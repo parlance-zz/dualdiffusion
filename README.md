@@ -1,2 +1,2 @@
-# dualdiffusion
-Fourier Dual Diffusion
+# Fourier Dual Diffusion
+
