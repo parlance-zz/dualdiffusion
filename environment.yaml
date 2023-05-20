@@ -1,0 +1,21 @@
+name: dualdiffusion
+channels:
+  - pytorch
+  - nvidia
+  - conda-forge
+dependencies:
+  - python=3.10
+  - nvidia::cudatoolkit
+  - pytorch::pytorch  
+  - pip
+  - numpy
+  - ffmpeg
+  - torchaudio
+  #- torchvision
+  - diffusers
+  - datasets
+  - accelerate
+  - transformers
+  - pip:
+    - ffmpeg-python
+    - safetensors

@@ -1,0 +1,4 @@
+__pycache__/
+models/*/
+*.raw
+old_filter_code.py
