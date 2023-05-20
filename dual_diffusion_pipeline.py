@@ -12,9 +12,6 @@ from diffusers.schedulers import DDIMScheduler, DDPMScheduler
 from diffusers.pipelines.pipeline_utils import AudioPipelineOutput, DiffusionPipeline
 from diffusers.utils import randn_tensor
 
-DATA_CFG_PATH = "./dataset/config.json"
-MODEL_PATH = "./models/dualdiffusion"
-
 class DualDiffusionPipeline(DiffusionPipeline):
 
     def __init__(
@@ -41,6 +38,31 @@ class DualDiffusionPipeline(DiffusionPipeline):
 
     def get_default_steps(self) -> int:
         return 50 if isinstance(self.scheduler, DDIMScheduler) else 1000
+
+    @staticmethod
+    def create_new(data_cfg_path, save_model_path):
+
+        with open(data_cfg_path, "rb") as f:
+            dataset_cfg = json.load(f)
+
+        scheduler_s = DDIMScheduler(clip_sample_range=10000.)
+        scheduler_f = DDIMScheduler(clip_sample_range=10000.)
+        unet_s = UNet1DModel(in_channels=2+16, out_channels=2)
+        unet_f = UNet1DModel(in_channels=2+16, out_channels=2)
+
+        pipeline = DualDiffusionPipeline(unet_s,
+                                         unet_f,
+                                         scheduler_s,
+                                         scheduler_f,
+                                         sample_len=dataset_cfg["sample_len"],
+                                         s_resolution=dataset_cfg["s_resolution"],
+                                         f_resolution=dataset_cfg["f_resolution"],
+                                         s_avg_std = dataset_cfg["s_avg_std"],
+                                         f_avg_std = dataset_cfg["f_avg_std"],
+                                         )
+        
+        pipeline.save_pretrained(save_model_path, safe_serialization=True)
+        return pipeline
 
     @staticmethod
     def get_window_offsets(resolution, overlap, sample_len):
@@ -247,33 +269,16 @@ class DualDiffusionPipeline(DiffusionPipeline):
 
 if __name__ == "__main__":
     
-    torch.set_default_device("cuda")
+    if torch.cuda.is_available():
+        device = torch.device("cuda")
+    else:
+        print("Error: CUDA not available")
+        exit(1)
+    torch.set_default_device(device)
 
-    if not os.path.exists(MODEL_PATH):
-
-        with open(DATA_CFG_PATH, "rb") as f:
-            dataset_cfg = json.load(f)
-
-        scheduler_s = DDIMScheduler(clip_sample_range=10000.)
-        scheduler_f = DDIMScheduler(clip_sample_range=10000.)
-        unet_s = UNet1DModel(in_channels=2+16, out_channels=2)
-        unet_f = UNet1DModel(in_channels=2+16, out_channels=2)
-
-        my_pipeline = DualDiffusionPipeline(unet_s,
-                                            unet_f,
-                                            scheduler_s,
-                                            scheduler_f,
-                                            sample_len=dataset_cfg["sample_len"],
-                                            s_resolution=dataset_cfg["s_resolution"],
-                                            f_resolution=dataset_cfg["f_resolution"],
-                                            s_avg_std = dataset_cfg["s_avg_std"],
-                                            f_avg_std = dataset_cfg["f_avg_std"],
-                                            )
-        
-        my_pipeline.save_pretrained(MODEL_PATH, safe_serialization=True)
-        print(f"Saved model to {MODEL_PATH}")
-
-    my_pipeline = DualDiffusionPipeline.from_pretrained(MODEL_PATH, torch_dtype=torch.float16).to("cuda")
+    model_path = "./models/new_dualdiffusion"
+    print(f"Loading DualDiffusion model from '{model_path}'...")
+    my_pipeline = DualDiffusionPipeline.from_pretrained(model_path, torch_dtype=torch.float16).to(device)
     
     noise = np.fromfile("./dataset/dual/SNES/01 - front line base.dual", dtype=np.float32, count=2048*1024)
     noise = torch.from_numpy(noise).to("cuda")

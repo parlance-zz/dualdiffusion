@@ -13,7 +13,7 @@ import torch.nn.functional as F
 from accelerate import Accelerator
 from accelerate.logging import get_logger
 from accelerate.utils import ProjectConfiguration
-from datasets import load_dataset
+from datasets import load_dataset, Audio
 from huggingface_hub import HfFolder, Repository, create_repo, whoami
 from packaging import version
 from torchvision import transforms
@@ -26,6 +26,9 @@ from diffusers.training_utils import EMAModel
 from diffusers.utils import check_min_version, is_accelerate_version, is_tensorboard_available, is_wandb_available
 from diffusers.utils.import_utils import is_xformers_available
 
+import numpy as np
+
+from dual_diffusion_pipeline import DualDiffusionPipeline
 
 # Will error if the minimal version of diffusers is not installed. Remove at your own risks.
 #check_min_version("0.17.0.dev0")
@@ -99,31 +102,7 @@ def parse_args():
         help="The directory where the downloaded models and datasets will be stored.",
     )
     parser.add_argument(
-        "--resolution",
-        type=int,
-        default=64,
-        help=(
-            "The resolution for input images, all the images in the train/validation dataset will be resized to this"
-            " resolution"
-        ),
-    )
-    parser.add_argument(
-        "--center_crop",
-        default=False,
-        action="store_true",
-        help=(
-            "Whether to center crop the input images to the resolution. If not set, the images will be randomly"
-            " cropped. The images will be resized to the resolution first before cropping."
-        ),
-    )
-    parser.add_argument(
-        "--random_flip",
-        default=False,
-        action="store_true",
-        help="whether to randomly flip images horizontally",
-    )
-    parser.add_argument(
-        "--train_batch_size", type=int, default=16, help="Batch size (per device) for the training dataloader."
+        "--train_batch_size", type=int, default=16, help="Batch size (per device)"
     )
     parser.add_argument(
         "--eval_batch_size", type=int, default=16, help="The number of images to generate for evaluation."
@@ -332,7 +311,7 @@ def main(args):
                 model = models.pop()
 
                 # load diffusers style into model
-                load_model = UNet2DModel.from_pretrained(input_dir, subfolder="unet")
+                load_model = UNet2DModel.from_pretrained(input_dir, subfolder="unet") # **TODO**
                 model.register_to_config(**load_model.config)
 
                 model.load_state_dict(load_model.state_dict())
@@ -375,8 +354,8 @@ def main(args):
 
     # Initialize the model
     if args.model_config_name_or_path is None:
-        model = UNet2DModel(
-            sample_size=args.resolution,
+        model = UNet2DModel(            # **TODO**
+            #sample_size=args.resolution,
             in_channels=3,
             out_channels=3,
             layers_per_block=2,
@@ -399,7 +378,7 @@ def main(args):
             ),
         )
     else:
-        config = UNet2DModel.load_config(args.model_config_name_or_path)
+        config = UNet2DModel.load_config(args.model_config_name_or_path) # **TODO**
         model = UNet2DModel.from_config(config)
 
     # Create EMA for the model.
@@ -428,7 +407,7 @@ def main(args):
             raise ValueError("xformers is not available. Make sure it is installed correctly")
 
     # Initialize the scheduler
-    accepts_prediction_type = "prediction_type" in set(inspect.signature(DDPMScheduler.__init__).parameters.keys())
+    accepts_prediction_type = "prediction_type" in set(inspect.signature(DDPMScheduler.__init__).parameters.keys()) # **TODO**
     if accepts_prediction_type:
         noise_scheduler = DDPMScheduler(
             num_train_timesteps=args.ddpm_num_steps,
@@ -436,7 +415,7 @@ def main(args):
             prediction_type=args.prediction_type,
         )
     else:
-        noise_scheduler = DDPMScheduler(num_train_timesteps=args.ddpm_num_steps, beta_schedule=args.ddpm_beta_schedule)
+        noise_scheduler = DDPMScheduler(num_train_timesteps=args.ddpm_num_steps, beta_schedule=args.ddpm_beta_schedule) # **TODO**
 
     # Initialize the optimizer
     optimizer = torch.optim.AdamW(
@@ -452,38 +431,47 @@ def main(args):
 
     # In distributed training, the load_dataset function guarantees that only one local process can concurrently
     # download the dataset.
+    
     if args.dataset_name is not None:
         dataset = load_dataset(
             args.dataset_name,
             args.dataset_config_name,
             cache_dir=args.cache_dir,
             split="train",
-        )
+        ).cast_column("audio", Audio(decode=False))
     else:
-        dataset = load_dataset("imagefolder", data_dir=args.train_data_dir, cache_dir=args.cache_dir, split="train")
-        # See more about loading custom images at
-        # https://huggingface.co/docs/datasets/v2.4.0/en/image_load#imagefolder
+        dataset = load_dataset("audiofolder",
+                               data_dir=args.train_data_dir,
+                               cache_dir=args.cache_dir,
+                               split="train").cast_column("audio", Audio(decode=False))
 
     # Preprocessing the datasets and DataLoaders creation.
     augmentations = transforms.Compose(
         [
-            transforms.Resize(args.resolution, interpolation=transforms.InterpolationMode.BILINEAR),
-            transforms.CenterCrop(args.resolution) if args.center_crop else transforms.RandomCrop(args.resolution),
-            transforms.RandomHorizontalFlip() if args.random_flip else transforms.Lambda(lambda x: x),
             transforms.ToTensor(),
-            transforms.Normalize([0.5], [0.5]),
         ]
     )
 
     def transform_images(examples):
-        images = [augmentations(image.convert("RGB")) for image in examples["image"]]
+        
+        images = []
+
+        for audio in examples["audio"]:
+            if audio["bytes"] is not None:
+                dual_data = np.frombuffer(audio["bytes"], dtype=np.float32)
+            else:
+                dual_data = np.fromfile(audio["path"], dtype=np.float32)
+                
+            dual_data = dual_data.reshape(2, len(dual_data)//2)
+            images.append(augmentations(dual_data))
+
         return {"input": images}
 
     logger.info(f"Dataset size: {len(dataset)}")
 
     dataset.set_transform(transform_images)
     train_dataloader = torch.utils.data.DataLoader(
-        dataset, batch_size=args.train_batch_size, shuffle=True, num_workers=args.dataloader_num_workers
+        dataset, batch_size=1, shuffle=True, num_workers=args.dataloader_num_workers
     )
 
     # Initialize the learning rate scheduler
@@ -560,7 +548,7 @@ def main(args):
                     progress_bar.update(1)
                 continue
 
-            clean_images = batch["input"]
+            clean_images = batch["input"] # **TODO**
             # Sample noise that we'll add to the images
             noise = torch.randn(clean_images.shape).to(clean_images.device)
             bsz = clean_images.shape[0]
@@ -575,9 +563,9 @@ def main(args):
 
             with accelerator.accumulate(model):
                 # Predict the noise residual
-                model_output = model(noisy_images, timesteps).sample
+                model_output = model(noisy_images, timesteps).sample # **TODO**
 
-                if args.prediction_type == "epsilon":
+                if args.prediction_type == "epsilon": # **TODO**
                     loss = F.mse_loss(model_output, noise)  # this could have different weights!
                 elif args.prediction_type == "sample":
                     alpha_t = _extract_into_tensor(
@@ -630,14 +618,14 @@ def main(args):
                     ema_model.store(unet.parameters())
                     ema_model.copy_to(unet.parameters())
 
-                pipeline = DDPMPipeline(
+                pipeline = DDPMPipeline(  # **TODO**
                     unet=unet,
                     scheduler=noise_scheduler,
                 )
 
                 generator = torch.Generator(device=pipeline.device).manual_seed(0)
                 # run pipeline in inference (sample random noise and denoise)
-                images = pipeline(
+                images = pipeline( # **TODO**
                     generator=generator,
                     batch_size=args.eval_batch_size,
                     num_inference_steps=args.ddpm_num_inference_steps,
@@ -648,7 +636,7 @@ def main(args):
                     ema_model.restore(unet.parameters())
 
                 # denormalize the images and save to tensorboard
-                images_processed = (images * 255).round().astype("uint8")
+                images_processed = (images * 255).round().astype("uint8") # **TODO**
 
                 if args.logger == "tensorboard":
                     if is_accelerate_version(">=", "0.17.0.dev0"):

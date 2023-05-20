@@ -3,14 +3,18 @@ import ffmpeg
 import numpy as np
 import torch
 import json
+import shutil
 
 import torch.nn.functional as F
 
 from dual_diffusion_pipeline import DualDiffusionPipeline
 
+DATASET_DUAL_LOADER_PATH = "./dataset_dual_loader.py"
 SOURCE_DIR = './dataset/source'
 RAW_DIR = './dataset/raw'
 DATA_CFG_PATH = './dataset/config.json'
+NEW_MODEL_PATH = './models/new_dualdiffusion'
+ENABLE_DEBUG_DUMPS = False
 SAMPLE_RATE = 44100
 
 SAMPLE_DIR = './dataset/dual'
@@ -49,6 +53,7 @@ def preprocess_raw_to_dual(input_dir,
                            fadeout_std,
                            s_resolution,
                            f_resolution,
+                           enable_debug_dumps=False
                            ):
 
     total_processed = 0
@@ -58,18 +63,13 @@ def preprocess_raw_to_dual(input_dir,
 
     fadeout_window = torch.exp(-torch.square(torch.linspace(0., 1., fadeout_len)) * fadeout_std)
 
+    os.makedirs(output_dir, exist_ok=True)
+
     for dirpath, _, filenames in os.walk(input_dir):
 
         for filename in filenames:
             
             input_file = os.path.join(dirpath, filename)
-            
-            relative_dirpath = os.path.relpath(dirpath, input_dir)
-            output_file_dir = os.path.join(output_dir, relative_dirpath)
-            os.makedirs(output_file_dir, exist_ok=True)
-            
-            output_file = os.path.join(output_file_dir, filename)
-            output_file = os.path.splitext(output_file)[0] + '.dual'
             
             raw_input = np.fromfile(input_file, dtype=np.float32, count=sample_len)
             if len(raw_input) < sample_len: # skip samples that are too short
@@ -87,7 +87,7 @@ def preprocess_raw_to_dual(input_dir,
             f_response = DualDiffusionPipeline.get_f_samples(fft_input, f_resolution)
             f_avg_std += torch.std(f_response).item()
             
-            if total_processed == 0:
+            if (total_processed == 0) and enable_debug_dumps:
                 s_response.cpu().numpy().tofile("./dataset/s_response.raw")
                 f_response.cpu().numpy().tofile("./dataset/f_response.raw")
 
@@ -103,6 +103,15 @@ def preprocess_raw_to_dual(input_dir,
                     s_reconstruction.cpu().numpy().tofile(f)
                     f_reconstruction.cpu().numpy().tofile(f)
 
+            #relative_dirpath = os.path.relpath(dirpath, input_dir)
+            #output_file_dir = os.path.join(output_dir, relative_dirpath)
+            #os.makedirs(output_file_dir, exist_ok=True)
+            #output_file = os.path.join(output_file_dir, filename)
+            #output_file = os.path.splitext(output_file)[0] + '.dual'
+
+            output_file = os.path.join(output_dir, filename)
+            output_file = os.path.splitext(output_file)[0] + '.raw'
+
             with open(output_file, 'wb') as f:
                 raw_input.cpu().numpy().tofile(f)
                 fft_input.cpu().numpy().tofile(f)
@@ -117,6 +126,7 @@ def preprocess_raw_to_dual(input_dir,
     print(f"Average s std: {s_avg_std}")
     print(f"Average f std: {f_avg_std}")
 
+    print(f"\nSaving config file to '{config_path}'...")
     config = {
         "sample_len": sample_len,
         "s_avg_std": s_avg_std,
@@ -129,7 +139,12 @@ def preprocess_raw_to_dual(input_dir,
 
 if __name__ == "__main__":
 
-    torch.set_default_device("cuda")
+    if torch.cuda.is_available():
+        device = torch.device("cuda")
+    else:
+        print("Error: CUDA not available")
+        exit(1)
+    torch.set_default_device(device)
 
     #decode_source_to_raw(SOURCE_DIR, RAW_DIR, SAMPLE_RATE)
 
@@ -141,4 +156,8 @@ if __name__ == "__main__":
                            FADEOUT_STD,
                            S_RESOLUTION,
                            F_RESOLUTION,
+                           ENABLE_DEBUG_DUMPS,
                            )
+
+    DualDiffusionPipeline.create_new(DATA_CFG_PATH, NEW_MODEL_PATH)
+    print(f"Created new DualDiffusion model with config at '{NEW_MODEL_PATH}'")
