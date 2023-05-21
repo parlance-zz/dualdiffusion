@@ -16,10 +16,11 @@ if __name__ == "__main__":
     print(f"Loading DualDiffusion model from '{model_path}'...")
     my_pipeline = DualDiffusionPipeline.from_pretrained(model_path, torch_dtype=torch.float16).to("cuda")
     
-    start = time.time(); output = my_pipeline(batch_size=32, steps=100)
+    start = time.time(); output = my_pipeline(batch_size=32, steps=50, eta=0.)
     print(f"Time taken: {time.time()-start}")
 
     existing_output_count = len(glob.glob("./output/*.raw"))
     test_output_path = f"./output/output_{existing_output_count}.raw"
-    output.cpu().numpy().tofile(test_output_path)
+    output = output.cpu().numpy()
+    (output / np.max(np.absolute(output))).tofile(test_output_path)
     print(f"Saved output to {test_output_path}")

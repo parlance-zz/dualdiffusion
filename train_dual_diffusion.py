@@ -306,7 +306,11 @@ def main(args):
         if not is_tensorboard_available():
             raise ImportError("Make sure to install tensorboard if you want to use it for logging during training.")
 
-        tensorboard_monitor_process = subprocess.Popen(['tensorboard', '--logdir', logging_dir])
+        if args.dual_training_mode == "s":
+            port = 6007
+        else:
+            port = 6006
+        tensorboard_monitor_process = subprocess.Popen(['tensorboard', '--logdir', logging_dir, '--port', f'{port}'])
 
         def cleanup_process():
             try:
@@ -315,7 +319,7 @@ def main(args):
                 pass
 
         atexit.register(cleanup_process)
-        webbrowser.open("http://localhost:6006")
+        webbrowser.open(f"http://localhost:{port}")
 
     elif args.logger == "wandb":
         if not is_wandb_available():
@@ -587,23 +591,27 @@ def main(args):
 
                 if args.dual_training_mode == "f":
                     
-                    clean_fft_input = torch.view_as_complex(clean_image.view(-1, 2))
-                    clean_f_response = DualDiffusionPipeline.get_f_samples(clean_fft_input, pipeline.config["f_resolution"])
-                    noise_fft_input = torch.view_as_complex(noise.view(-1, 2))
-                    noise_f_response = DualDiffusionPipeline.get_f_samples(noise_fft_input, pipeline.config["f_resolution"])
                     noisy_fft_input = torch.view_as_complex(noisy_image.view(-1, 2))
                     noisy_f_response = DualDiffusionPipeline.get_f_samples(noisy_fft_input, pipeline.config["f_resolution"])
                     
-                    f_response_indices = torch.randperm(clean_f_response.shape[0])[:args.train_batch_size]
-                    clean_f_response = clean_f_response[f_response_indices]
-                    noise_f_response = noise_f_response[f_response_indices]
+                    f_response_indices = torch.randperm(noisy_f_response.shape[0])[:args.train_batch_size]
                     noisy_f_response = noisy_f_response[f_response_indices]
-
                     model_output = model(noisy_f_response, timesteps)["sample"]
 
                     if args.prediction_type == "epsilon": 
+
+                        noise_fft_input = torch.view_as_complex(noise.view(-1, 2))
+                        noise_f_response = DualDiffusionPipeline.get_f_samples(noise_fft_input, pipeline.config["f_resolution"])                        
+                        noise_f_response = noise_f_response[f_response_indices]
+
                         loss = F.mse_loss(model_output, noise_f_response)
+
                     elif args.prediction_type == "sample":
+
+                        clean_fft_input = torch.view_as_complex(clean_image.view(-1, 2))
+                        clean_f_response = DualDiffusionPipeline.get_f_samples(clean_fft_input, pipeline.config["f_resolution"])
+                        clean_f_response = clean_f_response[f_response_indices]
+
                         alpha_t = _extract_into_tensor(
                             noise_scheduler.alphas_cumprod, timesteps, (clean_f_response.shape[0], 1, 1, 1)
                         )
@@ -617,23 +625,27 @@ def main(args):
                     
                 elif args.dual_training_mode == "s":
 
-                    clean_raw_input = clean_image
-                    clean_s_response = DualDiffusionPipeline.get_s_samples(clean_raw_input, pipeline.config["s_resolution"])
-                    noise_raw_input = noise
-                    noise_s_response = DualDiffusionPipeline.get_s_samples(noise_raw_input, pipeline.config["s_resolution"])
                     noisy_raw_input = noisy_image
                     noisy_s_response = DualDiffusionPipeline.get_s_samples(noisy_raw_input, pipeline.config["s_resolution"])
                     
-                    s_response_indices = torch.randperm(clean_s_response.shape[0])[:args.train_batch_size]
-                    clean_s_response = clean_s_response[s_response_indices]
-                    noise_s_response = noise_s_response[s_response_indices]
+                    s_response_indices = torch.randperm(noisy_s_response.shape[0])[:args.train_batch_size]
                     noisy_s_response = noisy_s_response[s_response_indices]
-
                     model_output = model(noisy_s_response, timesteps)["sample"]
 
                     if args.prediction_type == "epsilon": 
+
+                        noise_raw_input = noise
+                        noise_s_response = DualDiffusionPipeline.get_s_samples(noise_raw_input, pipeline.config["s_resolution"])
+                        noise_s_response = noise_s_response[s_response_indices]
+
                         loss = F.mse_loss(model_output, noise_s_response)
+
                     elif args.prediction_type == "sample":
+
+                        clean_raw_input = clean_image
+                        clean_s_response = DualDiffusionPipeline.get_s_samples(clean_raw_input, pipeline.config["s_resolution"])
+                        clean_s_response = clean_s_response[s_response_indices]
+
                         alpha_t = _extract_into_tensor(
                             noise_scheduler.alphas_cumprod, timesteps, (clean_s_response.shape[0], 1, 1, 1)
                         )
@@ -728,17 +740,10 @@ def main(args):
                     ema_model.store(unet.parameters())
                     ema_model.copy_to(unet.parameters())
 
-                """
-                pipeline = DDPMPipeline(
-                    unet=unet,
-                    scheduler=noise_scheduler,
-                )
-                """
-
                 if args.dual_training_mode == "f":
-                    pipeline.unet_f = model
+                    pipeline.unet_f = unet
                 elif args.dual_training_mode == "s":
-                    pipeline.unet_s = model
+                    pipeline.unet_s = unet
                 else:
                     raise ValueError(f"Unsupported dual training mode: {args.dual_training_mode}")
                 

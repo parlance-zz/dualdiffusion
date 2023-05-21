@@ -45,6 +45,7 @@ class DualDiffusionPipeline(DiffusionPipeline):
 
         scheduler_s = DDIMScheduler(clip_sample_range=10000.)
         scheduler_f = DDIMScheduler(clip_sample_range=10000.)
+        """ # big
         unet_s = UNet1DModel(sample_size=dataset_cfg["s_resolution"],
                              in_channels=2,
                              out_channels=2,
@@ -86,7 +87,45 @@ class DualDiffusionPipeline(DiffusionPipeline):
                                  "UpBlock1D",
                                  "UpBlock1D")
                              )
-
+        """
+        unet_s = UNet1DModel(sample_size=dataset_cfg["s_resolution"],
+                             in_channels=2,
+                             out_channels=2,
+                             layers_per_block=2,
+                             block_out_channels=(64, 64, 64, 128, 256),
+                             down_block_types=(
+                                 "DownBlock1D",
+                                 "DownBlock1D",
+                                 "DownBlock1D",
+                                 "AttnDownBlock1D",
+                                 "DownBlock1D"),
+                             up_block_types=(
+                                 "UpBlock1D",
+                                 "AttnUpBlock1D",
+                                 "UpBlock1D",
+                                 "UpBlock1D",
+                                 "UpBlock1D")
+                             )
+        
+        unet_f = UNet1DModel(sample_size=dataset_cfg["f_resolution"],
+                             in_channels=2,
+                             out_channels=2,
+                             layers_per_block=2,
+                             block_out_channels=(64, 64, 64, 128, 256),
+                             down_block_types=(
+                                 "DownBlock1D",
+                                 "DownBlock1D",
+                                 "DownBlock1D",
+                                 "AttnDownBlock1D",
+                                 "DownBlock1D"),
+                             up_block_types=(
+                                 "UpBlock1D",
+                                 "AttnUpBlock1D",
+                                 "UpBlock1D",
+                                 "UpBlock1D",
+                                 "UpBlock1D")
+                             )
+        
         pipeline = DualDiffusionPipeline(unet_s,
                                          unet_f,
                                          scheduler_s,
@@ -119,11 +158,12 @@ class DualDiffusionPipeline(DiffusionPipeline):
     @staticmethod
     def get_s_samples(raw_input, s_resolution):
 
+        raw_input = F.pad(raw_input, (s_resolution//2, s_resolution//2))
         window_offsets = DualDiffusionPipeline.get_window_offsets(s_resolution, 2, len(raw_input))
 
         response = torch.zeros((window_offsets.shape[0], s_resolution), dtype=torch.complex64, device="cuda")
         s_window = DualDiffusionPipeline.get_window(s_resolution)
-
+        
         response_indices = torch.arange(0, s_resolution, device="cuda").view(1, -1) + window_offsets.view(-1, 1)
         response = torch.fft.fft(raw_input[response_indices] * s_window.view(1, -1), norm="ortho")
         response = response[:, :s_resolution//2]
@@ -135,6 +175,7 @@ class DualDiffusionPipeline(DiffusionPipeline):
     def invert_s_samples(s_response, raw_input):
 
         s_resolution = s_response.shape[2] * 2
+        raw_input = F.pad(raw_input, (s_resolution//2, s_resolution//2))
         window_offsets = DualDiffusionPipeline.get_window_offsets(s_resolution, 2, len(raw_input))
 
         s_response = torch.view_as_complex(s_response.permute(0, 2, 1))
@@ -151,11 +192,12 @@ class DualDiffusionPipeline(DiffusionPipeline):
         response_indices_odd = torch.arange(0, s_resolution, device="cuda").view(1, -1) + window_offsets_odd.view(-1, 1)
         raw_input[response_indices_odd] += torch.fft.irfft(s_response_odd, norm="ortho")
 
-        return raw_input
+        return raw_input[s_resolution//2:-s_resolution//2]
 
     @staticmethod
     def get_f_samples(fft_input, f_resolution):
 
+        fft_input = F.pad(fft_input, (f_resolution//2, f_resolution//2))
         window_offsets = DualDiffusionPipeline.get_window_offsets(f_resolution, 2, len(fft_input))
 
         response = torch.zeros((window_offsets.shape[0], f_resolution), dtype=torch.complex64)
@@ -171,6 +213,7 @@ class DualDiffusionPipeline(DiffusionPipeline):
     def invert_f_samples(f_response, fft_input):
 
         f_resolution = f_response.shape[2]
+        fft_input = F.pad(fft_input, (f_resolution//2, f_resolution//2))
         window_offsets = DualDiffusionPipeline.get_window_offsets(f_resolution, 2, len(fft_input))
 
         f_response = torch.view_as_complex(f_response.permute(0, 2, 1))
@@ -186,7 +229,7 @@ class DualDiffusionPipeline(DiffusionPipeline):
         response_indices_odd = torch.arange(0, f_resolution, device="cuda").view(1, -1) + window_offsets_odd.view(-1, 1)
         fft_input[response_indices_odd] += torch.fft.fft(f_response_odd, norm="ortho")
 
-        return fft_input
+        return fft_input[f_resolution//2:-f_resolution//2]
 
     @torch.no_grad()
     def __call__(

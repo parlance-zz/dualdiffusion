@@ -3,9 +3,9 @@ accelerate launch^
  --mixed_precision="fp16"^
  train_dual_diffusion.py^
  --train_data_dir="./dataset/dual"^
- --model_config_name_or_path="./models/dualdiffusion"^
+ --model_config_name_or_path="./models/dualdiffusion_f"^
  --dual_training_mode="f"^
- --output_dir="./models/dualdiffusion"^
+ --output_dir="./models/dualdiffusion_f"^
  --train_batch_size=256^
  --num_epochs=1000^
  --checkpointing_steps=1000^
@@ -15,4 +15,5 @@ accelerate launch^
  --learning_rate=1e-4^
  --lr_warmup_steps=500^
  --mixed_precision="fp16"^
- --logger="tensorboard"
+ --logger="tensorboard"^
+ --use_ema
