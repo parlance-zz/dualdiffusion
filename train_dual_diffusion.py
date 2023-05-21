@@ -1,8 +1,11 @@
 import argparse
-import inspect
 import logging
 import math
 import os
+import subprocess
+import atexit
+import webbrowser
+
 from pathlib import Path
 from typing import Optional
 
@@ -20,7 +23,7 @@ from torchvision import transforms
 from tqdm.auto import tqdm
 
 import diffusers
-from diffusers import DDPMPipeline, DDPMScheduler, UNet2DModel
+from diffusers import UNet1DModel
 from diffusers.optimization import get_scheduler
 from diffusers.training_utils import EMAModel
 from diffusers.utils import check_min_version, is_accelerate_version, is_tensorboard_available, is_wandb_available
@@ -32,6 +35,13 @@ from dual_diffusion_pipeline import DualDiffusionPipeline
 
 # Will error if the minimal version of diffusers is not installed. Remove at your own risks.
 #check_min_version("0.17.0.dev0")
+
+if torch.cuda.is_available():
+    device = torch.device("cuda")
+else:
+    print("Error: PyTorch not compiled with CUDA support or CUDA unavailable")
+    exit(1)
+#torch.set_default_device(device)
 
 logger = get_logger(__name__, log_level="INFO")
 
@@ -76,8 +86,16 @@ def parse_args():
         "--model_config_name_or_path",
         type=str,
         default=None,
-        help="The config of the UNet model to train, leave as None to use standard DDPM configuration.",
+        help="The config of the Dual Diffusion model to train, use process_dataset.py to create a pipeline corresponding to your dataset.",
+        required=True,
     )
+    parser.add_argument(
+        "--dual_training_mode",
+        type=str,
+        default=None,
+        help="Set to either 's' or 'f' to train the corresponding dual diffusion unet model",
+        required=True,
+    )    
     parser.add_argument(
         "--train_data_dir",
         type=str,
@@ -281,6 +299,17 @@ def main(args):
         if not is_tensorboard_available():
             raise ImportError("Make sure to install tensorboard if you want to use it for logging during training.")
 
+        tensorboard_monitor_process = subprocess.Popen(['tensorboard', '--logdir', logging_dir])
+
+        def cleanup_process():
+            try:
+                tensorboard_monitor_process.terminate()
+            except Exception:
+                pass
+
+        atexit.register(cleanup_process)
+        webbrowser.open("http://localhost:6006")
+
     elif args.logger == "wandb":
         if not is_wandb_available():
             raise ImportError("Make sure to install wandb if you want to use it for logging during training.")
@@ -289,19 +318,19 @@ def main(args):
     # `accelerate` 0.16.0 will have better support for customized saving
     if version.parse(accelerate.__version__) >= version.parse("0.16.0"):
         # create custom saving & loading hooks so that `accelerator.save_state(...)` serializes in a nice format
-        def save_model_hook(models, weights, output_dir):
+        def save_model_hook(models, weights, output_dir, unet_folder_suffix=args.dual_training_mode):
             if args.use_ema:
-                ema_model.save_pretrained(os.path.join(output_dir, "unet_ema"))
+                ema_model.save_pretrained(os.path.join(output_dir, f"unet_ema_{unet_folder_suffix}"))
 
             for i, model in enumerate(models):
-                model.save_pretrained(os.path.join(output_dir, "unet"))
+                model.save_pretrained(os.path.join(output_dir, f"unet_{unet_folder_suffix}"))
 
                 # make sure to pop weight so that corresponding model is not saved again
                 weights.pop()
 
-        def load_model_hook(models, input_dir):
+        def load_model_hook(models, input_dir, unet_folder_suffix=args.dual_training_mode):
             if args.use_ema:
-                load_model = EMAModel.from_pretrained(os.path.join(input_dir, "unet_ema"), UNet2DModel)
+                load_model = EMAModel.from_pretrained(os.path.join(input_dir, f"unet_ema_{unet_folder_suffix}"), UNet1DModel)
                 ema_model.load_state_dict(load_model.state_dict())
                 ema_model.to(accelerator.device)
                 del load_model
@@ -311,7 +340,7 @@ def main(args):
                 model = models.pop()
 
                 # load diffusers style into model
-                load_model = UNet2DModel.from_pretrained(input_dir, subfolder="unet") # **TODO**
+                load_model = UNet1DModel.from_pretrained(input_dir, subfolder=f"unet_{unet_folder_suffix}") 
                 model.register_to_config(**load_model.config)
 
                 model.load_state_dict(load_model.state_dict())
@@ -353,33 +382,21 @@ def main(args):
             os.makedirs(args.output_dir, exist_ok=True)
 
     # Initialize the model
-    if args.model_config_name_or_path is None:
-        model = UNet2DModel(            # **TODO**
-            #sample_size=args.resolution,
-            in_channels=3,
-            out_channels=3,
-            layers_per_block=2,
-            block_out_channels=(128, 128, 256, 256, 512, 512),
-            down_block_types=(
-                "DownBlock2D",
-                "DownBlock2D",
-                "DownBlock2D",
-                "DownBlock2D",
-                "AttnDownBlock2D",
-                "DownBlock2D",
-            ),
-            up_block_types=(
-                "UpBlock2D",
-                "AttnUpBlock2D",
-                "UpBlock2D",
-                "UpBlock2D",
-                "UpBlock2D",
-                "UpBlock2D",
-            ),
-        )
+
+    #pipeline = DualDiffusionPipeline.from_pretrained(args.model_config_name_or_path, torch_dtype=torch.float16).to("cuda")
+    pipeline = DualDiffusionPipeline.from_pretrained(args.model_config_name_or_path).to("cuda")
+
+    if args.dual_training_mode == "s":
+        model = pipeline.unet_s
+        noise_scheduler = pipeline.scheduler_s
+        mode_index = 0
+    elif args.dual_training_mode == "f":
+        model = pipeline.unet_f
+        noise_scheduler = pipeline.scheduler_f
+        mode_index = 1
     else:
-        config = UNet2DModel.load_config(args.model_config_name_or_path) # **TODO**
-        model = UNet2DModel.from_config(config)
+        raise ValueError(f"Unknown dual training mode {args.dual_training_mode}")
+    config = model.config
 
     # Create EMA for the model.
     if args.use_ema:
@@ -389,7 +406,7 @@ def main(args):
             use_ema_warmup=True,
             inv_gamma=args.ema_inv_gamma,
             power=args.ema_power,
-            model_cls=UNet2DModel,
+            model_cls=model.__class__,
             model_config=model.config,
         )
 
@@ -405,17 +422,6 @@ def main(args):
             model.enable_xformers_memory_efficient_attention()
         else:
             raise ValueError("xformers is not available. Make sure it is installed correctly")
-
-    # Initialize the scheduler
-    accepts_prediction_type = "prediction_type" in set(inspect.signature(DDPMScheduler.__init__).parameters.keys()) # **TODO**
-    if accepts_prediction_type:
-        noise_scheduler = DDPMScheduler(
-            num_train_timesteps=args.ddpm_num_steps,
-            beta_schedule=args.ddpm_beta_schedule,
-            prediction_type=args.prediction_type,
-        )
-    else:
-        noise_scheduler = DDPMScheduler(num_train_timesteps=args.ddpm_num_steps, beta_schedule=args.ddpm_beta_schedule) # **TODO**
 
     # Initialize the optimizer
     optimizer = torch.optim.AdamW(
@@ -461,7 +467,8 @@ def main(args):
                 dual_data = np.frombuffer(audio["bytes"], dtype=np.float32)
             else:
                 dual_data = np.fromfile(audio["path"], dtype=np.float32)
-                
+            assert(len(dual_data) % 2 == 0)
+
             dual_data = dual_data.reshape(2, len(dual_data)//2)
             images.append(augmentations(dual_data))
 
@@ -471,7 +478,7 @@ def main(args):
 
     dataset.set_transform(transform_images)
     train_dataloader = torch.utils.data.DataLoader(
-        dataset, batch_size=1, shuffle=True, num_workers=args.dataloader_num_workers
+        dataset, batch_size=1, shuffle=True, num_workers=args.dataloader_num_workers,
     )
 
     # Initialize the learning rate scheduler
@@ -496,7 +503,7 @@ def main(args):
         run = os.path.split(__file__)[-1].split(".")[0]
         accelerator.init_trackers(run)
 
-    total_batch_size = args.train_batch_size * accelerator.num_processes * args.gradient_accumulation_steps
+    total_batch_size = 1 * accelerator.num_processes * args.gradient_accumulation_steps
     num_update_steps_per_epoch = math.ceil(len(train_dataloader) / args.gradient_accumulation_steps)
     max_train_steps = args.num_epochs * num_update_steps_per_epoch
 
@@ -518,7 +525,7 @@ def main(args):
         else:
             # Get the most recent checkpoint
             dirs = os.listdir(args.output_dir)
-            dirs = [d for d in dirs if d.startswith("checkpoint")]
+            dirs = [d for d in dirs if d.startswith(f"{args.dual_training_mode}_checkpoint")]
             dirs = sorted(dirs, key=lambda x: int(x.split("-")[1]))
             path = dirs[-1] if len(dirs) > 0 else None
 
@@ -541,44 +548,96 @@ def main(args):
         model.train()
         progress_bar = tqdm(total=num_update_steps_per_epoch, disable=not accelerator.is_local_main_process)
         progress_bar.set_description(f"Epoch {epoch}")
-        for step, batch in enumerate(train_dataloader):
+        for step, input_dual in enumerate(train_dataloader):
             # Skip steps until we reach the resumed step
             if args.resume_from_checkpoint and epoch == first_epoch and step < resume_step:
                 if step % args.gradient_accumulation_steps == 0:
                     progress_bar.update(1)
                 continue
 
-            clean_images = batch["input"] # **TODO**
+            clean_image = input_dual["input"][0, 0, mode_index]
+
             # Sample noise that we'll add to the images
-            noise = torch.randn(clean_images.shape).to(clean_images.device)
-            bsz = clean_images.shape[0]
+            noise = torch.randn(clean_image.shape).to(clean_image.device)
+            
+            if args.dual_training_mode == "f":
+                noise *= pipeline.config["f_avg_std"]
+            elif args.dual_training_mode == "s":
+                noise *= pipeline.config["s_avg_std"]
+            else:
+                raise ValueError(f"Invalid dual training mode: {args.dual_training_mode}")
+
             # Sample a random timestep for each image
             timesteps = torch.randint(
-                0, noise_scheduler.config.num_train_timesteps, (bsz,), device=clean_images.device
+                0, noise_scheduler.config.num_train_timesteps, (1,), device=clean_image.device
             ).long()
 
             # Add noise to the clean images according to the noise magnitude at each timestep
             # (this is the forward diffusion process)
-            noisy_images = noise_scheduler.add_noise(clean_images, noise, timesteps)
+            noisy_image = noise_scheduler.add_noise(clean_image, noise, timesteps)
 
             with accelerator.accumulate(model):
-                # Predict the noise residual
-                model_output = model(noisy_images, timesteps).sample # **TODO**
 
-                if args.prediction_type == "epsilon": # **TODO**
-                    loss = F.mse_loss(model_output, noise)  # this could have different weights!
-                elif args.prediction_type == "sample":
-                    alpha_t = _extract_into_tensor(
-                        noise_scheduler.alphas_cumprod, timesteps, (clean_images.shape[0], 1, 1, 1)
-                    )
-                    snr_weights = alpha_t / (1 - alpha_t)
-                    loss = snr_weights * F.mse_loss(
-                        model_output, clean_images, reduction="none"
-                    )  # use SNR weighting from distillation paper
-                    loss = loss.mean()
-                else:
-                    raise ValueError(f"Unsupported prediction type: {args.prediction_type}")
+                if args.dual_training_mode == "f":
+                    
+                    clean_fft_input = torch.view_as_complex(clean_image.view(-1, 2))
+                    clean_f_response = DualDiffusionPipeline.get_f_samples(clean_fft_input, pipeline.config["f_resolution"])
+                    noise_fft_input = torch.view_as_complex(noise.view(-1, 2))
+                    noise_f_response = DualDiffusionPipeline.get_f_samples(noise_fft_input, pipeline.config["f_resolution"])
+                    noisy_fft_input = torch.view_as_complex(noisy_image.view(-1, 2))
+                    noisy_f_response = DualDiffusionPipeline.get_f_samples(noisy_fft_input, pipeline.config["f_resolution"])
+                    
+                    f_response_indices = torch.randperm(clean_f_response.shape[0])[:args.train_batch_size]
+                    clean_f_response = clean_f_response[f_response_indices]
+                    noise_f_response = noise_f_response[f_response_indices]
+                    noisy_f_response = noisy_f_response[f_response_indices]
 
+                    model_output = model(noisy_f_response, timesteps)["sample"]
+
+                    if args.prediction_type == "epsilon": 
+                        loss = F.mse_loss(model_output, noise_f_response)
+                    elif args.prediction_type == "sample":
+                        alpha_t = _extract_into_tensor(
+                            noise_scheduler.alphas_cumprod, timesteps, (clean_f_response.shape[0], 1, 1, 1)
+                        )
+                        snr_weights = alpha_t / (1 - alpha_t)
+                        loss = snr_weights * F.mse_loss(
+                            model_output, clean_f_response, reduction="none"
+                        )  # use SNR weighting from distillation paper
+                        loss = loss.mean()
+                    else:
+                        raise ValueError(f"Unsupported prediction type: {args.prediction_type}")
+                    
+                elif args.dual_training_mode == "s":
+
+                    clean_raw_input = clean_image
+                    clean_s_response = DualDiffusionPipeline.get_s_samples(clean_raw_input, pipeline.config["s_resolution"])
+                    noise_raw_input = noise
+                    noise_s_response = DualDiffusionPipeline.get_s_samples(noise_raw_input, pipeline.config["s_resolution"])
+                    noisy_raw_input = noisy_image
+                    noisy_s_response = DualDiffusionPipeline.get_s_samples(noisy_raw_input, pipeline.config["s_resolution"])
+                    
+                    s_response_indices = torch.randperm(clean_s_response.shape[0])[:args.train_batch_size]
+                    clean_s_response = clean_f_response[s_response_indices]
+                    noise_s_response = noise_f_response[s_response_indices]
+                    noisy_s_response = noisy_f_response[s_response_indices]
+
+                    model_output = model(noisy_f_response, timesteps)["sample"]
+
+                    if args.prediction_type == "epsilon": 
+                        loss = F.mse_loss(model_output, noise_s_response)
+                    elif args.prediction_type == "sample":
+                        alpha_t = _extract_into_tensor(
+                            noise_scheduler.alphas_cumprod, timesteps, (clean_s_response.shape[0], 1, 1, 1)
+                        )
+                        snr_weights = alpha_t / (1 - alpha_t)
+                        loss = snr_weights * F.mse_loss(
+                            model_output, clean_s_response, reduction="none"
+                        )  # use SNR weighting from distillation paper
+                        loss = loss.mean()
+                    else:
+                        raise ValueError(f"Unsupported prediction type: {args.prediction_type}")
+                    
                 accelerator.backward(loss)
 
                 if accelerator.sync_gradients:
@@ -596,7 +655,7 @@ def main(args):
 
                 if global_step % args.checkpointing_steps == 0:
                     if accelerator.is_main_process:
-                        save_path = os.path.join(args.output_dir, f"checkpoint-{global_step}")
+                        save_path = os.path.join(args.output_dir, f"{args.dual_training_mode}_checkpoint-{global_step}")
                         accelerator.save_state(save_path)
                         logger.info(f"Saved state to {save_path}")
 
@@ -618,6 +677,7 @@ def main(args):
                     ema_model.store(unet.parameters())
                     ema_model.copy_to(unet.parameters())
 
+                """
                 pipeline = DDPMPipeline(  # **TODO**
                     unet=unet,
                     scheduler=noise_scheduler,
@@ -631,25 +691,27 @@ def main(args):
                     num_inference_steps=args.ddpm_num_inference_steps,
                     output_type="numpy",
                 ).images
+                """
 
                 if args.use_ema:
                     ema_model.restore(unet.parameters())
 
                 # denormalize the images and save to tensorboard
-                images_processed = (images * 255).round().astype("uint8") # **TODO**
+                #images_processed = (images * 255).round().astype("uint8") # **TODO**
 
                 if args.logger == "tensorboard":
                     if is_accelerate_version(">=", "0.17.0.dev0"):
                         tracker = accelerator.get_tracker("tensorboard", unwrap=True)
                     else:
                         tracker = accelerator.get_tracker("tensorboard")
-                    tracker.add_images("test_samples", images_processed.transpose(0, 3, 1, 2), epoch)
+                    #tracker.add_images("test_samples", images_processed.transpose(0, 3, 1, 2), epoch)
                 elif args.logger == "wandb":
+                    pass
                     # Upcoming `log_images` helper coming in https://github.com/huggingface/accelerate/pull/962/files
-                    accelerator.get_tracker("wandb").log(
-                        {"test_samples": [wandb.Image(img) for img in images_processed], "epoch": epoch},
-                        step=global_step,
-                    )
+                    #accelerator.get_tracker("wandb").log(
+                    #    {"test_samples": [wandb.Image(img) for img in images_processed], "epoch": epoch},
+                    #    step=global_step,
+                    #)
 
             if epoch % args.save_model_epochs == 0 or epoch == args.num_epochs - 1:
                 # save the model
@@ -659,12 +721,21 @@ def main(args):
                     ema_model.store(unet.parameters())
                     ema_model.copy_to(unet.parameters())
 
+                """
                 pipeline = DDPMPipeline(
                     unet=unet,
                     scheduler=noise_scheduler,
                 )
+                """
 
-                pipeline.save_pretrained(args.output_dir)
+                if args.dual_training_mode == "f":
+                    pipeline.unet_f = model
+                elif args.dual_training_mode == "s":
+                    pipeline.unet_s = model
+                else:
+                    raise ValueError(f"Unsupported dual training mode: {args.dual_training_mode}")
+                
+                pipeline.save_pretrained(args.output_dir, safe_serialization=True)
 
                 if args.use_ema:
                     ema_model.restore(unet.parameters())

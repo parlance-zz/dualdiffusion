@@ -73,21 +73,21 @@ class DualDiffusionPipeline(DiffusionPipeline):
             if (window_offsets[-1] + resolution) < sample_len:
                 window_offsets = torch.cat((window_offsets, torch.tensor([sample_len-resolution])))
             
-            return window_offsets
+            return window_offsets.to("cuda")
 
     @staticmethod
     def get_window(resolution):
-        return (torch.ones(resolution) + torch.cos(torch.arange(0, resolution) / resolution * 2. * np.pi - np.pi)) * 0.5
+        return((torch.ones(resolution, device="cuda") + torch.cos(torch.arange(0, resolution, device="cuda") / resolution * 2. * np.pi - np.pi)) * 0.5)
 
     @staticmethod
     def get_s_samples(raw_input, s_resolution):
 
         window_offsets = DualDiffusionPipeline.get_window_offsets(s_resolution, 2, len(raw_input))
 
-        response = torch.zeros((window_offsets.shape[0], s_resolution), dtype=torch.complex64)
+        response = torch.zeros((window_offsets.shape[0], s_resolution), dtype=torch.complex64, device="cuda")
         s_window = DualDiffusionPipeline.get_window(s_resolution)
 
-        response_indices = torch.arange(0, s_resolution).view(1, -1) + window_offsets.view(-1, 1)
+        response_indices = torch.arange(0, s_resolution, device="cuda").view(1, -1) + window_offsets.view(-1, 1)
         response = torch.fft.fft(raw_input[response_indices] * s_window.view(1, -1), norm="ortho")
         response = response[:, :s_resolution//2]
         response[:, ::2] *= -1. # 180 degree phase shift
@@ -106,12 +106,12 @@ class DualDiffusionPipeline(DiffusionPipeline):
         
         window_offsets_even = window_offsets[::2]
         s_response_even = s_response[::2]
-        response_indices_even = torch.arange(0, s_resolution).view(1, -1) + window_offsets_even.view(-1, 1)
+        response_indices_even = torch.arange(0, s_resolution, device="cuda").view(1, -1) + window_offsets_even.view(-1, 1)
         raw_input[response_indices_even] = torch.fft.irfft(s_response_even, norm="ortho")
 
         window_offsets_odd = window_offsets[1::2]
         s_response_odd = s_response[1::2]
-        response_indices_odd = torch.arange(0, s_resolution).view(1, -1) + window_offsets_odd.view(-1, 1)
+        response_indices_odd = torch.arange(0, s_resolution, device="cuda").view(1, -1) + window_offsets_odd.view(-1, 1)
         raw_input[response_indices_odd] += torch.fft.irfft(s_response_odd, norm="ortho")
 
         return raw_input
@@ -124,7 +124,7 @@ class DualDiffusionPipeline(DiffusionPipeline):
         response = torch.zeros((window_offsets.shape[0], f_resolution), dtype=torch.complex64)
         f_window = DualDiffusionPipeline.get_window(f_resolution)
 
-        response_indices = torch.arange(0, f_resolution).view(1, -1) + window_offsets.view(-1, 1)
+        response_indices = torch.arange(0, f_resolution).to("cuda").view(1, -1) + window_offsets.view(-1, 1)
         response = torch.fft.ifft(fft_input[response_indices] * f_window.view(1, -1), norm="ortho")
         response[:, ::2] *= -1. # 180 degree phase shift
 
@@ -141,12 +141,12 @@ class DualDiffusionPipeline(DiffusionPipeline):
 
         window_offsets_even = window_offsets[::2]
         f_response_even = f_response[::2]
-        response_indices_even = torch.arange(0, f_resolution).view(1, -1) + window_offsets_even.view(-1, 1)
+        response_indices_even = torch.arange(0, f_resolution, device="cuda").view(1, -1) + window_offsets_even.view(-1, 1)
         fft_input[response_indices_even] = torch.fft.fft(f_response_even, norm="ortho")
 
         window_offsets_odd = window_offsets[1::2]
         f_response_odd = f_response[1::2]
-        response_indices_odd = torch.arange(0, f_resolution).view(1, -1) + window_offsets_odd.view(-1, 1)
+        response_indices_odd = torch.arange(0, f_resolution, device="cuda").view(1, -1) + window_offsets_odd.view(-1, 1)
         fft_input[response_indices_odd] += torch.fft.fft(f_response_odd, norm="ortho")
 
         return fft_input
@@ -269,18 +269,15 @@ class DualDiffusionPipeline(DiffusionPipeline):
 
 if __name__ == "__main__":
     
-    if torch.cuda.is_available():
-        device = torch.device("cuda")
-    else:
-        print("Error: CUDA not available")
+    if not torch.cuda.is_available():
+        print("Error: PyTorch not compiled with CUDA support or CUDA unavailable")
         exit(1)
-    torch.set_default_device(device)
 
     model_path = "./models/new_dualdiffusion"
     print(f"Loading DualDiffusion model from '{model_path}'...")
-    my_pipeline = DualDiffusionPipeline.from_pretrained(model_path, torch_dtype=torch.float16).to(device)
+    my_pipeline = DualDiffusionPipeline.from_pretrained(model_path, torch_dtype=torch.float16).to("cuda")
     
-    noise = np.fromfile("./dataset/dual/SNES/01 - front line base.dual", dtype=np.float32, count=2048*1024)
+    noise = np.fromfile("./dataset/dual/01 - front line base.raw", dtype=np.float32, count=2048*1024)
     noise = torch.from_numpy(noise).to("cuda")
 
     start = time.time()

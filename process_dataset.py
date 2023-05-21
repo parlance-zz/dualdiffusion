@@ -61,7 +61,7 @@ def preprocess_raw_to_dual(input_dir,
     s_avg_std = 0.
     f_avg_std = 0.
 
-    fadeout_window = torch.exp(-torch.square(torch.linspace(0., 1., fadeout_len)) * fadeout_std)
+    fadeout_window = torch.exp(-torch.square(torch.linspace(0., 1., fadeout_len, device="cuda")) * fadeout_std)
 
     os.makedirs(output_dir, exist_ok=True)
 
@@ -139,12 +139,9 @@ def preprocess_raw_to_dual(input_dir,
 
 if __name__ == "__main__":
 
-    if torch.cuda.is_available():
-        device = torch.device("cuda")
-    else:
-        print("Error: CUDA not available")
+    if not torch.cuda.is_available():
+        print("Error: PyTorch not compiled with CUDA support or CUDA unavailable")
         exit(1)
-    torch.set_default_device(device)
 
     #decode_source_to_raw(SOURCE_DIR, RAW_DIR, SAMPLE_RATE)
 
