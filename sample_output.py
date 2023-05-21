@@ -12,7 +12,7 @@ if __name__ == "__main__":
         print("Error: PyTorch not compiled with CUDA support or CUDA unavailable")
         exit(1)
 
-    model_path = "./models/dualdiffusion"
+    model_path = "./models/dualdiffusion_f"
     print(f"Loading DualDiffusion model from '{model_path}'...")
     my_pipeline = DualDiffusionPipeline.from_pretrained(model_path, torch_dtype=torch.float16).to("cuda")
     

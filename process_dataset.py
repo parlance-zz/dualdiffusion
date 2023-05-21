@@ -92,9 +92,9 @@ def preprocess_raw_to_dual(input_dir,
                 f_response.cpu().numpy().tofile("./dataset/f_response.raw")
 
                 s_reconstruction = torch.zeros_like(raw_input)
-                DualDiffusionPipeline.invert_s_samples(s_response, s_reconstruction)
+                s_reconstruction = DualDiffusionPipeline.invert_s_samples(s_response, s_reconstruction)
                 f_reconstruction = torch.zeros_like(fft_input)
-                DualDiffusionPipeline.invert_f_samples(f_response, f_reconstruction)
+                f_reconstruction = DualDiffusionPipeline.invert_f_samples(f_response, f_reconstruction)
 
                 ifft = torch.fft.irfft(F.pad(fft_input, (0, 1)), norm="ortho")
                 ifft.cpu().numpy().tofile("./dataset/ifft.raw")

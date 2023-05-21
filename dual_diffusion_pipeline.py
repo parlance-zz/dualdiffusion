@@ -143,13 +143,13 @@ class DualDiffusionPipeline(DiffusionPipeline):
     @staticmethod
     def get_window_offsets(resolution, overlap, sample_len):
             
-            step = int(resolution / overlap + 0.5)
+        step = int(resolution / overlap + 0.5)
 
-            window_offsets = torch.arange(0, sample_len-resolution, step=step)
-            if (window_offsets[-1] + resolution) < sample_len:
-                window_offsets = torch.cat((window_offsets, torch.tensor([sample_len-resolution])))
-            
-            return window_offsets.to("cuda")
+        window_offsets = torch.arange(0, sample_len-resolution, step=step)
+        if (window_offsets[-1] + resolution) < sample_len:
+            window_offsets = torch.cat((window_offsets, torch.tensor([sample_len-resolution])))
+        
+        return window_offsets.to("cuda")
 
     @staticmethod
     def get_window(resolution):
@@ -287,7 +287,7 @@ class DualDiffusionPipeline(DiffusionPipeline):
             #model_output.type(torch.float32).cpu().numpy().tofile("./f_unet_output.raw")
 
             f_reconstruction = torch.zeros_like(fft_input)
-            DualDiffusionPipeline.invert_f_samples(model_output.type(torch.float32), f_reconstruction)
+            f_reconstruction = DualDiffusionPipeline.invert_f_samples(model_output.type(torch.float32), f_reconstruction)
 
             fft_input = torch.view_as_real(fft_input).type(torch.float16)
             f_reconstruction = torch.view_as_real(f_reconstruction).type(torch.float16)
@@ -322,7 +322,7 @@ class DualDiffusionPipeline(DiffusionPipeline):
             #model_output.type(torch.float32).cpu().numpy().tofile("./s_unet_output.raw")
 
             s_reconstruction = torch.zeros_like(raw_input)
-            DualDiffusionPipeline.invert_s_samples(model_output.type(torch.float32), s_reconstruction)
+            s_reconstruction = DualDiffusionPipeline.invert_s_samples(model_output.type(torch.float32), s_reconstruction)
 
             raw_input = raw_input.type(torch.float16)
             s_reconstruction = s_reconstruction.type(torch.float16)
