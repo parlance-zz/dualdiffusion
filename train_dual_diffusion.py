@@ -561,7 +561,7 @@ def main(args):
                 if step % args.gradient_accumulation_steps == 0:
                     progress_bar.update(1)
                 continue
-
+            
             clean_image = input_dual["input"][0, 0, mode_index]
 
             # Sample noise that we'll add to the images

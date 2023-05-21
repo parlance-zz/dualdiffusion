@@ -1,8 +1,5 @@
-import os
 import json
-import time
-import glob
-from typing import List, Tuple, Union, Optional
+from typing import List, Tuple, Union
 
 import numpy as np
 import torch
@@ -306,24 +303,3 @@ class DualDiffusionPipeline(DiffusionPipeline):
             raw_input = raw_input.type(torch.float32)
 
         return raw_input
-
-if __name__ == "__main__":
-    
-    if not torch.cuda.is_available():
-        print("Error: PyTorch not compiled with CUDA support or CUDA unavailable")
-        exit(1)
-
-    model_path = "./models/dualdiffusion"
-    print(f"Loading DualDiffusion model from '{model_path}'...")
-    my_pipeline = DualDiffusionPipeline.from_pretrained(model_path, torch_dtype=torch.float16).to("cuda")
-    
-    #noise = np.fromfile("./dataset/dual/01 - front line base.raw", dtype=np.float32, count=2048*1024)
-    #noise = torch.from_numpy(noise).to("cuda")
-    
-    start = time.time(); output = my_pipeline(batch_size=32, steps=100)#, noise=noise)
-    print(f"Time taken: {time.time()-start}")
-
-    existing_output_count = len(glob.glob("./output/*.raw"))
-    test_output_path = f"./output/test_output_{existing_output_count}.raw"
-    output.cpu().numpy().tofile(test_output_path)
-    print(f"Saved output to {test_output_path}")
