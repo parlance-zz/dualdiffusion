@@ -1,4 +1,9 @@
 __pycache__/
 models/*/
+output/*/
+
 *.raw
+*.json
+*.dual
+
 old_filter_code.py

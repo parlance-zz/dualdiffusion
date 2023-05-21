@@ -1,6 +1,7 @@
 import os
 import json
 import time
+import glob
 from typing import List, Tuple, Union, Optional
 
 import numpy as np
@@ -47,8 +48,47 @@ class DualDiffusionPipeline(DiffusionPipeline):
 
         scheduler_s = DDIMScheduler(clip_sample_range=10000.)
         scheduler_f = DDIMScheduler(clip_sample_range=10000.)
-        unet_s = UNet1DModel(in_channels=2+16, out_channels=2)
-        unet_f = UNet1DModel(in_channels=2+16, out_channels=2)
+        unet_s = UNet1DModel(sample_size=dataset_cfg["s_resolution"],
+                             in_channels=2,
+                             out_channels=2,
+                             layers_per_block=2,
+                             block_out_channels=(128, 128, 256, 256, 512, 512),
+                             down_block_types=(
+                                 "DownBlock1D",
+                                 "DownBlock1D",
+                                 "DownBlock1D",
+                                 "DownBlock1D",
+                                 "AttnDownBlock1D",
+                                 "DownBlock1D"),
+                             up_block_types=(
+                                 "UpBlock1D",
+                                 "AttnUpBlock1D",
+                                 "UpBlock1D",
+                                 "UpBlock1D",
+                                 "UpBlock1D",
+                                 "UpBlock1D")
+                             )
+        
+        unet_f = UNet1DModel(sample_size=dataset_cfg["f_resolution"],
+                             in_channels=2,
+                             out_channels=2,
+                             layers_per_block=2,
+                             block_out_channels=(128, 128, 256, 256, 512, 512),
+                             down_block_types=(
+                                 "DownBlock1D",
+                                 "DownBlock1D",
+                                 "DownBlock1D",
+                                 "DownBlock1D",
+                                 "AttnDownBlock1D",
+                                 "DownBlock1D"),
+                             up_block_types=(
+                                 "UpBlock1D",
+                                 "AttnUpBlock1D",
+                                 "UpBlock1D",
+                                 "UpBlock1D",
+                                 "UpBlock1D",
+                                 "UpBlock1D")
+                             )
 
         pipeline = DualDiffusionPipeline(unet_s,
                                          unet_f,
@@ -273,14 +313,17 @@ if __name__ == "__main__":
         print("Error: PyTorch not compiled with CUDA support or CUDA unavailable")
         exit(1)
 
-    model_path = "./models/new_dualdiffusion"
+    model_path = "./models/dualdiffusion"
     print(f"Loading DualDiffusion model from '{model_path}'...")
     my_pipeline = DualDiffusionPipeline.from_pretrained(model_path, torch_dtype=torch.float16).to("cuda")
     
-    noise = np.fromfile("./dataset/dual/01 - front line base.raw", dtype=np.float32, count=2048*1024)
-    noise = torch.from_numpy(noise).to("cuda")
-
-    start = time.time()
-    output = my_pipeline(batch_size=128, steps = 20, noise=noise)
+    #noise = np.fromfile("./dataset/dual/01 - front line base.raw", dtype=np.float32, count=2048*1024)
+    #noise = torch.from_numpy(noise).to("cuda")
+    
+    start = time.time(); output = my_pipeline(batch_size=32, steps=100)#, noise=noise)
     print(f"Time taken: {time.time()-start}")
-    output.cpu().numpy().tofile("./output.raw")
+
+    existing_output_count = len(glob.glob("./output/*.raw"))
+    test_output_path = f"./output/test_output_{existing_output_count}.raw"
+    output.cpu().numpy().tofile(test_output_path)
+    print(f"Saved output to {test_output_path}")

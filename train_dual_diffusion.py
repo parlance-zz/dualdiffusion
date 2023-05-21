@@ -5,6 +5,8 @@ import os
 import subprocess
 import atexit
 import webbrowser
+from datetime import datetime
+import shutil
 
 from pathlib import Path
 from typing import Optional
@@ -283,7 +285,11 @@ def get_full_repo_name(model_id: str, organization: Optional[str] = None, token:
 
 
 def main(args):
+
+    #run_name = f"{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}_{args.dual_training_mode}"
+    #logging_dir = os.path.join(os.path.join(args.output_dir, args.logging_dir), run_name)
     logging_dir = os.path.join(args.output_dir, args.logging_dir)
+    if os.path.exists(logging_dir) and os.path.isdir(logging_dir): shutil.rmtree(logging_dir)
 
     accelerator_project_config = ProjectConfiguration(total_limit=args.checkpoints_total_limit)
 
@@ -293,6 +299,7 @@ def main(args):
         log_with=args.logger,
         logging_dir=logging_dir,
         project_config=accelerator_project_config,
+        
     )
 
     if args.logger == "tensorboard":
@@ -618,11 +625,11 @@ def main(args):
                     noisy_s_response = DualDiffusionPipeline.get_s_samples(noisy_raw_input, pipeline.config["s_resolution"])
                     
                     s_response_indices = torch.randperm(clean_s_response.shape[0])[:args.train_batch_size]
-                    clean_s_response = clean_f_response[s_response_indices]
-                    noise_s_response = noise_f_response[s_response_indices]
-                    noisy_s_response = noisy_f_response[s_response_indices]
+                    clean_s_response = clean_s_response[s_response_indices]
+                    noise_s_response = noise_s_response[s_response_indices]
+                    noisy_s_response = noisy_s_response[s_response_indices]
 
-                    model_output = model(noisy_f_response, timesteps)["sample"]
+                    model_output = model(noisy_s_response, timesteps)["sample"]
 
                     if args.prediction_type == "epsilon": 
                         loss = F.mse_loss(model_output, noise_s_response)
