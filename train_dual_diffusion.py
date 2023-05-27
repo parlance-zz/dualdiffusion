@@ -25,7 +25,7 @@ from torchvision import transforms
 from tqdm.auto import tqdm
 
 import diffusers
-from diffusers import UNet1DModel
+from diffusers import UNet2DModel
 from diffusers.optimization import get_scheduler
 from diffusers.training_utils import EMAModel
 from diffusers.utils import check_min_version, is_accelerate_version, is_tensorboard_available, is_wandb_available
@@ -43,7 +43,6 @@ if torch.cuda.is_available():
 else:
     print("Error: PyTorch not compiled with CUDA support or CUDA unavailable")
     exit(1)
-#torch.set_default_device(device)
 
 logger = get_logger(__name__, log_level="INFO")
 
@@ -286,8 +285,6 @@ def get_full_repo_name(model_id: str, organization: Optional[str] = None, token:
 
 def main(args):
 
-    #run_name = f"{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}_{args.dual_training_mode}"
-    #logging_dir = os.path.join(os.path.join(args.output_dir, args.logging_dir), run_name)
     logging_dir = os.path.join(args.output_dir, args.logging_dir)
     if os.path.exists(logging_dir) and os.path.isdir(logging_dir): shutil.rmtree(logging_dir)
 
@@ -341,7 +338,7 @@ def main(args):
 
         def load_model_hook(models, input_dir, unet_folder_suffix=args.dual_training_mode):
             if args.use_ema:
-                load_model = EMAModel.from_pretrained(os.path.join(input_dir, f"unet_ema_{unet_folder_suffix}"), UNet1DModel)
+                load_model = EMAModel.from_pretrained(os.path.join(input_dir, f"unet_ema_{unet_folder_suffix}"), UNet2DModel)
                 ema_model.load_state_dict(load_model.state_dict())
                 ema_model.to(accelerator.device)
                 del load_model
@@ -351,7 +348,7 @@ def main(args):
                 model = models.pop()
 
                 # load diffusers style into model
-                load_model = UNet1DModel.from_pretrained(input_dir, subfolder=f"unet_{unet_folder_suffix}") 
+                load_model = UNet2DModel.from_pretrained(input_dir, subfolder=f"unet_{unet_folder_suffix}") 
                 model.register_to_config(**load_model.config)
 
                 model.load_state_dict(load_model.state_dict())
@@ -394,7 +391,6 @@ def main(args):
 
     # Initialize the model
 
-    #pipeline = DualDiffusionPipeline.from_pretrained(args.model_config_name_or_path, torch_dtype=torch.float16).to("cuda")
     pipeline = DualDiffusionPipeline.from_pretrained(args.model_config_name_or_path).to("cuda")
 
     if args.dual_training_mode == "s":
@@ -407,7 +403,6 @@ def main(args):
         mode_index = 1
     else:
         raise ValueError(f"Unknown dual training mode {args.dual_training_mode}")
-    config = model.config
 
     # Create EMA for the model.
     if args.use_ema:
@@ -528,6 +523,7 @@ def main(args):
 
     global_step = 0
     first_epoch = 0
+    grad_norm = 0.
 
     # Potentially load in the weights and states from a previous save
     if args.resume_from_checkpoint:
@@ -569,98 +565,81 @@ def main(args):
             clean_image = input_dual["input"][0, 0, mode_index]
 
             # Sample noise that we'll add to the images
-            noise = torch.randn(clean_image.shape).to(clean_image.device)
+            
+            timesteps = torch.randint(
+                0, noise_scheduler.config.num_train_timesteps, (1,), device=clean_image.device
+            ).long()
             
             if args.dual_training_mode == "f":
-                noise *= pipeline.config["f_avg_std"]
+                
+                noise = torch.randn(len(clean_image), device=clean_image.device)
+                noise_fft = torch.fft.fft(noise)[:len(noise)//2]
+                noise_fft /= torch.arange(len(noise_fft), device=noise.device)
+                noise_fft[0] = 0.
+                noise = noise_fft / noise.std()
+
+                clean_image = torch.view_as_complex(clean_image.view(-1, 2))
+                clean_image[0] = 0.
+
             elif args.dual_training_mode == "s":
-                noise *= pipeline.config["s_avg_std"]
+                
+                noise = torch.randn(len(clean_image), device=clean_image.device)
+                noise_fft = torch.fft.fft(noise)
+                noise_fft[:len(noise)//2] /= torch.arange(len(noise)//2, device=noise.device)
+                noise_fft[0] = 0.; noise_fft[len(noise)//2:] = 0.
+                noise = torch.fft.ifft(noise_fft).real
+                noise /= noise.std()
+
             else:
                 raise ValueError(f"Invalid dual training mode: {args.dual_training_mode}")
 
             # Sample a random timestep for each image
-            timesteps = torch.randint(
-                0, noise_scheduler.config.num_train_timesteps, (1,), device=clean_image.device
-            ).long()
-
+            
             # Add noise to the clean images according to the noise magnitude at each timestep
             # (this is the forward diffusion process)
-            noisy_image = noise_scheduler.add_noise(clean_image, noise, timesteps)
 
             with accelerator.accumulate(model):
 
                 if args.dual_training_mode == "f":
                     
-                    noisy_fft_input = torch.view_as_complex(noisy_image.view(-1, 2))
-                    noisy_f_response = DualDiffusionPipeline.get_f_samples(noisy_fft_input, pipeline.config["f_resolution"])
+                    clean_f_response = DualDiffusionPipeline.get_f_samples(clean_image, pipeline.config["f_resolution"])
+                    noise_f_response = DualDiffusionPipeline.get_f_samples(noise, pipeline.config["f_resolution"])
+
+                    f_response_offset = np.random.randint(0, clean_f_response.shape[0]+1-pipeline.config["f_resolution"])
                     
-                    f_response_indices = torch.randperm(noisy_f_response.shape[0])[:args.train_batch_size]
-                    noisy_f_response = noisy_f_response[f_response_indices]
+                    clean_f_response = clean_f_response[f_response_offset:f_response_offset+pipeline.config["f_resolution"]].permute(1, 0, 2).unsqueeze(0)
+                    noise_f_response = noise_f_response[f_response_offset:f_response_offset+pipeline.config["f_resolution"]].permute(1, 0, 2).unsqueeze(0)
+
+                    noisy_f_response = noise_scheduler.add_noise(clean_f_response, noise_f_response, timesteps)
                     model_output = model(noisy_f_response, timesteps)["sample"]
 
                     if args.prediction_type == "epsilon": 
-
-                        noise_fft_input = torch.view_as_complex(noise.view(-1, 2))
-                        noise_f_response = DualDiffusionPipeline.get_f_samples(noise_fft_input, pipeline.config["f_resolution"])                        
-                        noise_f_response = noise_f_response[f_response_indices]
-
                         loss = F.mse_loss(model_output, noise_f_response)
-
-                    elif args.prediction_type == "sample":
-
-                        clean_fft_input = torch.view_as_complex(clean_image.view(-1, 2))
-                        clean_f_response = DualDiffusionPipeline.get_f_samples(clean_fft_input, pipeline.config["f_resolution"])
-                        clean_f_response = clean_f_response[f_response_indices]
-
-                        alpha_t = _extract_into_tensor(
-                            noise_scheduler.alphas_cumprod, timesteps, (clean_f_response.shape[0], 1, 1, 1)
-                        )
-                        snr_weights = alpha_t / (1 - alpha_t)
-                        loss = snr_weights * F.mse_loss(
-                            model_output, clean_f_response, reduction="none"
-                        )  # use SNR weighting from distillation paper
-                        loss = loss.mean()
                     else:
                         raise ValueError(f"Unsupported prediction type: {args.prediction_type}")
                     
                 elif args.dual_training_mode == "s":
-
-                    noisy_raw_input = noisy_image
-                    noisy_s_response = DualDiffusionPipeline.get_s_samples(noisy_raw_input, pipeline.config["s_resolution"])
                     
-                    s_response_indices = torch.randperm(noisy_s_response.shape[0])[:args.train_batch_size]
-                    noisy_s_response = noisy_s_response[s_response_indices]
+                    clean_s_response = DualDiffusionPipeline.get_s_samples(clean_image, pipeline.config["s_resolution"])
+                    noise_s_response = DualDiffusionPipeline.get_s_samples(noise, pipeline.config["s_resolution"])
+
+                    s_response_offset = np.random.randint(0, clean_s_response.shape[0]+1-pipeline.config["s_resolution"])
+                    
+                    clean_s_response = clean_s_response[s_response_offset:s_response_offset+pipeline.config["s_resolution"]].permute(1, 0, 2).unsqueeze(0)
+                    noise_s_response = noise_s_response[s_response_offset:s_response_offset+pipeline.config["s_resolution"]].permute(1, 0, 2).unsqueeze(0)
+
+                    noisy_s_response = noise_scheduler.add_noise(clean_s_response, noise_s_response, timesteps)
                     model_output = model(noisy_s_response, timesteps)["sample"]
 
                     if args.prediction_type == "epsilon": 
-
-                        noise_raw_input = noise
-                        noise_s_response = DualDiffusionPipeline.get_s_samples(noise_raw_input, pipeline.config["s_resolution"])
-                        noise_s_response = noise_s_response[s_response_indices]
-
                         loss = F.mse_loss(model_output, noise_s_response)
-
-                    elif args.prediction_type == "sample":
-
-                        clean_raw_input = clean_image
-                        clean_s_response = DualDiffusionPipeline.get_s_samples(clean_raw_input, pipeline.config["s_resolution"])
-                        clean_s_response = clean_s_response[s_response_indices]
-
-                        alpha_t = _extract_into_tensor(
-                            noise_scheduler.alphas_cumprod, timesteps, (clean_s_response.shape[0], 1, 1, 1)
-                        )
-                        snr_weights = alpha_t / (1 - alpha_t)
-                        loss = snr_weights * F.mse_loss(
-                            model_output, clean_s_response, reduction="none"
-                        )  # use SNR weighting from distillation paper
-                        loss = loss.mean()
                     else:
                         raise ValueError(f"Unsupported prediction type: {args.prediction_type}")
-                    
+                                        
                 accelerator.backward(loss)
 
                 if accelerator.sync_gradients:
-                    accelerator.clip_grad_norm_(model.parameters(), 1.0)
+                    grad_norm = accelerator.clip_grad_norm_(model.parameters(), 1.).item()
                 optimizer.step()
                 lr_scheduler.step()
                 optimizer.zero_grad()
@@ -678,7 +657,10 @@ def main(args):
                         accelerator.save_state(save_path)
                         logger.info(f"Saved state to {save_path}")
 
-            logs = {"loss": loss.detach().item(), "lr": lr_scheduler.get_last_lr()[0], "step": global_step}
+            logs = {"loss": loss.detach().item(),
+                    "lr": lr_scheduler.get_last_lr()[0],
+                    "step": global_step,
+                    "grad_norm": grad_norm}
             if args.use_ema:
                 logs["ema_decay"] = ema_model.cur_decay_value
             progress_bar.set_postfix(**logs)
@@ -689,48 +671,6 @@ def main(args):
 
         # Generate sample images for visual inspection
         if accelerator.is_main_process:
-            if epoch % args.save_images_epochs == 0 or epoch == args.num_epochs - 1:
-                unet = accelerator.unwrap_model(model)
-
-                if args.use_ema:
-                    ema_model.store(unet.parameters())
-                    ema_model.copy_to(unet.parameters())
-
-                """
-                pipeline = DDPMPipeline(  # **TODO**
-                    unet=unet,
-                    scheduler=noise_scheduler,
-                )
-
-                generator = torch.Generator(device=pipeline.device).manual_seed(0)
-                # run pipeline in inference (sample random noise and denoise)
-                images = pipeline( # **TODO**
-                    generator=generator,
-                    batch_size=args.eval_batch_size,
-                    num_inference_steps=args.ddpm_num_inference_steps,
-                    output_type="numpy",
-                ).images
-                """
-
-                if args.use_ema:
-                    ema_model.restore(unet.parameters())
-
-                # denormalize the images and save to tensorboard
-                #images_processed = (images * 255).round().astype("uint8") # **TODO**
-
-                if args.logger == "tensorboard":
-                    if is_accelerate_version(">=", "0.17.0.dev0"):
-                        tracker = accelerator.get_tracker("tensorboard", unwrap=True)
-                    else:
-                        tracker = accelerator.get_tracker("tensorboard")
-                    #tracker.add_images("test_samples", images_processed.transpose(0, 3, 1, 2), epoch)
-                elif args.logger == "wandb":
-                    pass
-                    # Upcoming `log_images` helper coming in https://github.com/huggingface/accelerate/pull/962/files
-                    #accelerator.get_tracker("wandb").log(
-                    #    {"test_samples": [wandb.Image(img) for img in images_processed], "epoch": epoch},
-                    #    step=global_step,
-                    #)
 
             if epoch % args.save_model_epochs == 0 or epoch == args.num_epochs - 1:
                 # save the model

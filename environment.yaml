@@ -19,3 +19,4 @@ dependencies:
     - ffmpeg-python
     - safetensors
     - tensorboard
+    - opencv-python
