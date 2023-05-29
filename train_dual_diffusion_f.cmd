@@ -6,13 +6,14 @@ accelerate launch^
  --model_config_name_or_path="./models/dualdiffusion_f"^
  --dual_training_mode="f"^
  --output_dir="./models/dualdiffusion_f"^
+ --train_batch_size=256^
  --num_epochs=10000^
  --checkpointing_steps=100000000^
  --checkpoints_total_limit=10^
  --save_model_epochs=1^
- --gradient_accumulation_steps=1^
+ --gradient_accumulation_steps=2^
  --learning_rate=1e-4^
- --lr_warmup_steps=200^
+ --lr_warmup_steps=1000^
  --mixed_precision="fp16"^
  --logger="tensorboard"^
  --use_ema

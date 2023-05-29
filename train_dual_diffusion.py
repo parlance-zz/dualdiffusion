@@ -25,7 +25,7 @@ from torchvision import transforms
 from tqdm.auto import tqdm
 
 import diffusers
-from diffusers import UNet2DModel
+from diffusers import UNet1DModel, UNet2DModel
 from diffusers.optimization import get_scheduler
 from diffusers.training_utils import EMAModel
 from diffusers.utils import check_min_version, is_accelerate_version, is_tensorboard_available, is_wandb_available
@@ -338,7 +338,7 @@ def main(args):
 
         def load_model_hook(models, input_dir, unet_folder_suffix=args.dual_training_mode):
             if args.use_ema:
-                load_model = EMAModel.from_pretrained(os.path.join(input_dir, f"unet_ema_{unet_folder_suffix}"), UNet2DModel)
+                load_model = EMAModel.from_pretrained(os.path.join(input_dir, f"unet_ema_{unet_folder_suffix}"), UNet1DModel)
                 ema_model.load_state_dict(load_model.state_dict())
                 ema_model.to(accelerator.device)
                 del load_model
@@ -348,7 +348,7 @@ def main(args):
                 model = models.pop()
 
                 # load diffusers style into model
-                load_model = UNet2DModel.from_pretrained(input_dir, subfolder=f"unet_{unet_folder_suffix}") 
+                load_model = UNet1DModel.from_pretrained(input_dir, subfolder=f"unet_{unet_folder_suffix}") 
                 model.register_to_config(**load_model.config)
 
                 model.load_state_dict(load_model.state_dict())
@@ -392,6 +392,8 @@ def main(args):
     # Initialize the model
 
     pipeline = DualDiffusionPipeline.from_pretrained(args.model_config_name_or_path).to("cuda")
+    noise_profile = np.fromfile(os.path.join(args.model_config_name_or_path, "avg_freq_response.raw"), dtype=np.float32)
+    noise_profile = torch.from_numpy(noise_profile).to("cuda")
 
     if args.dual_training_mode == "s":
         model = pipeline.unet_s
@@ -457,13 +459,6 @@ def main(args):
                                cache_dir=args.cache_dir,
                                split="train").cast_column("audio", Audio(decode=False))
 
-    # Preprocessing the datasets and DataLoaders creation.
-    augmentations = transforms.Compose(
-        [
-            transforms.ToTensor(),
-        ]
-    )
-
     def transform_images(examples):
         
         images = []
@@ -475,8 +470,8 @@ def main(args):
                 dual_data = np.fromfile(audio["path"], dtype=np.float32)
             assert(len(dual_data) % 2 == 0)
 
-            dual_data = dual_data.reshape(2, len(dual_data)//2)
-            images.append(augmentations(dual_data))
+            dual_data = torch.from_numpy(dual_data).to("cuda")
+            images.append(dual_data)
 
         return {"input": images}
 
@@ -562,18 +557,19 @@ def main(args):
                     progress_bar.update(1)
                 continue
             
-            clean_image = input_dual["input"][0, 0, mode_index]
+            #clean_image = input_dual["input"][0, 0, mode_index]
+            clean_image = input_dual["input"][0]
 
             # Sample noise that we'll add to the images
             
             timesteps = torch.randint(
-                0, noise_scheduler.config.num_train_timesteps, (1,), device=clean_image.device
+                0, noise_scheduler.config.num_train_timesteps, (args.train_batch_size,), device=clean_image.device
             ).long()
             
             if args.dual_training_mode == "f":
                 
                 noise = torch.randn(len(clean_image), device=clean_image.device)
-                noise_fft = torch.fft.fft(noise)[:len(noise)//2]
+                noise_fft = torch.fft.fft(noise, norm="ortho")[:len(noise)//2]
                 noise_fft /= torch.arange(len(noise_fft), device=noise.device)
                 noise_fft[0] = 0.
                 noise = noise_fft / noise.std()
@@ -583,12 +579,18 @@ def main(args):
 
             elif args.dual_training_mode == "s":
                 
-                noise = torch.randn(len(clean_image), device=clean_image.device)
-                noise_fft = torch.fft.fft(noise)
-                noise_fft[:len(noise)//2] /= torch.arange(len(noise)//2, device=noise.device)
-                noise_fft[0] = 0.; noise_fft[len(noise)//2:] = 0.
-                noise = torch.fft.ifft(noise_fft).real
-                noise /= noise.std()
+                clean_image = torch.view_as_complex(clean_image.view(-1, 2))[:pipeline.config["sample_len"]]
+
+                #noise = torch.randn(len(clean_image), device=clean_image.device)
+                #noise_fft = torch.fft.fft(noise, norm="ortho")
+                #noise_fft[:len(noise)//2] /= torch.arange(len(noise)//2, device=noise.device)
+                #noise_fft[0] = 0.; noise_fft[len(noise)//2:] = 0.
+                #noise = torch.fft.ifft(noise_fft, norm="ortho")
+                #noise /= noise.std()
+
+                noise = torch.exp(torch.rand(len(clean_image)//2, device=clean_image.device) * 1j * 2 * np.pi) * noise_profile
+                noise = torch.cat((noise, torch.zeros(len(clean_image)//2, device=clean_image.device)))
+                noise = torch.fft.ifft(noise, norm="ortho")
 
             else:
                 raise ValueError(f"Invalid dual training mode: {args.dual_training_mode}")
@@ -605,10 +607,11 @@ def main(args):
                     clean_f_response = DualDiffusionPipeline.get_f_samples(clean_image, pipeline.config["f_resolution"])
                     noise_f_response = DualDiffusionPipeline.get_f_samples(noise, pipeline.config["f_resolution"])
 
-                    f_response_offset = np.random.randint(0, clean_f_response.shape[0]+1-pipeline.config["f_resolution"])
+                    v_res = 1 #pipeline.config["f_resolution"]
+                    f_response_offset = np.random.randint(0, clean_f_response.shape[0]+1-v_res)
                     
-                    clean_f_response = clean_f_response[f_response_offset:f_response_offset+pipeline.config["f_resolution"]].permute(1, 0, 2).unsqueeze(0)
-                    noise_f_response = noise_f_response[f_response_offset:f_response_offset+pipeline.config["f_resolution"]].permute(1, 0, 2).unsqueeze(0)
+                    clean_f_response = clean_f_response[f_response_offset:f_response_offset+v_res].permute(1, 0, 2).unsqueeze(0)
+                    noise_f_response = noise_f_response[f_response_offset:f_response_offset+v_res].permute(1, 0, 2).unsqueeze(0)
 
                     noisy_f_response = noise_scheduler.add_noise(clean_f_response, noise_f_response, timesteps)
                     model_output = model(noisy_f_response, timesteps)["sample"]
@@ -623,12 +626,12 @@ def main(args):
                     clean_s_response = DualDiffusionPipeline.get_s_samples(clean_image, pipeline.config["s_resolution"])
                     noise_s_response = DualDiffusionPipeline.get_s_samples(noise, pipeline.config["s_resolution"])
 
-                    s_response_offset = np.random.randint(0, clean_s_response.shape[0]+1-pipeline.config["s_resolution"])
+                    s_response_indices = torch.randperm(clean_s_response.shape[0])[:args.train_batch_size]
                     
-                    clean_s_response = clean_s_response[s_response_offset:s_response_offset+pipeline.config["s_resolution"]].permute(1, 0, 2).unsqueeze(0)
-                    noise_s_response = noise_s_response[s_response_offset:s_response_offset+pipeline.config["s_resolution"]].permute(1, 0, 2).unsqueeze(0)
-
+                    clean_s_response = clean_s_response[s_response_indices]
+                    noise_s_response = noise_s_response[s_response_indices]
                     noisy_s_response = noise_scheduler.add_noise(clean_s_response, noise_s_response, timesteps)
+                    
                     model_output = model(noisy_s_response, timesteps)["sample"]
 
                     if args.prediction_type == "epsilon": 

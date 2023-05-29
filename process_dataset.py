@@ -21,8 +21,8 @@ SAMPLE_LEN = 2 ** 21
 FADEOUT_LEN = 2 ** 17
 FADEOUT_STD = 10.
 
-S_RESOLUTION = 128 // 2
-F_RESOLUTION = 128 // 2
+S_RESOLUTION = 8192
+F_RESOLUTION = 8192
 
 def decode_source_to_raw(input_dir, output_dir, sample_rate):
 
@@ -81,24 +81,30 @@ def preprocess_raw_to_dual(input_dir,
             raw_input /= torch.max(torch.abs(raw_input))
             
             fft_input = torch.fft.fft(raw_input, norm="ortho")
+            fft_input[len(fft_input)//2:] = 0.
+            raw_input = torch.fft.ifft(fft_input, norm="ortho")
             fft_input = fft_input[:len(fft_input)//2]
+
             avg_freq_response += torch.abs(fft_input)
 
             s_response = DualDiffusionPipeline.get_s_samples(raw_input, s_resolution)  
             s_avg_mean += s_response.mean().item()
             s_avg_std += s_response.std().item()
 
+            f_response = DualDiffusionPipeline.get_f_samples(fft_input, f_resolution)
+            f_avg_mean += f_response.mean().item()
+            f_avg_std += f_response.std().item()
+
             output_file = os.path.join(output_dir, filename)
             output_file = os.path.splitext(output_file)[0] + '.raw'
 
             with open(output_file, 'wb') as f:
+                #(raw_input / 0.1).cpu().numpy().tofile(f)
+                #(fft_input / 0.1).cpu().numpy().tofile(f)
                 raw_input.cpu().numpy().tofile(f)
                 fft_input.cpu().numpy().tofile(f)
 
-            """
             if (total_processed) == 0 and enable_debug_dumps:
-                s_response = DualDiffusionPipeline.get_s_samples(raw_input, s_resolution)
-                f_response = DualDiffusionPipeline.get_f_samples(fft_input, f_resolution)
                 s_reconstructed  = DualDiffusionPipeline.invert_s_samples(s_response, raw_input)
                 f_reconstructed  = DualDiffusionPipeline.invert_f_samples(f_response, fft_input)
 
@@ -106,9 +112,7 @@ def preprocess_raw_to_dual(input_dir,
                 s_reconstructed.cpu().numpy().tofile("./dataset/s_reconstructed.raw")
                 f_response.cpu().numpy().tofile("./dataset/f_response.raw")                
                 f_reconstructed.cpu().numpy().tofile("./dataset/f_reconstructed.raw")
-                #exit(0)
-            """
-
+                
             print(f"Processed '{input_file}'")
             total_processed += 1
 
@@ -116,7 +120,10 @@ def preprocess_raw_to_dual(input_dir,
 
     s_avg_mean /= total_processed
     s_avg_std /= total_processed
+    f_avg_mean /= total_processed
+    f_avg_std /= total_processed
     print(f"\nAverage s mean: {s_avg_mean}  Average s std: {s_avg_std}")
+    print(f"Average f mean: {f_avg_mean}  Average f std: {f_avg_std}")
 
     avg_freq_response /= total_processed
     avg_freq_response.cpu().numpy().tofile("./dataset/avg_freq_response.raw")
@@ -125,8 +132,6 @@ def preprocess_raw_to_dual(input_dir,
     config = {
         "sample_len": sample_len,
         "s_resolution": s_resolution,
-        "s_avg_mean": s_avg_mean,
-        "s_avg_std": s_avg_std,
         "f_resolution": f_resolution,
         }
     with open(config_path, 'w') as f:
@@ -153,3 +158,6 @@ if __name__ == "__main__":
 
     DualDiffusionPipeline.create_new(DATA_CFG_PATH, NEW_MODEL_PATH)
     print(f"Created new DualDiffusion model with config at '{NEW_MODEL_PATH}'")
+
+    # copy avg frequency response to model path
+    shutil.copyfile("./dataset/avg_freq_response.raw", os.path.join(NEW_MODEL_PATH, "avg_freq_response.raw"))

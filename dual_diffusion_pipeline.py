@@ -5,8 +5,8 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
-from diffusers.models import UNet2DModel
-from diffusers.schedulers import PNDMScheduler
+from diffusers.models import UNet1DModel, UNet2DModel
+from diffusers.schedulers import PNDMScheduler, DDIMScheduler, DDIMInverseScheduler
 from diffusers.pipelines.pipeline_utils import AudioPipelineOutput, DiffusionPipeline
 from diffusers.utils import randn_tensor
     
@@ -14,8 +14,8 @@ class DualDiffusionPipeline(DiffusionPipeline):
 
     def __init__(
         self,
-        unet_s: UNet2DModel,
-        unet_f: UNet2DModel,
+        unet_s: UNet1DModel,
+        unet_f: UNet1DModel,
         scheduler_s: PNDMScheduler,
         scheduler_f: PNDMScheduler,
         sample_len: int = None,
@@ -55,6 +55,7 @@ class DualDiffusionPipeline(DiffusionPipeline):
             steps_offset=1,
         )
 
+        """
         unet_s = UNet2DModel(
             sample_size=dataset_cfg["s_resolution"],
             in_channels=2,
@@ -99,7 +100,50 @@ class DualDiffusionPipeline(DiffusionPipeline):
                 "AttnUpBlock2D",
             ),
         )
+        """
 
+        unet_s = UNet1DModel(sample_size=dataset_cfg["s_resolution"],
+                             in_channels=2,
+                             out_channels=2,
+                             layers_per_block=2,
+                             block_out_channels=(128, 128, 256, 256, 512, 512),
+                             down_block_types=(
+                                 "DownBlock1D",
+                                 "DownBlock1D",
+                                 "DownBlock1D",
+                                 "DownBlock1D",
+                                 "AttnDownBlock1D",
+                                 "DownBlock1D"),
+                             up_block_types=(
+                                 "UpBlock1D",
+                                 "AttnUpBlock1D",
+                                 "UpBlock1D",
+                                 "UpBlock1D",
+                                 "UpBlock1D",
+                                 "UpBlock1D")
+                             )
+        
+        unet_f = UNet1DModel(sample_size=dataset_cfg["f_resolution"],
+                             in_channels=2,
+                             out_channels=2,
+                             layers_per_block=2,
+                             block_out_channels=(128, 128, 256, 256, 512, 512),
+                             down_block_types=(
+                                 "DownBlock1D",
+                                 "DownBlock1D",
+                                 "DownBlock1D",
+                                 "DownBlock1D",
+                                 "AttnDownBlock1D",
+                                 "DownBlock1D"),
+                             up_block_types=(
+                                 "UpBlock1D",
+                                 "AttnUpBlock1D",
+                                 "UpBlock1D",
+                                 "UpBlock1D",
+                                 "UpBlock1D",
+                                 "UpBlock1D")
+                             )
+        
         pipeline = DualDiffusionPipeline(unet_s,
                                          unet_f,
                                          scheduler_s,
@@ -158,41 +202,50 @@ class DualDiffusionPipeline(DiffusionPipeline):
     @staticmethod
     def get_s_samples(raw_input, s_resolution):
 
-        window_offsets = DualDiffusionPipeline.get_window_offsets(s_resolution*2, 2, len(raw_input))
-        response_indices = torch.arange(0, s_resolution*2, device="cuda").view(1, -1) + window_offsets.view(-1, 1)
-        response = torch.fft.fft(raw_input[response_indices], norm="ortho")[:, :s_resolution]
+        #window_offsets = DualDiffusionPipeline.get_window_offsets(s_resolution*2, 2, len(raw_input))
+        #response_indices = torch.arange(0, s_resolution*2, device="cuda").view(1, -1) + window_offsets.view(-1, 1)
+        #response = torch.fft.fft(raw_input[response_indices], norm="ortho")[:, :s_resolution]
+        #response[:, 0] = 0.
+
+        #return torch.view_as_real(response).permute(0, 2, 1)
+
+        window_offsets = DualDiffusionPipeline.get_window_offsets(s_resolution, 2, len(raw_input))
+        response_indices = torch.arange(0, s_resolution, device="cuda").view(1, -1) + window_offsets.view(-1, 1)
+        response = raw_input[response_indices]
+        response -= response.mean(dim=-1, keepdim=True) # each individual response should have zero mean
 
         return torch.view_as_real(response).permute(0, 2, 1)
     
     @staticmethod
     def invert_s_samples(s_response, raw_input):
 
-        s_resolution = s_response.shape[2]# * 2
+        s_resolution = s_response.shape[2]
+        #window_offsets = DualDiffusionPipeline.get_window_offsets(s_resolution*2, 2, len(raw_input))
+        #windows = DualDiffusionPipeline.get_windows(window_offsets, s_resolution*2)
         window_offsets = DualDiffusionPipeline.get_window_offsets(s_resolution, 2, len(raw_input))
         windows = DualDiffusionPipeline.get_windows(window_offsets, s_resolution)
-        
-        s_response = s_response.squeeze(1)
+
+        s_response = torch.view_as_complex(s_response.permute(0, 2, 1))
         #s_response = torch.cat((s_response, torch.zeros_like(s_response)), dim=-1)
-        s_response = torch.clip(s_response, 0., 1000.)
 
         window_offsets_even = window_offsets[::2]
         s_response_even = s_response[::2]
         windows_even = windows[::2]
+        #response_indices_even = torch.arange(0, s_resolution*2, device="cuda").view(1, -1) + window_offsets_even.view(-1, 1)
         response_indices_even = torch.arange(0, s_resolution, device="cuda").view(1, -1) + window_offsets_even.view(-1, 1)
-        raw_input_fft_even = torch.fft.fft(raw_input[response_indices_even], norm="ortho")
-        #raw_input_ifft_even = torch.fft.ifft(raw_input_fft_even / torch.absolute(raw_input_fft_even) * torch.exp(s_response_even))
-        raw_input_ifft_even = torch.fft.ifft(raw_input_fft_even / torch.absolute(raw_input_fft_even) * (s_response_even))
+        #raw_input_ifft_even = torch.fft.ifft(s_response_even, norm="ortho").real
 
         window_offsets_odd = window_offsets[1::2]
         s_response_odd = s_response[1::2]
         windows_odd = windows[1::2]
+        #response_indices_odd = torch.arange(0, s_resolution*2, device="cuda").view(1, -1) + window_offsets_odd.view(-1, 1)
         response_indices_odd = torch.arange(0, s_resolution, device="cuda").view(1, -1) + window_offsets_odd.view(-1, 1)
-        raw_input_fft_odd = torch.fft.fft(raw_input[response_indices_odd], norm="ortho")
-        #raw_input_ifft_odd = torch.fft.ifft(raw_input_fft_odd / torch.absolute(raw_input_fft_odd) * torch.exp(s_response_odd))
-        raw_input_ifft_odd = torch.fft.ifft(raw_input_fft_odd / torch.absolute(raw_input_fft_odd) * (s_response_odd))
+        #raw_input_ifft_odd = torch.fft.ifft(s_response_odd, norm="ortho").real
 
-        raw_input[response_indices_even] = raw_input_ifft_even * windows_even
-        raw_input[response_indices_odd] += raw_input_ifft_odd * windows_odd
+        #raw_input[response_indices_even] = raw_input_ifft_even * windows_even
+        #raw_input[response_indices_odd] += raw_input_ifft_odd * windows_odd
+        raw_input[response_indices_even] = s_response_even * windows_even
+        raw_input[response_indices_odd] += s_response_odd * windows_odd
 
         return raw_input
 
@@ -212,24 +265,19 @@ class DualDiffusionPipeline(DiffusionPipeline):
         window_offsets = DualDiffusionPipeline.get_window_offsets(f_resolution, 2, len(fft_input))
         windows = DualDiffusionPipeline.get_windows(window_offsets, f_resolution)
 
-        f_response = f_response.squeeze(1)
-        f_response = torch.clip(f_response, 0., 1000.)
+        f_response = torch.view_as_complex(f_response.permute(0, 2, 1))
 
         window_offsets_even = window_offsets[::2]
         f_response_even = f_response[::2]
         windows_even = windows[::2]
         response_indices_even = torch.arange(0, f_resolution, device="cuda").view(1, -1) + window_offsets_even.view(-1, 1)
-        #fft_input[response_indices_even] = torch.fft.rfft(f_response_even, norm="ortho") * windows_even
-        fft_input_even = torch.fft.fft(fft_input[response_indices_even], norm="ortho")
-        fft_input_even = torch.fft.ifft(fft_input_even / torch.absolute(fft_input_even) * (f_response_even))
+        fft_input_even = torch.fft.fft(f_response_even, norm="ortho")
 
         window_offsets_odd = window_offsets[1::2]
         f_response_odd = f_response[1::2]
         windows_odd = windows[1::2]
         response_indices_odd = torch.arange(0, f_resolution, device="cuda").view(1, -1) + window_offsets_odd.view(-1, 1)
-        #fft_input[response_indices_odd] += torch.fft.rfft(f_response_odd, norm="ortho") * windows_odd
-        fft_input_odd = torch.fft.fft(fft_input[response_indices_odd], norm="ortho")
-        fft_input_odd = torch.fft.ifft(fft_input_odd / torch.absolute(fft_input_odd) * (f_response_odd))
+        fft_input_odd = torch.fft.fft(f_response_odd, norm="ortho")
 
         fft_input[response_indices_even] = fft_input_even * windows_even
         fft_input[response_indices_odd] += fft_input_odd * windows_odd
@@ -241,11 +289,10 @@ class DualDiffusionPipeline(DiffusionPipeline):
         self,
         batch_size: int = 1,
         length: int = 0,
-        start_step: int = 0,
+        start_step: int = 1,
         steps: int = None,
         generator: torch.Generator = None,
         step_generator: torch.Generator = None,
-        eta: float = 0,
         noise: torch.Tensor = None,
     ) -> Union[
         AudioPipelineOutput,
@@ -265,6 +312,8 @@ class DualDiffusionPipeline(DiffusionPipeline):
         Returns:
             `List[PIL Image]`: mel spectrograms (`float`, `List[np.ndarray]`): sample rate and raw audios
         """
+        self.scheduler_s = DDIMScheduler(clip_sample_range=10000.)
+        self.scheduler_f = DDIMScheduler(clip_sample_range=10000.)
 
         steps = steps or self.get_default_steps()
         self.scheduler_s.set_timesteps(steps)
@@ -275,17 +324,24 @@ class DualDiffusionPipeline(DiffusionPipeline):
 
         if noise is None:
             noise = randn_tensor((length,), generator=generator, device=self.device)
-
+            noise_fft = torch.fft.fft(noise, norm="ortho")
+            noise_fft[:len(noise)//2] /= torch.arange(len(noise)//2, device=noise.device)
+            noise_fft[0] = 0.; noise_fft[len(noise)//2:] = 0.
+            noise = torch.fft.ifft(noise_fft, norm="ortho")
+            noise /= noise.std()
+        
         raw_input = noise
+        noise.cpu().numpy().tofile(f"./output/noise_input.raw")
 
         for step, t in enumerate(self.progress_bar(self.scheduler_f.timesteps[start_step:])):
             
             fft_input = torch.fft.fft(raw_input, norm="ortho")[:len(raw_input)//2]
 
+            """
             if step > 0 and (1==2):
                 
                 f_response = DualDiffusionPipeline.get_f_samples(fft_input, self.config["f_resolution"])
-                #f_response.cpu().numpy().tofile("./f_unet_input.raw")
+                #f_response.cpu().numpy().tofile("./output/f_unet_input.raw")
                 f_response_std = f_response.std(dim=(1, 2))
                 f_response /= f_response_std.view(-1, 1, 1)
                 f_response = f_response.type(torch.float16)
@@ -294,7 +350,7 @@ class DualDiffusionPipeline(DiffusionPipeline):
                 for i in range(0, f_response.shape[0], batch_size):
                     next_batch_size = min(batch_size, f_response.shape[0] - i)
                     model_output[i:i+next_batch_size] = self.unet_f(f_response[i:i+next_batch_size], t)["sample"]
-                #model_output.type(torch.float32).cpu().numpy().tofile("./f_unet_output.raw")
+                #model_output.type(torch.float32).cpu().numpy().tofile("./output/f_unet_output.raw")
 
                 model_output *= f_response_std.view(-1, 1, 1)
                 f_reconstruction = torch.zeros_like(fft_input)
@@ -303,68 +359,45 @@ class DualDiffusionPipeline(DiffusionPipeline):
                 fft_input = torch.view_as_real(fft_input).type(torch.float16)
                 f_reconstruction = torch.view_as_real(f_reconstruction).type(torch.float16)
 
-                if isinstance(self.scheduler_f, DDIMScheduler):
-                    fft_input = self.scheduler_f.step(
-                        model_output=f_reconstruction,
-                        timestep=t,
-                        sample=fft_input,
-                        eta=eta,
-                        generator=step_generator,
-                    )["prev_sample"]
-                else:
-                    fft_input = self.scheduler_f.step(
-                        model_output=f_reconstruction,
-                        timestep=t,
-                        sample=fft_input,
-                        generator=step_generator,
-                    )["prev_sample"]
+
+                fft_input = self.scheduler_f.step(
+                    model_output=f_reconstruction,
+                    timestep=t,
+                    sample=fft_input,
+                    generator=step_generator,
+                )["prev_sample"]
                 
                 fft_input = torch.view_as_complex(fft_input.type(torch.float32))
+            """
 
+            #fft_input.cpu().numpy().tofile(f"./output/fft_input_{step}.raw")
             raw_input = torch.fft.ifft(F.pad(fft_input, (0, len(fft_input))), norm="ortho")
-            #raw_input -= raw_input.mean().item()
-            #raw_input /= torch.max(torch.abs(torch.real(raw_input))) #raw_input.std().item()
+            #raw_input -= raw_input.mean()
+            #raw_input /= raw_input.std()
+
             s_response = DualDiffusionPipeline.get_s_samples(raw_input, self.config["s_resolution"])
-            #s_response -= self.config["s_avg_mean"]
-            #s_response /= self.config["s_avg_std"] * 5.
-            s_response.cpu().numpy().tofile(f"./s_unet_input_{step}.raw")
+            s_response.cpu().numpy().tofile(f"./output/s_unet_input_{step}.raw")
             s_response = s_response.type(torch.float16)
-            model_output = torch.zeros_like(s_response)
 
-            for i in range(0, s_response.shape[0], batch_size*2):
-                next_batch_size = min(batch_size*2, s_response.shape[0] - i)
-                model_output[i:i+next_batch_size] = self.unet_s(s_response[i:i+next_batch_size], t)["sample"]
-            model_output.type(torch.float32).cpu().numpy().tofile(f"./s_unet_output_{step}.raw")
-            
-            #s_reconstruction = raw_input.clone()
-            #s_reconstruction = DualDiffusionPipeline.invert_s_samples(model_output.type(torch.float32), s_reconstruction)
+            for i in range(0, s_response.shape[0], batch_size):
+                
+                next_batch_size = min(batch_size, s_response.shape[0] - i)
 
-            #raw_input = raw_input.type(torch.float16)
-            #s_reconstruction = s_reconstruction.type(torch.float16)
-            
-            if isinstance(self.scheduler_s, DDIMScheduler):
-                s_response = self.scheduler_s.step(
+                model_input = s_response[i:i+next_batch_size]
+                model_output = self.unet_s(model_input, t)["sample"]
+                
+                model_input = self.scheduler_s.step(
                     model_output=model_output,
                     timestep=t,
-                    sample=s_response,
-                    eta=eta,
-                    generator=step_generator,
+                    sample=model_input,
                 )["prev_sample"]
-            else:
-                s_response = self.scheduler_s.step(
-                    model_output=model_output,
-                    timestep=t,
-                    sample=s_response,
-                    generator=step_generator,
-                )["prev_sample"]
+
+                s_response[i:i+next_batch_size] = model_input
             
             s_response = s_response.type(torch.float32)
-            #s_response *= self.config["s_avg_std"] * 5.
-            #s_response += self.config["s_avg_mean"]
-            s_response.type(torch.float32).cpu().numpy().tofile(f"./s_unet_output_s_response_{step}.raw")
+            s_response.cpu().numpy().tofile(f"./output/s_unet_output_s_response_{step}.raw")
 
             raw_input = DualDiffusionPipeline.invert_s_samples(s_response, raw_input)
-
-            #raw_input = raw_input.type(torch.float32)
+            raw_input.cpu().numpy().tofile(f"./output/raw_input_{step}.raw")
 
         return raw_input
