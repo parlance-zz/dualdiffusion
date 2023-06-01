@@ -22,7 +22,7 @@ FADEOUT_LEN = 2 ** 17
 FADEOUT_STD = 10.
 
 S_RESOLUTION = 8192
-F_RESOLUTION = 8192
+F_RESOLUTION = 8192 #1024 (abs)
 
 def decode_source_to_raw(input_dir, output_dir, sample_rate):
 
@@ -44,15 +44,15 @@ def decode_source_to_raw(input_dir, output_dir, sample_rate):
             except Exception as e:
                 print(f"Error processing '{input_file}': {e}")
 
-def preprocess_raw_to_dual(input_dir,
-                           output_dir,
-                           config_path,
-                           sample_len,
-                           fadeout_len,
-                           fadeout_std,
-                           s_resolution,
-                           f_resolution,
-                           enable_debug_dumps=False
+def preprocess_raw_to_dual(input_dir: str,
+                           output_dir: str,
+                           config_path: str,
+                           sample_len: int,
+                           fadeout_len: int,
+                           fadeout_std: float,
+                           s_resolution: int,
+                           f_resolution: int,
+                           enable_debug_dumps: bool=False,
                            ):
 
     fadeout_window = torch.exp(-torch.square(torch.linspace(0., 1., fadeout_len, device="cuda")) * fadeout_std)
@@ -98,21 +98,21 @@ def preprocess_raw_to_dual(input_dir,
             output_file = os.path.join(output_dir, filename)
             output_file = os.path.splitext(output_file)[0] + '.raw'
 
-            with open(output_file, 'wb') as f:
-                #(raw_input / 0.1).cpu().numpy().tofile(f)
-                #(fft_input / 0.1).cpu().numpy().tofile(f)
-                raw_input.cpu().numpy().tofile(f)
-                fft_input.cpu().numpy().tofile(f)
+            #with open(output_file, 'wb') as f:
+            #    raw_input.cpu().numpy().tofile(f)
+            #    fft_input.cpu().numpy().tofile(f)
 
             if (total_processed) == 0 and enable_debug_dumps:
                 s_reconstructed  = DualDiffusionPipeline.invert_s_samples(s_response, raw_input)
                 f_reconstructed  = DualDiffusionPipeline.invert_f_samples(f_response, fft_input)
-
+                
                 s_response.cpu().numpy().tofile("./dataset/s_response.raw")
                 s_reconstructed.cpu().numpy().tofile("./dataset/s_reconstructed.raw")
                 f_response.cpu().numpy().tofile("./dataset/f_response.raw")                
                 f_reconstructed.cpu().numpy().tofile("./dataset/f_reconstructed.raw")
-                
+
+                #exit(0)    
+
             print(f"Processed '{input_file}'")
             total_processed += 1
 
