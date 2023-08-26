@@ -261,15 +261,9 @@ class LGDiffusionPipeline(DiffusionPipeline):
         steps: int = 50,
         scheduler="dpms++",
         seed=0,
-        sample_rate_multiplier: int = 1,
-        length_multiplier: int = 1,
         loops: int = 1,
         batch_size: int = 1,
     ):
-        if sample_rate_multiplier < 1:
-            raise ValueError(f"Sample rate multiplier must be greater than 0, got {sample_rate_multiplier}")
-        if length_multiplier < 1:
-            raise ValueError(f"Length multiplier must be greater than 0, got {length_multiplier}")
         if (steps <= 0) or (steps > 1000):
             raise ValueError(f"Steps must be between 1 and 1000, got {steps}")
         if loops < 0:
