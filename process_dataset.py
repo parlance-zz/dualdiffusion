@@ -1,4 +1,6 @@
 import os
+import subprocess
+import uuid
 import multiprocessing
 import numpy as np
 import torch
@@ -8,7 +10,6 @@ from lg_diffusion_pipeline import LGDiffusionPipeline
 NUM_PROCESSES = multiprocessing.cpu_count() // 2
 FFMPEG_PATH = './dataset/ffmpeg_gme/bin/ffmpeg.exe'
 #FFMPEG_PATH = 'ffmpeg'
-#FFMPEG_PATH = None
 SOURCE_DIR = './dataset/spc'
 #SOURCE_DIR = './dataset/source'
 INPUT_FORMATS = ('.spc')
@@ -24,8 +25,8 @@ SAMPLE_RAW_LENGTH = 65536
 OVERLAPPED = False
 SPATIAL_WINDOW_LENGTH = 2048
 FREQ_EMBEDDING_DIM = 30
-MINIMUM_SAMPLE_LENGTH = SAMPLE_RAW_LENGTH * 4
-MAXIMUM_SAMPLE_LENGTH = SAMPLE_RAW_LENGTH * 4
+MINIMUM_SAMPLE_LENGTH = SAMPLE_RAW_LENGTH * 8
+MAXIMUM_SAMPLE_LENGTH = SAMPLE_RAW_LENGTH * 8
 INPUT_RAW_DIR = OUTPUT_RAW_DIR
 OUTPUT_SAMPLE_DIR = './dataset/samples'
 
@@ -41,53 +42,33 @@ MODEL_PARAMS = {
 }
 NEW_MODEL_PATH = './models/new_lgdiffusion'
 
-
-
-if FFMPEG_PATH is None: import ffmpeg
-else: import subprocess
     
-def decode_source_files_to_raw(input_files):
+def decode_source_files_to_raw(input_file):
 
-    num_processed = 0
-    num_error = 0
+    dirpath = os.path.dirname(input_file)
+    filename = os.path.basename(input_file)
 
-    for dirpath, filename in input_files: 
-        
-        input_file = os.path.join(dirpath, filename)
-        
-        relative_dirpath = os.path.relpath(dirpath, SOURCE_DIR)
-        output_file_dir = os.path.join(OUTPUT_RAW_DIR, relative_dirpath)
-        os.makedirs(output_file_dir, exist_ok=True)
-        
-        output_file = os.path.join(output_file_dir, filename)
-        output_file = os.path.splitext(output_file)[0] + '.raw'
-        
-        if FFMPEG_PATH is None:
-            try:
-                ffmpeg.input(input_file).output(output_file, t=MAXIMUM_RAW_LENGTH, ac=1, ar=SAMPLE_RATE, format='s16le').run(quiet=True)
-            except Exception as e:
-                print(f"Error processing '{input_file}': {e}")
-                num_error += 1
-                continue
-            print(f"Processed '{input_file}'")
-            num_processed += 1
-        else:
-            result = subprocess.run([FFMPEG_PATH,
-                                        '-i', input_file,
-                                        '-t', MAXIMUM_RAW_LENGTH,
-                                        '-ac', '1',
-                                        '-ar', str(SAMPLE_RATE),
-                                        '-f', 's16le',
-                                        output_file])
-            if result.returncode != 0:
-                print(f"Error processing '{input_file}'")
-                num_error += 1
-            else:
-                print(f"Processed '{input_file}'")
-                num_processed += 1
+    relative_dirpath = os.path.relpath(dirpath, SOURCE_DIR)
+    output_file_dir = os.path.join(OUTPUT_RAW_DIR, relative_dirpath)
+    os.makedirs(output_file_dir, exist_ok=True)
     
-    return num_processed, num_error
-
+    output_file = os.path.join(output_file_dir, filename)
+    output_file = os.path.splitext(output_file)[0] + '.raw'
+    
+    print(input_file, output_file)
+    result = subprocess.run([FFMPEG_PATH,
+                            '-i', input_file,
+                            '-t', MAXIMUM_RAW_LENGTH,
+                            '-ac', '1',
+                            '-ar', str(SAMPLE_RATE),
+                            '-f', 's16le',
+                            output_file])
+    if result.returncode != 0:
+        print(f"Error processing '{input_file}'")
+        return False
+    else:
+        print(f"Processed '{input_file}'")
+        return True
 
 def decode_source_to_raw():
 
@@ -99,51 +80,43 @@ def decode_source_to_raw():
             if not file_ext in INPUT_FORMATS:
                 continue
 
-            input_files.append((dirpath, filename))
+            input_file = os.path.join(dirpath, filename)
+            input_files.append(input_file)
 
-    num_processed = 0; num_error = 0
-    pool = multiprocessing.Pool(NUM_PROCESSES)  
-    for proc_num_processed, proc_num_error in pool.imap_unordered(decode_source_files_to_raw, input_files):
-        num_processed += proc_num_processed
-        num_error += proc_num_error
+    total_processed = 0
+    pool = multiprocessing.Pool(NUM_PROCESSES)
+    for processed in pool.map(decode_source_files_to_raw, input_files):
+        total_processed += int(processed)
 
     print("")
-    print(f"\nTotal processed: {num_processed}")
-    print(f"Total errors: {num_error}")
+    print(f"\nTotal processed: {total_processed}")
+    print(f"Total errors: {len(input_files)-total_processed}")
     print("")
 
-def preprocess_raw_files_to_sample(input_files):
+def preprocess_raw_files_to_sample(input_file):
 
     sample_crop_width = LGDiffusionPipeline.get_sample_crop_width(MODEL_PARAMS)
-    total_processed = 0; num_skipped = 0
-    avg_mean = 0; avg_std = 0
-    
-    for input_file in input_files:
-        
-        raw_input = np.fromfile(input_file, dtype=np.int16, count=MAXIMUM_SAMPLE_LENGTH)
-        if len(raw_input) < MINIMUM_SAMPLE_LENGTH:
-            print(f"Skipping '{input_file}' due to insufficient length")
-            num_skipped += 1
-            continue
+    processed = False; mean = 0.; std = 0.
 
-        output_file_raw = os.path.join(OUTPUT_SAMPLE_DIR, f"{total_processed+1}.raw")
+    print(f"Processing '{input_file}'") 
+    raw_input = np.fromfile(input_file, dtype=np.int16, count=MAXIMUM_SAMPLE_LENGTH)
+    if len(raw_input) < MINIMUM_SAMPLE_LENGTH:
+        print(f"Skipping '{input_file}' due to insufficient length")
+    else:
+        output_filename = f"{str(uuid.uuid4())}.raw"
+        output_file_raw = os.path.join(OUTPUT_SAMPLE_DIR, output_filename)
         raw_input.tofile(output_file_raw)
 
         raw_input = torch.from_numpy(raw_input).to("cuda").type(torch.float32) / 32768.
         sample = LGDiffusionPipeline.raw_to_freq(raw_input[:sample_crop_width].unsqueeze(0), MODEL_PARAMS)
-        avg_mean += sample.mean(dim=(1, 2, 3)).item()
-        avg_std += sample.std(dim=(1, 2, 3)).item()
+        mean = sample.mean(dim=(1, 2, 3)).item()
+        std = sample.std(dim=(1, 2, 3)).item()
 
-        if total_processed == 0:
-            print(f"Sample shape: {sample.shape}")
-            sample.cpu().numpy().tofile("./output/debug_sample.raw")
-            reconstructed_raw_sample = LGDiffusionPipeline.freq_to_raw(sample, MODEL_PARAMS)
-            reconstructed_raw_sample.cpu().numpy().tofile("./output/debug_reconstructed_raw.raw")
+        processed = True
 
-        print(f"Processed '{input_file}'")
-        total_processed += 1
+    print(f"Processed '{input_file}'")
 
-    return total_processed, num_skipped, avg_mean, avg_std
+    return processed, mean, std
 
 def preprocess_raw_to_sample():
 
@@ -159,20 +132,21 @@ def preprocess_raw_to_sample():
 
             input_files.append(os.path.join(dirpath, filename))
     
-    total_processed = 0; num_skipped = 0
-    avg_mean = 0; avg_std = 0
+    total_processed = 0; total_mean = 0; total_std = 0
     pool = multiprocessing.Pool(NUM_PROCESSES)
-    for proc_num_processed, proc_num_skipped, proc_avg_mean, proc_avg_std in pool.imap_unordered(preprocess_raw_files_to_sample, input_files):
-        total_processed += proc_num_processed
-        num_skipped += proc_num_skipped
-        avg_mean += proc_avg_mean
-        avg_std += proc_avg_std
+    for processed, mean, std in pool.map(preprocess_raw_files_to_sample, input_files):
+        total_processed += int(processed)
+        total_mean += mean
+        total_std += std
     
-    print(f"\nTotal processed: {total_processed}  Total skipped: {num_skipped}")
-    print(f"Average mean: {avg_mean/total_processed}")
-    print(f"Average std: {avg_std/total_processed}")
+    avg_mean = total_mean/total_processed
+    avg_std = total_std/total_processed
 
-    return avg_std/total_processed
+    print(f"\nTotal processed: {total_processed}  Total skipped: {len(input_files)-total_processed}")
+    print(f"Average mean: {avg_mean}")
+    print(f"Average std: {avg_std}")
+
+    return avg_mean, avg_std
 
 if __name__ == "__main__":
 
@@ -181,8 +155,10 @@ if __name__ == "__main__":
         exit(1)
 
     #decode_source_to_raw()
-    #avg_std = preprocess_raw_to_sample()
-    #MODEL_PARAMS["avg_std"] = avg_std #1.4706064990037718375
 
-    pipeline = LGDiffusionPipeline.create_new(MODEL_PARAMS, NEW_MODEL_PATH)
-    print(f"Created new LGDiffusion model with config at '{NEW_MODEL_PATH}'")
+    #avg_mean, avg_std = preprocess_raw_to_sample()
+    #MODEL_PARAMS["avg_mean"] = avg_mean
+    #MODEL_PARAMS["avg_std"] = avg_std
+
+    #pipeline = LGDiffusionPipeline.create_new(MODEL_PARAMS, NEW_MODEL_PATH)
+    #print(f"Created new LGDiffusion model with config at '{NEW_MODEL_PATH}'")
