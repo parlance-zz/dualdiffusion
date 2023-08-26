@@ -1,9 +1,12 @@
 __pycache__/
+.vscode/
 models/*/
 output/*/
+backup/
 
 *.raw
-*.json
-*.dual
+*.mp3
+*.flac
+*.spc
 
-old_filter_code.py
+test.py

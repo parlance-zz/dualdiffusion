@@ -5,8 +5,8 @@ import os
 import subprocess
 import atexit
 import webbrowser
-from datetime import datetime
 import shutil
+from datetime import datetime
 
 from pathlib import Path
 from typing import Optional
@@ -21,11 +21,10 @@ from accelerate.utils import ProjectConfiguration
 from datasets import load_dataset, Audio
 from huggingface_hub import HfFolder, Repository, create_repo, whoami
 from packaging import version
-from torchvision import transforms
 from tqdm.auto import tqdm
 
 import diffusers
-from diffusers import UNet1DModel, UNet2DModel
+from diffusers import UNet2DModel
 from diffusers.optimization import get_scheduler
 from diffusers.training_utils import EMAModel
 from diffusers.utils import check_min_version, is_accelerate_version, is_tensorboard_available, is_wandb_available
@@ -33,37 +32,43 @@ from diffusers.utils.import_utils import is_xformers_available
 
 import numpy as np
 
-from dual_diffusion_pipeline import DualDiffusionPipeline
+from lg_diffusion_pipeline import LGDiffusionPipeline
 
 # Will error if the minimal version of diffusers is not installed. Remove at your own risks.
 #check_min_version("0.17.0.dev0")
 
 if torch.cuda.is_available():
-    device = torch.device("cuda")
+    #torch.set_default_device("cuda")
+    torch.backends.cuda.cufft_plan_cache[0].max_size = 8 # stupid cufft memory leak
 else:
     print("Error: PyTorch not compiled with CUDA support or CUDA unavailable")
     exit(1)
 
 logger = get_logger(__name__, log_level="INFO")
 
-
-def _extract_into_tensor(arr, timesteps, broadcast_shape):
+def compute_snr(noise_scheduler, timesteps):
     """
-    Extract values from a 1-D numpy array for a batch of indices.
-
-    :param arr: the 1-D numpy array.
-    :param timesteps: a tensor of indices into the array to extract.
-    :param broadcast_shape: a larger shape of K dimensions with the batch
-                            dimension equal to the length of timesteps.
-    :return: a tensor of shape [batch_size, 1, ...] where the shape has K dims.
+    Computes SNR as per https://github.com/TiankaiHang/Min-SNR-Diffusion-Training/blob/521b624bd70c67cee4bdf49225915f5945a872e3/guided_diffusion/gaussian_diffusion.py#L847-L849
     """
-    if not isinstance(arr, torch.Tensor):
-        arr = torch.from_numpy(arr)
-    res = arr[timesteps].float().to(timesteps.device)
-    while len(res.shape) < len(broadcast_shape):
-        res = res[..., None]
-    return res.expand(broadcast_shape)
+    alphas_cumprod = noise_scheduler.alphas_cumprod
+    sqrt_alphas_cumprod = alphas_cumprod**0.5
+    sqrt_one_minus_alphas_cumprod = (1.0 - alphas_cumprod) ** 0.5
 
+    # Expand the tensors.
+    # Adapted from https://github.com/TiankaiHang/Min-SNR-Diffusion-Training/blob/521b624bd70c67cee4bdf49225915f5945a872e3/guided_diffusion/gaussian_diffusion.py#L1026
+    sqrt_alphas_cumprod = sqrt_alphas_cumprod.to(device=timesteps.device)[timesteps].float()
+    while len(sqrt_alphas_cumprod.shape) < len(timesteps.shape):
+        sqrt_alphas_cumprod = sqrt_alphas_cumprod[..., None]
+    alpha = sqrt_alphas_cumprod.expand(timesteps.shape)
+
+    sqrt_one_minus_alphas_cumprod = sqrt_one_minus_alphas_cumprod.to(device=timesteps.device)[timesteps].float()
+    while len(sqrt_one_minus_alphas_cumprod.shape) < len(timesteps.shape):
+        sqrt_one_minus_alphas_cumprod = sqrt_one_minus_alphas_cumprod[..., None]
+    sigma = sqrt_one_minus_alphas_cumprod.expand(timesteps.shape)
+
+    # Compute SNR.
+    snr = (alpha / sigma) ** 2
+    return snr
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Simple example of a training script.")
@@ -87,16 +92,9 @@ def parse_args():
         "--model_config_name_or_path",
         type=str,
         default=None,
-        help="The config of the Dual Diffusion model to train, use process_dataset.py to create a pipeline corresponding to your dataset.",
+        help="The diffusers model to train",
         required=True,
     )
-    parser.add_argument(
-        "--dual_training_mode",
-        type=str,
-        default=None,
-        help="Set to either 's' or 'f' to train the corresponding dual diffusion unet model",
-        required=True,
-    )    
     parser.add_argument(
         "--train_data_dir",
         type=str,
@@ -137,9 +135,9 @@ def parse_args():
     )
     parser.add_argument("--num_epochs", type=int, default=100)
     parser.add_argument("--save_images_epochs", type=int, default=10, help="How often to save images during training.")
-    parser.add_argument(
-        "--save_model_epochs", type=int, default=10, help="How often to save the model during training."
-    )
+    #parser.add_argument(
+    #    "--save_model_epochs", type=int, default=10, help="How often to save the model during training."
+    #)
     parser.add_argument(
         "--gradient_accumulation_steps",
         type=int,
@@ -177,7 +175,16 @@ def parse_args():
     )
     parser.add_argument("--ema_inv_gamma", type=float, default=1.0, help="The inverse gamma value for the EMA decay.")
     parser.add_argument("--ema_power", type=float, default=3 / 4, help="The power value for the EMA decay.")
+    parser.add_argument("--ema_min_decay", type=float, default=0., help="The minimum decay magnitude for EMA.")
     parser.add_argument("--ema_max_decay", type=float, default=0.9999, help="The maximum decay magnitude for EMA.")
+    parser.add_argument(
+        "--snr_gamma",
+        type=float,
+        default=None,
+        help="SNR weighting gamma to be used if rebalancing the loss. Recommended value is 5.0. "
+        "More details here: https://arxiv.org/abs/2303.09556.",
+    )
+
     parser.add_argument("--push_to_hub", action="store_true", help="Whether or not to push the model to the Hub.")
     parser.add_argument("--hub_token", type=str, default=None, help="The token to use to push to the Model Hub.")
     parser.add_argument(
@@ -221,16 +228,6 @@ def parse_args():
         ),
     )
     parser.add_argument(
-        "--prediction_type",
-        type=str,
-        default="epsilon",
-        choices=["epsilon", "sample"],
-        help="Whether the model should predict the 'epsilon'/noise error or directly the reconstructed image 'x0'.",
-    )
-    parser.add_argument("--ddpm_num_steps", type=int, default=1000)
-    parser.add_argument("--ddpm_num_inference_steps", type=int, default=1000)
-    parser.add_argument("--ddpm_beta_schedule", type=str, default="linear")
-    parser.add_argument(
         "--checkpointing_steps",
         type=int,
         default=500,
@@ -242,7 +239,7 @@ def parse_args():
     parser.add_argument(
         "--checkpoints_total_limit",
         type=int,
-        default=None,
+        default=1,
         help=(
             "Max number of checkpoints to store. Passed as `total_limit` to the `Accelerator` `ProjectConfiguration`."
             " See Accelerator::save_state https://huggingface.co/docs/accelerate/package_reference/accelerator#accelerate.Accelerator.save_state"
@@ -272,7 +269,6 @@ def parse_args():
 
     return args
 
-
 def get_full_repo_name(model_id: str, organization: Optional[str] = None, token: Optional[str] = None):
     if token is None:
         token = HfFolder.get_token()
@@ -282,32 +278,23 @@ def get_full_repo_name(model_id: str, organization: Optional[str] = None, token:
     else:
         return f"{organization}/{model_id}"
 
-
 def main(args):
 
     logging_dir = os.path.join(args.output_dir, args.logging_dir)
-    if os.path.exists(logging_dir) and os.path.isdir(logging_dir): shutil.rmtree(logging_dir)
-
     accelerator_project_config = ProjectConfiguration(total_limit=args.checkpoints_total_limit)
-
     accelerator = Accelerator(
         gradient_accumulation_steps=args.gradient_accumulation_steps,
         mixed_precision=args.mixed_precision,
         log_with=args.logger,
         logging_dir=logging_dir,
         project_config=accelerator_project_config,
-        
     )
 
     if args.logger == "tensorboard":
         if not is_tensorboard_available():
             raise ImportError("Make sure to install tensorboard if you want to use it for logging during training.")
-
-        if args.dual_training_mode == "s":
-            port = 6007
-        else:
-            port = 6006
-        tensorboard_monitor_process = subprocess.Popen(['tensorboard', '--logdir', logging_dir, '--port', f'{port}'])
+        port = 6006
+        tensorboard_monitor_process = subprocess.Popen(['tensorboard', '--logdir', logging_dir, '--bind_all', '--port', f'{port}'])
 
         def cleanup_process():
             try:
@@ -316,7 +303,7 @@ def main(args):
                 pass
 
         atexit.register(cleanup_process)
-        webbrowser.open(f"http://localhost:{port}")
+        #webbrowser.open(f"http://localhost:{port}")
 
     elif args.logger == "wandb":
         if not is_wandb_available():
@@ -326,29 +313,32 @@ def main(args):
     # `accelerate` 0.16.0 will have better support for customized saving
     if version.parse(accelerate.__version__) >= version.parse("0.16.0"):
         # create custom saving & loading hooks so that `accelerator.save_state(...)` serializes in a nice format
-        def save_model_hook(models, weights, output_dir, unet_folder_suffix=args.dual_training_mode):
+        def save_model_hook(models, weights, output_dir):
             if args.use_ema:
-                ema_model.save_pretrained(os.path.join(output_dir, f"unet_ema_{unet_folder_suffix}"))
+                ema_model.save_pretrained(os.path.join(output_dir, "unet_ema"))
 
             for i, model in enumerate(models):
-                model.save_pretrained(os.path.join(output_dir, f"unet_{unet_folder_suffix}"))
+                model.save_pretrained(os.path.join(output_dir, "unet"))
 
                 # make sure to pop weight so that corresponding model is not saved again
                 weights.pop()
 
-        def load_model_hook(models, input_dir, unet_folder_suffix=args.dual_training_mode):
+        def load_model_hook(models, input_dir):
             if args.use_ema:
-                load_model = EMAModel.from_pretrained(os.path.join(input_dir, f"unet_ema_{unet_folder_suffix}"), UNet1DModel)
-                ema_model.load_state_dict(load_model.state_dict())
-                ema_model.to(accelerator.device)
-                del load_model
+                if not os.path.exists(os.path.join(input_dir, "unet_ema")):
+                    logger.info("EMA model in checkpoint not found, using new ema model")
+                else:
+                    load_model = EMAModel.from_pretrained(os.path.join(input_dir, "unet_ema"), UNet2DModel)
+                    ema_model.load_state_dict(load_model.state_dict())
+                    ema_model.to(accelerator.device)
+                    del load_model
 
             for i in range(len(models)):
                 # pop models so that they are not loaded again
                 model = models.pop()
 
                 # load diffusers style into model
-                load_model = UNet1DModel.from_pretrained(input_dir, subfolder=f"unet_{unet_folder_suffix}") 
+                load_model = UNet2DModel.from_pretrained(input_dir, subfolder="unet") 
                 model.register_to_config(**load_model.config)
 
                 model.load_state_dict(load_model.state_dict())
@@ -390,26 +380,19 @@ def main(args):
             os.makedirs(args.output_dir, exist_ok=True)
 
     # Initialize the model
-
-    pipeline = DualDiffusionPipeline.from_pretrained(args.model_config_name_or_path).to("cuda")
-    noise_profile = np.fromfile(os.path.join(args.model_config_name_or_path, "avg_freq_response.raw"), dtype=np.float32)
-    noise_profile = torch.from_numpy(noise_profile).to("cuda")
-
-    if args.dual_training_mode == "s":
-        model = pipeline.unet_s
-        noise_scheduler = pipeline.scheduler_s
-        mode_index = 0
-    elif args.dual_training_mode == "f":
-        model = pipeline.unet_f
-        noise_scheduler = pipeline.scheduler_f
-        mode_index = 1
-    else:
-        raise ValueError(f"Unknown dual training mode {args.dual_training_mode}")
+    pipeline = LGDiffusionPipeline.from_pretrained(args.model_config_name_or_path).to("cuda")
+    model = pipeline.unet
+    noise_scheduler = pipeline.scheduler
+    model_params = pipeline.config["model_params"]
+    sample_crop_width = LGDiffusionPipeline.get_sample_crop_width(model_params)
+    num_input_channels, num_output_channels = LGDiffusionPipeline.get_num_channels(model_params)
+    freq_embedding_dim = model_params["freq_embedding_dim"]
 
     # Create EMA for the model.
     if args.use_ema:
         ema_model = EMAModel(
             model.parameters(),
+            min_decay=args.ema_min_decay,
             decay=args.ema_max_decay,
             use_ema_warmup=True,
             inv_gamma=args.ema_inv_gamma,
@@ -462,16 +445,19 @@ def main(args):
     def transform_images(examples):
         
         images = []
-
         for audio in examples["audio"]:
-            if audio["bytes"] is not None:
-                dual_data = np.frombuffer(audio["bytes"], dtype=np.float32)
-            else:
-                dual_data = np.fromfile(audio["path"], dtype=np.float32)
-            assert(len(dual_data) % 2 == 0)
 
-            dual_data = torch.from_numpy(dual_data).to("cuda")
-            images.append(dual_data)
+            if audio["bytes"] is not None:
+                sample_len = len(audio["bytes"]) // 2
+                crop_offset = np.random.randint(0, sample_len - sample_crop_width)
+                sample = np.frombuffer(audio["bytes"], dtype=np.int16, count=sample_crop_width, offset=crop_offset * 2)
+            else:
+                sample_len = os.path.getsize(audio["path"]) // 2
+                crop_offset = np.random.randint(0, sample_len - sample_crop_width)
+                sample = np.fromfile(audio["path"], dtype=np.int16, count=sample_crop_width, offset=crop_offset * 2)
+
+            sample = sample.astype(np.float32) / 32768.
+            images.append(torch.from_numpy(sample).to("cuda"))
 
         return {"input": images}
 
@@ -479,7 +465,7 @@ def main(args):
 
     dataset.set_transform(transform_images)
     train_dataloader = torch.utils.data.DataLoader(
-        dataset, batch_size=1, shuffle=True, num_workers=args.dataloader_num_workers,
+        dataset, batch_size=args.train_batch_size, shuffle=True, num_workers=args.dataloader_num_workers,
     )
 
     # Initialize the learning rate scheduler
@@ -501,10 +487,52 @@ def main(args):
     # We need to initialize the trackers we use, and also store our configuration.
     # The trackers initializes automatically on the main process.
     if accelerator.is_main_process:
+        start_timestamp = f"{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}"
+        """
+        run_config = {
+            "model_config_name_or_path": args.model_config_name_or_path,
+            "start_time": start_timestamp,
+            "mixed_precision": args.mixed_precision,
+            "train_batch_size": args.train_batch_size,
+            "gradient_accumulation_steps": args.gradient_accumulation_steps,
+            "num_epochs": args.num_epochs,
+            "checkpointing_steps": args.checkpointing_steps,
+            "snr_gamma": args.snr_gamma,
+            "learning_rate": args.learning_rate,
+            "lr_scheduler": args.lr_scheduler,
+            "lr_warmup_steps": args.lr_warmup_steps,
+            "adam_beta1": args.adam_beta1,
+            "adam_beta2": args.adam_beta2,
+            "adam_weight_decay": args.adam_weight_decay,
+            "adam_epsilon": args.adam_epsilon,
+            "use_ema": args.use_ema,
+            "ema_inv_gamma": args.ema_inv_gamma,
+            "ema_power": args.ema_power,
+            "ema_min_decay": args.ema_min_decay,
+            "ema_max_decay": args.ema_max_decay,
+        }
+
+        for k, v in model.config.items():
+            if not isinstance(v, (int, float, str, bool)):
+                v = f"{v}"
+            run_config[f"unet_{k}"] = v
+
+        for k, v in noise_scheduler.config.items():
+            if not isinstance(v, (int, float, str, bool)):
+                v = f"{v}"
+            run_config[f"scheduler_{k}"] = v
+
+        for k, v in model_params.items():
+            if not isinstance(v, (int, float, str, bool)):
+                v = f"{v}"
+            run_config[f"model_{k}"] = v
+        """
         run = os.path.split(__file__)[-1].split(".")[0]
+        run = f"{run}_{start_timestamp}"
+        #accelerator.init_trackers(run, config=run_config)
         accelerator.init_trackers(run)
 
-    total_batch_size = 1 * accelerator.num_processes * args.gradient_accumulation_steps
+    total_batch_size = args.train_batch_size * accelerator.num_processes * args.gradient_accumulation_steps
     num_update_steps_per_epoch = math.ceil(len(train_dataloader) / args.gradient_accumulation_steps)
     max_train_steps = args.num_epochs * num_update_steps_per_epoch
 
@@ -519,6 +547,7 @@ def main(args):
     global_step = 0
     first_epoch = 0
     grad_norm = 0.
+    debug_written = False
 
     # Potentially load in the weights and states from a previous save
     if args.resume_from_checkpoint:
@@ -527,7 +556,7 @@ def main(args):
         else:
             # Get the most recent checkpoint
             dirs = os.listdir(args.output_dir)
-            dirs = [d for d in dirs if d.startswith(f"{args.dual_training_mode}_checkpoint")]
+            dirs = [d for d in dirs if d.startswith("checkpoint")]
             dirs = sorted(dirs, key=lambda x: int(x.split("-")[1]))
             path = dirs[-1] if len(dirs) > 0 else None
 
@@ -550,79 +579,67 @@ def main(args):
         model.train()
         progress_bar = tqdm(total=num_update_steps_per_epoch, disable=not accelerator.is_local_main_process)
         progress_bar.set_description(f"Epoch {epoch}")
-        for step, input_dual in enumerate(train_dataloader):
+        checkpoint_saved_this_epoch = False
+        for step, input_image in enumerate(train_dataloader):
             # Skip steps until we reach the resumed step
-            if args.resume_from_checkpoint and epoch == first_epoch and step < resume_step:
+            if args.resume_from_checkpoint and (epoch == first_epoch) and (step < resume_step):
                 if step % args.gradient_accumulation_steps == 0:
                     progress_bar.update(1)
                 continue
             
-            clean_image = input_dual["input"][0]
+            raw_samples = input_image["input"]
+            samples = LGDiffusionPipeline.raw_to_freq(raw_samples, model_params)
+            noise = torch.randn_like(samples) * noise_scheduler.init_noise_sigma
 
-            # Sample noise that we'll add to the images
+            if not debug_written:
+                logger.info(f"Samples mean: {samples.mean()} - Samples std: {samples.std()}")
+                logger.info(f"Samples shape: {samples.shape} - Samples std (with noise): {(samples + noise).std()}")
+                samples.cpu().numpy().tofile("output/debug_samples.raw")
+                raw_samples.cpu().numpy().tofile("output/debug_raw_samples.raw")
+                #raw_samples = LGDiffusionPipeline.freq_to_raw(samples)
+                #raw_samples.cpu().numpy().tofile("output/debug_reconstructed_raw_samples.raw")
+                debug_written = True
+
+            timesteps = torch.randint(0, noise_scheduler.config.num_train_timesteps, (args.train_batch_size,), device=samples.device).long()
             
-            timesteps = torch.randint(
-                0, noise_scheduler.config.num_train_timesteps, (args.train_batch_size,), device=clean_image.device
-            ).long()
-            
-            if args.dual_training_mode == "f":
-                
-                clean_image = torch.view_as_complex(clean_image.view(-1, 2))[pipeline.config["sample_len"]:]
-                noise = torch.exp(torch.rand(len(clean_image), device=clean_image.device) * 1j * 2 * np.pi) * noise_profile
-
-            elif args.dual_training_mode == "s":
-                
-                clean_image = torch.view_as_complex(clean_image.view(-1, 2))[:pipeline.config["sample_len"]]
-                noise = torch.exp(torch.rand(len(clean_image)//2, device=clean_image.device) * 1j * 2 * np.pi) * noise_profile
-                noise = torch.cat((noise, torch.zeros(len(clean_image)//2, device=clean_image.device)))
-                noise = torch.fft.ifft(noise, norm="ortho")
-
-            else:
-                raise ValueError(f"Invalid dual training mode: {args.dual_training_mode}")
-
-            # Sample a random timestep for each image
-            
-            # Add noise to the clean images according to the noise magnitude at each timestep
-            # (this is the forward diffusion process)
-
             with accelerator.accumulate(model):
+ 
+                model_input = noise_scheduler.add_noise(samples, noise, timesteps)
+                if freq_embedding_dim > 0:
+                    model_input = LGDiffusionPipeline.add_freq_embedding(model_input, freq_embedding_dim)
+                model_input = noise_scheduler.scale_model_input(model_input, timesteps)
+                model_output = model(model_input, timesteps)["sample"]
 
-                if args.dual_training_mode == "f":
-                    
-                    clean_f_response = DualDiffusionPipeline.get_f_samples(clean_image, pipeline.config["f_resolution"])
-                    noise_f_response = DualDiffusionPipeline.get_f_samples(noise, pipeline.config["f_resolution"])
+                if noise_scheduler.config.prediction_type == "epsilon":
+                    target = noise
+                elif noise_scheduler.config.prediction_type == "v_prediction":
+                    target = noise_scheduler.get_velocity(samples.float(), noise.float(), timesteps)
+                else:
+                    raise ValueError(f"Unsupported prediction type: {noise_scheduler.config.prediction_type}")
 
-                    f_response_indices = torch.randperm(clean_f_response.shape[0])[:args.train_batch_size]
-                    clean_f_response = clean_f_response[f_response_indices]
-                    noise_f_response = noise_f_response[f_response_indices]
-                    noisy_f_response = noise_scheduler.add_noise(clean_f_response, noise_f_response, timesteps)
+                if args.snr_gamma is None:
+                    loss = F.mse_loss(model_output.float(), target.float(), reduction="mean")
+                else:
+                    snr = compute_snr(noise_scheduler, timesteps)
+                    mse_loss_weights = (
+                        torch.stack([snr, args.snr_gamma * torch.ones_like(timesteps)], dim=1).min(dim=1)[0] / snr
+                    )
+                    # We first calculate the original loss. Then we mean over the non-batch dimensions and
+                    # rebalance the sample-wise losses with their respective loss weights.
+                    # Finally, we take the mean of the rebalanced loss.
+                    loss = F.mse_loss(model_output.float(), target.float(), reduction="none")
+                    loss = loss.mean(dim=list(range(1, len(loss.shape)))) * mse_loss_weights
+                    loss = loss.mean()
 
-                    model_output = model(noisy_f_response, timesteps)["sample"]
-                    if args.prediction_type == "epsilon": 
-                        loss = F.mse_loss(model_output, noise_f_response)
-                    else:
-                        raise ValueError(f"Unsupported prediction type: {args.prediction_type}")
-                    
-                elif args.dual_training_mode == "s":
-                    
-                    clean_s_response = DualDiffusionPipeline.get_s_samples(clean_image, pipeline.config["s_resolution"])
-                    noise_s_response = DualDiffusionPipeline.get_s_samples(noise, pipeline.config["s_resolution"])
-
-                    s_response_indices = torch.randperm(clean_s_response.shape[0])[:args.train_batch_size]
-                    clean_s_response = clean_s_response[s_response_indices]
-                    noise_s_response = noise_s_response[s_response_indices]
-                    noisy_s_response = noise_scheduler.add_noise(clean_s_response, noise_s_response, timesteps)
-                    
-                    model_output = model(noisy_s_response, timesteps)["sample"]
-                    if args.prediction_type == "epsilon": 
-                        loss = F.mse_loss(model_output, noise_s_response)
-                    else:
-                        raise ValueError(f"Unsupported prediction type: {args.prediction_type}")
-                                        
                 accelerator.backward(loss)
 
                 if accelerator.sync_gradients:
                     grad_norm = accelerator.clip_grad_norm_(model.parameters(), 1.).item()
+                    
+                    if math.isnan(grad_norm):
+                        logger.warn("***WARNING*** GRAD NORM IS NAN - Gradient is being reset to zero")
+                        optimizer.zero_grad()
+                        
                 optimizer.step()
                 lr_scheduler.step()
                 optimizer.zero_grad()
@@ -632,13 +649,29 @@ def main(args):
                 if args.use_ema:
                     ema_model.step(model.parameters())
                 progress_bar.update(1)
+
                 global_step += 1
 
-                if global_step % args.checkpointing_steps == 0:
+                if (global_step % args.checkpointing_steps == 0) or (global_step == max_train_steps):
                     if accelerator.is_main_process:
-                        save_path = os.path.join(args.output_dir, f"{args.dual_training_mode}_checkpoint-{global_step}")
+                        save_path = os.path.join(args.output_dir, f"checkpoint-{global_step}")
                         accelerator.save_state(save_path)
                         logger.info(f"Saved state to {save_path}")
+                        checkpoint_saved_this_epoch = True
+
+                        #remove old checkpoints
+                        dirs = os.listdir(args.output_dir)
+                        dirs = [d for d in dirs if d.startswith("checkpoint")]
+                        dirs = sorted(dirs, key=lambda x: int(x.split("-")[1]))
+                        if len(dirs) > args.checkpoints_total_limit:
+                            checkpoint_count = len(dirs)
+                            for dir in dirs:
+                                if dir != f"checkpoint-{global_step}":
+                                    logger.info(f"Removing old checkpoint {dir}")
+                                    shutil.rmtree(os.path.join(args.output_dir, dir))
+                                    checkpoint_count -= 1
+                                if checkpoint_count <= args.checkpoints_total_limit:
+                                    break
 
             logs = {"loss": loss.detach().item(),
                     "lr": lr_scheduler.get_last_lr()[0],
@@ -655,21 +688,18 @@ def main(args):
         # Generate sample images for visual inspection
         if accelerator.is_main_process:
 
-            if epoch % args.save_model_epochs == 0 or epoch == args.num_epochs - 1:
+            #if ((epoch % args.save_model_epochs == 0) and epoch > 0) or (epoch == (args.num_epochs - 1)):
+            if checkpoint_saved_this_epoch == True:
                 # save the model
+                logger.info(f"Saving model to {args.output_dir}")
+
                 unet = accelerator.unwrap_model(model)
 
                 if args.use_ema:
                     ema_model.store(unet.parameters())
                     ema_model.copy_to(unet.parameters())
 
-                if args.dual_training_mode == "f":
-                    pipeline.unet_f = unet
-                elif args.dual_training_mode == "s":
-                    pipeline.unet_s = unet
-                else:
-                    raise ValueError(f"Unsupported dual training mode: {args.dual_training_mode}")
-                
+                pipeline.unet = unet
                 pipeline.save_pretrained(args.output_dir, safe_serialization=True)
 
                 if args.use_ema:
