@@ -314,7 +314,7 @@ class LGDiffusionPipeline(DiffusionPipeline):
             )["prev_sample"]
 
             #sample -= sample.mean(dim=(1,2,3), keepdim=True)
-            #sample /= sample.std(dim=(1,2,3), keepdim=True)
+            sample /= sample.std(dim=(1,2,3), keepdim=True)
 
         print("Sample std: ", sample.std(dim=(1,2,3)).item())
 

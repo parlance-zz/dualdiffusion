@@ -14,7 +14,7 @@ if __name__ == "__main__":
         print("Error: PyTorch not compiled with CUDA support or CUDA unavailable")
         exit(1)
 
-    model_path = "./models/lgdiffusion_freq9"
+    model_path = "./models/lgdiffusion_freq7"
     print(f"Loading LGDiffusion model from '{model_path}'...")
     my_pipeline = LGDiffusionPipeline.from_pretrained(model_path, torch_dtype=torch.float16).to("cuda")
     sample_rate = my_pipeline.config["model_params"]["sample_rate"]

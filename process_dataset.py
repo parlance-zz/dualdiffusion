@@ -1,13 +1,11 @@
 import os
 import subprocess
 import uuid
-import multiprocessing
 import numpy as np
 import torch
 
 from lg_diffusion_pipeline import LGDiffusionPipeline
 
-NUM_PROCESSES = multiprocessing.cpu_count() // 2
 FFMPEG_PATH = './dataset/ffmpeg_gme/bin/ffmpeg.exe'
 #FFMPEG_PATH = 'ffmpeg'
 SOURCE_DIR = './dataset/spc'
@@ -84,8 +82,8 @@ def decode_source_to_raw():
             input_files.append(input_file)
 
     total_processed = 0
-    pool = multiprocessing.Pool(NUM_PROCESSES)
-    for processed in pool.map(decode_source_files_to_raw, input_files):
+    for input_file in input_files:
+        processed = decode_source_files_to_raw(input_file)
         total_processed += int(processed)
 
     print("")
@@ -133,8 +131,9 @@ def preprocess_raw_to_sample():
             input_files.append(os.path.join(dirpath, filename))
     
     total_processed = 0; total_mean = 0; total_std = 0
-    pool = multiprocessing.Pool(NUM_PROCESSES)
-    for processed, mean, std in pool.map(preprocess_raw_files_to_sample, input_files):
+    
+    for input_file in input_files:
+        processed, mean, std = preprocess_raw_files_to_sample(input_file)
         total_processed += int(processed)
         total_mean += mean
         total_std += std
