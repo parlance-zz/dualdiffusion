@@ -11,6 +11,7 @@ dependencies:
   - numpy
   - ffmpeg
   - torchaudio
+  - torchvision
   - diffusers
   - datasets
   - accelerate
@@ -20,3 +21,4 @@ dependencies:
     - safetensors
     - tensorboard
     - opencv-python
+    - soundfile

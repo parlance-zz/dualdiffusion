@@ -34,18 +34,6 @@ import numpy as np
 
 from lg_diffusion_pipeline import LGDiffusionPipeline
 
-# Will error if the minimal version of diffusers is not installed. Remove at your own risks.
-#check_min_version("0.17.0.dev0")
-
-if torch.cuda.is_available():
-    #torch.set_default_device("cuda")
-    torch.backends.cuda.cufft_plan_cache[0].max_size = 8 # stupid cufft memory leak
-else:
-    print("Error: PyTorch not compiled with CUDA support or CUDA unavailable")
-    exit(1)
-
-logger = get_logger(__name__, log_level="INFO")
-
 def compute_snr(noise_scheduler, timesteps):
     """
     Computes SNR as per https://github.com/TiankaiHang/Min-SNR-Diffusion-Training/blob/521b624bd70c67cee4bdf49225915f5945a872e3/guided_diffusion/gaussian_diffusion.py#L847-L849
@@ -590,7 +578,7 @@ def main(args):
             raw_samples = input_image["input"]
             samples = LGDiffusionPipeline.raw_to_freq(raw_samples, model_params)
             noise = torch.randn_like(samples) * noise_scheduler.init_noise_sigma
-
+            
             if not debug_written:
                 logger.info(f"Samples mean: {samples.mean()} - Samples std: {samples.std()}")
                 logger.info(f"Samples shape: {samples.shape} - Samples std (with noise): {(samples + noise).std()}")
@@ -600,7 +588,7 @@ def main(args):
                 #raw_samples.cpu().numpy().tofile("output/debug_reconstructed_raw_samples.raw")
                 debug_written = True
 
-            timesteps = torch.randint(0, noise_scheduler.config.num_train_timesteps, (args.train_batch_size,), device=samples.device).long()
+            timesteps = torch.randint(0, noise_scheduler.config.num_train_timesteps, (samples.shape[0],), device=samples.device).long()
             
             with accelerator.accumulate(model):
  
@@ -614,15 +602,21 @@ def main(args):
                     target = noise
                 elif noise_scheduler.config.prediction_type == "v_prediction":
                     target = noise_scheduler.get_velocity(samples.float(), noise.float(), timesteps)
+                elif noise_scheduler.config.prediction_type == "sample":
+                    target = samples
                 else:
                     raise ValueError(f"Unsupported prediction type: {noise_scheduler.config.prediction_type}")
 
                 if args.snr_gamma is None:
                     loss = F.mse_loss(model_output.float(), target.float(), reduction="mean")
                 else:
+                    if noise_scheduler.config.prediction_type == "v_prediction":
+                        offset = 1.
+                    else:
+                        offset = 0.
                     snr = compute_snr(noise_scheduler, timesteps)
                     mse_loss_weights = (
-                        torch.stack([snr, args.snr_gamma * torch.ones_like(timesteps)], dim=1).min(dim=1)[0] / snr
+                        torch.stack([snr, args.snr_gamma * torch.ones_like(timesteps)], dim=1).min(dim=1)[0] / (snr + offset)
                     )
                     # We first calculate the original loss. Then we mean over the non-batch dimensions and
                     # rebalance the sample-wise losses with their respective loss weights.
@@ -634,7 +628,7 @@ def main(args):
                 accelerator.backward(loss)
 
                 if accelerator.sync_gradients:
-                    grad_norm = accelerator.clip_grad_norm_(model.parameters(), 1.).item()
+                    grad_norm = accelerator.clip_grad_norm_(model.parameters(), 10.).item()
                     
                     if math.isnan(grad_norm):
                         logger.warn("***WARNING*** GRAD NORM IS NAN - Gradient is being reset to zero")
@@ -712,5 +706,18 @@ def main(args):
 
 
 if __name__ == "__main__":
+
+    # Will error if the minimal version of diffusers is not installed. Remove at your own risks.
+    #check_min_version("0.17.0.dev0")
+
+    if torch.cuda.is_available():
+        #torch.set_default_device("cuda")
+        torch.backends.cuda.cufft_plan_cache[0].max_size = 8 # stupid cufft memory leak
+    else:
+        print("Error: PyTorch not compiled with CUDA support or CUDA unavailable")
+        exit(1)
+
+    logger = get_logger(__name__, log_level="INFO")
+
     args = parse_args()
     main(args)
