@@ -6,7 +6,7 @@ import torch
 import numpy as np
 import ffmpeg
 
-from lg_diffusion_pipeline import LGDiffusionPipeline
+from dual_diffusion_pipeline import DualDiffusionPipeline
 from diffusers import StableDiffusionImg2ImgPipeline
 
 def embedding_test():
@@ -16,7 +16,7 @@ def embedding_test():
     positions = ((torch.arange(0, num_positions, 1, dtype=torch.float32) + 0.5) / num_positions).log()
     positions = positions / positions[0] * num_positions / 4
 
-    pe = LGDiffusionPipeline.get_positional_embedding(positions, embedding_dim)
+    pe = DualDiffusionPipeline.get_positional_embedding(positions, embedding_dim)
     output = torch.zeros((num_positions, num_positions), dtype=torch.float32)
 
     for x in range(num_positions):
@@ -28,12 +28,12 @@ def embedding_test():
     exit()
 
 def reconstruction_test(model_params):
-    crop_width = LGDiffusionPipeline.get_sample_crop_width(model_params)
+    crop_width = DualDiffusionPipeline.get_sample_crop_width(model_params)
     raw_sample = np.fromfile("./dataset/samples/700.raw", dtype=np.int16, count=crop_width) / 32768.
     raw_sample = torch.from_numpy(raw_sample).unsqueeze(0).to("cuda")
-    freq_sample = LGDiffusionPipeline.raw_to_freq(raw_sample, model_params) #.type(torch.float16)
-    phases = LGDiffusionPipeline.raw_to_freq(raw_sample, model_params, format_override="complex")
-    raw_sample = LGDiffusionPipeline.freq_to_raw(freq_sample, model_params, phases)
+    freq_sample = DualDiffusionPipeline.raw_to_freq(raw_sample, model_params) #.type(torch.float16)
+    phases = DualDiffusionPipeline.raw_to_freq(raw_sample, model_params, format_override="complex")
+    raw_sample = DualDiffusionPipeline.freq_to_raw(freq_sample, model_params, phases)
     raw_sample.type(torch.complex64).cpu().numpy().tofile("./output/debug_reconstruction.raw")
     exit()
 
@@ -43,13 +43,10 @@ if __name__ == "__main__":
         print("Error: PyTorch not compiled with CUDA support or CUDA unavailable")
         exit(1)
 
-    model_path = "./models/new_lgdiffusion2-no-pe"
+    model_path = "./models/new_lgdiffusion"
     print(f"Loading LGDiffusion model from '{model_path}'...")
-    #my_pipeline = LGDiffusionPipeline.from_pretrained(model_path, torch_dtype=torch.float16).to("cuda")
-    my_pipeline = LGDiffusionPipeline.from_pretrained(model_path).to("cuda")
-    sample_rate = my_pipeline.config["model_params"]["sample_rate"]
-
-    #reconstruction_test(my_pipeline.config["model_params"])
+    pipeline = DualDiffusionPipeline.from_pretrained(model_path).to("cuda")
+    sample_rate = pipeline.config["model_params"]["sample_rate"]
 
     num_samples = 10
     batch_size = 1
@@ -61,31 +58,33 @@ if __name__ == "__main__":
     renormalize = False
     rebalance = False
 
-    seed = np.random.randint(10000000,
-                            99999999-num_samples)
+    seed = np.random.randint(10000, 99999-num_samples)
 
     for i in range(num_samples):
         print(f"Generating sample {i+1}/{num_samples}...")
 
         start = time.time()
-        output = my_pipeline(steps=steps,
-                             scheduler=scheduler,
-                             seed=seed,
-                             loops=loops,
-                             batch_size=batch_size,
-                             length=length,
-                             renormalize_sample=renormalize,
-                             rebalance_mean=rebalance)
+        output = pipeline(steps=steps,
+                          scheduler=scheduler,
+                          seed=seed,
+                          loops=loops,
+                          batch_size=batch_size,
+                          length=length,
+                          renormalize_sample=renormalize,
+                          rebalance_mean=rebalance)
         print(f"Time taken: {time.time()-start}")
 
-        existing_output_count = len(glob.glob("./output/output*.raw"))
-        test_output_path = f"./output/output_{existing_output_count}_{scheduler}_{steps}_{seed}.raw"
-        
-        output.cpu().numpy().tofile(test_output_path)
-        print(f"Saved raw output to {test_output_path}")
+        model_name = os.path.basename(model_path)
+        output_path = f"./models/{model_name}/output"
+        os.makedirs(output_path, exist_ok=True)
 
-        output_flac_file = os.path.splitext(test_output_path)[0] + '.flac'
-        ffmpeg.input(test_output_path, f="f32le", ac=2, ar=sample_rate).output(output_flac_file).run(quiet=True)
-        print(f"Saved flac output to {output_flac_file}")
+        last_global_step = pipeline.config["model_params"]["last_global_step"]
+        output_path = os.path.join(output_path, f"step_{last_global_step}_{scheduler}{steps}_s{seed}.raw")
         
+        output.cpu().numpy().tofile(output_path)
+        output_flac_file = os.path.splitext(output_path)[0] + '.flac'
+        ffmpeg.input(output_path, f="f32le", ac=2, ar=sample_rate).output(output_flac_file).run(quiet=True)
+        print(f"Saved flac output to {output_flac_file}")
+        os.remove(output_path)
+
         seed += 1

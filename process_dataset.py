@@ -4,7 +4,7 @@ import uuid
 import numpy as np
 import torch
 
-from lg_diffusion_pipeline import LGDiffusionPipeline
+from dual_diffusion_pipeline import DualDiffusionPipeline
 
 FFMPEG_PATH = './dataset/ffmpeg_gme/bin/ffmpeg.exe'
 #FFMPEG_PATH = 'ffmpeg'
@@ -29,28 +29,24 @@ SAMPLE_RAW_LENGTH = 65536*2
 OVERLAPPED = False
 WINDOW_TYPE = "none"
 SPATIAL_WINDOW_LENGTH = 2048
-FREQ_EMBEDDING_DIM = 30#62#30
+FREQ_EMBEDDING_DIM = 0#62#30
 
-NEW_MODEL_PATH = './models/new_lgdiffusion5'
+NEW_MODEL_PATH = './models/new_lgdiffusion'
 MODEL_PARAMS = {
     "prediction_type": "v_prediction",
-    #"beta_schedule": "log_linear", 
-    #"beta_start" : 0.0001, 
-    #"beta_end" : 0.02,
     "beta_schedule": "squaredcos_cap_v2",
     "beta_start" : 0.0001,
     "beta_end" : 0.02,
     "format": FORMAT,
-    "window_type": WINDOW_TYPE,
     "sample_raw_length": SAMPLE_RAW_LENGTH,
     "num_chunks": NUM_CHUNKS,
-    "overlapped": OVERLAPPED,
     "noise_floor": NOISE_FLOOR,
     "spatial_window_length": SPATIAL_WINDOW_LENGTH,
     "sample_rate": SAMPLE_RATE,
     "freq_embedding_dim": FREQ_EMBEDDING_DIM,
     "avg_mean": 0.,
     "avg_std": 0.,
+    "last_global_step": 0,
 }
     
 def decode_source_files_to_raw(input_file):
@@ -105,7 +101,7 @@ def decode_source_to_raw():
 
 def preprocess_raw_files_to_sample(input_file):
 
-    sample_crop_width = LGDiffusionPipeline.get_sample_crop_width(MODEL_PARAMS)
+    sample_crop_width = DualDiffusionPipeline.get_sample_crop_width(MODEL_PARAMS)
     processed = False; mean = 0.; std = 0.
     
     print(f"Processing '{input_file}'") 
@@ -119,7 +115,7 @@ def preprocess_raw_files_to_sample(input_file):
             raw_input.tofile(output_file_raw)
 
         raw_input = torch.from_numpy(raw_input).to("cuda").type(torch.float32) / 32768.
-        sample = LGDiffusionPipeline.raw_to_freq(raw_input[:sample_crop_width].unsqueeze(0), MODEL_PARAMS)
+        sample = DualDiffusionPipeline.raw_to_freq(raw_input[:sample_crop_width].unsqueeze(0), MODEL_PARAMS)
         mean = sample.mean(dim=(1, 2, 3)).item()
         std = sample.std(dim=(1, 2, 3)).item()
         processed = True
@@ -170,5 +166,5 @@ if __name__ == "__main__":
     #MODEL_PARAMS["avg_mean"] = avg_mean
     #MODEL_PARAMS["avg_std"] = avg_std
 
-    pipeline = LGDiffusionPipeline.create_new(MODEL_PARAMS, NEW_MODEL_PATH)
+    pipeline = DualDiffusionPipeline.create_new(MODEL_PARAMS, NEW_MODEL_PATH)
     print(f"Created new LGDiffusion model with config at '{NEW_MODEL_PATH}'")
