@@ -10,6 +10,8 @@ logger = logging.get_logger(__name__)  # pylint: disable=invalid-name
 
 def AddPositionalCoding(x, num_heads):        
     
+    import math
+
     max_seq_length = x.shape[1]
     d_model = x.shape[2]# // num_heads
     #d_model = num_heads
@@ -272,8 +274,8 @@ class SeparableAttnUpBlock2D(nn.Module):
             hidden_states = torch.cat([hidden_states, res_hidden_states], dim=1)
 
             hidden_states = resnet(hidden_states, temb)
-            if i % 2 == 0: attn_dim = 3
-            else: attn_dim = 2
+            if i % 2 == 0: attn_dim = 2
+            else: attn_dim = 3
             original_shape = hidden_states.shape
             hidden_states = shape_for_attention(hidden_states, attn_dim)
             hidden_states = attn(hidden_states)

@@ -28,13 +28,16 @@ def embedding_test():
     exit()
 
 def reconstruction_test(model_params):
+    
     crop_width = DualDiffusionPipeline.get_sample_crop_width(model_params)
-    raw_sample = np.fromfile("./dataset/samples/700.raw", dtype=np.int16, count=crop_width) / 32768.
+    raw_sample = np.fromfile("./dataset/samples/400.raw", dtype=np.int16, count=crop_width) / 32768.
     raw_sample = torch.from_numpy(raw_sample).unsqueeze(0).to("cuda")
     freq_sample = DualDiffusionPipeline.raw_to_freq(raw_sample, model_params) #.type(torch.float16)
-    phases = DualDiffusionPipeline.raw_to_freq(raw_sample, model_params, format_override="complex")
-    raw_sample = DualDiffusionPipeline.freq_to_raw(freq_sample, model_params, phases)
+    #phases = DualDiffusionPipeline.raw_to_freq(raw_sample, model_params, format_override="complex")
+    #raw_sample = DualDiffusionPipeline.freq_to_raw(freq_sample, model_params, phases)
+    raw_sample = DualDiffusionPipeline.freq_to_raw(freq_sample, model_params)
     raw_sample.type(torch.complex64).cpu().numpy().tofile("./output/debug_reconstruction.raw")
+    
     exit()
 
 if __name__ == "__main__":
@@ -43,10 +46,12 @@ if __name__ == "__main__":
         print("Error: PyTorch not compiled with CUDA support or CUDA unavailable")
         exit(1)
 
-    model_path = "./models/new_lgdiffusion"
+    model_path = "./models/new_lgdiffusion2"
     print(f"Loading LGDiffusion model from '{model_path}'...")
     pipeline = DualDiffusionPipeline.from_pretrained(model_path).to("cuda")
     sample_rate = pipeline.config["model_params"]["sample_rate"]
+
+    #reconstruction_test(pipeline.config["model_params"])
 
     num_samples = 10
     batch_size = 1

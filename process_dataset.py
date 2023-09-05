@@ -31,7 +31,7 @@ WINDOW_TYPE = "none"
 SPATIAL_WINDOW_LENGTH = 2048
 FREQ_EMBEDDING_DIM = 0#62#30
 
-NEW_MODEL_PATH = './models/new_lgdiffusion'
+NEW_MODEL_PATH = './models/new_lgdiffusion2'
 MODEL_PARAMS = {
     "prediction_type": "v_prediction",
     "beta_schedule": "squaredcos_cap_v2",

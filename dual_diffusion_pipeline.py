@@ -142,17 +142,17 @@ class DualDiffusionPipeline(DiffusionPipeline):
         num_chunks = model_params["num_chunks"]
         chunk_len = fft_samples_positive_frequencies_only.shape[1] // num_chunks
         fft_samples_chunks = fft_samples_positive_frequencies_only.view(fft_samples_positive_frequencies_only.shape[0], -1, chunk_len)
-        #fft_samples_chunks[:, :, 0] = 0. # explicitly remove dc component, otherwise chunks have significant non-zero mean
+        fft_chunk_ffts = torch.fft.fft(fft_samples_chunks, norm="ortho")
 
         format = model_params["format"] if format_override is None else format_override
         if format == "complex":
-            freq_samples = fft_samples_chunks.unsqueeze(1)
-            freq_samples /= freq_samples.std(dim=(1, 2, 3), keepdim=True)
+            freq_samples = fft_chunk_ffts.unsqueeze(1)
+            freq_samples /= fft_chunk_ffts.std(dim=(1, 2, 3), keepdim=True)
         elif format == "complex_2channels":
-            freq_samples = torch.view_as_real(fft_samples_chunks).permute(0, 3, 1, 2).contiguous()
+            freq_samples = torch.view_as_real(fft_chunk_ffts).permute(0, 3, 1, 2).contiguous()
             freq_samples /= freq_samples.std(dim=(1, 2, 3), keepdim=True)
         elif format == "complex_1channel":
-            freq_samples = torch.view_as_real(fft_samples_chunks).view(fft_samples_chunks.shape[0], fft_samples_chunks.shape[1], -1).unsqueeze(1)
+            freq_samples = torch.view_as_real(fft_chunk_ffts).view(fft_chunk_ffts.shape[0], fft_chunk_ffts.shape[1], -1).unsqueeze(1)
             freq_samples /= freq_samples.std(dim=(1, 2, 3), keepdim=True)
         else:
             raise ValueError(f"Unknown format '{format}'")
@@ -226,7 +226,7 @@ class DualDiffusionPipeline(DiffusionPipeline):
             generator = torch.Generator(device=self.device).manual_seed(seed)
         elif isinstance(seed, torch.Generator):
             generator = seed
-        
+
         model_params = self.config["model_params"]
         sample_crop_width = DualDiffusionPipeline.get_sample_crop_width(model_params)
         num_chunks = model_params["num_chunks"]

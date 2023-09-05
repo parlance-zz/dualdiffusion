@@ -5,11 +5,11 @@ accelerate launch^
  --allow_tf32^
  --snr_gamma=5^
  --train_data_dir="./dataset/samples"^
- --pretrained_model_name_or_path="./models/new_lgdiffusion"^
- --output_dir="./models/new_lgdiffusion"^
+ --pretrained_model_name_or_path="./models/new_lgdiffusion2"^
+ --output_dir="./models/new_lgdiffusion2"^
  --train_batch_size=4^
  --num_train_epochs=500^
- --checkpointing_steps=9110^
+ --checkpointing_steps=4555^
  --checkpoints_total_limit=1^
  --gradient_accumulation_steps=1^
  --learning_rate=1e-4^

@@ -708,6 +708,7 @@ def main():
     global_step = 0
     first_epoch = 0
     grad_norm = 0.
+    debug_written = False
 
     # Potentially load in the weights and states from a previous save
     if args.resume_from_checkpoint:
@@ -755,15 +756,24 @@ def main():
                 samples = DualDiffusionPipeline.raw_to_freq(raw_samples, model_params)
 
                 noise = torch.randn_like(samples)
-                if args.input_perturbation:
+                if args.input_perturbation > 0:
                     new_noise = noise + args.input_perturbation * torch.randn_like(noise)
 
+                if not debug_written:
+                    logger.info(f"Samples mean: {samples.mean()} - Samples std: {samples.std()}")
+                    logger.info(f"Samples shape: {samples.shape} - Samples std (with noise): {(samples + noise).std()}")
+                    samples.cpu().numpy().tofile("output/debug_samples.raw")
+                    raw_samples.cpu().numpy().tofile("output/debug_raw_samples.raw")
+                    #raw_samples = LGDiffusionPipeline.freq_to_raw(samples)
+                    #raw_samples.cpu().numpy().tofile("output/debug_reconstructed_raw_samples.raw")
+                    debug_written = True
+                    
                 # Sample a random timestep for each image
                 timesteps = torch.randint(0, noise_scheduler.config.num_train_timesteps, (samples.shape[0],), device=samples.device).long()
 
                 # Add noise to the latents according to the noise magnitude at each timestep
                 # (this is the forward diffusion process)
-                if args.input_perturbation:
+                if args.input_perturbation > 0:
                     model_input = noise_scheduler.add_noise(samples, new_noise, timesteps)
                 else:
                     model_input = noise_scheduler.add_noise(samples, noise, timesteps)
@@ -774,10 +784,12 @@ def main():
                     target = noise
                 elif noise_scheduler.config.prediction_type == "v_prediction":
                     target = noise_scheduler.get_velocity(samples, noise, timesteps)
+                elif noise_scheduler.config.prediction_type == "sample":
+                    target = samples
                 else:
                     raise ValueError(f"Unknown prediction type {noise_scheduler.config.prediction_type}")
 
-                # Predict the noise residual and compute loss
+                # Predict the target and compute loss
                 model_output = unet(model_input, timesteps).sample
 
                 if args.snr_gamma is None:
