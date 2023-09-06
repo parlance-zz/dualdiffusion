@@ -5,6 +5,7 @@ import numpy as np
 import torch
 
 from dual_diffusion_pipeline import DualDiffusionPipeline
+from dual_diffusion_pipeline1d import DualDiffusionPipeline1D
 
 FFMPEG_PATH = './dataset/ffmpeg_gme/bin/ffmpeg.exe'
 #FFMPEG_PATH = 'ffmpeg'
@@ -25,14 +26,15 @@ FORMAT = "complex_2channels"
 NOISE_FLOOR = 0. #1e-3
 SAMPLE_RATE = 8000
 NUM_CHUNKS = 256
-SAMPLE_RAW_LENGTH = 65536*2
+SAMPLE_RAW_LENGTH = 65536#*2
 OVERLAPPED = False
 WINDOW_TYPE = "none"
 SPATIAL_WINDOW_LENGTH = 2048
 FREQ_EMBEDDING_DIM = 0#62#30
 
-NEW_MODEL_PATH = './models/new_lgdiffusion2'
+NEW_MODEL_PATH = './models/dualdiffusion1d_1'
 MODEL_PARAMS = {
+    "model_type": "1d", #"2d"
     "prediction_type": "v_prediction",
     "beta_schedule": "squaredcos_cap_v2",
     "beta_start" : 0.0001,
@@ -115,7 +117,7 @@ def preprocess_raw_files_to_sample(input_file):
             raw_input.tofile(output_file_raw)
 
         raw_input = torch.from_numpy(raw_input).to("cuda").type(torch.float32) / 32768.
-        sample = DualDiffusionPipeline.raw_to_freq(raw_input[:sample_crop_width].unsqueeze(0), MODEL_PARAMS)
+        sample = DualDiffusionPipeline.raw_to_sample(raw_input[:sample_crop_width].unsqueeze(0), MODEL_PARAMS)
         mean = sample.mean(dim=(1, 2, 3)).item()
         std = sample.std(dim=(1, 2, 3)).item()
         processed = True
@@ -166,5 +168,8 @@ if __name__ == "__main__":
     #MODEL_PARAMS["avg_mean"] = avg_mean
     #MODEL_PARAMS["avg_std"] = avg_std
 
-    pipeline = DualDiffusionPipeline.create_new(MODEL_PARAMS, NEW_MODEL_PATH)
-    print(f"Created new LGDiffusion model with config at '{NEW_MODEL_PATH}'")
+    if MODEL_PARAMS["model_type"] == "1d":
+        pipeline = DualDiffusionPipeline1D.create_new(MODEL_PARAMS, NEW_MODEL_PATH)
+    else:
+        pipeline = DualDiffusionPipeline.create_new(MODEL_PARAMS, NEW_MODEL_PATH)
+    print(f"Created new DualDiffusion model with config at '{NEW_MODEL_PATH}'")

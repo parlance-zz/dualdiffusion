@@ -47,8 +47,8 @@ from diffusers.training_utils import EMAModel
 from diffusers.utils import check_min_version, deprecate, is_tensorboard_available
 from diffusers.utils.import_utils import is_xformers_available
 
-from unet2d_dual import UNet2DDualModel
-from dual_diffusion_pipeline import DualDiffusionPipeline
+from unet1d_dual import UNet1DDualModel
+from dual_diffusion_pipeline1d import DualDiffusionPipeline1D
 
 # Will error if the minimal version of diffusers is not installed. Remove at your own risks.
 #check_min_version("0.21.0.dev0")
@@ -420,12 +420,11 @@ def main():
             os.makedirs(args.output_dir, exist_ok=True)
 
     # Initialize the model
-    pipeline = DualDiffusionPipeline.from_pretrained(args.pretrained_model_name_or_path)#.to("cuda")
+    pipeline = DualDiffusionPipeline1D.from_pretrained(args.pretrained_model_name_or_path)#.to("cuda")
     unet = pipeline.unet
     noise_scheduler = pipeline.scheduler
     model_params = pipeline.config["model_params"]
-    sample_crop_width = DualDiffusionPipeline.get_sample_crop_width(model_params)
-    freq_embedding_dim = model_params["freq_embedding_dim"]
+    sample_crop_width = DualDiffusionPipeline1D.get_sample_crop_width(model_params)
 
     # Currently Accelerate doesn't know how to handle multiple models under Deepspeed ZeRO stage 3.
     # For this to work properly all models must be run through `accelerate.prepare`. But accelerate
@@ -439,11 +438,11 @@ def main():
 
     # Create EMA for the unet.
     if args.use_ema:
-        ema_unet = UNet2DDualModel.from_pretrained(
+        ema_unet = UNet1DDualModel.from_pretrained(
             args.pretrained_model_name_or_path, subfolder="unet", revision=args.revision
         )
         ema_unet = EMAModel(ema_unet.parameters(),
-                            model_cls=UNet2DDualModel,
+                            model_cls=UNet1DDualModel,
                             model_config=ema_unet.config,
                             min_decay=args.ema_min_decay,
                             decay=args.ema_max_decay,
@@ -505,7 +504,7 @@ def main():
                 if not os.path.exists(os.path.join(input_dir, "unet_ema")):
                     logger.info("EMA model in checkpoint not found, using new ema model")
                 else:
-                    load_model = EMAModel.from_pretrained(os.path.join(input_dir, "unet_ema"), UNet2DDualModel)
+                    load_model = EMAModel.from_pretrained(os.path.join(input_dir, "unet_ema"), UNet1DDualModel)
                     ema_unet.load_state_dict(load_model.state_dict())
                     ema_unet.to(accelerator.device)
                     del load_model
@@ -515,7 +514,7 @@ def main():
                 model = models.pop()
 
                 # load diffusers style into model
-                load_model = UNet2DDualModel.from_pretrained(input_dir, subfolder="unet")
+                load_model = UNet1DDualModel.from_pretrained(input_dir, subfolder="unet")
                 model.register_to_config(**load_model.config)
 
                 model.load_state_dict(load_model.state_dict())
@@ -753,7 +752,7 @@ def main():
             with accelerator.accumulate(unet):
 
                 raw_samples = batch["input"]
-                samples = DualDiffusionPipeline.raw_to_sample(raw_samples, model_params)
+                samples = DualDiffusionPipeline1D.raw_to_sample(raw_samples, model_params)
 
                 noise = torch.randn_like(samples)
                 if args.input_perturbation > 0:
@@ -777,9 +776,7 @@ def main():
                     model_input = noise_scheduler.add_noise(samples, new_noise, timesteps)
                 else:
                     model_input = noise_scheduler.add_noise(samples, noise, timesteps)
-                if freq_embedding_dim > 0:
-                    model_input = DualDiffusionPipeline.add_freq_embedding(model_input, freq_embedding_dim)
-
+                    
                 if noise_scheduler.config.prediction_type == "epsilon":
                     target = noise
                 elif noise_scheduler.config.prediction_type == "v_prediction":

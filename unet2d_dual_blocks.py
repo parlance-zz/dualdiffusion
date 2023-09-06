@@ -72,11 +72,14 @@ class SeparableAttnDownBlock2D(nn.Module):
         output_scale_factor=1.0,
         downsample_padding=1,
         downsample_type="conv",
+        separate_attn_dim=(3,),
     ):
         super().__init__()
         resnets = []
         attentions = []
+
         self.downsample_type = downsample_type
+        self.separate_attn_dim = separate_attn_dim
 
         if attention_head_dim is None:
             logger.warn(
@@ -154,8 +157,7 @@ class SeparableAttnDownBlock2D(nn.Module):
         for resnet, attn in zip(self.resnets, self.attentions):
 
             hidden_states = resnet(hidden_states, temb)
-            if i % 2 == 0: attn_dim = 3
-            else: attn_dim = 2
+            attn_dim = self.separate_attn_dim[i% len(self.separate_attn_dim)]
             original_shape = hidden_states.shape
             hidden_states = shape_for_attention(hidden_states, attn_dim)
             hidden_states = attn(hidden_states)
@@ -192,12 +194,14 @@ class SeparableAttnUpBlock2D(nn.Module):
         attention_head_dim=1,
         output_scale_factor=1.0,
         upsample_type="conv",
+        separate_attn_dim=(3,),
     ):
         super().__init__()
         resnets = []
         attentions = []
 
         self.upsample_type = upsample_type
+        self.separate_attn_dim = separate_attn_dim
 
         if attention_head_dim is None:
             logger.warn(
@@ -265,7 +269,7 @@ class SeparableAttnUpBlock2D(nn.Module):
             self.upsamplers = None
 
     def forward(self, hidden_states, res_hidden_states_tuple, temb=None, upsample_size=None):
-
+        
         i = 0
         for resnet, attn in zip(self.resnets, self.attentions):
             # pop res hidden states
@@ -274,8 +278,7 @@ class SeparableAttnUpBlock2D(nn.Module):
             hidden_states = torch.cat([hidden_states, res_hidden_states], dim=1)
 
             hidden_states = resnet(hidden_states, temb)
-            if i % 2 == 0: attn_dim = 2
-            else: attn_dim = 3
+            attn_dim = self.separate_attn_dim[i % len(self.separate_attn_dim)]
             original_shape = hidden_states.shape
             hidden_states = shape_for_attention(hidden_states, attn_dim)
             hidden_states = attn(hidden_states)

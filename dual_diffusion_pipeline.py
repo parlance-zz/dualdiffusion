@@ -7,13 +7,13 @@ from diffusers.schedulers import DPMSolverMultistepScheduler, DDIMScheduler
 from diffusers.pipelines.pipeline_utils import DiffusionPipeline
 
 from unet2d_dual import UNet2DDualModel
-
+from unet1d_dual import UNet1DDualModel
 class DualDiffusionPipeline(DiffusionPipeline):
 
     def __init__(
         self,
         unet: UNet2DDualModel,
-        scheduler: DPMSolverMultistepScheduler,
+        scheduler: DDIMScheduler,
         model_params: dict = None,
     ):
         super().__init__()
@@ -30,6 +30,14 @@ class DualDiffusionPipeline(DiffusionPipeline):
         unet = UNet2DDualModel(
             act_fn="silu",
             attention_head_dim=8,
+            #attention_head_dim=32,
+            #attention_head_dim=(16, 32, 64, 128),
+            #attention_head_dim=(8, 16, 32, 64),
+            #separate_attn_dim=(3,2),
+            separate_attn_dim=3,
+            reverse_separate_attn_dim=False,
+            #separate_attn_dim=(3,2),
+            #reverse_separate_attn_dim=True,
             center_input_sample=False,
             downsample_padding=1,
             flip_sin_to_cos=True,
@@ -40,25 +48,30 @@ class DualDiffusionPipeline(DiffusionPipeline):
             in_channels=num_input_channels,
             out_channels=num_output_channels,
             layers_per_block=2,
-            block_out_channels=(128, 192, 288, 448, 672, 1024),
+            block_out_channels=(64, 128, 256, 512, 1024), #, 1024),
             down_block_types=(
                 "SeparableAttnDownBlock2D",
                 "SeparableAttnDownBlock2D",
-                "SeparableAttnDownBlock2D",
-                "SeparableAttnDownBlock2D",
-                "SeparableAttnDownBlock2D",
-                "SeparableAttnDownBlock2D",
+                "AttnDownBlock2D",
+                "AttnDownBlock2D",
+                "AttnDownBlock2D",
+                #"SeparableAttnDownBlock2D",
+                #"AttnDownBlock2D",
             ),
             up_block_types=(
-                "SeparableAttnUpBlock2D",
-                "SeparableAttnUpBlock2D",
-                "SeparableAttnUpBlock2D",
-                "SeparableAttnUpBlock2D",
+                #"AttnUpBlock2D",
+                #"SeparableAttnUpBlock2D",
+                #"SeparableAttnUpBlock2D",
+                "AttnUpBlock2D",
+                "AttnUpBlock2D",
+                "AttnUpBlock2D",
                 "SeparableAttnUpBlock2D",
                 "SeparableAttnUpBlock2D",
             ),
+            #downsample_type="resnet",
+            #upsample_type="resnet",
         )
-        
+
         beta_schedule = model_params["beta_schedule"]
         beta_start = model_params["beta_start"]
         beta_end = model_params["beta_end"]
@@ -122,7 +135,7 @@ class DualDiffusionPipeline(DiffusionPipeline):
 
     @staticmethod
     @torch.no_grad()
-    def raw_to_freq(raw_samples, model_params, format_override=None):
+    def raw_to_sample(raw_samples, model_params, format_override=None):
 
         raw_samples = raw_samples.clone()
         raw_samples /= raw_samples.std(dim=1, keepdim=True)
@@ -161,7 +174,7 @@ class DualDiffusionPipeline(DiffusionPipeline):
     
     @staticmethod
     @torch.no_grad()
-    def freq_to_raw(freq_samples, model_params):
+    def sample_to_raw(freq_samples, model_params):
         
         format = model_params["format"]
         if format == "complex_1channel":
@@ -177,16 +190,6 @@ class DualDiffusionPipeline(DiffusionPipeline):
         fft_samples = torch.cat((fft_samples, torch.zeros_like(fft_samples)), dim=1)
         raw_samples = torch.fft.ifft(fft_samples, norm="ortho")
         return raw_samples / raw_samples.std(dim=1, keepdim=True) * 0.18215
-
-    @staticmethod
-    @torch.no_grad()
-    def raw_to_log_scale(samples, u=255.):
-        return torch.sgn(samples) * torch.log(1. + 255 * samples.abs()) / torch.log(1 + u)
-
-    @staticmethod
-    @torch.no_grad() 
-    def log_scale_to_raw(samples, u=255.):
-        return torch.sgn(samples) * ((1 + u) ** samples.abs() - 1) / u
 
     @torch.no_grad()
     def __call__(
@@ -268,7 +271,7 @@ class DualDiffusionPipeline(DiffusionPipeline):
         #sample = sample.type(torch.float32)
         #sample.cpu().numpy().tofile("./output/debug_sample.raw")
 
-        raw_sample = DualDiffusionPipeline.freq_to_raw(sample, model_params)
+        raw_sample = DualDiffusionPipeline.sample_to_raw(sample, model_params)
         if loops > 0: raw_sample = raw_sample.repeat(1, loops+1)
         else: self.set_tiling_mode(False)
 

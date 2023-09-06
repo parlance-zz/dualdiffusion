@@ -6,80 +6,28 @@ import torch.nn as nn
 from diffusers.configuration_utils import ConfigMixin, register_to_config
 from diffusers.models.embeddings import GaussianFourierProjection, TimestepEmbedding, Timesteps
 from diffusers.models.modeling_utils import ModelMixin
-from diffusers.models.unet_2d_blocks import UNetMidBlock2D, get_down_block, get_up_block
-from diffusers.models.unet_2d import UNet2DOutput
+from diffusers.models.unet_1d import UNet1DOutput
 
-from unet2d_dual_blocks import SeparableAttnDownBlock2D, SeparableAttnUpBlock2D
+from unet1d_dual_blocks import DualDownBlock1D, DualUpBlock1D, DualMidBlock1D
 
-class UNet2DDualModel(ModelMixin, ConfigMixin):
-    r"""
-    A 2D UNet model that takes a noisy sample and a timestep and returns a sample shaped output.
-
-    This model inherits from [`ModelMixin`]. Check the superclass documentation for it's generic methods implemented
-    for all models (such as downloading or saving).
-
-    Parameters:
-        sample_size (`int` or `Tuple[int, int]`, *optional*, defaults to `None`):
-            Height and width of input/output sample. Dimensions must be a multiple of `2 ** (len(block_out_channels) -
-            1)`.
-        in_channels (`int`, *optional*, defaults to 3): Number of channels in the input sample.
-        out_channels (`int`, *optional*, defaults to 3): Number of channels in the output.
-        center_input_sample (`bool`, *optional*, defaults to `False`): Whether to center the input sample.
-        time_embedding_type (`str`, *optional*, defaults to `"positional"`): Type of time embedding to use.
-        freq_shift (`int`, *optional*, defaults to 0): Frequency shift for Fourier time embedding.
-        flip_sin_to_cos (`bool`, *optional*, defaults to `True`):
-            Whether to flip sin to cos for Fourier time embedding.
-        down_block_types (`Tuple[str]`, *optional*, defaults to `("DownBlock2D", "AttnDownBlock2D", "AttnDownBlock2D", "AttnDownBlock2D")`):
-            Tuple of downsample block types.
-        mid_block_type (`str`, *optional*, defaults to `"UNetMidBlock2D"`):
-            Block type for middle of UNet, it can be either `UNetMidBlock2D` or `UnCLIPUNetMidBlock2D`.
-        up_block_types (`Tuple[str]`, *optional*, defaults to `("AttnUpBlock2D", "AttnUpBlock2D", "AttnUpBlock2D", "UpBlock2D")`):
-            Tuple of upsample block types.
-        block_out_channels (`Tuple[int]`, *optional*, defaults to `(224, 448, 672, 896)`):
-            Tuple of block output channels.
-        layers_per_block (`int`, *optional*, defaults to `2`): The number of layers per block.
-        mid_block_scale_factor (`float`, *optional*, defaults to `1`): The scale factor for the mid block.
-        downsample_padding (`int`, *optional*, defaults to `1`): The padding for the downsample convolution.
-        downsample_type (`str`, *optional*, defaults to `conv`):
-            The downsample type for downsampling layers. Choose between "conv" and "resnet"
-        upsample_type (`str`, *optional*, defaults to `conv`):
-            The upsample type for upsampling layers. Choose between "conv" and "resnet"
-        act_fn (`str`, *optional*, defaults to `"silu"`): The activation function to use.
-        attention_head_dim (`int`, *optional*, defaults to `8`): The attention head dimension.
-        norm_num_groups (`int`, *optional*, defaults to `32`): The number of groups for normalization.
-        norm_eps (`float`, *optional*, defaults to `1e-5`): The epsilon for normalization.
-        resnet_time_scale_shift (`str`, *optional*, defaults to `"default"`): Time scale shift config
-            for ResNet blocks (see [`~models.resnet.ResnetBlock2D`]). Choose from `default` or `scale_shift`.
-        class_embed_type (`str`, *optional*, defaults to `None`):
-            The type of class embedding to use which is ultimately summed with the time embeddings. Choose from `None`,
-            `"timestep"`, or `"identity"`.
-        num_class_embeds (`int`, *optional*, defaults to `None`):
-            Input dimension of the learnable embedding matrix to be projected to `time_embed_dim` when performing class
-            conditioning with `class_embed_type` equal to `None`.
-    """
+class UNet1DDualModel(ModelMixin, ConfigMixin):
 
     @register_to_config
     def __init__(
         self,
-        sample_size: Optional[Union[int, Tuple[int, int]]] = None,
-        in_channels: int = 3,
-        out_channels: int = 3,
-        center_input_sample: bool = False,
+        sample_size: Optional[int] = None,
+        in_channels: int = 2,
+        out_channels: int = 2,
         time_embedding_type: str = "positional",
         freq_shift: int = 0,
         flip_sin_to_cos: bool = True,
-        down_block_types: Tuple[str] = ("DownBlock2D", "AttnDownBlock2D", "AttnDownBlock2D", "AttnDownBlock2D"),
-        up_block_types: Tuple[str] = ("AttnUpBlock2D", "AttnUpBlock2D", "AttnUpBlock2D", "UpBlock2D"),
+        down_block_types: Tuple[str] = ("DualDownBlock1D", "DualDownBlock1D", "DualDownBlock1D", "DualDownBlock1D"),
+        up_block_types: Tuple[str] = ("DualUpBlock1D", "DualUpBlock1D", "DualUpBlock1D", "DualUpBlock1D"),
         block_out_channels: Tuple[int] = (224, 448, 672, 896),
         layers_per_block: int = 2,
         mid_block_scale_factor: float = 1,
-        downsample_padding: int = 1,
-        downsample_type: str = "conv",
-        upsample_type: str = "conv",
         act_fn: str = "silu",
         attention_head_dim: Union[int, Tuple[int]] = 8,
-        separate_attn_dim: Union[int, Tuple[int]] = (3,2),
-        reverse_separate_attn_dim: bool = False,
         norm_num_groups: int = 32,
         norm_eps: float = 1e-5,
         resnet_time_scale_shift: str = "default",
@@ -108,13 +56,8 @@ class UNet2DDualModel(ModelMixin, ConfigMixin):
                 f"Must provide the same number of `attention_head_dim` as `down_block_types`. `attention_head_dim`: {attention_head_dim}. `down_block_types`: {down_block_types}."
             )
         
-        if not isinstance(separate_attn_dim, int) and len(separate_attn_dim) != layers_per_block:
-            raise ValueError(
-                f"Must provide the same number of `separate_attn_dim` as `layers_per_block`. `separate_attn_dim`: {separate_attn_dim}. `layers_per_block`: {layers_per_block}."
-            )
-        
         # input
-        self.conv_in = nn.Conv2d(in_channels, block_out_channels[0], kernel_size=3, padding=(1, 1))
+        self.conv_in = nn.Conv1d(in_channels, block_out_channels[0], kernel_size=3, padding=1)
 
         # time
         if time_embedding_type == "fourier":
@@ -142,8 +85,6 @@ class UNet2DDualModel(ModelMixin, ConfigMixin):
 
         if isinstance(attention_head_dim, int):
             attention_head_dim = (attention_head_dim,) * len(down_block_types)
-        if isinstance(separate_attn_dim, int):
-            separate_attn_dim = (separate_attn_dim,) * layers_per_block
 
         # down
         output_channel = block_out_channels[0]
@@ -152,14 +93,13 @@ class UNet2DDualModel(ModelMixin, ConfigMixin):
             output_channel = block_out_channels[i]
             is_final_block = i == len(block_out_channels) - 1
 
-            if down_block_type == "SeparableAttnDownBlock2D":
-
-                if is_final_block is True:
-                    downsample_type = None
-                else:
-                    downsample_type = downsample_type or "conv"  # default to 'conv'
-
-                down_block = SeparableAttnDownBlock2D(
+            if is_final_block is True:
+                downsample_type = None
+            else:
+                downsample_type = "kernel"
+                
+            if down_block_type == "DualDownBlock1D":
+                down_block = DualDownBlock1D(
                     num_layers=layers_per_block,
                     in_channels=input_channel,
                     out_channels=output_channel,
@@ -168,31 +108,18 @@ class UNet2DDualModel(ModelMixin, ConfigMixin):
                     resnet_act_fn=act_fn,
                     resnet_groups=norm_num_groups,
                     attention_head_dim=attention_head_dim[i],
-                    downsample_padding=downsample_padding,
                     resnet_time_scale_shift=resnet_time_scale_shift,
                     downsample_type=downsample_type,
-                    separate_attn_dim=separate_attn_dim,
+                    add_attention=False,
                 )
             else:
-                down_block = get_down_block(
-                    down_block_type,
-                    num_layers=layers_per_block,
-                    in_channels=input_channel,
-                    out_channels=output_channel,
-                    temb_channels=time_embed_dim,
-                    add_downsample=not is_final_block,
-                    resnet_eps=norm_eps,
-                    resnet_act_fn=act_fn,
-                    resnet_groups=norm_num_groups,
-                    attention_head_dim=attention_head_dim[i],
-                    downsample_padding=downsample_padding,
-                    resnet_time_scale_shift=resnet_time_scale_shift,
-                    downsample_type=downsample_type,
-                )
+                raise ValueError(f"Unrecognized down block type: {down_block_type}")
+
             self.down_blocks.append(down_block)
 
         # mid
-        self.mid_block = UNetMidBlock2D(
+        self.mid_block = DualMidBlock1D(
+            #num_layers=layers_per_block,
             in_channels=block_out_channels[-1],
             temb_channels=time_embed_dim,
             resnet_eps=norm_eps,
@@ -205,10 +132,6 @@ class UNet2DDualModel(ModelMixin, ConfigMixin):
         )
 
         reversed_attention_head_dim = list(reversed(attention_head_dim))
-        if reverse_separate_attn_dim:
-            reversed_separate_attn_dim = list(reversed(separate_attn_dim))
-        else:
-            reversed_separate_attn_dim = separate_attn_dim
 
         # up
         reversed_block_out_channels = list(reversed(block_out_channels))
@@ -220,13 +143,13 @@ class UNet2DDualModel(ModelMixin, ConfigMixin):
 
             is_final_block = i == len(block_out_channels) - 1
 
-            if up_block_type == "SeparableAttnUpBlock2D":
+            if up_block_type == "DualUpBlock1D":
                 if is_final_block is True:
                     upsample_type = None
                 else:
-                    upsample_type = upsample_type or "conv"  # default to 'conv'
+                    upsample_type = "kernel"
                     
-                up_block = SeparableAttnUpBlock2D(
+                up_block = DualUpBlock1D(
                     num_layers=layers_per_block + 1,
                     in_channels=input_channel,
                     out_channels=output_channel,
@@ -238,24 +161,11 @@ class UNet2DDualModel(ModelMixin, ConfigMixin):
                     attention_head_dim=reversed_attention_head_dim[i],
                     resnet_time_scale_shift=resnet_time_scale_shift,
                     upsample_type=upsample_type,
-                    separate_attn_dim=reversed_separate_attn_dim,
+                    add_attention=False,
                 )
             else:
-                up_block = get_up_block(
-                    up_block_type,
-                    num_layers=layers_per_block + 1,
-                    in_channels=input_channel,
-                    out_channels=output_channel,
-                    prev_output_channel=prev_output_channel,
-                    temb_channels=time_embed_dim,
-                    add_upsample=not is_final_block,
-                    resnet_eps=norm_eps,
-                    resnet_act_fn=act_fn,
-                    resnet_groups=norm_num_groups,
-                    attention_head_dim=reversed_attention_head_dim[i],
-                    resnet_time_scale_shift=resnet_time_scale_shift,
-                    upsample_type=upsample_type,
-                )
+                raise ValueError(f"Unrecognized up block type: {up_block_type}")
+            
             self.up_blocks.append(up_block)
             prev_output_channel = output_channel
 
@@ -263,7 +173,7 @@ class UNet2DDualModel(ModelMixin, ConfigMixin):
         num_groups_out = norm_num_groups if norm_num_groups is not None else min(block_out_channels[0] // 4, 32)
         self.conv_norm_out = nn.GroupNorm(num_channels=block_out_channels[0], num_groups=num_groups_out, eps=norm_eps)
         self.conv_act = nn.SiLU()
-        self.conv_out = nn.Conv2d(block_out_channels[0], out_channels, kernel_size=3, padding=1)
+        self.conv_out = nn.Conv1d(block_out_channels[0], out_channels, kernel_size=3, padding=1)
 
     def forward(
         self,
@@ -271,27 +181,7 @@ class UNet2DDualModel(ModelMixin, ConfigMixin):
         timestep: Union[torch.Tensor, float, int],
         class_labels: Optional[torch.Tensor] = None,
         return_dict: bool = True,
-    ) -> Union[UNet2DOutput, Tuple]:
-        r"""
-        The [`UNet2DModel`] forward method.
-
-        Args:
-            sample (`torch.FloatTensor`):
-                The noisy input tensor with the following shape `(batch, channel, height, width)`.
-            timestep (`torch.FloatTensor` or `float` or `int`): The number of timesteps to denoise an input.
-            class_labels (`torch.FloatTensor`, *optional*, defaults to `None`):
-                Optional class labels for conditioning. Their embeddings will be summed with the timestep embeddings.
-            return_dict (`bool`, *optional*, defaults to `True`):
-                Whether or not to return a [`~models.unet_2d.UNet2DOutput`] instead of a plain tuple.
-
-        Returns:
-            [`~models.unet_2d.UNet2DOutput`] or `tuple`:
-                If `return_dict` is True, an [`~models.unet_2d.UNet2DOutput`] is returned, otherwise a `tuple` is
-                returned where the first element is the sample tensor.
-        """
-        # 0. center input if necessary
-        if self.config.center_input_sample:
-            sample = 2 * sample - 1.0
+    ) -> Union[UNet1DOutput, Tuple]:
 
         # 1. time
         timesteps = timestep
@@ -366,4 +256,5 @@ class UNet2DDualModel(ModelMixin, ConfigMixin):
         if not return_dict:
             return (sample,)
 
-        return UNet2DOutput(sample=sample)
+        return UNet1DOutput(sample=sample)
+

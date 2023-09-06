@@ -7,7 +7,7 @@ import numpy as np
 import ffmpeg
 
 from dual_diffusion_pipeline import DualDiffusionPipeline
-from diffusers import StableDiffusionImg2ImgPipeline
+from dual_diffusion_pipeline1d import DualDiffusionPipeline1D
 
 def embedding_test():
     num_positions = 256
@@ -32,11 +32,27 @@ def reconstruction_test(model_params):
     crop_width = DualDiffusionPipeline.get_sample_crop_width(model_params)
     raw_sample = np.fromfile("./dataset/samples/400.raw", dtype=np.int16, count=crop_width) / 32768.
     raw_sample = torch.from_numpy(raw_sample).unsqueeze(0).to("cuda")
-    freq_sample = DualDiffusionPipeline.raw_to_freq(raw_sample, model_params) #.type(torch.float16)
+    freq_sample = DualDiffusionPipeline.raw_to_sample(raw_sample, model_params) #.type(torch.float16)
     #phases = DualDiffusionPipeline.raw_to_freq(raw_sample, model_params, format_override="complex")
     #raw_sample = DualDiffusionPipeline.freq_to_raw(freq_sample, model_params, phases)
-    raw_sample = DualDiffusionPipeline.freq_to_raw(freq_sample, model_params)
+    raw_sample = DualDiffusionPipeline.sample_to_raw(freq_sample, model_params)
     raw_sample.type(torch.complex64).cpu().numpy().tofile("./output/debug_reconstruction.raw")
+    
+    exit()
+
+def attention_shaping_test():
+    from unet2d_dual_blocks import shape_for_attention, unshape_for_attention
+
+    hidden_states_original = torch.randn((4, 32, 256, 256), dtype=torch.float32).to("cuda")
+
+    for attn_dim in range(2, 3+1):
+        hidden_states = hidden_states_original.clone()
+        original_shape = hidden_states.shape
+
+        hidden_states = shape_for_attention(hidden_states, attn_dim)
+        hidden_states = unshape_for_attention(hidden_states, attn_dim, original_shape)
+
+        assert(torch.equal(hidden_states_original, hidden_states))
     
     exit()
 
@@ -45,21 +61,26 @@ if __name__ == "__main__":
     if not torch.cuda.is_available():
         print("Error: PyTorch not compiled with CUDA support or CUDA unavailable")
         exit(1)
+    else:
+        torch.backends.cuda.matmul.allow_tf32 = True
+        torch.backends.cuda.cufft_plan_cache[0].max_size = 32 # stupid cufft memory leak
 
-    model_path = "./models/new_lgdiffusion2"
-    print(f"Loading LGDiffusion model from '{model_path}'...")
-    pipeline = DualDiffusionPipeline.from_pretrained(model_path).to("cuda")
+    model_path = "./models/dualdiffusion1d_1"
+    print(f"Loading DualDiffusion model from '{model_path}'...")
+    #pipeline = DualDiffusionPipeline.from_pretrained(model_path).to("cuda")
+    pipeline = DualDiffusionPipeline1D.from_pretrained(model_path).to("cuda")
     sample_rate = pipeline.config["model_params"]["sample_rate"]
 
     #reconstruction_test(pipeline.config["model_params"])
+    #attention_shaping_test()
 
-    num_samples = 10
+    num_samples = 3
     batch_size = 1
     length = 1
     scheduler = "dpms++"
     #scheduler = "ddim"
-    steps = 100
-    loops = 1
+    steps = 200
+    loops = 0
     renormalize = False
     rebalance = False
 
