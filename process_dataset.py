@@ -32,7 +32,7 @@ WINDOW_TYPE = "none"
 SPATIAL_WINDOW_LENGTH = 2048
 FREQ_EMBEDDING_DIM = 0#62#30
 
-NEW_MODEL_PATH = './models/dualdiffusion1d_1'
+NEW_MODEL_PATH = './models/dualdiffusion1d_15'
 MODEL_PARAMS = {
     "model_type": "1d", #"2d"
     "prediction_type": "v_prediction",
@@ -47,7 +47,7 @@ MODEL_PARAMS = {
     "sample_rate": SAMPLE_RATE,
     "freq_embedding_dim": FREQ_EMBEDDING_DIM,
     "avg_mean": 0.,
-    "avg_std": 0.,
+    "avg_std": 1.,
     "last_global_step": 0,
 }
     
@@ -117,9 +117,12 @@ def preprocess_raw_files_to_sample(input_file):
             raw_input.tofile(output_file_raw)
 
         raw_input = torch.from_numpy(raw_input).to("cuda").type(torch.float32) / 32768.
-        sample = DualDiffusionPipeline.raw_to_sample(raw_input[:sample_crop_width].unsqueeze(0), MODEL_PARAMS)
-        mean = sample.mean(dim=(1, 2, 3)).item()
-        std = sample.std(dim=(1, 2, 3)).item()
+        #sample = DualDiffusionPipeline.raw_to_sample(raw_input[:sample_crop_width].unsqueeze(0), MODEL_PARAMS)
+        #mean = sample.mean(dim=(1, 2, 3)).item()
+        #std = sample.std(dim=(1, 2, 3)).item()
+        sample = DualDiffusionPipeline1D.raw_to_sample(raw_input[:sample_crop_width].unsqueeze(0), MODEL_PARAMS)
+        mean = sample.mean(dim=(1, 2)).item()
+        std = sample.std(dim=(1, 2)).item()
         processed = True
 
     print(f"Processed '{input_file}'")
@@ -161,12 +164,18 @@ if __name__ == "__main__":
     if not torch.cuda.is_available():
         print("Error: PyTorch not compiled with CUDA support or CUDA unavailable")
         exit(1)
+    else:
+        torch.backends.cuda.matmul.allow_tf32 = True
+        torch.backends.cuda.cufft_plan_cache[0].max_size = 32 # stupid cufft memory leak
 
     #decode_source_to_raw()
 
-    #avg_mean, avg_std, avg_chunk_std = preprocess_raw_to_sample()
+    #avg_mean, avg_std = preprocess_raw_to_sample()
     #MODEL_PARAMS["avg_mean"] = avg_mean
     #MODEL_PARAMS["avg_std"] = avg_std
+
+    #MODEL_PARAMS["avg_mean"] = 0.0017828649850519483
+    #MODEL_PARAMS["avg_std"] = 0.563462784100214
 
     if MODEL_PARAMS["model_type"] == "1d":
         pipeline = DualDiffusionPipeline1D.create_new(MODEL_PARAMS, NEW_MODEL_PATH)

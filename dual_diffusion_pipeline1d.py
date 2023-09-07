@@ -8,6 +8,12 @@ from diffusers.pipelines.pipeline_utils import DiffusionPipeline
 
 from unet1d_dual import UNet1DDualModel
 
+def raw_to_log_scale(samples, u=255.):
+    return torch.sgn(samples) * torch.log(1. + u * samples.abs()) / np.log(1. + u)
+
+def log_scale_to_raw(samples, u=255.):
+    return torch.sgn(samples) * ((1. + u) ** samples.abs() - 1.) / u
+
 class DualDiffusionPipeline1D(DiffusionPipeline):
 
     def __init__(
@@ -37,9 +43,20 @@ class DualDiffusionPipeline1D(DiffusionPipeline):
             norm_num_groups=32,
             in_channels=num_input_channels,
             out_channels=num_output_channels,
-            layers_per_block=2,
-            block_out_channels=(32, 64, 96, 128, 160, 192, 224, 256),
+            layers_per_block=2,#2,
+            #block_out_channels=(32, 64, 96, 128, 160, 192),
+            #block_out_channels=(32, 64, 96, 160, 256, 416),
+            conv_size=3,
+            #block_out_channels=(64, 64, 64, 64, 64, 64, 64, 64),
+            #block_out_channels=(32, 64, 96, 128, 160, 192, 224, 256),
+            #block_out_channels=(128, 128, 128, 128, 128, 128, 128, 128),
+
+            #block_out_channels=(64, 64, 64, 64, 64, 64, 64, 64, 64, 64, 64),
+            block_out_channels=(128, 128, 128, 128, 128, 128, 128, 128, 128, 128, 128),
             down_block_types=(
+                "DualDownBlock1D",
+                "DualDownBlock1D",
+                "DualDownBlock1D",
                 "DualDownBlock1D",
                 "DualDownBlock1D",
                 "DualDownBlock1D",
@@ -50,6 +67,9 @@ class DualDiffusionPipeline1D(DiffusionPipeline):
                 "DualDownBlock1D",
             ),
             up_block_types=(
+                "DualUpBlock1D",
+                "DualUpBlock1D",
+                "DualUpBlock1D",
                 "DualUpBlock1D",
                 "DualUpBlock1D",
                 "DualUpBlock1D",
@@ -81,7 +101,8 @@ class DualDiffusionPipeline1D(DiffusionPipeline):
     
     @staticmethod
     def get_num_channels(model_params):
-        return (2, 2)
+        #return (2, 2)
+        return (1, 1)
 
     @staticmethod
     def get_window(window_len):
@@ -90,7 +111,7 @@ class DualDiffusionPipeline1D(DiffusionPipeline):
 
     @staticmethod
     @torch.no_grad()
-    def raw_to_sample(raw_samples, model_params, format_override=None):
+    def raw_to_sample(raw_samples, model_params):
 
         raw_samples = raw_samples.clone()
         raw_samples /= raw_samples.std(dim=1, keepdim=True)
@@ -105,11 +126,17 @@ class DualDiffusionPipeline1D(DiffusionPipeline):
             raw_samples[:, :spatial_window_len//2]  *= spatial_window[:spatial_window_len//2]
             raw_samples[:, -spatial_window_len//2:] *= spatial_window[-spatial_window_len//2:]
 
+        raw_samples /= raw_samples.std(dim=1, keepdim=True)
+        return raw_samples.unsqueeze(1)
+
         fft_samples = torch.fft.fft(raw_samples, norm="ortho")
         fft_samples[:, raw_samples.shape[1]//2:] = 0.
         ifft_samples = torch.fft.ifft(fft_samples, norm="ortho")
 
-        format = model_params["format"] if format_override is None else format_override
+        #ifft_samples -= ifft_samples.mean(dim=1, keepdim=True)
+        #ifft_samples /= ifft_samples.abs().amax(dim=1, keepdim=True)
+
+        format = model_params["format"]
         if format == "complex":
             spatial_samples = ifft_samples.unsqueeze(1)
             spatial_samples /= spatial_samples.std(dim=(1, 2), keepdim=True)
@@ -119,29 +146,26 @@ class DualDiffusionPipeline1D(DiffusionPipeline):
         else:
             raise ValueError(f"Unknown format '{format}'")
 
+        #avg_std = model_params["avg_std"]
+        #return raw_to_log_scale(spatial_samples) / avg_std
         return spatial_samples
     
     @staticmethod
     @torch.no_grad()
     def sample_to_raw(spatial_samples, model_params):
         
+        spatial_samples = spatial_samples.squeeze(1)
+        return spatial_samples / spatial_samples.std(dim=1, keepdim=True) * 0.18215
+    
         format = model_params["format"]
         if format == "complex_2channels":
             raw_samples = torch.view_as_complex(spatial_samples.permute(0, 2, 1).contiguous())
         else:
             raise ValueError(f"Unknown format '{format}'")
         
+        #avg_std = model_params["avg_std"]
+        #raw_samples = log_scale_to_raw(raw_samples * avg_std)
         return raw_samples / raw_samples.std(dim=1, keepdim=True) * 0.18215
-
-    @staticmethod
-    @torch.no_grad()
-    def raw_to_log_scale(samples, u=255.):
-        return torch.sgn(samples) * torch.log(1. + 255 * samples.abs()) / torch.log(1 + u)
-
-    @staticmethod
-    @torch.no_grad() 
-    def log_scale_to_raw(samples, u=255.):
-        return torch.sgn(samples) * ((1 + u) ** samples.abs() - 1) / u
 
     @torch.no_grad()
     def __call__(

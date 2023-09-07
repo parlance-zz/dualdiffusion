@@ -65,7 +65,7 @@ if __name__ == "__main__":
         torch.backends.cuda.matmul.allow_tf32 = True
         torch.backends.cuda.cufft_plan_cache[0].max_size = 32 # stupid cufft memory leak
 
-    model_path = "./models/dualdiffusion1d_1"
+    model_path = "./models/dualdiffusion1d_14"
     print(f"Loading DualDiffusion model from '{model_path}'...")
     #pipeline = DualDiffusionPipeline.from_pretrained(model_path).to("cuda")
     pipeline = DualDiffusionPipeline1D.from_pretrained(model_path).to("cuda")
@@ -74,12 +74,12 @@ if __name__ == "__main__":
     #reconstruction_test(pipeline.config["model_params"])
     #attention_shaping_test()
 
-    num_samples = 3
+    num_samples = 1
     batch_size = 1
     length = 1
     scheduler = "dpms++"
     #scheduler = "ddim"
-    steps = 200
+    steps = 100
     loops = 0
     renormalize = False
     rebalance = False
@@ -109,7 +109,8 @@ if __name__ == "__main__":
         
         output.cpu().numpy().tofile(output_path)
         output_flac_file = os.path.splitext(output_path)[0] + '.flac'
-        ffmpeg.input(output_path, f="f32le", ac=2, ar=sample_rate).output(output_flac_file).run(quiet=True)
+        #ffmpeg.input(output_path, f="f32le", ac=2, ar=sample_rate).output(output_flac_file).run(quiet=True)
+        ffmpeg.input(output_path, f="f32le", ac=1, ar=sample_rate).output(output_flac_file).run(quiet=True)
         print(f"Saved flac output to {output_flac_file}")
         os.remove(output_path)
 

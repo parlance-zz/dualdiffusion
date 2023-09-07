@@ -3,11 +3,11 @@ accelerate launch^
  train1d.py^
  --allow_tf32^
  --train_data_dir="./dataset/samples"^
- --pretrained_model_name_or_path="./models/dualdiffusion1d_1"^
- --output_dir="./models/dualdiffusion1d_1"^
- --train_batch_size=8^
+ --pretrained_model_name_or_path="./models/dualdiffusion1d_14"^
+ --output_dir="./models/dualdiffusion1d_14"^
+ --train_batch_size=4^
  --num_train_epochs=500^
- --checkpointing_steps=2278^
+ --checkpointing_steps=4555^
  --checkpoints_total_limit=1^
  --gradient_accumulation_steps=1^
  --learning_rate=1e-4^

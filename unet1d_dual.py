@@ -34,10 +34,13 @@ class UNet1DDualModel(ModelMixin, ConfigMixin):
         add_attention: bool = True,
         class_embed_type: Optional[str] = None,
         num_class_embeds: Optional[int] = None,
+        conv_size: int = 3,
     ):
         super().__init__()
 
         self.sample_size = sample_size
+        self.conv_size = conv_size
+
         time_embed_dim = block_out_channels[0] * 4
 
         # Check inputs
@@ -57,7 +60,14 @@ class UNet1DDualModel(ModelMixin, ConfigMixin):
             )
         
         # input
-        self.conv_in = nn.Conv1d(in_channels, block_out_channels[0], kernel_size=3, padding=1)
+        self.conv_in = nn.Conv1d(in_channels, block_out_channels[0], kernel_size=conv_size, padding=conv_size//2)
+        
+        """
+        self.conv_in = []
+        for i in range(len(down_block_types)):
+            self.conv_in.append(nn.Conv1d(in_channels, block_out_channels[0], kernel_size=conv_size, padding=conv_size//2))
+        self.conv_in = nn.ModuleList(self.conv_in)
+        """
 
         # time
         if time_embedding_type == "fourier":
@@ -98,7 +108,8 @@ class UNet1DDualModel(ModelMixin, ConfigMixin):
             else:
                 downsample_type = "kernel"
                 
-            if down_block_type == "DualDownBlock1D":
+            if (down_block_type == "DualDownBlock1D") or (down_block_type == "DualAttnDownBlock1D"):
+                _add_attention = (down_block_type == "DualAttnDownBlock1D")
                 down_block = DualDownBlock1D(
                     num_layers=layers_per_block,
                     in_channels=input_channel,
@@ -110,7 +121,8 @@ class UNet1DDualModel(ModelMixin, ConfigMixin):
                     attention_head_dim=attention_head_dim[i],
                     resnet_time_scale_shift=resnet_time_scale_shift,
                     downsample_type=downsample_type,
-                    add_attention=False,
+                    add_attention=_add_attention,
+                    conv_size=conv_size,
                 )
             else:
                 raise ValueError(f"Unrecognized down block type: {down_block_type}")
@@ -129,6 +141,7 @@ class UNet1DDualModel(ModelMixin, ConfigMixin):
             attention_head_dim=attention_head_dim[-1],
             resnet_groups=norm_num_groups,
             add_attention=add_attention,
+            conv_size=conv_size,
         )
 
         reversed_attention_head_dim = list(reversed(attention_head_dim))
@@ -143,7 +156,8 @@ class UNet1DDualModel(ModelMixin, ConfigMixin):
 
             is_final_block = i == len(block_out_channels) - 1
 
-            if up_block_type == "DualUpBlock1D":
+            if (up_block_type == "DualUpBlock1D") or (up_block_type == "DualAttnUpBlock1D"):
+                _add_attention = (up_block_type == "DualAttnUpBlock1D")
                 if is_final_block is True:
                     upsample_type = None
                 else:
@@ -161,7 +175,8 @@ class UNet1DDualModel(ModelMixin, ConfigMixin):
                     attention_head_dim=reversed_attention_head_dim[i],
                     resnet_time_scale_shift=resnet_time_scale_shift,
                     upsample_type=upsample_type,
-                    add_attention=False,
+                    add_attention=_add_attention,
+                    conv_size=conv_size,
                 )
             else:
                 raise ValueError(f"Unrecognized up block type: {up_block_type}")
@@ -173,7 +188,7 @@ class UNet1DDualModel(ModelMixin, ConfigMixin):
         num_groups_out = norm_num_groups if norm_num_groups is not None else min(block_out_channels[0] // 4, 32)
         self.conv_norm_out = nn.GroupNorm(num_channels=block_out_channels[0], num_groups=num_groups_out, eps=norm_eps)
         self.conv_act = nn.SiLU()
-        self.conv_out = nn.Conv1d(block_out_channels[0], out_channels, kernel_size=3, padding=1)
+        self.conv_out = nn.Conv1d(block_out_channels[0], out_channels, kernel_size=conv_size, padding=conv_size//2)
 
     def forward(
         self,
@@ -211,43 +226,67 @@ class UNet1DDualModel(ModelMixin, ConfigMixin):
             class_emb = self.class_embedding(class_labels).to(dtype=self.dtype)
             emb = emb + class_emb
 
+        #"""
         # 2. pre-process
-        skip_sample = sample
         sample = self.conv_in(sample)
 
         # 3. down
         down_block_res_samples = (sample,)
         for downsample_block in self.down_blocks:
-            if hasattr(downsample_block, "skip_conv"):
-                sample, res_samples, skip_sample = downsample_block(
-                    hidden_states=sample, temb=emb, skip_sample=skip_sample
-                )
-            else:
-                sample, res_samples = downsample_block(hidden_states=sample, temb=emb)
-
+            sample, res_samples = downsample_block(hidden_states=sample, temb=emb)
             down_block_res_samples += res_samples
 
         # 4. mid
         sample = self.mid_block(sample, emb)
 
         # 5. up
-        skip_sample = None
         for upsample_block in self.up_blocks:
             res_samples = down_block_res_samples[-len(upsample_block.resnets) :]
             down_block_res_samples = down_block_res_samples[: -len(upsample_block.resnets)]
 
-            if hasattr(upsample_block, "skip_conv"):
-                sample, skip_sample = upsample_block(sample, res_samples, emb, skip_sample)
+            sample = upsample_block(sample, res_samples, emb)
+        #"""
+
+        """
+        original_sample_fft = torch.fft.fft(sample, norm="ortho")
+        max_freq = sample.shape[2]//2
+        
+        # 3. down
+        down_block_res_samples = (self.conv_in[0](sample),)
+        i = 0
+        for downsample_block in self.down_blocks:
+            
+            if i == 0:
+                sample = down_block_res_samples[0]
             else:
-                sample = upsample_block(sample, res_samples, emb)
+                sample = self.conv_in[i](sample)
+            
+            sample, res_samples = downsample_block(hidden_states=sample, temb=emb)
+            down_block_res_samples += res_samples
+
+            if downsample_block != self.down_blocks[-1]:
+                sample = original_sample_fft[:, :, max_freq//2:max_freq]
+                sample = torch.cat((sample, torch.zeros_like(sample)), dim=2)
+                sample = torch.fft.ifft(sample, norm="ortho").real
+                max_freq //= 2
+
+            i += 1
+        # 4. mid
+
+        sample = self.mid_block(sample, emb)
+
+        # 5. up
+        for upsample_block in self.up_blocks:
+            res_samples = down_block_res_samples[-len(upsample_block.resnets) :]
+            down_block_res_samples = down_block_res_samples[: -len(upsample_block.resnets)]
+
+            sample = upsample_block(sample, res_samples, emb)
+        """
 
         # 6. post-process
         sample = self.conv_norm_out(sample)
         sample = self.conv_act(sample)
         sample = self.conv_out(sample)
-
-        if skip_sample is not None:
-            sample += skip_sample
 
         if self.config.time_embedding_type == "fourier":
             timesteps = timesteps.reshape((sample.shape[0], *([1] * len(sample.shape[1:]))))
