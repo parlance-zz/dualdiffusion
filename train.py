@@ -735,6 +735,8 @@ def main():
             first_epoch = global_step // num_update_steps_per_epoch
             resume_step = resume_global_step % (num_update_steps_per_epoch * args.gradient_accumulation_steps)
 
+    torch.cuda.empty_cache()
+    
     for epoch in range(first_epoch, args.num_train_epochs):
         unet.train()
         train_loss = 0.0
@@ -799,11 +801,16 @@ def main():
                     # Since we predict the noise instead of x_0, the original formulation is slightly changed.
                     # This is discussed in Section 4.2 of the same paper.
                     snr = compute_snr(timesteps)
-                    if noise_scheduler.config.prediction_type == "v_prediction": # correction as per the above paper
-                        snr += 1.                                                # for v-prediction
+                    #if noise_scheduler.config.prediction_type == "v_prediction": # correction as per the above paper
+                        #snr += 1.                                                # for v-prediction
+                        #offset = 1.
+                    #else:
+                        #offset = 0.
+                    offset = 0.
 
                     mse_loss_weights = (
-                        torch.stack([snr, args.snr_gamma * torch.ones_like(timesteps)], dim=1).min(dim=1)[0] / snr
+                        #torch.stack([snr, args.snr_gamma * torch.ones_like(timesteps)], dim=1).min(dim=1)[0] / snr
+                        torch.stack([snr, args.snr_gamma * torch.ones_like(timesteps)], dim=1).min(dim=1)[0] / (snr + offset)
                     )
                     # We first calculate the original loss. Then we mean over the non-batch dimensions and
                     # rebalance the sample-wise losses with their respective loss weights.
@@ -889,6 +896,7 @@ def main():
             pipeline.save_pretrained(args.output_dir, safe_serialization=True)
 
             if args.num_validation_samples > 0:
+                unet.eval()
                 try:
                     log_validation(
                         pipeline,
@@ -901,6 +909,9 @@ def main():
                     logger.error(f"Error running validation: {e}")
                     pipeline.set_tiling_mode(False)
                     
+                unet.train()
+                torch.cuda.empty_cache()
+
             if args.use_ema:
                 ema_unet.restore(unet.parameters())
                 

@@ -16,6 +16,7 @@ dependencies:
   - datasets
   - accelerate
   - transformers
+  - librosa
   - pip:
     - ffmpeg-python
     - safetensors

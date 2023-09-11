@@ -35,11 +35,18 @@ class UNet1DDualModel(ModelMixin, ConfigMixin):
         class_embed_type: Optional[str] = None,
         num_class_embeds: Optional[int] = None,
         conv_size: int = 3,
+        downsample_type = "kernel",
+        upsample_type = "kernel",
+        use_fft: bool = False,
+        dropout: float = 0.0,
     ):
         super().__init__()
 
         self.sample_size = sample_size
         self.conv_size = conv_size
+        self.downsample_type = downsample_type
+        self.upsample_type = upsample_type
+        self.use_fft = use_fft
 
         time_embed_dim = block_out_channels[0] * 4
 
@@ -61,7 +68,7 @@ class UNet1DDualModel(ModelMixin, ConfigMixin):
         
         # input
         self.conv_in = nn.Conv1d(in_channels, block_out_channels[0], kernel_size=conv_size, padding=conv_size//2)
-        
+
         """
         self.conv_in = []
         for i in range(len(down_block_types)):
@@ -104,9 +111,9 @@ class UNet1DDualModel(ModelMixin, ConfigMixin):
             is_final_block = i == len(block_out_channels) - 1
 
             if is_final_block is True:
-                downsample_type = None
+                _downsample_type = None
             else:
-                downsample_type = "kernel"
+                _downsample_type = downsample_type
                 
             if (down_block_type == "DualDownBlock1D") or (down_block_type == "DualAttnDownBlock1D"):
                 _add_attention = (down_block_type == "DualAttnDownBlock1D")
@@ -120,9 +127,11 @@ class UNet1DDualModel(ModelMixin, ConfigMixin):
                     resnet_groups=norm_num_groups,
                     attention_head_dim=attention_head_dim[i],
                     resnet_time_scale_shift=resnet_time_scale_shift,
-                    downsample_type=downsample_type,
+                    downsample_type=_downsample_type,
                     add_attention=_add_attention,
                     conv_size=conv_size,
+                    use_fft=use_fft,
+                    dropout=dropout,
                 )
             else:
                 raise ValueError(f"Unrecognized down block type: {down_block_type}")
@@ -132,6 +141,7 @@ class UNet1DDualModel(ModelMixin, ConfigMixin):
         # mid
         self.mid_block = DualMidBlock1D(
             #num_layers=layers_per_block,
+            #num_layers=3,
             in_channels=block_out_channels[-1],
             temb_channels=time_embed_dim,
             resnet_eps=norm_eps,
@@ -142,6 +152,8 @@ class UNet1DDualModel(ModelMixin, ConfigMixin):
             resnet_groups=norm_num_groups,
             add_attention=add_attention,
             conv_size=conv_size,
+            use_fft=use_fft,
+            dropout=dropout,
         )
 
         reversed_attention_head_dim = list(reversed(attention_head_dim))
@@ -159,9 +171,9 @@ class UNet1DDualModel(ModelMixin, ConfigMixin):
             if (up_block_type == "DualUpBlock1D") or (up_block_type == "DualAttnUpBlock1D"):
                 _add_attention = (up_block_type == "DualAttnUpBlock1D")
                 if is_final_block is True:
-                    upsample_type = None
+                    _upsample_type = None
                 else:
-                    upsample_type = "kernel"
+                    _upsample_type = upsample_type
                     
                 up_block = DualUpBlock1D(
                     num_layers=layers_per_block + 1,
@@ -174,9 +186,11 @@ class UNet1DDualModel(ModelMixin, ConfigMixin):
                     resnet_groups=norm_num_groups,
                     attention_head_dim=reversed_attention_head_dim[i],
                     resnet_time_scale_shift=resnet_time_scale_shift,
-                    upsample_type=upsample_type,
+                    upsample_type=_upsample_type,
                     add_attention=_add_attention,
                     conv_size=conv_size,
+                    use_fft=use_fft,
+                    dropout=dropout,
                 )
             else:
                 raise ValueError(f"Unrecognized up block type: {up_block_type}")
@@ -229,22 +243,23 @@ class UNet1DDualModel(ModelMixin, ConfigMixin):
         #"""
         # 2. pre-process
         sample = self.conv_in(sample)
+        io = 0
 
         # 3. down
         down_block_res_samples = (sample,)
         for downsample_block in self.down_blocks:
-            sample, res_samples = downsample_block(hidden_states=sample, temb=emb)
+            sample, res_samples, io = downsample_block(hidden_states=sample, temb=emb, io=io)
             down_block_res_samples += res_samples
 
         # 4. mid
-        sample = self.mid_block(sample, emb)
+        sample, io = self.mid_block(sample, emb, io=io)
 
         # 5. up
         for upsample_block in self.up_blocks:
             res_samples = down_block_res_samples[-len(upsample_block.resnets) :]
             down_block_res_samples = down_block_res_samples[: -len(upsample_block.resnets)]
 
-            sample = upsample_block(sample, res_samples, emb)
+            sample, io = upsample_block(sample, res_samples, emb, io=io)
         #"""
 
         """

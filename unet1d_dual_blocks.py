@@ -11,7 +11,6 @@ from diffusers.models.attention import AdaGroupNorm
 from diffusers.models.attention_processor import Attention, SpatialNorm
 from diffusers.models.unet_1d_blocks import ResConvBlock, Downsample1d, Upsample1d
 
-
 logger = logging.get_logger(__name__)  # pylint: disable=invalid-name
 
 """
@@ -27,7 +26,8 @@ def to_freq(x):
 
     #"""
     original_shape = x.shape
-    x = x.view(-1, 2, x.shape[2])
+    #x = x.view(-1, 2, x.shape[2])
+    x = x.reshape(-1, 2, x.shape[2])
     x = x.permute(0, 2, 1).contiguous()
     x = torch.fft.fft(torch.view_as_complex(x), norm="ortho")
     x = torch.view_as_real(x)
@@ -47,10 +47,11 @@ def to_freq(x):
 
 def to_spatial(x):
     #return x
-    
+
     #"""
     original_shape = x.shape
-    x = x.view(-1, 2, x.shape[2])
+    #x = x.view(-1, 2, x.shape[2])
+    x = x.reshape(-1, 2, x.shape[2])
     x = x.permute(0, 2, 1).contiguous()
     x = torch.fft.ifft(torch.view_as_complex(x), norm="ortho")
     x = torch.view_as_real(x)
@@ -255,13 +256,16 @@ class DualMidBlock1D(nn.Module):
         attention_head_dim=1,
         output_scale_factor=1.0,
         conv_size: int = 3,
+        use_fft: bool = False,
     ):
         super().__init__()
         resnet_groups = resnet_groups if resnet_groups is not None else min(in_channels // 4, 32)
 
         self.add_attention = add_attention
         self.conv_size = conv_size
-
+        self.num_layers = num_layers
+        self.use_fft = use_fft
+        
         # there is always at least one resnet
         resnets = [
             ResnetBlock1D(
@@ -301,6 +305,7 @@ class DualMidBlock1D(nn.Module):
                         bias=True,
                         upcast_softmax=True,
                         _from_deprecated_attn_block=True,
+                        dropout=dropout,
                     )
                 )
             else:
@@ -325,29 +330,32 @@ class DualMidBlock1D(nn.Module):
         self.attentions = nn.ModuleList(attentions)
         self.resnets = nn.ModuleList(resnets)
 
-    def forward(self, hidden_states, temb=None):
-        hidden_states = to_freq(hidden_states)
-        hidden_states = self.resnets[0](hidden_states, temb)
-        hidden_states = to_spatial(hidden_states)
-        
-        i = 0
-        for attn, resnet in zip(self.attentions, self.resnets[1:]):
+    def forward(self, hidden_states, temb=None, io=0):
 
-            #if i == 0:
-            #    hidden_states = to_freq(hidden_states)
-            #elif i == 1:
-            #    hidden_states = to_spatial(hidden_states)
+        if ((io % 2) == 0) and self.use_fft:
+            hidden_states = to_freq(hidden_states)
+            
+        hidden_states = self.resnets[0](hidden_states, temb)
+
+        if ((io % 2) == 0) and self.use_fft:
+            hidden_states = to_spatial(hidden_states)
+        
+        i = 1
+        for attn, resnet in zip(self.attentions, self.resnets[1:]):
+            
+            if (((i+io) % 2) == 0) and self.use_fft:
+                hidden_states = to_freq(hidden_states)
 
             if attn is not None:
                 hidden_states = attn(hidden_states.unsqueeze(-1), temb=temb).squeeze(-1)
             hidden_states = resnet(hidden_states, temb)
 
-            #if i == 0:
-            #    hidden_states = to_spatial(hidden_states)
+            if (((i+io) % 2) == 0) and self.use_fft:
+                hidden_states = to_spatial(hidden_states)
 
             i += 1
 
-        return hidden_states
+        return hidden_states, i
     
 class DualDownBlock1D(nn.Module):
     def __init__(self,
@@ -366,6 +374,7 @@ class DualDownBlock1D(nn.Module):
                  downsample_type=None,
                  add_attention: bool = False,
                  conv_size: int = 3,
+                 use_fft: bool = False,
                  ):
         super().__init__()
         
@@ -375,6 +384,8 @@ class DualDownBlock1D(nn.Module):
         self.downsample_type = downsample_type
         self.add_attention = add_attention
         self.conv_size = conv_size
+        self.num_layers = num_layers
+        self.use_fft = use_fft
 
         if attention_head_dim is None:
             logger.warn(
@@ -412,6 +423,7 @@ class DualDownBlock1D(nn.Module):
                         bias=True,
                         upcast_softmax=True,
                         _from_deprecated_attn_block=True,
+                        dropout=dropout,
                     )
                 )
             else:
@@ -420,32 +432,48 @@ class DualDownBlock1D(nn.Module):
         self.attentions = nn.ModuleList(attentions)
         self.resnets = nn.ModuleList(resnets)
 
+
         if downsample_type is None:
             self.downsamplers = None
-        else:
+        elif downsample_type == "resnet":
+            self.downsamplers = nn.ModuleList(
+                [
+                    ResnetBlock1D(
+                        in_channels=out_channels,
+                        out_channels=out_channels,
+                        temb_channels=temb_channels,
+                        eps=resnet_eps,
+                        groups=resnet_groups,
+                        dropout=dropout,
+                        time_embedding_norm=resnet_time_scale_shift,
+                        non_linearity=resnet_act_fn,
+                        output_scale_factor=output_scale_factor,
+                        pre_norm=resnet_pre_norm,
+                        down=True,
+                    )
+                ]
+            )
+        elif downsample_type == "kernel":
             self.downsamplers = nn.ModuleList([
                 Downsample1d("lanczos3", pad_mode="constant")
             ])
+        else:
+            raise ValueError(f"Unknown downsample_type : {downsample_type} ")
 
-    def forward(self, hidden_states, temb=None, upsample_size=None):
+    def forward(self, hidden_states, temb=None, upsample_size=None, io=0):
         output_states = ()
 
         i = 0
         for resnet, attn in zip(self.resnets, self.attentions):
 
-            #if i == 0:
-            if ((i % 2) == 0) and (i < (len(self.resnets) - 1)):
+            if (((i+io) % 2) == 0) and self.use_fft:
                 hidden_states = to_freq(hidden_states)
-            #elif i == 1:
-            #    hidden_states = to_spatial(hidden_states)
-            #    output_modes += ("spatial",)
                 
             hidden_states = resnet(hidden_states, temb)
             if attn is not None:
                 hidden_states = attn(hidden_states.unsqueeze(-1)).squeeze(-1)
 
-            #if i == 0:
-            if ((i % 2) == 0) and (i < (len(self.resnets) - 1)):
+            if (((i+io) % 2) == 0) and self.use_fft:
                 hidden_states = to_spatial(hidden_states)
 
             output_states = output_states + (hidden_states,)
@@ -453,11 +481,11 @@ class DualDownBlock1D(nn.Module):
 
         if self.downsamplers is not None:
             for downsampler in self.downsamplers:
-                hidden_states = downsampler(hidden_states)
+                hidden_states = downsampler(hidden_states, temb=temb)
 
             output_states += (hidden_states,)
 
-        return hidden_states, output_states
+        return hidden_states, output_states, i
 
 class DualUpBlock1D(nn.Module):
     def __init__(self,
@@ -477,6 +505,7 @@ class DualUpBlock1D(nn.Module):
                  upsample_type=None,
                  add_attention: bool = False,
                  conv_size: int = 3,
+                 use_fft: bool = False,
                  ):
         super().__init__()
         resnets = []
@@ -485,6 +514,8 @@ class DualUpBlock1D(nn.Module):
         self.upsample_type = upsample_type
         self.add_attention = add_attention
         self.conv_size = conv_size
+        self.num_layers = num_layers
+        self.use_fft = use_fft
 
         if attention_head_dim is None:
             logger.warn(
@@ -524,6 +555,7 @@ class DualUpBlock1D(nn.Module):
                         bias=True,
                         upcast_softmax=True,
                         _from_deprecated_attn_block=True,
+                        dropout=dropout,
                     )
                 )
             else:
@@ -534,12 +566,32 @@ class DualUpBlock1D(nn.Module):
 
         if upsample_type is None:
             self.upsamplers = None
-        else:
+        elif upsample_type == "resnet":
+            self.upsamplers = nn.ModuleList(
+                [
+                    ResnetBlock1D(
+                        in_channels=out_channels,
+                        out_channels=out_channels,
+                        temb_channels=temb_channels,
+                        eps=resnet_eps,
+                        groups=resnet_groups,
+                        dropout=dropout,
+                        time_embedding_norm=resnet_time_scale_shift,
+                        non_linearity=resnet_act_fn,
+                        output_scale_factor=output_scale_factor,
+                        pre_norm=resnet_pre_norm,
+                        up=True,
+                    )
+                ]
+            )           
+        elif upsample_type == "kernel":
             self.upsamplers = nn.ModuleList([
                 Upsample1d("lanczos3", pad_mode="constant")
             ])
+        else:
+            raise ValueError(f"Unknown upsample_type : {upsample_type} ")
 
-    def forward(self, hidden_states, res_hidden_states_tuple, temb=None, upsample_size=None):
+    def forward(self, hidden_states, res_hidden_states_tuple, temb=None, upsample_size=None, io=0):
         i = 0
         for resnet, attn in zip(self.resnets, self.attentions):
             # pop res hidden states
@@ -547,26 +599,20 @@ class DualUpBlock1D(nn.Module):
             res_hidden_states_tuple = res_hidden_states_tuple[:-1]
             hidden_states = torch.cat([hidden_states, res_hidden_states], dim=1)
 
-            #if i == 0:
-            #if (i == 0) or (i == 2):
-            if ((i % 2) == 1) and (i < (len(self.resnets) - 1)):
+            if (((i+io) % 2) == 0) and self.use_fft:
                 hidden_states = to_freq(hidden_states)
-            #elif i == 1:
-            #    hidden_states = to_spatial(hidden_states)
 
             hidden_states = resnet(hidden_states, temb)
             if attn is not None:
                 hidden_states = attn(hidden_states.unsqueeze(-1)).squeeze(-1)
 
-            #if i == 0:
-            #if (i == 0) or (i == 2):
-            if ((i % 2) == 1) and (i < (len(self.resnets) - 1)):
+            if (((i+io) % 2) == 0) and self.use_fft:
                 hidden_states = to_spatial(hidden_states)
 
             i += 1
 
         if self.upsamplers is not None:
             for upsampler in self.upsamplers:
-                hidden_states = upsampler(hidden_states)
+                hidden_states = upsampler(hidden_states, temb=temb)
 
-        return hidden_states
+        return hidden_states, i

@@ -2,6 +2,7 @@ from typing import Optional, Tuple, Union
 
 import torch
 import torch.nn as nn
+import numpy as np
 
 from diffusers.configuration_utils import ConfigMixin, register_to_config
 from diffusers.models.embeddings import GaussianFourierProjection, TimestepEmbedding, Timesteps
@@ -9,7 +10,7 @@ from diffusers.models.modeling_utils import ModelMixin
 from diffusers.models.unet_2d_blocks import UNetMidBlock2D, get_down_block, get_up_block
 from diffusers.models.unet_2d import UNet2DOutput
 
-from unet2d_dual_blocks import SeparableAttnDownBlock2D, SeparableAttnUpBlock2D
+from unet2d_dual_blocks import SeparableAttnDownBlock2D, SeparableAttnUpBlock2D, shape_for_attention, unshape_for_attention
 
 class UNet2DDualModel(ModelMixin, ConfigMixin):
     r"""
@@ -62,9 +63,8 @@ class UNet2DDualModel(ModelMixin, ConfigMixin):
     def __init__(
         self,
         sample_size: Optional[Union[int, Tuple[int, int]]] = None,
-        in_channels: int = 3,
-        out_channels: int = 3,
-        center_input_sample: bool = False,
+        in_channels: int = 2,
+        out_channels: int = 2,
         time_embedding_type: str = "positional",
         freq_shift: int = 0,
         flip_sin_to_cos: bool = True,
@@ -78,18 +78,25 @@ class UNet2DDualModel(ModelMixin, ConfigMixin):
         upsample_type: str = "conv",
         act_fn: str = "silu",
         attention_head_dim: Union[int, Tuple[int]] = 8,
-        separate_attn_dim: Union[int, Tuple[int]] = (3,2),
+        separate_attn_dim: Tuple[int] = (2,3),
+        positional_coding_dims: Tuple[int] = (),
         reverse_separate_attn_dim: bool = False,
+        double_attention: bool = True,
+        separable_resnet: bool = False,
         norm_num_groups: int = 32,
         norm_eps: float = 1e-5,
         resnet_time_scale_shift: str = "default",
         add_attention: bool = True,
         class_embed_type: Optional[str] = None,
         num_class_embeds: Optional[int] = None,
+        dropout: float = 0.0,
+        conv_size = (3,3),
     ):
         super().__init__()
 
         self.sample_size = sample_size
+        self.separable_resnet = separable_resnet
+        self.separate_attn_dim = separate_attn_dim
         time_embed_dim = block_out_channels[0] * 4
 
         # Check inputs
@@ -108,13 +115,8 @@ class UNet2DDualModel(ModelMixin, ConfigMixin):
                 f"Must provide the same number of `attention_head_dim` as `down_block_types`. `attention_head_dim`: {attention_head_dim}. `down_block_types`: {down_block_types}."
             )
         
-        if not isinstance(separate_attn_dim, int) and len(separate_attn_dim) != layers_per_block:
-            raise ValueError(
-                f"Must provide the same number of `separate_attn_dim` as `layers_per_block`. `separate_attn_dim`: {separate_attn_dim}. `layers_per_block`: {layers_per_block}."
-            )
-        
         # input
-        self.conv_in = nn.Conv2d(in_channels, block_out_channels[0], kernel_size=3, padding=(1, 1))
+        self.conv_in = nn.Conv2d(in_channels, block_out_channels[0], kernel_size=conv_size, padding=(conv_size[0]//2, conv_size[1]//2))
 
         # time
         if time_embedding_type == "fourier":
@@ -143,7 +145,7 @@ class UNet2DDualModel(ModelMixin, ConfigMixin):
         if isinstance(attention_head_dim, int):
             attention_head_dim = (attention_head_dim,) * len(down_block_types)
         if isinstance(separate_attn_dim, int):
-            separate_attn_dim = (separate_attn_dim,) * layers_per_block
+            separate_attn_dim = (separate_attn_dim,)
 
         # down
         output_channel = block_out_channels[0]
@@ -172,6 +174,11 @@ class UNet2DDualModel(ModelMixin, ConfigMixin):
                     resnet_time_scale_shift=resnet_time_scale_shift,
                     downsample_type=downsample_type,
                     separate_attn_dim=separate_attn_dim,
+                    positional_coding_dims=positional_coding_dims,
+                    double_attention=double_attention,
+                    separable_resnet=separable_resnet,
+                    dropout=dropout,
+                    conv_size=conv_size,
                 )
             else:
                 down_block = get_down_block(
@@ -189,6 +196,12 @@ class UNet2DDualModel(ModelMixin, ConfigMixin):
                     resnet_time_scale_shift=resnet_time_scale_shift,
                     downsample_type=downsample_type,
                 )
+            
+            #with torch.no_grad():
+            #    param_scale = 2 ** (-i/4)
+            #    for param in down_block.parameters():
+            #        param *= param_scale
+
             self.down_blocks.append(down_block)
 
         # mid
@@ -202,8 +215,14 @@ class UNet2DDualModel(ModelMixin, ConfigMixin):
             attention_head_dim=attention_head_dim[-1],
             resnet_groups=norm_num_groups,
             add_attention=add_attention,
+            dropout=dropout,
         )
 
+        #with torch.no_grad():
+        #    param_scale = 2 ** (-len(down_block_types)/4)
+        #    for param in self.mid_block.parameters():
+        #        param *= param_scale
+            
         reversed_attention_head_dim = list(reversed(attention_head_dim))
         if reverse_separate_attn_dim:
             reversed_separate_attn_dim = list(reversed(separate_attn_dim))
@@ -239,6 +258,11 @@ class UNet2DDualModel(ModelMixin, ConfigMixin):
                     resnet_time_scale_shift=resnet_time_scale_shift,
                     upsample_type=upsample_type,
                     separate_attn_dim=reversed_separate_attn_dim,
+                    positional_coding_dims=positional_coding_dims,
+                    double_attention=double_attention,
+                    separable_resnet=separable_resnet,
+                    dropout=dropout,
+                    conv_size=conv_size,
                 )
             else:
                 up_block = get_up_block(
@@ -256,6 +280,12 @@ class UNet2DDualModel(ModelMixin, ConfigMixin):
                     resnet_time_scale_shift=resnet_time_scale_shift,
                     upsample_type=upsample_type,
                 )
+
+            #with torch.no_grad():
+            #    param_scale = 2 ** ((-len(down_block_types) + 1 + i)/4)
+            #    for param in up_block.parameters():
+            #        param *= param_scale
+                
             self.up_blocks.append(up_block)
             prev_output_channel = output_channel
 
@@ -263,7 +293,7 @@ class UNet2DDualModel(ModelMixin, ConfigMixin):
         num_groups_out = norm_num_groups if norm_num_groups is not None else min(block_out_channels[0] // 4, 32)
         self.conv_norm_out = nn.GroupNorm(num_channels=block_out_channels[0], num_groups=num_groups_out, eps=norm_eps)
         self.conv_act = nn.SiLU()
-        self.conv_out = nn.Conv2d(block_out_channels[0], out_channels, kernel_size=3, padding=1)
+        self.conv_out = nn.Conv2d(block_out_channels[0], out_channels, kernel_size=conv_size, padding=(conv_size[0]//2, conv_size[1]//2))
 
     def forward(
         self,
@@ -289,9 +319,6 @@ class UNet2DDualModel(ModelMixin, ConfigMixin):
                 If `return_dict` is True, an [`~models.unet_2d.UNet2DOutput`] is returned, otherwise a `tuple` is
                 returned where the first element is the sample tensor.
         """
-        # 0. center input if necessary
-        if self.config.center_input_sample:
-            sample = 2 * sample - 1.0
 
         # 1. time
         timesteps = timestep
@@ -326,7 +353,11 @@ class UNet2DDualModel(ModelMixin, ConfigMixin):
         sample = self.conv_in(sample)
 
         # 3. down
-        down_block_res_samples = (sample,)
+        if self.separable_resnet and False:
+            down_block_res_samples = (shape_for_attention(sample, self.separate_attn_dim[0]),)
+        else:    
+            down_block_res_samples = (sample,)
+
         for downsample_block in self.down_blocks:
             if hasattr(downsample_block, "skip_conv"):
                 sample, res_samples, skip_sample = downsample_block(

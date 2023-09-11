@@ -65,7 +65,7 @@ if __name__ == "__main__":
         torch.backends.cuda.matmul.allow_tf32 = True
         torch.backends.cuda.cufft_plan_cache[0].max_size = 32 # stupid cufft memory leak
 
-    model_path = "./models/dualdiffusion1d_14"
+    model_path = "./models/dualdiffusion1d_19"
     print(f"Loading DualDiffusion model from '{model_path}'...")
     #pipeline = DualDiffusionPipeline.from_pretrained(model_path).to("cuda")
     pipeline = DualDiffusionPipeline1D.from_pretrained(model_path).to("cuda")

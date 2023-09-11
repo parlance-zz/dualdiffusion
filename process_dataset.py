@@ -25,18 +25,18 @@ WRITE_SAMPLES = False
 FORMAT = "complex_2channels"
 NOISE_FLOOR = 0. #1e-3
 SAMPLE_RATE = 8000
-NUM_CHUNKS = 256
-SAMPLE_RAW_LENGTH = 65536#*2
+NUM_CHUNKS = 256 # 64
+SAMPLE_RAW_LENGTH = 65536*2
 OVERLAPPED = False
 WINDOW_TYPE = "none"
 SPATIAL_WINDOW_LENGTH = 2048
-FREQ_EMBEDDING_DIM = 0#62#30
+FREQ_EMBEDDING_DIM = 0
 
-NEW_MODEL_PATH = './models/dualdiffusion1d_15'
+NEW_MODEL_PATH = './models/dualdiffusion2d_11'
 MODEL_PARAMS = {
-    "model_type": "1d", #"2d"
+    "model_type": "2d", #1d
     "prediction_type": "v_prediction",
-    "beta_schedule": "squaredcos_cap_v2",
+    "beta_schedule": "linear",#"squaredcos_cap_v2",
     "beta_start" : 0.0001,
     "beta_end" : 0.02,
     "format": FORMAT,
