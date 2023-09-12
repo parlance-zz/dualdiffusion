@@ -29,9 +29,11 @@ class DualDiffusionPipeline(DiffusionPipeline):
 
         unet = UNet2DDualModel(
             #dropout=0.1,
-            #act_fn="silu",
-            act_fn="mish",
-            attention_head_dim=(16, 16, 32, 64, 128, 128),
+            act_fn="silu",
+            #act_fn="mish",
+            #attention_head_dim=(16, 16, 32, 64, 128, 128),
+            #attention_head_dim=16,
+            attention_head_dim=8,
             separate_attn_dim=(2,3),
             #positional_coding_dims=(2,3),
             #positional_coding_dims=(3,), 
@@ -50,9 +52,9 @@ class DualDiffusionPipeline(DiffusionPipeline):
             out_channels=num_output_channels,
             layers_per_block=2,
             conv_size=(3,3),
-            downsample_type="resnet",
-            upsample_type="resnet",
-            block_out_channels=(64, 128, 256, 512, 1024, 1536),
+            #downsample_type="resnet",
+            #upsample_type="resnet",
+            block_out_channels=(32, 64, 96, 128, 160, 192),
             down_block_types=(
                 "SeparableAttnDownBlock2D",
                 "SeparableAttnDownBlock2D",

@@ -5,41 +5,31 @@ import numpy as np
 import torch
 
 from dual_diffusion_pipeline import DualDiffusionPipeline
-from dual_diffusion_pipeline1d import DualDiffusionPipeline1D
 
 FFMPEG_PATH = './dataset/ffmpeg_gme/bin/ffmpeg.exe'
-#FFMPEG_PATH = 'ffmpeg'
 SOURCE_DIR = './dataset/spc'
-#SOURCE_DIR = './dataset/source'
 INPUT_FORMATS = ('.spc')
-#INPUT_FORMATS = ('.mp3', '.flac')
 OUTPUT_RAW_DIR = './dataset/raw'
-MAXIMUM_RAW_LENGTH = "00:01:30"
+MAXIMUM_RAW_LENGTH = "00:02:30"
 
 INPUT_RAW_DIR = OUTPUT_RAW_DIR
 MINIMUM_SAMPLE_LENGTH = 65536 * 8
-MAXIMUM_SAMPLE_LENGTH = 65536 * 8
 OUTPUT_SAMPLE_DIR = './dataset/samples'
 WRITE_SAMPLES = False
 
-FORMAT = "complex_2channels"
 NOISE_FLOOR = 0. #1e-3
 SAMPLE_RATE = 8000
-NUM_CHUNKS = 256 # 64
+NUM_CHUNKS = 256
 SAMPLE_RAW_LENGTH = 65536*2
-OVERLAPPED = False
-WINDOW_TYPE = "none"
-SPATIAL_WINDOW_LENGTH = 2048
+SPATIAL_WINDOW_LENGTH = 4096 #2048
 FREQ_EMBEDDING_DIM = 0
 
-NEW_MODEL_PATH = './models/dualdiffusion2d_11'
+NEW_MODEL_PATH = './models/dualdiffusion2d_14'
 MODEL_PARAMS = {
-    "model_type": "2d", #1d
-    "prediction_type": "v_prediction",
-    "beta_schedule": "linear",#"squaredcos_cap_v2",
+    "prediction_type": "epsilon", #"v_prediction",
+    "beta_schedule": "linear", #"squaredcos_cap_v2",
     "beta_start" : 0.0001,
     "beta_end" : 0.02,
-    "format": FORMAT,
     "sample_raw_length": SAMPLE_RAW_LENGTH,
     "num_chunks": NUM_CHUNKS,
     "noise_floor": NOISE_FLOOR,
@@ -107,7 +97,7 @@ def preprocess_raw_files_to_sample(input_file):
     processed = False; mean = 0.; std = 0.
     
     print(f"Processing '{input_file}'") 
-    raw_input = np.fromfile(input_file, dtype=np.int16, count=MAXIMUM_SAMPLE_LENGTH)
+    raw_input = np.fromfile(input_file, dtype=np.int16)
     if len(raw_input) < MINIMUM_SAMPLE_LENGTH:
         print(f"Skipping '{input_file}' due to insufficient length")
     else:
@@ -117,12 +107,9 @@ def preprocess_raw_files_to_sample(input_file):
             raw_input.tofile(output_file_raw)
 
         raw_input = torch.from_numpy(raw_input).to("cuda").type(torch.float32) / 32768.
-        #sample = DualDiffusionPipeline.raw_to_sample(raw_input[:sample_crop_width].unsqueeze(0), MODEL_PARAMS)
-        #mean = sample.mean(dim=(1, 2, 3)).item()
-        #std = sample.std(dim=(1, 2, 3)).item()
-        sample = DualDiffusionPipeline1D.raw_to_sample(raw_input[:sample_crop_width].unsqueeze(0), MODEL_PARAMS)
-        mean = sample.mean(dim=(1, 2)).item()
-        std = sample.std(dim=(1, 2)).item()
+        sample = DualDiffusionPipeline.raw_to_sample(raw_input[:sample_crop_width].unsqueeze(0), MODEL_PARAMS)
+        mean = sample.mean(dim=(1, 2, 3)).item()
+        std = sample.std(dim=(1, 2, 3)).item()
         processed = True
 
     print(f"Processed '{input_file}'")
@@ -177,8 +164,5 @@ if __name__ == "__main__":
     #MODEL_PARAMS["avg_mean"] = 0.0017828649850519483
     #MODEL_PARAMS["avg_std"] = 0.563462784100214
 
-    if MODEL_PARAMS["model_type"] == "1d":
-        pipeline = DualDiffusionPipeline1D.create_new(MODEL_PARAMS, NEW_MODEL_PATH)
-    else:
-        pipeline = DualDiffusionPipeline.create_new(MODEL_PARAMS, NEW_MODEL_PATH)
+    pipeline = DualDiffusionPipeline.create_new(MODEL_PARAMS, NEW_MODEL_PATH)
     print(f"Created new DualDiffusion model with config at '{NEW_MODEL_PATH}'")

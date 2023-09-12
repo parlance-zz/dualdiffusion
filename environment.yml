@@ -9,7 +9,6 @@ dependencies:
   - pytorch::pytorch  
   - pip
   - numpy
-  - ffmpeg
   - torchaudio
   - torchvision
   - diffusers
@@ -18,7 +17,6 @@ dependencies:
   - transformers
   - librosa
   - pip:
-    - ffmpeg-python
     - safetensors
     - tensorboard
     - opencv-python

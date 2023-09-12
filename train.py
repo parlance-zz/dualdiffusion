@@ -17,15 +17,11 @@ import argparse
 import logging
 import math
 import os
-import random
 import shutil
 import subprocess
 import atexit
-from pathlib import Path
 from datetime import datetime
 from glob import glob
-
-import ffmpeg
 
 import accelerate
 import datasets
@@ -33,9 +29,9 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 import torch.utils.checkpoint
+import torchaudio
 from accelerate import Accelerator
 from accelerate.logging import get_logger
-from accelerate.state import AcceleratorState
 from accelerate.utils import ProjectConfiguration, set_seed
 from datasets import load_dataset, Audio
 from packaging import version
@@ -57,7 +53,6 @@ logger = get_logger(__name__, log_level="INFO")
 
 def log_validation(pipeline, args, accelerator, weight_dtype, global_step):
     logger.info("Running validation... ")
-
     pipeline.set_progress_bar_config(disable=True)
 
     sample_rate = pipeline.config["model_params"]["sample_rate"]
@@ -75,28 +70,22 @@ def log_validation(pipeline, args, accelerator, weight_dtype, global_step):
         with torch.autocast("cuda"):
             sample = pipeline(steps=args.num_validation_steps,
                               seed=generator,
-                              scheduler=args.validation_scheduler)
-            samples.append(sample)
+                              scheduler=args.validation_scheduler).real.cpu()
+            sample_filename = f"step_{global_step}_{args.validation_scheduler}{args.num_validation_steps}_s{seed}.flac"
+            samples.append((sample, sample_filename))
 
-            sample_output_path = os.path.join(output_path, f"step_{global_step}_{args.validation_scheduler}{args.num_validation_steps}_s{seed}.raw")
-            sample.cpu().numpy().tofile(sample_output_path)
-            output_flac_file = os.path.splitext(sample_output_path)[0] + '.flac'
-            ffmpeg.input(sample_output_path, f="f32le", ac=2, ar=sample_rate).output(output_flac_file).run(quiet=True)
-            logger.info(f"Saved sample to to {output_flac_file}")
-            os.remove(sample_output_path)
+            sample_output_path = os.path.join(output_path, sample_filename)
+            torchaudio.save(sample_output_path, sample, sample_rate, bits_per_sample=16)
+            logger.info(f"Saved sample to to {sample_output_path}")
 
         seed += 1
 
     for tracker in accelerator.trackers:
         if tracker.name == "tensorboard":
-            i = 0
-            for sample in samples:
-                tracker.writer.add_audio(f"step_{global_step}__{i}", sample.real.type(torch.float32).cpu(), global_step, sample_rate=sample_rate)
-                i += 1
+            for sample, sample_filename in samples:
+                tracker.writer.add_audio(os.path.splitext(sample_filename)[0], global_step, sample_rate=sample_rate)
         else:
             logger.warn(f"image logging not implemented for {tracker.name}")
-
-    torch.cuda.empty_cache()
 
 
 def parse_args():
@@ -143,6 +132,11 @@ def parse_args():
             " https://huggingface.co/docs/datasets/image_dataset#imagefolder. In particular, a `metadata.jsonl` file"
             " must exist to provide the captions for the images. Ignored if `dataset_name` is specified."
         ),
+    )
+    parser.add_argument(
+        "--sample_format",
+        type=str,
+        default="int16",
     )
     parser.add_argument(
         "--max_train_samples",
@@ -588,16 +582,33 @@ def main():
         samples = []
         for audio in examples["audio"]:
 
-            if audio["bytes"] is not None:
-                sample_len = len(audio["bytes"]) // 2
-                crop_offset = np.random.randint(0, sample_len - sample_crop_width)
-                sample = np.frombuffer(audio["bytes"], dtype=np.int16, count=sample_crop_width, offset=crop_offset * 2)
-            else:
-                sample_len = os.path.getsize(audio["path"]) // 2
-                crop_offset = np.random.randint(0, sample_len - sample_crop_width)
-                sample = np.fromfile(audio["path"], dtype=np.int16, count=sample_crop_width, offset=crop_offset * 2)
+            if args.sample_format == "int16":
 
-            sample = sample.astype(np.float32) / 32768.
+                if audio["bytes"] is not None:
+                    sample_len = len(audio["bytes"]) // 2
+                    crop_offset = np.random.randint(0, sample_len - sample_crop_width)
+                    sample = np.frombuffer(audio["bytes"], dtype=np.int16, count=sample_crop_width, offset=crop_offset * 2)
+                    sample = sample.astype(np.float32) / 32768.
+                else:
+                    sample_len = os.path.getsize(audio["path"]) // 2
+                    crop_offset = np.random.randint(0, sample_len - sample_crop_width)
+                    sample = np.fromfile(audio["path"], dtype=np.int16, count=sample_crop_width, offset=crop_offset * 2)
+                    sample = sample.astype(np.float32) / 32768.
+
+            elif args.sample_format == "fp32":
+
+                if audio["bytes"] is not None:
+                    sample_len = len(audio["bytes"]) // 4
+                    crop_offset = np.random.randint(0, sample_len - sample_crop_width)
+                    sample = np.frombuffer(audio["bytes"], dtype=np.float32, count=sample_crop_width, offset=crop_offset * 4)
+                else:
+                    sample_len = os.path.getsize(audio["path"]) // 4
+                    crop_offset = np.random.randint(0, sample_len - sample_crop_width)
+                    sample = np.fromfile(audio["path"], dtype=np.float32, count=sample_crop_width, offset=crop_offset * 4)
+            
+            else:
+                raise ValueError(f"Unsupported sample format: {args.sample_format}")
+            
             samples.append(torch.from_numpy(sample).to("cuda"))
 
         return {"input": samples}
@@ -801,6 +812,8 @@ def main():
                     # Since we predict the noise instead of x_0, the original formulation is slightly changed.
                     # This is discussed in Section 4.2 of the same paper.
                     snr = compute_snr(timesteps)
+
+                    # todo: not sure if this is correct, avoiding min_snr for now with v-prediction
                     #if noise_scheduler.config.prediction_type == "v_prediction": # correction as per the above paper
                         #snr += 1.                                                # for v-prediction
                         #offset = 1.
@@ -877,6 +890,7 @@ def main():
                         checkpoint_saved_this_epoch = True
 
             if global_step >= args.max_train_steps:
+                logger.info(f"Reached max train steps ({args.max_train_steps}) - Training complete")
                 break
         
         progress_bar.close()
