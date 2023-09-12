@@ -1,8 +1,8 @@
 - experiment with taking the avg std per frequency from the dataset preprocessing and using that to initialize starter noise
   when sampling (after using schedule.add_noise with timestep = max_timestep)
-- add reverse separable attention order for upblocks in new_lgdiffusion3 code
-    - add the tracking offset so it ALWAYS alternates time <-> frequency attention layers on every block and every layer
-    - remove failed experiments like positional coding and separable resnets
+
+- remove separable resnets and adjustable conv size, clean up code
+
 - optimize deployment code for a bigger experiment on lambda cloud
   - read/write flac instead of raw using torchaudio
   - upload dataset to HF and support asynchronous push to hub for model / checkpoint saves
@@ -11,3 +11,4 @@
 - investigate v-prediction with min_snr
 - investigate input perturbation
 - investigate input scaling (https://arxiv.org/pdf/2301.10972.pdf)
+- investigate separable attention for training a custom vae

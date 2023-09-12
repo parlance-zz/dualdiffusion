@@ -68,9 +68,9 @@ class UNet2DDualModel(ModelMixin, ConfigMixin):
         time_embedding_type: str = "positional",
         freq_shift: int = 0,
         flip_sin_to_cos: bool = True,
-        down_block_types: Tuple[str] = ("DownBlock2D", "AttnDownBlock2D", "AttnDownBlock2D", "AttnDownBlock2D"),
-        up_block_types: Tuple[str] = ("AttnUpBlock2D", "AttnUpBlock2D", "AttnUpBlock2D", "UpBlock2D"),
-        block_out_channels: Tuple[int] = (224, 448, 672, 896),
+        down_block_types: Tuple[str] = ("SeparableAttnDownBlock2D", "SeparableAttnDownBlock2D", "SeparableAttnDownBlock2D"),
+        up_block_types: Tuple[str] = ("SeparableAttnUpBlock2D", "SeparableAttnUpBlock2D", "SeparableAttnUpBlock2D"),
+        block_out_channels: Tuple[int] = (128, 256, 512),
         layers_per_block: int = 2,
         mid_block_scale_factor: float = 1,
         downsample_padding: int = 1,
@@ -80,9 +80,8 @@ class UNet2DDualModel(ModelMixin, ConfigMixin):
         attention_head_dim: Union[int, Tuple[int]] = 8,
         separate_attn_dim: Tuple[int] = (2,3),
         positional_coding_dims: Tuple[int] = (),
-        reverse_separate_attn_dim: bool = False,
-        double_attention: bool = True,
-        separable_resnet: bool = False,
+        reverse_separate_attn_dim: bool = True,
+        double_attention: bool = False,
         norm_num_groups: int = 32,
         norm_eps: float = 1e-5,
         resnet_time_scale_shift: str = "default",
@@ -95,7 +94,6 @@ class UNet2DDualModel(ModelMixin, ConfigMixin):
         super().__init__()
 
         self.sample_size = sample_size
-        self.separable_resnet = separable_resnet
         self.separate_attn_dim = separate_attn_dim
         time_embed_dim = block_out_channels[0] * 4
 
@@ -176,7 +174,6 @@ class UNet2DDualModel(ModelMixin, ConfigMixin):
                     separate_attn_dim=separate_attn_dim,
                     positional_coding_dims=positional_coding_dims,
                     double_attention=double_attention,
-                    separable_resnet=separable_resnet,
                     dropout=dropout,
                     conv_size=conv_size,
                 )
@@ -196,11 +193,6 @@ class UNet2DDualModel(ModelMixin, ConfigMixin):
                     resnet_time_scale_shift=resnet_time_scale_shift,
                     downsample_type=downsample_type,
                 )
-            
-            #with torch.no_grad():
-            #    param_scale = 2 ** (-i/4)
-            #    for param in down_block.parameters():
-            #        param *= param_scale
 
             self.down_blocks.append(down_block)
 
@@ -218,11 +210,6 @@ class UNet2DDualModel(ModelMixin, ConfigMixin):
             dropout=dropout,
         )
 
-        #with torch.no_grad():
-        #    param_scale = 2 ** (-len(down_block_types)/4)
-        #    for param in self.mid_block.parameters():
-        #        param *= param_scale
-            
         reversed_attention_head_dim = list(reversed(attention_head_dim))
         if reverse_separate_attn_dim:
             reversed_separate_attn_dim = list(reversed(separate_attn_dim))
@@ -260,7 +247,6 @@ class UNet2DDualModel(ModelMixin, ConfigMixin):
                     separate_attn_dim=reversed_separate_attn_dim,
                     positional_coding_dims=positional_coding_dims,
                     double_attention=double_attention,
-                    separable_resnet=separable_resnet,
                     dropout=dropout,
                     conv_size=conv_size,
                 )
@@ -281,11 +267,6 @@ class UNet2DDualModel(ModelMixin, ConfigMixin):
                     upsample_type=upsample_type,
                 )
 
-            #with torch.no_grad():
-            #    param_scale = 2 ** ((-len(down_block_types) + 1 + i)/4)
-            #    for param in up_block.parameters():
-            #        param *= param_scale
-                
             self.up_blocks.append(up_block)
             prev_output_channel = output_channel
 
@@ -353,10 +334,8 @@ class UNet2DDualModel(ModelMixin, ConfigMixin):
         sample = self.conv_in(sample)
 
         # 3. down
-        if self.separable_resnet and False:
-            down_block_res_samples = (shape_for_attention(sample, self.separate_attn_dim[0]),)
-        else:    
-            down_block_res_samples = (sample,)
+        down_block_res_samples = (sample,)
+        global_attn_block_count = 0
 
         for downsample_block in self.down_blocks:
             if hasattr(downsample_block, "skip_conv"):
@@ -364,7 +343,9 @@ class UNet2DDualModel(ModelMixin, ConfigMixin):
                     hidden_states=sample, temb=emb, skip_sample=skip_sample
                 )
             else:
-                sample, res_samples = downsample_block(hidden_states=sample, temb=emb)
+                sample, res_samples, global_attn_block_count = downsample_block(hidden_states=sample,
+                                                                                temb=emb,
+                                                                                global_attn_block_count=global_attn_block_count)
 
             down_block_res_samples += res_samples
 
@@ -378,9 +359,16 @@ class UNet2DDualModel(ModelMixin, ConfigMixin):
             down_block_res_samples = down_block_res_samples[: -len(upsample_block.resnets)]
 
             if hasattr(upsample_block, "skip_conv"):
-                sample, skip_sample = upsample_block(sample, res_samples, emb, skip_sample)
+                sample, skip_sample, global_attn_block_count = upsample_block(sample,
+                                                                              res_samples,
+                                                                              emb,
+                                                                              skip_sample,
+                                                                              global_attn_block_count=global_attn_block_count)
             else:
-                sample = upsample_block(sample, res_samples, emb)
+                sample, global_attn_block_count = upsample_block(sample,
+                                                                 res_samples,
+                                                                 emb,
+                                                                 global_attn_block_count=global_attn_block_count)
 
         # 6. post-process
         sample = self.conv_norm_out(sample)
