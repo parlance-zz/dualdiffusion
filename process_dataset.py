@@ -24,9 +24,9 @@ SAMPLE_RAW_LENGTH = 65536*2
 SPATIAL_WINDOW_LENGTH = 4096 #2048
 FREQ_EMBEDDING_DIM = 0
 
-NEW_MODEL_PATH = './models/dualdiffusion2d_14'
+NEW_MODEL_PATH = './models/dualdiffusion2d_28'
 MODEL_PARAMS = {
-    "prediction_type": "epsilon", #"v_prediction",
+    "prediction_type": "v_prediction",
     "beta_schedule": "linear", #"squaredcos_cap_v2",
     "beta_start" : 0.0001,
     "beta_end" : 0.02,
@@ -36,8 +36,7 @@ MODEL_PARAMS = {
     "spatial_window_length": SPATIAL_WINDOW_LENGTH,
     "sample_rate": SAMPLE_RATE,
     "freq_embedding_dim": FREQ_EMBEDDING_DIM,
-    "avg_mean": 0.,
-    "avg_std": 1.,
+    "avg_std": [],
     "last_global_step": 0,
 }
     

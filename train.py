@@ -83,9 +83,12 @@ def log_validation(pipeline, args, accelerator, weight_dtype, global_step):
     for tracker in accelerator.trackers:
         if tracker.name == "tensorboard":
             for sample, sample_filename in samples:
-                tracker.writer.add_audio(os.path.splitext(sample_filename)[0], global_step, sample_rate=sample_rate)
+                tracker.writer.add_audio(os.path.splitext(sample_filename)[0],
+                                         sample,
+                                         global_step,
+                                         sample_rate=sample_rate)
         else:
-            logger.warn(f"image logging not implemented for {tracker.name}")
+            logger.warn(f"audio logging not implemented for {tracker.name}")
 
 
 def parse_args():

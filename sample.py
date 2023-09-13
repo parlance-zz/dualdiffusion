@@ -16,7 +16,7 @@ if __name__ == "__main__":
         torch.backends.cuda.matmul.allow_tf32 = True
         torch.backends.cuda.cufft_plan_cache[0].max_size = 32 # stupid cufft memory leak
 
-    model_path = "./models/dualdiffusion2d_14"
+    model_path = "./models/dualdiffusion2d_27"
     print(f"Loading DualDiffusion model from '{model_path}'...")
     pipeline = DualDiffusionPipeline.from_pretrained(model_path).to("cuda")
     sample_rate = pipeline.config["model_params"]["sample_rate"]
@@ -43,9 +43,7 @@ if __name__ == "__main__":
                           seed=seed,
                           loops=loops,
                           batch_size=batch_size,
-                          length=length,
-                          renormalize_sample=renormalize,
-                          rebalance_mean=rebalance).real.cpu()
+                          length=length).real.cpu()
         print(f"Time taken: {time.time()-start}")
 
         model_name = os.path.basename(model_path)

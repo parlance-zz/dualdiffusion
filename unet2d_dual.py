@@ -339,8 +339,8 @@ class UNet2DDualModel(ModelMixin, ConfigMixin):
 
         for downsample_block in self.down_blocks:
             if hasattr(downsample_block, "skip_conv"):
-                sample, res_samples, skip_sample = downsample_block(
-                    hidden_states=sample, temb=emb, skip_sample=skip_sample
+                sample, res_samples, skip_sample, global_attn_block_count = downsample_block(
+                    hidden_states=sample, temb=emb, skip_sample=skip_sample, global_attn_block_count=global_attn_block_count,
                 )
             else:
                 sample, res_samples, global_attn_block_count = downsample_block(hidden_states=sample,

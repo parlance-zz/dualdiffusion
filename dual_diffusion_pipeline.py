@@ -7,7 +7,7 @@ from diffusers.schedulers import DPMSolverMultistepScheduler, DDIMScheduler
 from diffusers.pipelines.pipeline_utils import DiffusionPipeline
 
 from unet2d_dual import UNet2DDualModel
-from unet1d_dual import UNet1DDualModel
+
 class DualDiffusionPipeline(DiffusionPipeline):
 
     def __init__(
@@ -29,19 +29,21 @@ class DualDiffusionPipeline(DiffusionPipeline):
 
         unet = UNet2DDualModel(
             #dropout=0.1,
-            act_fn="silu",
             #act_fn="mish",
-            #attention_head_dim=(16, 16, 32, 64, 128, 128),
-            #attention_head_dim=16,
-            attention_head_dim=8,
+            act_fn="silu",
+            #attention_head_dim=(16, 32, 64),
+            #attention_head_dim=(32, 64, 128),
+            attention_head_dim=16,
+            #attention_head_dim=(16, 32, 32),
             separate_attn_dim=(2,3),
             #positional_coding_dims=(2,3),
             #positional_coding_dims=(3,), 
             positional_coding_dims=(),
-            reverse_separate_attn_dim=True,
-            double_attention=True,
-            separable_resnet=False,
-            add_attention=True,
+            reverse_separate_attn_dim=False,
+            #reverse_separate_attn_dim=True,
+            #double_attention=False,
+            double_attention=False,
+            add_attention=False,
             downsample_padding=1,
             flip_sin_to_cos=True,
             freq_shift=0,
@@ -54,25 +56,15 @@ class DualDiffusionPipeline(DiffusionPipeline):
             conv_size=(3,3),
             #downsample_type="resnet",
             #upsample_type="resnet",
-            block_out_channels=(32, 64, 96, 128, 160, 192),
+            #block_out_channels=(32, 64, 128),
+            #block_out_channels=(64, 96, 128),
+            block_out_channels=(32, 64, 128),
             down_block_types=(
                 "SeparableAttnDownBlock2D",
                 "SeparableAttnDownBlock2D",
                 "SeparableAttnDownBlock2D",
-                "SeparableAttnDownBlock2D",
-                "SeparableAttnDownBlock2D",
-                "SeparableAttnDownBlock2D",
-                #"AttnDownBlock2D",
-                #"AttnDownBlock2D",
-                #"AttnDownBlock2D",
             ),
             up_block_types=(
-                #"AttnUpBlock2D",
-                #"AttnUpBlock2D",
-                #"AttnUpBlock2D",
-                "SeparableAttnUpBlock2D",
-                "SeparableAttnUpBlock2D",
-                "SeparableAttnUpBlock2D",
                 "SeparableAttnUpBlock2D",
                 "SeparableAttnUpBlock2D",
                 "SeparableAttnUpBlock2D",
@@ -99,16 +91,8 @@ class DualDiffusionPipeline(DiffusionPipeline):
     
     @staticmethod
     def get_num_channels(model_params):
-        format = model_params["format"]
         freq_embedding_dim = model_params["freq_embedding_dim"]
-        if format == "complex":
-            return (1 + freq_embedding_dim, 1)
-        elif format == "complex_2channels":
-            return (2 + freq_embedding_dim, 2)
-        elif format == "complex_1channel":
-            return (1 + freq_embedding_dim, 1)
-        else:
-            raise ValueError(f"Unknown format '{format}'")
+        return (2 + freq_embedding_dim, 2)
 
     @staticmethod
     def get_window(window_len):
@@ -142,7 +126,7 @@ class DualDiffusionPipeline(DiffusionPipeline):
 
     @staticmethod
     @torch.no_grad()
-    def raw_to_sample(raw_samples, model_params, format_override=None):
+    def raw_to_sample(raw_samples, model_params):
 
         raw_samples = raw_samples.clone()
         raw_samples /= raw_samples.std(dim=1, keepdim=True)
@@ -164,33 +148,14 @@ class DualDiffusionPipeline(DiffusionPipeline):
         fft_samples_chunks = fft_samples_positive_frequencies_only.view(fft_samples_positive_frequencies_only.shape[0], -1, chunk_len)
         fft_chunk_ffts = torch.fft.fft(fft_samples_chunks, norm="ortho")
 
-        format = model_params["format"] if format_override is None else format_override
-        if format == "complex":
-            freq_samples = fft_chunk_ffts.unsqueeze(1)
-            freq_samples /= fft_chunk_ffts.std(dim=(1, 2, 3), keepdim=True)
-        elif format == "complex_2channels":
-            freq_samples = torch.view_as_real(fft_chunk_ffts).permute(0, 3, 1, 2).contiguous()
-            freq_samples /= freq_samples.std(dim=(1, 2, 3), keepdim=True)
-        elif format == "complex_1channel":
-            freq_samples = torch.view_as_real(fft_chunk_ffts).view(fft_chunk_ffts.shape[0], fft_chunk_ffts.shape[1], -1).unsqueeze(1)
-            freq_samples /= freq_samples.std(dim=(1, 2, 3), keepdim=True)
-        else:
-            raise ValueError(f"Unknown format '{format}'")
-
+        freq_samples = torch.view_as_real(fft_chunk_ffts).permute(0, 3, 1, 2).contiguous()
+        freq_samples /= freq_samples.std(dim=(1, 2, 3), keepdim=True)
         return freq_samples
     
     @staticmethod
     @torch.no_grad()
     def sample_to_raw(freq_samples, model_params):
-        
-        format = model_params["format"]
-        if format == "complex_1channel":
-            fft_samples_chunks = torch.view_as_complex(freq_samples.view(freq_samples.shape[0], freq_samples.shape[2], -1, 2))
-        elif format == "complex_2channels":
-            fft_samples_chunks = torch.view_as_complex(freq_samples.permute(0, 2, 3, 1).contiguous())
-        else:
-            raise ValueError(f"Unknown format '{format}'")
-        
+        fft_samples_chunks = torch.view_as_complex(freq_samples.permute(0, 2, 3, 1).contiguous())
         fft_samples = torch.fft.ifft(fft_samples_chunks, norm="ortho")
         fft_samples = fft_samples.view(fft_samples.shape[0], -1)
 
@@ -207,8 +172,6 @@ class DualDiffusionPipeline(DiffusionPipeline):
         loops: int = 0,
         batch_size: int = 1,
         length: int = 1,
-        renormalize_sample: bool = False,
-        rebalance_mean: bool = False,
     ):
         if (steps <= 0) or (steps > 1000):
             raise ValueError(f"Steps must be between 1 and 1000, got {steps}")
@@ -246,7 +209,7 @@ class DualDiffusionPipeline(DiffusionPipeline):
         noise = torch.randn((batch_size, num_output_channels, num_chunks, default_length*length,),
                             device=self.device,
                             generator=generator)
-        sample = noise #; print(f"Sample shape: {sample.shape}")
+        sample = noise
         freq_embedding_dim = model_params["freq_embedding_dim"]
         
         for step, t in enumerate(self.progress_bar(timesteps)):
@@ -257,10 +220,6 @@ class DualDiffusionPipeline(DiffusionPipeline):
             model_input = noise_scheduler.scale_model_input(model_input, t)
             model_output = self.unet(model_input, t).sample
             
-            #if step == 0:
-            #    print(f"Model output shape: {model_output.shape}")
-            #    model_output.float().cpu().numpy().tofile("./output/debug_model_output.raw")
-
             sample = noise_scheduler.step(
                 model_output=model_output,
                 timestep=t,
@@ -268,15 +227,10 @@ class DualDiffusionPipeline(DiffusionPipeline):
                 generator=generator,
             )["prev_sample"]
 
-            if rebalance_mean:
-                sample -= sample.mean(dim=(1,2,3), keepdim=True)
-            if renormalize_sample:
-                sample /= sample.std(dim=(1,2,3), keepdim=True)
-
         print("Sample std: ", sample.std(dim=(1,2,3)).item())
 
-        #sample = sample.type(torch.float32)
-        #sample.cpu().numpy().tofile("./output/debug_sample.raw")
+        sample = sample.type(torch.float32)
+        sample.cpu().numpy().tofile("./output/debug_sample.raw")
 
         raw_sample = DualDiffusionPipeline.sample_to_raw(sample, model_params)
         if loops > 0: raw_sample = raw_sample.repeat(1, loops+1)
@@ -328,7 +282,6 @@ class DualDiffusionPipeline(DiffusionPipeline):
                         self.remove_module_tiling(submodule)
                     else:
                         self.set_module_tiling(submodule, tiling)
-
 
 
 
