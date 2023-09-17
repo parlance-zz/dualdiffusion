@@ -386,7 +386,7 @@ def main():
     if args.report_to == "tensorboard":
         if not is_tensorboard_available():
             raise ImportError("Make sure to install tensorboard if you want to use it for logging during training.")
-        port = 6006
+        port = int(os.environ.get("TENSORBOARD_HTTP_PORT", 6006))
         tensorboard_monitor_process = subprocess.Popen(['tensorboard', '--logdir', logging_dir, '--bind_all', '--port', f'{port}'])
 
         def cleanup_process():
@@ -422,7 +422,7 @@ def main():
             os.makedirs(args.output_dir, exist_ok=True)
 
     # Initialize the model
-    pipeline = DualDiffusionPipeline.from_pretrained(args.pretrained_model_name_or_path)#.to("cuda")
+    pipeline = DualDiffusionPipeline.from_pretrained(args.pretrained_model_name_or_path)
     unet = pipeline.unet
     noise_scheduler = pipeline.scheduler
     model_params = pipeline.config["model_params"]
@@ -762,14 +762,6 @@ def main():
     else:
         snr_offset = 0.
 
-    """
-    loss_weights = ((torch.arange(0, model_params["num_chunks"], device=accelerator.device, dtype=torch.float32) + 0.5) / model_params["num_chunks"])
-    loss_weights = torch.exp2(-loss_weights * 7.) * loss_weights
-    loss_weights /= loss_weights.amax() / 1.84
-    loss_weights = loss_weights.view(1, 1, loss_weights.shape[0], 1)
-    print(loss_weights)
-    """
-
     window = None
     torch.cuda.empty_cache()
     
@@ -840,13 +832,7 @@ def main():
 
                 if args.snr_gamma is None:
                     loss = F.mse_loss(model_output.float(), target.float(), reduction="mean")
-
-                    #loss = F.mse_loss(model_output.float(), target.float(), reduction="mean")
-                    #loss += F.mse_loss(model_output_freq.float(), target_freq.float(), reduction="mean") * 2.
-                    #loss *= 0.5
-
-                    #loss = F.mse_loss(model_output.float(), target.float(), reduction="none")
-                    #loss = (loss * loss_weights).mean()
+                    #loss = (loss + F.mse_loss(model_output_freq.float(), target_freq.float(), reduction="mean") * 2.) * 0.5
                 else:
                     # Compute loss-weights as per Section 3.4 of https://arxiv.org/abs/2303.09556.
                     # Since we predict the noise instead of x_0, the original formulation is slightly changed.
