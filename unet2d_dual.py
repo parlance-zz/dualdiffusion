@@ -63,21 +63,21 @@ class UNet2DDualModel(ModelMixin, ConfigMixin):
     def __init__(
         self,
         sample_size: Optional[Union[int, Tuple[int, int]]] = None,
-        in_channels: int = 2,
-        out_channels: int = 2,
+        in_channels: int = 1,
+        out_channels: int = 1,
         time_embedding_type: str = "positional",
         freq_shift: int = 0,
         flip_sin_to_cos: bool = True,
-        down_block_types: Tuple[str] = ("SeparableAttnDownBlock2D", "SeparableAttnDownBlock2D", "SeparableAttnDownBlock2D"),
-        up_block_types: Tuple[str] = ("SeparableAttnUpBlock2D", "SeparableAttnUpBlock2D", "SeparableAttnUpBlock2D"),
-        block_out_channels: Tuple[int] = (128, 256, 512),
+        down_block_types: Tuple[str] = ("SeparableAttnDownBlock2D", "SeparableAttnDownBlock2D", "SeparableAttnDownBlock2D", "SeparableAttnDownBlock2D"),
+        up_block_types: Tuple[str] = ("SeparableAttnUpBlock2D", "SeparableAttnUpBlock2D", "SeparableAttnUpBlock2D", "SeparableAttnUpBlock2D"),
+        block_out_channels: Tuple[int] = (32, 64, 128, 256),
         layers_per_block: int = 2,
         mid_block_scale_factor: float = 1,
         downsample_padding: int = 1,
         downsample_type: str = "conv",
         upsample_type: str = "conv",
         act_fn: str = "silu",
-        attention_head_dim: Union[int, Tuple[int]] = 8,
+        attention_head_dim: Union[int, Tuple[int]] = 16,
         separate_attn_dim: Tuple[int] = (2,3),
         positional_coding_dims: Tuple[int] = (),
         reverse_separate_attn_dim: bool = True,
@@ -150,15 +150,14 @@ class UNet2DDualModel(ModelMixin, ConfigMixin):
         for i, down_block_type in enumerate(down_block_types):
             input_channel = output_channel
             output_channel = block_out_channels[i]
+
             is_final_block = i == len(block_out_channels) - 1
+            if is_final_block is True: _downsample_type = None
+            else: _downsample_type = downsample_type or "conv"  # default to 'conv'
+            _norm_num_groups = min(input_channel, norm_num_groups)
+            _attention_head_dim = min(output_channel, attention_head_dim[i])
 
             if down_block_type == "SeparableAttnDownBlock2D":
-
-                if is_final_block is True:
-                    downsample_type = None
-                else:
-                    downsample_type = downsample_type or "conv"  # default to 'conv'
-
                 down_block = SeparableAttnDownBlock2D(
                     num_layers=layers_per_block,
                     in_channels=input_channel,
@@ -166,11 +165,11 @@ class UNet2DDualModel(ModelMixin, ConfigMixin):
                     temb_channels=time_embed_dim,
                     resnet_eps=norm_eps,
                     resnet_act_fn=act_fn,
-                    resnet_groups=norm_num_groups,
-                    attention_head_dim=attention_head_dim[i],
+                    resnet_groups=_norm_num_groups,
+                    attention_head_dim=_attention_head_dim,
                     downsample_padding=downsample_padding,
                     resnet_time_scale_shift=resnet_time_scale_shift,
-                    downsample_type=downsample_type,
+                    downsample_type=_downsample_type,
                     separate_attn_dim=separate_attn_dim,
                     positional_coding_dims=positional_coding_dims,
                     double_attention=double_attention,
@@ -187,11 +186,11 @@ class UNet2DDualModel(ModelMixin, ConfigMixin):
                     add_downsample=not is_final_block,
                     resnet_eps=norm_eps,
                     resnet_act_fn=act_fn,
-                    resnet_groups=norm_num_groups,
-                    attention_head_dim=attention_head_dim[i],
+                    resnet_groups=_norm_num_groups,
+                    attention_head_dim=_attention_head_dim,
                     downsample_padding=downsample_padding,
                     resnet_time_scale_shift=resnet_time_scale_shift,
-                    downsample_type=downsample_type,
+                    downsample_type=_downsample_type,
                 )
 
             self.down_blocks.append(down_block)
@@ -225,13 +224,12 @@ class UNet2DDualModel(ModelMixin, ConfigMixin):
             input_channel = reversed_block_out_channels[min(i + 1, len(block_out_channels) - 1)]
 
             is_final_block = i == len(block_out_channels) - 1
+            if is_final_block is True: _upsample_type = None
+            else: _upsample_type = upsample_type or "conv"  # default to 'conv'
+            _norm_num_groups = min(input_channel, norm_num_groups)
+            _attention_head_dim = min(output_channel, reversed_attention_head_dim[i])
 
             if up_block_type == "SeparableAttnUpBlock2D":
-                if is_final_block is True:
-                    upsample_type = None
-                else:
-                    upsample_type = upsample_type or "conv"  # default to 'conv'
-                    
                 up_block = SeparableAttnUpBlock2D(
                     num_layers=layers_per_block + 1,
                     in_channels=input_channel,
@@ -240,10 +238,10 @@ class UNet2DDualModel(ModelMixin, ConfigMixin):
                     temb_channels=time_embed_dim,
                     resnet_eps=norm_eps,
                     resnet_act_fn=act_fn,
-                    resnet_groups=norm_num_groups,
-                    attention_head_dim=reversed_attention_head_dim[i],
+                    resnet_groups=_norm_num_groups,
+                    attention_head_dim=_attention_head_dim,
                     resnet_time_scale_shift=resnet_time_scale_shift,
-                    upsample_type=upsample_type,
+                    upsample_type=_upsample_type,
                     separate_attn_dim=reversed_separate_attn_dim,
                     positional_coding_dims=positional_coding_dims,
                     double_attention=double_attention,
@@ -261,10 +259,10 @@ class UNet2DDualModel(ModelMixin, ConfigMixin):
                     add_upsample=not is_final_block,
                     resnet_eps=norm_eps,
                     resnet_act_fn=act_fn,
-                    resnet_groups=norm_num_groups,
-                    attention_head_dim=reversed_attention_head_dim[i],
+                    resnet_groups=_norm_num_groups,
+                    attention_head_dim=_attention_head_dim,
                     resnet_time_scale_shift=resnet_time_scale_shift,
-                    upsample_type=upsample_type,
+                    upsample_type=_upsample_type,
                 )
 
             self.up_blocks.append(up_block)
@@ -272,7 +270,8 @@ class UNet2DDualModel(ModelMixin, ConfigMixin):
 
         # out
         num_groups_out = norm_num_groups if norm_num_groups is not None else min(block_out_channels[0] // 4, 32)
-        self.conv_norm_out = nn.GroupNorm(num_channels=block_out_channels[0], num_groups=num_groups_out, eps=norm_eps)
+        _num_groups_out = min(block_out_channels[0], num_groups_out)
+        self.conv_norm_out = nn.GroupNorm(num_channels=block_out_channels[0], num_groups=_num_groups_out, eps=norm_eps)
         self.conv_act = nn.SiLU()
         self.conv_out = nn.Conv2d(block_out_channels[0], out_channels, kernel_size=conv_size, padding=(conv_size[0]//2, conv_size[1]//2))
 

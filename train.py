@@ -44,7 +44,7 @@ from diffusers.utils import check_min_version, deprecate, is_tensorboard_availab
 from diffusers.utils.import_utils import is_xformers_available
 
 from unet2d_dual import UNet2DDualModel
-from dual_diffusion_pipeline import DualDiffusionPipeline
+from dual_diffusion_pipeline import DualDiffusionPipeline, to_freq, to_spatial
 
 # Will error if the minimal version of diffusers is not installed. Remove at your own risks.
 #check_min_version("0.21.0.dev0")
@@ -257,10 +257,10 @@ def parse_args():
     parser.add_argument(
         "--logging_dir",
         type=str,
-        default="logs",
+        default=None,
         help=(
             "[TensorBoard](https://www.tensorflow.org/tensorboard) log directory. Will default to"
-            " *output_dir/runs/**CURRENT_DATETIME_HOSTNAME***."
+            " output_dir/logs/(model_name)"
         ),
     )
     parser.add_argument(
@@ -367,7 +367,11 @@ def main():
                 " use `--variant=non_ema` instead."
             ),
         )
-    logging_dir = os.path.join(args.output_dir, args.logging_dir)
+
+    if args.logging_dir is None:
+        logging_dir = os.path.join(args.output_dir, "logs")
+    else:
+        logging_dir = args.logging_dir
 
     accelerator_project_config = ProjectConfiguration(project_dir=args.output_dir, logging_dir=logging_dir)
 
@@ -674,8 +678,8 @@ def main():
     if accelerator.is_main_process:
         if args.tracker_project_name is None:
             args.tracker_project_name = os.path.basename(args.output_dir)
-        start_timestamp = f"{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}"
-        args.tracker_project_name = f"{args.tracker_project_name}_{start_timestamp}"
+        #start_timestamp = f"{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}"
+        #args.tracker_project_name = f"{args.tracker_project_name}_{start_timestamp}"
 
         """
         tracker_config = dict(vars(args))
@@ -749,6 +753,23 @@ def main():
             first_epoch = global_step // num_update_steps_per_epoch
             resume_step = resume_global_step % (num_update_steps_per_epoch * args.gradient_accumulation_steps)
 
+    # correction to min snr for v-prediction, not 100% sure this is correct
+    if args.snr_gamma is not None and noise_scheduler.config.prediction_type == "v_prediction":
+        logger.info(f"SNR gamma ({args.snr_gamma}) is set with v_prediction objective, using SNR offset +1")
+        snr_offset = 1.
+        args.snr_gamma += 1.
+    else:
+        snr_offset = 0.
+
+    """
+    loss_weights = ((torch.arange(0, model_params["num_chunks"], device=accelerator.device, dtype=torch.float32) + 0.5) / model_params["num_chunks"])
+    loss_weights = torch.exp2(-loss_weights * 7.) * loss_weights
+    loss_weights /= loss_weights.amax() / 1.84
+    loss_weights = loss_weights.view(1, 1, loss_weights.shape[0], 1)
+    print(loss_weights)
+    """
+
+    window = None
     torch.cuda.empty_cache()
     
     for epoch in range(first_epoch, args.num_train_epochs):
@@ -769,7 +790,9 @@ def main():
             with accelerator.accumulate(unet):
 
                 raw_samples = batch["input"]
-                samples = DualDiffusionPipeline.raw_to_sample(raw_samples, model_params)
+                samples, window = DualDiffusionPipeline.raw_to_sample(raw_samples,
+                                                                      model_params,
+                                                                      window=window)
 
                 noise = torch.randn_like(samples)
                 if args.input_perturbation > 0:
@@ -778,10 +801,10 @@ def main():
                 if not debug_written:
                     logger.info(f"Samples mean: {samples.mean()} - Samples std: {samples.std()}")
                     logger.info(f"Samples shape: {samples.shape} - Samples std (with noise): {(samples + noise).std()}")
-                    samples.cpu().numpy().tofile("output/debug_samples.raw")
-                    raw_samples.cpu().numpy().tofile("output/debug_raw_samples.raw")
-                    #raw_samples = LGDiffusionPipeline.freq_to_raw(samples)
-                    #raw_samples.cpu().numpy().tofile("output/debug_reconstructed_raw_samples.raw")
+                    samples.cpu().numpy().tofile("output/debug_train_samples.raw")
+                    raw_samples.cpu().numpy().tofile("output/debug_train_raw_samples.raw")
+                    raw_samples = DualDiffusionPipeline.sample_to_raw(samples)
+                    raw_samples.cpu().numpy().tofile("output/debug_train_reconstructed_raw_samples.raw")
                     debug_written = True
                     
                 # Sample a random timestep for each image
@@ -808,25 +831,32 @@ def main():
                 # Predict the target and compute loss
                 model_output = unet(model_input, timesteps).sample
 
+                #model_output_freq = torch.view_as_real(DualDiffusionPipeline.sample_to_raw(model_output))
+                #target_freq = torch.view_as_real(DualDiffusionPipeline.sample_to_raw(target))
+
                 if args.snr_gamma is None:
                     loss = F.mse_loss(model_output.float(), target.float(), reduction="mean")
+
+                    #loss = F.mse_loss(model_output.float(), target.float(), reduction="mean")
+                    #loss += F.mse_loss(model_output_freq.float(), target_freq.float(), reduction="mean") * 2.
+                    #loss *= 0.5
+
+                    #loss = F.mse_loss(model_output.float(), target.float(), reduction="none")
+                    #loss = (loss * loss_weights).mean()
                 else:
                     # Compute loss-weights as per Section 3.4 of https://arxiv.org/abs/2303.09556.
                     # Since we predict the noise instead of x_0, the original formulation is slightly changed.
                     # This is discussed in Section 4.2 of the same paper.
-                    snr = compute_snr(timesteps)
-
-                    # todo: not sure if this is correct, avoiding min_snr for now with v-prediction
-                    #if noise_scheduler.config.prediction_type == "v_prediction": # correction as per the above paper
-                        #snr += 1.                                                # for v-prediction
-                        #offset = 1.
-                    #else:
-                        #offset = 0.
-                    offset = 0.
+                    snr = compute_snr(timesteps) + snr_offset
+                    
+                    if noise_scheduler.config.prediction_type != "v_prediction":
+                        # clamp required when using zero terminal SNR rescaling to avoid division by zero
+                        # not needed when using v-prediction because of the +1 snr offset
+                        if noise_scheduler.config.rescale_betas_zero_snr:
+                            snr = snr.clamp(min=1e-10)
 
                     mse_loss_weights = (
-                        #torch.stack([snr, args.snr_gamma * torch.ones_like(timesteps)], dim=1).min(dim=1)[0] / snr
-                        torch.stack([snr, args.snr_gamma * torch.ones_like(timesteps)], dim=1).min(dim=1)[0] / (snr + offset)
+                        torch.stack([snr, args.snr_gamma * torch.ones_like(timesteps)], dim=1).min(dim=1)[0] / snr
                     )
                     # We first calculate the original loss. Then we mean over the non-batch dimensions and
                     # rebalance the sample-wise losses with their respective loss weights.
@@ -924,8 +954,8 @@ def main():
                     )
                 except Exception as e:
                     logger.error(f"Error running validation: {e}")
-                    pipeline.set_tiling_mode(False)
-                    
+
+                pipeline.set_tiling_mode(False)
                 unet.train()
                 torch.cuda.empty_cache()
 

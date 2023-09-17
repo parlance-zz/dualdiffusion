@@ -17,29 +17,29 @@ MINIMUM_SAMPLE_LENGTH = 65536 * 8
 OUTPUT_SAMPLE_DIR = './dataset/samples'
 WRITE_SAMPLES = False
 
-NOISE_FLOOR = 0. #1e-3
 SAMPLE_RATE = 8000
+#NUM_CHUNKS = 256
+#SAMPLE_RAW_LENGTH = 65536
 NUM_CHUNKS = 256
 SAMPLE_RAW_LENGTH = 65536*2
-SPATIAL_WINDOW_LENGTH = 4096 #2048
 FREQ_EMBEDDING_DIM = 0
 
-NEW_MODEL_PATH = './models/dualdiffusion2d_28'
+NEW_MODEL_PATH = './models/dualdiffusion2d_41'
 MODEL_PARAMS = {
-    "prediction_type": "v_prediction",
+    "channels": 1, #2
+    "prediction_type": "v_prediction", #"v_prediction",
     "beta_schedule": "linear", #"squaredcos_cap_v2",
     "beta_start" : 0.0001,
     "beta_end" : 0.02,
     "sample_raw_length": SAMPLE_RAW_LENGTH,
     "num_chunks": NUM_CHUNKS,
-    "noise_floor": NOISE_FLOOR,
-    "spatial_window_length": SPATIAL_WINDOW_LENGTH,
     "sample_rate": SAMPLE_RATE,
     "freq_embedding_dim": FREQ_EMBEDDING_DIM,
-    "avg_std": [],
     "last_global_step": 0,
 }
-    
+
+SPATIAL_WINDOW = None
+
 def decode_source_files_to_raw(input_file):
 
     dirpath = os.path.dirname(input_file)
@@ -94,7 +94,7 @@ def preprocess_raw_files_to_sample(input_file):
 
     sample_crop_width = DualDiffusionPipeline.get_sample_crop_width(MODEL_PARAMS)
     processed = False; mean = 0.; std = 0.
-    
+
     print(f"Processing '{input_file}'") 
     raw_input = np.fromfile(input_file, dtype=np.int16)
     if len(raw_input) < MINIMUM_SAMPLE_LENGTH:
@@ -106,7 +106,9 @@ def preprocess_raw_files_to_sample(input_file):
             raw_input.tofile(output_file_raw)
 
         raw_input = torch.from_numpy(raw_input).to("cuda").type(torch.float32) / 32768.
-        sample = DualDiffusionPipeline.raw_to_sample(raw_input[:sample_crop_width].unsqueeze(0), MODEL_PARAMS)
+        sample, SPATIAL_WINDOW = DualDiffusionPipeline.raw_to_sample(raw_input[:sample_crop_width].unsqueeze(0),
+                                                                     MODEL_PARAMS,
+                                                                     spatial_window=SPATIAL_WINDOW)
         mean = sample.mean(dim=(1, 2, 3)).item()
         std = sample.std(dim=(1, 2, 3)).item()
         processed = True

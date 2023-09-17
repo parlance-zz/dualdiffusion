@@ -16,20 +16,18 @@ if __name__ == "__main__":
         torch.backends.cuda.matmul.allow_tf32 = True
         torch.backends.cuda.cufft_plan_cache[0].max_size = 32 # stupid cufft memory leak
 
-    model_path = "./models/dualdiffusion2d_27"
+    model_path = "./models/dualdiffusion2d_39"
     print(f"Loading DualDiffusion model from '{model_path}'...")
     pipeline = DualDiffusionPipeline.from_pretrained(model_path).to("cuda")
     sample_rate = pipeline.config["model_params"]["sample_rate"]
 
-    num_samples = 5
+    num_samples = 1
     batch_size = 1
     length = 1
     scheduler = "dpms++"
     #scheduler = "ddim"
     steps = 125
     loops = 1
-    renormalize = False
-    rebalance = False
 
     seed = np.random.randint(10000, 99999-num_samples)
     #seed = 43
@@ -58,8 +56,17 @@ if __name__ == "__main__":
         seed += 1
 
 
-
 """
+def img_test():
+    sample_crop_width = 65536*2
+    pipeline.config["model_params"]["channels"] = 2
+    sample = np.fromfile("./dataset/samples/700.raw", dtype=np.int16, count=sample_crop_width) / 32768.
+    sample = torch.from_numpy(sample).unsqueeze(0).to("cuda")
+    sample, window = DualDiffusionPipeline.raw_to_sample(sample, pipeline.config["model_params"])
+    sample = 1j * sample[0, 0, :, :] + sample[0, 1, :, :]
+    DualDiffusionPipeline.save_sample_img(sample, "test.png")
+    exit()
+
 def embedding_test():
     num_positions = 256
     embedding_dim = 32

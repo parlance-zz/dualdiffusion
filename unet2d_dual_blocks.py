@@ -55,28 +55,26 @@ def AddPositionalCoding(x, num_heads, log_scale=True, max_seq_len=256.):
 def shape_for_attention(hidden_states, attn_dim):
 
     if attn_dim == 3:
-        hidden_states = hidden_states.permute(0, 3, 1, 2).contiguous()
+        hidden_states = hidden_states.permute(0, 3, 1, 2)
     elif attn_dim == 2:
-        hidden_states = hidden_states.permute(0, 2, 1, 3).contiguous()        
+        hidden_states = hidden_states.permute(0, 2, 1, 3)
     else:
         raise ValueError(f"attn_dim must be 2 or 3, got {attn_dim}")
     
-    return hidden_states.view(-1, hidden_states.shape[2], 1, hidden_states.shape[3])
+    return hidden_states.reshape(-1, hidden_states.shape[2], 1, hidden_states.shape[3])
 
 def unshape_for_attention(hidden_states, attn_dim, original_shape):
 
     if attn_dim == 3:
-        #hidden_states = hidden_states.view(original_shape[0], original_shape[3], original_shape[1], original_shape[2])
         hidden_states = hidden_states.view(original_shape[0], original_shape[3], hidden_states.shape[1], original_shape[2])
-        hidden_states = hidden_states.permute(0, 2, 3, 1).contiguous()
+        hidden_states = hidden_states.permute(0, 2, 3, 1)
     elif attn_dim == 2:
-        #hidden_states = hidden_states.view(original_shape[0], original_shape[2], original_shape[1], original_shape[3])
         hidden_states = hidden_states.view(original_shape[0], original_shape[2], hidden_states.shape[1], original_shape[3])
-        hidden_states = hidden_states.permute(0, 2, 1, 3).contiguous()
+        hidden_states = hidden_states.permute(0, 2, 1, 3)
     else:
         raise ValueError(f"attn_dim must be 2 or 3, got {attn_dim}")
     
-    return hidden_states
+    return hidden_states.contiguous()
 
 class DualResnetBlock2D(nn.Module):
     r"""
@@ -329,6 +327,7 @@ class SeparableAttnDownBlock2D(nn.Module):
                         bias=True,
                         upcast_softmax=True,
                         _from_deprecated_attn_block=True,
+                        dropout=dropout,
                     )
                 )
 
@@ -464,6 +463,7 @@ class SeparableAttnUpBlock2D(nn.Module):
                         bias=True,
                         upcast_softmax=True,
                         _from_deprecated_attn_block=True,
+                        dropout=dropout,
                     )
                 )
 

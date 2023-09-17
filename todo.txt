@@ -1,15 +1,14 @@
-- experiment with taking the avg std per frequency from the dataset preprocessing and using that to initialize starter noise
-  when sampling (after using schedule.add_noise with timestep = max_timestep)
-
 - optimize deployment code for a bigger experiment on lambda cloud
   - read/write flac instead of raw using torchaudio
   - upload dataset to HF and support asynchronous push to hub for model / checkpoint saves
 
 ** less important **
-- investigate linear beta schedule instead of cos^2
-- investigate v-prediction vs epsilon with winning schedule
-- investigate min_snr and input perturbation with winning objective
+- linear beats cos^2 schedule in the long run with v-prediction
+- v-prediction beats epsilon (which seems almost broken), whereas it seems sample beats v-prediction on cos^2
+- testing sample with linear schedule in progress (31)
+- investigate min_snr and input perturbation with winning objective and schedule
 - investigate dropout
 - investigate input scaling (https://arxiv.org/pdf/2301.10972.pdf)
+- add validation to train script, investigate using something like fid for audio
 - investigate separable attention for training a custom vae
 - investigate doubling the crop width and sample rate for a 512x512 model
