@@ -1,5 +1,6 @@
 import os
 import time
+from dotenv import load_dotenv
 
 import torch
 import numpy as np
@@ -16,11 +17,9 @@ if __name__ == "__main__":
         torch.backends.cuda.matmul.allow_tf32 = True
         torch.backends.cuda.cufft_plan_cache[0].max_size = 32 # stupid cufft memory leak
 
-    model_path = "./models/dualdiffusion2d_39"
-    print(f"Loading DualDiffusion model from '{model_path}'...")
-    pipeline = DualDiffusionPipeline.from_pretrained(model_path).to("cuda")
-    sample_rate = pipeline.config["model_params"]["sample_rate"]
+    load_dotenv()
 
+    model_name = "dualdiffusion2d_42"
     num_samples = 1
     batch_size = 1
     length = 1
@@ -31,6 +30,11 @@ if __name__ == "__main__":
 
     seed = np.random.randint(10000, 99999-num_samples)
     #seed = 43
+
+    model_path = os.path.join(os.environ.get("MODEL_PATH", "./"), model_name)
+    print(f"Loading DualDiffusion model from '{model_path}'...")
+    pipeline = DualDiffusionPipeline.from_pretrained(model_path).to("cuda")
+    sample_rate = pipeline.config["model_params"]["sample_rate"]
 
     for i in range(num_samples):
         print(f"Generating sample {i+1}/{num_samples}...")
@@ -44,8 +48,7 @@ if __name__ == "__main__":
                           length=length).real.cpu()
         print(f"Time taken: {time.time()-start}")
 
-        model_name = os.path.basename(model_path)
-        output_path = f"./models/{model_name}/output"
+        output_path = os.path.join(model_path, "output")
         os.makedirs(output_path, exist_ok=True)
 
         last_global_step = pipeline.config["model_params"]["last_global_step"]

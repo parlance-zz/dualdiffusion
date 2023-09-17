@@ -1,5 +1,5 @@
-from typing import Literal, Union
-
+import os
+from typing import Union
 import numpy as np
 import torch
 
@@ -37,77 +37,15 @@ class DualDiffusionPipeline(DiffusionPipeline):
         self.tiling_mode = False
 
     @staticmethod
-    def create_new(model_params, save_model_path):
+    def create_new(model_params, unet_params, save_model_path):
         
-        num_input_channels, num_output_channels = DualDiffusionPipeline.get_num_channels(model_params)
+        unet = UNet2DDualModel(**unet_params)
 
-        unet = UNet2DDualModel(
-            #dropout=0.1,
-            dropout=0.0,
-            #act_fn="mish",
-            act_fn="silu",
-            #attention_head_dim=(16, 32, 64),
-            attention_head_dim=16,
-            #separate_attn_dim=(3,2),
-            separate_attn_dim=(2,3),
-            #positional_coding_dims=(3,), 
-            positional_coding_dims=(),
-            #reverse_separate_attn_dim=True,
-            reverse_separate_attn_dim=False,
-            #double_attention=True,
-            double_attention=False,
-            #add_attention=True,
-            add_attention=False,
-            downsample_padding=1,
-            flip_sin_to_cos=True,
-            freq_shift=0,
-            mid_block_scale_factor=1,
-            norm_eps=1e-05,
-            norm_num_groups=32,
-            in_channels=num_input_channels,
-            out_channels=num_output_channels,
-            layers_per_block=2,
-            conv_size=(3,3),
-            #downsample_type="resnet",
-            #upsample_type="resnet",
-
-            #block_out_channels=(32, 64, 128),
-            #down_block_types=(
-            #    "SeparableAttnDownBlock2D",
-            #    "SeparableAttnDownBlock2D",
-            #    "SeparableAttnDownBlock2D",
-            #),
-            #up_block_types=(
-            #    "SeparableAttnUpBlock2D",
-            #    "SeparableAttnUpBlock2D",
-            #    "SeparableAttnUpBlock2D",
-            #),
-            block_out_channels=(32, 32, 64, 128, 256),
-            down_block_types=(
-                "SeparableAttnDownBlock2D",
-                "SeparableAttnDownBlock2D",
-                "SeparableAttnDownBlock2D",
-                "SeparableAttnDownBlock2D",
-                "SeparableAttnDownBlock2D",
-            ),
-            up_block_types=(
-                "SeparableAttnUpBlock2D",
-                "SeparableAttnUpBlock2D",
-                "SeparableAttnUpBlock2D",
-                "SeparableAttnUpBlock2D",
-                "SeparableAttnUpBlock2D",
-            ),
-        )
-
-        beta_schedule = model_params["beta_schedule"]
-        beta_start = model_params["beta_start"]
-        beta_end = model_params["beta_end"]
-        prediction_type = model_params["prediction_type"]
         scheduler = DDIMScheduler(clip_sample_range=20.,
-                                  prediction_type=prediction_type,
-                                  beta_schedule=beta_schedule,
-                                  beta_start=beta_start,
-                                  beta_end=beta_end,
+                                  prediction_type=model_params["prediction_type"],
+                                  beta_schedule=model_params["beta_schedule"],
+                                  beta_start=model_params["beta_start"],
+                                  beta_end=model_params["beta_end"],
                                   rescale_betas_zero_snr=True)
 
         pipeline = DualDiffusionPipeline(unet, scheduler, model_params)
@@ -194,7 +132,7 @@ class DualDiffusionPipeline(DiffusionPipeline):
         num_chunks = samples.shape[2] // 2
         chunk_len = samples.shape[3] // 2 * channels
         half_chunk_len = chunk_len // 2
-        sample_len = samples.shape[2] * chunk_len
+        sample_len = num_chunks * chunk_len * 2
         half_sample_len = sample_len // 2
         
         bsz = samples.shape[0]
@@ -218,6 +156,7 @@ class DualDiffusionPipeline(DiffusionPipeline):
         
         return torch.fft.ifft(fft, norm="ortho") * 2.
 
+    """
     @staticmethod
     @torch.no_grad()
     def save_sample_img(sample, img_path):
@@ -230,6 +169,7 @@ class DualDiffusionPipeline(DiffusionPipeline):
         sample_img = sample
         sample_img = cv2.applyColorMap(sample, cv2.COLORMAP_JET)
         cv2.imwrite(img_path, sample_img)
+    """
 
     @torch.no_grad()
     def __call__(
@@ -274,7 +214,7 @@ class DualDiffusionPipeline(DiffusionPipeline):
         num_chunks = model_params["num_chunks"]
         channels = model_params["channels"]
         default_length = sample_crop_width // num_chunks // channels
-        num_input_channels, num_output_channels = DualDiffusionPipeline.get_num_channels(model_params)
+        _, num_output_channels = DualDiffusionPipeline.get_num_channels(model_params)
 
         noise = torch.randn((batch_size, num_output_channels, num_chunks*2, default_length*length,),
                             device=self.device,
@@ -313,12 +253,13 @@ class DualDiffusionPipeline(DiffusionPipeline):
             )["prev_sample"]
 
             #sample /= sample.std(dim=3, keepdim=True)
-
-        print("Sample std: ", sample.std(dim=(1,2,3)).item())
-
-        sample = sample.type(torch.float32)
-        sample.cpu().numpy().tofile("./output/debug_sample.raw")
-
+        
+        debug_path = os.environ.get("DEBUG_PATH", None)
+        if debug_path is not None:
+            print("Sample std: ", sample.std(dim=(1,2,3)).item())
+            os.makedirs(debug_path, exist_ok=True)
+            sample.cpu().numpy().tofile(os.path.join(debug_path, "debug_sample.raw"))
+        
         raw_sample = DualDiffusionPipeline.sample_to_raw(sample)
         raw_sample *= 0.18215 / raw_sample.std(dim=1, keepdim=True)
         if loops > 0: raw_sample = raw_sample.repeat(1, loops+1)

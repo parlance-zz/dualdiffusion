@@ -1,7 +1,10 @@
 __pycache__/
 .vscode/
+
 models/*/
-output/*/
+dataset/*/
+debug/*/
+output/
 backup/
 
 *.raw
@@ -9,3 +12,7 @@ backup/
 *.flac
 *.spc
 *.7z
+*.env
+*.png
+
+todo.txt

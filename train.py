@@ -22,6 +22,7 @@ import subprocess
 import atexit
 from datetime import datetime
 from glob import glob
+from dotenv import load_dotenv
 
 import accelerate
 import datasets
@@ -801,10 +802,13 @@ def main():
                 if not debug_written:
                     logger.info(f"Samples mean: {samples.mean()} - Samples std: {samples.std()}")
                     logger.info(f"Samples shape: {samples.shape} - Samples std (with noise): {(samples + noise).std()}")
-                    samples.cpu().numpy().tofile("output/debug_train_samples.raw")
-                    raw_samples.cpu().numpy().tofile("output/debug_train_raw_samples.raw")
-                    raw_samples = DualDiffusionPipeline.sample_to_raw(samples)
-                    raw_samples.cpu().numpy().tofile("output/debug_train_reconstructed_raw_samples.raw")
+                    debug_path = os.environ.get("DEBUG_PATH", None)
+                    if debug_path is not None:
+                        os.makedirs(debug_path, exist_ok=True)
+                        samples.cpu().numpy().tofile(os.path.join(debug_path, "debug_train_samples.raw"))
+                        raw_samples.cpu().numpy().tofile(os.path.join(debug_path, "debug_train_raw_samples.raw"))
+                        raw_samples = DualDiffusionPipeline.sample_to_raw(samples)
+                        raw_samples.cpu().numpy().tofile(os.path.join(debug_path, "debug_train_reconstructed_raw_samples.raw"))
                     debug_written = True
                     
                 # Sample a random timestep for each image
@@ -973,4 +977,5 @@ if __name__ == "__main__":
         print("Error: PyTorch not compiled with CUDA support or CUDA unavailable")
         exit(1)
 
+    load_dotenv()
     main()
