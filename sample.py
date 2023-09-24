@@ -2,8 +2,8 @@ import os
 import time
 from dotenv import load_dotenv
 
-import torch
 import numpy as np
+import torch
 import torchaudio
 
 from dual_diffusion_pipeline import DualDiffusionPipeline
@@ -19,17 +19,17 @@ if __name__ == "__main__":
 
     load_dotenv()
 
-    model_name = "dualdiffusion2d_42"
+    model_name = "dualdiffusion2d_49"
     num_samples = 1
     batch_size = 1
     length = 1
     scheduler = "dpms++"
     #scheduler = "ddim"
-    steps = 125
+    steps = 150
     loops = 1
 
     seed = np.random.randint(10000, 99999-num_samples)
-    #seed = 43
+    #seed = 100
 
     model_path = os.path.join(os.environ.get("MODEL_PATH", "./"), model_name)
     print(f"Loading DualDiffusion model from '{model_path}'...")

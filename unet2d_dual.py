@@ -82,7 +82,7 @@ class UNet2DDualModel(ModelMixin, ConfigMixin):
         positional_coding_dims: Tuple[int] = (),
         reverse_separate_attn_dim: bool = False,
         double_attention: bool = False,
-        norm_num_groups: int = 32,
+        norm_num_groups: Union[int, Tuple[int]] = 32,
         norm_eps: float = 1e-5,
         resnet_time_scale_shift: str = "default",
         add_attention: bool = True,
@@ -111,6 +111,11 @@ class UNet2DDualModel(ModelMixin, ConfigMixin):
         if not isinstance(attention_head_dim, int) and len(attention_head_dim) != len(down_block_types):
             raise ValueError(
                 f"Must provide the same number of `attention_head_dim` as `down_block_types`. `attention_head_dim`: {attention_head_dim}. `down_block_types`: {down_block_types}."
+            )   
+
+        if not isinstance(norm_num_groups, int) and len(norm_num_groups) != len(down_block_types):
+            raise ValueError(
+                f"Must provide the same number of `norm_num_groups` as `down_block_types`. `norm_num_groups`: {norm_num_groups}. `down_block_types`: {down_block_types}."
             )
         
         # input
@@ -142,6 +147,8 @@ class UNet2DDualModel(ModelMixin, ConfigMixin):
 
         if isinstance(attention_head_dim, int):
             attention_head_dim = (attention_head_dim,) * len(down_block_types)
+        if isinstance(norm_num_groups, int):
+            norm_num_groups = (norm_num_groups,) * len(down_block_types)
         if isinstance(separate_attn_dim, int):
             separate_attn_dim = (separate_attn_dim,)
 
@@ -154,8 +161,8 @@ class UNet2DDualModel(ModelMixin, ConfigMixin):
             is_final_block = i == len(block_out_channels) - 1
             if is_final_block is True: _downsample_type = None
             else: _downsample_type = downsample_type or "conv"  # default to 'conv'
-            _norm_num_groups = min(input_channel, norm_num_groups)
-            _attention_head_dim = min(output_channel, attention_head_dim[i])
+            _norm_num_groups = norm_num_groups[i]
+            _attention_head_dim = attention_head_dim[i]
 
             if down_block_type == "SeparableAttnDownBlock2D":
                 down_block = SeparableAttnDownBlock2D(
@@ -196,6 +203,8 @@ class UNet2DDualModel(ModelMixin, ConfigMixin):
             self.down_blocks.append(down_block)
 
         # mid
+        _norm_num_groups = norm_num_groups[-1]
+        _attention_head_dim = attention_head_dim[-1]
         self.mid_block = UNetMidBlock2D(
             in_channels=block_out_channels[-1],
             temb_channels=time_embed_dim,
@@ -203,13 +212,14 @@ class UNet2DDualModel(ModelMixin, ConfigMixin):
             resnet_act_fn=act_fn,
             output_scale_factor=mid_block_scale_factor,
             resnet_time_scale_shift=resnet_time_scale_shift,
-            attention_head_dim=attention_head_dim[-1],
-            resnet_groups=norm_num_groups,
+            attention_head_dim=_attention_head_dim,
+            resnet_groups=_norm_num_groups,
             add_attention=add_attention,
             dropout=dropout,
         )
 
         reversed_attention_head_dim = list(reversed(attention_head_dim))
+        reversed_norm_num_groups = list(reversed(norm_num_groups))
         if reverse_separate_attn_dim:
             reversed_separate_attn_dim = list(reversed(separate_attn_dim))
         else:
@@ -226,8 +236,8 @@ class UNet2DDualModel(ModelMixin, ConfigMixin):
             is_final_block = i == len(block_out_channels) - 1
             if is_final_block is True: _upsample_type = None
             else: _upsample_type = upsample_type or "conv"  # default to 'conv'
-            _norm_num_groups = min(input_channel, norm_num_groups)
-            _attention_head_dim = min(output_channel, reversed_attention_head_dim[i])
+            _norm_num_groups = reversed_norm_num_groups[i]
+            _attention_head_dim = reversed_attention_head_dim[i]
 
             if up_block_type == "SeparableAttnUpBlock2D":
                 up_block = SeparableAttnUpBlock2D(
@@ -269,9 +279,9 @@ class UNet2DDualModel(ModelMixin, ConfigMixin):
             prev_output_channel = output_channel
 
         # out
-        num_groups_out = norm_num_groups if norm_num_groups is not None else min(block_out_channels[0] // 4, 32)
-        _num_groups_out = min(block_out_channels[0], num_groups_out)
+        _num_groups_out = norm_num_groups[0]
         self.conv_norm_out = nn.GroupNorm(num_channels=block_out_channels[0], num_groups=_num_groups_out, eps=norm_eps)
+
         self.conv_act = nn.SiLU()
         self.conv_out = nn.Conv2d(block_out_channels[0], out_channels, kernel_size=conv_size, padding=(conv_size[0]//2, conv_size[1]//2))
 

@@ -131,13 +131,17 @@ def parse_args():
         "--train_data_dir",
         type=str,
         default=None,
-        help="A folder containing the training samples.",
+        help=(
+            "A folder containing the training data. Folder contents must follow the structure described in"
+            " https://huggingface.co/docs/datasets/image_dataset#imagefolder. In particular, a `metadata.jsonl` file"
+            " must exist to provide the captions for the images. Ignored if `dataset_name` is specified."
+        ),
     )
     parser.add_argument(
-        "--raw_sample_format",
+        "--sample_format",
         type=str,
-        default=None,
-        help=("Use a .raw dataset format (int16 or float32)"),
+        default="int16",
+        help=("int16 or fp32, choose the sample format when using a .raw dataset"),
     )
     parser.add_argument(
         "--max_train_samples",
@@ -310,12 +314,6 @@ def parse_args():
         "--enable_xformers_memory_efficient_attention", action="store_true", help="Whether or not to use xformers."
     )
     parser.add_argument(
-        "--num_validation_epochs",
-        type=int,
-        default=10,
-        help="Number of epochs between creating new validation samples.",
-    )
-    parser.add_argument(
         "--num_validation_samples",
         type=int,
         default=5,
@@ -324,7 +322,7 @@ def parse_args():
     parser.add_argument(
         "--num_validation_steps",
         type=int,
-        default=125,
+        default=100,
         help="Number of steps to use when creating validation samples.",
     )
     parser.add_argument(
@@ -575,8 +573,7 @@ def main():
             args.dataset_config_name,
             cache_dir=args.cache_dir,
             data_dir=args.train_data_dir,
-            num_proc=args.dataloader_num_workers,
-        ).cast_column("audio", Audio(decode=args.raw_sample_format is None))
+        ).cast_column("audio", Audio(decode=False))
     else:
         data_files = {}
         if args.train_data_dir is not None:
@@ -585,45 +582,43 @@ def main():
             "audiofolder",
             data_files=data_files,
             cache_dir=args.cache_dir,
-            num_proc=args.dataloader_num_workers,
-        ).cast_column("audio", Audio(decode=args.raw_sample_format is None))
+        ).cast_column("audio", Audio(decode=False))
+
+    logger.info(f"Dataset size: {len(dataset)}")
 
     def transform_samples(examples):
         
         samples = []
         for audio in examples["audio"]:
 
-            if args.raw_sample_format is not None:
-                if args.raw_sample_format == "int16":
+            if args.sample_format == "int16":
 
-                    if audio["bytes"] is not None:
-                        sample_len = len(audio["bytes"]) // 2
-                        crop_offset = np.random.randint(0, sample_len - sample_crop_width)
-                        sample = np.frombuffer(audio["bytes"], dtype=np.int16, count=sample_crop_width, offset=crop_offset * 2)
-                        sample = sample.astype(np.float32) / 32768.
-                    else:
-                        sample_len = os.path.getsize(audio["path"]) // 2
-                        crop_offset = np.random.randint(0, sample_len - sample_crop_width)
-                        sample = np.fromfile(audio["path"], dtype=np.int16, count=sample_crop_width, offset=crop_offset * 2)
-                        sample = sample.astype(np.float32) / 32768.
-
-                elif args.raw_sample_format == "float32":
-
-                    if audio["bytes"] is not None:
-                        sample_len = len(audio["bytes"]) // 4
-                        crop_offset = np.random.randint(0, sample_len - sample_crop_width)
-                        sample = np.frombuffer(audio["bytes"], dtype=np.float32, count=sample_crop_width, offset=crop_offset * 4)
-                    else:
-                        sample_len = os.path.getsize(audio["path"]) // 4
-                        crop_offset = np.random.randint(0, sample_len - sample_crop_width)
-                        sample = np.fromfile(audio["path"], dtype=np.float32, count=sample_crop_width, offset=crop_offset * 4)
-            
+                if audio["bytes"] is not None:
+                    sample_len = len(audio["bytes"]) // 2
+                    crop_offset = np.random.randint(0, sample_len - sample_crop_width)
+                    sample = np.frombuffer(audio["bytes"], dtype=np.int16, count=sample_crop_width, offset=crop_offset * 2)
+                    sample = sample.astype(np.float32) / 32768.
                 else:
-                    raise ValueError(f"Unsupported raw sample format: {args.raw_sample_format}")
-                
-                samples.append(torch.from_numpy(sample).to("cuda"))
+                    sample_len = os.path.getsize(audio["path"]) // 2
+                    crop_offset = np.random.randint(0, sample_len - sample_crop_width)
+                    sample = np.fromfile(audio["path"], dtype=np.int16, count=sample_crop_width, offset=crop_offset * 2)
+                    sample = sample.astype(np.float32) / 32768.
+
+            elif args.sample_format == "fp32":
+
+                if audio["bytes"] is not None:
+                    sample_len = len(audio["bytes"]) // 4
+                    crop_offset = np.random.randint(0, sample_len - sample_crop_width)
+                    sample = np.frombuffer(audio["bytes"], dtype=np.float32, count=sample_crop_width, offset=crop_offset * 4)
+                else:
+                    sample_len = os.path.getsize(audio["path"]) // 4
+                    crop_offset = np.random.randint(0, sample_len - sample_crop_width)
+                    sample = np.fromfile(audio["path"], dtype=np.float32, count=sample_crop_width, offset=crop_offset * 4)
+            
             else:
-                pass   
+                raise ValueError(f"Unsupported sample format: {args.sample_format}")
+            
+            samples.append(torch.from_numpy(sample).to("cuda"))
 
         return {"input": samples}
 
@@ -639,9 +634,6 @@ def main():
         shuffle=True,
         batch_size=args.train_batch_size,
         num_workers=args.dataloader_num_workers,
-        pin_memory=True,
-        persistent_workers=True if args.dataloader_num_workers > 0 else False,
-        prefetch_factor=4 if args.dataloader_num_workers > 0 else None,
     )
 
     # Scheduler and math around the number of training steps.
@@ -942,22 +934,21 @@ def main():
             pipeline.save_pretrained(args.output_dir, safe_serialization=True)
 
             if args.num_validation_samples > 0:
-                if epoch % args.num_validation_epochs == 0:
-                    unet.eval()
-                    try:
-                        log_validation(
-                            pipeline,
-                            args,
-                            accelerator,
-                            weight_dtype,
-                            global_step,
-                        )
-                    except Exception as e:
-                        logger.error(f"Error running validation: {e}")
+                unet.eval()
+                try:
+                    log_validation(
+                        pipeline,
+                        args,
+                        accelerator,
+                        weight_dtype,
+                        global_step,
+                    )
+                except Exception as e:
+                    logger.error(f"Error running validation: {e}")
 
-                    pipeline.set_tiling_mode(False)
-                    unet.train()
-                    torch.cuda.empty_cache()
+                pipeline.set_tiling_mode(False)
+                unet.train()
+                torch.cuda.empty_cache()
 
             if args.use_ema:
                 ema_unet.restore(unet.parameters())

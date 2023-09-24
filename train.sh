@@ -5,6 +5,7 @@ accelerate launch \
   --mixed_precision="fp16" \
   --allow_tf32 \
   --train_data_dir="/home/ubuntu/stor-lgdiffusion/dataset/samples" \
+  --raw_sample_format="int16" \
   --logging_dir="/home/ubuntu/stor-lgdiffusion/logs" \
   --pretrained_model_name_or_path="/home/ubuntu/stor-lgdiffusion/dualdiffusion/models/dualdiffusion2d_50" \
   --output_dir="/home/ubuntu/stor-lgdiffusion/dualdiffusion/models/dualdiffusion2d_50" \
