@@ -2,6 +2,7 @@ import os
 from typing import Union
 import numpy as np
 import torch
+import cv2
 
 from diffusers.schedulers import DPMSolverMultistepScheduler, DDIMScheduler
 from diffusers.pipelines.pipeline_utils import DiffusionPipeline
@@ -54,23 +55,18 @@ class DualDiffusionPipeline(DiffusionPipeline):
 
     @staticmethod
     def get_sample_crop_width(model_params):
-        if model_params["format"] == "no_pre_fft":
-            chunk_len = model_params["sample_raw_length"] // model_params["num_chunks"]
-            return model_params["sample_raw_length"] + chunk_len // 2
-        else:
-            return model_params["sample_raw_length"]
+        return model_params["sample_raw_length"]
     
     @staticmethod
     def get_num_channels(model_params):
         freq_embedding_dim = model_params["freq_embedding_dim"]
-        #channels = model_params["channels"]
-        channels = 2
+        channels = model_params["sample_raw_channels"] * 2
         return (channels + freq_embedding_dim, channels)
 
     @staticmethod
     @torch.no_grad()
     def get_window(window_len):
-        x = torch.arange(0, window_len, device="cuda") / window_len
+        x = torch.arange(0, window_len, device="cuda") / (window_len - 1)
         return (1 + torch.cos(x * 2.*np.pi - np.pi)) * 0.5
 
     @staticmethod
@@ -100,126 +96,71 @@ class DualDiffusionPipeline(DiffusionPipeline):
 
     @staticmethod
     @torch.no_grad()
-    def raw_to_sample_no_pre_fft(raw_samples, model_params, window=None):
-        
-        num_chunks = model_params["num_chunks"]
-        sample_len = model_params["sample_raw_length"]
-        chunk_len = sample_len // num_chunks
-        half_chunk_len = chunk_len // 2
-        bsz = raw_samples.shape[0]
-
-        if window is None:
-            window = DualDiffusionPipeline.get_window(chunk_len)
-
-        slices_1 = raw_samples[:, :-half_chunk_len].view(bsz, num_chunks, chunk_len)
-        slices_2 = raw_samples[:,  half_chunk_len:].view(bsz, num_chunks, chunk_len)
-
-        samples = torch.cat((slices_1, slices_2), dim=2).view(bsz, num_chunks*2, chunk_len) * window
-        samples = torch.view_as_real(torch.fft.fft(samples, norm="ortho")).permute(0, 3, 1, 2).contiguous()
-        
-        samples = samples[:, :, :, :samples.shape[3]//2]
-        samples /= samples.std(dim=(1, 2, 3), keepdim=True)
-        return samples, window
-
-    @staticmethod
-    @torch.no_grad()
     def raw_to_sample(raw_samples, model_params, window=None):
 
-        format = model_params["format"]
-        if format == "no_pre_fft":
-            return DualDiffusionPipeline.raw_to_sample_no_pre_fft(raw_samples, model_params, window)
-        
         num_chunks = model_params["num_chunks"]
         sample_len = model_params["sample_raw_length"]
         half_sample_len = sample_len // 2
         chunk_len = half_sample_len // num_chunks
-        half_chunk_len = chunk_len // 2
         bsz = raw_samples.shape[0]
 
         if window is None:
-            window = DualDiffusionPipeline.get_window(chunk_len)
-
+            window = DualDiffusionPipeline.get_window(chunk_len*2) # this might need to go back to just chunk_len
         raw_samples = raw_samples.clone()
-        raw_samples[:, :half_chunk_len]  *= window[:half_chunk_len]
-        raw_samples[:, -half_chunk_len:] *= window[half_chunk_len:]
+        raw_samples[:, :chunk_len]  *= window[:chunk_len]
+        raw_samples[:, -chunk_len:] *= window[chunk_len:]
 
-        fft = torch.fft.fft(raw_samples, norm="ortho")[:, :half_sample_len + half_chunk_len]
-        fft[:, half_sample_len:] = 0.
-
-        slices_1 = fft[:, :half_sample_len].view(bsz, num_chunks, chunk_len)
-        slices_2 = fft[:,  half_chunk_len:].view(bsz, num_chunks, chunk_len)
-
-        samples = torch.cat((slices_1, slices_2), dim=2).view(bsz, num_chunks*2, chunk_len) * window
-        samples = torch.view_as_real(torch.fft.fft(samples, norm="ortho")).permute(0, 3, 1, 2).contiguous()
+        fft = torch.fft.fft(raw_samples, norm="ortho")[:, :half_sample_len].view(bsz, num_chunks, chunk_len)
+        fft[:, 0, 0] = 0; fft[:, 1:, 0] -= fft[:, 1:, 0].mean()  # remove annoying clicking due to lack of windowing
+        samples = torch.view_as_real(torch.fft.fft(fft, norm="ortho")).permute(0, 3, 1, 2).contiguous()
         
-        samples /= samples.std(dim=(1, 2, 3), keepdim=True)
+        samples /= samples.std(dim=(1, 2, 3), keepdim=True).clip(1e-5)
         return samples, window
 
     @staticmethod
     @torch.no_grad()
-    def sample_to_raw_no_pre_fft(samples, model_params):
+    def sample_to_raw(samples):
 
-        num_chunks = samples.shape[2] // 2
-        chunk_len = samples.shape[3] * 2
-        half_chunk_len = chunk_len // 2
-        sample_len = num_chunks * chunk_len
-        bsz = samples.shape[0]
-        
-        samples = torch.view_as_complex(samples.permute(0, 2, 3, 1).contiguous())
-        samples = torch.cat((samples, torch.zeros_like(samples)), dim=2)
-        samples = torch.fft.ifft(samples, norm="ortho") * 2.
-
-        slices_1 = samples[:, 0::2, :]
-        slices_2 = samples[:, 1::2, :]
-
-        raw_samples = torch.zeros((bsz, sample_len + half_chunk_len), dtype=torch.complex64, device="cuda")
-        raw_samples[:, :-half_chunk_len]  = slices_1.reshape(bsz, -1)
-        raw_samples[:,  half_chunk_len:] += slices_2.reshape(bsz, -1)
-        
-        return raw_samples
-
-    @staticmethod
-    @torch.no_grad()
-    def sample_to_raw(samples, model_params):
-
-        format = model_params["format"]
-        if format == "no_pre_fft":
-            return DualDiffusionPipeline.sample_to_raw_no_pre_fft(samples, model_params)
-  
-        num_chunks = samples.shape[2] // 2
+        num_chunks = samples.shape[2]
         chunk_len = samples.shape[3]
-        half_chunk_len = chunk_len // 2
         sample_len = num_chunks * chunk_len * 2
         half_sample_len = sample_len // 2
         bsz = samples.shape[0]
-        
+
         samples = torch.view_as_complex(samples.permute(0, 2, 3, 1).contiguous())
-        samples = torch.fft.ifft(samples, norm="ortho") #* DualDiffusionPipeline.get_window(chunk_len).square() # might reduce artifacts without compromising quality
+        samples = torch.fft.ifft(samples, norm="ortho")
+        samples[:, 0, 0] = 0; samples[:, 1:, 0] -= samples[:, 1:, 0].mean() # remove annoying clicking due to lack of windowing
+        #a = torch.arange(1, chunk_len, device="cuda") # overkill, apparently. 99% similar to the above result
+        #samples[:, :, a] -= samples[:, :, a].mean()
+        samples = samples.view(bsz, half_sample_len)
+        samples = torch.cat((samples, torch.zeros_like(samples)), dim=1)
 
-        slices_1 = samples[:, 0::2, :]
-        slices_2 = samples[:, 1::2, :]
+        return torch.fft.ifft(samples, norm="ortho") * 2.
 
-        fft = torch.zeros((bsz, sample_len), dtype=torch.complex64, device="cuda")
-        fft[:, :half_sample_len] = slices_1.reshape(bsz, -1)
-        fft[:,  half_chunk_len:half_sample_len+half_chunk_len] += slices_2.reshape(bsz, -1)
-        fft[:, half_sample_len:half_sample_len+half_chunk_len] = 0.
-        
-        return torch.fft.ifft(fft, norm="ortho") * 2.
-
-    """
     @staticmethod
     @torch.no_grad()
-    def save_sample_img(sample, img_path):
+    def save_sample_img(sample, img_path, include_phase=False):
+        
+        num_chunks = sample.shape[2]
+        chunk_len = sample.shape[3]
+        bsz = sample.shape[0]
 
-        import cv2
+        sample = torch.view_as_complex(sample.clone().detach().permute(0, 2, 3, 1).contiguous().float())
+        sample *= torch.arange(num_chunks//8, num_chunks+num_chunks//8).to(sample.device).view(1, num_chunks, 1)
+        sample = sample.view(bsz * num_chunks, chunk_len)
+        amp = sample.abs(); amp = (amp / torch.max(amp)).cpu().numpy()
+        
+        if include_phase:
+            phase = sample.angle().cpu().numpy()
+            cv2_img = np.zeros((bsz * num_chunks, chunk_len, 3), dtype=np.uint8)
+            cv2_img[:, :, 0] = (np.sin(phase) + 1) * 255/2 * amp
+            cv2_img[:, :, 1] = (np.sin(phase + 2*np.pi/3) + 1) * 255/2 * amp
+            cv2_img[:, :, 2] = (np.sin(phase + 4*np.pi/3) + 1) * 255/2 * amp
+        else:
+            cv2_img = (amp * 255).astype(np.uint8)
+            cv2_img = cv2.applyColorMap(cv2_img, cv2.COLORMAP_JET)
 
-        sample = sample.abs()
-        sample /= torch.max(sample)
-        sample = (sample.cpu().numpy()*255.).astype(np.uint8)
-        sample_img = sample
-        sample_img = cv2.applyColorMap(sample, cv2.COLORMAP_JET)
-        cv2.imwrite(img_path, sample_img)
-    """
+        cv2.imwrite(img_path, cv2.flip(cv2_img, -1))
 
     @torch.no_grad()
     def __call__(
@@ -262,22 +203,11 @@ class DualDiffusionPipeline(DiffusionPipeline):
         model_params = self.config["model_params"]
         _, num_output_channels = DualDiffusionPipeline.get_num_channels(model_params)
         num_chunks = model_params["num_chunks"]
+        default_length = model_params["sample_raw_length"] // num_chunks // 2
 
-        model_format = model_params["format"]
-        if model_format == "no_pre_fft":
-            num_freqs = model_params["sample_raw_length"] // num_chunks // 2
-            default_length = num_chunks * 2
-            
-            noise = torch.randn((batch_size, num_output_channels, default_length*length, num_freqs,),
-                                device=self.device,
-                                generator=generator)
-        else:
-            num_freqs = num_chunks * 2
-            default_length = model_params["sample_raw_length"] // num_chunks // 2
-
-            noise = torch.randn((batch_size, num_output_channels, num_freqs, default_length*length,),
-                                device=self.device,
-                                generator=generator)
+        noise = torch.randn((batch_size, num_output_channels, num_chunks, default_length*length,),
+                             device=self.device,
+                             generator=generator)
         sample = noise
         freq_embedding_dim = model_params["freq_embedding_dim"]
 
@@ -319,21 +249,16 @@ class DualDiffusionPipeline(DiffusionPipeline):
             os.makedirs(debug_path, exist_ok=True)
             sample.cpu().numpy().tofile(os.path.join(debug_path, "debug_sample.raw"))
         
-        raw_sample = DualDiffusionPipeline.sample_to_raw(sample, model_params)
-        raw_sample *= 0.18215 / raw_sample.std(dim=1, keepdim=True)
+        raw_sample = DualDiffusionPipeline.sample_to_raw(sample)
+        raw_sample *= 0.18215 / raw_sample.std(dim=1, keepdim=True).clip(1e-5)
         if loops > 0: raw_sample = raw_sample.repeat(1, loops+1)
         return raw_sample
     
     def set_module_tiling(self, module):
         F, _pair = torch.nn.functional, torch.nn.modules.utils._pair
 
-        model_format = self.config["model_params"]["format"]
-        if model_format == "no_pre_fft":
-            padding_modeX = "constant"
-            padding_modeY = "circular"
-        else:
-            padding_modeX = "circular"
-            padding_modeY = "constant"
+        padding_modeX = "circular"
+        padding_modeY = "constant"
 
         rprt = module._reversed_padding_repeated_twice
         paddingX = (rprt[0], rprt[1], 0, 0)

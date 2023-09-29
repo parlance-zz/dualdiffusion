@@ -47,9 +47,36 @@ from unet2d_dual import UNet2DDualModel
 from dual_diffusion_pipeline import DualDiffusionPipeline, to_freq, to_spatial
 
 # Will error if the minimal version of diffusers is not installed. Remove at your own risks.
-#check_min_version("0.21.0.dev0")
+check_min_version("0.21.0.dev0")
 
 logger = get_logger(__name__, log_level="INFO")
+#torch.autograd.set_detect_anomaly(True)
+
+def compute_snr(noise_scheduler, timesteps):
+    """
+    Computes SNR as per
+    https://github.com/TiankaiHang/Min-SNR-Diffusion-Training/blob/521b624bd70c67cee4bdf49225915f5945a872e3/guided_diffusion/gaussian_diffusion.py#L847-L849
+    """
+    alphas_cumprod = noise_scheduler.alphas_cumprod
+    sqrt_alphas_cumprod = alphas_cumprod**0.5
+    sqrt_one_minus_alphas_cumprod = (1.0 - alphas_cumprod) ** 0.5
+
+    # Expand the tensors.
+    # Adapted from https://github.com/TiankaiHang/Min-SNR-Diffusion-Training/blob/521b624bd70c67cee4bdf49225915f5945a872e3/guided_diffusion/gaussian_diffusion.py#L1026
+    sqrt_alphas_cumprod = sqrt_alphas_cumprod.to(device=timesteps.device)[timesteps].float()
+    while len(sqrt_alphas_cumprod.shape) < len(timesteps.shape):
+        sqrt_alphas_cumprod = sqrt_alphas_cumprod[..., None]
+    alpha = sqrt_alphas_cumprod.expand(timesteps.shape)
+
+    sqrt_one_minus_alphas_cumprod = sqrt_one_minus_alphas_cumprod.to(device=timesteps.device)[timesteps].float()
+    while len(sqrt_one_minus_alphas_cumprod.shape) < len(timesteps.shape):
+        sqrt_one_minus_alphas_cumprod = sqrt_one_minus_alphas_cumprod[..., None]
+    sigma = sqrt_one_minus_alphas_cumprod.expand(timesteps.shape)
+
+    # Compute SNR.
+    snr = (alpha / sigma) ** 2
+    return snr
+
 
 def log_validation(pipeline, args, accelerator, weight_dtype, global_step):
     logger.info("Running validation... ")
@@ -401,7 +428,12 @@ def main():
         atexit.register(cleanup_process)
 
     # Make one log on every process with the configuration for debugging.
+    os.makedirs(logging_dir, exist_ok=True)
     logging.basicConfig(
+        handlers=[
+            logging.FileHandler(os.path.join(logging_dir, "train.log")),
+            logging.StreamHandler()
+        ],
         format="%(asctime)s - %(levelname)s - %(name)s - %(message)s",
         datefmt="%m/%d/%Y %H:%M:%S",
         level=logging.INFO,
@@ -416,6 +448,7 @@ def main():
 
     # If passed along, set the training seed now.
     if args.seed is not None:
+        logger.info(f"Using random seed {args.seed}")
         set_seed(args.seed)
 
     # Handle the repository creation
@@ -456,7 +489,7 @@ def main():
 
     if args.enable_xformers_memory_efficient_attention:
         if is_xformers_available():
-            import xformers
+            import xformers # type: ignore
 
             xformers_version = version.parse(xformers.__version__)
             if xformers_version == version.parse("0.0.16"):
@@ -466,30 +499,6 @@ def main():
             pipeline.enable_xformers_memory_efficient_attention()
         else:
             raise ValueError("xformers is not available. Make sure it is installed correctly")
-
-    def compute_snr(timesteps):
-        """
-        Computes SNR as per https://github.com/TiankaiHang/Min-SNR-Diffusion-Training/blob/521b624bd70c67cee4bdf49225915f5945a872e3/guided_diffusion/gaussian_diffusion.py#L847-L849
-        """
-        alphas_cumprod = noise_scheduler.alphas_cumprod
-        sqrt_alphas_cumprod = alphas_cumprod**0.5
-        sqrt_one_minus_alphas_cumprod = (1.0 - alphas_cumprod) ** 0.5
-
-        # Expand the tensors.
-        # Adapted from https://github.com/TiankaiHang/Min-SNR-Diffusion-Training/blob/521b624bd70c67cee4bdf49225915f5945a872e3/guided_diffusion/gaussian_diffusion.py#L1026
-        sqrt_alphas_cumprod = sqrt_alphas_cumprod.to(device=timesteps.device)[timesteps].float()
-        while len(sqrt_alphas_cumprod.shape) < len(timesteps.shape):
-            sqrt_alphas_cumprod = sqrt_alphas_cumprod[..., None]
-        alpha = sqrt_alphas_cumprod.expand(timesteps.shape)
-
-        sqrt_one_minus_alphas_cumprod = sqrt_one_minus_alphas_cumprod.to(device=timesteps.device)[timesteps].float()
-        while len(sqrt_one_minus_alphas_cumprod.shape) < len(timesteps.shape):
-            sqrt_one_minus_alphas_cumprod = sqrt_one_minus_alphas_cumprod[..., None]
-        sigma = sqrt_one_minus_alphas_cumprod.expand(timesteps.shape)
-
-        # Compute SNR.
-        snr = (alpha / sigma) ** 2
-        return snr
 
     # `accelerate` 0.16.0 will have better support for customized saving
     if version.parse(accelerate.__version__) >= version.parse("0.16.0"):
@@ -544,7 +553,7 @@ def main():
     # Initialize the optimizer
     if args.use_8bit_adam:
         try:
-            import bitsandbytes as bnb
+            import bitsandbytes as bnb # type: ignore
         except ImportError:
             raise ImportError(
                 "Please install bitsandbytes to use 8-bit Adam. You can do so by running `pip install bitsandbytes`"
@@ -554,6 +563,7 @@ def main():
     else:
         optimizer_cls = torch.optim.AdamW
 
+    logger.info(f"Using optimiser {optimizer_cls.__name__} with learning rate {args.learning_rate} - epsilon: {args.adam_epsilon}")
     optimizer = optimizer_cls(
         unet.parameters(),
         lr=args.learning_rate,
@@ -574,8 +584,8 @@ def main():
             args.dataset_config_name,
             cache_dir=args.cache_dir,
             data_dir=args.train_data_dir,
-            num_proc=args.dataloader_num_workers,
-        ).cast_column("audio", Audio(decode=args.raw_sample_format is None))
+            num_proc=args.dataloader_num_workers if args.dataloader_num_workers > 0 else None,
+        ).cast_column("audio", Audio(decode=(args.raw_sample_format is None)))
     else:
         data_files = {}
         if args.train_data_dir is not None:
@@ -584,13 +594,24 @@ def main():
             "audiofolder",
             data_files=data_files,
             cache_dir=args.cache_dir,
-            num_proc=args.dataloader_num_workers,
-        ).cast_column("audio", Audio(decode=args.raw_sample_format is None))
+            num_proc=args.dataloader_num_workers if args.dataloader_num_workers > 0 else None,
+        ).cast_column("audio", Audio(decode=(args.raw_sample_format is None)))
 
+    debug_last_sample_paths = []
+    total_batch_size = 0
+    
     def transform_samples(examples):
         
+        if len(debug_last_sample_paths) >= total_batch_size:
+            debug_last_sample_paths.clear()
+
         samples = []
         for audio in examples["audio"]:
+            
+            if audio["path"] is not None:
+                debug_last_sample_paths.append(audio["path"])
+            else:
+                debug_last_sample_paths.append("bytes")
 
             if args.raw_sample_format is not None:
                 if args.raw_sample_format == "int16":
@@ -620,9 +641,11 @@ def main():
                 else:
                     raise ValueError(f"Unsupported raw sample format: {args.raw_sample_format}")
                 
-                samples.append(torch.from_numpy(sample).to("cuda"))
+                samples.append(torch.from_numpy(sample))
             else:
-                pass   
+                print(audio)
+                print(dir(audio))
+                raise Exception("Not implemented") 
 
         return {"input": samples}
 
@@ -763,12 +786,17 @@ def main():
             resume_step = resume_global_step % (num_update_steps_per_epoch * args.gradient_accumulation_steps)
 
     # correction to min snr for v-prediction, not 100% sure this is correct
-    if args.snr_gamma is not None and noise_scheduler.config.prediction_type == "v_prediction":
-        logger.info(f"SNR gamma ({args.snr_gamma}) is set with v_prediction objective, using SNR offset +1")
-        snr_offset = 1.
-        args.snr_gamma += 1.
-    else:
-        snr_offset = 0.
+    if args.snr_gamma is not None:
+        logger.info(f"Using min-SNR loss weighting - SNR gamma ({args.snr_gamma})")
+        if noise_scheduler.config.prediction_type == "v_prediction":
+            logger.info(f"SNR gamma ({args.snr_gamma}) is set with v_prediction objective, using SNR offset +1")
+            snr_offset = 1.
+            args.snr_gamma += 1.
+        else:
+            snr_offset = 0.
+            
+    if args.input_perturbation > 0:
+        logger.info(f"Using input perturbation of {args.input_perturbation}")
 
     window = None
     torch.cuda.empty_cache()
@@ -807,7 +835,7 @@ def main():
                         os.makedirs(debug_path, exist_ok=True)
                         samples.cpu().numpy().tofile(os.path.join(debug_path, "debug_train_samples.raw"))
                         raw_samples.cpu().numpy().tofile(os.path.join(debug_path, "debug_train_raw_samples.raw"))
-                        raw_samples = DualDiffusionPipeline.sample_to_raw(samples, model_params)
+                        raw_samples = DualDiffusionPipeline.sample_to_raw(samples)
                         raw_samples.cpu().numpy().tofile(os.path.join(debug_path, "debug_train_reconstructed_raw_samples.raw"))
                     debug_written = True
                     
@@ -845,17 +873,18 @@ def main():
                     # Compute loss-weights as per Section 3.4 of https://arxiv.org/abs/2303.09556.
                     # Since we predict the noise instead of x_0, the original formulation is slightly changed.
                     # This is discussed in Section 4.2 of the same paper.
-                    snr = compute_snr(timesteps) + snr_offset
-                    
+                    snr = compute_snr(noise_scheduler, timesteps) + snr_offset
+
                     if noise_scheduler.config.prediction_type != "v_prediction":
                         # clamp required when using zero terminal SNR rescaling to avoid division by zero
                         # not needed when using v-prediction because of the +1 snr offset
                         if noise_scheduler.config.rescale_betas_zero_snr:
-                            snr = snr.clamp(min=1e-10)
+                            snr = snr.clamp(min=1e-8)
 
                     mse_loss_weights = (
                         torch.stack([snr, args.snr_gamma * torch.ones_like(timesteps)], dim=1).min(dim=1)[0] / snr
                     )
+
                     # We first calculate the original loss. Then we mean over the non-batch dimensions and
                     # rebalance the sample-wise losses with their respective loss weights.
                     # Finally, we take the mean of the rebalanced loss.
@@ -871,6 +900,26 @@ def main():
                 accelerator.backward(loss)
                 if accelerator.sync_gradients:
                     grad_norm = accelerator.clip_grad_norm_(unet.parameters(), args.max_grad_norm).item()
+                    if math.isnan(grad_norm) or math.isinf(grad_norm):
+                        if args.snr_gamma is None: snr = "n/a"
+                        logger.warning(f"Warning: grad norm is {grad_norm} - step={global_step} loss={loss.item()} timesteps={timesteps} snr={snr} debug_last_sample_paths={debug_last_sample_paths}")
+                        debug_path = os.environ.get("DEBUG_PATH", None)
+                        if debug_path is not None:
+                            try:
+                                os.makedirs(debug_path, exist_ok=True)
+                                samples.detach().cpu().numpy().tofile(os.path.join(debug_path, "debug_nan_samples.raw"))
+                                raw_samples.detach().cpu().numpy().tofile(os.path.join(debug_path, "debug_nan_raw_samples.raw"))
+                                raw_samples = DualDiffusionPipeline.sample_to_raw(samples)
+                                raw_samples.detach().cpu().numpy().tofile(os.path.join(debug_path, "debug_nan_reconstructed_raw_samples.raw"))
+                                model_output.detach().cpu().numpy().tofile(os.path.join(debug_path, "debug_nan_model_output.raw"))
+                                target.detach().cpu().numpy().tofile(os.path.join(debug_path, "debug_nan_target.raw"))
+                                torch.isnan(model_output.detach()).cpu().numpy().astype(np.int32).tofile(os.path.join(debug_path, "debug_nan_model_output_mask.raw"))
+                                torch.isnan(target.detach()).cpu().numpy().astype(np.int32).tofile(os.path.join(debug_path, "debug_nan_target_mask.raw"))
+                                #_ = input("Press enter to continue")
+                            except Exception as e:
+                                logger.error(f"Error writing debug files: {e}")
+                        #optimizer.zero_grad()
+
                 optimizer.step()
                 lr_scheduler.step()
                 optimizer.zero_grad()
@@ -897,23 +946,26 @@ def main():
                     if accelerator.is_main_process:
                         # _before_ saving state, check if this save would set us over the `checkpoints_total_limit`
                         if args.checkpoints_total_limit is not None:
-                            checkpoints = os.listdir(args.output_dir)
-                            checkpoints = [d for d in checkpoints if d.startswith("checkpoint")]
-                            checkpoints = sorted(checkpoints, key=lambda x: int(x.split("-")[1]))
+                            try:
+                                checkpoints = os.listdir(args.output_dir)
+                                checkpoints = [d for d in checkpoints if d.startswith("checkpoint")]
+                                checkpoints = sorted(checkpoints, key=lambda x: int(x.split("-")[1]))
 
-                            # before we save the new checkpoint, we need to have at _most_ `checkpoints_total_limit - 1` checkpoints
-                            if len(checkpoints) >= args.checkpoints_total_limit:
-                                num_to_remove = len(checkpoints) - args.checkpoints_total_limit + 1
-                                removing_checkpoints = checkpoints[0:num_to_remove]
+                                # before we save the new checkpoint, we need to have at _most_ `checkpoints_total_limit - 1` checkpoints
+                                if len(checkpoints) >= args.checkpoints_total_limit:
+                                    num_to_remove = len(checkpoints) - args.checkpoints_total_limit + 1
+                                    removing_checkpoints = checkpoints[0:num_to_remove]
 
-                                logger.info(
-                                    f"{len(checkpoints)} checkpoints already exist, removing {len(removing_checkpoints)} checkpoints"
-                                )
-                                logger.info(f"removing checkpoints: {', '.join(removing_checkpoints)}")
+                                    logger.info(
+                                        f"{len(checkpoints)} checkpoints already exist, removing {len(removing_checkpoints)} checkpoints"
+                                    )
+                                    logger.info(f"removing checkpoints: {', '.join(removing_checkpoints)}")
 
-                                for removing_checkpoint in removing_checkpoints:
-                                    removing_checkpoint = os.path.join(args.output_dir, removing_checkpoint)
-                                    shutil.rmtree(removing_checkpoint)
+                                    for removing_checkpoint in removing_checkpoints:
+                                        removing_checkpoint = os.path.join(args.output_dir, removing_checkpoint)
+                                        shutil.rmtree(removing_checkpoint)
+                            except Exception as e:
+                                logger.error(f"Error removing checkpoints: {e}")
 
                         save_path = os.path.join(args.output_dir, f"checkpoint-{global_step}")
                         accelerator.save_state(save_path)

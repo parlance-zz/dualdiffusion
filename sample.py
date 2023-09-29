@@ -18,18 +18,18 @@ if __name__ == "__main__":
         torch.backends.cuda.cufft_plan_cache[0].max_size = 32 # stupid cufft memory leak
 
     load_dotenv()
-
-    model_name = "dualdiffusion2d_49"
+    
+    model_name = "dualdiffusion2d_61"
     num_samples = 1
     batch_size = 1
     length = 1
     scheduler = "dpms++"
     #scheduler = "ddim"
-    steps = 150
-    loops = 1
+    steps = 125
+    loops = 0
 
     seed = np.random.randint(10000, 99999-num_samples)
-    #seed = 100
+    #seed = 48
 
     model_path = os.path.join(os.environ.get("MODEL_PATH", "./"), model_name)
     print(f"Loading DualDiffusion model from '{model_path}'...")
@@ -61,12 +61,13 @@ if __name__ == "__main__":
 
 """
 def img_test():
-    sample_crop_width = 65536*2
-    pipeline.config["model_params"]["channels"] = 2
-    sample = np.fromfile("./dataset/samples/700.raw", dtype=np.int16, count=sample_crop_width) / 32768.
+    model_params = {
+        "sample_raw_length": 65536*2,
+        "num_chunks": 128,
+    }
+    sample = np.fromfile("./dataset/samples/66.raw", dtype=np.int16, count=model_params["sample_raw_length"]) / 32768.
     sample = torch.from_numpy(sample).unsqueeze(0).to("cuda")
-    sample, window = DualDiffusionPipeline.raw_to_sample(sample, pipeline.config["model_params"])
-    sample = 1j * sample[0, 0, :, :] + sample[0, 1, :, :]
+    sample, window = DualDiffusionPipeline.raw_to_sample(sample, model_params)
     DualDiffusionPipeline.save_sample_img(sample, "test.png")
     exit()
 

@@ -9,11 +9,29 @@ base_game_url = "https://www.zophar.net"
 base_page_url = "https://www.zophar.net/music/nintendo-snes-spc?page="
 game_page_pattern = re.compile(r'href=["\'](/music/nintendo-snes-spc/[^"\']*)["\']')
 zip_link_pattern = re.compile(r'href=["\'](https://[^"\']*EMU[^"\']*\.zip)["\']')
-request_throttle_delay_seconds = 1
+request_throttle_delay_seconds = 0.1
 target_zip_dir = "./dataset/spc/zip"
 target_spc_dir = "./dataset/spc"
 start_page = 1
 end_page = 9
+
+# re-extract zip files
+"""
+for dirpath, _, filenames in os.walk(target_zip_dir):
+    for filename in filenames:
+        zip_filename = os.path.join(dirpath, filename)
+        try:
+            game_name = os.path.splitext(filename)[0]
+            game_dir = os.path.join(target_spc_dir, game_name)
+            if not os.path.exists(game_dir):
+                os.makedirs(game_dir)
+            with zipfile.ZipFile(zip_filename, 'r') as zip_ref:
+                zip_ref.extractall(game_dir)
+            print(f"Extracted '{zip_filename}' to '{game_dir}'")
+        except Exception as e:
+            print(f"Failed to extract contents of '{zip_filename}': {e}")     
+exit()
+"""
 
 if not os.path.exists(target_zip_dir):
     os.makedirs(target_zip_dir)

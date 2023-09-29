@@ -14,5 +14,5 @@ backup/
 *.7z
 *.env
 *.png
-
-todo_list.txt
+*.txt
+*.log

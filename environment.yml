@@ -11,14 +11,15 @@ dependencies:
   - numpy
   - torchaudio
   - torchvision
-  - diffusers
-  - datasets
-  - accelerate
-  - transformers
   - librosa
   - pip:
+    - datasets
+    - diffusers
+    - accelerate
+    - transformers
     - safetensors
     - tensorboard
     - opencv-python
     - soundfile
     - python-dotenv
+    

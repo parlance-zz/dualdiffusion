@@ -29,7 +29,7 @@ def decode_source_file(input_file, sample_num):
             '-ac', str(OUTPUT_NUM_CHANNELS),
             '-ar', str(OUTPUT_SAMPLE_RATE),
             '-filter:a', 'loudnorm']
-
+    
     if OUTPUT_SAMPLE_FORMAT == '.raw': args += ['-f', 's16le']
     if OUTPUT_SAMPLE_FORMAT == '.flac': args += ['-sample_fmt', 's16']
     elif OUTPUT_SAMPLE_FORMAT == '.mp3': args += ['-codec:a', 'libmp3lame', '-qscale:a', '2']
@@ -72,7 +72,7 @@ def decode_source_to_samples():
 
             input_file = os.path.join(dirpath, filename)
             input_files.append(input_file)
-
+ 
     total_processed = 0
     sample_num = 0
     for input_file in input_files:

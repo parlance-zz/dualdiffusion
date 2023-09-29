@@ -362,13 +362,19 @@ class UNet2DDualModel(ModelMixin, ConfigMixin):
 
         for downsample_block in self.down_blocks:
             if hasattr(downsample_block, "skip_conv"):
-                sample, res_samples, skip_sample, global_attn_block_count = downsample_block(
-                    hidden_states=sample, temb=emb, skip_sample=skip_sample, global_attn_block_count=global_attn_block_count,
-                )
+                if isinstance(downsample_block, SeparableAttnDownBlock2D):
+                    sample, res_samples, skip_sample, global_attn_block_count = downsample_block(
+                        hidden_states=sample, temb=emb, skip_sample=skip_sample, global_attn_block_count=global_attn_block_count,
+                    )
+                else:
+                    sample, res_samples, skip_sample = downsample_block(hidden_states=sample, temb=emb, skip_sample=skip_sample)
             else:
-                sample, res_samples, global_attn_block_count = downsample_block(hidden_states=sample,
-                                                                                temb=emb,
-                                                                                global_attn_block_count=global_attn_block_count)
+                if isinstance(downsample_block, SeparableAttnDownBlock2D):
+                    sample, res_samples, global_attn_block_count = downsample_block(hidden_states=sample,
+                                                                                    temb=emb,
+                                                                                    global_attn_block_count=global_attn_block_count)
+                else:
+                    sample, res_samples = downsample_block(hidden_states=sample, temb=emb)
 
             down_block_res_samples += res_samples
 
@@ -382,16 +388,22 @@ class UNet2DDualModel(ModelMixin, ConfigMixin):
             down_block_res_samples = down_block_res_samples[: -len(upsample_block.resnets)]
 
             if hasattr(upsample_block, "skip_conv"):
-                sample, skip_sample, global_attn_block_count = upsample_block(sample,
-                                                                              res_samples,
-                                                                              emb,
-                                                                              skip_sample,
-                                                                              global_attn_block_count=global_attn_block_count)
+                if isinstance(upsample_block, SeparableAttnUpBlock2D):
+                    sample, skip_sample, global_attn_block_count = upsample_block(sample,
+                                                                                res_samples,
+                                                                                emb,
+                                                                                skip_sample,
+                                                                                global_attn_block_count=global_attn_block_count)
+                else:
+                    sample, skip_sample = upsample_block(sample, res_samples, emb, skip_sample)
             else:
-                sample, global_attn_block_count = upsample_block(sample,
-                                                                 res_samples,
-                                                                 emb,
-                                                                 global_attn_block_count=global_attn_block_count)
+                if isinstance(upsample_block, SeparableAttnUpBlock2D):
+                    sample, global_attn_block_count = upsample_block(sample,
+                                                                    res_samples,
+                                                                    emb,
+                                                                    global_attn_block_count=global_attn_block_count)
+                else:
+                    sample = upsample_block(sample, res_samples, emb)
 
         # 6. post-process
         sample = self.conv_norm_out(sample)
