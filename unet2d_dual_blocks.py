@@ -46,47 +46,31 @@ def get_activation(act_fn):
     else:
         raise ValueError(f"Unsupported activation function: {act_fn}")
 
-def AddPositionalCoding(x, num_heads, log_scale=True, max_seq_len=256.):
-
-    seq_length = x.shape[3]
-    d_model = x.shape[1] // num_heads
-
-    pe = torch.zeros(seq_length, d_model, device=x.device)
-    position = torch.arange(0, seq_length, dtype=torch.float32, device=x.device)
-    if log_scale:
-        position = ((position + 0.5) / seq_length).log() * (max_seq_len / np.abs(np.log(0.5/max_seq_len)))
-    else:
-        position *= max_seq_len / seq_length
-    position = position.unsqueeze(1)
-
-    div_term = torch.exp(torch.arange(0, d_model, 2, dtype=torch.float32, device=x.device) * (-np.log(10000.0) / d_model))
-    pe[:, 0::2] = torch.sin(position * div_term)
-    pe[:, 1::2] = torch.cos(position * div_term)
-    pe = pe.repeat(1, num_heads).permute(1, 0).unsqueeze(1).unsqueeze(0)
-
-    return x + pe # / 4.
-
 def shape_for_attention(hidden_states, attn_dim):
 
-    if attn_dim == 3:
+    if attn_dim == 0:
+        return hidden_states
+    elif attn_dim == 3:
         hidden_states = hidden_states.permute(0, 3, 1, 2)
     elif attn_dim == 2:
         hidden_states = hidden_states.permute(0, 2, 1, 3)
     else:
-        raise ValueError(f"attn_dim must be 2 or 3, got {attn_dim}")
+        raise ValueError(f"attn_dim must be 2, 3, or 0. got {attn_dim}")
     
     return hidden_states.reshape(-1, hidden_states.shape[2], 1, hidden_states.shape[3])
 
 def unshape_for_attention(hidden_states, attn_dim, original_shape):
 
-    if attn_dim == 3:
+    if attn_dim == 0:
+        return hidden_states
+    elif attn_dim == 3:
         hidden_states = hidden_states.view(original_shape[0], original_shape[3], hidden_states.shape[1], original_shape[2])
         hidden_states = hidden_states.permute(0, 2, 3, 1)
     elif attn_dim == 2:
         hidden_states = hidden_states.view(original_shape[0], original_shape[2], hidden_states.shape[1], original_shape[3])
         hidden_states = hidden_states.permute(0, 2, 1, 3)
     else:
-        raise ValueError(f"attn_dim must be 2 or 3, got {attn_dim}")
+        raise ValueError(f"attn_dim must be 2, 3, or 0. got {attn_dim}")
     
     return hidden_states.contiguous()
 
@@ -280,19 +264,19 @@ class SeparableAttnDownBlock2D(nn.Module):
         out_channels: int,
         temb_channels: int,
         dropout: float = 0.0,
-        num_layers: int = 1,
+        num_layers: int = 2,
         resnet_eps: float = 1e-6,
         resnet_time_scale_shift: str = "default",
-        resnet_act_fn: str = "swish",
+        resnet_act_fn: str = "silu",
         resnet_groups: int = 32,
         resnet_pre_norm: bool = True,
-        attention_head_dim=1,
+        attention_num_heads=8,
         output_scale_factor=1.0,
         downsample_padding=1,
-        downsample_type="conv",
-        separate_attn_dim=(2,3,),
-        double_attention: bool = True,
-        positional_coding_dims=(),
+        downsample_type="resnet",
+        separate_attn_dim=(3,2,3,),
+        double_attention=False,
+        pre_attention=True,
         conv_size=(3,3),
     ):
         super().__init__()
@@ -301,21 +285,15 @@ class SeparableAttnDownBlock2D(nn.Module):
 
         self.downsample_type = downsample_type
         self.separate_attn_dim = separate_attn_dim
-        self.double_attention = double_attention
-        self.positional_coding_dims = positional_coding_dims
         self.conv_size = conv_size
-
-        if attention_head_dim is None:
-            logger.warn(
-                f"It is not recommend to pass `attention_head_dim=None`. Defaulting `attention_head_dim` to `in_channels`: {out_channels}."
-            )
-            attention_head_dim = out_channels
+        self.double_attention = double_attention
+        self.pre_attention = pre_attention
 
         for i in range(num_layers):
-            in_channels = in_channels if i == 0 else out_channels
+            _in_channels = in_channels if i == 0 else out_channels
             resnets.append(
             DualResnetBlock2D(
-                    in_channels=in_channels,
+                    in_channels=_in_channels,
                     out_channels=out_channels,
                     temb_channels=temb_channels,
                     eps=resnet_eps,
@@ -328,12 +306,15 @@ class SeparableAttnDownBlock2D(nn.Module):
                     conv_size=conv_size,
                 )
             )
-            for i in range(2 if double_attention else 1):
+        
+        for i in range(num_layers+int(self.pre_attention)):
+            _channels = in_channels if i == 0 and self.pre_attention else out_channels
+            for _ in range(2 if double_attention else 1):
                 attentions.append(
                     Attention(
-                        out_channels,
-                        heads=out_channels // attention_head_dim,
-                        dim_head=attention_head_dim,
+                        _channels,
+                        heads=attention_num_heads,
+                        dim_head=_channels // attention_num_heads,
                         rescale_output_factor=output_scale_factor,
                         eps=resnet_eps,
                         norm_num_groups=resnet_groups,
@@ -345,6 +326,9 @@ class SeparableAttnDownBlock2D(nn.Module):
                     )
                 )
 
+        if len(attentions) != len(separate_attn_dim):
+            raise ValueError(f"separate_attn_dim must have the same length as attentions. got {len(separate_attn_dim)} and {len(attentions)}")
+        
         self.attentions = nn.ModuleList(attentions)
         self.resnets = nn.ModuleList(resnets)
 
@@ -377,22 +361,28 @@ class SeparableAttnDownBlock2D(nn.Module):
         else:
             self.downsamplers = None
 
-    def forward(self, hidden_states, temb=None, upsample_size=None, global_attn_block_count=0):
+    def separate_attention(self, hidden_states, attn_block_count):
+        attn = self.attentions[attn_block_count]
+        attn_dim = self.separate_attn_dim[attn_block_count]
+        original_shape = hidden_states.shape
+
+        hidden_states = attn(shape_for_attention(hidden_states, attn_dim))
+        return unshape_for_attention(hidden_states, attn_dim, original_shape)
+        
+    def forward(self, hidden_states, temb=None, upsample_size=None):
         output_states = ()
 
         attn_block_count = 0
+        if self.pre_attention:
+            for _ in range(2 if self.double_attention else 1):
+                hidden_states = self.separate_attention(hidden_states, attn_block_count)
+                attn_block_count += 1
+
         for resnet in self.resnets:
             hidden_states = resnet(hidden_states, temb)
 
-            for j in range(2 if self.double_attention else 1):
-                attn = self.attentions[attn_block_count]
-                attn_dim = self.separate_attn_dim[(global_attn_block_count+attn_block_count) % len(self.separate_attn_dim)]
-                original_shape = hidden_states.shape
-                hidden_states = shape_for_attention(hidden_states, attn_dim)
-                if attn_dim in self.positional_coding_dims:
-                    hidden_states = AddPositionalCoding(hidden_states, attn.heads, log_scale=(attn_dim == 3))
-                hidden_states = attn(hidden_states)
-                hidden_states = unshape_for_attention(hidden_states, attn_dim, original_shape)
+            for _ in range(2 if self.double_attention else 1):
+                hidden_states = self.separate_attention(hidden_states, attn_block_count)
                 attn_block_count += 1
 
             output_states = output_states + (hidden_states,)
@@ -406,7 +396,7 @@ class SeparableAttnDownBlock2D(nn.Module):
 
             output_states += (hidden_states,)
 
-        return hidden_states, output_states, global_attn_block_count+attn_block_count
+        return hidden_states, output_states
 
 class SeparableAttnUpBlock2D(nn.Module):
     def __init__(
@@ -416,18 +406,18 @@ class SeparableAttnUpBlock2D(nn.Module):
         out_channels: int,
         temb_channels: int,
         dropout: float = 0.0,
-        num_layers: int = 1,
+        num_layers: int = 2,
         resnet_eps: float = 1e-6,
         resnet_time_scale_shift: str = "default",
-        resnet_act_fn: str = "swish",
+        resnet_act_fn: str = "silu",
         resnet_groups: int = 32,
         resnet_pre_norm: bool = True,
-        attention_head_dim=1,
+        attention_num_heads=8,
         output_scale_factor=1.0,
-        upsample_type="conv",
-        separate_attn_dim=(2,3,),
-        double_attention: bool = True,
-        positional_coding_dims=(),
+        upsample_type="resnet",
+        separate_attn_dim=(3,2,2,3,),
+        double_attention=False,
+        pre_attention=True,
         conv_size=(3,3),
     ):
         super().__init__()
@@ -436,15 +426,9 @@ class SeparableAttnUpBlock2D(nn.Module):
 
         self.upsample_type = upsample_type
         self.separate_attn_dim = separate_attn_dim
-        self.double_attention = double_attention
-        self.positional_coding_dims = positional_coding_dims
         self.conv_size = conv_size
-
-        if attention_head_dim is None:
-            logger.warn(
-                f"It is not recommend to pass `attention_head_dim=None`. Defaulting `attention_head_dim` to `in_channels`: {out_channels}."
-            )
-            attention_head_dim = out_channels
+        self.double_attention = double_attention
+        self.pre_attention = pre_attention
 
         for i in range(num_layers):
             res_skip_channels = in_channels if (i == num_layers - 1) else out_channels
@@ -464,12 +448,15 @@ class SeparableAttnUpBlock2D(nn.Module):
                     conv_size=conv_size,
                 )
             )
-            for i in range(2 if double_attention else 1):
+        
+        for i in range(num_layers+int(self.pre_attention)):
+            _channels = prev_output_channel if i == 0 and self.pre_attention else out_channels
+            for _ in range(2 if double_attention else 1):
                 attentions.append(
                     Attention(
-                        out_channels,
-                        heads=out_channels // attention_head_dim,
-                        dim_head=attention_head_dim,
+                        _channels,
+                        heads=attention_num_heads,
+                        dim_head=_channels // attention_num_heads,
                         rescale_output_factor=output_scale_factor,
                         eps=resnet_eps,
                         norm_num_groups=resnet_groups,
@@ -481,6 +468,9 @@ class SeparableAttnUpBlock2D(nn.Module):
                     )
                 )
 
+        if len(attentions) != len(separate_attn_dim):
+            raise ValueError(f"separate_attn_dim must have the same length as attentions. got {len(separate_attn_dim)} and {len(attentions)}")
+        
         self.attentions = nn.ModuleList(attentions)
         self.resnets = nn.ModuleList(resnets)
 
@@ -507,9 +497,22 @@ class SeparableAttnUpBlock2D(nn.Module):
         else:
             self.upsamplers = None
 
-    def forward(self, hidden_states, res_hidden_states_tuple, temb=None, upsample_size=None, global_attn_block_count=0):
+    def separate_attention(self, hidden_states, attn_block_count):
+        attn = self.attentions[attn_block_count]
+        attn_dim = self.separate_attn_dim[attn_block_count]
+        original_shape = hidden_states.shape
+
+        hidden_states = attn(shape_for_attention(hidden_states, attn_dim))
+        return unshape_for_attention(hidden_states, attn_dim, original_shape)
+
+    def forward(self, hidden_states, res_hidden_states_tuple, temb=None, upsample_size=None):
         
         attn_block_count = 0
+        if self.pre_attention:
+            for _ in range(2 if self.double_attention else 1):
+                hidden_states = self.separate_attention(hidden_states, attn_block_count)
+                attn_block_count += 1
+
         for resnet in self.resnets:
             # pop res hidden states
             res_hidden_states = res_hidden_states_tuple[-1]
@@ -517,15 +520,8 @@ class SeparableAttnUpBlock2D(nn.Module):
             hidden_states = torch.cat([hidden_states, res_hidden_states], dim=1)
             hidden_states = resnet(hidden_states, temb)
 
-            for j in range(2 if self.double_attention else 1):
-                attn = self.attentions[attn_block_count]
-                attn_dim = self.separate_attn_dim[(global_attn_block_count+attn_block_count) % len(self.separate_attn_dim)]
-                original_shape = hidden_states.shape
-                hidden_states = shape_for_attention(hidden_states, attn_dim)
-                if attn_dim in self.positional_coding_dims:
-                    hidden_states = AddPositionalCoding(hidden_states, attn.heads, log_scale=(attn_dim == 3))
-                hidden_states = attn(hidden_states)
-                hidden_states = unshape_for_attention(hidden_states, attn_dim, original_shape)
+            for _ in range(2 if self.double_attention else 1):
+                hidden_states = self.separate_attention(hidden_states, attn_block_count)
                 attn_block_count += 1
 
         if self.upsamplers is not None:
@@ -535,4 +531,108 @@ class SeparableAttnUpBlock2D(nn.Module):
                 else:
                     hidden_states = upsampler(hidden_states)
 
-        return hidden_states, global_attn_block_count+attn_block_count
+        return hidden_states
+
+class SeparableMidBlock2D(nn.Module):
+    def __init__(
+        self,
+        in_channels: int,
+        temb_channels: int,
+        dropout: float = 0.0,
+        num_layers: int = 1,
+        resnet_eps: float = 1e-6,
+        resnet_time_scale_shift: str = "default",  # default, spatial
+        resnet_act_fn: str = "swish",
+        resnet_groups: int = 32,
+        resnet_pre_norm: bool = True,
+        output_scale_factor=1.0,
+        add_attention: bool = True,
+        attention_num_heads=8,
+        separate_attn_dim=(2,),
+        double_attention=False,
+        pre_attention=True,
+        conv_size=(3,3),
+    ):
+        super().__init__()
+        resnets = []
+        attentions = []
+
+        self.add_attention = add_attention
+        self.separate_attn_dim = separate_attn_dim
+        self.double_attention = double_attention
+        self.pre_attention = pre_attention
+
+        for _ in range(num_layers+1):
+            resnets.append(
+                DualResnetBlock2D(
+                    in_channels=in_channels,
+                    out_channels=in_channels,
+                    temb_channels=temb_channels,
+                    eps=resnet_eps,
+                    groups=resnet_groups,
+                    dropout=dropout,
+                    time_embedding_norm=resnet_time_scale_shift,
+                    non_linearity=resnet_act_fn,
+                    output_scale_factor=output_scale_factor,
+                    pre_norm=resnet_pre_norm,
+                    conv_size=conv_size,
+                )
+            )
+
+        if self.add_attention:
+            for _ in range(num_layers):
+                _channels = in_channels
+                for _ in range(2 if double_attention else 1):
+                    attentions.append(
+                        Attention(
+                            _channels,
+                            heads=attention_num_heads,
+                            dim_head=_channels // attention_num_heads,
+                            rescale_output_factor=output_scale_factor,
+                            eps=resnet_eps,
+                            norm_num_groups=resnet_groups,
+                            spatial_norm_dim=temb_channels if resnet_time_scale_shift == "spatial" else None,
+                            residual_connection=True,
+                            bias=True,
+                            upcast_softmax=True,
+                            _from_deprecated_attn_block=True,
+                            dropout=dropout,
+                        )
+                    )
+
+            if len(attentions) != len(separate_attn_dim):
+                raise ValueError(f"separate_attn_dim must have the same length as attentions. got {len(separate_attn_dim)} and {len(attentions)}")
+        
+        self.attentions = nn.ModuleList(attentions)
+        self.resnets = nn.ModuleList(resnets)
+
+    def separate_attention(self, hidden_states, attn_block_count, temb=None):
+        attn = self.attentions[attn_block_count]
+        attn_dim = self.separate_attn_dim[attn_block_count]
+        original_shape = hidden_states.shape
+
+        hidden_states = attn(shape_for_attention(hidden_states, attn_dim), temb=temb)
+        return unshape_for_attention(hidden_states, attn_dim, original_shape)
+
+    def forward(self, hidden_states, temb=None):
+        
+        if self.pre_attention:
+            resnets = self.resnets[:-1]
+        else:
+            hidden_states = self.resnets[0](hidden_states, temb)
+            resnets = self.resnets[1:]
+
+        attn_block_count = 0
+        
+        for resnet in resnets:
+            hidden_states = resnet(hidden_states, temb)
+
+            if self.add_attention:
+                for _ in range(2 if self.double_attention else 1):
+                    hidden_states = self.separate_attention(hidden_states, attn_block_count, temb=temb)
+                    attn_block_count += 1
+
+        if self.pre_attention:
+            hidden_states = self.resnets[-1](hidden_states, temb)
+
+        return hidden_states

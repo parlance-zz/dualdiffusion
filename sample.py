@@ -6,7 +6,99 @@ import numpy as np
 import torch
 import torchaudio
 
-from dual_diffusion_pipeline import DualDiffusionPipeline
+from dual_diffusion_pipeline import DualDiffusionPipeline, DualLogFormat, DualNormalFormat, DualOverlappedFormat
+
+def get_dataset_stats(format):
+    model_params = {
+        "sample_raw_length": 65536,
+        "num_chunks": 128,
+        "ln_amplitude_mean": 0.,
+        "ln_amplitude_std": 1.,
+        "phase_integral_mean": 0.,
+        "phase_integral_std": 1,
+        "sample_std": 1,
+        "spatial_window_length": 256,
+    }
+    crop_width = model_params["sample_raw_length"]
+    format = DualOverlappedFormat
+    #format = DualLogFormat
+    #format = DualNormalFormat
+
+    if format == DualLogFormat:
+        ln_amplitude_mean = 0.
+        ln_amplitude_std = 0.
+        phase_integral_mean = 0.
+        phase_integral_std = 0.
+    else:
+        sample_std = 0.
+    num_samples = 0
+    window = None
+    
+    sample_list = os.listdir("./dataset/samples")
+    for filename in sample_list:
+        if filename.endswith(".raw"):
+            raw_sample = np.fromfile(os.path.join("./dataset/samples", filename), dtype=np.int16, count=crop_width) / 32768.
+            raw_sample = torch.from_numpy(raw_sample.astype(np.float32)).unsqueeze(0).to("cuda")
+            
+            sample, window = format.raw_to_sample(raw_sample, model_params, window)
+
+            if format == DualLogFormat:
+                ln_amplitude_mean += sample[:, 0, :, :].mean(dim=(0,1,2)).item()
+                ln_amplitude_std += sample[:, 0, :, :].std(dim=(0,1,2)).item()
+                phase_integral_mean += sample[:, 1:, :, :].mean(dim=(0,1,2,3)).item()
+                phase_integral_std += sample[:, 1:, :, :].std(dim=(0,1,2,3)).item()
+            else:
+                sample_std += sample.std().item()
+
+            num_samples += 1
+            if num_samples % 100 == 0:
+                print(f"Processed {num_samples}/{len(sample_list)} samples")
+
+    if format == DualLogFormat:
+        ln_amplitude_mean /= num_samples
+        ln_amplitude_std /= num_samples
+        phase_integral_mean /= num_samples
+        phase_integral_std /= num_samples
+        print(f"ln_amplitude_mean: {ln_amplitude_mean}")
+        print(f"ln_amplitude_std: {ln_amplitude_std}")
+        print(f"phase_integral_mean: {phase_integral_mean}")
+        print(f"phase_integral_std: {phase_integral_std}")
+        print(f"total samples processed: {num_samples}")
+    else:
+        sample_std /= num_samples
+        print(f"sample_std: {sample_std}")
+        print(f"total samples processed: {num_samples}")
+        
+    exit()
+
+def reconstruction_test(format, sample_num=1):
+
+    model_params = {
+        "sample_raw_length": 65536,
+        "num_chunks": 128,
+        #"ln_amplitude_floor": -12,
+        #"ln_amplitude_mean": -6.1341057,
+        #"ln_amplitude_std": 1.66477387,
+        #"phase_integral_mean": 0,
+        #"phase_integral_std": 0.0212208259651,
+        #"spatial_window_length": 256,
+        #"sample_std": 0.021220825965105643,
+    }
+    crop_width = model_params["sample_raw_length"]
+
+    raw_sample = np.fromfile(f"./dataset/samples/{sample_num}.raw", dtype=np.int16, count=crop_width) / 32768.
+    raw_sample = torch.from_numpy(raw_sample.astype(np.float32)).unsqueeze(0).to("cuda")
+    raw_sample.cpu().numpy().tofile("./debug/debug_raw_original.raw")
+
+    freq_sample, _ = format.raw_to_sample(raw_sample, model_params)
+    print("Sample shape:", freq_sample.shape)
+    freq_sample.cpu().numpy().tofile("./debug/debug_sample.raw")
+
+    raw_sample = format.sample_to_raw(freq_sample, model_params).real
+    raw_sample /= raw_sample.abs().max()
+    raw_sample.cpu().numpy().tofile("./debug/debug_reconstruction.raw")
+    
+    exit()
 
 if __name__ == "__main__":
 
@@ -18,22 +110,30 @@ if __name__ == "__main__":
         torch.backends.cuda.cufft_plan_cache[0].max_size = 32 # stupid cufft memory leak
 
     load_dotenv()
-    
-    model_name = "dualdiffusion2d_61"
-    num_samples = 1
+
+    #reconstruction_test(DualOverlappedFormat, sample_num=100)
+    #get_dataset_stats(DualOverlappedFormat)
+
+    model_name = "dualdiffusion2d_110"
+    num_samples = 4
     batch_size = 1
     length = 1
     scheduler = "dpms++"
     #scheduler = "ddim"
+    #scheduler = "kdpm2_a"
+    #scheduler = "euler_a"
     steps = 125
-    loops = 0
+    loops = 1
+    #fp16 = False
+    fp16 = True
 
-    seed = np.random.randint(10000, 99999-num_samples)
-    #seed = 48
+    #seed = np.random.randint(10000, 99999-num_samples)
+    seed = 100
 
+    model_dtype = torch.float16 if fp16 else torch.float32
     model_path = os.path.join(os.environ.get("MODEL_PATH", "./"), model_name)
-    print(f"Loading DualDiffusion model from '{model_path}'...")
-    pipeline = DualDiffusionPipeline.from_pretrained(model_path).to("cuda")
+    print(f"Loading DualDiffusion model from '{model_path}' (dtype={model_dtype})...")
+    pipeline = DualDiffusionPipeline.from_pretrained(model_path, torch_dtype=model_dtype).to("cuda")
     sample_rate = pipeline.config["model_params"]["sample_rate"]
 
     for i in range(num_samples):
@@ -87,19 +187,6 @@ def embedding_test():
             output[x, y] = ( pe[:, y] * a).sum()
 
     output.cpu().numpy().tofile("./output/debug_embeddings.raw")
-    exit()
-
-def reconstruction_test(model_params):
-    
-    crop_width = DualDiffusionPipeline.get_sample_crop_width(model_params)
-    raw_sample = np.fromfile("./dataset/samples/400.raw", dtype=np.int16, count=crop_width) / 32768.
-    raw_sample = torch.from_numpy(raw_sample).unsqueeze(0).to("cuda")
-    freq_sample = DualDiffusionPipeline.raw_to_sample(raw_sample, model_params) #.type(torch.float16)
-    #phases = DualDiffusionPipeline.raw_to_freq(raw_sample, model_params, format_override="complex")
-    #raw_sample = DualDiffusionPipeline.freq_to_raw(freq_sample, model_params, phases)
-    raw_sample = DualDiffusionPipeline.sample_to_raw(freq_sample, model_params)
-    raw_sample.type(torch.complex64).cpu().numpy().tofile("./output/debug_reconstruction.raw")
-    
     exit()
 
 def attention_shaping_test():

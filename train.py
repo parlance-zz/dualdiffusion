@@ -195,7 +195,7 @@ def parse_args():
         "--max_train_steps",
         type=int,
         default=None,
-        help="Total number of training steps to perform.  If provided, overrides num_train_epochs.",
+        help="Total number of training steps to perform. If provided, overrides num_train_epochs.",
     )
     parser.add_argument(
         "--gradient_accumulation_steps",
@@ -207,6 +207,22 @@ def parse_args():
         "--gradient_checkpointing",
         action="store_true",
         help="Whether or not to use gradient checkpointing to save memory at the expense of slower backward pass.",
+    )
+    parser.add_argument(
+        "--dropout",
+        type=float,
+        default=None,
+        help="Set the probability for dropout modules in the UNet, retain the dropout values from the pretrained model if not specified.",
+    )
+    parser.add_argument(
+        "--dropout_depth",
+        type=int,
+        default=3,
+        help=("Minimum block depth to apply dropout;",
+              " For example, in a UNet with 6 down-blocks and a dropout depth of 3,",
+              " dropout is only applied to the last 3 down-blocks, mid-block, and first 3 up-blocks.",
+              " Setting this to 0 will apply the dropout value to all blocks.",
+        )
     )
     parser.add_argument(
         "--learning_rate",
@@ -338,13 +354,13 @@ def parse_args():
     parser.add_argument(
         "--num_validation_epochs",
         type=int,
-        default=10,
+        default=5,
         help="Number of epochs between creating new validation samples.",
     )
     parser.add_argument(
         "--num_validation_samples",
         type=int,
-        default=5,
+        default=4,
         help="Number of samples to generate for validation.",
     )
     parser.add_argument(
@@ -461,7 +477,7 @@ def main():
     unet = pipeline.unet
     noise_scheduler = pipeline.scheduler
     model_params = pipeline.config["model_params"]
-    sample_crop_width = DualDiffusionPipeline.get_sample_crop_width(model_params)
+    sample_crop_width = pipeline.format.get_sample_crop_width(model_params)
     freq_embedding_dim = model_params["freq_embedding_dim"]
 
     # Currently Accelerate doesn't know how to handle multiple models under Deepspeed ZeRO stage 3.
@@ -791,16 +807,35 @@ def main():
         if noise_scheduler.config.prediction_type == "v_prediction":
             logger.info(f"SNR gamma ({args.snr_gamma}) is set with v_prediction objective, using SNR offset +1")
             snr_offset = 1.
-            args.snr_gamma += 1.
+            args.snr_gamma += 1. # also offset snr_gamma so the value has the same effect/meaning as non-v-pred objective
         else:
             snr_offset = 0.
             
     if args.input_perturbation > 0:
         logger.info(f"Using input perturbation of {args.input_perturbation}")
 
+    if args.dropout is not None:
+        logger.info(f"Setting dropout probability to {args.dropout} for block depth >= {args.dropout_depth}")
+
+        def set_dropout_p(model, p_value):
+            for module in model.children():
+                if isinstance(module, torch.nn.Dropout):
+                    module.p = p_value
+                else:
+                    set_dropout_p(module, p_value)
+
+        for i in range(args.dropout_depth, len(unet.down_blocks)):
+            set_dropout_p(unet.down_blocks[i], args.dropout)
+        if len(unet.down_blocks) >= args.dropout_depth:
+            set_dropout_p(unet.mid_block, args.dropout)
+        for i in range(args.dropout_depth, len(unet.up_blocks)):
+            set_dropout_p(unet.up_blocks[i-args.dropout_depth], args.dropout)
+
     window = None
     torch.cuda.empty_cache()
-    
+    num_nan_grads = 0
+    last_grad_norm_nan = False
+
     for epoch in range(first_epoch, args.num_train_epochs):
         unet.train()
         train_loss = 0.0
@@ -819,24 +854,21 @@ def main():
             with accelerator.accumulate(unet):
 
                 raw_samples = batch["input"]
-                samples, window = DualDiffusionPipeline.raw_to_sample(raw_samples,
-                                                                      model_params,
-                                                                      window=window)
+                samples, window = pipeline.format.raw_to_sample(raw_samples, model_params, window=window)
 
                 noise = torch.randn_like(samples)
                 if args.input_perturbation > 0:
                     new_noise = noise + args.input_perturbation * torch.randn_like(noise)
 
                 if not debug_written:
-                    logger.info(f"Samples mean: {samples.mean()} - Samples std: {samples.std()}")
-                    logger.info(f"Samples shape: {samples.shape} - Samples std (with noise): {(samples + noise).std()}")
+                    logger.info(f"Samples mean: {samples.mean(dim=(1,2,3))} - Samples std: {samples.std(dim=(1,2,3))}")
+                    logger.info(f"Samples shape: {samples.shape}")
                     debug_path = os.environ.get("DEBUG_PATH", None)
                     if debug_path is not None:
                         os.makedirs(debug_path, exist_ok=True)
-                        samples.cpu().numpy().tofile(os.path.join(debug_path, "debug_train_samples.raw"))
-                        raw_samples.cpu().numpy().tofile(os.path.join(debug_path, "debug_train_raw_samples.raw"))
-                        raw_samples = DualDiffusionPipeline.sample_to_raw(samples)
-                        raw_samples.cpu().numpy().tofile(os.path.join(debug_path, "debug_train_reconstructed_raw_samples.raw"))
+                        samples.detach().cpu().numpy().tofile(os.path.join(debug_path, "debug_train_samples.raw"))
+                        raw_samples.detach().cpu().numpy().tofile(os.path.join(debug_path, "debug_train_raw_samples.raw"))
+                        pipeline.format.sample_to_raw(samples.detach(), model_params).real.cpu().numpy().tofile(os.path.join(debug_path, "debug_train_reconstructed_raw_samples.raw"))
                     debug_written = True
                     
                 # Sample a random timestep for each image
@@ -860,6 +892,9 @@ def main():
                 else:
                     raise ValueError(f"Unknown prediction type {noise_scheduler.config.prediction_type}")
 
+                model_input = model_input.detach()
+                target = target.detach()
+                
                 # Predict the target and compute loss
                 model_output = unet(model_input, timesteps).sample
 
@@ -867,7 +902,8 @@ def main():
                 #target_freq = torch.view_as_real(DualDiffusionPipeline.sample_to_raw(target))
 
                 if args.snr_gamma is None:
-                    loss = F.mse_loss(model_output.float(), target.float(), reduction="mean")
+                    loss = pipeline.format.get_loss(model_output, target, model_params).mean()
+                    #loss = F.mse_loss(model_output.float(), target.float(), reduction="mean")
                     #loss = (loss + F.mse_loss(model_output_freq.float(), target_freq.float(), reduction="mean") * 2.) * 0.5
                 else:
                     # Compute loss-weights as per Section 3.4 of https://arxiv.org/abs/2303.09556.
@@ -878,7 +914,7 @@ def main():
                     if noise_scheduler.config.prediction_type != "v_prediction":
                         # clamp required when using zero terminal SNR rescaling to avoid division by zero
                         # not needed when using v-prediction because of the +1 snr offset
-                        if noise_scheduler.config.rescale_betas_zero_snr:
+                        if noise_scheduler.config.rescale_betas_zero_snr or (noise_scheduler.config.beta_schedule == "trained_betas"):
                             snr = snr.clamp(min=1e-8)
 
                     mse_loss_weights = (
@@ -888,7 +924,8 @@ def main():
                     # We first calculate the original loss. Then we mean over the non-batch dimensions and
                     # rebalance the sample-wise losses with their respective loss weights.
                     # Finally, we take the mean of the rebalanced loss.
-                    loss = F.mse_loss(model_output.float(), target.float(), reduction="none")
+                    loss = pipeline.format.get_loss(model_output, target, model_params)
+                    #loss = F.mse_loss(model_output.float(), target.float(), reduction="none")
                     loss = loss.mean(dim=list(range(1, len(loss.shape)))) * mse_loss_weights
                     loss = loss.mean()
 
@@ -901,24 +938,28 @@ def main():
                 if accelerator.sync_gradients:
                     grad_norm = accelerator.clip_grad_norm_(unet.parameters(), args.max_grad_norm).item()
                     if math.isnan(grad_norm) or math.isinf(grad_norm):
+                        num_nan_grads += 1
+                        last_grad_norm_nan = True
                         if args.snr_gamma is None: snr = "n/a"
                         logger.warning(f"Warning: grad norm is {grad_norm} - step={global_step} loss={loss.item()} timesteps={timesteps} snr={snr} debug_last_sample_paths={debug_last_sample_paths}")
                         debug_path = os.environ.get("DEBUG_PATH", None)
                         if debug_path is not None:
                             try:
+                                debug_path = os.path.join(debug_path, f"step_{global_step}_gradnorm_{grad_norm}")
                                 os.makedirs(debug_path, exist_ok=True)
                                 samples.detach().cpu().numpy().tofile(os.path.join(debug_path, "debug_nan_samples.raw"))
                                 raw_samples.detach().cpu().numpy().tofile(os.path.join(debug_path, "debug_nan_raw_samples.raw"))
-                                raw_samples = DualDiffusionPipeline.sample_to_raw(samples)
-                                raw_samples.detach().cpu().numpy().tofile(os.path.join(debug_path, "debug_nan_reconstructed_raw_samples.raw"))
+                                pipeline.format.sample_to_raw(samples.detach(), model_params).real.cpu().numpy().tofile(os.path.join(debug_path, "debug_nan_reconstructed_raw_samples.raw"))
                                 model_output.detach().cpu().numpy().tofile(os.path.join(debug_path, "debug_nan_model_output.raw"))
                                 target.detach().cpu().numpy().tofile(os.path.join(debug_path, "debug_nan_target.raw"))
-                                torch.isnan(model_output.detach()).cpu().numpy().astype(np.int32).tofile(os.path.join(debug_path, "debug_nan_model_output_mask.raw"))
-                                torch.isnan(target.detach()).cpu().numpy().astype(np.int32).tofile(os.path.join(debug_path, "debug_nan_target_mask.raw"))
-                                #_ = input("Press enter to continue")
                             except Exception as e:
                                 logger.error(f"Error writing debug files: {e}")
-                        #optimizer.zero_grad()
+
+                        if num_nan_grads > 100:
+                            logger.error(f"Error: Too many NaN grads, aborting...")
+                            exit(1)
+                    else:
+                        last_grad_norm_nan = False
 
                 optimizer.step()
                 lr_scheduler.step()
@@ -944,33 +985,36 @@ def main():
 
                 if global_step % args.checkpointing_steps == 0:
                     if accelerator.is_main_process:
-                        # _before_ saving state, check if this save would set us over the `checkpoints_total_limit`
-                        if args.checkpoints_total_limit is not None:
-                            try:
-                                checkpoints = os.listdir(args.output_dir)
-                                checkpoints = [d for d in checkpoints if d.startswith("checkpoint")]
-                                checkpoints = sorted(checkpoints, key=lambda x: int(x.split("-")[1]))
+                        if last_grad_norm_nan:
+                            logger.warning(f"Warning: grad norm was NaN last step, not saving checkpoint")
+                        else:
+                            # _before_ saving state, check if this save would set us over the `checkpoints_total_limit`
+                            if args.checkpoints_total_limit is not None:
+                                try:
+                                    checkpoints = os.listdir(args.output_dir)
+                                    checkpoints = [d for d in checkpoints if d.startswith("checkpoint")]
+                                    checkpoints = sorted(checkpoints, key=lambda x: int(x.split("-")[1]))
 
-                                # before we save the new checkpoint, we need to have at _most_ `checkpoints_total_limit - 1` checkpoints
-                                if len(checkpoints) >= args.checkpoints_total_limit:
-                                    num_to_remove = len(checkpoints) - args.checkpoints_total_limit + 1
-                                    removing_checkpoints = checkpoints[0:num_to_remove]
+                                    # before we save the new checkpoint, we need to have at _most_ `checkpoints_total_limit - 1` checkpoints
+                                    if len(checkpoints) >= args.checkpoints_total_limit:
+                                        num_to_remove = len(checkpoints) - args.checkpoints_total_limit + 1
+                                        removing_checkpoints = checkpoints[0:num_to_remove]
 
-                                    logger.info(
-                                        f"{len(checkpoints)} checkpoints already exist, removing {len(removing_checkpoints)} checkpoints"
-                                    )
-                                    logger.info(f"removing checkpoints: {', '.join(removing_checkpoints)}")
+                                        logger.info(
+                                            f"{len(checkpoints)} checkpoints already exist, removing {len(removing_checkpoints)} checkpoints"
+                                        )
+                                        logger.info(f"removing checkpoints: {', '.join(removing_checkpoints)}")
 
-                                    for removing_checkpoint in removing_checkpoints:
-                                        removing_checkpoint = os.path.join(args.output_dir, removing_checkpoint)
-                                        shutil.rmtree(removing_checkpoint)
-                            except Exception as e:
-                                logger.error(f"Error removing checkpoints: {e}")
+                                        for removing_checkpoint in removing_checkpoints:
+                                            removing_checkpoint = os.path.join(args.output_dir, removing_checkpoint)
+                                            shutil.rmtree(removing_checkpoint)
+                                except Exception as e:
+                                    logger.error(f"Error removing checkpoints: {e}")
 
-                        save_path = os.path.join(args.output_dir, f"checkpoint-{global_step}")
-                        accelerator.save_state(save_path)
-                        logger.info(f"Saved state to {save_path}")
-                        checkpoint_saved_this_epoch = True
+                            save_path = os.path.join(args.output_dir, f"checkpoint-{global_step}")
+                            accelerator.save_state(save_path)
+                            logger.info(f"Saved state to {save_path}")
+                            checkpoint_saved_this_epoch = True
 
             if global_step >= args.max_train_steps:
                 logger.info(f"Reached max train steps ({args.max_train_steps}) - Training complete")
@@ -1008,11 +1052,12 @@ def main():
 
                     pipeline.set_tiling_mode(False)
                     unet.train()
-                    torch.cuda.empty_cache()
 
             if args.use_ema:
                 ema_unet.restore(unet.parameters())
-                
+            
+            torch.cuda.empty_cache()
+            
     accelerator.end_training()
 
 

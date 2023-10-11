@@ -16,7 +16,6 @@ from typing import Optional, Tuple, Union
 
 import torch
 import torch.nn as nn
-import numpy as np
 
 from diffusers.configuration_utils import ConfigMixin, register_to_config
 from diffusers.models.embeddings import GaussianFourierProjection, TimestepEmbedding, Timesteps
@@ -24,7 +23,7 @@ from diffusers.models.modeling_utils import ModelMixin
 from diffusers.models.unet_2d_blocks import UNetMidBlock2D, get_down_block, get_up_block
 from diffusers.models.unet_2d import UNet2DOutput
 
-from unet2d_dual_blocks import SeparableAttnDownBlock2D, SeparableAttnUpBlock2D, shape_for_attention, unshape_for_attention
+from unet2d_dual_blocks import SeparableAttnDownBlock2D, SeparableMidBlock2D, SeparableAttnUpBlock2D
 
 class UNet2DDualModel(ModelMixin, ConfigMixin):
     r"""
@@ -86,29 +85,32 @@ class UNet2DDualModel(ModelMixin, ConfigMixin):
         up_block_types: Tuple[str] = ("SeparableAttnUpBlock2D", "SeparableAttnUpBlock2D", "SeparableAttnUpBlock2D", "SeparableAttnUpBlock2D"),
         block_out_channels: Tuple[int] = (32, 64, 128, 256),
         layers_per_block: int = 2,
+        layers_per_mid_block: int = 1,
         mid_block_scale_factor: float = 1,
         downsample_padding: int = 1,
-        downsample_type: str = "conv",
-        upsample_type: str = "conv",
+        downsample_type: str = "resnet", #"conv",
+        upsample_type: str = "resnet", #"conv",
         act_fn: str = "silu",
-        attention_head_dim: Union[int, Tuple[int]] = 16,
-        separate_attn_dim: Tuple[int] = (2,3),
-        positional_coding_dims: Tuple[int] = (),
-        reverse_separate_attn_dim: bool = False,
-        double_attention: bool = False,
+        attention_num_heads: Union[int, Tuple[int]] = 8,
+        separate_attn_dim_down: Tuple[int] = (3,2,3),
+        separate_attn_dim_up: Tuple[int] = (3,2,2,3),
+        separate_attn_dim_mid: Tuple[int] = (2,),
+        double_attention: Union[bool, Tuple[bool]] = False,
+        pre_attention: Union[bool, Tuple[bool]] = True,
+        add_mid_attention: bool = True,
+        use_separable_mid_block: bool = False,
         norm_num_groups: Union[int, Tuple[int]] = 32,
         norm_eps: float = 1e-5,
         resnet_time_scale_shift: str = "default",
-        add_attention: bool = True,
         class_embed_type: Optional[str] = None,
         num_class_embeds: Optional[int] = None,
-        dropout: float = 0.0,
+        dropout: Union[float, Tuple[float]] = 0.0,
         conv_size = (3,3),
     ):
         super().__init__()
 
         self.sample_size = sample_size
-        self.separate_attn_dim = separate_attn_dim
+        
         time_embed_dim = block_out_channels[0] * 4
 
         # Check inputs
@@ -122,14 +124,29 @@ class UNet2DDualModel(ModelMixin, ConfigMixin):
                 f"Must provide the same number of `block_out_channels` as `down_block_types`. `block_out_channels`: {block_out_channels}. `down_block_types`: {down_block_types}."
             )
 
-        if not isinstance(attention_head_dim, int) and len(attention_head_dim) != len(down_block_types):
+        if not isinstance(attention_num_heads, int) and len(attention_num_heads) != len(down_block_types):
             raise ValueError(
-                f"Must provide the same number of `attention_head_dim` as `down_block_types`. `attention_head_dim`: {attention_head_dim}. `down_block_types`: {down_block_types}."
+                f"Must provide the same number of `attention_num_heads` as `down_block_types`. `attention_num_heads`: {attention_num_heads}. `down_block_types`: {down_block_types}."
             )   
 
         if not isinstance(norm_num_groups, int) and len(norm_num_groups) != len(down_block_types):
             raise ValueError(
                 f"Must provide the same number of `norm_num_groups` as `down_block_types`. `norm_num_groups`: {norm_num_groups}. `down_block_types`: {down_block_types}."
+            )
+        
+        if not isinstance(dropout, float) and len(dropout) != len(down_block_types):
+            raise ValueError(
+                f"Must provide the same number of `dropout` as `down_block_types`. `dropout`: {dropout}. `down_block_types`: {down_block_types}."
+            )
+        
+        if not isinstance(double_attention, bool) and len(double_attention) != len(down_block_types):
+            raise ValueError(
+                f"Must provide the same number of `double_attention` as `down_block_types`. `double_attention`: {double_attention}. `down_block_types`: {down_block_types}."
+            )
+        
+        if not isinstance(pre_attention, bool) and len(pre_attention) != len(down_block_types):
+            raise ValueError(
+                f"Must provide the same number of `pre_attention` as `down_block_types`. `pre_attention`: {pre_attention}. `down_block_types`: {down_block_types}."
             )
         
         # input
@@ -159,12 +176,27 @@ class UNet2DDualModel(ModelMixin, ConfigMixin):
         self.mid_block = None
         self.up_blocks = nn.ModuleList([])
 
-        if isinstance(attention_head_dim, int):
-            attention_head_dim = (attention_head_dim,) * len(down_block_types)
+        if isinstance(attention_num_heads, int):
+            attention_num_heads = (attention_num_heads,) * len(down_block_types)
         if isinstance(norm_num_groups, int):
             norm_num_groups = (norm_num_groups,) * len(down_block_types)
-        if isinstance(separate_attn_dim, int):
-            separate_attn_dim = (separate_attn_dim,)
+        if isinstance(dropout, float):
+            dropout = (dropout,) * len(down_block_types)
+        if isinstance(separate_attn_dim_down, int):
+            separate_attn_dim_down = (separate_attn_dim_down,)
+        if isinstance(separate_attn_dim_up, int):
+            separate_attn_dim_up = (separate_attn_dim_up,)
+        if isinstance(double_attention, bool):
+            double_attention = (double_attention,) * len(down_block_types)
+        if isinstance(pre_attention, bool):
+            pre_attention = (pre_attention,) * len(down_block_types)
+
+        def set_dropout_p(model, p_value):
+            for module in model.children():
+                if isinstance(module, torch.nn.Dropout):
+                    module.p = p_value
+                else:
+                    set_dropout_p(module, p_value)
 
         # down
         output_channel = block_out_channels[0]
@@ -176,7 +208,10 @@ class UNet2DDualModel(ModelMixin, ConfigMixin):
             if is_final_block is True: _downsample_type = None
             else: _downsample_type = downsample_type or "conv"  # default to 'conv'
             _norm_num_groups = norm_num_groups[i]
-            _attention_head_dim = attention_head_dim[i]
+            _attention_num_heads = attention_num_heads[i]
+            _dropout = dropout[i]
+            _double_attention = double_attention[i]
+            _pre_attention = pre_attention[i]
 
             if down_block_type == "SeparableAttnDownBlock2D":
                 down_block = SeparableAttnDownBlock2D(
@@ -187,14 +222,14 @@ class UNet2DDualModel(ModelMixin, ConfigMixin):
                     resnet_eps=norm_eps,
                     resnet_act_fn=act_fn,
                     resnet_groups=_norm_num_groups,
-                    attention_head_dim=_attention_head_dim,
+                    attention_num_heads=_attention_num_heads,
                     downsample_padding=downsample_padding,
                     resnet_time_scale_shift=resnet_time_scale_shift,
                     downsample_type=_downsample_type,
-                    separate_attn_dim=separate_attn_dim,
-                    positional_coding_dims=positional_coding_dims,
-                    double_attention=double_attention,
-                    dropout=dropout,
+                    separate_attn_dim=separate_attn_dim_down,
+                    double_attention=_double_attention,
+                    pre_attention=_pre_attention,
+                    dropout=_dropout,
                     conv_size=conv_size,
                 )
             else:
@@ -208,36 +243,58 @@ class UNet2DDualModel(ModelMixin, ConfigMixin):
                     resnet_eps=norm_eps,
                     resnet_act_fn=act_fn,
                     resnet_groups=_norm_num_groups,
-                    attention_head_dim=_attention_head_dim,
+                    attention_head_dim=output_channel // _attention_num_heads,
                     downsample_padding=downsample_padding,
                     resnet_time_scale_shift=resnet_time_scale_shift,
                     downsample_type=_downsample_type,
                 )
+                set_dropout_p(down_block, _dropout) # default blocks don't apply dropout to all modules
 
             self.down_blocks.append(down_block)
 
         # mid
         _norm_num_groups = norm_num_groups[-1]
-        _attention_head_dim = attention_head_dim[-1]
-        self.mid_block = UNetMidBlock2D(
-            in_channels=block_out_channels[-1],
-            temb_channels=time_embed_dim,
-            resnet_eps=norm_eps,
-            resnet_act_fn=act_fn,
-            output_scale_factor=mid_block_scale_factor,
-            resnet_time_scale_shift=resnet_time_scale_shift,
-            attention_head_dim=_attention_head_dim,
-            resnet_groups=_norm_num_groups,
-            add_attention=add_attention,
-            dropout=dropout,
-        )
-
-        reversed_attention_head_dim = list(reversed(attention_head_dim))
-        reversed_norm_num_groups = list(reversed(norm_num_groups))
-        if reverse_separate_attn_dim:
-            reversed_separate_attn_dim = list(reversed(separate_attn_dim))
+        _attention_num_heads = attention_num_heads[-1]
+        _dropout = dropout[-1]
+        if use_separable_mid_block:
+            self.mid_block = SeparableMidBlock2D(
+                in_channels=block_out_channels[-1],
+                temb_channels=time_embed_dim,
+                resnet_eps=norm_eps,
+                resnet_act_fn=act_fn,
+                output_scale_factor=mid_block_scale_factor,
+                resnet_time_scale_shift=resnet_time_scale_shift,
+                attention_num_heads=_attention_num_heads,
+                resnet_groups=_norm_num_groups,
+                add_attention=add_mid_attention,
+                pre_attention=pre_attention,
+                separate_attn_dim=separate_attn_dim_mid,
+                double_attention=double_attention,
+                dropout=_dropout,
+                conv_size=conv_size,
+                num_layers=layers_per_mid_block,
+            )
         else:
-            reversed_separate_attn_dim = separate_attn_dim
+            self.mid_block = UNetMidBlock2D(
+                in_channels=block_out_channels[-1],
+                temb_channels=time_embed_dim,
+                resnet_eps=norm_eps,
+                resnet_act_fn=act_fn,
+                output_scale_factor=mid_block_scale_factor,
+                resnet_time_scale_shift=resnet_time_scale_shift,
+                attention_head_dim=block_out_channels[-1] // _attention_num_heads,
+                resnet_groups=_norm_num_groups,
+                add_attention=add_mid_attention,
+                dropout=_dropout,
+                num_layers=layers_per_mid_block,
+            )
+            set_dropout_p(self.mid_block, _dropout) # default blocks don't apply dropout to all modules
+
+        reversed_attention_num_heads = list(reversed(attention_num_heads))
+        reversed_norm_num_groups = list(reversed(norm_num_groups))
+        reversed_dropout = list(reversed(dropout))
+        reversed_double_attention = list(reversed(double_attention))
+        reversed_pre_attention = list(reversed(pre_attention))
 
         # up
         reversed_block_out_channels = list(reversed(block_out_channels))
@@ -251,7 +308,10 @@ class UNet2DDualModel(ModelMixin, ConfigMixin):
             if is_final_block is True: _upsample_type = None
             else: _upsample_type = upsample_type or "conv"  # default to 'conv'
             _norm_num_groups = reversed_norm_num_groups[i]
-            _attention_head_dim = reversed_attention_head_dim[i]
+            _attention_num_heads = reversed_attention_num_heads[i]
+            _dropout = reversed_dropout[i]
+            _double_attention = reversed_double_attention[i]
+            _pre_attention = reversed_pre_attention[i]
 
             if up_block_type == "SeparableAttnUpBlock2D":
                 up_block = SeparableAttnUpBlock2D(
@@ -263,13 +323,13 @@ class UNet2DDualModel(ModelMixin, ConfigMixin):
                     resnet_eps=norm_eps,
                     resnet_act_fn=act_fn,
                     resnet_groups=_norm_num_groups,
-                    attention_head_dim=_attention_head_dim,
+                    attention_num_heads=_attention_num_heads,
                     resnet_time_scale_shift=resnet_time_scale_shift,
                     upsample_type=_upsample_type,
-                    separate_attn_dim=reversed_separate_attn_dim,
-                    positional_coding_dims=positional_coding_dims,
-                    double_attention=double_attention,
-                    dropout=dropout,
+                    separate_attn_dim=separate_attn_dim_up,
+                    double_attention=_double_attention,
+                    pre_attention=_pre_attention,
+                    dropout=_dropout,
                     conv_size=conv_size,
                 )
             else:
@@ -284,10 +344,11 @@ class UNet2DDualModel(ModelMixin, ConfigMixin):
                     resnet_eps=norm_eps,
                     resnet_act_fn=act_fn,
                     resnet_groups=_norm_num_groups,
-                    attention_head_dim=_attention_head_dim,
+                    attention_head_dim=output_channel // _attention_num_heads,
                     resnet_time_scale_shift=resnet_time_scale_shift,
                     upsample_type=_upsample_type,
                 )
+                set_dropout_p(up_block, _dropout) # default blocks don't apply dropout to all modules
 
             self.up_blocks.append(up_block)
             prev_output_channel = output_channel
@@ -358,24 +419,12 @@ class UNet2DDualModel(ModelMixin, ConfigMixin):
 
         # 3. down
         down_block_res_samples = (sample,)
-        global_attn_block_count = 0
 
         for downsample_block in self.down_blocks:
             if hasattr(downsample_block, "skip_conv"):
-                if isinstance(downsample_block, SeparableAttnDownBlock2D):
-                    sample, res_samples, skip_sample, global_attn_block_count = downsample_block(
-                        hidden_states=sample, temb=emb, skip_sample=skip_sample, global_attn_block_count=global_attn_block_count,
-                    )
-                else:
-                    sample, res_samples, skip_sample = downsample_block(hidden_states=sample, temb=emb, skip_sample=skip_sample)
+                sample, res_samples, skip_sample = downsample_block(hidden_states=sample, temb=emb, skip_sample=skip_sample)
             else:
-                if isinstance(downsample_block, SeparableAttnDownBlock2D):
-                    sample, res_samples, global_attn_block_count = downsample_block(hidden_states=sample,
-                                                                                    temb=emb,
-                                                                                    global_attn_block_count=global_attn_block_count)
-                else:
-                    sample, res_samples = downsample_block(hidden_states=sample, temb=emb)
-
+                sample, res_samples = downsample_block(hidden_states=sample, temb=emb)
             down_block_res_samples += res_samples
 
         # 4. mid
@@ -388,22 +437,9 @@ class UNet2DDualModel(ModelMixin, ConfigMixin):
             down_block_res_samples = down_block_res_samples[: -len(upsample_block.resnets)]
 
             if hasattr(upsample_block, "skip_conv"):
-                if isinstance(upsample_block, SeparableAttnUpBlock2D):
-                    sample, skip_sample, global_attn_block_count = upsample_block(sample,
-                                                                                res_samples,
-                                                                                emb,
-                                                                                skip_sample,
-                                                                                global_attn_block_count=global_attn_block_count)
-                else:
-                    sample, skip_sample = upsample_block(sample, res_samples, emb, skip_sample)
+                sample, skip_sample = upsample_block(sample, res_samples, emb, skip_sample)
             else:
-                if isinstance(upsample_block, SeparableAttnUpBlock2D):
-                    sample, global_attn_block_count = upsample_block(sample,
-                                                                    res_samples,
-                                                                    emb,
-                                                                    global_attn_block_count=global_attn_block_count)
-                else:
-                    sample = upsample_block(sample, res_samples, emb)
+                sample = upsample_block(sample, res_samples, emb)
 
         # 6. post-process
         sample = self.conv_norm_out(sample)

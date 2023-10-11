@@ -3,6 +3,7 @@
 accelerate launch \
   train.py \
   --mixed_precision="fp16" \
+  --allow_tf32 \
   --train_data_dir="/home/ubuntu/stor-lgdiffusion/dataset/samples" \
   --raw_sample_format="int16" \
   --logging_dir="/home/ubuntu/stor-lgdiffusion/logs" \
@@ -16,6 +17,8 @@ accelerate launch \
   --learning_rate=1e-4 \
   --report_to="tensorboard" \
   --resume_from_checkpoint=latest \
-  --seed=45 \
-  --snr_gamma=5 \
+  --seed=100 \
+  --snr_gamma=1 \
   --input_perturbation=0.1
+
+# --dropout=0.1
