@@ -8,26 +8,30 @@ load_dotenv()
 
 torch.manual_seed(100)
 
-MODEL_NAME = "dualdiffusion2d_110"
+MODEL_NAME = "dualdiffusion2d_113"
 MODEL_PARAMS = {
-    "prediction_type": "v_prediction", #"sample",
+    #"prediction_type": "sample",
+    "prediction_type": "v_prediction",
     #"beta_schedule": "trained_betas",
-    "beta_schedule": "squaredcos_cap_v2", 
     #"beta_schedule": "linear", 
+    "beta_schedule": "squaredcos_cap_v2", 
     "beta_start" : 0.0001,
     "beta_end" : 0.02,
-    "rescale_betas_zero_snr": False,
     #"rescale_betas_zero_snr": True,
+    "rescale_betas_zero_snr": False,
     #"sample_raw_length": 65536*2,
     "sample_raw_length": 65536,
-    "sample_raw_channels": 1, #int(os.environ.get("DATASET_SAMPLE_CHANNELS")),
+    #"sample_raw_channels": int(os.environ.get("DATASET_SAMPLE_CHANNELS")),
+    "sample_raw_channels": 1,
     #"num_chunks": 256, 
     "num_chunks": 128, 
-    "sample_rate": 8000, #int(os.environ.get("DATASET_SAMPLE_RATE")),
+    #"sample_rate": int(os.environ.get("DATASET_SAMPLE_RATE")),
+    "sample_rate": 8000,
     "freq_embedding_dim": 0,
     "last_global_step": 0,
     "spatial_window_length": 1024,
     "sample_format": "overlapped",
+    "fftshift": True,
     #"sample_std": 0.021220825965105643,
     #"sample_format": "ln",
     #"ln_amplitude_floor": -12,
@@ -91,17 +95,11 @@ UNET_PARAMS = {
     ),
     "in_channels": MODEL_PARAMS["sample_raw_channels"]*2 + MODEL_PARAMS["freq_embedding_dim"],
     "out_channels": MODEL_PARAMS["sample_raw_channels"]*2,
-    #"in_channels": MODEL_PARAMS["sample_raw_channels"]*3 + MODEL_PARAMS["freq_embedding_dim"],
-    #"out_channels": MODEL_PARAMS["sample_raw_channels"]*3,
 }
 
 if __name__ == "__main__":
 
     NEW_MODEL_PATH = os.path.join(os.environ.get("MODEL_PATH"), MODEL_NAME)
-    
-    #MODEL_PARAMS["beta_schedule"] = "trained_betas"
-    #MODEL_PARAMS["beta_schedule"] = "squaredcos_cap_v2"
-    #MODEL_PARAMS["beta_schedule"] = "linear"
 
     if os.path.exists(NEW_MODEL_PATH):
         print(f"Warning: Output folder already exists '{NEW_MODEL_PATH}'")

@@ -902,7 +902,7 @@ def main():
                 #target_freq = torch.view_as_real(DualDiffusionPipeline.sample_to_raw(target))
 
                 if args.snr_gamma is None:
-                    loss = pipeline.format.get_loss(model_output, target, model_params).mean()
+                    loss = pipeline.format.get_loss(model_output, target, model_params, reduction="mean")
                     #loss = F.mse_loss(model_output.float(), target.float(), reduction="mean")
                     #loss = (loss + F.mse_loss(model_output_freq.float(), target_freq.float(), reduction="mean") * 2.) * 0.5
                 else:
@@ -924,7 +924,7 @@ def main():
                     # We first calculate the original loss. Then we mean over the non-batch dimensions and
                     # rebalance the sample-wise losses with their respective loss weights.
                     # Finally, we take the mean of the rebalanced loss.
-                    loss = pipeline.format.get_loss(model_output, target, model_params)
+                    loss = pipeline.format.get_loss(model_output, target, model_params, reduction="none")
                     #loss = F.mse_loss(model_output.float(), target.float(), reduction="none")
                     loss = loss.mean(dim=list(range(1, len(loss.shape)))) * mse_loss_weights
                     loss = loss.mean()
@@ -938,7 +938,8 @@ def main():
                 if accelerator.sync_gradients:
                     grad_norm = accelerator.clip_grad_norm_(unet.parameters(), args.max_grad_norm).item()
                     if math.isnan(grad_norm) or math.isinf(grad_norm):
-                        num_nan_grads += 1
+                        if math.isnan(grad_norm):
+                            num_nan_grads += 1
                         last_grad_norm_nan = True
                         if args.snr_gamma is None: snr = "n/a"
                         logger.warning(f"Warning: grad norm is {grad_norm} - step={global_step} loss={loss.item()} timesteps={timesteps} snr={snr} debug_last_sample_paths={debug_last_sample_paths}")

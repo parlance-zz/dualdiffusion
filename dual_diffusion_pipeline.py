@@ -62,7 +62,7 @@ class DualOverlappedFormat:
     @staticmethod
     @torch.no_grad()
     def get_window(window_len):
-        x = torch.arange(0, window_len, device="cuda") / (window_len - 1)
+        x = torch.arange(0, window_len, device="cuda") / window_len #(window_len - 1)
         return (1 + torch.cos(x * 2.*np.pi - np.pi)) * 0.5
 
     @staticmethod
@@ -74,6 +74,8 @@ class DualOverlappedFormat:
         chunk_len = half_sample_len // num_chunks
         half_chunk_len = chunk_len // 2
         bsz = raw_samples.shape[0]
+
+        fftshift = model_params.get("fftshift", True)
 
         if window is None:
             window = DualLogFormat.get_window(chunk_len)
@@ -88,14 +90,20 @@ class DualOverlappedFormat:
         slices_2 = fft[:,  half_chunk_len:].view(bsz, num_chunks, chunk_len)
 
         samples = torch.cat((slices_1, slices_2), dim=2).view(bsz, num_chunks*2, chunk_len) * window
-        samples = torch.view_as_real(torch.fft.fft(torch.fft.fftshift(samples, dim=-1), norm="ortho"))
+        if fftshift:
+            samples = torch.view_as_real(torch.fft.fft(torch.fft.fftshift(samples, dim=-1), norm="ortho"))
+        else:
+            samples = torch.view_as_real(torch.fft.fft(samples, norm="ortho"))
         samples = samples.permute(0, 3, 1, 2).contiguous()
         
-        #samples -= samples.mean(dim=(2, 3), keepdim=True)
         if "sample_std" in model_params:
             samples /= model_params["sample_std"]
         else:
-            samples /= samples.std(dim=(1, 2, 3), keepdim=True).clip(min=1e-5) 
+            samples /= samples.std(dim=(1, 2, 3), keepdim=True).clip(min=1e-8)
+
+        if not fftshift:
+            samples -= samples.mean(dim=(1, 2, 3), keepdim=True)
+
         return samples, window
 
     @staticmethod
@@ -108,13 +116,17 @@ class DualOverlappedFormat:
         half_sample_len = sample_len // 2
         bsz = samples.shape[0]
 
-        if "sample_std" in model_params:
-            sample_std = model_params["sample_std"]
-        else:
-            sample_std = 1.
+        fftshift = model_params.get("fftshift", True)
+        sample_std = model_params.get("sample_std", 1.)
 
         samples = samples.clone().permute(0, 2, 3, 1).contiguous() * sample_std
-        samples = torch.fft.fftshift(torch.fft.ifft(torch.view_as_complex(samples), norm="ortho"), dim=-1)
+
+        if fftshift:
+            samples = torch.fft.fftshift(torch.fft.ifft(torch.view_as_complex(samples), norm="ortho"), dim=-1)
+        else:
+            samples -= samples.mean(dim=(1, 2, 3), keepdim=True)
+            samples = torch.fft.ifft(torch.view_as_complex(samples), norm="ortho")
+
         slices_1 = samples[:, 0::2, :]
         slices_2 = samples[:, 1::2, :]
 
@@ -126,8 +138,8 @@ class DualOverlappedFormat:
         return torch.fft.ifft(fft, norm="ortho") * 2.
 
     @staticmethod
-    def get_loss(sample, target, model_params):
-        return torch.nn.functional.mse_loss(sample.float(), target.float(), reduction="none")
+    def get_loss(sample, target, model_params, reduction="mean"):
+        return torch.nn.functional.mse_loss(sample.float(), target.float(), reduction=reduction)
     
     @staticmethod
     def get_sample_shape(model_params, bsz=1, length=1):
@@ -241,7 +253,7 @@ class DualLogFormat:
         return torch.fft.ifft(fft, norm="ortho") * 2.
 
     @staticmethod
-    def get_loss(sample, target, model_params):
+    def get_loss(sample, target, model_params, reduction="mean"):
         
         ln_amplitude_mean = model_params["ln_amplitude_mean"]
         ln_amplitude_std = model_params["ln_amplitude_std"]
@@ -257,7 +269,7 @@ class DualLogFormat:
         sample = sample_phase * sample[:, 0, :, :].unsqueeze(1).exp() / 0.03526712161930658
         target = target_phase * target[:, 0, :, :].unsqueeze(1).exp() / 0.03526712161930658
 
-        return torch.nn.functional.mse_loss(sample, target, reduction="none")
+        return torch.nn.functional.mse_loss(sample, target, reduction=reduction)
     
     @staticmethod
     def get_sample_shape(model_params, bsz=1, length=1):
@@ -309,12 +321,12 @@ class DualNormalFormat:
         if "sample_std" in model_params:
             samples /= model_params["sample_std"]
         else:
-            samples /= samples.std(dim=(1, 2, 3), keepdim=True).clip(min=1e-5) 
+            samples /= samples.std(dim=(1, 2, 3), keepdim=True).clip(min=1e-8) 
         return samples, window
 
     @staticmethod
     @torch.no_grad()
-    def sample_to_raw(samples):
+    def sample_to_raw(samples, model_params):
 
         num_chunks = samples.shape[2]
         chunk_len = samples.shape[3]
@@ -357,8 +369,8 @@ class DualNormalFormat:
         cv2.imwrite(img_path, cv2.flip(cv2_img, -1))
 
     @staticmethod
-    def get_loss(sample, target, model_params):
-        return torch.nn.functional.mse_loss(sample.float(), target.float(), reduction="none")
+    def get_loss(sample, target, model_params, reduction="mean"):
+        return torch.nn.functional.mse_loss(sample.float(), target.float(), reduction=reduction)
     
     @staticmethod
     def get_sample_shape(model_params, bsz=1, length=1):

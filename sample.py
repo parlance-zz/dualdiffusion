@@ -76,6 +76,7 @@ def reconstruction_test(format, sample_num=1):
     model_params = {
         "sample_raw_length": 65536,
         "num_chunks": 128,
+        "fftshift": True,
         #"ln_amplitude_floor": -12,
         #"ln_amplitude_mean": -6.1341057,
         #"ln_amplitude_std": 1.66477387,
@@ -92,6 +93,8 @@ def reconstruction_test(format, sample_num=1):
 
     freq_sample, _ = format.raw_to_sample(raw_sample, model_params)
     print("Sample shape:", freq_sample.shape)
+    print("Sample mean:", freq_sample.mean(dim=(2,3)), freq_sample.mean().item())
+    print("Sample std:", freq_sample.std().item())
     freq_sample.cpu().numpy().tofile("./debug/debug_sample.raw")
 
     raw_sample = format.sample_to_raw(freq_sample, model_params).real
@@ -114,8 +117,8 @@ if __name__ == "__main__":
     #reconstruction_test(DualOverlappedFormat, sample_num=100)
     #get_dataset_stats(DualOverlappedFormat)
 
-    model_name = "dualdiffusion2d_110"
-    num_samples = 4
+    model_name = "dualdiffusion2d_112"
+    num_samples = 7
     batch_size = 1
     length = 1
     scheduler = "dpms++"
