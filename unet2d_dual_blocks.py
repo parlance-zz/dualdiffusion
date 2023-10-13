@@ -278,6 +278,7 @@ class SeparableAttnDownBlock2D(nn.Module):
         double_attention=False,
         pre_attention=True,
         conv_size=(3,3),
+        return_res_samples=True,
     ):
         super().__init__()
         resnets = []
@@ -288,6 +289,7 @@ class SeparableAttnDownBlock2D(nn.Module):
         self.conv_size = conv_size
         self.double_attention = double_attention
         self.pre_attention = pre_attention
+        self.return_res_samples = return_res_samples
 
         for i in range(num_layers):
             _in_channels = in_channels if i == 0 else out_channels
@@ -385,7 +387,8 @@ class SeparableAttnDownBlock2D(nn.Module):
                 hidden_states = self.separate_attention(hidden_states, attn_block_count)
                 attn_block_count += 1
 
-            output_states = output_states + (hidden_states,)
+            if self.return_res_samples:
+                output_states = output_states + (hidden_states,)
 
         if self.downsamplers is not None:
             for downsampler in self.downsamplers:
@@ -394,9 +397,13 @@ class SeparableAttnDownBlock2D(nn.Module):
                 else:
                     hidden_states = downsampler(hidden_states)
 
-            output_states += (hidden_states,)
+            if self.return_res_samples:
+                output_states += (hidden_states,)
 
-        return hidden_states, output_states
+        if self.return_res_samples:
+            return hidden_states, output_states
+        else:
+            return hidden_states
 
 class SeparableAttnUpBlock2D(nn.Module):
     def __init__(
@@ -419,6 +426,7 @@ class SeparableAttnUpBlock2D(nn.Module):
         double_attention=False,
         pre_attention=True,
         conv_size=(3,3),
+        use_res_samples=True,
     ):
         super().__init__()
         resnets = []
@@ -429,10 +437,15 @@ class SeparableAttnUpBlock2D(nn.Module):
         self.conv_size = conv_size
         self.double_attention = double_attention
         self.pre_attention = pre_attention
+        self.use_res_samples = use_res_samples
 
         for i in range(num_layers):
-            res_skip_channels = in_channels if (i == num_layers - 1) else out_channels
+            if self.use_res_samples:
+                res_skip_channels = in_channels if (i == num_layers - 1) else out_channels
+            else:
+                res_skip_channels = 0
             resnet_in_channels = prev_output_channel if i == 0 else out_channels
+
             resnets.append(
                 DualResnetBlock2D(
                     in_channels=resnet_in_channels + res_skip_channels,
@@ -514,10 +527,11 @@ class SeparableAttnUpBlock2D(nn.Module):
                 attn_block_count += 1
 
         for resnet in self.resnets:
-            # pop res hidden states
-            res_hidden_states = res_hidden_states_tuple[-1]
-            res_hidden_states_tuple = res_hidden_states_tuple[:-1]
-            hidden_states = torch.cat([hidden_states, res_hidden_states], dim=1)
+            if self.use_res_samples:
+                res_hidden_states = res_hidden_states_tuple[-1]
+                res_hidden_states_tuple = res_hidden_states_tuple[:-1]
+                hidden_states = torch.cat([hidden_states, res_hidden_states], dim=1)
+                
             hidden_states = resnet(hidden_states, temb)
 
             for _ in range(2 if self.double_attention else 1):

@@ -8,7 +8,7 @@ load_dotenv()
 
 torch.manual_seed(100)
 
-MODEL_NAME = "dualdiffusion2d_113"
+MODEL_NAME = "dualdiffusion2d_118"
 MODEL_PARAMS = {
     #"prediction_type": "sample",
     "prediction_type": "v_prediction",
@@ -31,7 +31,7 @@ MODEL_PARAMS = {
     "last_global_step": 0,
     "spatial_window_length": 1024,
     "sample_format": "overlapped",
-    "fftshift": True,
+    "fftshift": False,
     #"sample_std": 0.021220825965105643,
     #"sample_format": "ln",
     #"ln_amplitude_floor": -12,
@@ -48,7 +48,9 @@ UNET_PARAMS = {
     #"conv_size": (3,3),
 
     #"attention_num_heads": 8,
-    "attention_num_heads": (8,12,20,32,52,84),
+    #"attention_num_heads": (8,12,20,32,52,84),
+    #"attention_num_heads": (6,12,24,48),
+    "attention_num_heads": (8,12,20,32),
 
     #"double_attention": False,
     #"pre_attention": True,
@@ -62,9 +64,14 @@ UNET_PARAMS = {
     "add_mid_attention": True,
     "layers_per_mid_block": 1,
 
+    #"double_attention": True,
     "double_attention": False,
+    #"pre_attention": True,
     "pre_attention": False,
+    #"separate_attn_dim_down": (2,3),
+    #"separate_attn_dim_down": (2,3,2,3,2,3),
     "separate_attn_dim_down": (2,3),
+    #"separate_attn_dim_up": (3,2,3,2,3,2,3,2),
     "separate_attn_dim_up": (3,2,3),
 
     #"downsample_type": "resnet",
@@ -76,18 +83,19 @@ UNET_PARAMS = {
     "norm_num_groups": 32,
 
     "layers_per_block": 2,
-    "block_out_channels": (128, 192, 320, 512, 832, 1344),
+    #"block_out_channels": (128, 192, 320, 512, 832, 1344),
+    "block_out_channels": (128, 192, 320, 512),#, 832, 1344),
     "down_block_types": (
         "SeparableAttnDownBlock2D",
         "SeparableAttnDownBlock2D",
         "SeparableAttnDownBlock2D",
         "SeparableAttnDownBlock2D",
-        "SeparableAttnDownBlock2D",
-        "SeparableAttnDownBlock2D",
+        #"SeparableAttnDownBlock2D",
+        #"SeparableAttnDownBlock2D",
     ),
     "up_block_types": (
-        "SeparableAttnUpBlock2D",
-        "SeparableAttnUpBlock2D",
+        #"SeparableAttnUpBlock2D",
+        #"SeparableAttnUpBlock2D",
         "SeparableAttnUpBlock2D",
         "SeparableAttnUpBlock2D",
         "SeparableAttnUpBlock2D",

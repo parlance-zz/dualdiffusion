@@ -101,9 +101,6 @@ class DualOverlappedFormat:
         else:
             samples /= samples.std(dim=(1, 2, 3), keepdim=True).clip(min=1e-8)
 
-        if not fftshift:
-            samples -= samples.mean(dim=(1, 2, 3), keepdim=True)
-
         return samples, window
 
     @staticmethod
@@ -122,10 +119,15 @@ class DualOverlappedFormat:
         samples = samples.clone().permute(0, 2, 3, 1).contiguous() * sample_std
 
         if fftshift:
+            # this mitigates clicking artifacts somehow
+            #samples -= samples.mean(dim=(1,2), keepdim=True)
+            samples -= samples.mean(dim=1, keepdim=True) * (-samples.std(dim=1, keepdim=True) * 20).exp()
+            #samples -= samples.mean(dim=(1,3), keepdim=True) * (-samples.std(dim=(1,3), keepdim=True) * 16).exp()
+
             samples = torch.fft.fftshift(torch.fft.ifft(torch.view_as_complex(samples), norm="ortho"), dim=-1)
         else:
-            samples -= samples.mean(dim=(1, 2, 3), keepdim=True)
             samples = torch.fft.ifft(torch.view_as_complex(samples), norm="ortho")
+            samples[:, :, 0] = 0 # mitigate clicking artifacts
 
         slices_1 = samples[:, 0::2, :]
         slices_2 = samples[:, 1::2, :]

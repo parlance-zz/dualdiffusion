@@ -76,7 +76,7 @@ def reconstruction_test(format, sample_num=1):
     model_params = {
         "sample_raw_length": 65536,
         "num_chunks": 128,
-        "fftshift": True,
+        "fftshift": False,
         #"ln_amplitude_floor": -12,
         #"ln_amplitude_mean": -6.1341057,
         #"ln_amplitude_std": 1.66477387,
@@ -117,7 +117,7 @@ if __name__ == "__main__":
     #reconstruction_test(DualOverlappedFormat, sample_num=100)
     #get_dataset_stats(DualOverlappedFormat)
 
-    model_name = "dualdiffusion2d_112"
+    model_name = "dualdiffusion2d_111"
     num_samples = 7
     batch_size = 1
     length = 1
