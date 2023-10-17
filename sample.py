@@ -117,8 +117,9 @@ if __name__ == "__main__":
     #reconstruction_test(DualOverlappedFormat, sample_num=100)
     #get_dataset_stats(DualOverlappedFormat)
 
-    model_name = "dualdiffusion2d_111"
-    num_samples = 7
+    model_name = "dualdiffusion2d_120"
+    #model_name = "dualdiffusion2d_118"
+    num_samples = 10
     batch_size = 1
     length = 1
     scheduler = "dpms++"
@@ -129,12 +130,13 @@ if __name__ == "__main__":
     loops = 1
     #fp16 = False
     fp16 = True
-
-    #seed = np.random.randint(10000, 99999-num_samples)
-    seed = 100
+    
+    seed = np.random.randint(10000, 99999-num_samples)
+    #seed = 200
 
     model_dtype = torch.float16 if fp16 else torch.float32
     model_path = os.path.join(os.environ.get("MODEL_PATH", "./"), model_name)
+    #model_path = "Z:/dualdiffusion/models/dualdiffusion2d_118"
     print(f"Loading DualDiffusion model from '{model_path}' (dtype={model_dtype})...")
     pipeline = DualDiffusionPipeline.from_pretrained(model_path, torch_dtype=model_dtype).to("cuda")
     sample_rate = pipeline.config["model_params"]["sample_rate"]
@@ -148,13 +150,15 @@ if __name__ == "__main__":
                           seed=seed,
                           loops=loops,
                           batch_size=batch_size,
-                          length=length).real.cpu()
+                          length=length).cpu()
         print(f"Time taken: {time.time()-start}")
 
         output_path = os.path.join(model_path, "output")
         os.makedirs(output_path, exist_ok=True)
 
-        last_global_step = pipeline.config["model_params"]["last_global_step"]
+        last_global_step = pipeline.config["model_params"].get("unet_last_global_step", None)
+        if last_global_step is None: last_global_step = pipeline.config["model_params"].get("last_global_step", 0)
+
         output_flac_file_path = os.path.join(output_path, f"step_{last_global_step}_{scheduler}{steps}_s{seed}.flac")
         torchaudio.save(output_flac_file_path, output, sample_rate, bits_per_sample=16)
         print(f"Saved flac output to {output_flac_file_path}")

@@ -387,10 +387,16 @@ class DualDiffusionPipeline(DiffusionPipeline):
         self,
         unet: UNet2DDualModel,
         scheduler: DDIMScheduler,
+        vae = None, # todo: insert class
+        upscaler = None, # todo: insert class
         model_params: dict = None,
     ):
         super().__init__()
-        self.register_modules(unet=unet, scheduler=scheduler)
+
+        modules = {"unet": unet, "scheduler": scheduler}
+        if vae is not None: modules["vae"] = vae
+        if upscaler is not None: modules["upscaler"] = upscaler
+        self.register_modules(**modules)
         
         if model_params is not None:
             self.config["model_params"] = model_params
@@ -412,7 +418,7 @@ class DualDiffusionPipeline(DiffusionPipeline):
             raise ValueError(f"Unknown sample format '{sample_format}'")
 
     @staticmethod
-    def create_new(model_params, unet_params):
+    def create_new(model_params, unet_params, vae_params=None, upscaler_params=None):
         
         unet = UNet2DDualModel(**unet_params)
         
@@ -448,7 +454,19 @@ class DualDiffusionPipeline(DiffusionPipeline):
             snr.log().cpu().numpy().tofile(os.path.join(debug_path, "debug_ln_snr.raw"))
             np.array(trained_betas).astype(np.float32).tofile(os.path.join(debug_path, "debug_betas.raw"))
 
-        return DualDiffusionPipeline(unet, scheduler, model_params)
+        if vae_params is not None:
+            #vae = VAE(**vae_params)
+            raise NotImplementedError()
+        else:
+            vae = None
+
+        if upscaler_params is not None:
+            #upscaler = Upscaler(**upscaler_params)
+            raise NotImplementedError()
+        else:
+            upscaler = None
+
+        return DualDiffusionPipeline(unet, scheduler, vae=vae, upscaler=upscaler, model_params=model_params)
 
     @staticmethod
     @torch.no_grad()
@@ -462,18 +480,26 @@ class DualDiffusionPipeline(DiffusionPipeline):
     def add_freq_embedding(freq_samples, freq_embedding_dim):
         if freq_embedding_dim == 0: return freq_samples
 
-        ln_freqs = ((torch.arange(0, freq_samples.shape[2], device=freq_samples.device) + 0.5) / freq_samples.shape[2]).log_()
+        ln_freqs = ((torch.arange(0, freq_samples.shape[2], device=freq_samples.device) + 0.5) / freq_samples.shape[2]).log()
         
-        if freq_embedding_dim > 1:
+        if freq_embedding_dim > 2:
             ln_freqs *= freq_samples.shape[2] / ln_freqs[0].item()
             freq_embeddings = DualDiffusionPipeline.get_positional_embedding(ln_freqs, freq_embedding_dim).type(freq_samples.dtype)
             freq_embeddings = freq_embeddings.view(1, freq_embedding_dim, freq_samples.shape[2], 1).repeat(freq_samples.shape[0], 1, 1, freq_samples.shape[3])
-        else:
+        elif freq_embedding_dim == 2:
+            ln_freqs /= np.log(2)
+            freq_embeddings = torch.view_as_real(torch.exp(1j * 2 * np.pi * ln_freqs)).permute(1, 0)
+            freq_embeddings = freq_embeddings.view(1, 2, freq_samples.shape[2], 1).repeat(freq_samples.shape[0], 1, 1, freq_samples.shape[3])
+        elif freq_embedding_dim == 1:
             ln_freqs /= ln_freqs[0].item()
             ln_freqs = ln_freqs.type(freq_samples.dtype)
             freq_embeddings = ln_freqs.view(1, 1, freq_samples.shape[2], 1).repeat(freq_samples.shape[0], 1, 1, freq_samples.shape[3])
 
         return torch.cat((freq_samples, freq_embeddings), dim=1)
+    
+    @torch.no_grad()
+    def upscale(self, raw_sample):
+        raise NotImplementedError()
     
     @torch.no_grad()
     def __call__(
@@ -528,27 +554,17 @@ class DualDiffusionPipeline(DiffusionPipeline):
             generator = seed
 
         model_params = self.config["model_params"]
-        sample_shape = self.format.get_sample_shape(model_params, bsz=batch_size, length=length)
-        noise = torch.randn(sample_shape, device=self.device, dtype=self.unet.dtype, generator=generator)
-        sample = noise
+        
+        if getattr(self, "vae", None) is None:
+            sample_shape = self.format.get_sample_shape(model_params, bsz=batch_size, length=length)
+        else:
+            raise NotImplementedError()
+        print(f"Sample shape: {sample_shape}")
+
+        sample = torch.randn(sample_shape, device=self.device, dtype=self.unet.dtype, generator=generator)
         freq_embedding_dim = model_params["freq_embedding_dim"]
-
-        print(f"Sample shape: {sample.shape}")
-
-        # terminal timestep imposed mean test
-        """
-        raw_sample = np.fromfile("D:/dualdiffusion/dataset/samples/400.raw", dtype=np.int16, count=sample_crop_width) / 32768.
-        raw_sample = torch.from_numpy(raw_sample).unsqueeze(0).to("cuda").type(torch.float32)
-        freq_sample = DualDiffusionPipeline.raw_to_freq(raw_sample, model_params)
-        #freq_sample_std = freq_sample.std(dim=(1,3), keepdim=True)
-        #noise2 = torch.randn_like(noise) * freq_sample_std
-        freq_sample_mean = freq_sample.mean(dim=3, keepdim=True)
-        noise2 = freq_sample_mean.repeat(1, 1, 1, sample.shape[3])
-        sample = noise_scheduler.add_noise(noise2, noise, noise_scheduler.timesteps[12]) # 0-2 gives best results, but 3-10 might be usable
-        #sample = noise_scheduler.add_noise(freq_sample, noise, noise_scheduler.timesteps[9]) #0 to ~12 gives best results for audio2audio
-        """
-
-        for step, t in enumerate(self.progress_bar(timesteps)):
+        
+        for _, t in enumerate(self.progress_bar(timesteps)):
             
             model_input = sample
             if freq_embedding_dim > 0:
@@ -571,7 +587,15 @@ class DualDiffusionPipeline(DiffusionPipeline):
             os.makedirs(debug_path, exist_ok=True)
             sample.cpu().numpy().tofile(os.path.join(debug_path, "debug_sample.raw"))
         
-        raw_sample = self.format.sample_to_raw(sample, model_params)
+        if getattr(self, "vae", None) is None:
+            raw_sample = self.format.sample_to_raw(sample, model_params).real
+        else:
+            raw_sample = self.vae.decode(sample / self.vae.config.scaling_factor).sample
+            raise NotImplementedError()
+        
+        if getattr(self, "upscaler", None) is not None:
+            raw_sample = self.upscale(raw_sample)
+
         raw_sample *= 0.18215 / raw_sample.std(dim=1, keepdim=True).clip(min=1e-5)
         if loops > 0: raw_sample = raw_sample.repeat(1, loops+1)
         return raw_sample
@@ -605,10 +629,11 @@ class DualDiffusionPipeline(DiffusionPipeline):
 
         if self.tiling_mode == tiling:
             return
-
-        module_names, _, _ = self.extract_init_dict(dict(self.config))
-        #modules = [getattr(self, name) for name in module_names.keys()]
+        
         modules = [self.unet]
+        if getattr(self, "vae", None) is not None:
+            modules.append(self.vae)
+            
         modules = filter(lambda module: isinstance(module, torch.nn.Module), modules)
 
         for module in modules:

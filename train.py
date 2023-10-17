@@ -19,7 +19,6 @@ import os
 import shutil
 import subprocess
 import atexit
-from datetime import datetime
 from glob import glob
 from dotenv import load_dotenv
 
@@ -44,7 +43,7 @@ from diffusers.utils import check_min_version, deprecate, is_tensorboard_availab
 from diffusers.utils.import_utils import is_xformers_available
 
 from unet2d_dual import UNet2DDualModel
-from dual_diffusion_pipeline import DualDiffusionPipeline, to_freq, to_spatial
+from dual_diffusion_pipeline import DualDiffusionPipeline
 
 # Will error if the minimal version of diffusers is not installed. Remove at your own risks.
 check_min_version("0.21.0.dev0")
@@ -78,7 +77,7 @@ def compute_snr(noise_scheduler, timesteps):
     return snr
 
 
-def log_validation(pipeline, args, accelerator, weight_dtype, global_step):
+def log_validation_unet(pipeline, args, accelerator, global_step):
     logger.info("Running validation... ")
     pipeline.set_progress_bar_config(disable=True)
 
@@ -97,7 +96,7 @@ def log_validation(pipeline, args, accelerator, weight_dtype, global_step):
         with torch.autocast("cuda"):
             sample = pipeline(steps=args.num_validation_steps,
                               seed=generator,
-                              scheduler=args.validation_scheduler).real.cpu()
+                              scheduler=args.validation_scheduler).cpu()
             sample_filename = f"step_{global_step}_{args.validation_scheduler}{args.num_validation_steps}_s{seed}.flac"
             samples.append((sample, sample_filename))
 
@@ -117,6 +116,11 @@ def log_validation(pipeline, args, accelerator, weight_dtype, global_step):
         else:
             logger.warn(f"audio logging not implemented for {tracker.name}")
 
+def log_validation_vae(pipeline, args, accelerator, global_step):
+    raise NotImplementedError()
+
+def log_validation_upscaler(pipeline, args, accelerator, global_step):
+    raise NotImplementedError()
 
 def parse_args():
     parser = argparse.ArgumentParser(description="DualDiffusion training script.")
@@ -129,6 +133,13 @@ def parse_args():
         default=None,
         required=True,
         help="Path to pretrained model or model identifier from huggingface.co/models.",
+    )
+    parser.add_argument(
+        "--module",
+        type=str,
+        default="unet",
+        required=False,
+        help="Which module in the model to train. Choose between ['unet', 'vae', 'upscaler']",
     )
     parser.add_argument(
         "--revision",
@@ -212,14 +223,14 @@ def parse_args():
         "--dropout",
         type=float,
         default=None,
-        help="Set the probability for dropout modules in the UNet, retain the dropout values from the pretrained model if not specified.",
+        help="Set the probability for dropout modules in the module, retain the dropout values from the pretrained model if not specified.",
     )
     parser.add_argument(
         "--dropout_depth",
         type=int,
         default=3,
         help=("Minimum block depth to apply dropout;",
-              " For example, in a UNet with 6 down-blocks and a dropout depth of 3,",
+              " For example, in a UNet / VAE with 6 down-blocks and a dropout depth of 3,",
               " dropout is only applied to the last 3 down-blocks, mid-block, and first 3 up-blocks.",
               " Setting this to 0 will apply the dropout value to all blocks.",
         )
@@ -300,7 +311,7 @@ def parse_args():
         default=None,
         help=(
             "[TensorBoard](https://www.tensorflow.org/tensorboard) log directory. Will default to"
-            " output_dir/logs/(model_name)"
+            " output_dir/logs_(modulename)/(model_name)"
         ),
     )
     parser.add_argument(
@@ -398,6 +409,10 @@ def parse_args():
     if args.non_ema_revision is None:
         args.non_ema_revision = args.revision
 
+    args.module = args.module.lower().strip()
+    if args.module not in ["unet", "vae", "upscaler"]:
+        raise ValueError(f"Unknown module {args.module}")
+    
     return args
 
 
@@ -415,7 +430,7 @@ def main():
         )
 
     if args.logging_dir is None:
-        logging_dir = os.path.join(args.output_dir, "logs")
+        logging_dir = os.path.join(args.output_dir, f"logs_{args.module}")
     else:
         logging_dir = args.logging_dir
 
@@ -427,6 +442,11 @@ def main():
         log_with=args.report_to,
         project_config=accelerator_project_config,
     )
+
+    if accelerator.mixed_precision == "fp16":
+        args.mixed_precision = accelerator.mixed_precision
+    elif accelerator.mixed_precision == "bf16":
+        args.mixed_precision = accelerator.mixed_precision
 
     if args.report_to == "tensorboard":
         if not is_tensorboard_available():
@@ -474,30 +494,53 @@ def main():
 
     # Initialize the model
     pipeline = DualDiffusionPipeline.from_pretrained(args.pretrained_model_name_or_path)
-    unet = pipeline.unet
+    module = getattr(pipeline, args.module)
     noise_scheduler = pipeline.scheduler
     model_params = pipeline.config["model_params"]
     sample_crop_width = pipeline.format.get_sample_crop_width(model_params)
     freq_embedding_dim = model_params["freq_embedding_dim"]
+    
+    if args.module == "unet":
+        module_class = UNet2DDualModel
 
-    # Currently Accelerate doesn't know how to handle multiple models under Deepspeed ZeRO stage 3.
-    # For this to work properly all models must be run through `accelerate.prepare`. But accelerate
-    # will try to assign the same optimizer with the same weights to all models during
-    # `deepspeed.initialize`, which of course doesn't work.
-    #
-    # For now the following workaround will partially support Deepspeed ZeRO-3, by excluding the 2
-    # frozen models from being partitioned during `zero.Init` which gets called during
-    # `from_pretrained` So CLIPTextModel and AutoencoderKL will not enjoy the parameter sharding
-    # across multiple gpus and only UNet2DConditionModel will get ZeRO sharded.
+        vae = getattr(pipeline, "vae", None)
+        if vae is not None:
+            vae.requires_grad_(False)
+            vae.to(accelerator.device)
 
+        if getattr(pipeline, "upscaler", None) is not None:
+            pipeline.upscaler.to("cpu")
+
+    elif args.module == "vae":
+        #module_class = UNet2DDualModel
+        raise NotImplementedError("VAE training not implemented yet")
+
+        if getattr(pipeline, "unet", None) is not None:
+            pipeline.unet.to("cpu")
+        if getattr(pipeline, "upscaler", None) is not None:
+            pipeline.upscaler.to("cpu")
+
+    elif args.module == "upscaler":
+        #module_class = UNet2DDualModel
+        raise NotImplementedError("Upscaler training not implemented yet")
+        sample_crop_width = module.config["sample_crop_width"]
+
+        if getattr(pipeline, "unet", None) is not None:
+            pipeline.unet.to("cpu")
+
+        if getattr(pipeline, "vae", None) is not None:
+            pipeline.vae.to("cpu")
+    else:
+        raise ValueError(f"Unknown module {args.module}")
+    
     # Create EMA for the unet.
     if args.use_ema:
-        ema_unet = UNet2DDualModel.from_pretrained(
-            args.pretrained_model_name_or_path, subfolder="unet", revision=args.revision
+        ema_module = module_class.from_pretrained(
+            args.pretrained_model_name_or_path, subfolder=args.module, revision=args.revision
         )
-        ema_unet = EMAModel(ema_unet.parameters(),
-                            model_cls=UNet2DDualModel,
-                            model_config=ema_unet.config,
+        ema_module = EMAModel(ema_module.parameters(),
+                            model_cls=module_class,
+                            model_config=ema_module.config,
                             min_decay=args.ema_min_decay,
                             decay=args.ema_max_decay,
                             inv_gamma=args.ema_inv_gamma,
@@ -521,22 +564,22 @@ def main():
         # create custom saving & loading hooks so that `accelerator.save_state(...)` serializes in a nice format
         def save_model_hook(models, weights, output_dir):
             if args.use_ema:
-                ema_unet.save_pretrained(os.path.join(output_dir, "unet_ema"))
+                ema_module.save_pretrained(os.path.join(output_dir, f"{args.module}_ema"))
 
             for i, model in enumerate(models):
-                model.save_pretrained(os.path.join(output_dir, "unet"))
+                model.save_pretrained(os.path.join(output_dir, args.module))
 
                 # make sure to pop weight so that corresponding model is not saved again
                 weights.pop()
 
         def load_model_hook(models, input_dir):
             if args.use_ema:
-                if not os.path.exists(os.path.join(input_dir, "unet_ema")):
+                if not os.path.exists(os.path.join(input_dir, f"{args.module}_ema")):
                     logger.info("EMA model in checkpoint not found, using new ema model")
                 else:
-                    load_model = EMAModel.from_pretrained(os.path.join(input_dir, "unet_ema"), UNet2DDualModel)
-                    ema_unet.load_state_dict(load_model.state_dict())
-                    ema_unet.to(accelerator.device)
+                    load_model = EMAModel.from_pretrained(os.path.join(input_dir, f"{args.module}_ema"), module_class)
+                    ema_module.load_state_dict(load_model.state_dict())
+                    ema_module.to(accelerator.device)
                     del load_model
 
             for i in range(len(models)):
@@ -544,7 +587,7 @@ def main():
                 model = models.pop()
 
                 # load diffusers style into model
-                load_model = UNet2DDualModel.from_pretrained(input_dir, subfolder="unet")
+                load_model = module_class.from_pretrained(input_dir, subfolder=args.module)
                 model.register_to_config(**load_model.config)
 
                 model.load_state_dict(load_model.state_dict())
@@ -554,7 +597,7 @@ def main():
         accelerator.register_load_state_pre_hook(load_model_hook)
 
     if args.gradient_checkpointing:
-        unet.enable_gradient_checkpointing()
+        module.enable_gradient_checkpointing()
 
     # Enable TF32 for faster training on Ampere GPUs,
     # cf https://pytorch.org/docs/stable/notes/cuda.html#tensorfloat-32-tf32-on-ampere-devices
@@ -581,7 +624,7 @@ def main():
 
     logger.info(f"Using optimiser {optimizer_cls.__name__} with learning rate {args.learning_rate} - epsilon: {args.adam_epsilon}")
     optimizer = optimizer_cls(
-        unet.parameters(),
+        module.parameters(),
         lr=args.learning_rate,
         betas=(args.adam_beta1, args.adam_beta2),
         weight_decay=args.adam_weight_decay,
@@ -661,7 +704,7 @@ def main():
             else:
                 print(audio)
                 print(dir(audio))
-                raise Exception("Not implemented") 
+                raise NotImplementedError() 
 
         return {"input": samples}
 
@@ -697,22 +740,12 @@ def main():
     )
 
     # Prepare everything with our `accelerator`.
-    unet, optimizer, train_dataloader, lr_scheduler = accelerator.prepare(
-        unet, optimizer, train_dataloader, lr_scheduler
+    module, optimizer, train_dataloader, lr_scheduler = accelerator.prepare(
+        module, optimizer, train_dataloader, lr_scheduler
     )
 
     if args.use_ema:
-        ema_unet.to(accelerator.device)
-
-    # For mixed precision training we cast all non-trainable weigths (vae, non-lora text_encoder and non-lora unet) to half-precision
-    # as these weights are only used for inference, keeping weights in full precision is not required.
-    weight_dtype = torch.float32
-    if accelerator.mixed_precision == "fp16":
-        weight_dtype = torch.float16
-        args.mixed_precision = accelerator.mixed_precision
-    elif accelerator.mixed_precision == "bf16":
-        weight_dtype = torch.bfloat16
-        args.mixed_precision = accelerator.mixed_precision
+        ema_module.to(accelerator.device)
 
     # We need to recalculate our total training steps as the size of the training dataloader may have changed.
     num_update_steps_per_epoch = math.ceil(len(train_dataloader) / args.gradient_accumulation_steps)
@@ -731,9 +764,9 @@ def main():
 
         """
         tracker_config = dict(vars(args))
-        for k, v in unet.config.items():
+        for k, v in module.config.items():
             if not isinstance(v, (int, float, str, bool)): v = f"{v}"
-            tracker_config[f"unet_{k}"] = v
+            tracker_config[f"{args.module}_{k}"] = v
 
         for k, v in noise_scheduler.config.items():
             if not isinstance(v, (int, float, str, bool)): v = f"{v}"
@@ -783,7 +816,7 @@ def main():
         else:
             # Get the most recent checkpoint
             dirs = os.listdir(args.output_dir)
-            dirs = [d for d in dirs if d.startswith("checkpoint")]
+            dirs = [d for d in dirs if d.startswith(f"{args.module}_checkpoint")]
             dirs = sorted(dirs, key=lambda x: int(x.split("-")[1]))
             path = dirs[-1] if len(dirs) > 0 else None
 
@@ -824,20 +857,19 @@ def main():
                 else:
                     set_dropout_p(module, p_value)
 
-        for i in range(args.dropout_depth, len(unet.down_blocks)):
-            set_dropout_p(unet.down_blocks[i], args.dropout)
-        if len(unet.down_blocks) >= args.dropout_depth:
-            set_dropout_p(unet.mid_block, args.dropout)
-        for i in range(args.dropout_depth, len(unet.up_blocks)):
-            set_dropout_p(unet.up_blocks[i-args.dropout_depth], args.dropout)
+        for i in range(args.dropout_depth, len(module.down_blocks)):
+            set_dropout_p(module.down_blocks[i], args.dropout)
+        if len(module.down_blocks) >= args.dropout_depth:
+            set_dropout_p(module.mid_block, args.dropout)
+        for i in range(args.dropout_depth, len(module.up_blocks)):
+            set_dropout_p(module.up_blocks[i-args.dropout_depth], args.dropout)
 
     window = None
+    timesteps = None
     torch.cuda.empty_cache()
-    num_nan_grads = 0
-    last_grad_norm_nan = False
 
     for epoch in range(first_epoch, args.num_train_epochs):
-        unet.train()
+        module.train()
         train_loss = 0.0
 
         progress_bar = tqdm(total=num_update_steps_per_epoch, disable=not accelerator.is_local_main_process)
@@ -851,84 +883,102 @@ def main():
                     progress_bar.update(1)
                 continue
 
-            with accelerator.accumulate(unet):
+            with accelerator.accumulate(module):
 
                 raw_samples = batch["input"]
-                samples, window = pipeline.format.raw_to_sample(raw_samples, model_params, window=window)
 
-                noise = torch.randn_like(samples)
-                if args.input_perturbation > 0:
-                    new_noise = noise + args.input_perturbation * torch.randn_like(noise)
+                if args.module == "unet":
+                    samples, window = pipeline.format.raw_to_sample(raw_samples, model_params, window=window)
+                    if vae is not None:
+                        samples = vae.encode(samples).latent_dist.sample() * vae.config.scaling_factor
 
-                if not debug_written:
-                    logger.info(f"Samples mean: {samples.mean(dim=(1,2,3))} - Samples std: {samples.std(dim=(1,2,3))}")
-                    logger.info(f"Samples shape: {samples.shape}")
-                    debug_path = os.environ.get("DEBUG_PATH", None)
-                    if debug_path is not None:
-                        os.makedirs(debug_path, exist_ok=True)
-                        samples.detach().cpu().numpy().tofile(os.path.join(debug_path, "debug_train_samples.raw"))
-                        raw_samples.detach().cpu().numpy().tofile(os.path.join(debug_path, "debug_train_raw_samples.raw"))
-                        pipeline.format.sample_to_raw(samples.detach(), model_params).real.cpu().numpy().tofile(os.path.join(debug_path, "debug_train_reconstructed_raw_samples.raw"))
-                    debug_written = True
+                    noise = torch.randn_like(samples)
+                    if args.input_perturbation > 0:
+                        new_noise = noise + args.input_perturbation * torch.randn_like(noise)
+
+                    if not debug_written:
+                        logger.info(f"Samples mean: {samples.mean(dim=(1,2,3))} - Samples std: {samples.std(dim=(1,2,3))}")
+                        logger.info(f"Samples shape: {samples.shape}")
+                        debug_path = os.environ.get("DEBUG_PATH", None)
+                        if debug_path is not None:
+                            os.makedirs(debug_path, exist_ok=True)
+                            samples.detach().cpu().numpy().tofile(os.path.join(debug_path, "debug_train_samples.raw"))
+                            raw_samples.detach().cpu().numpy().tofile(os.path.join(debug_path, "debug_train_raw_samples.raw"))
+                            if vae is None:
+                                pipeline.format.sample_to_raw(samples.detach(), model_params).real.cpu().numpy().tofile(os.path.join(debug_path, "debug_train_reconstructed_raw_samples.raw"))
+                            else:       
+                                vae.decode(samples.detach() / vae.config.scaling_factor).sample.cpu().numpy().tofile(os.path.join(debug_path, "debug_train_reconstructed_raw_samples.raw"))
+                        debug_written = True
+                        
+                    # Sample a random timestep for each image
+                    timesteps = torch.randint(0, noise_scheduler.config.num_train_timesteps, (samples.shape[0],), device=samples.device).long()
+
+                    # Add noise to the latents according to the noise magnitude at each timestep
+                    # (this is the forward diffusion process)
+                    if args.input_perturbation > 0:
+                        model_input = noise_scheduler.add_noise(samples, new_noise, timesteps)
+                    else:
+                        model_input = noise_scheduler.add_noise(samples, noise, timesteps)
+                    if freq_embedding_dim > 0:
+                        model_input = DualDiffusionPipeline.add_freq_embedding(model_input, freq_embedding_dim)
+
+                    if noise_scheduler.config.prediction_type == "epsilon":
+                        target = noise
+                    elif noise_scheduler.config.prediction_type == "v_prediction":
+                        target = noise_scheduler.get_velocity(samples, noise, timesteps)
+                    elif noise_scheduler.config.prediction_type == "sample":
+                        target = samples
+                    else:
+                        raise ValueError(f"Unknown prediction type {noise_scheduler.config.prediction_type}")
+
+                    model_input = model_input.detach()
+                    target = target.detach()
                     
-                # Sample a random timestep for each image
-                timesteps = torch.randint(0, noise_scheduler.config.num_train_timesteps, (samples.shape[0],), device=samples.device).long()
+                    # Predict the target and compute loss
+                    model_output = module(model_input, timesteps).sample
 
-                # Add noise to the latents according to the noise magnitude at each timestep
-                # (this is the forward diffusion process)
-                if args.input_perturbation > 0:
-                    model_input = noise_scheduler.add_noise(samples, new_noise, timesteps)
-                else:
-                    model_input = noise_scheduler.add_noise(samples, noise, timesteps)
-                if freq_embedding_dim > 0:
-                    model_input = DualDiffusionPipeline.add_freq_embedding(model_input, freq_embedding_dim)
+                    if args.snr_gamma is None:
+                        if vae is None:
+                            loss = pipeline.format.get_loss(model_output, target, model_params, reduction="mean")
+                        else:
+                            loss = F.mse_loss(model_output.float(), target.float(), reduction="mean")
+                    else:
+                        # Compute loss-weights as per Section 3.4 of https://arxiv.org/abs/2303.09556.
+                        # Since we predict the noise instead of x_0, the original formulation is slightly changed.
+                        # This is discussed in Section 4.2 of the same paper.
+                        snr = compute_snr(noise_scheduler, timesteps) + snr_offset
 
-                if noise_scheduler.config.prediction_type == "epsilon":
-                    target = noise
-                elif noise_scheduler.config.prediction_type == "v_prediction":
-                    target = noise_scheduler.get_velocity(samples, noise, timesteps)
-                elif noise_scheduler.config.prediction_type == "sample":
-                    target = samples
-                else:
-                    raise ValueError(f"Unknown prediction type {noise_scheduler.config.prediction_type}")
+                        if noise_scheduler.config.prediction_type != "v_prediction":
+                            # clamp required when using zero terminal SNR rescaling to avoid division by zero
+                            # not needed when using v-prediction because of the +1 snr offset
+                            if noise_scheduler.config.rescale_betas_zero_snr or (noise_scheduler.config.beta_schedule == "trained_betas"):
+                                snr = snr.clamp(min=1e-8)
 
-                model_input = model_input.detach()
-                target = target.detach()
+                        mse_loss_weights = (
+                            torch.stack([snr, args.snr_gamma * torch.ones_like(timesteps)], dim=1).min(dim=1)[0] / snr
+                        )
+
+                        # We first calculate the original loss. Then we mean over the non-batch dimensions and
+                        # rebalance the sample-wise losses with their respective loss weights.
+                        # Finally, we take the mean of the rebalanced loss.
+                        if vae is None:
+                            loss = pipeline.format.get_loss(model_output, target, model_params, reduction="none")
+                        else:
+                            loss = F.mse_loss(model_output.float(), target.float(), reduction="none")
+                        loss = loss.mean(dim=list(range(1, len(loss.shape)))) * mse_loss_weights
+                        loss = loss.mean()
+
+                elif args.module == "vae":
+
+                    raise NotImplementedError()
                 
-                # Predict the target and compute loss
-                model_output = unet(model_input, timesteps).sample
+                elif args.module == "upscaler":
 
-                #model_output_freq = torch.view_as_real(DualDiffusionPipeline.sample_to_raw(model_output))
-                #target_freq = torch.view_as_real(DualDiffusionPipeline.sample_to_raw(target))
-
-                if args.snr_gamma is None:
-                    loss = pipeline.format.get_loss(model_output, target, model_params, reduction="mean")
-                    #loss = F.mse_loss(model_output.float(), target.float(), reduction="mean")
-                    #loss = (loss + F.mse_loss(model_output_freq.float(), target_freq.float(), reduction="mean") * 2.) * 0.5
+                    raise NotImplementedError()
+                
                 else:
-                    # Compute loss-weights as per Section 3.4 of https://arxiv.org/abs/2303.09556.
-                    # Since we predict the noise instead of x_0, the original formulation is slightly changed.
-                    # This is discussed in Section 4.2 of the same paper.
-                    snr = compute_snr(noise_scheduler, timesteps) + snr_offset
-
-                    if noise_scheduler.config.prediction_type != "v_prediction":
-                        # clamp required when using zero terminal SNR rescaling to avoid division by zero
-                        # not needed when using v-prediction because of the +1 snr offset
-                        if noise_scheduler.config.rescale_betas_zero_snr or (noise_scheduler.config.beta_schedule == "trained_betas"):
-                            snr = snr.clamp(min=1e-8)
-
-                    mse_loss_weights = (
-                        torch.stack([snr, args.snr_gamma * torch.ones_like(timesteps)], dim=1).min(dim=1)[0] / snr
-                    )
-
-                    # We first calculate the original loss. Then we mean over the non-batch dimensions and
-                    # rebalance the sample-wise losses with their respective loss weights.
-                    # Finally, we take the mean of the rebalanced loss.
-                    loss = pipeline.format.get_loss(model_output, target, model_params, reduction="none")
-                    #loss = F.mse_loss(model_output.float(), target.float(), reduction="none")
-                    loss = loss.mean(dim=list(range(1, len(loss.shape)))) * mse_loss_weights
-                    loss = loss.mean()
-
+                    raise ValueError(f"Unknown module {args.module}")
+                
                 # Gather the losses across all processes for logging (if we use distributed training).
                 avg_loss = accelerator.gather(loss.repeat(args.train_batch_size)).mean()
                 train_loss += avg_loss.item() / args.gradient_accumulation_steps
@@ -936,31 +986,13 @@ def main():
                 # Backpropagate
                 accelerator.backward(loss)
                 if accelerator.sync_gradients:
-                    grad_norm = accelerator.clip_grad_norm_(unet.parameters(), args.max_grad_norm).item()
-                    if math.isnan(grad_norm) or math.isinf(grad_norm):
-                        if math.isnan(grad_norm):
-                            num_nan_grads += 1
-                        last_grad_norm_nan = True
-                        if args.snr_gamma is None: snr = "n/a"
-                        logger.warning(f"Warning: grad norm is {grad_norm} - step={global_step} loss={loss.item()} timesteps={timesteps} snr={snr} debug_last_sample_paths={debug_last_sample_paths}")
-                        debug_path = os.environ.get("DEBUG_PATH", None)
-                        if debug_path is not None:
-                            try:
-                                debug_path = os.path.join(debug_path, f"step_{global_step}_gradnorm_{grad_norm}")
-                                os.makedirs(debug_path, exist_ok=True)
-                                samples.detach().cpu().numpy().tofile(os.path.join(debug_path, "debug_nan_samples.raw"))
-                                raw_samples.detach().cpu().numpy().tofile(os.path.join(debug_path, "debug_nan_raw_samples.raw"))
-                                pipeline.format.sample_to_raw(samples.detach(), model_params).real.cpu().numpy().tofile(os.path.join(debug_path, "debug_nan_reconstructed_raw_samples.raw"))
-                                model_output.detach().cpu().numpy().tofile(os.path.join(debug_path, "debug_nan_model_output.raw"))
-                                target.detach().cpu().numpy().tofile(os.path.join(debug_path, "debug_nan_target.raw"))
-                            except Exception as e:
-                                logger.error(f"Error writing debug files: {e}")
+                    grad_norm = accelerator.clip_grad_norm_(module.parameters(), args.max_grad_norm).item()
+                    if math.isinf(grad_norm):
+                        logger.warning(f"Warning: grad norm is {grad_norm} - step={global_step} loss={loss.item()} timesteps={timesteps} debug_last_sample_paths={debug_last_sample_paths}")
 
-                        if num_nan_grads > 100:
-                            logger.error(f"Error: Too many NaN grads, aborting...")
-                            exit(1)
-                    else:
-                        last_grad_norm_nan = False
+                    if math.isnan(grad_norm):
+                        logger.error(f"Error: grad norm is {grad_norm}, aborting...")
+                        exit(1)
 
                 optimizer.step()
                 lr_scheduler.step()
@@ -969,7 +1001,7 @@ def main():
             # Checks if the accelerator has performed an optimization step behind the scenes
             if accelerator.sync_gradients:
                 if args.use_ema:
-                    ema_unet.step(unet.parameters())
+                    ema_module.step(module.parameters())
                 progress_bar.update(1)
                 global_step += 1
 
@@ -978,7 +1010,7 @@ def main():
                         "step": global_step,
                         "grad_norm": grad_norm}
                 if args.use_ema:
-                    logs["ema_decay"] = ema_unet.cur_decay_value    
+                    logs["ema_decay"] = ema_module.cur_decay_value    
                 accelerator.log(logs, step=global_step)
                 progress_bar.set_postfix(**logs)
 
@@ -986,36 +1018,33 @@ def main():
 
                 if global_step % args.checkpointing_steps == 0:
                     if accelerator.is_main_process:
-                        if last_grad_norm_nan:
-                            logger.warning(f"Warning: grad norm was NaN last step, not saving checkpoint")
-                        else:
-                            # _before_ saving state, check if this save would set us over the `checkpoints_total_limit`
-                            if args.checkpoints_total_limit is not None:
-                                try:
-                                    checkpoints = os.listdir(args.output_dir)
-                                    checkpoints = [d for d in checkpoints if d.startswith("checkpoint")]
-                                    checkpoints = sorted(checkpoints, key=lambda x: int(x.split("-")[1]))
+                        # _before_ saving state, check if this save would set us over the `checkpoints_total_limit`
+                        if args.checkpoints_total_limit is not None:
+                            try:
+                                checkpoints = os.listdir(args.output_dir)
+                                checkpoints = [d for d in checkpoints if d.startswith(f"{args.module}_checkpoint")]
+                                checkpoints = sorted(checkpoints, key=lambda x: int(x.split("-")[1]))
 
-                                    # before we save the new checkpoint, we need to have at _most_ `checkpoints_total_limit - 1` checkpoints
-                                    if len(checkpoints) >= args.checkpoints_total_limit:
-                                        num_to_remove = len(checkpoints) - args.checkpoints_total_limit + 1
-                                        removing_checkpoints = checkpoints[0:num_to_remove]
+                                # before we save the new checkpoint, we need to have at _most_ `checkpoints_total_limit - 1` checkpoints
+                                if len(checkpoints) >= args.checkpoints_total_limit:
+                                    num_to_remove = len(checkpoints) - args.checkpoints_total_limit + 1
+                                    removing_checkpoints = checkpoints[0:num_to_remove]
 
-                                        logger.info(
-                                            f"{len(checkpoints)} checkpoints already exist, removing {len(removing_checkpoints)} checkpoints"
-                                        )
-                                        logger.info(f"removing checkpoints: {', '.join(removing_checkpoints)}")
+                                    logger.info(
+                                        f"{len(checkpoints)} checkpoints already exist, removing {len(removing_checkpoints)} checkpoints"
+                                    )
+                                    logger.info(f"removing checkpoints: {', '.join(removing_checkpoints)}")
 
-                                        for removing_checkpoint in removing_checkpoints:
-                                            removing_checkpoint = os.path.join(args.output_dir, removing_checkpoint)
-                                            shutil.rmtree(removing_checkpoint)
-                                except Exception as e:
-                                    logger.error(f"Error removing checkpoints: {e}")
+                                    for removing_checkpoint in removing_checkpoints:
+                                        removing_checkpoint = os.path.join(args.output_dir, removing_checkpoint)
+                                        shutil.rmtree(removing_checkpoint)
+                            except Exception as e:
+                                logger.error(f"Error removing checkpoints: {e}")
 
-                            save_path = os.path.join(args.output_dir, f"checkpoint-{global_step}")
-                            accelerator.save_state(save_path)
-                            logger.info(f"Saved state to {save_path}")
-                            checkpoint_saved_this_epoch = True
+                        save_path = os.path.join(args.output_dir, f"{args.module}_checkpoint-{global_step}")
+                        accelerator.save_state(save_path)
+                        logger.info(f"Saved state to {save_path}")
+                        checkpoint_saved_this_epoch = True
 
             if global_step >= args.max_train_steps:
                 logger.info(f"Reached max train steps ({args.max_train_steps}) - Training complete")
@@ -1028,34 +1057,52 @@ def main():
         if accelerator.is_main_process and checkpoint_saved_this_epoch:
             logger.info(f"Saving model to {args.output_dir}")
 
-            unet = accelerator.unwrap_model(unet)
+            module = accelerator.unwrap_model(module)
             if args.use_ema:
-                ema_unet.store(unet.parameters())
-                ema_unet.copy_to(unet.parameters())
+                ema_module.store(module.parameters())
+                ema_module.copy_to(module.parameters())
 
-            pipeline.unet = unet
-            pipeline.config["model_params"]["last_global_step"] = global_step
+            setattr(pipeline, args.module, module)
+            pipeline.config["model_params"][f"{args.module}_last_global_step"] = global_step
             pipeline.save_pretrained(args.output_dir, safe_serialization=True)
 
             if args.num_validation_samples > 0:
                 if epoch % args.num_validation_epochs == 0:
-                    unet.eval()
+                    module.eval()
                     try:
-                        log_validation(
-                            pipeline,
-                            args,
-                            accelerator,
-                            weight_dtype,
-                            global_step,
-                        )
+                        if args.module == "unet":
+                            log_validation_unet(
+                                pipeline,
+                                args,
+                                accelerator,
+                                global_step,
+                            )
+                        elif args.module == "vae":
+                            #log_validation_vae(
+                            #    pipeline,
+                            #    args,
+                            #    accelerator,
+                            #    global_step,
+                            #)
+                            raise NotImplementedError()
+                        elif args.module == "upscaler":
+                            #log_validation_upscaler(
+                            #    pipeline,
+                            #    args,
+                            #    accelerator,
+                            #    global_step,
+                            #)
+                            raise NotImplementedError()
+                        else:
+                            raise ValueError(f"Unknown module {args.module}")
+
                     except Exception as e:
                         logger.error(f"Error running validation: {e}")
 
-                    pipeline.set_tiling_mode(False)
-                    unet.train()
+                    module.train()
 
             if args.use_ema:
-                ema_unet.restore(unet.parameters())
+                ema_module.restore(module.parameters())
             
             torch.cuda.empty_cache()
             

@@ -8,7 +8,7 @@ load_dotenv()
 
 torch.manual_seed(100)
 
-MODEL_NAME = "dualdiffusion2d_118"
+MODEL_NAME = "dualdiffusion2d_123"
 MODEL_PARAMS = {
     #"prediction_type": "sample",
     "prediction_type": "v_prediction",
@@ -19,18 +19,19 @@ MODEL_PARAMS = {
     "beta_end" : 0.02,
     #"rescale_betas_zero_snr": True,
     "rescale_betas_zero_snr": False,
-    #"sample_raw_length": 65536*2,
-    "sample_raw_length": 65536,
+    "sample_raw_length": 65536*2,
+    #"sample_raw_length": 65536,
     #"sample_raw_channels": int(os.environ.get("DATASET_SAMPLE_CHANNELS")),
     "sample_raw_channels": 1,
     #"num_chunks": 256, 
     "num_chunks": 128, 
     #"sample_rate": int(os.environ.get("DATASET_SAMPLE_RATE")),
     "sample_rate": 8000,
-    "freq_embedding_dim": 0,
-    "last_global_step": 0,
+    #"freq_embedding_dim": 0,
+    "freq_embedding_dim": 2,
     "spatial_window_length": 1024,
     "sample_format": "overlapped",
+    #"fftshift": True,
     "fftshift": False,
     #"sample_std": 0.021220825965105643,
     #"sample_format": "ln",
@@ -40,6 +41,10 @@ MODEL_PARAMS = {
     #"phase_integral_mean": 0,
     #"phase_integral_std": 4.32964091,
 }
+
+#VAE_PARAMS = {
+#}
+VAE_PARAMS = None
 
 UNET_PARAMS = {
     #"dropout": (0, 0, 0, 0.1, 0.15, 0.25),
@@ -66,13 +71,13 @@ UNET_PARAMS = {
 
     #"double_attention": True,
     "double_attention": False,
-    #"pre_attention": True,
-    "pre_attention": False,
-    #"separate_attn_dim_down": (2,3),
+    "pre_attention": True,
+    #"pre_attention": False,
     #"separate_attn_dim_down": (2,3,2,3,2,3),
-    "separate_attn_dim_down": (2,3),
+    #"separate_attn_dim_down": (2,3),
+    "separate_attn_dim_down": (3,2,3),
     #"separate_attn_dim_up": (3,2,3,2,3,2,3,2),
-    "separate_attn_dim_up": (3,2,3),
+    "separate_attn_dim_up": (2,3,2,3),
 
     #"downsample_type": "resnet",
     #"upsample_type": "resnet",
@@ -105,6 +110,10 @@ UNET_PARAMS = {
     "out_channels": MODEL_PARAMS["sample_raw_channels"]*2,
 }
 
+#UPSCALER_PARAMS = {
+#}
+UPSCALER_PARAMS = None
+
 if __name__ == "__main__":
 
     NEW_MODEL_PATH = os.path.join(os.environ.get("MODEL_PATH"), MODEL_NAME)
@@ -113,6 +122,6 @@ if __name__ == "__main__":
         print(f"Warning: Output folder already exists '{NEW_MODEL_PATH}'")
         if input("Overwrite existing model? (y/n): ").lower() not in ["y","yes"]: exit()
     
-    pipeline = DualDiffusionPipeline.create_new(MODEL_PARAMS, UNET_PARAMS)
+    pipeline = DualDiffusionPipeline.create_new(MODEL_PARAMS, UNET_PARAMS, vae_params=VAE_PARAMS, upscaler_params=UPSCALER_PARAMS)
     pipeline.save_pretrained(NEW_MODEL_PATH, safe_serialization=True)
     print(f"Created new DualDiffusion model with config at '{NEW_MODEL_PATH}'")

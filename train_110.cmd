@@ -18,7 +18,8 @@ accelerate launch^
  --seed=100^
  --lr_scheduler="constant_with_warmup"^
  --lr_warmup_steps=1318^
- --num_validation_samples=0
+ --num_validation_samples=0^
+ --dataloader_num_workers=4
  
 REM --snr_gamma=1^
 REM --input_perturbation=0.1
