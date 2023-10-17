@@ -83,22 +83,23 @@ class UNet2DDualModel(ModelMixin, ConfigMixin):
         flip_sin_to_cos: bool = True,
         down_block_types: Tuple[str] = ("SeparableAttnDownBlock2D", "SeparableAttnDownBlock2D", "SeparableAttnDownBlock2D", "SeparableAttnDownBlock2D"),
         up_block_types: Tuple[str] = ("SeparableAttnUpBlock2D", "SeparableAttnUpBlock2D", "SeparableAttnUpBlock2D", "SeparableAttnUpBlock2D"),
-        block_out_channels: Tuple[int] = (32, 64, 128, 256),
+        block_out_channels: Tuple[int] = (128, 192, 320, 512),
         layers_per_block: int = 2,
         layers_per_mid_block: int = 1,
         mid_block_scale_factor: float = 1,
         downsample_padding: int = 1,
-        downsample_type: str = "resnet", #"conv",
-        upsample_type: str = "resnet", #"conv",
+        downsample_type: str = "conv",
+        upsample_type: str = "conv",
         act_fn: str = "silu",
-        attention_num_heads: Union[int, Tuple[int]] = 8,
-        separate_attn_dim_down: Tuple[int] = (3,2,3),
-        separate_attn_dim_up: Tuple[int] = (3,2,2,3),
-        separate_attn_dim_mid: Tuple[int] = (2,),
+        attention_num_heads: Union[int, Tuple[int]] = (8,12,20,32),
+        separate_attn_dim_down: Tuple[int] = (2,3),
+        separate_attn_dim_up: Tuple[int] = (3,2,3),
+        separate_attn_dim_mid: Tuple[int] = (0,),
         double_attention: Union[bool, Tuple[bool]] = False,
-        pre_attention: Union[bool, Tuple[bool]] = True,
+        pre_attention: Union[bool, Tuple[bool]] = False,
         add_mid_attention: bool = True,
         use_separable_mid_block: bool = False,
+        freq_embedding_dim: int = 0,
         norm_num_groups: Union[int, Tuple[int]] = 32,
         norm_eps: float = 1e-5,
         resnet_time_scale_shift: str = "default",
@@ -231,6 +232,7 @@ class UNet2DDualModel(ModelMixin, ConfigMixin):
                     pre_attention=_pre_attention,
                     dropout=_dropout,
                     conv_size=conv_size,
+                    freq_embedding_dim=freq_embedding_dim,
                 )
             else:
                 down_block = get_down_block(
@@ -256,6 +258,8 @@ class UNet2DDualModel(ModelMixin, ConfigMixin):
         _norm_num_groups = norm_num_groups[-1]
         _attention_num_heads = attention_num_heads[-1]
         _dropout = dropout[-1]
+        _double_attention = double_attention[-1]
+        _pre_attention = pre_attention[-1]
         if use_separable_mid_block:
             self.mid_block = SeparableMidBlock2D(
                 in_channels=block_out_channels[-1],
@@ -267,12 +271,13 @@ class UNet2DDualModel(ModelMixin, ConfigMixin):
                 attention_num_heads=_attention_num_heads,
                 resnet_groups=_norm_num_groups,
                 add_attention=add_mid_attention,
-                pre_attention=pre_attention,
+                pre_attention=_pre_attention,
                 separate_attn_dim=separate_attn_dim_mid,
-                double_attention=double_attention,
+                double_attention=_double_attention,
                 dropout=_dropout,
                 conv_size=conv_size,
                 num_layers=layers_per_mid_block,
+                freq_embedding_dim=freq_embedding_dim,
             )
         else:
             self.mid_block = UNetMidBlock2D(
@@ -331,6 +336,7 @@ class UNet2DDualModel(ModelMixin, ConfigMixin):
                     pre_attention=_pre_attention,
                     dropout=_dropout,
                     conv_size=conv_size,
+                    freq_embedding_dim=freq_embedding_dim,
                 )
             else:
                 up_block = get_up_block(

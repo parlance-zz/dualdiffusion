@@ -74,6 +74,40 @@ def unshape_for_attention(hidden_states, attn_dim, original_shape):
     
     return hidden_states.contiguous()
 
+@torch.no_grad()
+def get_positional_embedding(positions, embedding_dim):
+    positions = positions.unsqueeze(0)
+    indices = (torch.arange(0, embedding_dim, step=2, device=positions.device) / embedding_dim).unsqueeze(1)
+    return torch.cat((torch.sin(positions / (10000. ** indices)), torch.cos(positions / (10000. ** indices))), dim=0)
+
+@torch.no_grad()
+def add_freq_embedding(freq_samples, freq_embedding_dim):
+    if freq_embedding_dim == 0: return freq_samples
+
+    #overlapped = True
+    overlapped = False
+    ln_freqs = ((torch.arange(0, freq_samples.shape[2], device=freq_samples.device) + 0.5 + overlapped/2) / freq_samples.shape[2]).log()
+    #ln_freqs = ((torch.arange(0, freq_samples.shape[2], device=freq_samples.device) + 0.5) / freq_samples.shape[2]).log()
+    
+    if freq_embedding_dim > 3:
+        ln_freqs *= freq_samples.shape[2] / ln_freqs[0].item()
+        freq_embeddings = get_positional_embedding(ln_freqs, freq_embedding_dim).type(freq_samples.dtype) * 1.414213562373095
+        freq_embeddings = freq_embeddings.view(1, freq_embedding_dim, freq_samples.shape[2], 1).repeat(freq_samples.shape[0], 1, 1, freq_samples.shape[3])
+    elif freq_embedding_dim == 3:
+        ln_freqs /= np.log(2)
+        freq_embeddings = torch.view_as_real(torch.exp(1j * 2 * np.pi * ln_freqs)).permute(1, 0) * 1.414213562373095
+        freq_embeddings = torch.cat((freq_embeddings, ln_freqs.unsqueeze(0) / ln_freqs.std()), dim=0)
+        freq_embeddings = freq_embeddings.view(1, 3, freq_samples.shape[2], 1).repeat(freq_samples.shape[0], 1, 1, freq_samples.shape[3])            
+    elif freq_embedding_dim == 2:
+        ln_freqs = ln_freqs / np.log(2)
+        freq_embeddings = torch.view_as_real(torch.exp(1j * 2 * np.pi * ln_freqs)).permute(1, 0) * 1.414213562373095
+        freq_embeddings = freq_embeddings.view(1, 2, freq_samples.shape[2], 1).repeat(freq_samples.shape[0], 1, 1, freq_samples.shape[3])
+    elif freq_embedding_dim == 1:
+        ln_freqs = ln_freqs / ln_freqs.std()
+        freq_embeddings = ln_freqs.view(1, 1, freq_samples.shape[2], 1).repeat(freq_samples.shape[0], 1, 1, freq_samples.shape[3])
+
+    return torch.cat((freq_samples, freq_embeddings), dim=1)
+
 class DualResnetBlock2D(nn.Module):
     r"""
     A Resnet block.
@@ -128,6 +162,7 @@ class DualResnetBlock2D(nn.Module):
         conv_shortcut_bias: bool = True,
         conv_2d_out_channels: Optional[int] = None,
         conv_size = (3,3),
+        freq_embedding_dim: int = 0,
     ):
         super().__init__()
         self.pre_norm = pre_norm
@@ -141,6 +176,7 @@ class DualResnetBlock2D(nn.Module):
         self.output_scale_factor = output_scale_factor
         self.time_embedding_norm = time_embedding_norm
         self.skip_time_act = skip_time_act
+        self.freq_embedding_dim = freq_embedding_dim
 
         if groups_out is None:
             groups_out = groups
@@ -152,7 +188,7 @@ class DualResnetBlock2D(nn.Module):
         else:
             self.norm1 = torch.nn.GroupNorm(num_groups=groups, num_channels=in_channels, eps=eps, affine=True)
 
-        self.conv1 = torch.nn.Conv2d(in_channels, out_channels, kernel_size=conv_size, stride=1, padding=(conv_size[0]//2,conv_size[1]//2))
+        self.conv1 = torch.nn.Conv2d(in_channels+freq_embedding_dim, out_channels, kernel_size=conv_size, stride=1, padding=(conv_size[0]//2,conv_size[1]//2))
 
         if temb_channels is not None:
             if self.time_embedding_norm == "default":
@@ -175,7 +211,7 @@ class DualResnetBlock2D(nn.Module):
 
         self.dropout = torch.nn.Dropout(dropout)
         conv_2d_out_channels = conv_2d_out_channels or out_channels
-        self.conv2 = torch.nn.Conv2d(out_channels, conv_2d_out_channels, kernel_size=conv_size, stride=1, padding=(conv_size[0]//2,conv_size[1]//2))
+        self.conv2 = torch.nn.Conv2d(out_channels+freq_embedding_dim, conv_2d_out_channels, kernel_size=conv_size, stride=1, padding=(conv_size[0]//2,conv_size[1]//2))
 
         self.nonlinearity = get_activation(non_linearity)
 
@@ -226,6 +262,8 @@ class DualResnetBlock2D(nn.Module):
             input_tensor = self.downsample(input_tensor)
             hidden_states = self.downsample(hidden_states)
 
+        if self.freq_embedding_dim > 0:
+            hidden_states = add_freq_embedding(hidden_states, self.freq_embedding_dim)
         hidden_states = self.conv1(hidden_states)
 
         if self.time_emb_proj is not None:
@@ -247,6 +285,8 @@ class DualResnetBlock2D(nn.Module):
 
         hidden_states = self.nonlinearity(hidden_states)
 
+        if self.freq_embedding_dim > 0:
+            hidden_states = add_freq_embedding(hidden_states, self.freq_embedding_dim)
         hidden_states = self.dropout(hidden_states)
         hidden_states = self.conv2(hidden_states)
 
@@ -273,12 +313,13 @@ class SeparableAttnDownBlock2D(nn.Module):
         attention_num_heads=8,
         output_scale_factor=1.0,
         downsample_padding=1,
-        downsample_type="resnet",
-        separate_attn_dim=(3,2,3,),
+        downsample_type="conv",
+        separate_attn_dim=(2,3,),
         double_attention=False,
-        pre_attention=True,
+        pre_attention=False,
         conv_size=(3,3),
         return_res_samples=True,
+        freq_embedding_dim=0,
     ):
         super().__init__()
         resnets = []
@@ -290,6 +331,7 @@ class SeparableAttnDownBlock2D(nn.Module):
         self.double_attention = double_attention
         self.pre_attention = pre_attention
         self.return_res_samples = return_res_samples
+        self.freq_embedding_dim = freq_embedding_dim
 
         for i in range(num_layers):
             _in_channels = in_channels if i == 0 else out_channels
@@ -306,6 +348,7 @@ class SeparableAttnDownBlock2D(nn.Module):
                     output_scale_factor=output_scale_factor,
                     pre_norm=resnet_pre_norm,
                     conv_size=conv_size,
+                    freq_embedding_dim=freq_embedding_dim,
                 )
             )
         
@@ -338,7 +381,7 @@ class SeparableAttnDownBlock2D(nn.Module):
             self.downsamplers = nn.ModuleList(
                 [
                     Downsample2D(
-                        out_channels, use_conv=True, out_channels=out_channels, padding=downsample_padding, name="op"
+                        out_channels+freq_embedding_dim, use_conv=True, out_channels=out_channels, padding=downsample_padding, name="op"
                     )
                 ]
             )
@@ -357,6 +400,7 @@ class SeparableAttnDownBlock2D(nn.Module):
                         output_scale_factor=output_scale_factor,
                         pre_norm=resnet_pre_norm,
                         down=True,
+                        freq_embedding_dim=freq_embedding_dim,
                     )
                 ]
             )
@@ -395,6 +439,8 @@ class SeparableAttnDownBlock2D(nn.Module):
                 if self.downsample_type == "resnet":
                     hidden_states = downsampler(hidden_states, temb=temb)
                 else:
+                    if self.freq_embedding_dim > 0:
+                        hidden_states = add_freq_embedding(hidden_states, self.freq_embedding_dim)
                     hidden_states = downsampler(hidden_states)
 
             if self.return_res_samples:
@@ -421,12 +467,13 @@ class SeparableAttnUpBlock2D(nn.Module):
         resnet_pre_norm: bool = True,
         attention_num_heads=8,
         output_scale_factor=1.0,
-        upsample_type="resnet",
-        separate_attn_dim=(3,2,2,3,),
+        upsample_type="conv",
+        separate_attn_dim=(2,3,),
         double_attention=False,
-        pre_attention=True,
+        pre_attention=False,
         conv_size=(3,3),
         use_res_samples=True,
+        freq_embedding_dim=0,
     ):
         super().__init__()
         resnets = []
@@ -438,6 +485,7 @@ class SeparableAttnUpBlock2D(nn.Module):
         self.double_attention = double_attention
         self.pre_attention = pre_attention
         self.use_res_samples = use_res_samples
+        self.freq_embedding_dim = freq_embedding_dim
 
         for i in range(num_layers):
             if self.use_res_samples:
@@ -459,6 +507,7 @@ class SeparableAttnUpBlock2D(nn.Module):
                     output_scale_factor=output_scale_factor,
                     pre_norm=resnet_pre_norm,
                     conv_size=conv_size,
+                    freq_embedding_dim=freq_embedding_dim,
                 )
             )
         
@@ -488,7 +537,7 @@ class SeparableAttnUpBlock2D(nn.Module):
         self.resnets = nn.ModuleList(resnets)
 
         if upsample_type == "conv":
-            self.upsamplers = nn.ModuleList([Upsample2D(out_channels, use_conv=True, out_channels=out_channels)])
+            self.upsamplers = nn.ModuleList([Upsample2D(out_channels+freq_embedding_dim, use_conv=True, out_channels=out_channels)])
         elif upsample_type == "resnet":
             self.upsamplers = nn.ModuleList(
                 [
@@ -504,6 +553,7 @@ class SeparableAttnUpBlock2D(nn.Module):
                         output_scale_factor=output_scale_factor,
                         pre_norm=resnet_pre_norm,
                         up=True,
+                        freq_embedding_dim=freq_embedding_dim,
                     )
                 ]
             )
@@ -531,7 +581,7 @@ class SeparableAttnUpBlock2D(nn.Module):
                 res_hidden_states = res_hidden_states_tuple[-1]
                 res_hidden_states_tuple = res_hidden_states_tuple[:-1]
                 hidden_states = torch.cat([hidden_states, res_hidden_states], dim=1)
-                
+            
             hidden_states = resnet(hidden_states, temb)
 
             for _ in range(2 if self.double_attention else 1):
@@ -543,6 +593,8 @@ class SeparableAttnUpBlock2D(nn.Module):
                 if self.upsample_type == "resnet":
                     hidden_states = upsampler(hidden_states, temb=temb)
                 else:
+                    if self.freq_embedding_dim > 0:
+                        hidden_states = add_freq_embedding(hidden_states, self.freq_embedding_dim)                    
                     hidden_states = upsampler(hidden_states)
 
         return hidden_states
@@ -562,10 +614,11 @@ class SeparableMidBlock2D(nn.Module):
         output_scale_factor=1.0,
         add_attention: bool = True,
         attention_num_heads=8,
-        separate_attn_dim=(2,),
+        separate_attn_dim=(0,),
         double_attention=False,
-        pre_attention=True,
+        pre_attention=False,
         conv_size=(3,3),
+        freq_embedding_dim=0,
     ):
         super().__init__()
         resnets = []
@@ -575,6 +628,7 @@ class SeparableMidBlock2D(nn.Module):
         self.separate_attn_dim = separate_attn_dim
         self.double_attention = double_attention
         self.pre_attention = pre_attention
+        self.freq_embedding_dim = freq_embedding_dim
 
         for _ in range(num_layers+1):
             resnets.append(
@@ -590,6 +644,7 @@ class SeparableMidBlock2D(nn.Module):
                     output_scale_factor=output_scale_factor,
                     pre_norm=resnet_pre_norm,
                     conv_size=conv_size,
+                    freq_embedding_dim=freq_embedding_dim,
                 )
             )
 

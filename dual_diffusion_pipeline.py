@@ -8,6 +8,7 @@ from diffusers.schedulers import DPMSolverMultistepScheduler, DDIMScheduler
 from diffusers.schedulers import EulerAncestralDiscreteScheduler, KDPM2AncestralDiscreteScheduler
 from diffusers.pipelines.pipeline_utils import DiffusionPipeline
 
+from unet2d_dual_blocks import add_freq_embedding
 from unet2d_dual import UNet2DDualModel
 
 def to_freq(x):
@@ -339,7 +340,7 @@ class DualNormalFormat:
 
         samples = torch.view_as_complex(samples.permute(0, 2, 3, 1).contiguous())
         samples = torch.fft.ifft(samples, norm="ortho")
-        samples[:, :, 0] = 0; samples[:, 1:, 0] -= samples[:, 1:, 0].mean(dim=1, keepdim=True) # remove annoying clicking due to lack of windowing
+        #samples[:, :, 0] = 0; samples[:, 1:, 0] -= samples[:, 1:, 0].mean(dim=1, keepdim=True) # remove annoying clicking due to lack of windowing
         samples = samples.view(bsz, half_sample_len)
         samples = torch.cat((samples, torch.zeros_like(samples)), dim=1)
 
@@ -470,32 +471,8 @@ class DualDiffusionPipeline(DiffusionPipeline):
 
     @staticmethod
     @torch.no_grad()
-    def get_positional_embedding(positions, embedding_dim):
-        positions = positions.unsqueeze(0)
-        indices = (torch.arange(0, embedding_dim, step=2, device=positions.device) / embedding_dim).unsqueeze(1)
-        return torch.cat((torch.sin(positions / (10000. ** indices)), torch.cos(positions / (10000. ** indices))), dim=0)
-    
-    @staticmethod
-    @torch.no_grad()
     def add_freq_embedding(freq_samples, freq_embedding_dim):
-        if freq_embedding_dim == 0: return freq_samples
-
-        ln_freqs = ((torch.arange(0, freq_samples.shape[2], device=freq_samples.device) + 0.5) / freq_samples.shape[2]).log()
-        
-        if freq_embedding_dim > 2:
-            ln_freqs *= freq_samples.shape[2] / ln_freqs[0].item()
-            freq_embeddings = DualDiffusionPipeline.get_positional_embedding(ln_freqs, freq_embedding_dim).type(freq_samples.dtype)
-            freq_embeddings = freq_embeddings.view(1, freq_embedding_dim, freq_samples.shape[2], 1).repeat(freq_samples.shape[0], 1, 1, freq_samples.shape[3])
-        elif freq_embedding_dim == 2:
-            ln_freqs /= np.log(2)
-            freq_embeddings = torch.view_as_real(torch.exp(1j * 2 * np.pi * ln_freqs)).permute(1, 0)
-            freq_embeddings = freq_embeddings.view(1, 2, freq_samples.shape[2], 1).repeat(freq_samples.shape[0], 1, 1, freq_samples.shape[3])
-        elif freq_embedding_dim == 1:
-            ln_freqs /= ln_freqs[0].item()
-            ln_freqs = ln_freqs.type(freq_samples.dtype)
-            freq_embeddings = ln_freqs.view(1, 1, freq_samples.shape[2], 1).repeat(freq_samples.shape[0], 1, 1, freq_samples.shape[3])
-
-        return torch.cat((freq_samples, freq_embeddings), dim=1)
+        return add_freq_embedding(freq_samples, freq_embedding_dim)
     
     @torch.no_grad()
     def upscale(self, raw_sample):

@@ -921,7 +921,8 @@ def main():
                         model_input = noise_scheduler.add_noise(samples, noise, timesteps)
                     if freq_embedding_dim > 0:
                         model_input = DualDiffusionPipeline.add_freq_embedding(model_input, freq_embedding_dim)
-
+                    model_input = noise_scheduler.scale_model_input(model_input, timesteps)
+                    
                     if noise_scheduler.config.prediction_type == "epsilon":
                         target = noise
                     elif noise_scheduler.config.prediction_type == "v_prediction":

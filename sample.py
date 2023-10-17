@@ -117,7 +117,7 @@ if __name__ == "__main__":
     #reconstruction_test(DualOverlappedFormat, sample_num=100)
     #get_dataset_stats(DualOverlappedFormat)
 
-    model_name = "dualdiffusion2d_120"
+    model_name = "dualdiffusion2d_121"
     #model_name = "dualdiffusion2d_118"
     num_samples = 10
     batch_size = 1
