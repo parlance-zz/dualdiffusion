@@ -81,32 +81,35 @@ def get_positional_embedding(positions, embedding_dim):
     return torch.cat((torch.sin(positions / (10000. ** indices)), torch.cos(positions / (10000. ** indices))), dim=0)
 
 @torch.no_grad()
-def add_freq_embedding(freq_samples, freq_embedding_dim):
+def add_freq_embedding(freq_samples, freq_embedding_dim, format_hint=""):
     if freq_embedding_dim == 0: return freq_samples
 
-    #overlapped = True
-    overlapped = False
-    ln_freqs = ((torch.arange(0, freq_samples.shape[2], device=freq_samples.device) + 0.5 + overlapped/2) / freq_samples.shape[2]).log()
-    #ln_freqs = ((torch.arange(0, freq_samples.shape[2], device=freq_samples.device) + 0.5) / freq_samples.shape[2]).log()
+    if freq_embedding_dim % 2 != 0:
+        raise ValueError(f"freq_embedding_dim must be even. got {freq_embedding_dim}")
+    num_orders = freq_embedding_dim // 2
+    #if num_orders > 6:
+    #    raise ValueError(f"freq_embedding_dim must be <= 12. got {freq_embedding_dim}")
     
-    if freq_embedding_dim > 3:
-        ln_freqs *= freq_samples.shape[2] / ln_freqs[0].item()
-        freq_embeddings = get_positional_embedding(ln_freqs, freq_embedding_dim).type(freq_samples.dtype) * 1.414213562373095
-        freq_embeddings = freq_embeddings.view(1, freq_embedding_dim, freq_samples.shape[2], 1).repeat(freq_samples.shape[0], 1, 1, freq_samples.shape[3])
-    elif freq_embedding_dim == 3:
-        ln_freqs /= np.log(2)
-        freq_embeddings = torch.view_as_real(torch.exp(1j * 2 * np.pi * ln_freqs)).permute(1, 0) * 1.414213562373095
-        freq_embeddings = torch.cat((freq_embeddings, ln_freqs.unsqueeze(0) / ln_freqs.std()), dim=0)
-        freq_embeddings = freq_embeddings.view(1, 3, freq_samples.shape[2], 1).repeat(freq_samples.shape[0], 1, 1, freq_samples.shape[3])            
-    elif freq_embedding_dim == 2:
-        ln_freqs = ln_freqs / np.log(2)
-        freq_embeddings = torch.view_as_real(torch.exp(1j * 2 * np.pi * ln_freqs)).permute(1, 0) * 1.414213562373095
-        freq_embeddings = freq_embeddings.view(1, 2, freq_samples.shape[2], 1).repeat(freq_samples.shape[0], 1, 1, freq_samples.shape[3])
-    elif freq_embedding_dim == 1:
-        ln_freqs = ln_freqs / ln_freqs.std()
-        freq_embeddings = ln_freqs.view(1, 1, freq_samples.shape[2], 1).repeat(freq_samples.shape[0], 1, 1, freq_samples.shape[3])
+    if format_hint == "overlapped":
+        overlapped = True
+    else:
+        overlapped = False
+    
+    x = ((torch.arange(0, freq_samples.shape[2], device=freq_samples.device) + 0.5 + overlapped/2) / freq_samples.shape[2])
 
-    return torch.cat((freq_samples, freq_embeddings), dim=1)
+    #k = torch.tensor([1, 2, 3, 4, 6, 12])[:num_orders].type(torch.float32).to(freq_samples.device)
+    #k = torch.exp2(torch.arange(0, num_orders, device=freq_samples.device))
+    k = torch.arange(1, num_orders+1, device=freq_samples.device)
+
+    q = x.log().unsqueeze(1) * k.unsqueeze(0) * 2 * np.pi / np.log(2)
+
+    #freq_embeddings = torch.view_as_real(torch.exp(1j * q))
+    freq_embeddings = torch.view_as_real(torch.exp(1j * q) * x.unsqueeze(1))
+
+    freq_embeddings = freq_embeddings.view(freq_samples.shape[2], freq_embedding_dim).permute(1, 0) / freq_embeddings.std()
+    freq_embeddings = freq_embeddings.view(1, freq_embedding_dim, freq_samples.shape[2], 1).repeat(freq_samples.shape[0], 1, 1, freq_samples.shape[3])
+
+    return torch.cat((freq_samples, freq_embeddings.type(freq_samples.dtype)), dim=1)
 
 class DualResnetBlock2D(nn.Module):
     r"""

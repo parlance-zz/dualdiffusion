@@ -371,13 +371,13 @@ def parse_args():
     parser.add_argument(
         "--num_validation_samples",
         type=int,
-        default=4,
+        default=10,
         help="Number of samples to generate for validation.",
     )
     parser.add_argument(
         "--num_validation_steps",
         type=int,
-        default=125,
+        default=250,
         help="Number of steps to use when creating validation samples.",
     )
     parser.add_argument(
@@ -892,7 +892,7 @@ def main():
                     if vae is not None:
                         samples = vae.encode(samples).latent_dist.sample() * vae.config.scaling_factor
 
-                    noise = torch.randn_like(samples)
+                    noise = torch.randn_like(samples) * noise_scheduler.init_noise_sigma
                     if args.input_perturbation > 0:
                         new_noise = noise + args.input_perturbation * torch.randn_like(noise)
 
@@ -920,7 +920,9 @@ def main():
                     else:
                         model_input = noise_scheduler.add_noise(samples, noise, timesteps)
                     if freq_embedding_dim > 0:
-                        model_input = DualDiffusionPipeline.add_freq_embedding(model_input, freq_embedding_dim)
+                        model_input = DualDiffusionPipeline.add_freq_embedding(model_input,
+                                                                               freq_embedding_dim,
+                                                                               format_hint=model_params["sample_format"])
                     model_input = noise_scheduler.scale_model_input(model_input, timesteps)
                     
                     if noise_scheduler.config.prediction_type == "epsilon":

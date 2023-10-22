@@ -5,11 +5,11 @@ accelerate launch^
  --allow_tf32^
  --train_data_dir="./dataset/samples"^
  --raw_sample_format="int16"^
- --pretrained_model_name_or_path="./models/dualdiffusion2d_124"^
- --output_dir="./models/dualdiffusion2d_124"^
- --train_batch_size=2^
+ --pretrained_model_name_or_path="./models/dualdiffusion2d_128"^
+ --output_dir="./models/dualdiffusion2d_128"^
+ --train_batch_size=4^
  --num_train_epochs=500^
- --checkpointing_steps=2470^
+ --checkpointing_steps=1235^
  --checkpoints_total_limit=1^
  --gradient_accumulation_steps=4^
  --learning_rate=1e-4^
@@ -17,7 +17,7 @@ accelerate launch^
  --resume_from_checkpoint=latest^
  --seed=100^
  --lr_scheduler="constant_with_warmup"^
- --lr_warmup_steps=2470^
+ --lr_warmup_steps=1235^
  --num_validation_samples=10^
  --num_validation_epochs=5
  

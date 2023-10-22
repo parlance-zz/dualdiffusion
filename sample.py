@@ -8,7 +8,7 @@ import torchaudio
 
 from dual_diffusion_pipeline import DualDiffusionPipeline, DualLogFormat, DualNormalFormat, DualOverlappedFormat
 
-def get_dataset_stats(format):
+def get_dataset_stats():
     model_params = {
         "sample_raw_length": 65536,
         "num_chunks": 128,
@@ -20,9 +20,7 @@ def get_dataset_stats(format):
         "spatial_window_length": 256,
     }
     crop_width = model_params["sample_raw_length"]
-    format = DualOverlappedFormat
-    #format = DualLogFormat
-    #format = DualNormalFormat
+    format = DualDiffusionPipeline.get_sample_format(model_params)
 
     if format == DualLogFormat:
         ln_amplitude_mean = 0.
@@ -71,22 +69,26 @@ def get_dataset_stats(format):
         
     exit()
 
-def reconstruction_test(format, sample_num=1):
+def reconstruction_test(sample_num=1):
 
     model_params = {
-        "sample_raw_length": 65536,
-        "num_chunks": 128,
-        "fftshift": False,
+        "sample_raw_length": 65536*2,
+        "num_chunks": 256,
+        #"sample_format": "overlapped",
+        "sample_format": "normal",
+        "freq_embedding_dim": 24,
+        #"fftshift": False,
         #"ln_amplitude_floor": -12,
         #"ln_amplitude_mean": -6.1341057,
         #"ln_amplitude_std": 1.66477387,
         #"phase_integral_mean": 0,
         #"phase_integral_std": 0.0212208259651,
-        #"spatial_window_length": 256,
+        "spatial_window_length": 1024,
         #"sample_std": 0.021220825965105643,
     }
     crop_width = model_params["sample_raw_length"]
-
+    format = DualDiffusionPipeline.get_sample_format(model_params)
+    
     raw_sample = np.fromfile(f"./dataset/samples/{sample_num}.raw", dtype=np.int16, count=crop_width) / 32768.
     raw_sample = torch.from_numpy(raw_sample.astype(np.float32)).unsqueeze(0).to("cuda")
     raw_sample.cpu().numpy().tofile("./debug/debug_raw_original.raw")
@@ -96,10 +98,24 @@ def reconstruction_test(format, sample_num=1):
     print("Sample mean:", freq_sample.mean(dim=(2,3)), freq_sample.mean().item())
     print("Sample std:", freq_sample.std().item())
     freq_sample.cpu().numpy().tofile("./debug/debug_sample.raw")
+    
+    # you _can_ change the tempo without changing frequency with this sample format, however,
+    # for good quality you need to resample nicely (ideally sinc)
+    #a = torch.zeros((1, 2, 256, 1024,), device=freq_sample.device, dtype=freq_sample.dtype)
+    #a[:, :, :, ::2] = freq_sample
+    #a[:, :, :, 1::2] = a[:, :, :, ::2]
+    #a[:, :, :, 1:-1:2] += a[:, :, :, 2::2]
+    #a[:, :, :, 1::2] /= 2
+    #freq_sample = a
 
     raw_sample = format.sample_to_raw(freq_sample, model_params).real
     raw_sample /= raw_sample.abs().max()
     raw_sample.cpu().numpy().tofile("./debug/debug_reconstruction.raw")
+    
+    freq_sample = DualDiffusionPipeline.add_freq_embedding(freq_sample,
+                                                           model_params["freq_embedding_dim"],
+                                                           model_params["sample_format"])
+    freq_sample.cpu().numpy().tofile("./debug/debug_sample_with_freq_embedding.raw")
     
     exit()
 
@@ -114,29 +130,30 @@ if __name__ == "__main__":
 
     load_dotenv()
 
-    #reconstruction_test(DualOverlappedFormat, sample_num=100)
+    #reconstruction_test(sample_num=100)
     #get_dataset_stats(DualOverlappedFormat)
 
-    model_name = "dualdiffusion2d_121"
-    #model_name = "dualdiffusion2d_118"
-    num_samples = 10
+    #model_name = "dualdiffusion2d_120"
+    model_name = "dualdiffusion2d_118"
+    num_samples = 20
     batch_size = 1
     length = 1
     scheduler = "dpms++"
     #scheduler = "ddim"
     #scheduler = "kdpm2_a"
     #scheduler = "euler_a"
-    steps = 125
+    #scheduler = "dpms++_sde"
+    steps = 250#337 #250
     loops = 1
-    #fp16 = False
-    fp16 = True
+    fp16 = False
+    # fp16 = True
     
     seed = np.random.randint(10000, 99999-num_samples)
-    #seed = 200
+    #seed = 2000
 
     model_dtype = torch.float16 if fp16 else torch.float32
     model_path = os.path.join(os.environ.get("MODEL_PATH", "./"), model_name)
-    #model_path = "Z:/dualdiffusion/models/dualdiffusion2d_118"
+    #model_path = "Z:/dualdiffusion/models/dualdiffusion2d_129"
     print(f"Loading DualDiffusion model from '{model_path}' (dtype={model_dtype})...")
     pipeline = DualDiffusionPipeline.from_pretrained(model_path, torch_dtype=model_dtype).to("cuda")
     sample_rate = pipeline.config["model_params"]["sample_rate"]

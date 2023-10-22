@@ -61,3 +61,8 @@ chmod +x Miniconda3-py310_23.5.0-3-Linux-x86_64.sh
 #  -use 1st raw partition as ext4 mount /
 #  -use 2nd raw partition as swap
 #-set default boot OS in bios
+
+# *enable discard/trim for ssd*
+#sudo nano /etc/fstab
+# *enable discard and noatime: UUID=df39839a-05b1-4bc9-9c5c-3ee6b30981a8 /               ext4    discard,noatime,errors=remount-ro 0*
+#reboot

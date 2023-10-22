@@ -7,20 +7,21 @@ accelerate launch^
  --raw_sample_format="int16"^
  --pretrained_model_name_or_path="./models/dualdiffusion2d_118"^
  --output_dir="./models/dualdiffusion2d_118"^
- --train_batch_size=5^
+ --train_batch_size=2^
  --num_train_epochs=500^
- --checkpointing_steps=1318^
+ --checkpointing_steps=1647^
  --checkpoints_total_limit=1^
- --gradient_accumulation_steps=3^
+ --gradient_accumulation_steps=6^
  --learning_rate=1e-4^
  --report_to="tensorboard"^
  --resume_from_checkpoint=latest^
  --seed=100^
  --lr_scheduler="constant_with_warmup"^
- --lr_warmup_steps=1318^
- --num_validation_samples=0^
- --dataloader_num_workers=4
- 
+ --lr_warmup_steps=1647^
+ --num_validation_samples=10^
+ --num_validation_epochs=5^
+ --input_perturbation=0.1
+
 REM --snr_gamma=1^
 REM --input_perturbation=0.1
 

@@ -4,7 +4,7 @@ import numpy as np
 import torch
 import cv2
 
-from diffusers.schedulers import DPMSolverMultistepScheduler, DDIMScheduler
+from diffusers.schedulers import DPMSolverMultistepScheduler, DDIMScheduler, DPMSolverSDEScheduler
 from diffusers.schedulers import EulerAncestralDiscreteScheduler, KDPM2AncestralDiscreteScheduler
 from diffusers.pipelines.pipeline_utils import DiffusionPipeline
 
@@ -401,23 +401,27 @@ class DualDiffusionPipeline(DiffusionPipeline):
         
         if model_params is not None:
             self.config["model_params"] = model_params
-
+        else:
+            model_params = self.config["model_params"]
+            
         self.tiling_mode = False
 
-        if "sample_format" in model_params:
-            sample_format = model_params["sample_format"]
-        else:
-            sample_format = "normal"
+        if "sample_format" not in model_params:
+            model_params["sample_format"] = "normal"
+        self.format = DualDiffusionPipeline.get_sample_format(model_params)
 
+    @staticmethod
+    def get_sample_format(model_params):
+        sample_format = model_params["sample_format"]
         if sample_format == "ln":
-            self.format = DualLogFormat
+            return DualLogFormat
         elif sample_format == "normal":
-            self.format = DualNormalFormat
+            return DualNormalFormat
         elif sample_format == "overlapped":
-            self.format = DualOverlappedFormat
+            return DualOverlappedFormat
         else:
             raise ValueError(f"Unknown sample format '{sample_format}'")
-
+        
     @staticmethod
     def create_new(model_params, unet_params, vae_params=None, upscaler_params=None):
         
@@ -471,8 +475,8 @@ class DualDiffusionPipeline(DiffusionPipeline):
 
     @staticmethod
     @torch.no_grad()
-    def add_freq_embedding(freq_samples, freq_embedding_dim):
-        return add_freq_embedding(freq_samples, freq_embedding_dim)
+    def add_freq_embedding(freq_samples, freq_embedding_dim, format_hint=""):
+        return add_freq_embedding(freq_samples, freq_embedding_dim, format_hint=format_hint)
     
     @torch.no_grad()
     def upscale(self, raw_sample):
@@ -504,6 +508,7 @@ class DualDiffusionPipeline(DiffusionPipeline):
         else:
             trained_betas = None
 
+        scheduler = scheduler.lower().strip()
         if scheduler == "ddim":
             noise_scheduler = self.scheduler
         elif scheduler == "dpms++":
@@ -519,6 +524,13 @@ class DualDiffusionPipeline(DiffusionPipeline):
             noise_scheduler = EulerAncestralDiscreteScheduler(prediction_type=prediction_type,
                                                               beta_schedule=beta_schedule,
                                                               trained_betas=trained_betas)
+        elif scheduler == "dpms++_sde":
+            if self.unet.dtype != torch.float32:
+                raise ValueError("dpms++_sde scheduler requires float32 precision")
+            
+            noise_scheduler = DPMSolverSDEScheduler(prediction_type=prediction_type,
+                                                    beta_schedule=beta_schedule,
+                                                    trained_betas=trained_betas)
         else:
             raise ValueError(f"Unknown scheduler '{scheduler}'")
         noise_scheduler.set_timesteps(steps)
@@ -539,22 +551,27 @@ class DualDiffusionPipeline(DiffusionPipeline):
         print(f"Sample shape: {sample_shape}")
 
         sample = torch.randn(sample_shape, device=self.device, dtype=self.unet.dtype, generator=generator)
+        sample *= noise_scheduler.init_noise_sigma
         freq_embedding_dim = model_params["freq_embedding_dim"]
-        
+
         for _, t in enumerate(self.progress_bar(timesteps)):
             
             model_input = sample
             if freq_embedding_dim > 0:
-                model_input = DualDiffusionPipeline.add_freq_embedding(model_input, freq_embedding_dim)
+                model_input = DualDiffusionPipeline.add_freq_embedding(model_input,
+                                                                       freq_embedding_dim,
+                                                                       format_hint=model_params["sample_format"])
             model_input = noise_scheduler.scale_model_input(model_input, t)
             model_output = self.unet(model_input, t).sample
 
-            sample = noise_scheduler.step(
-                model_output=model_output,
-                timestep=t,
-                sample=sample,
-                generator=generator,
-            )["prev_sample"]
+            scheduler_args = {
+                "model_output": model_output,
+                "timestep": t,
+                "sample": sample,
+            }
+            if scheduler != "dpms++_sde":
+                scheduler_args["generator"] = generator
+            sample = noise_scheduler.step(**scheduler_args)["prev_sample"]
         
         sample = sample.float()
 
