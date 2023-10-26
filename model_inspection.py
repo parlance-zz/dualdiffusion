@@ -10,9 +10,9 @@ if __name__ == "__main__":
 
     load_dotenv()
 
-    model_name = "dualdiffusion2d_130"
+    model_name = "dualdiffusion2d_135"
     compare_model_name = None
-    #compare_model_name = "dualdiffusion2d_112"
+    #compare_model_name = "dualdiffusion2d_132"
 
     model_path = os.path.join(os.environ.get("MODEL_PATH", "./"), model_name)
     print(f"Loading DualDiffusion model from '{model_path}'...")

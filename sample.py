@@ -119,6 +119,40 @@ def reconstruction_test(sample_num=1):
     
     exit()
 
+def embedding_test():
+    freq_embedding_dim = 60
+    ref_pitch_pos = 64
+    ref_time_pos = 64
+    exp_scale = 10
+
+    sample = torch.zeros((1, 2, 256, 256), dtype=torch.float32).to("cuda")
+    sample = DualDiffusionPipeline.add_freq_embedding(sample, freq_embedding_dim, "normal")
+
+    ref_pitch_embed = sample[:, 2:freq_embedding_dim//2, ref_pitch_pos:ref_pitch_pos+1, :]
+    ref_time_embed = sample[:, 2+freq_embedding_dim//2:, :, ref_time_pos:ref_time_pos+1]
+    
+    sample_pitch_embed = sample[:, 2:freq_embedding_dim//2, :, :]
+    sample_time_embed = sample[:, 2+freq_embedding_dim//2:, :, :]
+
+    pitch_response = (ref_pitch_embed * sample_pitch_embed).mean(dim=(0,1,3))
+    time_response = (ref_time_embed * sample_time_embed).mean(dim=(0,1,2))
+    
+    pitch_response -= pitch_response.max()
+    time_response -= time_response.max()
+    pitch_response = (pitch_response*exp_scale).exp()
+    time_response = (time_response*exp_scale).exp()
+    pitch_response /= pitch_response.max()
+    time_response /= time_response.max()
+
+    print("Pitch response accuracy: ", pitch_response[ref_pitch_pos].item() / pitch_response.sum().item())
+    print("Time response accuracy: ", time_response[ref_time_pos].item() / time_response.sum().item())
+
+    pitch_response.cpu().numpy().tofile("./debug/debug_embed_pitch_response.raw")
+    time_response.cpu().numpy().tofile("./debug/debug_embed_time_response.raw")
+
+    exit()
+
+
 if __name__ == "__main__":
 
     if not torch.cuda.is_available():
@@ -132,10 +166,11 @@ if __name__ == "__main__":
 
     #reconstruction_test(sample_num=100)
     #get_dataset_stats(DualOverlappedFormat)
+    #embedding_test()
 
-    #model_name = "dualdiffusion2d_120"
-    model_name = "dualdiffusion2d_118"
-    num_samples = 20
+    model_name = "dualdiffusion2d_135"
+    #model_name = "dualdiffusion2d_118"
+    num_samples = 3
     batch_size = 1
     length = 1
     scheduler = "dpms++"
@@ -146,14 +181,13 @@ if __name__ == "__main__":
     steps = 250#337 #250
     loops = 1
     fp16 = False
-    # fp16 = True
+    #fp16 = True
     
     seed = np.random.randint(10000, 99999-num_samples)
     #seed = 2000
 
     model_dtype = torch.float16 if fp16 else torch.float32
     model_path = os.path.join(os.environ.get("MODEL_PATH", "./"), model_name)
-    #model_path = "Z:/dualdiffusion/models/dualdiffusion2d_129"
     print(f"Loading DualDiffusion model from '{model_path}' (dtype={model_dtype})...")
     pipeline = DualDiffusionPipeline.from_pretrained(model_path, torch_dtype=model_dtype).to("cuda")
     sample_rate = pipeline.config["model_params"]["sample_rate"]

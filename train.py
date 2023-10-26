@@ -188,7 +188,7 @@ def parse_args():
     parser.add_argument(
         "--output_dir",
         type=str,
-        default="sd-model-finetuned",
+        default="",
         help="The output directory where the model predictions and checkpoints will be written.",
     )
     parser.add_argument(
@@ -265,6 +265,24 @@ def parse_args():
         default=None,
         help="SNR weighting gamma to be used if rebalancing the loss. Recommended value is 5.0. "
         "More details here: https://arxiv.org/abs/2303.09556.",
+    )
+    parser.add_argument(
+        "--phase_augmentation",
+        type=bool,
+        default=True,
+        help="Add a random phase offset to the sample phase (absolute phase invariance)",
+    )
+    parser.add_argument(
+        "--pitch_augmentation_range",
+        type=float,
+        default=0, #2/12,
+        help="Modulate the pitch of the sample by a random amount within this range (in octaves)",
+    )
+    parser.add_argument(
+        "--tempo_augmentation_range",
+        type=float,
+        default=0, #0.167,
+        help="Modulate the tempo of the sample by a random amount within this range (value of 1 is double/half speed)",
     )
     parser.add_argument(
         "--use_8bit_adam", action="store_true", help="Whether or not to use 8-bit Adam from bitsandbytes."
@@ -429,6 +447,9 @@ def main():
             ),
         )
 
+    if args.output_dir == "":
+        args.output_dir = args.pretrained_model_name_or_path
+        
     if args.logging_dir is None:
         logging_dir = os.path.join(args.output_dir, f"logs_{args.module}")
     else:
@@ -506,19 +527,19 @@ def main():
         vae = getattr(pipeline, "vae", None)
         if vae is not None:
             vae.requires_grad_(False)
-            vae.to(accelerator.device)
+            vae = vae.to(accelerator.device)
 
         if getattr(pipeline, "upscaler", None) is not None:
-            pipeline.upscaler.to("cpu")
+            pipeline.upscaler = pipeline.upscaler.to("cpu")
 
     elif args.module == "vae":
         #module_class = UNet2DDualModel
         raise NotImplementedError("VAE training not implemented yet")
 
         if getattr(pipeline, "unet", None) is not None:
-            pipeline.unet.to("cpu")
+            pipeline.unet = pipeline.unet.to("cpu")
         if getattr(pipeline, "upscaler", None) is not None:
-            pipeline.upscaler.to("cpu")
+            pipeline.upscaler = pipeline.upscaler.to("cpu")
 
     elif args.module == "upscaler":
         #module_class = UNet2DDualModel
@@ -526,10 +547,10 @@ def main():
         sample_crop_width = module.config["sample_crop_width"]
 
         if getattr(pipeline, "unet", None) is not None:
-            pipeline.unet.to("cpu")
+            pipeline.unet = pipeline.unet.to("cpu")
 
         if getattr(pipeline, "vae", None) is not None:
-            pipeline.vae.to("cpu")
+            pipeline.vae = pipeline.vae.to("cpu")
     else:
         raise ValueError(f"Unknown module {args.module}")
     
@@ -785,13 +806,16 @@ def main():
         target_src_path = os.path.join(args.output_dir, "src")
         logger.info(f"Copying source code at '{source_src_path}' to model folder '{target_src_path}'")
 
-        os.makedirs(target_src_path, exist_ok=True)
-        src_file_types = ["py", "cmd", "yml", "sh"]
-        src_files = []
-        for file_type in src_file_types:
-            src_files += glob(f"*.{file_type}")
-        for src_file in src_files:
-            shutil.copy(src_file, os.path.join(target_src_path, os.path.basename(src_file)))
+        try:
+            os.makedirs(target_src_path, exist_ok=True)
+            src_file_types = ["py", "cmd", "yml", "sh"]
+            src_files = []
+            for file_type in src_file_types:
+                src_files += glob(f"*.{file_type}")
+            for src_file in src_files:
+                shutil.copy(src_file, os.path.join(target_src_path, os.path.basename(src_file)))
+        except Exception as e:
+            logger.warning(f"Failed to copy source code to model folder: {e}")
 
     # Train!
     total_batch_size = args.train_batch_size * accelerator.num_processes * args.gradient_accumulation_steps
@@ -888,7 +912,10 @@ def main():
                 raw_samples = batch["input"]
 
                 if args.module == "unet":
-                    samples, window = pipeline.format.raw_to_sample(raw_samples, model_params, window=window)
+                    samples, window = pipeline.format.raw_to_sample(raw_samples,
+                                                                    model_params,
+                                                                    window=window,
+                                                                    random_phase_offset=args.phase_augmentation)
                     if vae is not None:
                         samples = vae.encode(samples).latent_dist.sample() * vae.config.scaling_factor
 
@@ -920,9 +947,15 @@ def main():
                     else:
                         model_input = noise_scheduler.add_noise(samples, noise, timesteps)
                     if freq_embedding_dim > 0:
+                        pitch_augmentation = np.exp2((np.random.rand()*2-1) * args.pitch_augmentation_range)
+                        tempo_augmentation = np.exp2((np.random.rand()*2-1) * args.tempo_augmentation_range)
+
                         model_input = DualDiffusionPipeline.add_freq_embedding(model_input,
                                                                                freq_embedding_dim,
-                                                                               format_hint=model_params["sample_format"])
+                                                                               format_hint=model_params["sample_format"],
+                                                                               pitch_augmentation=pitch_augmentation,
+                                                                               tempo_augmentation=tempo_augmentation)
+                        
                     model_input = noise_scheduler.scale_model_input(model_input, timesteps)
                     
                     if noise_scheduler.config.prediction_type == "epsilon":
