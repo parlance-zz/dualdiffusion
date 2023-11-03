@@ -99,7 +99,6 @@ class UNet2DDualModel(ModelMixin, ConfigMixin):
         pre_attention: Union[bool, Tuple[bool]] = False,
         add_mid_attention: bool = True,
         use_separable_mid_block: bool = False,
-        freq_embedding_dim: int = 0,
         norm_num_groups: Union[int, Tuple[int]] = 32,
         norm_eps: float = 1e-5,
         resnet_time_scale_shift: str = "default",
@@ -111,7 +110,7 @@ class UNet2DDualModel(ModelMixin, ConfigMixin):
         super().__init__()
 
         self.sample_size = sample_size
-        
+
         time_embed_dim = block_out_channels[0] * 4
 
         # Check inputs
@@ -151,7 +150,9 @@ class UNet2DDualModel(ModelMixin, ConfigMixin):
             )
         
         # input
-        self.conv_in = nn.Conv2d(in_channels, block_out_channels[0], kernel_size=conv_size, padding=(conv_size[0]//2, conv_size[1]//2))
+        #conv_in_kernel_size = conv_size
+        conv_in_kernel_size = (3,3)
+        self.conv_in = nn.Conv2d(in_channels, block_out_channels[0], kernel_size=conv_in_kernel_size, padding=(conv_in_kernel_size[0]//2, conv_in_kernel_size[1]//2))
 
         # time
         if time_embedding_type == "fourier":
@@ -232,7 +233,6 @@ class UNet2DDualModel(ModelMixin, ConfigMixin):
                     pre_attention=_pre_attention,
                     dropout=_dropout,
                     conv_size=conv_size,
-                    freq_embedding_dim=freq_embedding_dim,
                 )
             else:
                 down_block = get_down_block(
@@ -277,7 +277,6 @@ class UNet2DDualModel(ModelMixin, ConfigMixin):
                 dropout=_dropout,
                 conv_size=conv_size,
                 num_layers=layers_per_mid_block,
-                freq_embedding_dim=freq_embedding_dim,
             )
         else:
             self.mid_block = UNetMidBlock2D(
@@ -336,7 +335,6 @@ class UNet2DDualModel(ModelMixin, ConfigMixin):
                     pre_attention=_pre_attention,
                     dropout=_dropout,
                     conv_size=conv_size,
-                    freq_embedding_dim=freq_embedding_dim,
                 )
             else:
                 up_block = get_up_block(
@@ -362,9 +360,11 @@ class UNet2DDualModel(ModelMixin, ConfigMixin):
         # out
         _num_groups_out = norm_num_groups[0]
         self.conv_norm_out = nn.GroupNorm(num_channels=block_out_channels[0], num_groups=_num_groups_out, eps=norm_eps)
-
         self.conv_act = nn.SiLU()
-        self.conv_out = nn.Conv2d(block_out_channels[0], out_channels, kernel_size=conv_size, padding=(conv_size[0]//2, conv_size[1]//2))
+
+        #conv_out_kernel_size = conv_size
+        conv_out_kernel_size = (3,3)
+        self.conv_out = nn.Conv2d(block_out_channels[0], out_channels, kernel_size=conv_out_kernel_size, padding=(conv_out_kernel_size[0]//2, conv_out_kernel_size[1]//2))
 
     def forward(
         self,

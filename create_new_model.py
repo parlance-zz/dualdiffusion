@@ -6,30 +6,31 @@ from dual_diffusion_pipeline import DualDiffusionPipeline
 
 load_dotenv()
 
-torch.manual_seed(100)
+torch.manual_seed(200)
 
-MODEL_NAME = "dualdiffusion2d_136"
+MODEL_NAME = "dualdiffusion2d_210"
 MODEL_PARAMS = {
     #"prediction_type": "sample",
     "prediction_type": "v_prediction",
+    #"prediction_type": "epsilon",
     #"beta_schedule": "trained_betas",
-    "beta_schedule": "linear", 
-    #"beta_schedule": "squaredcos_cap_v2", 
+    #"beta_schedule": "linear", 
+    "beta_schedule": "squaredcos_cap_v2", 
     "beta_start" : 0.0001,
     "beta_end" : 0.02,
-    "rescale_betas_zero_snr": False,
     #"rescale_betas_zero_snr": True,
+    "rescale_betas_zero_snr": False,
     "sample_raw_length": 65536*2,
     #"sample_raw_length": 65536,
     "sample_raw_channels": int(os.environ.get("DATASET_NUM_CHANNELS")),
-    "num_chunks": 256, 
     #"num_chunks": 128, 
+    "num_chunks": 256, 
     "sample_rate": int(os.environ.get("DATASET_SAMPLE_RATE")),
-    "freq_embedding_dim": 0,
-    #"freq_embedding_dim": 12,
-    "spatial_window_length": 2048,
+    #"freq_embedding_dim": 0,
+    "freq_embedding_dim": 126,
+    "spatial_window_length": 1024, #2048,
     #"sample_format": "overlapped",
-    "sample_format": "normal",
+    "sample_format": "embedding",
     #"fftshift": True,
     #"fftshift": False,
 
@@ -50,12 +51,12 @@ UNET_PARAMS = {
     #"dropout": (0, 0, 0, 0.1, 0.15, 0.25),
     "dropout": 0.0,
     "act_fn": "silu",
-    #"conv_size": (3,3),
-
+    "conv_size": (3,3),
+    #"conv_size": (1,3),
     #"attention_num_heads": 8,
     #"attention_num_heads": (8,12,20,32,52,84),
     #"attention_num_heads": (6,12,24,48),
-    "attention_num_heads": (16,16,32,32,32),
+    "attention_num_heads": (2,4,8,16,),
 
     #"double_attention": False,
     #"pre_attention": True,
@@ -67,22 +68,20 @@ UNET_PARAMS = {
     #"use_separable_mid_block": False,
     "use_separable_mid_block": True,
     #"separate_attn_dim_mid": (0,),
-    "separate_attn_dim_mid": (0,0,),
+    "separate_attn_dim_mid": (0,),
     "add_mid_attention": True,
     "layers_per_mid_block": 1,
 
     #"double_attention": True,
     "double_attention": False,
-    #"pre_attention": False,
-    "pre_attention": True,
+    "pre_attention": False,
+    #"pre_attention": True,
     
-    "separate_attn_dim_down": (3,2,3,),
+    "separate_attn_dim_down": (2,3,),
     #"separate_attn_dim_down": (3,),
     
-    "separate_attn_dim_up": (2,3,2,3,),
+    "separate_attn_dim_up": (3,2,3,),
     #"separate_attn_dim_up": (2,3,),
-
-    "freq_embedding_dim": 256,
 
     #"downsample_type": "resnet",
     #"upsample_type": "resnet",
@@ -95,16 +94,15 @@ UNET_PARAMS = {
     "layers_per_block": 2,
     #"layers_per_block": 2,
     #"block_out_channels": (128, 192, 320, 512, 832, 1344),
-    "block_out_channels": (128, 192, 320, 512, 832),#, 832, 1344),
+    #"block_out_channels": (128, 192, 320, 512, 832),#, 832, 1344),
+    "block_out_channels": (128, 256, 512, 1024),
     "down_block_types": (
-        "SeparableAttnDownBlock2D",
         "SeparableAttnDownBlock2D",
         "SeparableAttnDownBlock2D",
         "SeparableAttnDownBlock2D",
         "SeparableAttnDownBlock2D",
     ),
     "up_block_types": (
-        "SeparableAttnUpBlock2D",
         "SeparableAttnUpBlock2D",
         "SeparableAttnUpBlock2D",
         "SeparableAttnUpBlock2D",

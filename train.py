@@ -858,6 +858,11 @@ def main():
             first_epoch = global_step // num_update_steps_per_epoch
             resume_step = resume_global_step % (num_update_steps_per_epoch * args.gradient_accumulation_steps)
 
+            # update learning rate in case we've changed it
+            for g in optimizer.param_groups:
+                g["lr"] = args.learning_rate
+            lr_scheduler.scheduler.base_lrs = [args.learning_rate]
+            
     # correction to min snr for v-prediction, not 100% sure this is correct
     if args.snr_gamma is not None:
         logger.info(f"Using min-SNR loss weighting - SNR gamma ({args.snr_gamma})")
@@ -935,8 +940,13 @@ def main():
                                 pipeline.format.sample_to_raw(samples.detach(), model_params).real.cpu().numpy().tofile(os.path.join(debug_path, "debug_train_reconstructed_raw_samples.raw"))
                             else:       
                                 vae.decode(samples.detach() / vae.config.scaling_factor).sample.cpu().numpy().tofile(os.path.join(debug_path, "debug_train_reconstructed_raw_samples.raw"))
-                        debug_written = True
-                        
+
+                            samples_with_embedding = DualDiffusionPipeline.add_freq_embedding(samples,
+                                                                                              freq_embedding_dim,
+                                                                                              format_hint=model_params["sample_format"])
+                            samples_with_embedding.detach().cpu().numpy().tofile(os.path.join(debug_path, "debug_train_samples_with_embedding.raw"))
+                            del samples_with_embedding
+                            
                     # Sample a random timestep for each image
                     timesteps = torch.randint(0, noise_scheduler.config.num_train_timesteps, (samples.shape[0],), device=samples.device).long()
 
@@ -955,6 +965,10 @@ def main():
                                                                                format_hint=model_params["sample_format"],
                                                                                pitch_augmentation=pitch_augmentation,
                                                                                tempo_augmentation=tempo_augmentation)
+                        if (not debug_written) and (debug_path is not None):
+                            model_input.detach().cpu().numpy().tofile(os.path.join(debug_path, "debug_train_model_input.raw"))
+                        
+                    debug_written = True
                         
                     model_input = noise_scheduler.scale_model_input(model_input, timesteps)
                     
@@ -1054,7 +1068,13 @@ def main():
 
                 if global_step % args.checkpointing_steps == 0:
                     if accelerator.is_main_process:
-                        # _before_ saving state, check if this save would set us over the `checkpoints_total_limit`
+
+                        save_path = os.path.join(args.output_dir, f"{args.module}_checkpoint-{global_step}")
+                        accelerator.save_state(save_path)
+                        logger.info(f"Saved state to {save_path}")
+                        checkpoint_saved_this_epoch = True
+
+                        # delete old checkpoints AFTER saving new checkpoint
                         if args.checkpoints_total_limit is not None:
                             try:
                                 checkpoints = os.listdir(args.output_dir)
@@ -1062,25 +1082,20 @@ def main():
                                 checkpoints = sorted(checkpoints, key=lambda x: int(x.split("-")[1]))
 
                                 # before we save the new checkpoint, we need to have at _most_ `checkpoints_total_limit - 1` checkpoints
-                                if len(checkpoints) >= args.checkpoints_total_limit:
-                                    num_to_remove = len(checkpoints) - args.checkpoints_total_limit + 1
-                                    removing_checkpoints = checkpoints[0:num_to_remove]
+                                if len(checkpoints) > args.checkpoints_total_limit:
+                                    num_to_remove = len(checkpoints) - args.checkpoints_total_limit
+                                    if num_to_remove > 0:
+                                        removing_checkpoints = checkpoints[0:num_to_remove]
+                                        logger.info(
+                                            f"{len(checkpoints)} checkpoints already exist, removing {len(removing_checkpoints)} checkpoints"
+                                        )
+                                        logger.info(f"removing checkpoints: {', '.join(removing_checkpoints)}")
 
-                                    logger.info(
-                                        f"{len(checkpoints)} checkpoints already exist, removing {len(removing_checkpoints)} checkpoints"
-                                    )
-                                    logger.info(f"removing checkpoints: {', '.join(removing_checkpoints)}")
-
-                                    for removing_checkpoint in removing_checkpoints:
-                                        removing_checkpoint = os.path.join(args.output_dir, removing_checkpoint)
-                                        shutil.rmtree(removing_checkpoint)
+                                        for removing_checkpoint in removing_checkpoints:
+                                            removing_checkpoint = os.path.join(args.output_dir, removing_checkpoint)
+                                            shutil.rmtree(removing_checkpoint)
                             except Exception as e:
                                 logger.error(f"Error removing checkpoints: {e}")
-
-                        save_path = os.path.join(args.output_dir, f"{args.module}_checkpoint-{global_step}")
-                        accelerator.save_state(save_path)
-                        logger.info(f"Saved state to {save_path}")
-                        checkpoint_saved_this_epoch = True
 
             if global_step >= args.max_train_steps:
                 logger.info(f"Reached max train steps ({args.max_train_steps}) - Training complete")

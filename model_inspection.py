@@ -10,7 +10,7 @@ if __name__ == "__main__":
 
     load_dotenv()
 
-    model_name = "dualdiffusion2d_135"
+    model_name = "dualdiffusion2d_147"
     compare_model_name = None
     #compare_model_name = "dualdiffusion2d_132"
 
@@ -62,7 +62,7 @@ if __name__ == "__main__":
             avg_std = 0
 
             for name, param in pipeline.unet.named_parameters():
-
+                
                 param_mean = param.mean().item()
                 param_std = param.std().item()
                 param_numel = param.numel()

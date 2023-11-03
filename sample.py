@@ -75,8 +75,8 @@ def reconstruction_test(sample_num=1):
         "sample_raw_length": 65536*2,
         "num_chunks": 256,
         #"sample_format": "overlapped",
-        "sample_format": "normal",
-        "freq_embedding_dim": 24,
+        "sample_format": "embedding",
+        "freq_embedding_dim": 128,
         #"fftshift": False,
         #"ln_amplitude_floor": -12,
         #"ln_amplitude_mean": -6.1341057,
@@ -91,11 +91,12 @@ def reconstruction_test(sample_num=1):
     
     raw_sample = np.fromfile(f"./dataset/samples/{sample_num}.raw", dtype=np.int16, count=crop_width) / 32768.
     raw_sample = torch.from_numpy(raw_sample.astype(np.float32)).unsqueeze(0).to("cuda")
+    #raw_sample = torch.sin(torch.arange(0, crop_width) / 400).unsqueeze(0).to("cuda")
     raw_sample.cpu().numpy().tofile("./debug/debug_raw_original.raw")
 
     freq_sample, _ = format.raw_to_sample(raw_sample, model_params)
     print("Sample shape:", freq_sample.shape)
-    print("Sample mean:", freq_sample.mean(dim=(2,3)), freq_sample.mean().item())
+    print("Sample mean:", freq_sample.mean(dim=(2,3)), freq_sample.mean())
     print("Sample std:", freq_sample.std().item())
     freq_sample.cpu().numpy().tofile("./debug/debug_sample.raw")
     
@@ -115,32 +116,37 @@ def reconstruction_test(sample_num=1):
     freq_sample = DualDiffusionPipeline.add_freq_embedding(freq_sample,
                                                            model_params["freq_embedding_dim"],
                                                            model_params["sample_format"])
+    print("Sample shape (with freq embedding):", freq_sample.shape)
+    print("Sample mean (with freq embedding):", freq_sample.mean().item())
+    print("Sample std (with freq embedding):", freq_sample.std().item())
+
     freq_sample.cpu().numpy().tofile("./debug/debug_sample_with_freq_embedding.raw")
     
     exit()
 
 def embedding_test():
-    freq_embedding_dim = 60
-    ref_pitch_pos = 64
-    ref_time_pos = 64
-    exp_scale = 10
+    freq_embedding_dim = 256#256#32
+    ref_pitch_pos = 4
+    ref_time_pos = 4
+    pitch_exp_scale = (freq_embedding_dim)**-0.5
+    time_exp_scale = (freq_embedding_dim)**-0.5 
 
     sample = torch.zeros((1, 2, 256, 256), dtype=torch.float32).to("cuda")
     sample = DualDiffusionPipeline.add_freq_embedding(sample, freq_embedding_dim, "normal")
 
-    ref_pitch_embed = sample[:, 2:freq_embedding_dim//2, ref_pitch_pos:ref_pitch_pos+1, :]
-    ref_time_embed = sample[:, 2+freq_embedding_dim//2:, :, ref_time_pos:ref_time_pos+1]
+    ref_pitch_embed = sample[:, 2:freq_embedding_dim//2, ref_pitch_pos:ref_pitch_pos+1, 0]
+    ref_time_embed = sample[:, 2+freq_embedding_dim//2:, 0, ref_time_pos:ref_time_pos+1]
     
-    sample_pitch_embed = sample[:, 2:freq_embedding_dim//2, :, :]
-    sample_time_embed = sample[:, 2+freq_embedding_dim//2:, :, :]
+    sample_pitch_embed = sample[:, 2:freq_embedding_dim//2, :, 0]
+    sample_time_embed = sample[:, 2+freq_embedding_dim//2:, 0, :]
 
-    pitch_response = (ref_pitch_embed * sample_pitch_embed).mean(dim=(0,1,3))
-    time_response = (ref_time_embed * sample_time_embed).mean(dim=(0,1,2))
+    pitch_response = (ref_pitch_embed * sample_pitch_embed).sum(dim=(0,1))
+    time_response = (ref_time_embed * sample_time_embed).sum(dim=(0,1))
     
     pitch_response -= pitch_response.max()
     time_response -= time_response.max()
-    pitch_response = (pitch_response*exp_scale).exp()
-    time_response = (time_response*exp_scale).exp()
+    pitch_response = (pitch_response*pitch_exp_scale).exp()
+    time_response = (time_response*time_exp_scale).exp()
     pitch_response /= pitch_response.max()
     time_response /= time_response.max()
 
@@ -164,11 +170,11 @@ if __name__ == "__main__":
 
     load_dotenv()
 
-    #reconstruction_test(sample_num=100)
+    #reconstruction_test(sample_num=200)
     #get_dataset_stats(DualOverlappedFormat)
     #embedding_test()
 
-    model_name = "dualdiffusion2d_135"
+    model_name = "dualdiffusion2d_203"
     #model_name = "dualdiffusion2d_118"
     num_samples = 3
     batch_size = 1
@@ -178,13 +184,13 @@ if __name__ == "__main__":
     #scheduler = "kdpm2_a"
     #scheduler = "euler_a"
     #scheduler = "dpms++_sde"
-    steps = 250#337 #250
+    steps = 666#337 #250
     loops = 1
     fp16 = False
     #fp16 = True
     
     seed = np.random.randint(10000, 99999-num_samples)
-    #seed = 2000
+    #seed = 1000
 
     model_dtype = torch.float16 if fp16 else torch.float32
     model_path = os.path.join(os.environ.get("MODEL_PATH", "./"), model_name)

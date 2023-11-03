@@ -48,6 +48,139 @@ def compute_snr(noise_scheduler, timesteps):
     snr = (alpha / sigma) ** 2
     return snr
 
+class DualEmbeddingFormat:
+
+    @staticmethod
+    def get_sample_crop_width(model_params):
+        return model_params["sample_raw_length"]
+    
+    @staticmethod
+    def get_num_channels(model_params):
+        freq_embedding_dim = model_params["freq_embedding_dim"]
+        channels = model_params["sample_raw_channels"] * 2
+        return (channels + freq_embedding_dim, channels)
+
+    @staticmethod
+    @torch.no_grad()
+    def get_window(window_len):
+        x = torch.arange(0, window_len, device="cuda") / (window_len - 1)
+        return (1 + torch.cos(x * 2.*np.pi - np.pi)) * 0.5
+
+    @staticmethod
+    @torch.no_grad()
+    def add_freq_embedding(freq_samples, freq_embedding_dim, format_hint="", pitch_augmentation=1., tempo_augmentation=1.):
+
+        bsz = freq_samples.shape[0]
+        num_chunks = freq_samples.shape[2]
+        chunk_len = freq_samples.shape[3]
+        num_frequencies = num_chunks * chunk_len
+        num_orders = freq_embedding_dim // 2
+
+        k = torch.exp2(torch.arange(0, num_orders, device=freq_samples.device))
+        ln_q = torch.arange(0, num_frequencies, device=freq_samples.device).log2()
+        freq_embeddings = torch.exp(1j*2*np.pi * ln_q.view(-1, 1) * k.view(1, -1))
+        freq_embeddings[0, :] = 0
+        
+        fft = torch.view_as_complex(freq_samples.permute(0, 2, 3, 1).contiguous().float())
+        fft = torch.fft.ifft(fft, norm="ortho")
+
+        freq_embeddings = fft.view(bsz, num_chunks, chunk_len, 1) * freq_embeddings.view(1, num_chunks, chunk_len, num_orders)
+        freq_embeddings = torch.fft.fft(freq_embeddings, norm="ortho", dim=2)
+        freq_embeddings = torch.view_as_real(freq_embeddings).permute(0, 3, 4, 1, 2).contiguous()
+        freq_embeddings = freq_embeddings.view(bsz, freq_embedding_dim, num_chunks, chunk_len)
+
+        freq_embeddings = torch.cat((freq_samples, freq_embeddings), dim=1)
+        freq_embeddings /= freq_embeddings.std(dim=(1, 2, 3), keepdim=True).clip(min=1e-8) 
+        return freq_embeddings.type(freq_samples.dtype)
+
+    @staticmethod
+    @torch.no_grad()
+    def raw_to_sample(raw_samples, model_params, window=None, random_phase_offset=False):
+
+        num_chunks = model_params["num_chunks"]
+        sample_len = model_params["sample_raw_length"]
+        half_sample_len = sample_len // 2
+        chunk_len = half_sample_len // num_chunks
+        bsz = raw_samples.shape[0]
+        half_window_len = model_params["spatial_window_length"] // 2
+        raw_samples = raw_samples.clone()
+
+        if half_window_len > 0:
+            if window is None:
+                window = DualEmbeddingFormat.get_window(half_window_len*2).square_() # this might need to go back to just chunk_len
+            raw_samples[:, :half_window_len]  *= window[:half_window_len]
+            raw_samples[:, -half_window_len:] *= window[half_window_len:]
+
+        fft = torch.fft.fft(raw_samples, norm="ortho")[:, :half_sample_len].view(bsz, num_chunks, chunk_len)
+        fft[:, 0, 0] = 0 # remove DC component
+        fft = torch.fft.fft(fft, norm="ortho")
+        if random_phase_offset:
+            fft *= torch.exp(2j*np.pi*torch.rand(1, device=fft.device))
+        samples = torch.view_as_real(fft).permute(0, 3, 1, 2).contiguous()
+
+        # unit variance
+        if "sample_std" in model_params:
+            samples /= model_params["sample_std"]
+        else:
+            samples /= samples.std(dim=(1, 2, 3), keepdim=True).clip(min=1e-8) 
+        return samples, window
+
+    @staticmethod
+    @torch.no_grad()
+    def sample_to_raw(samples, model_params):
+
+        num_chunks = samples.shape[2]
+        chunk_len = samples.shape[3]
+        sample_len = num_chunks * chunk_len * 2
+        half_sample_len = sample_len // 2
+        bsz = samples.shape[0]
+        samples = samples.clone()
+
+        samples = torch.view_as_complex(samples.permute(0, 2, 3, 1).contiguous())
+        samples = torch.fft.ifft(samples, norm="ortho")
+        #samples[:, :, 0] = 0; samples[:, 1:, 0] -= samples[:, 1:, 0].mean(dim=1, keepdim=True) # remove annoying clicking due to lack of windowing
+        samples = samples.view(bsz, half_sample_len)
+        samples = torch.cat((samples, torch.zeros_like(samples)), dim=1)
+
+        return torch.fft.ifft(samples, norm="ortho") * 2.
+
+    @staticmethod
+    @torch.no_grad()
+    def save_sample_img(sample, img_path, include_phase=False):
+        
+        num_chunks = sample.shape[2]
+        chunk_len = sample.shape[3]
+        bsz = sample.shape[0]
+
+        sample = torch.view_as_complex(sample.clone().detach().permute(0, 2, 3, 1).contiguous().float())
+        sample *= torch.arange(num_chunks//8, num_chunks+num_chunks//8).to(sample.device).view(1, num_chunks, 1)
+        sample = sample.view(bsz * num_chunks, chunk_len)
+        amp = sample.abs(); amp = (amp / torch.max(amp)).cpu().numpy()
+        
+        if include_phase:
+            phase = sample.angle().cpu().numpy()
+            cv2_img = np.zeros((bsz * num_chunks, chunk_len, 3), dtype=np.uint8)
+            cv2_img[:, :, 0] = (np.sin(phase) + 1) * 255/2 * amp
+            cv2_img[:, :, 1] = (np.sin(phase + 2*np.pi/3) + 1) * 255/2 * amp
+            cv2_img[:, :, 2] = (np.sin(phase + 4*np.pi/3) + 1) * 255/2 * amp
+        else:
+            cv2_img = (amp * 255).astype(np.uint8)
+            cv2_img = cv2.applyColorMap(cv2_img, cv2.COLORMAP_JET)
+
+        cv2.imwrite(img_path, cv2.flip(cv2_img, -1))
+
+    @staticmethod
+    def get_loss(sample, target, model_params, reduction="mean"):
+        return torch.nn.functional.mse_loss(sample.float(), target.float(), reduction=reduction)
+    
+    @staticmethod
+    def get_sample_shape(model_params, bsz=1, length=1):
+        _, num_output_channels = DualNormalFormat.get_num_channels(model_params)
+        num_chunks = model_params["num_chunks"]
+        default_length = model_params["sample_raw_length"] // num_chunks // 2
+        return (bsz, num_output_channels, num_chunks, default_length*length,)
+
+
 class DualOverlappedFormat:
 
     @staticmethod
@@ -68,7 +201,7 @@ class DualOverlappedFormat:
 
     @staticmethod
     @torch.no_grad()
-    def raw_to_sample(raw_samples, model_params, window=None):
+    def raw_to_sample(raw_samples, model_params, window=None, random_phase_offset=False):
         num_chunks = model_params["num_chunks"]
         sample_len = model_params["sample_raw_length"]
         half_sample_len = sample_len // 2
@@ -92,10 +225,12 @@ class DualOverlappedFormat:
 
         samples = torch.cat((slices_1, slices_2), dim=2).view(bsz, num_chunks*2, chunk_len) * window
         if fftshift:
-            samples = torch.view_as_real(torch.fft.fft(torch.fft.fftshift(samples, dim=-1), norm="ortho"))
+            samples = torch.fft.fft(torch.fft.fftshift(samples, dim=-1), norm="ortho")
         else:
-            samples = torch.view_as_real(torch.fft.fft(samples, norm="ortho"))
-        samples = samples.permute(0, 3, 1, 2).contiguous()
+            samples = torch.fft.fft(samples, norm="ortho")
+        if random_phase_offset:
+            samples *= torch.exp(2j*np.pi*torch.rand(1, device=samples.device))
+        samples = torch.view_as_real(samples).permute(0, 3, 1, 2).contiguous()
         
         if "sample_std" in model_params:
             samples /= model_params["sample_std"]
@@ -422,6 +557,8 @@ class DualDiffusionPipeline(DiffusionPipeline):
             return DualNormalFormat
         elif sample_format == "overlapped":
             return DualOverlappedFormat
+        elif sample_format == "embedding":
+            return DualEmbeddingFormat
         else:
             raise ValueError(f"Unknown sample format '{sample_format}'")
         
@@ -479,11 +616,11 @@ class DualDiffusionPipeline(DiffusionPipeline):
     @staticmethod
     @torch.no_grad()
     def add_freq_embedding(freq_samples, freq_embedding_dim, format_hint="", pitch_augmentation=1., tempo_augmentation=1.):
-        return add_freq_embedding(freq_samples,
-                                  freq_embedding_dim,
-                                  format_hint=format_hint,
-                                  pitch_augmentation=pitch_augmentation,
-                                  tempo_augmentation=tempo_augmentation)
+        return DualEmbeddingFormat.add_freq_embedding(freq_samples,
+                                                      freq_embedding_dim,
+                                                      format_hint=format_hint,
+                                                      pitch_augmentation=pitch_augmentation,
+                                                      tempo_augmentation=tempo_augmentation)
     
     @torch.no_grad()
     def upscale(self, raw_sample):
