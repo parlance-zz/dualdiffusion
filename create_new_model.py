@@ -8,7 +8,7 @@ load_dotenv()
 
 torch.manual_seed(200)
 
-MODEL_NAME = "dualdiffusion2d_210"
+MODEL_NAME = "dualdiffusion2d_211"
 MODEL_PARAMS = {
     #"prediction_type": "sample",
     "prediction_type": "v_prediction",
@@ -74,13 +74,14 @@ UNET_PARAMS = {
 
     #"double_attention": True,
     "double_attention": False,
-    "pre_attention": False,
-    #"pre_attention": True,
+    #"pre_attention": False,
+    "pre_attention": True,
+    "no_conv_in": True,
     
-    "separate_attn_dim_down": (2,3,),
+    "separate_attn_dim_down": (3,2,3,),
     #"separate_attn_dim_down": (3,),
     
-    "separate_attn_dim_up": (3,2,3,),
+    "separate_attn_dim_up": (2,3,2,3,),
     #"separate_attn_dim_up": (2,3,),
 
     #"downsample_type": "resnet",

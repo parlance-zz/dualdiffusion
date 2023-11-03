@@ -106,6 +106,7 @@ class UNet2DDualModel(ModelMixin, ConfigMixin):
         num_class_embeds: Optional[int] = None,
         dropout: Union[float, Tuple[float]] = 0.0,
         conv_size = (3,3),
+        no_conv_in: bool = False,
     ):
         super().__init__()
 
@@ -150,9 +151,12 @@ class UNet2DDualModel(ModelMixin, ConfigMixin):
             )
         
         # input
-        #conv_in_kernel_size = conv_size
-        conv_in_kernel_size = (3,3)
-        self.conv_in = nn.Conv2d(in_channels, block_out_channels[0], kernel_size=conv_in_kernel_size, padding=(conv_in_kernel_size[0]//2, conv_in_kernel_size[1]//2))
+        if no_conv_in:
+            self.conv_in = nn.Identity()
+        else:
+            #conv_in_kernel_size = conv_size
+            conv_in_kernel_size = (3,3)
+            self.conv_in = nn.Conv2d(in_channels, block_out_channels[0], kernel_size=conv_in_kernel_size, padding=(conv_in_kernel_size[0]//2, conv_in_kernel_size[1]//2))
 
         # time
         if time_embedding_type == "fourier":
