@@ -5,7 +5,7 @@ accelerate launch^
  --allow_tf32^
  --train_data_dir="D:/dualdiffusion/dataset/samples"^
  --raw_sample_format="int16"^
- --pretrained_model_name_or_path="D:/dualdiffusion/models/dualdiffusion2d_203"^
+ --pretrained_model_name_or_path="D:/dualdiffusion/models/dualdiffusion2d_210"^
  --train_batch_size=1^
  --num_train_epochs=500^
  --checkpointing_steps=2470^

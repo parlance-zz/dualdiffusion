@@ -8,7 +8,6 @@ from diffusers.schedulers import DPMSolverMultistepScheduler, DDIMScheduler, DPM
 from diffusers.schedulers import EulerAncestralDiscreteScheduler, KDPM2AncestralDiscreteScheduler
 from diffusers.pipelines.pipeline_utils import DiffusionPipeline
 
-from unet2d_dual_blocks import add_freq_embedding
 from unet2d_dual import UNet2DDualModel
 
 def to_freq(x):
