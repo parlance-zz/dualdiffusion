@@ -395,7 +395,7 @@ def parse_args():
     parser.add_argument(
         "--num_validation_steps",
         type=int,
-        default=250,
+        default=500,
         help="Number of steps to use when creating validation samples.",
     )
     parser.add_argument(
@@ -520,6 +520,7 @@ def main():
     model_params = pipeline.config["model_params"]
     sample_crop_width = pipeline.format.get_sample_crop_width(model_params)
     freq_embedding_dim = model_params["freq_embedding_dim"]
+    time_embedding_dim = model_params["time_embedding_dim"]
     
     if args.module == "unet":
         module_class = UNet2DDualModel
@@ -941,9 +942,10 @@ def main():
                             else:       
                                 vae.decode(samples.detach() / vae.config.scaling_factor).sample.cpu().numpy().tofile(os.path.join(debug_path, "debug_train_reconstructed_raw_samples.raw"))
 
-                            samples_with_embedding = DualDiffusionPipeline.add_freq_embedding(samples,
-                                                                                              freq_embedding_dim,
-                                                                                              format_hint=model_params["sample_format"])
+                            samples_with_embedding = DualDiffusionPipeline.add_embeddings(samples,
+                                                                                          freq_embedding_dim,
+                                                                                          time_embedding_dim,
+                                                                                          format_hint=model_params["sample_format"])
                             samples_with_embedding.detach().cpu().numpy().tofile(os.path.join(debug_path, "debug_train_samples_with_embedding.raw"))
                             del samples_with_embedding
                             
@@ -960,11 +962,12 @@ def main():
                         pitch_augmentation = np.exp2((np.random.rand()*2-1) * args.pitch_augmentation_range)
                         tempo_augmentation = np.exp2((np.random.rand()*2-1) * args.tempo_augmentation_range)
 
-                        model_input = DualDiffusionPipeline.add_freq_embedding(model_input,
-                                                                               freq_embedding_dim,
-                                                                               format_hint=model_params["sample_format"],
-                                                                               pitch_augmentation=pitch_augmentation,
-                                                                               tempo_augmentation=tempo_augmentation)
+                        model_input = DualDiffusionPipeline.add_embeddings(model_input,
+                                                                           freq_embedding_dim,
+                                                                           time_embedding_dim,
+                                                                           format_hint=model_params["sample_format"],
+                                                                           pitch_augmentation=pitch_augmentation,
+                                                                           tempo_augmentation=tempo_augmentation)
                         if (not debug_written) and (debug_path is not None):
                             model_input.detach().cpu().numpy().tofile(os.path.join(debug_path, "debug_train_model_input.raw"))
                         
@@ -1058,7 +1061,8 @@ def main():
                 logs = {"loss": train_loss,
                         "lr": lr_scheduler.get_last_lr()[0],
                         "step": global_step,
-                        "grad_norm": grad_norm}
+                        "grad_norm": grad_norm,
+                        "grad_norm/loss": grad_norm / train_loss}
                 if args.use_ema:
                     logs["ema_decay"] = ema_module.cur_decay_value    
                 accelerator.log(logs, step=global_step)

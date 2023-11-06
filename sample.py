@@ -7,6 +7,7 @@ import torch
 import torchaudio
 
 from dual_diffusion_pipeline import DualDiffusionPipeline, DualLogFormat, DualNormalFormat, DualOverlappedFormat
+from attention_processor_dual import add_embeddings
 
 def get_dataset_stats():
     model_params = {
@@ -113,26 +114,29 @@ def reconstruction_test(sample_num=1):
     raw_sample /= raw_sample.abs().max()
     raw_sample.cpu().numpy().tofile("./debug/debug_reconstruction.raw")
     
-    freq_sample = DualDiffusionPipeline.add_freq_embedding(freq_sample,
-                                                           model_params["freq_embedding_dim"],
-                                                           model_params["sample_format"])
-    print("Sample shape (with freq embedding):", freq_sample.shape)
-    print("Sample mean (with freq embedding):", freq_sample.mean().item())
-    print("Sample std (with freq embedding):", freq_sample.std().item())
-
-    freq_sample.cpu().numpy().tofile("./debug/debug_sample_with_freq_embedding.raw")
+    if model_params["freq_embedding_dim"] > 0 or model_params["time_embedding_dim"] > 0:
+        freq_sample = DualDiffusionPipeline.add_embeddings(freq_sample,
+                                                        model_params["freq_embedding_dim"],
+                                                        model_params["time_embedding_dim"],
+                                                        model_params["sample_format"])
+        print("Sample shape (with freq embedding):", freq_sample.shape)
+        print("Sample mean (with freq embedding):", freq_sample.mean().item())
+        print("Sample std (with freq embedding):", freq_sample.std().item())
+        freq_sample.cpu().numpy().tofile("./debug/debug_sample_with_freq_embedding.raw")
     
     exit()
 
 def embedding_test():
-    freq_embedding_dim = 256#256#32
+    freq_embedding_dim = 128#128
+    time_embedding_dim = 128
     ref_pitch_pos = 4
     ref_time_pos = 4
     pitch_exp_scale = (freq_embedding_dim)**-0.5
-    time_exp_scale = (freq_embedding_dim)**-0.5 
+    time_exp_scale = (time_embedding_dim)**-0.5 
 
     sample = torch.zeros((1, 2, 256, 256), dtype=torch.float32).to("cuda")
-    sample = DualDiffusionPipeline.add_freq_embedding(sample, freq_embedding_dim, "normal")
+    sample = DualDiffusionPipeline.add_embeddings(sample, freq_embedding_dim, time_embedding_dim, "normal")
+    #sample = add_embeddings(sample, freq_embedding_dim, time_embedding_dim)
 
     ref_pitch_embed = sample[:, 2:freq_embedding_dim//2, ref_pitch_pos:ref_pitch_pos+1, 0]
     ref_time_embed = sample[:, 2+freq_embedding_dim//2:, 0, ref_time_pos:ref_time_pos+1]
@@ -174,9 +178,9 @@ if __name__ == "__main__":
     #get_dataset_stats(DualOverlappedFormat)
     #embedding_test()
 
-    model_name = "dualdiffusion2d_203"
+    model_name = "dualdiffusion2d_302"
     #model_name = "dualdiffusion2d_118"
-    num_samples = 3
+    num_samples = 1
     batch_size = 1
     length = 1
     scheduler = "dpms++"
@@ -184,7 +188,7 @@ if __name__ == "__main__":
     #scheduler = "kdpm2_a"
     #scheduler = "euler_a"
     #scheduler = "dpms++_sde"
-    steps = 666#337 #250
+    steps = 999#337 #250
     loops = 1
     fp16 = False
     #fp16 = True

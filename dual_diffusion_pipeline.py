@@ -56,8 +56,9 @@ class DualEmbeddingFormat:
     @staticmethod
     def get_num_channels(model_params):
         freq_embedding_dim = model_params["freq_embedding_dim"]
+        time_embedding_dim = model_params["time_embedding_dim"]
         channels = model_params["sample_raw_channels"] * 2
-        return (channels + freq_embedding_dim, channels)
+        return (channels + freq_embedding_dim + time_embedding_dim, channels)
 
     @staticmethod
     @torch.no_grad()
@@ -67,30 +68,26 @@ class DualEmbeddingFormat:
 
     @staticmethod
     @torch.no_grad()
-    def add_freq_embedding(freq_samples, freq_embedding_dim, format_hint="", pitch_augmentation=1., tempo_augmentation=1.):
+    def add_embeddings(samples, freq_embedding_dim, time_embedding_dim, format_hint="", pitch_augmentation=1., tempo_augmentation=1.):
 
-        bsz = freq_samples.shape[0]
-        num_chunks = freq_samples.shape[2]
-        chunk_len = freq_samples.shape[3]
-        num_frequencies = num_chunks * chunk_len
+        bsz = samples.shape[0]
+        num_chunks = samples.shape[2]
+        chunk_len = samples.shape[3]
         num_orders = freq_embedding_dim // 2
 
-        k = torch.exp2(torch.arange(0, num_orders, device=freq_samples.device))
-        ln_q = torch.arange(0, num_frequencies, device=freq_samples.device).log2()
-        freq_embeddings = torch.exp(1j*2*np.pi * ln_q.view(-1, 1) * k.view(1, -1))
-        freq_embeddings[0, :] = 0
+        #k = torch.pow(1.6180339887498948482, torch.arange(0, num_orders, device=freq_samples.device))
+        k = torch.exp2(torch.arange(0, num_orders, device=samples.device))
+        q = torch.arange(0, num_chunks, device=samples.device) + 0.5
+        q = q.log2() # ???
+        t = (torch.arange(0, chunk_len, device=samples.device) + 0.5) / chunk_len - 0.5
         
-        fft = torch.view_as_complex(freq_samples.permute(0, 2, 3, 1).contiguous().float())
-        fft = torch.fft.ifft(fft, norm="ortho")
+        embeddings = torch.exp(1j * k.view(-1, 1, 1) * q.view(1,-1, 1) * t.view(1, 1,-1))
+        embeddings = torch.view_as_real(embeddings).permute(0, 3, 1, 2).contiguous()
+        embeddings = embeddings.view(1, freq_embedding_dim, num_chunks, chunk_len)
+        embeddings = embeddings.repeat(bsz, 1, 1, 1)
 
-        freq_embeddings = fft.view(bsz, num_chunks, chunk_len, 1) * freq_embeddings.view(1, num_chunks, chunk_len, num_orders)
-        freq_embeddings = torch.fft.fft(freq_embeddings, norm="ortho", dim=2)
-        freq_embeddings = torch.view_as_real(freq_embeddings).permute(0, 3, 4, 1, 2).contiguous()
-        freq_embeddings = freq_embeddings.view(bsz, freq_embedding_dim, num_chunks, chunk_len)
-
-        freq_embeddings = torch.cat((freq_samples, freq_embeddings), dim=1)
-        freq_embeddings /= freq_embeddings.std(dim=(1, 2, 3), keepdim=True).clip(min=1e-8) 
-        return freq_embeddings.type(freq_samples.dtype)
+        embeddings = torch.cat((samples, embeddings), dim=1)
+        return embeddings.type(samples.dtype)
 
     @staticmethod
     @torch.no_grad()
@@ -614,12 +611,13 @@ class DualDiffusionPipeline(DiffusionPipeline):
 
     @staticmethod
     @torch.no_grad()
-    def add_freq_embedding(freq_samples, freq_embedding_dim, format_hint="", pitch_augmentation=1., tempo_augmentation=1.):
-        return DualEmbeddingFormat.add_freq_embedding(freq_samples,
-                                                      freq_embedding_dim,
-                                                      format_hint=format_hint,
-                                                      pitch_augmentation=pitch_augmentation,
-                                                      tempo_augmentation=tempo_augmentation)
+    def add_embeddings(freq_samples, freq_embedding_dim, time_embedding_dim, format_hint="normal", pitch_augmentation=1., tempo_augmentation=1.):
+        return DualEmbeddingFormat.add_embeddings(freq_samples,
+                                                  freq_embedding_dim,
+                                                  time_embedding_dim,
+                                                  format_hint=format_hint,
+                                                  pitch_augmentation=pitch_augmentation,
+                                                  tempo_augmentation=tempo_augmentation)
     
     @torch.no_grad()
     def upscale(self, raw_sample):
@@ -691,20 +689,22 @@ class DualDiffusionPipeline(DiffusionPipeline):
             sample_shape = self.format.get_sample_shape(model_params, bsz=batch_size, length=length)
         else:
             raise NotImplementedError()
-        #sample_shape = (1, 2, 128, 128)
         print(f"Sample shape: {sample_shape}")
 
         sample = torch.randn(sample_shape, device=self.device, dtype=self.unet.dtype, generator=generator)
         sample *= noise_scheduler.init_noise_sigma
+
         freq_embedding_dim = model_params["freq_embedding_dim"]
+        time_embedding_dim = model_params["time_embedding_dim"]
 
         for _, t in enumerate(self.progress_bar(timesteps)):
             
             model_input = sample
-            if freq_embedding_dim > 0:
-                model_input = DualDiffusionPipeline.add_freq_embedding(model_input,
-                                                                       freq_embedding_dim,
-                                                                       format_hint=model_params["sample_format"])
+            if freq_embedding_dim > 0 or time_embedding_dim > 0:
+                model_input = DualDiffusionPipeline.add_embeddings(model_input,
+                                                                   freq_embedding_dim,
+                                                                   time_embedding_dim,
+                                                                   format_hint=model_params["sample_format"])
             model_input = noise_scheduler.scale_model_input(model_input, t)
             model_output = self.unet(model_input, t).sample
 

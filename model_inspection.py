@@ -10,7 +10,7 @@ if __name__ == "__main__":
 
     load_dotenv()
 
-    model_name = "dualdiffusion2d_147"
+    model_name = "dualdiffusion2d_301"
     compare_model_name = None
     #compare_model_name = "dualdiffusion2d_132"
 
