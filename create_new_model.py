@@ -81,10 +81,10 @@ UNET_PARAMS = {
     #"no_conv_in": True,
     "no_conv_in": False,
     
-    "separate_attn_dim_down": (2,3,),
+    "separate_attn_dim_down": (3,2,3,),
     #"separate_attn_dim_down": (3,),
     
-    "separate_attn_dim_up": (3,2,3,),
+    "separate_attn_dim_up": (2,3,2,3,),
     #"separate_attn_dim_up": (2,3,),
     
     "freq_embedding_dim": 128,
