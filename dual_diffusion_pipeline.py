@@ -86,8 +86,7 @@ class DualEmbeddingFormat:
         embeddings = embeddings.view(1, freq_embedding_dim, num_chunks, chunk_len)
         embeddings = embeddings.repeat(bsz, 1, 1, 1)
 
-        embeddings = torch.cat((samples, embeddings), dim=1)
-        return embeddings.type(samples.dtype)
+        return torch.cat((samples, embeddings.type(samples.dtype)), dim=1)
 
     @staticmethod
     @torch.no_grad()

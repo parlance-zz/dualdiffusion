@@ -127,16 +127,16 @@ def reconstruction_test(sample_num=1):
     exit()
 
 def embedding_test():
-    freq_embedding_dim = 128#128
-    time_embedding_dim = 128
-    ref_pitch_pos = 4
-    ref_time_pos = 4
-    pitch_exp_scale = (freq_embedding_dim)**-0.5
-    time_exp_scale = (time_embedding_dim)**-0.5 
+    freq_embedding_dim = 256#128
+    time_embedding_dim = 64
+    ref_pitch_pos = 10
+    ref_time_pos = 10
+    pitch_exp_scale = (freq_embedding_dim)**-0.5# * 10
+    time_exp_scale = (time_embedding_dim)**-0.5# * 10
 
     sample = torch.zeros((1, 2, 256, 256), dtype=torch.float32).to("cuda")
-    sample = DualDiffusionPipeline.add_embeddings(sample, freq_embedding_dim, time_embedding_dim, "normal")
-    #sample = add_embeddings(sample, freq_embedding_dim, time_embedding_dim)
+    #sample = DualDiffusionPipeline.add_embeddings(sample, freq_embedding_dim, time_embedding_dim, "normal")
+    sample = add_embeddings(sample, freq_embedding_dim, time_embedding_dim)
 
     ref_pitch_embed = sample[:, 2:freq_embedding_dim//2, ref_pitch_pos:ref_pitch_pos+1, 0]
     ref_time_embed = sample[:, 2+freq_embedding_dim//2:, 0, ref_time_pos:ref_time_pos+1]
@@ -176,7 +176,7 @@ if __name__ == "__main__":
 
     #reconstruction_test(sample_num=200)
     #get_dataset_stats(DualOverlappedFormat)
-    #embedding_test()
+    embedding_test()
 
     model_name = "dualdiffusion2d_302"
     #model_name = "dualdiffusion2d_118"

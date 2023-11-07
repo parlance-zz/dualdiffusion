@@ -112,9 +112,11 @@ class Attention(nn.Module):
             )
 
         if norm_num_groups is not None:
-            self.group_norm = nn.GroupNorm(num_channels=self.inner_dim, num_groups=norm_num_groups, eps=eps, affine=True)
+            self.group_norm_v = nn.GroupNorm(num_channels=self.inner_dim, num_groups=norm_num_groups, eps=eps, affine=True)
+            self.group_norm_qk = nn.GroupNorm(num_channels=query_dim, num_groups=norm_num_groups, eps=eps, affine=True)
         else:
-            self.group_norm = None
+            self.group_norm_v = None
+            self.group_norm_qk = None
 
         if spatial_norm_dim is not None:
             self.spatial_norm = SpatialNorm(f_channels=self.inner_dim, zq_channels=spatial_norm_dim)
@@ -898,10 +900,10 @@ def add_embeddings(hidden_states, freq_embedding_dim, time_embedding_dim):
         with torch.no_grad():
             num_freq_orders = freq_embedding_dim // 2
             k = torch.exp2(torch.arange(0, num_freq_orders, device=hidden_states.device))
-            #x = torch.arange(1, hidden_states.shape[2]+1, device=hidden_states.device)
-            x = (torch.arange(0, hidden_states.shape[2], device=hidden_states.device)+0.5) / hidden_states.shape[2]
-            #ln_x = x.log2() / x[-1].log2()
-            ln_x = x.log2() * (2 * 3.14159265358979323846)
+            x = torch.arange(1, hidden_states.shape[2]+1, device=hidden_states.device)
+            #x = (torch.arange(0, hidden_states.shape[2], device=hidden_states.device)+0.5) / hidden_states.shape[2]
+            ln_x = x.log2() / x[-1].log2()
+            #ln_x = x.log2() * (2 * 3.14159265358979323846)
             freq_embeddings = k.view(-1, 1) * ln_x.view(1, -1)
             freq_embeddings = torch.view_as_real(torch.exp(1j * freq_embeddings)).permute(0, 2, 1).reshape(1, freq_embedding_dim, hidden_states.shape[2], 1)
             freq_embeddings = freq_embeddings.repeat(hidden_states.shape[0], 1, 1, hidden_states.shape[3])
@@ -1048,8 +1050,9 @@ class AttnProcessor2_0:
             # (batch, heads, source_length, target_length)
             attention_mask = attention_mask.view(batch_size, attn.heads, -1, attention_mask.shape[-1])
 
-        if attn.group_norm is not None:
-            v_hidden_states = attn.group_norm(v_hidden_states.transpose(1, 2)).transpose(1, 2)
+        if attn.group_norm_v is not None:
+            qk_hidden_states = attn.group_norm_qk(qk_hidden_states.transpose(1, 2)).transpose(1, 2)
+            v_hidden_states = attn.group_norm_v(v_hidden_states.transpose(1, 2)).transpose(1, 2)
 
         query = attn.to_q(qk_hidden_states, scale=scale)
         key = attn.to_k(qk_hidden_states, scale=scale)

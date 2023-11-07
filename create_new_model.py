@@ -8,7 +8,7 @@ load_dotenv()
 
 torch.manual_seed(200)
 
-MODEL_NAME = "dualdiffusion2d_302"
+MODEL_NAME = "dualdiffusion2d_310"
 MODEL_PARAMS = {
     #"prediction_type": "sample",
     "prediction_type": "v_prediction",
@@ -29,7 +29,7 @@ MODEL_PARAMS = {
     "freq_embedding_dim": 0,
     #"freq_embedding_dim": 16,
     "time_embedding_dim": 0,
-    "spatial_window_length": 2048,
+    "spatial_window_length": 1024,
     #"sample_format": "overlapped",
     #"sample_format": "embedding",
     "sample_format": "normal",
@@ -58,7 +58,7 @@ UNET_PARAMS = {
     #"attention_num_heads": 8,
     #"attention_num_heads": (8,12,20,32,52,84),
     #"attention_num_heads": (6,12,24,48),
-    "attention_num_heads": (4,8,16,16,),
+    "attention_num_heads": (8,8,16,16),
 
     #"double_attention": False,
     #"pre_attention": True,
@@ -81,14 +81,14 @@ UNET_PARAMS = {
     #"no_conv_in": True,
     "no_conv_in": False,
     
-    "separate_attn_dim_down": (3,2,3,),
+    "separate_attn_dim_down": (2,3,),
     #"separate_attn_dim_down": (3,),
     
-    "separate_attn_dim_up": (2,3,2,3,),
+    "separate_attn_dim_up": (3,2,3,),
     #"separate_attn_dim_up": (2,3,),
     
-    "freq_embedding_dim": 128,
-    "time_embedding_dim": 128,
+    "freq_embedding_dim": 256,
+    "time_embedding_dim": 64,
     #"downsample_type": "resnet",
     #"upsample_type": "resnet",
     "downsample_type": "conv",
@@ -101,7 +101,7 @@ UNET_PARAMS = {
     #"layers_per_block": 2,
     #"block_out_channels": (128, 192, 320, 512, 832, 1344),
     #"block_out_channels": (128, 192, 320, 512, 832),#, 832, 1344),
-    "block_out_channels": (256, 512, 768, 1024),
+    "block_out_channels": (128, 192, 320, 512),
     "down_block_types": (
         "SeparableAttnDownBlock2D",
         "SeparableAttnDownBlock2D",
