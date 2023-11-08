@@ -930,12 +930,10 @@ def add_embeddings(hidden_states, freq_embedding_dim, time_embedding_dim):
     if freq_embedding_dim > 0: # this embedding is a form of witchcraft
         with torch.no_grad():
             num_freq_orders = freq_embedding_dim // 2
-            x = torch.arange(0, hidden_states.shape[2]*num_freq_orders, device=hidden_states.device) + 1e-5
-            ln_x = x.log2()
+            ln_x = (torch.arange(0, hidden_states.shape[2]*num_freq_orders, device=hidden_states.device) + 1e-5).log2()
             ln_x = ln_x.view(hidden_states.shape[2], num_freq_orders).permute(1, 0).contiguous()
             ln_x *= torch.arange(1, num_freq_orders+1, device=ln_x.device).view(-1, 1)
-            freq_embeddings = ln_x
-            freq_embeddings = torch.view_as_real(torch.exp(1j * freq_embeddings)).permute(0, 2, 1).reshape(1, freq_embedding_dim, hidden_states.shape[2], 1)
+            freq_embeddings = torch.view_as_real(torch.exp(1j * ln_x)).permute(0, 2, 1).reshape(1, freq_embedding_dim, hidden_states.shape[2], 1)
             freq_embeddings = freq_embeddings.repeat(hidden_states.shape[0], 1, 1, hidden_states.shape[3])
         hidden_states = torch.cat((hidden_states, freq_embeddings.type(hidden_states.dtype)), dim=1)
 

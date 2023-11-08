@@ -112,6 +112,7 @@ class DualEmbeddingFormat:
                 #k = (torch.arange(0, num_time_orders, device=hidden_states.device) + 1e-8).log2()
                 #k = torch.arange(1, num_time_orders+1, device=hidden_states.device)
                 k = torch.exp2(torch.arange(-num_time_orders//2-1, num_time_orders//2-1, device=hidden_states.device))
+                #k = torch.exp2(torch.arange(-num_time_orders//2-1, num_time_orders//2-1, device=hidden_states.device)-0.00125)
                 #k = torch.pow(1.6180339887498948482, torch.arange(0, num_time_orders, device=hidden_states.device))
                 #y = torch.arange(1, hidden_states.shape[3]+1, device=hidden_states.device) / hidden_states.shape[3] / 256#100
                 y = torch.arange(0, hidden_states.shape[3]*num_time_orders, device=hidden_states.device) #* 256# / num_time_orders#hidden_states.shape[3] #/ 256
