@@ -66,6 +66,7 @@ class DualEmbeddingFormat:
         x = torch.arange(0, window_len, device="cuda") / (window_len - 1)
         return (1 + torch.cos(x * 2.*np.pi - np.pi)) * 0.5
 
+    """
     @staticmethod
     @torch.no_grad()
     def add_embeddings(samples, freq_embedding_dim, time_embedding_dim, format_hint="", pitch_augmentation=1., tempo_augmentation=1.):
@@ -77,8 +78,7 @@ class DualEmbeddingFormat:
 
         #k = torch.pow(1.6180339887498948482, torch.arange(0, num_orders, device=freq_samples.device))
         k = torch.exp2(torch.arange(0, num_orders, device=samples.device))
-        q = torch.arange(0, num_chunks, device=samples.device) + 0.5
-        q = q.log2() # ???
+        q = (torch.arange(0, num_chunks, device=samples.device) + 0.5).log2() * 2 * np.pi
         t = (torch.arange(0, chunk_len, device=samples.device) + 0.5) / chunk_len - 0.5
         
         embeddings = torch.exp(1j * k.view(-1, 1, 1) * q.view(1,-1, 1) * t.view(1, 1,-1))
@@ -87,6 +87,44 @@ class DualEmbeddingFormat:
         embeddings = embeddings.repeat(bsz, 1, 1, 1)
 
         return torch.cat((samples, embeddings.type(samples.dtype)), dim=1)
+    """
+    def add_embeddings(hidden_states, freq_embedding_dim, time_embedding_dim, format_hint="", pitch_augmentation=1., tempo_augmentation=1.):
+
+        if freq_embedding_dim % 2 != 0 or time_embedding_dim % 2 != 0:
+            raise ValueError(f"freq_embedding_dim and time_embedding_dim must be divisible by 2. got freq_embedding_dim: {freq_embedding_dim} time_embedding_dim: {time_embedding_dim}")
+
+        if freq_embedding_dim > 0:
+            with torch.no_grad():
+                num_freq_orders = freq_embedding_dim // 2
+                x = torch.arange(0, hidden_states.shape[2]*num_freq_orders, device=hidden_states.device) + 1e-5
+                ln_x = x.log2()
+                ln_x = ln_x.view(hidden_states.shape[2], num_freq_orders).permute(1, 0).contiguous()
+                ln_x *= torch.arange(1, num_freq_orders+1, device=ln_x.device).view(-1, 1)
+                freq_embeddings = ln_x
+                freq_embeddings = torch.view_as_real(torch.exp(1j * freq_embeddings)).permute(0, 2, 1).reshape(1, freq_embedding_dim, hidden_states.shape[2], 1)
+                freq_embeddings = freq_embeddings.repeat(hidden_states.shape[0], 1, 1, hidden_states.shape[3])
+            hidden_states = torch.cat((hidden_states, freq_embeddings.type(hidden_states.dtype)), dim=1)
+
+        if time_embedding_dim > 0:
+            with torch.no_grad():
+                num_time_orders = time_embedding_dim // 2
+                #k = torch.exp2(torch.arange(0, num_time_orders, device=hidden_states.device))
+                #k = (torch.arange(0, num_time_orders, device=hidden_states.device) + 1e-8).log2()
+                #k = torch.arange(1, num_time_orders+1, device=hidden_states.device)
+                k = torch.exp2(torch.arange(-num_time_orders//2-1, num_time_orders//2-1, device=hidden_states.device))
+                #k = torch.pow(1.6180339887498948482, torch.arange(0, num_time_orders, device=hidden_states.device))
+                #y = torch.arange(1, hidden_states.shape[3]+1, device=hidden_states.device) / hidden_states.shape[3] / 256#100
+                y = torch.arange(0, hidden_states.shape[3]*num_time_orders, device=hidden_states.device) #* 256# / num_time_orders#hidden_states.shape[3] #/ 256
+                y = y.view(hidden_states.shape[3], num_time_orders).permute(1, 0).contiguous()
+                #time_embeddings = k.view(-1, 1) * y.view(1, -1)
+                #time_embeddings = k.view(-1, 1) * y.view(num_time_orders, -1)
+                time_embeddings = k.view(-1, 1) * y
+                time_embeddings = torch.view_as_real(torch.exp(1j * time_embeddings)).permute(0, 2, 1).reshape(1, time_embedding_dim, 1, hidden_states.shape[3])
+                time_embeddings = time_embeddings.repeat(hidden_states.shape[0], 1, hidden_states.shape[2], 1)
+
+            hidden_states = torch.cat((hidden_states, time_embeddings.type(hidden_states.dtype)), dim=1)
+
+        return hidden_states
 
     @staticmethod
     @torch.no_grad()
@@ -591,8 +629,8 @@ class DualDiffusionPipeline(DiffusionPipeline):
         debug_path = os.environ.get("DEBUG_PATH", None)
         if debug_path is not None:
             os.makedirs(debug_path, exist_ok=True)
-            snr.log().cpu().numpy().tofile(os.path.join(debug_path, "debug_ln_snr.raw"))
-            np.array(trained_betas).astype(np.float32).tofile(os.path.join(debug_path, "debug_betas.raw"))
+            snr.log().cpu().numpy().tofile(os.path.join(debug_path, "debug_schedule_ln_snr.raw"))
+            np.array(trained_betas).astype(np.float32).tofile(os.path.join(debug_path, "debug_schedule_betas.raw"))
 
         if vae_params is not None:
             #vae = VAE(**vae_params)

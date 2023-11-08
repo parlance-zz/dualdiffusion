@@ -126,40 +126,74 @@ def reconstruction_test(sample_num=1):
     
     exit()
 
+def get_embedding_response(query_embed, key_embed, exp_scale):
+    response = (query_embed * key_embed).sum(dim=(0))
+    response -= response.max()
+    response = (response*exp_scale).exp()
+    return response / response.max()
+
+def get_query(query_embed, weight):
+    return (weight.view(1, -1) * query_embed).sum(dim=1).view(-1, 1)
+
 def embedding_test():
-    freq_embedding_dim = 256#128
+    base_n_channels = 128
+    freq_embedding_dim = 64
     time_embedding_dim = 64
-    ref_pitch_pos = 10
-    ref_time_pos = 10
-    pitch_exp_scale = (freq_embedding_dim)**-0.5# * 10
-    time_exp_scale = (time_embedding_dim)**-0.5# * 10
+    sample_resolution_freq = 256
+    sample_resolution_time = 256
+    freq_exp_scale = (base_n_channels + freq_embedding_dim)**-0.5 # / 2
+    time_exp_scale = (base_n_channels + time_embedding_dim)**-0.5 # / 2
 
-    sample = torch.zeros((1, 2, 256, 256), dtype=torch.float32).to("cuda")
-    #sample = DualDiffusionPipeline.add_embeddings(sample, freq_embedding_dim, time_embedding_dim, "normal")
-    sample = add_embeddings(sample, freq_embedding_dim, time_embedding_dim)
-
-    ref_pitch_embed = sample[:, 2:freq_embedding_dim//2, ref_pitch_pos:ref_pitch_pos+1, 0]
-    ref_time_embed = sample[:, 2+freq_embedding_dim//2:, 0, ref_time_pos:ref_time_pos+1]
+    sample = torch.zeros((1, base_n_channels, sample_resolution_freq, sample_resolution_time), dtype=torch.float32)
     
-    sample_pitch_embed = sample[:, 2:freq_embedding_dim//2, :, 0]
-    sample_time_embed = sample[:, 2+freq_embedding_dim//2:, 0, :]
+    #sample = add_embeddings(sample, freq_embedding_dim, time_embedding_dim)
+    sample = DualDiffusionPipeline.add_embeddings(sample, freq_embedding_dim, time_embedding_dim)
 
-    pitch_response = (ref_pitch_embed * sample_pitch_embed).sum(dim=(0,1))
-    time_response = (ref_time_embed * sample_time_embed).sum(dim=(0,1))
+    freq_embed = sample[0, base_n_channels:base_n_channels+freq_embedding_dim, :, 0]
+    time_embed = sample[0, base_n_channels+freq_embedding_dim:, 0, :]
+
+    def g(dim, x, std):
+        x = torch.linspace(-1, 1, dim) - x
+        w = torch.exp(-0.5*(x/std)**2)
+        return w / w.max()
     
-    pitch_response -= pitch_response.max()
-    time_response -= time_response.max()
-    pitch_response = (pitch_response*pitch_exp_scale).exp()
-    time_response = (time_response*time_exp_scale).exp()
-    pitch_response /= pitch_response.max()
-    time_response /= time_response.max()
+    def lg(dim, x, std):
+        x = torch.linspace(0, 1, dim) / x
+        w = torch.exp(-0.5*(torch.log2(x)/std)**2)
+        return w / w.max()
+    
+    #freq_test_weight = lg(sample_resolution_freq, 0.4, 0.05)
+    #freq_test_weight += lg(sample_resolution_freq, 0.2, 0.05)
+    #freq_test_weight += lg(sample_resolution_freq, 0.1, 0.05)
 
-    print("Pitch response accuracy: ", pitch_response[ref_pitch_pos].item() / pitch_response.sum().item())
-    print("Time response accuracy: ", time_response[ref_time_pos].item() / time_response.sum().item())
+    freq_test_weight = lg(sample_resolution_freq, 0.1, 0.02)# /0.1
+    freq_test_weight += lg(sample_resolution_freq, 0.24, 0.02) #/ 0.24
+    freq_test_weight += lg(sample_resolution_freq, 0.63, 0.02)# / 0.63
+    freq_test_weight /= torch.arange(1, len(freq_test_weight)+1e-3)
 
-    pitch_response.cpu().numpy().tofile("./debug/debug_embed_pitch_response.raw")
+    freq_test_weight /= freq_test_weight.max()
+    freq_test_weight.cpu().numpy().tofile("./debug/debug_embed_freq_weight.raw")
+
+    freq_query = get_query(freq_embed, freq_test_weight)
+    freq_response = get_embedding_response(freq_query, freq_embed, freq_exp_scale)
+    freq_response.cpu().numpy().tofile("./debug/debug_embed_freq_response.raw")
+    
+    time_test_weight = g(sample_resolution_time, -0.5, 0.015)
+    time_test_weight += g(sample_resolution_time, -0.3, 0.015)
+    time_test_weight += g(sample_resolution_time, -0.1, 0.015)
+    time_test_weight += g(sample_resolution_time, 0., 0.015)
+    time_test_weight += g(sample_resolution_time, 0.3, 0.015)
+    time_test_weight /= time_test_weight.max()
+    time_test_weight.cpu().numpy().tofile("./debug/debug_embed_time_weight.raw")
+
+    time_query = get_query(time_embed, time_test_weight)
+    time_response = get_embedding_response(time_query, time_embed, time_exp_scale)
     time_response.cpu().numpy().tofile("./debug/debug_embed_time_response.raw")
 
+    print("freq response error:", (freq_response - freq_test_weight).square().mean().item())
+    print("time response error:", (time_response - time_test_weight).square().mean().item())
+    #print("freq response error:", (freq_response.log() - freq_test_weight.log()).square().mean().item())
+    #print("time response error:", (time_response.log() - time_test_weight.log()).square().mean().item())
     exit()
 
 
