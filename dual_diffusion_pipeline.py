@@ -96,30 +96,18 @@ class DualEmbeddingFormat:
         if freq_embedding_dim > 0:
             with torch.no_grad():
                 num_freq_orders = freq_embedding_dim // 2
-                x = torch.arange(0, hidden_states.shape[2]*num_freq_orders, device=hidden_states.device) + 1e-5
-                ln_x = x.log2()
+                ln_x = torch.arange(0, hidden_states.shape[2]*num_freq_orders, device=hidden_states.device).log2(); ln_x[0] = 0
                 ln_x = ln_x.view(hidden_states.shape[2], num_freq_orders).permute(1, 0).contiguous()
                 ln_x *= torch.arange(1, num_freq_orders+1, device=ln_x.device).view(-1, 1)
-                freq_embeddings = ln_x
-                freq_embeddings = torch.view_as_real(torch.exp(1j * freq_embeddings)).permute(0, 2, 1).reshape(1, freq_embedding_dim, hidden_states.shape[2], 1)
+                freq_embeddings = torch.view_as_real(torch.exp(1j * ln_x)).permute(0, 2, 1).reshape(1, freq_embedding_dim, hidden_states.shape[2], 1)
                 freq_embeddings = freq_embeddings.repeat(hidden_states.shape[0], 1, 1, hidden_states.shape[3])
             hidden_states = torch.cat((hidden_states, freq_embeddings.type(hidden_states.dtype)), dim=1)
 
         if time_embedding_dim > 0:
             with torch.no_grad():
                 num_time_orders = time_embedding_dim // 2
-                #k = torch.exp2(torch.arange(0, num_time_orders, device=hidden_states.device))
-                #k = (torch.arange(0, num_time_orders, device=hidden_states.device) + 1e-8).log2()
-                #k = torch.arange(1, num_time_orders+1, device=hidden_states.device)
-                k = torch.exp2(torch.arange(-num_time_orders//2-1, num_time_orders//2-1, device=hidden_states.device))
-                #k = torch.exp2(torch.arange(-num_time_orders//2-1, num_time_orders//2-1, device=hidden_states.device)-0.00125)
-                #k = torch.pow(1.6180339887498948482, torch.arange(0, num_time_orders, device=hidden_states.device))
-                #y = torch.arange(1, hidden_states.shape[3]+1, device=hidden_states.device) / hidden_states.shape[3] / 256#100
-                y = torch.arange(0, hidden_states.shape[3]*num_time_orders, device=hidden_states.device) #* 256# / num_time_orders#hidden_states.shape[3] #/ 256
-                y = y.view(hidden_states.shape[3], num_time_orders).permute(1, 0).contiguous()
-                #time_embeddings = k.view(-1, 1) * y.view(1, -1)
-                #time_embeddings = k.view(-1, 1) * y.view(num_time_orders, -1)
-                time_embeddings = k.view(-1, 1) * y
+                k = torch.arange(1, num_time_orders+1, device=hidden_states.device)
+                time_embeddings = k.view(-1, 1) * k.log2().view(-1, 1) * torch.arange(0, hidden_states.shape[3], device=hidden_states.device).view(1, -1) / (hidden_states.shape[3] / 4 * np.pi)
                 time_embeddings = torch.view_as_real(torch.exp(1j * time_embeddings)).permute(0, 2, 1).reshape(1, time_embedding_dim, 1, hidden_states.shape[3])
                 time_embeddings = time_embeddings.repeat(hidden_states.shape[0], 1, hidden_states.shape[2], 1)
 

@@ -146,8 +146,8 @@ def embedding_test():
 
     sample = torch.zeros((1, base_n_channels, sample_resolution_freq, sample_resolution_time), dtype=torch.float32)
     
-    #sample = add_embeddings(sample, freq_embedding_dim, time_embedding_dim)
-    sample = DualDiffusionPipeline.add_embeddings(sample, freq_embedding_dim, time_embedding_dim)
+    sample = add_embeddings(sample, freq_embedding_dim, time_embedding_dim)
+    #sample = DualDiffusionPipeline.add_embeddings(sample, freq_embedding_dim, time_embedding_dim)
 
     freq_embed = sample[0, base_n_channels:base_n_channels+freq_embedding_dim, :, 0]
     time_embed = sample[0, base_n_channels+freq_embedding_dim:, 0, :]
@@ -178,15 +178,17 @@ def embedding_test():
     freq_response = get_embedding_response(freq_query, freq_embed, freq_exp_scale)
     freq_response.cpu().numpy().tofile("./debug/debug_embed_freq_response.raw")
     
-    time_test_weight = g(sample_resolution_time, -0.5, 0.015)
-    time_test_weight += g(sample_resolution_time, -0.3, 0.015)
-    time_test_weight += g(sample_resolution_time, -0.1, 0.015)
-    time_test_weight += g(sample_resolution_time, 0., 0.015)
-    time_test_weight += g(sample_resolution_time, 0.3, 0.015)
+    time_test_weight_std = 0.01
+    time_test_weight = g(sample_resolution_time, -0.5, time_test_weight_std)
+    time_test_weight += g(sample_resolution_time, -0.3, time_test_weight_std)
+    time_test_weight += g(sample_resolution_time, -0.1, time_test_weight_std)
+    time_test_weight += g(sample_resolution_time, 0., time_test_weight_std)
+    time_test_weight += g(sample_resolution_time, 0.3, time_test_weight_std)
     time_test_weight /= time_test_weight.max()
     time_test_weight.cpu().numpy().tofile("./debug/debug_embed_time_weight.raw")
 
     time_query = get_query(time_embed, time_test_weight)
+    time_query.cpu().numpy().tofile("./debug/debug_embed_time_query.raw")
     time_response = get_embedding_response(time_query, time_embed, time_exp_scale)
     time_response.cpu().numpy().tofile("./debug/debug_embed_time_response.raw")
 
