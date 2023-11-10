@@ -67,27 +67,6 @@ class DualEmbeddingFormat:
         return (1 + torch.cos(x * 2.*np.pi - np.pi)) * 0.5
 
     """
-    @staticmethod
-    @torch.no_grad()
-    def add_embeddings(samples, freq_embedding_dim, time_embedding_dim, format_hint="", pitch_augmentation=1., tempo_augmentation=1.):
-
-        bsz = samples.shape[0]
-        num_chunks = samples.shape[2]
-        chunk_len = samples.shape[3]
-        num_orders = freq_embedding_dim // 2
-
-        #k = torch.pow(1.6180339887498948482, torch.arange(0, num_orders, device=freq_samples.device))
-        k = torch.exp2(torch.arange(0, num_orders, device=samples.device))
-        q = (torch.arange(0, num_chunks, device=samples.device) + 0.5).log2() * 2 * np.pi
-        t = (torch.arange(0, chunk_len, device=samples.device) + 0.5) / chunk_len - 0.5
-        
-        embeddings = torch.exp(1j * k.view(-1, 1, 1) * q.view(1,-1, 1) * t.view(1, 1,-1))
-        embeddings = torch.view_as_real(embeddings).permute(0, 3, 1, 2).contiguous()
-        embeddings = embeddings.view(1, freq_embedding_dim, num_chunks, chunk_len)
-        embeddings = embeddings.repeat(bsz, 1, 1, 1)
-
-        return torch.cat((samples, embeddings.type(samples.dtype)), dim=1)
-    """
     def add_embeddings(hidden_states, freq_embedding_dim, time_embedding_dim, format_hint="", pitch_augmentation=1., tempo_augmentation=1.):
 
         if freq_embedding_dim % 2 != 0 or time_embedding_dim % 2 != 0:
@@ -108,6 +87,35 @@ class DualEmbeddingFormat:
                 num_time_orders = time_embedding_dim // 2
                 k = torch.arange(1, num_time_orders+1, device=hidden_states.device)
                 time_embeddings = k.view(-1, 1) * k.log2().view(-1, 1) * (torch.arange(0, hidden_states.shape[3], device=hidden_states.device)+0.5).view(1, -1) / hidden_states.shape[3]
+                time_embeddings = torch.view_as_real(torch.exp(1j * time_embeddings)).permute(0, 2, 1).reshape(1, time_embedding_dim, 1, hidden_states.shape[3])
+                time_embeddings = time_embeddings.repeat(hidden_states.shape[0], 1, hidden_states.shape[2], 1)
+            hidden_states = torch.cat((hidden_states, time_embeddings.type(hidden_states.dtype)), dim=1)
+
+        return hidden_states
+    """
+    
+    @staticmethod
+    @torch.no_grad()
+    def add_embeddings(hidden_states, freq_embedding_dim, time_embedding_dim, format_hint="", pitch_augmentation=1., tempo_augmentation=1.):
+
+        if freq_embedding_dim % 2 != 0 or time_embedding_dim % 2 != 0:
+            raise ValueError(f"freq_embedding_dim and time_embedding_dim must be divisible by 2. got freq_embedding_dim: {freq_embedding_dim} time_embedding_dim: {time_embedding_dim}")
+
+        if freq_embedding_dim > 0:
+            with torch.no_grad():
+                num_freq_orders = freq_embedding_dim // 2
+                ln_x = torch.arange(1, hidden_states.shape[2]*num_freq_orders+1, device=hidden_states.device).log()
+                ln_x = ln_x.view(hidden_states.shape[2], num_freq_orders).permute(1, 0).contiguous()
+                ln_x *= torch.arange(1, num_freq_orders+1, device=ln_x.device).view(-1, 1)
+                freq_embeddings = torch.view_as_real(torch.exp(1j * ln_x)).permute(0, 2, 1).reshape(1, freq_embedding_dim, hidden_states.shape[2], 1)
+                freq_embeddings = freq_embeddings.repeat(hidden_states.shape[0], 1, 1, hidden_states.shape[3])
+            hidden_states = torch.cat((hidden_states, freq_embeddings.type(hidden_states.dtype)), dim=1)
+
+        if time_embedding_dim > 0:
+            with torch.no_grad():
+                num_time_orders = time_embedding_dim // 2
+                k = torch.arange(1, num_time_orders+1, device=hidden_states.device)
+                time_embeddings = k.view(-1, 1) * k.log().view(-1, 1) * torch.arange(1, hidden_states.shape[3]+1, device=hidden_states.device).view(1, -1) / hidden_states.shape[3]
                 time_embeddings = torch.view_as_real(torch.exp(1j * time_embeddings)).permute(0, 2, 1).reshape(1, time_embedding_dim, 1, hidden_states.shape[3])
                 time_embeddings = time_embeddings.repeat(hidden_states.shape[0], 1, hidden_states.shape[2], 1)
             hidden_states = torch.cat((hidden_states, time_embeddings.type(hidden_states.dtype)), dim=1)

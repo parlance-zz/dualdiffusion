@@ -982,6 +982,7 @@ def add_embeddings(hidden_states, freq_embedding_dim, time_embedding_dim): # the
     return hidden_states
 """
 
+"""
 # v4
 @torch.no_grad()
 def get_embeddings(hidden_states_shape, freq_embedding_dim, time_embedding_dim, dtype=torch.float32, device="cuda"): # these embeddings are a refined form of withcraft
@@ -1005,6 +1006,40 @@ def get_embeddings(hidden_states_shape, freq_embedding_dim, time_embedding_dim, 
         num_time_orders = time_embedding_dim // 2
         k = torch.arange(1, num_time_orders+1, device=device)
         time_embeddings = k.view(-1, 1) * k.log2().view(-1, 1) * (torch.arange(0, hidden_states_shape[3], device=k.device)+0.5).view(1, -1) / hidden_states_shape[3]
+        time_embeddings = torch.view_as_real(torch.exp(1j * time_embeddings)).permute(0, 2, 1).reshape(1, time_embedding_dim, 1, hidden_states_shape[3])
+        time_embeddings = time_embeddings.repeat(hidden_states_shape[0], 1, hidden_states_shape[2], 1)
+
+        if embeddings is None:
+            embeddings = time_embeddings
+        else:
+            embeddings = torch.cat((embeddings, time_embeddings), dim=1)
+
+    return embeddings.type(dtype)
+"""
+
+# v5
+@torch.no_grad()
+def get_embeddings(hidden_states_shape, freq_embedding_dim, time_embedding_dim, dtype=torch.float32, device="cuda"): # these embeddings are a very refined form of withcraft
+
+    if freq_embedding_dim % 2 != 0 or time_embedding_dim % 2 != 0:
+        raise ValueError(f"freq_embedding_dim and time_embedding_dim must be divisible by 2. got freq_embedding_dim: {freq_embedding_dim} time_embedding_dim: {time_embedding_dim}")
+
+    embeddings = None
+
+    if freq_embedding_dim > 0:        
+        num_freq_orders = freq_embedding_dim // 2
+        ln_x = torch.arange(1, hidden_states_shape[2]*num_freq_orders+1, device=device).log()
+        ln_x = ln_x.view(hidden_states_shape[2], num_freq_orders).permute(1, 0).contiguous()
+        ln_x *= torch.arange(1, num_freq_orders+1, device=device).view(-1, 1)
+        freq_embeddings = torch.view_as_real(torch.exp(1j * ln_x)).permute(0, 2, 1).reshape(1, freq_embedding_dim, hidden_states_shape[2], 1)
+        freq_embeddings = freq_embeddings.repeat(hidden_states_shape[0], 1, 1, hidden_states_shape[3])
+
+        embeddings = freq_embeddings
+
+    if time_embedding_dim > 0:        
+        num_time_orders = time_embedding_dim // 2
+        k = torch.arange(1, num_time_orders+1, device=device)
+        time_embeddings = k.view(-1, 1) * k.log().view(-1, 1) * torch.arange(1, hidden_states_shape[3]+1, device=device).view(1, -1) / hidden_states_shape[3]
         time_embeddings = torch.view_as_real(torch.exp(1j * time_embeddings)).permute(0, 2, 1).reshape(1, time_embedding_dim, 1, hidden_states_shape[3])
         time_embeddings = time_embeddings.repeat(hidden_states_shape[0], 1, hidden_states_shape[2], 1)
 
