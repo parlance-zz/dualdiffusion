@@ -8,7 +8,7 @@ load_dotenv()
 
 torch.manual_seed(200)
 
-MODEL_NAME = "dualdiffusion2d_312_v3_64embed"
+MODEL_NAME = "dualdiffusion2d_312_v4_256embed"
 MODEL_PARAMS = {
     #"prediction_type": "sample",
     "prediction_type": "v_prediction",
@@ -87,8 +87,8 @@ UNET_PARAMS = {
     "separate_attn_dim_up": (3,2,3,),
     #"separate_attn_dim_up": (2,3,),
     
-    "freq_embedding_dim": 64,
-    "time_embedding_dim": 64,
+    "freq_embedding_dim": 256,
+    "time_embedding_dim": 256,
     #"downsample_type": "resnet",
     #"upsample_type": "resnet",
     "downsample_type": "conv",

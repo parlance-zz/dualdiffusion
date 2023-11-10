@@ -7,7 +7,7 @@ import torch
 import torchaudio
 
 from dual_diffusion_pipeline import DualDiffusionPipeline, DualLogFormat, DualNormalFormat, DualOverlappedFormat
-from attention_processor_dual import add_embeddings
+from attention_processor_dual import get_embeddings
 
 def get_dataset_stats():
     model_params = {
@@ -129,28 +129,28 @@ def reconstruction_test(sample_num=1):
 def get_embedding_response(query_embed, key_embed, exp_scale):
     response = (query_embed * key_embed).sum(dim=(0))
     response -= response.max()
+    ln_response = response.clone()
     response = (response*exp_scale).exp()
-    return response / response.max()
+    return response / response.max(), ln_response
 
 def get_query(query_embed, weight):
     return (weight.view(1, -1) * query_embed).sum(dim=1).view(-1, 1)
 
 def embedding_test():
-    base_n_channels = 128
-    freq_embedding_dim = 64
-    time_embedding_dim = 64
+    base_n_channels = 256
+    freq_embedding_dim = 256
+    time_embedding_dim = 256
     sample_resolution_freq = 256
     sample_resolution_time = 256
-    freq_exp_scale = (base_n_channels + freq_embedding_dim)**-0.5 # / 2
-    time_exp_scale = (base_n_channels + time_embedding_dim)**-0.5 # / 2
+    freq_exp_scale = (base_n_channels + freq_embedding_dim)**-0.5
+    time_exp_scale = (base_n_channels + time_embedding_dim)**-0.5
 
-    sample = torch.zeros((1, base_n_channels, sample_resolution_freq, sample_resolution_time), dtype=torch.float32)
-    
-    sample = add_embeddings(sample, freq_embedding_dim, time_embedding_dim)
+    sample_shape = (1, base_n_channels, sample_resolution_freq, sample_resolution_time)
+    embeddings = get_embeddings(sample_shape, freq_embedding_dim, time_embedding_dim, dtype=torch.float32, device="cpu")
     #sample = DualDiffusionPipeline.add_embeddings(sample, freq_embedding_dim, time_embedding_dim)
 
-    freq_embed = sample[0, base_n_channels:base_n_channels+freq_embedding_dim, :, 0]
-    time_embed = sample[0, base_n_channels+freq_embedding_dim:, 0, :]
+    freq_embed = embeddings[0, :freq_embedding_dim,  :, 0]
+    time_embed = embeddings[0,  freq_embedding_dim:, 0, :]
 
     def g(dim, x, std):
         x = torch.linspace(-1, 1, dim) - x
@@ -160,7 +160,7 @@ def embedding_test():
     def lg(dim, x, std):
         x = torch.linspace(0, 1, dim) / x
         w = torch.exp(-0.5*(torch.log2(x)/std)**2)
-        return w / w.max()
+        return w / w.square().sum() ** 0.5
     
     #freq_test_weight = lg(sample_resolution_freq, 0.4, 0.05)
     #freq_test_weight += lg(sample_resolution_freq, 0.2, 0.05)
@@ -175,7 +175,7 @@ def embedding_test():
     freq_test_weight.cpu().numpy().tofile("./debug/debug_embed_freq_weight.raw")
 
     freq_query = get_query(freq_embed, freq_test_weight)
-    freq_response = get_embedding_response(freq_query, freq_embed, freq_exp_scale)
+    freq_response, freq_ln_response = get_embedding_response(freq_query, freq_embed, freq_exp_scale)
     freq_response.cpu().numpy().tofile("./debug/debug_embed_freq_response.raw")
     
     time_test_weight_std = 0.01
@@ -188,14 +188,24 @@ def embedding_test():
     time_test_weight.cpu().numpy().tofile("./debug/debug_embed_time_weight.raw")
 
     time_query = get_query(time_embed, time_test_weight)
-    time_query.cpu().numpy().tofile("./debug/debug_embed_time_query.raw")
-    time_response = get_embedding_response(time_query, time_embed, time_exp_scale)
+    time_query.abs().cpu().numpy().tofile("./debug/debug_embed_time_query.raw")
+    time_response, time_ln_response = get_embedding_response(time_query, time_embed, time_exp_scale)
     time_response.cpu().numpy().tofile("./debug/debug_embed_time_response.raw")
 
-    print("freq response error:", (freq_response - freq_test_weight).square().mean().item())
-    print("time response error:", (time_response - time_test_weight).square().mean().item())
-    #print("freq response error:", (freq_response.log() - freq_test_weight.log()).square().mean().item())
-    #print("time response error:", (time_response.log() - time_test_weight.log()).square().mean().item())
+    freq_ln_test_weight = freq_test_weight.log()
+    freq_nan_mask = torch.isnan(freq_ln_test_weight).logical_or(torch.isinf(freq_ln_test_weight)).logical_or(torch.isneginf(freq_ln_test_weight))
+    freq_ln_response[freq_nan_mask] = 0
+    freq_ln_test_weight[freq_nan_mask] = 0
+
+    time_ln_test_weight = time_test_weight.log()
+    time_nan_mask = torch.isnan(time_ln_test_weight).logical_or(torch.isinf(time_ln_test_weight)).logical_or(torch.isneginf(time_ln_test_weight))
+    time_ln_response[time_nan_mask] = 0
+    time_ln_test_weight[time_nan_mask] = 0
+
+    print("freq response ln error:", (freq_ln_response - freq_ln_test_weight).mean().item())
+    print("time response ln error:", (time_ln_response - time_ln_test_weight).mean().item())
+    print("freq response mse error:", (freq_response - freq_test_weight).square().mean().item())
+    print("time response mse error:", (time_response - time_test_weight).square().mean().item())
     exit()
 
 
