@@ -5,7 +5,7 @@ accelerate launch^
  --allow_tf32^
  --train_data_dir="D:/dualdiffusion/dataset/samples"^
  --raw_sample_format="int16"^
- --pretrained_model_name_or_path="D:/dualdiffusion/models/dualdiffusion2d_312_v4_256embed"^
+ --pretrained_model_name_or_path="D:/dualdiffusion/models/dualdiffusion2d_312_v5_256embed"^
  --train_batch_size=3^
  --num_train_epochs=500^
  --checkpointing_steps=2196^

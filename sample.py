@@ -138,22 +138,22 @@ def get_query(query_embed, weight):
 
 def embedding_test():
     base_n_channels = 256
-    freq_embedding_dim = 256
-    time_embedding_dim = 256
+    freq_embedding_dim = 192
+    time_embedding_dim = 192
     sample_resolution_freq = 256
     sample_resolution_time = 256
     freq_exp_scale = (base_n_channels + freq_embedding_dim)**-0.5
-    time_exp_scale = (base_n_channels + time_embedding_dim)**-0.5 
+    time_exp_scale = (base_n_channels + time_embedding_dim)**-0.5
     sample_shape = (1, base_n_channels, sample_resolution_freq, sample_resolution_time)
 
-    embeddings = get_embeddings(sample_shape, freq_embedding_dim, time_embedding_dim, dtype=torch.float32, device="cpu")
-    freq_embed = embeddings[0, :freq_embedding_dim,  :, 0]
-    time_embed = embeddings[0,  freq_embedding_dim:, 0, :]
+    #embeddings = get_embeddings(sample_shape, freq_embedding_dim, time_embedding_dim, dtype=torch.float32, device="cpu")
+    #freq_embed = embeddings[0, :freq_embedding_dim,  :, 0]
+    #time_embed = embeddings[0,  freq_embedding_dim:, 0, :]
 
-    #sample = torch.zeros(sample_shape)
-    #sample = DualDiffusionPipeline.add_embeddings(sample, freq_embedding_dim, time_embedding_dim)
-    #freq_embed = sample[0, base_n_channels:base_n_channels+freq_embedding_dim,  :, 0]
-    #time_embed = sample[0, base_n_channels+freq_embedding_dim:, 0, :]
+    sample = torch.zeros(sample_shape)
+    sample = DualDiffusionPipeline.add_embeddings(sample, freq_embedding_dim, time_embedding_dim)
+    freq_embed = sample[0, base_n_channels:base_n_channels+freq_embedding_dim,  :, 0]
+    time_embed = sample[0, base_n_channels+freq_embedding_dim:, 0, :]
 
     def g(dim, x, std):
         x = torch.linspace(-1, 1, dim) - x
@@ -169,10 +169,10 @@ def embedding_test():
     #freq_test_weight += lg(sample_resolution_freq, 0.2, 0.05)
     #freq_test_weight += lg(sample_resolution_freq, 0.1, 0.05)
 
-    freq_test_weight = lg(sample_resolution_freq, 0.1, 0.02)# /0.1
-    freq_test_weight += lg(sample_resolution_freq, 0.24, 0.02) #/ 0.24
-    freq_test_weight += lg(sample_resolution_freq, 0.63, 0.02)# / 0.63
-    freq_test_weight /= torch.arange(1, len(freq_test_weight)+1e-3)
+    freq_test_weight  = lg(sample_resolution_freq, 0.1, 0.03)# /0.1
+    freq_test_weight += lg(sample_resolution_freq, 0.24, 0.03) #/ 0.24
+    freq_test_weight += lg(sample_resolution_freq, 0.63, 0.03)# / 0.63
+    freq_test_weight /= torch.arange(0, len(freq_test_weight))+1e-5#e-5 # + 1
 
     freq_test_weight /= freq_test_weight.max()
     freq_test_weight.cpu().numpy().tofile("./debug/debug_embed_freq_weight.raw")
@@ -181,7 +181,7 @@ def embedding_test():
     freq_response, freq_ln_response = get_embedding_response(freq_query, freq_embed, freq_exp_scale)
     freq_response.cpu().numpy().tofile("./debug/debug_embed_freq_response.raw")
     
-    time_test_weight_std = 0.002#0.01
+    time_test_weight_std = 0.001#0.01
     time_test_weight = g(sample_resolution_time, -0.5, time_test_weight_std)
     time_test_weight += g(sample_resolution_time, -0.3, time_test_weight_std)
     time_test_weight += g(sample_resolution_time, -0.1, time_test_weight_std)

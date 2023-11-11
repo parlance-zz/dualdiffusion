@@ -93,7 +93,7 @@ class DualEmbeddingFormat:
 
         return hidden_states
     """
-    
+
     @staticmethod
     @torch.no_grad()
     def add_embeddings(hidden_states, freq_embedding_dim, time_embedding_dim, format_hint="", pitch_augmentation=1., tempo_augmentation=1.):
@@ -115,7 +115,9 @@ class DualEmbeddingFormat:
             with torch.no_grad():
                 num_time_orders = time_embedding_dim // 2
                 k = torch.arange(1, num_time_orders+1, device=hidden_states.device)
-                time_embeddings = k.view(-1, 1) * k.log().view(-1, 1) * torch.arange(1, hidden_states.shape[3]+1, device=hidden_states.device).view(1, -1) / hidden_states.shape[3]
+                x = torch.arange(1, num_time_orders*hidden_states.shape[3]+1, device=hidden_states.device)
+                x = x.view(hidden_states.shape[3], num_time_orders).permute(1, 0).contiguous()
+                time_embeddings = k.view(-1, 1) * k.log().view(-1, 1) * x / (hidden_states.shape[3]*num_time_orders)
                 time_embeddings = torch.view_as_real(torch.exp(1j * time_embeddings)).permute(0, 2, 1).reshape(1, time_embedding_dim, 1, hidden_states.shape[3])
                 time_embeddings = time_embeddings.repeat(hidden_states.shape[0], 1, hidden_states.shape[2], 1)
             hidden_states = torch.cat((hidden_states, time_embeddings.type(hidden_states.dtype)), dim=1)

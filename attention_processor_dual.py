@@ -1039,7 +1039,9 @@ def get_embeddings(hidden_states_shape, freq_embedding_dim, time_embedding_dim, 
     if time_embedding_dim > 0:        
         num_time_orders = time_embedding_dim // 2
         k = torch.arange(1, num_time_orders+1, device=device)
-        time_embeddings = k.view(-1, 1) * k.log().view(-1, 1) * torch.arange(1, hidden_states_shape[3]+1, device=device).view(1, -1) / hidden_states_shape[3]
+        x = torch.arange(1, num_time_orders*hidden_states_shape[3]+1, device=device)
+        x = x.view(hidden_states_shape[3], num_time_orders).permute(1, 0).contiguous()
+        time_embeddings = k.view(-1, 1) * k.log().view(-1, 1) * x / (hidden_states_shape[3]*num_time_orders)
         time_embeddings = torch.view_as_real(torch.exp(1j * time_embeddings)).permute(0, 2, 1).reshape(1, time_embedding_dim, 1, hidden_states_shape[3])
         time_embeddings = time_embeddings.repeat(hidden_states_shape[0], 1, hidden_states_shape[2], 1)
 
