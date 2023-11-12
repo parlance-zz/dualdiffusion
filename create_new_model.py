@@ -8,7 +8,7 @@ load_dotenv()
 
 torch.manual_seed(200)
 
-MODEL_NAME = "dualdiffusion2d_312_v5_256embed"
+MODEL_NAME = "dualdiffusion2d_320_v6_256embed"
 MODEL_PARAMS = {
     #"prediction_type": "sample",
     "prediction_type": "v_prediction",
@@ -101,7 +101,7 @@ UNET_PARAMS = {
     #"layers_per_block": 2,
     #"block_out_channels": (128, 192, 320, 512, 832, 1344),
     #"block_out_channels": (128, 192, 320, 512, 832),#, 832, 1344),
-    "block_out_channels": (128, 192, 320, 512),
+    "block_out_channels": (256, 384, 640, 1024),
     "down_block_types": (
         "SeparableAttnDownBlock2D",
         "SeparableAttnDownBlock2D",

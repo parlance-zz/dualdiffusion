@@ -137,9 +137,9 @@ def get_query(query_embed, weight):
     return (weight.view(1, -1) * query_embed).sum(dim=1).view(-1, 1)
 
 def embedding_test():
-    base_n_channels = 256
-    freq_embedding_dim = 192
-    time_embedding_dim = 192
+    base_n_channels = 128
+    freq_embedding_dim = 256
+    time_embedding_dim = 256
     sample_resolution_freq = 256
     sample_resolution_time = 256
     freq_exp_scale = (base_n_channels + freq_embedding_dim)**-0.5
@@ -181,7 +181,7 @@ def embedding_test():
     freq_response, freq_ln_response = get_embedding_response(freq_query, freq_embed, freq_exp_scale)
     freq_response.cpu().numpy().tofile("./debug/debug_embed_freq_response.raw")
     
-    time_test_weight_std = 0.001#0.01
+    time_test_weight_std = 0.003#0.01
     time_test_weight = g(sample_resolution_time, -0.5, time_test_weight_std)
     time_test_weight += g(sample_resolution_time, -0.3, time_test_weight_std)
     time_test_weight += g(sample_resolution_time, -0.1, time_test_weight_std)
