@@ -8,7 +8,7 @@ load_dotenv()
 
 torch.manual_seed(200)
 
-MODEL_NAME = "dualdiffusion2d_320_v6_256embed"
+MODEL_NAME = "dualdiffusion2d_330_v7_256embed_scalednumgroups"
 MODEL_PARAMS = {
     #"prediction_type": "sample",
     "prediction_type": "v_prediction",
@@ -52,32 +52,25 @@ VAE_PARAMS = None
 UNET_PARAMS = {
     #"dropout": (0, 0, 0, 0.1, 0.15, 0.25),
     "dropout": 0.0,
-    "act_fn": "silu",
-    "conv_size": (3,3),
-    #"conv_size": (1,3),
-    #"attention_num_heads": 8,
-    #"attention_num_heads": (8,12,20,32,52,84),
-    #"attention_num_heads": (6,12,24,48),
-    "attention_num_heads": (8,8,16,16),
 
-    #"double_attention": False,
-    #"pre_attention": True,
-    #"separate_attn_dim_down": (3,2,3),
-    #"separate_attn_dim_up": (3,2,2,3),
-    #"downsample_type": "resnet",
-    #"upsample_type": "resnet",
+    "act_fn": "silu",
+
+    #"conv_size": (1,3),
+    "conv_size": (3,3),
+
+    #"attention_num_heads": 4,
+    "attention_num_heads": (8,8,16,16),
 
     #"use_separable_mid_block": False,
     "use_separable_mid_block": True,
-    #"separate_attn_dim_mid": (0,),
     "separate_attn_dim_mid": (0,),
     "add_mid_attention": True,
     "layers_per_mid_block": 1,
 
     #"double_attention": True,
     "double_attention": False,
-    "pre_attention": False,
     #"pre_attention": True,
+    "pre_attention": False,
     #"no_conv_in": True,
     "no_conv_in": False,
     
@@ -89,19 +82,22 @@ UNET_PARAMS = {
     
     "freq_embedding_dim": 256,
     "time_embedding_dim": 256,
+
     #"downsample_type": "resnet",
     #"upsample_type": "resnet",
     "downsample_type": "conv",
     "upsample_type": "conv",
 
     "norm_eps": 1e-05,
-    "norm_num_groups": 32,
+    #"norm_num_groups": 32,
+    "norm_num_groups": (32, 64, 128, 128,),
 
+    #"layers_per_block": 1,
     "layers_per_block": 2,
-    #"layers_per_block": 2,
-    #"block_out_channels": (128, 192, 320, 512, 832, 1344),
-    #"block_out_channels": (128, 192, 320, 512, 832),#, 832, 1344),
-    "block_out_channels": (256, 384, 640, 1024),
+
+    #"block_out_channels": (256, 384, 640, 1024), # 320
+    "block_out_channels": (128, 256, 512, 512), # 330
+
     "down_block_types": (
         "SeparableAttnDownBlock2D",
         "SeparableAttnDownBlock2D",

@@ -7,7 +7,7 @@ import torch
 import torchaudio
 
 from dual_diffusion_pipeline import DualDiffusionPipeline, DualLogFormat, DualNormalFormat, DualOverlappedFormat
-from attention_processor_dual import get_embeddings
+from attention_processor_dual import SeparableAttnProcessor2_0
 
 def get_dataset_stats():
     model_params = {
@@ -146,14 +146,14 @@ def embedding_test():
     time_exp_scale = (base_n_channels + time_embedding_dim)**-0.5
     sample_shape = (1, base_n_channels, sample_resolution_freq, sample_resolution_time)
 
-    #embeddings = get_embeddings(sample_shape, freq_embedding_dim, time_embedding_dim, dtype=torch.float32, device="cpu")
-    #freq_embed = embeddings[0, :freq_embedding_dim,  :, 0]
-    #time_embed = embeddings[0,  freq_embedding_dim:, 0, :]
+    embeddings = SeparableAttnProcessor2_0.get_embeddings(sample_shape, freq_embedding_dim, time_embedding_dim, dtype=torch.float32, device="cpu")
+    freq_embed = embeddings[0, :freq_embedding_dim,  :, 0]
+    time_embed = embeddings[0,  freq_embedding_dim:, 0, :]
 
-    sample = torch.zeros(sample_shape)
-    sample = DualDiffusionPipeline.add_embeddings(sample, freq_embedding_dim, time_embedding_dim)
-    freq_embed = sample[0, base_n_channels:base_n_channels+freq_embedding_dim,  :, 0]
-    time_embed = sample[0, base_n_channels+freq_embedding_dim:, 0, :]
+    #sample = torch.zeros(sample_shape)
+    #sample = DualDiffusionPipeline.add_embeddings(sample, freq_embedding_dim, time_embedding_dim)
+    #freq_embed = sample[0, base_n_channels:base_n_channels+freq_embedding_dim,  :, 0]
+    #time_embed = sample[0, base_n_channels+freq_embedding_dim:, 0, :]
 
     def g(dim, x, std):
         x = torch.linspace(-1, 1, dim) - x
@@ -181,17 +181,17 @@ def embedding_test():
     freq_response, freq_ln_response = get_embedding_response(freq_query, freq_embed, freq_exp_scale)
     freq_response.cpu().numpy().tofile("./debug/debug_embed_freq_response.raw")
     
-    time_test_weight_std = 0.003#0.01
+    time_test_weight_std = 0.001#0.003
     time_test_weight = g(sample_resolution_time, -0.5, time_test_weight_std)
-    time_test_weight += g(sample_resolution_time, -0.3, time_test_weight_std)
-    time_test_weight += g(sample_resolution_time, -0.1, time_test_weight_std)
-    time_test_weight += g(sample_resolution_time, 0., time_test_weight_std)
-    time_test_weight += g(sample_resolution_time, 0.3, time_test_weight_std)
+    #time_test_weight += g(sample_resolution_time, -0.3, time_test_weight_std)
+    #time_test_weight += g(sample_resolution_time, -0.1, time_test_weight_std)
+    #time_test_weight += g(sample_resolution_time, 0., time_test_weight_std)
+    #time_test_weight += g(sample_resolution_time, 0.3, time_test_weight_std)
     time_test_weight /= time_test_weight.max()
     time_test_weight.cpu().numpy().tofile("./debug/debug_embed_time_weight.raw")
 
     time_query = get_query(time_embed, time_test_weight)
-    time_query.abs().cpu().numpy().tofile("./debug/debug_embed_time_query.raw")
+    time_query.cpu().numpy().tofile("./debug/debug_embed_time_query.raw")
     time_response, time_ln_response = get_embedding_response(time_query, time_embed, time_exp_scale)
     time_response.cpu().numpy().tofile("./debug/debug_embed_time_response.raw")
 

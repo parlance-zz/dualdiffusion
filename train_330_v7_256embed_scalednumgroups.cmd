@@ -5,7 +5,7 @@ accelerate launch^
  --allow_tf32^
  --train_data_dir="D:/dualdiffusion/dataset/samples"^
  --raw_sample_format="int16"^
- --pretrained_model_name_or_path="D:/dualdiffusion/models/dualdiffusion2d_312_v5_256embed"^
+ --pretrained_model_name_or_path="D:/dualdiffusion/models/dualdiffusion2d_330_v7_256embed_scalednumgroups"^
  --train_batch_size=3^
  --num_train_epochs=500^
  --checkpointing_steps=2196^
@@ -23,7 +23,7 @@ accelerate launch^
 REM --snr_gamma=1^
 REM --input_perturbation=0.1
 
-REM --dropout=0.1                        
+REM --dropout=0.1
 REM --snr_gamma=5
 REM --input_perturbation=0.1
 
