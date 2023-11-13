@@ -109,7 +109,7 @@ class DualEmbeddingFormat:
                 ln_x = ln_x.view(hidden_states.shape[2], num_freq_orders).permute(1, 0).contiguous()
                 ln_x *= torch.arange(0, num_freq_orders, device=ln_x.device).view(-1, 1) + 0.5
                 freq_embeddings = torch.view_as_real(torch.exp(1j * ln_x)).permute(0, 2, 1).reshape(1, freq_embedding_dim, hidden_states.shape[2], 1)
-                freq_embeddings = freq_embeddings.repeat(hidden_states.shape[0], 1, 1, hidden_states.shape[3])
+                freq_embeddings = (freq_embeddings * 1.4142135623730950488016887242097).repeat(hidden_states.shape[0], 1, 1, hidden_states.shape[3])
             hidden_states = torch.cat((hidden_states, freq_embeddings.type(hidden_states.dtype)), dim=1)
 
         if time_embedding_dim > 0:
@@ -120,7 +120,7 @@ class DualEmbeddingFormat:
                 x = x.view(hidden_states.shape[3], num_time_orders).permute(1, 0).contiguous() 
                 time_embeddings = k.view(-1, 1) * x / (hidden_states.shape[3]*num_time_orders) * np.pi
                 time_embeddings = torch.view_as_real(torch.exp(1j * time_embeddings)).permute(0, 2, 1).reshape(1, time_embedding_dim, 1, hidden_states.shape[3])
-                time_embeddings = time_embeddings.repeat(hidden_states.shape[0], 1, hidden_states.shape[2], 1)
+                time_embeddings = (time_embeddings * 1.4142135623730950488016887242097).repeat(hidden_states.shape[0], 1, hidden_states.shape[2], 1)
                 
             hidden_states = torch.cat((hidden_states, time_embeddings.type(hidden_states.dtype)), dim=1)
 

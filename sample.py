@@ -172,7 +172,7 @@ def embedding_test():
     freq_test_weight  = lg(sample_resolution_freq, 0.1, 0.03)# /0.1
     freq_test_weight += lg(sample_resolution_freq, 0.24, 0.03) #/ 0.24
     freq_test_weight += lg(sample_resolution_freq, 0.63, 0.03)# / 0.63
-    freq_test_weight /= torch.arange(0, len(freq_test_weight))+1e-5#e-5 # + 1
+    freq_test_weight /= torch.arange(0, len(freq_test_weight)) +1e-5#e-5 # + 1
 
     freq_test_weight /= freq_test_weight.max()
     freq_test_weight.cpu().numpy().tofile("./debug/debug_embed_freq_weight.raw")
@@ -183,10 +183,10 @@ def embedding_test():
     
     time_test_weight_std = 0.001#0.003
     time_test_weight = g(sample_resolution_time, -0.5, time_test_weight_std)
-    #time_test_weight += g(sample_resolution_time, -0.3, time_test_weight_std)
-    #time_test_weight += g(sample_resolution_time, -0.1, time_test_weight_std)
-    #time_test_weight += g(sample_resolution_time, 0., time_test_weight_std)
-    #time_test_weight += g(sample_resolution_time, 0.3, time_test_weight_std)
+    time_test_weight += g(sample_resolution_time, -0.3, time_test_weight_std)
+    time_test_weight += g(sample_resolution_time, -0.1, time_test_weight_std)
+    time_test_weight += g(sample_resolution_time, 0., time_test_weight_std)
+    time_test_weight += g(sample_resolution_time, 0.3, time_test_weight_std)
     time_test_weight /= time_test_weight.max()
     time_test_weight.cpu().numpy().tofile("./debug/debug_embed_time_weight.raw")
 

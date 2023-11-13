@@ -120,9 +120,6 @@ class SeparableAttention(nn.Module):
 
     def forward(self, hidden_states, encoder_hidden_states=None, attention_mask=None, **cross_attention_kwargs):
 
-        original_shape = hidden_states.shape   
-        hidden_states = self.shape_for_attention(hidden_states, self.separate_attn_dim)
-
         hidden_states = self.processor(
             self,
             hidden_states,
@@ -131,7 +128,7 @@ class SeparableAttention(nn.Module):
             **cross_attention_kwargs,
         )
 
-        return self.unshape_for_attention(hidden_states, self.separate_attn_dim, original_shape)
+        return hidden_states
 
     def get_attention_scores(self, query, key, attention_mask=None):
         dtype = query.dtype
@@ -494,7 +491,7 @@ class SeparableAttnProcessor2_0:
             else:
                 embeddings = torch.cat((embeddings, time_embeddings), dim=1)
 
-        return embeddings.type(dtype)
+        return (embeddings * 1.4142135623730950488016887242097).type(dtype) # std = 1
     
     def __call__(
         self,
@@ -506,29 +503,33 @@ class SeparableAttnProcessor2_0:
         scale: float = 1.0,
     ):
         residual = hidden_states
-
-        batch_size, v_channel, height, width = hidden_states.shape
-        qk_channel = v_channel + attn.freq_embedding_dim + attn.time_embedding_dim
+        hidden_states_original_shape = hidden_states.shape
 
         if attn.group_norm_v is not None:
+            v_hidden_states = attn.group_norm_v(hidden_states)
             qk_hidden_states = attn.group_norm_qk(hidden_states)
-            hidden_states = attn.group_norm_v(hidden_states)
+
+        v_hidden_states = attn.shape_for_attention(v_hidden_states, attn.separate_attn_dim)
+        qk_hidden_states = attn.shape_for_attention(qk_hidden_states, attn.separate_attn_dim)
+    
+        batch_size, v_channel, height, width = v_hidden_states.shape
+        qk_channel = v_channel + attn.freq_embedding_dim + attn.time_embedding_dim
 
         if attn.freq_embedding_dim > 0 or attn.time_embedding_dim > 0:
             
             if self.cached_embeddings is None:
-                self.cached_embeddings = self.get_embeddings(hidden_states.shape, attn.freq_embedding_dim, attn.time_embedding_dim, hidden_states.dtype, hidden_states.device)
+                self.cached_embeddings = self.get_embeddings(qk_hidden_states.shape, attn.freq_embedding_dim, attn.time_embedding_dim, qk_hidden_states.dtype, qk_hidden_states.device)
             else:
                 if self.cached_embeddings.shape != hidden_states.shape:
-                    self.cached_embeddings = self.get_embeddings(hidden_states.shape, attn.freq_embedding_dim, attn.time_embedding_dim, hidden_states.dtype, hidden_states.device)
+                    self.cached_embeddings = self.get_embeddings(qk_hidden_states.shape, attn.freq_embedding_dim, attn.time_embedding_dim, qk_hidden_states.dtype, qk_hidden_states.device)
                 else:
-                    if self.cached_embeddings.dtype != hidden_states.dtype or self.cached_embeddings.device != hidden_states.device:
-                        self.cached_embeddings = self.cached_embeddings.to(hidden_states.dtype).to(hidden_states.device)
+                    if self.cached_embeddings.dtype != qk_hidden_states.dtype or self.cached_embeddings.device != qk_hidden_states.device:
+                        self.cached_embeddings = self.cached_embeddings.to(qk_hidden_states.dtype).to(qk_hidden_states.device)
 
             qk_hidden_states = torch.cat((qk_hidden_states, self.cached_embeddings), dim=1)
 
+        v_hidden_states = v_hidden_states.view(batch_size, v_channel, height * width).transpose(1, 2)
         qk_hidden_states = qk_hidden_states.view(batch_size, qk_channel, height * width).transpose(1, 2)
-        v_hidden_states = hidden_states.view(batch_size, v_channel, height * width).transpose(1, 2)
 
         query = attn.to_q(qk_hidden_states, scale=scale)
         key = attn.to_k(qk_hidden_states, scale=scale)
@@ -556,6 +557,8 @@ class SeparableAttnProcessor2_0:
         v_hidden_states = attn.to_out[0](v_hidden_states, scale=scale) # linear proj
         v_hidden_states = attn.to_out[1](v_hidden_states) # dropout
         v_hidden_states = v_hidden_states.transpose(-1, -2).reshape(batch_size, v_channel, height, width)
+
+        v_hidden_states = attn.unshape_for_attention(v_hidden_states, attn.separate_attn_dim, hidden_states_original_shape)
 
         if attn.residual_connection:
             v_hidden_states = v_hidden_states + residual
