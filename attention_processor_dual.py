@@ -69,9 +69,11 @@ class SeparableAttention(nn.Module):
         self.heads = heads
 
         if norm_num_groups is not None:
-            self.group_norm = nn.GroupNorm(num_channels=self.inner_dim, num_groups=norm_num_groups, eps=eps, affine=True)
+            self.group_norm_v = nn.GroupNorm(num_channels=self.inner_dim, num_groups=norm_num_groups, eps=eps, affine=True)
+            self.group_norm_qk = nn.GroupNorm(num_channels=self.inner_dim, num_groups=norm_num_groups, eps=eps, affine=True)
         else:
-            self.group_norm = None
+            self.group_norm_v = None
+            self.group_norm_qk = None
 
         self.to_q = LoRACompatibleLinear(self.query_dim, self.inner_query_dim, bias=bias)
         self.to_k = LoRACompatibleLinear(self.query_dim, self.inner_query_dim, bias=bias)
@@ -419,6 +421,7 @@ class SeparableAttnProcessor2_0:
         return embeddings.type(dtype)
     """
 
+    """
     # v7
     @staticmethod
     @torch.no_grad()
@@ -454,7 +457,45 @@ class SeparableAttnProcessor2_0:
                 embeddings = torch.cat((embeddings, time_embeddings), dim=1)
 
         return embeddings.type(dtype)
+    """
+    
+    # v8
+    @staticmethod
+    @torch.no_grad()
+    def get_embeddings(hidden_states_shape, freq_embedding_dim, time_embedding_dim, dtype=torch.float32, device="cuda"):
 
+        if freq_embedding_dim % 2 != 0 or time_embedding_dim % 2 != 0:
+            raise ValueError(f"freq_embedding_dim and time_embedding_dim must be divisible by 2. got freq_embedding_dim: {freq_embedding_dim} time_embedding_dim: {time_embedding_dim}")
+
+        embeddings = None
+
+        if freq_embedding_dim > 0:    
+            num_freq_orders = freq_embedding_dim // 2
+            ln_x = torch.arange(0, hidden_states_shape[2]*num_freq_orders, device=device).log2()
+            ln_x *= 3.1415926535897932384626433832795 / ln_x[-1]; ln_x[0] = -3.1415926535897932384626433832795/2
+            ln_x = ln_x.view(hidden_states_shape[2], num_freq_orders).permute(1, 0).contiguous()
+            ln_x *= torch.arange(0, num_freq_orders, device=device).view(-1, 1) + 0.5
+            freq_embeddings = torch.view_as_real(torch.exp(1j * ln_x)).permute(0, 2, 1).reshape(1, freq_embedding_dim, hidden_states_shape[2], 1)
+            freq_embeddings = freq_embeddings.repeat(hidden_states_shape[0], 1, 1, hidden_states_shape[3])
+
+            embeddings = freq_embeddings
+
+        if time_embedding_dim > 0:
+            num_time_orders = time_embedding_dim // 2
+            k = torch.arange(0, num_time_orders, device=device) + 0.5
+            x = torch.arange(0, num_time_orders*hidden_states_shape[3], device=device)
+            x = x.view(hidden_states_shape[3], num_time_orders).permute(1, 0).contiguous()
+            time_embeddings = k.view(-1, 1) * x / (hidden_states_shape[3]*num_time_orders) * 3.1415926535897932384626433832795
+            time_embeddings = torch.view_as_real(torch.exp(1j * time_embeddings)).permute(0, 2, 1).reshape(1, time_embedding_dim, 1, hidden_states_shape[3])
+            time_embeddings = time_embeddings.repeat(hidden_states_shape[0], 1, hidden_states_shape[2], 1)
+
+            if embeddings is None:
+                embeddings = time_embeddings
+            else:
+                embeddings = torch.cat((embeddings, time_embeddings), dim=1)
+
+        return embeddings.type(dtype)
+    
     def __call__(
         self,
         attn: SeparableAttention,
@@ -469,8 +510,9 @@ class SeparableAttnProcessor2_0:
         batch_size, v_channel, height, width = hidden_states.shape
         qk_channel = v_channel + attn.freq_embedding_dim + attn.time_embedding_dim
 
-        if attn.group_norm is not None:
-            hidden_states = attn.group_norm(hidden_states)
+        if attn.group_norm_v is not None:
+            qk_hidden_states = attn.group_norm_qk(hidden_states)
+            hidden_states = attn.group_norm_v(hidden_states)
 
         if attn.freq_embedding_dim > 0 or attn.time_embedding_dim > 0:
             
@@ -483,9 +525,7 @@ class SeparableAttnProcessor2_0:
                     if self.cached_embeddings.dtype != hidden_states.dtype or self.cached_embeddings.device != hidden_states.device:
                         self.cached_embeddings = self.cached_embeddings.to(hidden_states.dtype).to(hidden_states.device)
 
-            qk_hidden_states = torch.cat((hidden_states, self.cached_embeddings), dim=1)
-        else:
-            qk_hidden_states = hidden_states
+            qk_hidden_states = torch.cat((qk_hidden_states, self.cached_embeddings), dim=1)
 
         qk_hidden_states = qk_hidden_states.view(batch_size, qk_channel, height * width).transpose(1, 2)
         v_hidden_states = hidden_states.view(batch_size, v_channel, height * width).transpose(1, 2)

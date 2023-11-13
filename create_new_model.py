@@ -8,7 +8,7 @@ load_dotenv()
 
 torch.manual_seed(200)
 
-MODEL_NAME = "dualdiffusion2d_330_v7_256embed_scalednumgroups"
+MODEL_NAME = "dualdiffusion2d_330_v8_256embed_scaledgnorm"
 MODEL_PARAMS = {
     #"prediction_type": "sample",
     "prediction_type": "v_prediction",

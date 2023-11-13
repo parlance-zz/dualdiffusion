@@ -12,7 +12,7 @@ if __name__ == "__main__":
     load_dotenv()
 
     model_name = "dualdiffusion2d_312_v5_256embed"
-    module_name_filter = ["*attentions*group_norm_qk.weight"]
+    module_name_filter = ["*attentions*group_norm_*.weight"]
     #module_name_filter = ["*resnets*conv*.weight"]
 
     model_path = os.path.join(os.environ.get("MODEL_PATH", "./"), model_name)
