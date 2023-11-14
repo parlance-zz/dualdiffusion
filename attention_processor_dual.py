@@ -69,7 +69,7 @@ class SeparableAttention(nn.Module):
         self.heads = heads
 
         if norm_num_groups is not None:
-            if norm_num_groups == -1: norm_num_groups = self.inner_dim
+            if norm_num_groups == -1: norm_num_groups = self.inner_dim // 2
             self.group_norm_v = nn.GroupNorm(num_channels=self.inner_dim, num_groups=norm_num_groups, eps=eps, affine=True)
             self.group_norm_qk = nn.GroupNorm(num_channels=self.inner_dim, num_groups=norm_num_groups, eps=eps, affine=True)
             self.group_norm_embedding = nn.GroupNorm(num_channels=freq_embedding_dim+time_embedding_dim, num_groups=1, eps=eps, affine=True)

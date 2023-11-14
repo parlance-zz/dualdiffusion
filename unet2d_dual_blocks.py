@@ -115,8 +115,8 @@ class DualResnetBlock2D(nn.Module):
         self.skip_time_act = skip_time_act
 
         if groups == -1:
-            groups = in_channels
-            groups_out = out_channels
+            groups = in_channels // 2
+            groups_out = out_channels // 2
         else:
             if groups_out is None:
                 groups_out = groups
