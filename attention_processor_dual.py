@@ -69,11 +69,14 @@ class SeparableAttention(nn.Module):
         self.heads = heads
 
         if norm_num_groups is not None:
+            if norm_num_groups == -1: norm_num_groups = self.inner_dim
             self.group_norm_v = nn.GroupNorm(num_channels=self.inner_dim, num_groups=norm_num_groups, eps=eps, affine=True)
             self.group_norm_qk = nn.GroupNorm(num_channels=self.inner_dim, num_groups=norm_num_groups, eps=eps, affine=True)
+            self.group_norm_embedding = nn.GroupNorm(num_channels=freq_embedding_dim+time_embedding_dim, num_groups=1, eps=eps, affine=True)
         else:
             self.group_norm_v = None
             self.group_norm_qk = None
+            self.group_norm_embedding = None
 
         self.to_q = LoRACompatibleLinear(self.query_dim, self.inner_query_dim, bias=bias)
         self.to_k = LoRACompatibleLinear(self.query_dim, self.inner_query_dim, bias=bias)
@@ -526,7 +529,11 @@ class SeparableAttnProcessor2_0:
                     if self.cached_embeddings.dtype != qk_hidden_states.dtype or self.cached_embeddings.device != qk_hidden_states.device:
                         self.cached_embeddings = self.cached_embeddings.to(qk_hidden_states.dtype).to(qk_hidden_states.device)
 
-            qk_hidden_states = torch.cat((qk_hidden_states, self.cached_embeddings), dim=1)
+            if attn.group_norm_embedding is not None:
+                qk_embeddings = attn.group_norm_embedding(self.cached_embeddings)
+            else:
+                qk_embeddings = self.cached_embeddings
+            qk_hidden_states = torch.cat((qk_hidden_states, qk_embeddings), dim=1)
 
         v_hidden_states = v_hidden_states.view(batch_size, v_channel, height * width).transpose(1, 2)
         qk_hidden_states = qk_hidden_states.view(batch_size, qk_channel, height * width).transpose(1, 2)

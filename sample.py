@@ -149,21 +149,28 @@ def embedding_test():
     embeddings = SeparableAttnProcessor2_0.get_embeddings(sample_shape, freq_embedding_dim, time_embedding_dim, dtype=torch.float32, device="cpu")
     freq_embed = embeddings[0, :freq_embedding_dim,  :, 0]
     time_embed = embeddings[0,  freq_embedding_dim:, 0, :]
-
+    
     #sample = torch.zeros(sample_shape)
     #sample = DualDiffusionPipeline.add_embeddings(sample, freq_embedding_dim, time_embedding_dim)
     #freq_embed = sample[0, base_n_channels:base_n_channels+freq_embedding_dim,  :, 0]
     #time_embed = sample[0, base_n_channels+freq_embedding_dim:, 0, :]
 
+    print("freq_embed_std: ", freq_embed.std().item(), "freq_embed_mean: ", freq_embed.mean().item())
+    print("time_embed_std: ", time_embed.std().item(), "time_embed_mean: ", time_embed.mean().item())
+    print("combined_std: ", embeddings.std().item(), "combined_mean: ", embeddings.mean().item())
+    print("")
+
     def g(dim, x, std):
         x = torch.linspace(-1, 1, dim) - x
         w = torch.exp(-0.5*(x/std)**2)
         return w / w.square().sum() ** 0.5
+        #return w/w.max()
     
     def lg(dim, x, std):
         x = torch.linspace(0, 1, dim) / x
         w = torch.exp(-0.5*(torch.log2(x)/std)**2)
         return w / w.square().sum() ** 0.5
+        #return w/w.max()
     
     #freq_test_weight = lg(sample_resolution_freq, 0.4, 0.05)
     #freq_test_weight += lg(sample_resolution_freq, 0.2, 0.05)

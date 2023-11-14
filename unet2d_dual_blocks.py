@@ -114,8 +114,12 @@ class DualResnetBlock2D(nn.Module):
         self.time_embedding_norm = time_embedding_norm
         self.skip_time_act = skip_time_act
 
-        if groups_out is None:
-            groups_out = groups
+        if groups == -1:
+            groups = in_channels
+            groups_out = out_channels
+        else:
+            if groups_out is None:
+                groups_out = groups
 
         if self.time_embedding_norm == "ada_group":
             self.norm1 = AdaGroupNorm(temb_channels, in_channels, groups, eps=eps)
