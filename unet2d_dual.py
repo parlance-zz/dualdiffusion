@@ -373,7 +373,7 @@ class UNet2DDualModel(ModelMixin, ConfigMixin):
 
         # out
         _num_groups_out = norm_num_groups[0]
-        if _num_groups_out == -1: _num_groups_out = block_out_channels[0]
+        if _num_groups_out < 0: _num_groups_out = block_out_channels[0] // abs(_num_groups_out)
         self.conv_norm_out = nn.GroupNorm(num_channels=block_out_channels[0], num_groups=_num_groups_out, eps=norm_eps)
         self.conv_act = nn.SiLU()
 

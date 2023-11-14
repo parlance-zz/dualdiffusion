@@ -8,7 +8,7 @@ load_dotenv()
 
 torch.manual_seed(200)
 
-MODEL_NAME = "dualdiffusion2d_330_v8_256embed_2chg-norm_1gembednorm"
+MODEL_NAME = "dualdiffusion2d_330_v8_256embed_3"
 MODEL_PARAMS = {
     #"prediction_type": "sample",
     "prediction_type": "v_prediction",
@@ -89,9 +89,9 @@ UNET_PARAMS = {
     "upsample_type": "conv",
 
     "norm_eps": 1e-05,
-    #"norm_num_groups": 32,
+    "norm_num_groups": 32,
     #"norm_num_groups": (32, 64, 128, 128,),
-    "norm_num_groups": -1,
+    #"norm_num_groups": -4,
 
     #"layers_per_block": 1,
     "layers_per_block": 2,
