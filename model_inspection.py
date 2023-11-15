@@ -11,7 +11,7 @@ if __name__ == "__main__":
 
     load_dotenv()
 
-    model_name = "dualdiffusion2d_312_v5_256embed"
+    model_name = "dualdiffusion2d_330_v8_256embed_3"
     module_name_filter = ["*attentions*group_norm_*.weight"]
     #module_name_filter = ["*resnets*conv*.weight"]
 

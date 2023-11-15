@@ -98,7 +98,7 @@ class UNet2DDualModel(ModelMixin, ConfigMixin):
         double_attention: Union[bool, Tuple[bool]] = False,
         pre_attention: Union[bool, Tuple[bool]] = False,
         add_mid_attention: bool = True,
-        use_separable_mid_block: bool = False,
+        use_separable_mid_block: bool = True,
         norm_num_groups: Union[int, Tuple[int]] = 32,
         norm_eps: float = 1e-5,
         resnet_time_scale_shift: str = "default",
@@ -109,12 +109,14 @@ class UNet2DDualModel(ModelMixin, ConfigMixin):
         no_conv_in: bool = False,
         freq_embedding_dim: int = 0,
         time_embedding_dim: int = 0,
+        use_skip_samples: bool = True,
     ):
         super().__init__()
 
         self.sample_size = sample_size
         self.freq_embedding_dim = freq_embedding_dim
         self.time_embedding_dim = time_embedding_dim
+        self.use_skip_samples = use_skip_samples
 
         time_embed_dim = block_out_channels[0] * 4
 
@@ -243,6 +245,7 @@ class UNet2DDualModel(ModelMixin, ConfigMixin):
                     conv_size=conv_size,
                     freq_embedding_dim=freq_embedding_dim,
                     time_embedding_dim=time_embedding_dim,
+                    return_res_samples=use_skip_samples,
                 )
             else:
                 down_block = get_down_block(
@@ -349,6 +352,7 @@ class UNet2DDualModel(ModelMixin, ConfigMixin):
                     conv_size=conv_size,
                     freq_embedding_dim=freq_embedding_dim,
                     time_embedding_dim=time_embedding_dim,
+                    use_res_samples=use_skip_samples,
                 )
             else:
                 up_block = get_up_block(
@@ -435,7 +439,8 @@ class UNet2DDualModel(ModelMixin, ConfigMixin):
             emb = emb + class_emb
 
         # 2. pre-process
-        skip_sample = sample
+        if self.use_skip_samples:
+            skip_sample = sample
         sample = self.conv_in(sample)
 
         # 3. down

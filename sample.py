@@ -140,24 +140,24 @@ def embedding_test():
     base_n_channels = 128
     freq_embedding_dim = 256
     time_embedding_dim = 256
-    sample_resolution_freq = 256
-    sample_resolution_time = 256
-    freq_exp_scale = (base_n_channels + freq_embedding_dim)**-0.5
-    time_exp_scale = (base_n_channels + time_embedding_dim)**-0.5
+    sample_resolution_freq = 64
+    sample_resolution_time = 64
+    freq_exp_scale = (base_n_channels + freq_embedding_dim)**-0.5 #* 0.5
+    time_exp_scale = (base_n_channels + time_embedding_dim)**-0.5 #* 0.5
     sample_shape = (1, base_n_channels, sample_resolution_freq, sample_resolution_time)
 
-    embeddings = SeparableAttnProcessor2_0.get_embeddings(sample_shape, freq_embedding_dim, time_embedding_dim, dtype=torch.float32, device="cpu")
-    freq_embed = embeddings[0, :freq_embedding_dim,  :, 0]
-    time_embed = embeddings[0,  freq_embedding_dim:, 0, :]
+    #embeddings = SeparableAttnProcessor2_0.get_embeddings(sample_shape, freq_embedding_dim, time_embedding_dim, dtype=torch.float32, device="cpu")
+    #freq_embed = embeddings[0, :freq_embedding_dim,  :, 0]
+    #time_embed = embeddings[0,  freq_embedding_dim:, 0, :]
     
-    #sample = torch.zeros(sample_shape)
-    #sample = DualDiffusionPipeline.add_embeddings(sample, freq_embedding_dim, time_embedding_dim)
-    #freq_embed = sample[0, base_n_channels:base_n_channels+freq_embedding_dim,  :, 0]
-    #time_embed = sample[0, base_n_channels+freq_embedding_dim:, 0, :]
+    sample = torch.zeros(sample_shape)
+    sample = DualDiffusionPipeline.add_embeddings(sample, freq_embedding_dim, time_embedding_dim)
+    freq_embed = sample[0, base_n_channels:base_n_channels+freq_embedding_dim,  :, 0]
+    time_embed = sample[0, base_n_channels+freq_embedding_dim:, 0, :]
 
     print("freq_embed_std: ", freq_embed.std().item(), "freq_embed_mean: ", freq_embed.mean().item())
     print("time_embed_std: ", time_embed.std().item(), "time_embed_mean: ", time_embed.mean().item())
-    print("combined_std: ", embeddings.std().item(), "combined_mean: ", embeddings.mean().item())
+    #print("combined_std: ", embeddings.std().item(), "combined_mean: ", embeddings.mean().item())
     print("")
 
     def g(dim, x, std):
@@ -188,7 +188,7 @@ def embedding_test():
     freq_response, freq_ln_response = get_embedding_response(freq_query, freq_embed, freq_exp_scale)
     freq_response.cpu().numpy().tofile("./debug/debug_embed_freq_response.raw")
     
-    time_test_weight_std = 0.001#0.003
+    time_test_weight_std = 0.01#0.003
     time_test_weight = g(sample_resolution_time, -0.5, time_test_weight_std)
     time_test_weight += g(sample_resolution_time, -0.3, time_test_weight_std)
     time_test_weight += g(sample_resolution_time, -0.1, time_test_weight_std)

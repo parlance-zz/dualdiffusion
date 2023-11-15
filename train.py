@@ -1040,7 +1040,7 @@ def main():
                 accelerator.backward(loss)
                 if accelerator.sync_gradients:
                     grad_norm = accelerator.clip_grad_norm_(module.parameters(), args.max_grad_norm).item()
-                    if math.isinf(grad_norm):
+                    if math.isinf(grad_norm) or math.isnan(grad_norm):
                         logger.warning(f"Warning: grad norm is {grad_norm} - step={global_step} loss={loss.item()} timesteps={timesteps} debug_last_sample_paths={debug_last_sample_paths}")
 
                     if math.isnan(grad_norm):

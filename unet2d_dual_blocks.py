@@ -388,10 +388,8 @@ class SeparableAttnDownBlock2D(nn.Module):
             if self.return_res_samples:
                 output_states += (hidden_states,)
 
-        if self.return_res_samples:
-            return hidden_states, output_states
-        else:
-            return hidden_states
+        return hidden_states, output_states
+
 
 class SeparableAttnUpBlock2D(nn.Module):
     def __init__(
