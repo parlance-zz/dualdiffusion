@@ -138,22 +138,22 @@ def get_query(query_embed, weight):
 
 def embedding_test():
     base_n_channels = 128
-    freq_embedding_dim = 256
-    time_embedding_dim = 256
-    sample_resolution_freq = 64
-    sample_resolution_time = 64
+    freq_embedding_dim = 512
+    time_embedding_dim = 512
+    sample_resolution_freq = 256
+    sample_resolution_time = 256
     freq_exp_scale = (base_n_channels + freq_embedding_dim)**-0.5 #* 0.5
     time_exp_scale = (base_n_channels + time_embedding_dim)**-0.5 #* 0.5
     sample_shape = (1, base_n_channels, sample_resolution_freq, sample_resolution_time)
 
-    #embeddings = SeparableAttnProcessor2_0.get_embeddings(sample_shape, freq_embedding_dim, time_embedding_dim, dtype=torch.float32, device="cpu")
-    #freq_embed = embeddings[0, :freq_embedding_dim,  :, 0]
-    #time_embed = embeddings[0,  freq_embedding_dim:, 0, :]
+    embeddings = SeparableAttnProcessor2_0.get_embeddings(sample_shape, freq_embedding_dim, time_embedding_dim, dtype=torch.float32, device="cpu")
+    freq_embed = embeddings[0, :freq_embedding_dim,  :, 0]
+    time_embed = embeddings[0,  freq_embedding_dim:, 0, :]
     
-    sample = torch.zeros(sample_shape)
-    sample = DualDiffusionPipeline.add_embeddings(sample, freq_embedding_dim, time_embedding_dim)
-    freq_embed = sample[0, base_n_channels:base_n_channels+freq_embedding_dim,  :, 0]
-    time_embed = sample[0, base_n_channels+freq_embedding_dim:, 0, :]
+    #sample = torch.zeros(sample_shape)
+    #sample = DualDiffusionPipeline.add_embeddings(sample, freq_embedding_dim, time_embedding_dim)
+    #freq_embed = sample[0, base_n_channels:base_n_channels+freq_embedding_dim,  :, 0]
+    #time_embed = sample[0, base_n_channels+freq_embedding_dim:, 0, :]
 
     print("freq_embed_std: ", freq_embed.std().item(), "freq_embed_mean: ", freq_embed.mean().item())
     print("time_embed_std: ", time_embed.std().item(), "time_embed_mean: ", time_embed.mean().item())
@@ -179,7 +179,7 @@ def embedding_test():
     freq_test_weight  = lg(sample_resolution_freq, 0.1, 0.03)# /0.1
     freq_test_weight += lg(sample_resolution_freq, 0.24, 0.03) #/ 0.24
     freq_test_weight += lg(sample_resolution_freq, 0.63, 0.03)# / 0.63
-    freq_test_weight /= torch.arange(0, len(freq_test_weight)) +1e-5#e-5 # + 1
+    #freq_test_weight /= torch.arange(0, len(freq_test_weight)) +1e-5#e-5 # + 1
 
     freq_test_weight /= freq_test_weight.max()
     freq_test_weight.cpu().numpy().tofile("./debug/debug_embed_freq_weight.raw")
@@ -234,9 +234,9 @@ if __name__ == "__main__":
     #get_dataset_stats(DualOverlappedFormat)
     embedding_test()
 
-    model_name = "dualdiffusion2d_302"
+    model_name = "dualdiffusion2d_330_v8_256embed_3_noskip"
     #model_name = "dualdiffusion2d_118"
-    num_samples = 1
+    num_samples = 5
     batch_size = 1
     length = 1
     scheduler = "dpms++"
@@ -245,7 +245,7 @@ if __name__ == "__main__":
     #scheduler = "euler_a"
     #scheduler = "dpms++_sde"
     steps = 999#337 #250
-    loops = 1
+    loops = 0
     fp16 = False
     #fp16 = True
     

@@ -459,6 +459,7 @@ class SeparableAttnProcessor2_0:
         return embeddings.type(dtype)
     """
     
+    """
     # v8
     @staticmethod
     @torch.no_grad()
@@ -495,6 +496,42 @@ class SeparableAttnProcessor2_0:
                 embeddings = torch.cat((embeddings, time_embeddings), dim=1)
 
         return (embeddings * 1.4142135623730950488016887242097).type(dtype) # std = 1
+    """
+
+    # v9
+    @staticmethod
+    @torch.no_grad()
+    def get_embeddings(hidden_states_shape, freq_embedding_dim, time_embedding_dim, dtype=torch.float32, device="cuda"):
+
+        if freq_embedding_dim % 2 != 0 or time_embedding_dim % 2 != 0:
+            raise ValueError(f"freq_embedding_dim and time_embedding_dim must be divisible by 2. got freq_embedding_dim: {freq_embedding_dim} time_embedding_dim: {time_embedding_dim}")
+
+        embeddings = None
+
+        if freq_embedding_dim > 0:    
+            num_freq_orders = freq_embedding_dim // 2
+            ln_x = torch.arange(0, hidden_states_shape[2], device=device).log2()
+            ln_x *= 3.1415926535897932384626433832795 / ln_x[-1]; ln_x[0] = -3.1415926535897932384626433832795/2
+            ln_x = (torch.arange(0, num_freq_orders, device=device).view(-1, 1) + 0.5) * ln_x.view(1, -1)
+            freq_embeddings = torch.view_as_real(torch.exp(1j * ln_x)).permute(0, 2, 1).reshape(1, freq_embedding_dim, hidden_states_shape[2], 1)
+            freq_embeddings = freq_embeddings.repeat(hidden_states_shape[0], 1, 1, hidden_states_shape[3])
+
+            embeddings = freq_embeddings
+
+        if time_embedding_dim > 0:
+            num_time_orders = time_embedding_dim // 2
+            k = torch.arange(0, num_time_orders, device=device) + 0.5
+            x = torch.arange(0, hidden_states_shape[3], device=device)
+            time_embeddings = k.view(-1, 1) * x.view(1, -1) / hidden_states_shape[3] * 3.1415926535897932384626433832795
+            time_embeddings = torch.view_as_real(torch.exp(1j * time_embeddings)).permute(0, 2, 1).reshape(1, time_embedding_dim, 1, hidden_states_shape[3])
+            time_embeddings = time_embeddings.repeat(hidden_states_shape[0], 1, hidden_states_shape[2], 1)
+
+            if embeddings is None:
+                embeddings = time_embeddings
+            else:
+                embeddings = torch.cat((embeddings, time_embeddings), dim=1)
+
+        return embeddings.type(dtype) # std = 1
     
     def __call__(
         self,

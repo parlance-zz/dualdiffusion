@@ -11,9 +11,11 @@ if __name__ == "__main__":
 
     load_dotenv()
 
-    model_name = "dualdiffusion2d_330_v8_256embed_3"
-    module_name_filter = ["*attentions*group_norm_*.weight"]
+    model_name = "dualdiffusion2d_330_v8_256embed_3_noskip"
+    #module_name_filter = ["*attentions*group_norm_*.weight"]
+    #module_name_filter = ["*attentions*group_norm_embedding.weight"]
     #module_name_filter = ["*resnets*conv*.weight"]
+    module_name_filter = ["*"]
 
     model_path = os.path.join(os.environ.get("MODEL_PATH", "./"), model_name)
     print(f"Loading DualDiffusion model from '{model_path}'...")

@@ -8,7 +8,7 @@ load_dotenv()
 
 torch.manual_seed(200)
 
-MODEL_NAME = "dualdiffusion2d_330_v8_256embed_3_noskip"
+MODEL_NAME = "dualdiffusion2d_330_v9_512freqembed_3_noskip_32chbottleneck"
 MODEL_PARAMS = {
     #"prediction_type": "sample",
     "prediction_type": "v_prediction",
@@ -69,6 +69,7 @@ UNET_PARAMS = {
     "separate_attn_dim_mid": (0,),
     "add_mid_attention": True,
     "layers_per_mid_block": 1,
+    "mid_block_bottleneck_channels": 32,
 
     #"double_attention": True,
     "double_attention": False,
@@ -83,8 +84,10 @@ UNET_PARAMS = {
     "separate_attn_dim_up": (3,2,3,),
     #"separate_attn_dim_up": (2,3,),
     
-    "freq_embedding_dim": 256,
-    "time_embedding_dim": 256,
+    #"freq_embedding_dim": 256,
+    #"time_embedding_dim": 256,
+    "freq_embedding_dim": (512, 0, 0, 0,),
+    "time_embedding_dim": 0,
 
     #"downsample_type": "resnet",
     #"upsample_type": "resnet",

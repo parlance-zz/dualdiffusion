@@ -253,7 +253,7 @@ class SeparableAttnDownBlock2D(nn.Module):
         double_attention=False,
         pre_attention=False,
         conv_size=(3,3),
-        return_res_samples=True,
+        return_skip_samples=True,
         freq_embedding_dim=0,
         time_embedding_dim=0,
     ):
@@ -266,7 +266,7 @@ class SeparableAttnDownBlock2D(nn.Module):
         self.conv_size = conv_size
         self.double_attention = double_attention
         self.pre_attention = pre_attention
-        self.return_res_samples = return_res_samples
+        self.return_skip_samples = return_skip_samples
         self.freq_embedding_dim = freq_embedding_dim
         self.time_embedding_dim = time_embedding_dim
 
@@ -375,7 +375,7 @@ class SeparableAttnDownBlock2D(nn.Module):
                 hidden_states = self.attentions[attn_block_count](hidden_states)
                 attn_block_count += 1
 
-            if self.return_res_samples:
+            if self.return_skip_samples:
                 output_states = output_states + (hidden_states,)
 
         if self.downsamplers is not None:
@@ -385,7 +385,7 @@ class SeparableAttnDownBlock2D(nn.Module):
                 else:
                     hidden_states = downsampler(hidden_states)
 
-            if self.return_res_samples:
+            if self.return_skip_samples:
                 output_states += (hidden_states,)
 
         return hidden_states, output_states
@@ -412,7 +412,7 @@ class SeparableAttnUpBlock2D(nn.Module):
         double_attention=False,
         pre_attention=False,
         conv_size=(3,3),
-        use_res_samples=True,
+        use_skip_samples=True,
         freq_embedding_dim=0,
         time_embedding_dim=0,
     ):
@@ -425,12 +425,12 @@ class SeparableAttnUpBlock2D(nn.Module):
         self.conv_size = conv_size
         self.double_attention = double_attention
         self.pre_attention = pre_attention
-        self.use_res_samples = use_res_samples
+        self.use_skip_samples = use_skip_samples
         self.freq_embedding_dim = freq_embedding_dim
         self.time_embedding_dim = time_embedding_dim
 
         for i in range(num_layers):
-            if self.use_res_samples:
+            if self.use_skip_samples:
                 res_skip_channels = in_channels if (i == num_layers - 1) else out_channels
             else:
                 res_skip_channels = 0
@@ -526,7 +526,7 @@ class SeparableAttnUpBlock2D(nn.Module):
                 attn_block_count += 1
 
         for resnet in self.resnets:
-            if self.use_res_samples:
+            if self.use_skip_samples:
                 res_hidden_states = res_hidden_states_tuple[-1]
                 res_hidden_states_tuple = res_hidden_states_tuple[:-1]
                 hidden_states = torch.cat([hidden_states, res_hidden_states], dim=1)
@@ -567,6 +567,7 @@ class SeparableMidBlock2D(nn.Module):
         conv_size=(3,3),
         freq_embedding_dim=0,
         time_embedding_dim=0,
+        mid_block_bottleneck_channels=0,
     ):
         super().__init__()
         resnets = []
@@ -578,12 +579,14 @@ class SeparableMidBlock2D(nn.Module):
         self.pre_attention = pre_attention
         self.freq_embedding_dim = freq_embedding_dim
         self.time_embedding_dim = time_embedding_dim
+        self.mid_block_bottleneck_channels = mid_block_bottleneck_channels
 
-        for _ in range(num_layers+1):
+        for i in range(num_layers+1):
+            _num_out_channels = in_channels if mid_block_bottleneck_channels == 0 or i != num_layers else mid_block_bottleneck_channels
             resnets.append(
                 DualResnetBlock2D(
                     in_channels=in_channels,
-                    out_channels=in_channels,
+                    out_channels=_num_out_channels,
                     temb_channels=temb_channels,
                     eps=resnet_eps,
                     groups=resnet_groups,
