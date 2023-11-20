@@ -459,7 +459,7 @@ class SeparableAttnProcessor2_0:
         return embeddings.type(dtype)
     """
     
-    """
+    #"""
     # v8
     @staticmethod
     @torch.no_grad()
@@ -496,8 +496,9 @@ class SeparableAttnProcessor2_0:
                 embeddings = torch.cat((embeddings, time_embeddings), dim=1)
 
         return (embeddings * 1.4142135623730950488016887242097).type(dtype) # std = 1
-    """
+    #"""
 
+    """
     # v9
     @staticmethod
     @torch.no_grad()
@@ -532,7 +533,8 @@ class SeparableAttnProcessor2_0:
                 embeddings = torch.cat((embeddings, time_embeddings), dim=1)
 
         return embeddings.type(dtype) # std = 1
-    
+    """
+
     def __call__(
         self,
         attn: SeparableAttention,

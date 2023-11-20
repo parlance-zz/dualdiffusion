@@ -5,9 +5,11 @@ from dotenv import load_dotenv
 import numpy as np
 import torch
 import torchaudio
+import json
 
 from dual_diffusion_pipeline import DualDiffusionPipeline, DualLogFormat, DualNormalFormat, DualOverlappedFormat
 from attention_processor_dual import SeparableAttnProcessor2_0
+from autoencoder_kl_dual import AutoencoderKLDual
 
 def get_dataset_stats():
     model_params = {
@@ -218,6 +220,51 @@ def embedding_test():
     print("time response mse error:", (time_response - time_test_weight).square().mean().item())
     exit()
 
+def vae_test():
+
+    model_name = "dualdiffusion2d_330_overlapped_v8_256embed_16vae"
+    num_samples = 5
+    #device = "cuda"
+    device = "cpu"
+
+    model_path = os.path.join(os.environ.get("MODEL_PATH", "./"), model_name)
+    with open(os.path.join(model_path, "model_index.json"), "r") as f:
+        model_index = json.load(f)
+    model_params = model_index["model_params"]
+    sample_rate = model_params["sample_rate"]
+
+    output_path = os.path.join(model_path, "output")
+    os.makedirs(output_path, exist_ok=True)
+
+    crop_width = model_params["sample_raw_length"]
+    format = DualDiffusionPipeline.get_sample_format(model_params)
+    
+    dataset_path = DATASET_PATH = os.environ.get("DATASET_PATH", "./")
+    #test_samples = sorted(os.listdir(dataset_path), key=lambda x: int(x.split(".")[0]))[:num_samples]
+    test_samples = np.random.choice(os.listdir(dataset_path), num_samples, replace=False)
+    
+    vae_path = os.path.join(model_path, "vae")
+    vae = AutoencoderKLDual.from_pretrained(vae_path).to(device)
+
+    for filename in test_samples:
+        raw_sample = np.fromfile(os.path.join(dataset_path, filename), dtype=np.int16, count=crop_width) / 32768.
+        raw_sample = torch.from_numpy(raw_sample.astype(np.float32)).unsqueeze(0).to(device)
+        sample, window = format.raw_to_sample(raw_sample, model_params)
+
+        output = vae(sample).sample.cpu()
+        output = format.sample_to_raw(output, model_params).real
+        
+        raw_sample /= raw_sample.abs().max()
+        output_flac_file_path = os.path.join(output_path, filename.replace(".raw", ".flac"))
+        torchaudio.save(output_flac_file_path, raw_sample.cpu(), sample_rate, bits_per_sample=16)
+        print(f"Saved flac output to {output_flac_file_path}")
+
+        output /= output.abs().max()
+        output_flac_file_path = os.path.join(output_path, filename.replace(".raw", "_decoded.flac"))
+        torchaudio.save(output_flac_file_path, output.cpu(), sample_rate, bits_per_sample=16)
+        print(f"Saved flac output to {output_flac_file_path}")
+
+    exit()
 
 if __name__ == "__main__":
 
@@ -232,9 +279,10 @@ if __name__ == "__main__":
 
     #reconstruction_test(sample_num=200)
     #get_dataset_stats(DualOverlappedFormat)
-    embedding_test()
+    #embedding_test()
+    vae_test()
 
-    model_name = "dualdiffusion2d_330_v8_256embed_3_noskip"
+    model_name = "dualdiffusion2d_330_v9_256embed_vae"
     #model_name = "dualdiffusion2d_118"
     num_samples = 5
     batch_size = 1

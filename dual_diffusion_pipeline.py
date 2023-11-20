@@ -9,6 +9,7 @@ from diffusers.schedulers import EulerAncestralDiscreteScheduler, KDPM2Ancestral
 from diffusers.pipelines.pipeline_utils import DiffusionPipeline
 
 from unet2d_dual import UNet2DDualModel
+from autoencoder_kl_dual import AutoencoderKLDual
 
 def to_freq(x):
     x = x.permute(0, 2, 3, 1).contiguous().float()
@@ -62,8 +63,8 @@ class DualEmbeddingFormat:
 
     @staticmethod
     @torch.no_grad()
-    def get_window(window_len):
-        x = torch.arange(0, window_len, device="cuda") / (window_len - 1)
+    def get_window(window_len, device):
+        x = torch.arange(0, window_len, device=device) / (window_len - 1)
         return (1 + torch.cos(x * 2.*np.pi - np.pi)) * 0.5
 
     """
@@ -146,7 +147,7 @@ class DualEmbeddingFormat:
 
         if half_window_len > 0:
             if window is None:
-                window = DualEmbeddingFormat.get_window(half_window_len*2).square_() # this might need to go back to just chunk_len
+                window = DualEmbeddingFormat.get_window(half_window_len*2, device=raw_samples.device).square_() # this might need to go back to just chunk_len
             raw_samples[:, :half_window_len]  *= window[:half_window_len]
             raw_samples[:, -half_window_len:] *= window[half_window_len:]
 
@@ -234,8 +235,8 @@ class DualOverlappedFormat:
     
     @staticmethod
     @torch.no_grad()
-    def get_window(window_len):
-        x = torch.arange(0, window_len, device="cuda") / window_len #(window_len - 1)
+    def get_window(window_len, device):
+        x = torch.arange(0, window_len, device=device) / window_len #(window_len - 1)
         return (1 + torch.cos(x * 2.*np.pi - np.pi)) * 0.5
 
     @staticmethod
@@ -251,7 +252,7 @@ class DualOverlappedFormat:
         fftshift = model_params.get("fftshift", True)
 
         if window is None:
-            window = DualLogFormat.get_window(chunk_len)
+            window = DualLogFormat.get_window(chunk_len, device=raw_samples.device)
 
         raw_samples[:, :half_chunk_len]  *= window[:half_chunk_len]
         raw_samples[:, -half_chunk_len:] *= window[half_chunk_len:]
@@ -339,8 +340,8 @@ class DualLogFormat:
     
     @staticmethod
     @torch.no_grad()
-    def get_window(window_len):
-        x = torch.arange(0, window_len, device="cuda") / (window_len - 1)
+    def get_window(window_len, device):
+        x = torch.arange(0, window_len, device=device) / (window_len - 1)
         return (1 + torch.cos(x * 2.*np.pi - np.pi)) * 0.5
 
     """
@@ -372,7 +373,7 @@ class DualLogFormat:
         phase_integral_std = model_params["phase_integral_std"]
 
         if window is None:
-            window = DualLogFormat.get_window(chunk_len)
+            window = DualLogFormat.get_window(chunk_len, device=raw_samples.device)
 
         raw_samples[:, :half_chunk_len]  *= window[:half_chunk_len]
         raw_samples[:, -half_chunk_len:] *= window[half_chunk_len:]
@@ -469,8 +470,8 @@ class DualNormalFormat:
 
     @staticmethod
     @torch.no_grad()
-    def get_window(window_len):
-        x = torch.arange(0, window_len, device="cuda") / (window_len - 1)
+    def get_window(window_len, device):
+        x = torch.arange(0, window_len, device=device) / (window_len - 1)
         return (1 + torch.cos(x * 2.*np.pi - np.pi)) * 0.5
 
     @staticmethod
@@ -487,7 +488,7 @@ class DualNormalFormat:
 
         if half_window_len > 0:
             if window is None:
-                window = DualNormalFormat.get_window(half_window_len*2).square_() # this might need to go back to just chunk_len
+                window = DualNormalFormat.get_window(half_window_len*2, device=raw_samples.device).square_() # this might need to go back to just chunk_len
             raw_samples[:, :half_window_len]  *= window[:half_window_len]
             raw_samples[:, -half_window_len:] *= window[half_window_len:]
 
@@ -565,15 +566,20 @@ class DualDiffusionPipeline(DiffusionPipeline):
         self,
         unet: UNet2DDualModel,
         scheduler: DDIMScheduler,
-        vae = None, # todo: insert class
-        upscaler = None, # todo: insert class
+        vae: AutoencoderKLDual, 
+        #upscaler: UNet2DDualModel = None, 
         model_params: dict = None,
     ):
         super().__init__()
 
-        modules = {"unet": unet, "scheduler": scheduler}
-        if vae is not None: modules["vae"] = vae
-        if upscaler is not None: modules["upscaler"] = upscaler
+        #modules = {"unet": unet, "scheduler": scheduler}
+        #if vae is not None: modules["vae"] = vae
+        #if upscaler is not None: modules["upscaler"] = upscaler
+        modules = {
+            "unet": unet,
+            "scheduler": scheduler,
+            "vae": vae,
+        }
         self.register_modules(**modules)
         
         if model_params is not None:
@@ -639,8 +645,7 @@ class DualDiffusionPipeline(DiffusionPipeline):
             np.array(trained_betas).astype(np.float32).tofile(os.path.join(debug_path, "debug_schedule_betas.raw"))
 
         if vae_params is not None:
-            #vae = VAE(**vae_params)
-            raise NotImplementedError()
+            vae = AutoencoderKLDual(**vae_params)
         else:
             vae = None
 
@@ -650,7 +655,8 @@ class DualDiffusionPipeline(DiffusionPipeline):
         else:
             upscaler = None
 
-        return DualDiffusionPipeline(unet, scheduler, vae=vae, upscaler=upscaler, model_params=model_params)
+        #return DualDiffusionPipeline(unet, scheduler, vae=vae, upscaler=upscaler, model_params=model_params)
+        return DualDiffusionPipeline(unet, scheduler, vae, model_params=model_params)
 
     @staticmethod
     @torch.no_grad()

@@ -26,51 +26,6 @@ from diffusers.models.unet_2d import UNet2DOutput
 from unet2d_dual_blocks import SeparableAttnDownBlock2D, SeparableMidBlock2D, SeparableAttnUpBlock2D
 
 class UNet2DDualModel(ModelMixin, ConfigMixin):
-    r"""
-    A 2D UNet model that takes a noisy sample and a timestep and returns a sample shaped output.
-
-    This model inherits from [`ModelMixin`]. Check the superclass documentation for it's generic methods implemented
-    for all models (such as downloading or saving).
-
-    Parameters:
-        sample_size (`int` or `Tuple[int, int]`, *optional*, defaults to `None`):
-            Height and width of input/output sample. Dimensions must be a multiple of `2 ** (len(block_out_channels) -
-            1)`.
-        in_channels (`int`, *optional*, defaults to 3): Number of channels in the input sample.
-        out_channels (`int`, *optional*, defaults to 3): Number of channels in the output.
-        center_input_sample (`bool`, *optional*, defaults to `False`): Whether to center the input sample.
-        time_embedding_type (`str`, *optional*, defaults to `"positional"`): Type of time embedding to use.
-        freq_shift (`int`, *optional*, defaults to 0): Frequency shift for Fourier time embedding.
-        flip_sin_to_cos (`bool`, *optional*, defaults to `True`):
-            Whether to flip sin to cos for Fourier time embedding.
-        down_block_types (`Tuple[str]`, *optional*, defaults to `("DownBlock2D", "AttnDownBlock2D", "AttnDownBlock2D", "AttnDownBlock2D")`):
-            Tuple of downsample block types.
-        mid_block_type (`str`, *optional*, defaults to `"UNetMidBlock2D"`):
-            Block type for middle of UNet, it can be either `UNetMidBlock2D` or `UnCLIPUNetMidBlock2D`.
-        up_block_types (`Tuple[str]`, *optional*, defaults to `("AttnUpBlock2D", "AttnUpBlock2D", "AttnUpBlock2D", "UpBlock2D")`):
-            Tuple of upsample block types.
-        block_out_channels (`Tuple[int]`, *optional*, defaults to `(224, 448, 672, 896)`):
-            Tuple of block output channels.
-        layers_per_block (`int`, *optional*, defaults to `2`): The number of layers per block.
-        mid_block_scale_factor (`float`, *optional*, defaults to `1`): The scale factor for the mid block.
-        downsample_padding (`int`, *optional*, defaults to `1`): The padding for the downsample convolution.
-        downsample_type (`str`, *optional*, defaults to `conv`):
-            The downsample type for downsampling layers. Choose between "conv" and "resnet"
-        upsample_type (`str`, *optional*, defaults to `conv`):
-            The upsample type for upsampling layers. Choose between "conv" and "resnet"
-        act_fn (`str`, *optional*, defaults to `"silu"`): The activation function to use.
-        attention_head_dim (`int`, *optional*, defaults to `8`): The attention head dimension.
-        norm_num_groups (`int`, *optional*, defaults to `32`): The number of groups for normalization.
-        norm_eps (`float`, *optional*, defaults to `1e-5`): The epsilon for normalization.
-        resnet_time_scale_shift (`str`, *optional*, defaults to `"default"`): Time scale shift config
-            for ResNet blocks (see [`~models.resnet.ResnetBlock2D`]). Choose from `default` or `scale_shift`.
-        class_embed_type (`str`, *optional*, defaults to `None`):
-            The type of class embedding to use which is ultimately summed with the time embeddings. Choose from `None`,
-            `"timestep"`, or `"identity"`.
-        num_class_embeds (`int`, *optional*, defaults to `None`):
-            Input dimension of the learnable embedding matrix to be projected to `time_embed_dim` when performing class
-            conditioning with `class_embed_type` equal to `None`.
-    """
 
     @register_to_config
     def __init__(
@@ -111,6 +66,7 @@ class UNet2DDualModel(ModelMixin, ConfigMixin):
         freq_embedding_dim: Union[int, Tuple[int]] = 0,
         time_embedding_dim: Union[int, Tuple[int]] = 0,
         use_skip_samples: bool = True,
+        last_global_step: int = 0,
     ):
         super().__init__()
 

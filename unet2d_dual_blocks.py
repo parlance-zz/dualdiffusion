@@ -582,11 +582,10 @@ class SeparableMidBlock2D(nn.Module):
         self.mid_block_bottleneck_channels = mid_block_bottleneck_channels
 
         for i in range(num_layers+1):
-            _num_out_channels = in_channels if mid_block_bottleneck_channels == 0 or i != num_layers else mid_block_bottleneck_channels
             resnets.append(
                 DualResnetBlock2D(
                     in_channels=in_channels,
-                    out_channels=_num_out_channels,
+                    out_channels=in_channels,
                     temb_channels=temb_channels,
                     eps=resnet_eps,
                     groups=resnet_groups,
@@ -642,6 +641,11 @@ class SeparableMidBlock2D(nn.Module):
         self.attentions = nn.ModuleList(attentions)
         self.resnets = nn.ModuleList(resnets)
 
+        if mid_block_bottleneck_channels > 0:
+            self.conv_bottleneck = nn.Conv2d(in_channels, mid_block_bottleneck_channels, kernel_size=(3,3), padding=(1, 1))
+        else:
+            self.conv_bottleneck = None
+
     def forward(self, hidden_states, temb=None):
         
         attn_block_count = 0
@@ -657,4 +661,7 @@ class SeparableMidBlock2D(nn.Module):
 
             hidden_states = resnet(hidden_states, temb)
 
+        if self.conv_bottleneck is not None:
+            hidden_states = self.conv_bottleneck(hidden_states)
+            
         return hidden_states

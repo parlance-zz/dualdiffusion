@@ -43,6 +43,7 @@ from diffusers.utils import check_min_version, deprecate, is_tensorboard_availab
 from diffusers.utils.import_utils import is_xformers_available
 
 from unet2d_dual import UNet2DDualModel
+from autoencoder_kl_dual import AutoencoderKLDual
 from dual_diffusion_pipeline import DualDiffusionPipeline
 
 # Will error if the minimal version of diffusers is not installed. Remove at your own risks.
@@ -78,8 +79,6 @@ def compute_snr(noise_scheduler, timesteps):
 
 
 def log_validation_unet(pipeline, args, accelerator, global_step):
-    logger.info("Running validation... ")
-    pipeline.set_progress_bar_config(disable=True)
 
     sample_rate = pipeline.config["model_params"]["sample_rate"]
     if args.seed is None: seed = 42
@@ -117,7 +116,43 @@ def log_validation_unet(pipeline, args, accelerator, global_step):
             logger.warn(f"audio logging not implemented for {tracker.name}")
 
 def log_validation_vae(pipeline, args, accelerator, global_step):
+
     raise NotImplementedError()
+
+    sample_rate = pipeline.config["model_params"]["sample_rate"]
+    if args.seed is None: seed = 42
+    else: seed = args.seed
+
+    output_path = os.path.join(args.output_dir, "output")
+    os.makedirs(output_path, exist_ok=True)
+    
+    samples = []
+    for i in range(args.num_validation_samples):
+        logger.info(f"Generating sample {i+1}/{args.num_validation_samples}...")
+
+        generator = torch.Generator(device=accelerator.device).manual_seed(seed)
+        with torch.autocast("cuda"):
+            sample = pipeline(steps=args.num_validation_steps,
+                              seed=generator,
+                              scheduler=args.validation_scheduler).cpu()
+            sample_filename = f"step_{global_step}_{args.validation_scheduler}{args.num_validation_steps}_s{seed}.flac"
+            samples.append((sample, sample_filename))
+
+            sample_output_path = os.path.join(output_path, sample_filename)
+            torchaudio.save(sample_output_path, sample, sample_rate, bits_per_sample=16)
+            logger.info(f"Saved sample to to {sample_output_path}")
+
+        seed += 1
+
+    for tracker in accelerator.trackers:
+        if tracker.name == "tensorboard":
+            for sample, sample_filename in samples:
+                tracker.writer.add_audio(os.path.splitext(sample_filename)[0],
+                                         sample,
+                                         global_step,
+                                         sample_rate=sample_rate)
+        else:
+            logger.warn(f"audio logging not implemented for {tracker.name}")
 
 def log_validation_upscaler(pipeline, args, accelerator, global_step):
     raise NotImplementedError()
@@ -534,8 +569,7 @@ def main():
             pipeline.upscaler = pipeline.upscaler.to("cpu")
 
     elif args.module == "vae":
-        #module_class = UNet2DDualModel
-        raise NotImplementedError("VAE training not implemented yet")
+        module_class = AutoencoderKLDual
 
         if getattr(pipeline, "unet", None) is not None:
             pipeline.unet = pipeline.unet.to("cpu")
@@ -555,7 +589,7 @@ def main():
     else:
         raise ValueError(f"Unknown module {args.module}")
     
-    # Create EMA for the unet.
+    # Create EMA for the target module
     if args.use_ema:
         ema_module = module_class.from_pretrained(
             args.pretrained_model_name_or_path, subfolder=args.module, revision=args.revision
@@ -851,19 +885,26 @@ def main():
             )
             args.resume_from_checkpoint = None
         else:
-            accelerator.print(f"Resuming from checkpoint {path}")
-            accelerator.load_state(os.path.join(args.output_dir, path))
             global_step = int(path.split("-")[1])
-
-            resume_global_step = global_step * args.gradient_accumulation_steps
-            first_epoch = global_step // num_update_steps_per_epoch
-            resume_step = resume_global_step % (num_update_steps_per_epoch * args.gradient_accumulation_steps)
+            logger.info(f"Resuming from checkpoint {path} (global step: {global_step})")
+            accelerator.load_state(os.path.join(args.output_dir, path))
 
             # update learning rate in case we've changed it
             for g in optimizer.param_groups:
                 g["lr"] = args.learning_rate
             lr_scheduler.scheduler.base_lrs = [args.learning_rate]
-            
+    else:
+        if getattr(module.config, "last_global_step", None) is not None:
+            global_step = module.config.last_global_step
+
+    if global_step > 0:
+        resume_global_step = global_step * args.gradient_accumulation_steps
+        first_epoch = global_step // num_update_steps_per_epoch
+        resume_step = resume_global_step % (num_update_steps_per_epoch * args.gradient_accumulation_steps)
+
+        if args.resume_from_checkpoint is None:
+            args.resume_from_checkpoint = "latest"
+    
     # correction to min snr for v-prediction, not 100% sure this is correct
     if args.snr_gamma is not None:
         logger.info(f"Using min-SNR loss weighting - SNR gamma ({args.snr_gamma})")
@@ -901,6 +942,8 @@ def main():
     for epoch in range(first_epoch, args.num_train_epochs):
         module.train()
         train_loss = 0.0
+        kl_train_loss = 0.0
+        kl_loss_weight = 0.0
 
         progress_bar = tqdm(total=num_update_steps_per_epoch, disable=not accelerator.is_local_main_process)
         progress_bar.set_description(f"Epoch {epoch}")
@@ -1023,8 +1066,24 @@ def main():
 
                 elif args.module == "vae":
 
-                    raise NotImplementedError()
-                
+                    samples, window = pipeline.format.raw_to_sample(raw_samples,
+                                                                    model_params,
+                                                                    window=window,
+                                                                    random_phase_offset=args.phase_augmentation)
+                    
+                    posterior = module.encode(samples, return_dict=False)[0]
+                    recon = module.decode(posterior.sample(), return_dict=False)[0]
+
+                    kl_loss_weight = 0.0001 # this can have different values, or start low and increase over time
+                    
+                    f_pow = (samples[:, 0, :, :].square() + samples[:, 1, :, :].square()).sum(dim=2, keepdim=True).sqrt().unsqueeze(1) + 1e-5
+                    f_pow /= samples.shape[2] ** 0.5
+                    recon_loss = F.mse_loss(recon / f_pow, samples / f_pow, reduction="sum") / samples.numel()
+
+                    #recon_loss = F.mse_loss(recon, samples, reduction="sum") / samples.numel()
+                    kl_loss = posterior.kl().sum() / samples.numel()
+                    loss = recon_loss + kl_loss_weight * kl_loss
+
                 elif args.module == "upscaler":
 
                     raise NotImplementedError()
@@ -1036,6 +1095,10 @@ def main():
                 avg_loss = accelerator.gather(loss.repeat(args.train_batch_size)).mean()
                 train_loss += avg_loss.item() / args.gradient_accumulation_steps
 
+                if args.module == "vae":
+                    kl_avg_loss = accelerator.gather(kl_loss.repeat(args.train_batch_size)).mean()
+                    kl_train_loss += kl_avg_loss.item() / args.gradient_accumulation_steps
+                    
                 # Backpropagate
                 accelerator.backward(loss)
                 if accelerator.sync_gradients:
@@ -1063,16 +1126,22 @@ def main():
                         "step": global_step,
                         "grad_norm": grad_norm,
                         "grad_norm/loss": grad_norm / train_loss}
+                if args.module == "vae":
+                    logs["loss/kld"] = kl_train_loss
+                    logs["kl_loss_weight"] = kl_loss_weight
                 if args.use_ema:
                     logs["ema_decay"] = ema_module.cur_decay_value    
+
                 accelerator.log(logs, step=global_step)
                 progress_bar.set_postfix(**logs)
 
                 train_loss = 0.0
+                kl_train_loss = 0.0
 
                 if global_step % args.checkpointing_steps == 0:
                     if accelerator.is_main_process:
-
+                        
+                        module.config["last_global_step"] = global_step
                         save_path = os.path.join(args.output_dir, f"{args.module}_checkpoint-{global_step}")
                         accelerator.save_state(save_path)
                         logger.info(f"Saved state to {save_path}")
@@ -1109,7 +1178,9 @@ def main():
 
         # Create the pipeline using the trained modules and save it.
         accelerator.wait_for_everyone()
-        if accelerator.is_main_process and checkpoint_saved_this_epoch:
+        if accelerator.is_main_process: # and checkpoint_saved_this_epoch:
+            # full model saving disabled for now, not really necessary now that checkpoints are saved with config and safetensors
+            """
             logger.info(f"Saving model to {args.output_dir}")
 
             module = accelerator.unwrap_model(module)
@@ -1118,13 +1189,16 @@ def main():
                 ema_module.copy_to(module.parameters())
 
             setattr(pipeline, args.module, module)
-            pipeline.config["model_params"][f"{args.module}_last_global_step"] = global_step
             pipeline.save_pretrained(args.output_dir, safe_serialization=True)
-
+            """
             if args.num_validation_samples > 0:
                 if epoch % args.num_validation_epochs == 0:
                     module.eval()
+                    logger.info("Running validation... ")
+    
                     try:
+                        pipeline.set_progress_bar_config(disable=True)
+
                         if args.module == "unet":
                             log_validation_unet(
                                 pipeline,
@@ -1133,13 +1207,12 @@ def main():
                                 global_step,
                             )
                         elif args.module == "vae":
-                            #log_validation_vae(
-                            #    pipeline,
-                            #    args,
-                            #    accelerator,
-                            #    global_step,
-                            #)
-                            raise NotImplementedError()
+                            log_validation_vae(
+                                pipeline,
+                                args,
+                                accelerator,
+                                global_step,
+                            )
                         elif args.module == "upscaler":
                             #log_validation_upscaler(
                             #    pipeline,
