@@ -815,23 +815,7 @@ def main():
     if accelerator.is_main_process:
         if args.tracker_project_name is None:
             args.tracker_project_name = os.path.basename(args.output_dir)
-        #start_timestamp = f"{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}"
-        #args.tracker_project_name = f"{args.tracker_project_name}_{start_timestamp}"
 
-        """
-        tracker_config = dict(vars(args))
-        for k, v in module.config.items():
-            if not isinstance(v, (int, float, str, bool)): v = f"{v}"
-            tracker_config[f"{args.module}_{k}"] = v
-
-        for k, v in noise_scheduler.config.items():
-            if not isinstance(v, (int, float, str, bool)): v = f"{v}"
-            tracker_config[f"scheduler_{k}"] = v
-
-        for k, v in model_params.items():
-            if not isinstance(v, (int, float, str, bool)): v = f"{v}"
-            tracker_config[f"model_{k}"] = v
-        """
         tracker_config = None
         accelerator.init_trackers(args.tracker_project_name, tracker_config)
 
@@ -942,13 +926,17 @@ def main():
     for epoch in range(first_epoch, args.num_train_epochs):
         module.train()
         train_loss = 0.0
-        kl_train_loss = 0.0
-        kl_loss_weight = 0.0
 
+        if args.module == "vae":
+            vae_recon_train_loss = 0.0
+            vae_percept_train_loss = 0.0
+            vae_kl_train_loss = 0.0
+
+        checkpoint_saved_this_epoch = False
+                
         progress_bar = tqdm(total=num_update_steps_per_epoch, disable=not accelerator.is_local_main_process)
         progress_bar.set_description(f"Epoch {epoch}")
 
-        checkpoint_saved_this_epoch = False
         for step, batch in enumerate(train_dataloader):
             # Skip steps until we reach the resumed step
             if args.resume_from_checkpoint and epoch == first_epoch and step < resume_step:
@@ -1072,17 +1060,20 @@ def main():
                                                                     random_phase_offset=args.phase_augmentation)
                     
                     posterior = module.encode(samples, return_dict=False)[0]
-                    recon = module.decode(posterior.sample(), return_dict=False)[0]
-
-                    kl_loss_weight = 0.0001 # this can have different values, or start low and increase over time
+                    recon = module.decode(posterior.sample(), return_dict=False)[0]                    
                     
-                    f_pow = (samples[:, 0, :, :].square() + samples[:, 1, :, :].square()).sum(dim=2, keepdim=True).sqrt().unsqueeze(1) + 1e-5
-                    f_pow /= samples.shape[2] ** 0.5
-                    recon_loss = F.mse_loss(recon / f_pow, samples / f_pow, reduction="sum") / samples.numel()
+                    vae_recon_loss = F.mse_loss(recon, samples, reduction="sum") / samples.numel()
 
-                    #recon_loss = F.mse_loss(recon, samples, reduction="sum") / samples.numel()
-                    kl_loss = posterior.kl().sum() / samples.numel()
-                    loss = recon_loss + kl_loss_weight * kl_loss
+                    f_pow = (samples[:, 0, :, :].square() + samples[:, 1, :, :].square()).sum(dim=2, keepdim=True).sqrt().unsqueeze(1) + 1e-5
+                    f_pow /= (2 * samples.shape[3]) ** 0.5
+                    vae_percept_loss = F.mse_loss(recon / f_pow, samples / f_pow, reduction="sum") / samples.numel()
+
+                    vae_kl_loss = posterior.kl().sum() / samples.numel()
+
+                    vae_recon_loss_weight = 0.
+                    vae_percept_loss_weight = 1.
+                    vae_kl_loss_weight = 0.000001
+                    loss = vae_recon_loss_weight * vae_recon_loss + vae_percept_loss_weight * vae_percept_loss + vae_kl_loss_weight * vae_kl_loss
 
                 elif args.module == "upscaler":
 
@@ -1096,8 +1087,12 @@ def main():
                 train_loss += avg_loss.item() / args.gradient_accumulation_steps
 
                 if args.module == "vae":
-                    kl_avg_loss = accelerator.gather(kl_loss.repeat(args.train_batch_size)).mean()
-                    kl_train_loss += kl_avg_loss.item() / args.gradient_accumulation_steps
+                    vae_recon_avg_loss = accelerator.gather(vae_recon_loss.repeat(args.train_batch_size)).mean()
+                    vae_recon_train_loss += vae_recon_avg_loss.item() / args.gradient_accumulation_steps
+                    vae_percept_avg_loss = accelerator.gather(vae_percept_loss.repeat(args.train_batch_size)).mean()
+                    vae_percept_train_loss += vae_percept_avg_loss.item() / args.gradient_accumulation_steps
+                    vae_kl_avg_loss = accelerator.gather(vae_kl_loss.repeat(args.train_batch_size)).mean()
+                    vae_kl_train_loss += vae_kl_avg_loss.item() / args.gradient_accumulation_steps
                     
                 # Backpropagate
                 accelerator.backward(loss)
@@ -1124,11 +1119,14 @@ def main():
                 logs = {"loss": train_loss,
                         "lr": lr_scheduler.get_last_lr()[0],
                         "step": global_step,
-                        "grad_norm": grad_norm,
-                        "grad_norm/loss": grad_norm / train_loss}
+                        "grad_norm": grad_norm}
                 if args.module == "vae":
-                    logs["loss/kld"] = kl_train_loss
-                    logs["kl_loss_weight"] = kl_loss_weight
+                    logs["vae/recon_loss"] = vae_recon_train_loss
+                    logs["vae/percept_loss"] = vae_percept_train_loss
+                    logs["vae/kl_loss"] = vae_kl_train_loss
+                    logs["loss_weight/recon"] = vae_recon_loss_weight
+                    logs["loss_weight/percept"] = vae_percept_loss_weight
+                    logs["loss_weight/kl"] = vae_kl_loss_weight
                 if args.use_ema:
                     logs["ema_decay"] = ema_module.cur_decay_value    
 
@@ -1136,7 +1134,11 @@ def main():
                 progress_bar.set_postfix(**logs)
 
                 train_loss = 0.0
-                kl_train_loss = 0.0
+                
+                if args.module == "vae":
+                    vae_recon_train_loss = 0.0
+                    vae_percept_train_loss = 0.0
+                    vae_kl_train_loss = 0.0
 
                 if global_step % args.checkpointing_steps == 0:
                     if accelerator.is_main_process:
@@ -1178,18 +1180,19 @@ def main():
 
         # Create the pipeline using the trained modules and save it.
         accelerator.wait_for_everyone()
-        if accelerator.is_main_process: # and checkpoint_saved_this_epoch:
+        if accelerator.is_main_process:
             # full model saving disabled for now, not really necessary now that checkpoints are saved with config and safetensors
             """
-            logger.info(f"Saving model to {args.output_dir}")
+            if checkpoint_saved_this_epoch == True:
+                logger.info(f"Saving model to {args.output_dir}")
 
-            module = accelerator.unwrap_model(module)
-            if args.use_ema:
-                ema_module.store(module.parameters())
-                ema_module.copy_to(module.parameters())
+                module = accelerator.unwrap_model(module)
+                if args.use_ema:
+                    ema_module.store(module.parameters())
+                    ema_module.copy_to(module.parameters())
 
-            setattr(pipeline, args.module, module)
-            pipeline.save_pretrained(args.output_dir, safe_serialization=True)
+                setattr(pipeline, args.module, module)
+                pipeline.save_pretrained(args.output_dir, safe_serialization=True)
             """
             if args.num_validation_samples > 0:
                 if epoch % args.num_validation_epochs == 0:

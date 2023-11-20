@@ -224,8 +224,8 @@ def vae_test():
 
     model_name = "dualdiffusion2d_330_overlapped_v8_256embed_16vae"
     num_samples = 5
-    #device = "cuda"
-    device = "cpu"
+    device = "cuda"
+    #device = "cpu"
 
     model_path = os.path.join(os.environ.get("MODEL_PATH", "./"), model_name)
     with open(os.path.join(model_path, "model_index.json"), "r") as f:
@@ -238,7 +238,8 @@ def vae_test():
 
     crop_width = model_params["sample_raw_length"]
     format = DualDiffusionPipeline.get_sample_format(model_params)
-    
+    print("Sample shape: ", format.get_sample_shape(model_params))
+
     dataset_path = DATASET_PATH = os.environ.get("DATASET_PATH", "./")
     #test_samples = sorted(os.listdir(dataset_path), key=lambda x: int(x.split(".")[0]))[:num_samples]
     test_samples = np.random.choice(os.listdir(dataset_path), num_samples, replace=False)

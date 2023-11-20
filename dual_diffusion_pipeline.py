@@ -236,7 +236,7 @@ class DualOverlappedFormat:
     @staticmethod
     @torch.no_grad()
     def get_window(window_len, device):
-        x = torch.arange(0, window_len, device=device) / window_len #(window_len - 1)
+        x = torch.arange(0, window_len, device=device) / (window_len - 1)
         return (1 + torch.cos(x * 2.*np.pi - np.pi)) * 0.5
 
     @staticmethod
@@ -252,7 +252,7 @@ class DualOverlappedFormat:
         fftshift = model_params.get("fftshift", True)
 
         if window is None:
-            window = DualLogFormat.get_window(chunk_len, device=raw_samples.device)
+            window = DualOverlappedFormat.get_window(chunk_len, device=raw_samples.device)
 
         raw_samples[:, :half_chunk_len]  *= window[:half_chunk_len]
         raw_samples[:, -half_chunk_len:] *= window[half_chunk_len:]
