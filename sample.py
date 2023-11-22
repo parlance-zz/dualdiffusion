@@ -244,8 +244,8 @@ def vae_test():
     test_samples = sorted(os.listdir(dataset_path), key=lambda x: int(x.split(".")[0]))[:num_samples]
     #test_samples = np.random.choice(os.listdir(dataset_path), num_samples, replace=False)
     
-    #vae_path = os.path.join(model_path, "vae")
-    vae_path = "D:/dualdiffusion/models/dualdiffusion2d_330_overlapped_v8_256embed_16vae/old checkpoints/vae_checkpoint-49400/vae"
+    vae_path = os.path.join(model_path, "vae")
+    #vae_path = "D:/dualdiffusion/models/dualdiffusion2d_330_overlapped_v8_256embed_16vae/old checkpoints/vae_checkpoint-49400/vae"
     vae = AutoencoderKLDual.from_pretrained(vae_path).to(device)
 
     for filename in test_samples:

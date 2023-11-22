@@ -1067,11 +1067,14 @@ def main():
 
                     # this perceptual loss approximates a more stable ~log error rather than raw square error without using logarithms
                     # however, a reasonable max grad norm (~1) is still required to ensure stability
-                    percept_eps = 1e-4
+                    percept_eps = 1e-5 #1e-4
                     sample_pow = samples[:, 0, :, :].square() + samples[:, 1, :, :].square()
-                    sample_freq_pow = (sample_pow.sum(dim=2, keepdim=True).sqrt().unsqueeze(1)) / (2 * samples.shape[3]) ** 0.5 + percept_eps
-                    sample_time_pow = (sample_pow.sum(dim=1, keepdim=True).sqrt().unsqueeze(1)) / (2 * samples.shape[2]) ** 0.5 + percept_eps
-                    vae_percept_weight = (sample_freq_pow * sample_time_pow).sqrt()
+                    #sample_freq_pow = (sample_pow.sum(dim=2, keepdim=True).sqrt().unsqueeze(1)) / (2 * samples.shape[3]) ** 0.5 + percept_eps
+                    #sample_time_pow = (sample_pow.sum(dim=1, keepdim=True).sqrt().unsqueeze(1)) / (2 * samples.shape[2]) ** 0.5 + percept_eps
+                    #vae_percept_weight = (sample_freq_pow * sample_time_pow).sqrt()
+                    sample_freq_pow = (sample_pow.sum(dim=2, keepdim=True).unsqueeze(1)) / samples.shape[3]
+                    sample_time_pow = (sample_pow.sum(dim=1, keepdim=True).unsqueeze(1)) / samples.shape[2]
+                    vae_percept_weight = (sample_freq_pow + sample_time_pow).sqrt() / 4 + percept_eps
                     vae_percept_loss = F.mse_loss(recon / vae_percept_weight, samples / vae_percept_weight, reduction="sum") / samples.numel()
                     # not sure if the below would work better
                     #vae_percept_loss  = 0.5 * F.mse_loss(recon / sample_freq_pow, samples / sample_freq_pow, reduction="sum") / samples.numel()
