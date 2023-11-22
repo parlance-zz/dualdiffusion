@@ -308,7 +308,7 @@ class DualOverlappedFormat:
         slices_1 = samples[:, 0::2, :]
         slices_2 = samples[:, 1::2, :]
 
-        fft = torch.zeros((bsz, sample_len), dtype=torch.complex64, device="cuda")
+        fft = torch.zeros((bsz, sample_len), dtype=torch.complex64, device=samples.device)
         fft[:, :half_sample_len] = slices_1.reshape(bsz, -1)
         fft[:,  half_chunk_len:half_sample_len+half_chunk_len] += slices_2.reshape(bsz, -1)
         fft[:, half_sample_len:half_sample_len+half_chunk_len] = 0.
