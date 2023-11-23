@@ -7,7 +7,7 @@ from dual_diffusion_pipeline import DualDiffusionPipeline
 load_dotenv()
 torch.manual_seed(200)
 
-MODEL_NAME = "dualdiffusion2d_330_overlapped_v8_256embed_16vae"
+MODEL_NAME = "dualdiffusion2d_330_time_overlapped_v8_256embed_4vae"
 MODEL_PARAMS = {
     #"prediction_type": "sample",
     "prediction_type": "v_prediction",
@@ -19,22 +19,18 @@ MODEL_PARAMS = {
     "beta_end" : 0.02,
     #"rescale_betas_zero_snr": True,
     "rescale_betas_zero_snr": False,
-    "sample_raw_length": 65536*4,
-    #"sample_raw_length": 65536,
+    "sample_raw_length": 65536*2,
     "sample_raw_channels": int(os.environ.get("DATASET_NUM_CHANNELS")),
-    #"num_chunks": 32, 
     "num_chunks": 256, 
     "sample_rate": int(os.environ.get("DATASET_SAMPLE_RATE")),
     "freq_embedding_dim": 0,
-    #"freq_embedding_dim": 16,
     "time_embedding_dim": 0,
-    "spatial_window_length": 1024,
-    "sample_format": "overlapped",
-    #"sample_format": "embedding",
-    "sample_format": "normal",
+    "sample_format": "time_overlapped",
+    
+    #"sample_format": "normal",
+    #"spatial_window_length": 1024,
     #"fftshift": True,
     #"fftshift": False,
-
     #"sample_std": 0.021220825965105643,
     #"sample_format": "ln",
     #"ln_amplitude_floor": -12,
@@ -47,8 +43,8 @@ MODEL_PARAMS = {
 
 #VAE_PARAMS = None
 VAE_PARAMS = {
-  "latent_channels": 16,
-  "sample_size": (512, 512),
+  "latent_channels": 4,
+  "sample_size": (256, 512),
   "act_fn": "silu",
   "conv_size": (3,3),
   

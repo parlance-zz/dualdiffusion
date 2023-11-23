@@ -48,6 +48,105 @@ def compute_snr(noise_scheduler, timesteps):
     snr = (alpha / sigma) ** 2
     return snr
 
+
+class DualTimeOverlappedFormat:
+
+    @staticmethod
+    def get_sample_crop_width(model_params):
+        return model_params["sample_raw_length"] + model_params["num_chunks"]
+    
+    @staticmethod
+    def get_num_channels(model_params):
+        freq_embedding_dim = model_params["freq_embedding_dim"]
+        channels = model_params["sample_raw_channels"] * 2
+        return (channels + freq_embedding_dim, channels)
+    
+    @staticmethod
+    @torch.no_grad()
+    def get_window(window_len, device):
+        #x = torch.arange(0, window_len, device=device) / (window_len-1)
+        x = (torch.arange(0, window_len, device=device)+0.5) / (window_len - 1)
+        return (1 + torch.cos(x * 2.*np.pi - np.pi)) * 0.5
+
+    @staticmethod
+    @torch.no_grad()
+    def raw_to_sample(raw_samples, model_params, window=None, random_phase_offset=False):
+
+        num_chunks = model_params["num_chunks"]
+        half_window_len = num_chunks
+        window_len = half_window_len * 2
+        chunk_len = raw_samples.shape[1] // half_window_len - 1
+        half_chunk_len = chunk_len // 2
+        bsz = raw_samples.shape[0]
+
+        if raw_samples.shape[1] % half_window_len != 0:
+            raise ValueError(f"raw_samples length ({raw_samples.shape[1]}) must be divisible by half_window_len ({half_window_len})")
+        if chunk_len & (chunk_len - 1) != 0:
+            raise ValueError(f"chunk_len ({chunk_len}) must be a power of 2")
+        
+        if window is None:
+            window = DualTimeOverlappedFormat.get_window(window_len, device=raw_samples.device)
+
+        slices_1 = raw_samples[:, :-half_window_len].view(bsz, half_chunk_len, window_len) * window
+        slices_2 = raw_samples[:, half_window_len: ].view(bsz, half_chunk_len, window_len) * window
+        slices_1_fft = torch.fft.fft(slices_1, norm="ortho")[:, :, :half_window_len] 
+        slices_2_fft = torch.fft.fft(slices_2, norm="ortho")[:, :, :half_window_len]
+
+        samples = torch.cat((slices_1_fft, slices_2_fft), dim=2).view(bsz, chunk_len, num_chunks)
+        samples = samples.permute(0, 2, 1).contiguous()
+        samples[:, 0, :] /= 2
+
+        if random_phase_offset:
+            samples *= torch.exp(2j*np.pi*torch.rand(1, device=samples.device))
+        samples = torch.view_as_real(samples).permute(0, 3, 1, 2).contiguous()
+        
+        if "sample_std" in model_params:
+            samples /= model_params["sample_std"]
+        else:
+            samples /= samples.std(dim=(1, 2, 3), keepdim=True).clip(min=1e-8)
+
+        return samples, window
+
+    @staticmethod
+    @torch.no_grad()
+    def sample_to_raw(samples, model_params):
+
+        num_chunks = samples.shape[2]
+        half_window_len = num_chunks
+        chunk_len = samples.shape[3]
+        raw_sample_len = (chunk_len + 1) * half_window_len
+        bsz = samples.shape[0]
+
+        sample_std = model_params.get("sample_std", 1.)
+        samples = samples.clone().permute(0, 3, 2, 1).contiguous() * sample_std
+        samples = torch.view_as_complex(samples)
+        samples = torch.cat((samples, torch.zeros_like(samples)), dim=2)
+        samples = torch.fft.ifft(samples, norm="ortho")
+
+        slices_1 = samples[:, 0::2, :]
+        slices_2 = samples[:, 1::2, :]
+        raw_samples = torch.zeros((bsz, raw_sample_len), dtype=samples.dtype, device=samples.device)
+        raw_samples[:, :-half_window_len]  = slices_1.reshape(bsz, -1)
+        raw_samples[:, half_window_len: ] += slices_2.reshape(bsz, -1)
+        
+        return raw_samples * 2.
+
+    @staticmethod
+    def get_loss(sample, target, model_params, reduction="mean"):
+        return torch.nn.functional.mse_loss(sample.float(), target.float(), reduction=reduction)
+    
+    @staticmethod
+    def get_sample_shape(model_params, bsz=1, length=1):
+        _, num_output_channels = DualTimeOverlappedFormat.get_num_channels(model_params)
+
+        crop_width = DualTimeOverlappedFormat.get_sample_crop_width(model_params)
+        num_chunks = model_params["num_chunks"]
+        half_window_len = num_chunks
+        chunk_len = crop_width // half_window_len - 1
+
+        return (bsz, num_output_channels, num_chunks, chunk_len*length,)
+   
+
 class DualEmbeddingFormat:
 
     @staticmethod
@@ -494,6 +593,7 @@ class DualNormalFormat:
 
         fft = torch.fft.fft(raw_samples, norm="ortho")[:, :half_sample_len].view(bsz, num_chunks, chunk_len)
         fft = torch.fft.fft(fft, norm="ortho")
+        
         if random_phase_offset:
             fft *= torch.exp(2j*np.pi*torch.rand(1, device=fft.device))
         samples = torch.view_as_real(fft).permute(0, 3, 1, 2).contiguous()
@@ -604,6 +704,8 @@ class DualDiffusionPipeline(DiffusionPipeline):
             return DualOverlappedFormat
         elif sample_format == "embedding":
             return DualEmbeddingFormat
+        elif sample_format == "time_overlapped":
+            return DualTimeOverlappedFormat
         else:
             raise ValueError(f"Unknown sample format '{sample_format}'")
         
