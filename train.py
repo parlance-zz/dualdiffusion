@@ -303,7 +303,7 @@ def parse_args():
     )
     parser.add_argument(
         "--phase_augmentation",
-        type=bool,
+        type=lambda x: (str(x).lower() == 'true'),
         default=True,
         help="Add a random phase offset to the sample phase (absolute phase invariance)",
     )
@@ -715,6 +715,8 @@ def main():
     debug_last_sample_paths = []
     total_batch_size = 0
     
+    logger.info(f"Using phase augmentation: {args.phase_augmentation}")
+
     def transform_samples(examples):
         
         if len(debug_last_sample_paths) >= total_batch_size:
@@ -1067,7 +1069,7 @@ def main():
 
                     # this perceptual loss approximates a more stable ~log error rather than raw square error without using logarithms
                     # however, a reasonable max grad norm (~1) is still required to ensure stability
-                    percept_eps = 1e-2 #1e-4
+                    percept_eps = 2e-3 #1e-4
                     sample_pow = samples[:, 0, :, :].square() + samples[:, 1, :, :].square()
 
                     #sample_freq_pow = (sample_pow.sum(dim=2, keepdim=True).sqrt().unsqueeze(1)) / (2 * samples.shape[3]) ** 0.5 + percept_eps
@@ -1090,9 +1092,9 @@ def main():
                     # lastly, standard KL divergence loss
                     vae_kl_loss = posterior.kl().sum() / samples.numel()
 
-                    vae_recon_loss_weight = 0   #0.0001
-                    vae_percept_loss_weight = 1 #0.9999
-                    vae_kl_loss_weight = 0#1e-5   #1e-8
+                    vae_recon_loss_weight = 1   #0.0001
+                    vae_percept_loss_weight = 0 #0.9999
+                    vae_kl_loss_weight = 1e-8 #1e-6   #1e-8
                     loss = vae_recon_loss_weight * vae_recon_loss + vae_percept_loss_weight * vae_percept_loss + vae_kl_loss_weight * vae_kl_loss
 
                 elif args.module == "upscaler":

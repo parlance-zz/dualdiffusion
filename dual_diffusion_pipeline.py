@@ -49,11 +49,47 @@ def compute_snr(noise_scheduler, timesteps):
     return snr
 
 
+@torch.no_grad()
+def sfft(x, real=True):
+
+    #x = x.repeat_interleave(2, 1)
+
+    shift = torch.exp(1j * np.pi * torch.arange(0, x.shape[-1], device=x.device) / x.shape[-1])
+    sfft = torch.fft.fft(x * shift)
+
+    sfft[..., 0] /= torch.sqrt(torch.tensor(sfft.shape[-1], device=sfft.device))
+    sfft[..., 1:] *= torch.sqrt(2 / torch.tensor(sfft.shape[-1], device=sfft.device))
+
+    sfft.cpu().numpy().tofile("./debug/debug_sfft.raw")
+    if real:
+        return sfft[..., :sfft.shape[-1]//2]
+    else:
+        return sfft
+
+@torch.no_grad()
+def isfft(x, real=True):
+
+    if real:
+        #conj = x.flip(-1)
+        #conj = conj.real - 1j*conj.imag
+        #x = torch.cat((x, conj), dim=-1)
+        #x.cpu().numpy().tofile("./debug/debug_sfft2.raw")
+        x = torch.cat((x, torch.zeros_like(x)), dim=-1)
+
+    isfft = torch.fft.ifft(x)
+    shift = torch.exp(1j * np.pi * torch.arange(0, x.shape[-1], device=x.device) / x.shape[-1])
+
+    return isfft / shift
+
 class DualTimeOverlappedFormat:
 
     @staticmethod
     def get_sample_crop_width(model_params):
-        return model_params["sample_raw_length"] + model_params["num_chunks"]
+        rfft = model_params.get("rfft", False)
+        if rfft:
+            return model_params["sample_raw_length"] 
+        else:
+            return model_params["sample_raw_length"] + model_params["num_chunks"]
     
     @staticmethod
     def get_num_channels(model_params):
@@ -71,30 +107,29 @@ class DualTimeOverlappedFormat:
     @staticmethod
     @torch.no_grad()
     def raw_to_sample(raw_samples, model_params, window=None, random_phase_offset=False):
+        
+        rfft = model_params.get("rfft", False)
 
         num_chunks = model_params["num_chunks"]
-        half_window_len = num_chunks
-        window_len = half_window_len * 2
-        chunk_len = raw_samples.shape[1] // half_window_len - 1
-        half_chunk_len = chunk_len // 2
+        window_len = num_chunks * 2 - int(rfft)
+        chunk_len = raw_samples.shape[1] // window_len * 2
         bsz = raw_samples.shape[0]
-
-        if raw_samples.shape[1] % half_window_len != 0:
-            raise ValueError(f"raw_samples length ({raw_samples.shape[1]}) must be divisible by half_window_len ({half_window_len})")
-        if chunk_len & (chunk_len - 1) != 0:
-            raise ValueError(f"chunk_len ({chunk_len}) must be a power of 2")
         
         if window is None:
             window = DualTimeOverlappedFormat.get_window(window_len, device=raw_samples.device)
 
-        slices_1 = raw_samples[:, :-half_window_len].view(bsz, half_chunk_len, window_len) * window
-        slices_2 = raw_samples[:, half_window_len: ].view(bsz, half_chunk_len, window_len) * window
-        slices_1_fft = torch.fft.fft(slices_1, norm="ortho")[:, :, :half_window_len] 
-        slices_2_fft = torch.fft.fft(slices_2, norm="ortho")[:, :, :half_window_len]
+        slices_1 = raw_samples[:, :num_chunks*window_len ].view(bsz, num_chunks, window_len)# * window
+        slices_2 = raw_samples[:, -num_chunks*window_len:].view(bsz, num_chunks, window_len)# * window
+        if rfft:
+            slices_1_fft = torch.fft.rfft(slices_1, norm="ortho")
+            slices_2_fft = torch.fft.rfft(slices_2, norm="ortho")
+        else:
+            slices_1_fft = torch.fft.fft(slices_1, norm="ortho")[:, :, :num_chunks] 
+            slices_2_fft = torch.fft.fft(slices_2, norm="ortho")[:, :, :num_chunks]
+            #samples[:, :, 0] /= 2
 
         samples = torch.cat((slices_1_fft, slices_2_fft), dim=2).view(bsz, chunk_len, num_chunks)
         samples = samples.permute(0, 2, 1).contiguous()
-        samples[:, 0, :] /= 2
 
         if random_phase_offset:
             samples *= torch.exp(2j*np.pi*torch.rand(1, device=samples.device))
@@ -110,26 +145,43 @@ class DualTimeOverlappedFormat:
     @staticmethod
     @torch.no_grad()
     def sample_to_raw(samples, model_params):
-
+        
+        rfft = model_params.get("rfft", False)
+        
         num_chunks = samples.shape[2]
-        half_window_len = num_chunks
         chunk_len = samples.shape[3]
-        raw_sample_len = (chunk_len + 1) * half_window_len
+        raw_sample_len = (chunk_len + 1 - int(rfft)) * num_chunks
         bsz = samples.shape[0]
+
+        window_len = num_chunks * 2 - int(rfft)
+        window = DualTimeOverlappedFormat.get_window(window_len, device=samples.device)
 
         sample_std = model_params.get("sample_std", 1.)
         samples = samples.clone().permute(0, 3, 2, 1).contiguous() * sample_std
         samples = torch.view_as_complex(samples)
-        samples = torch.cat((samples, torch.zeros_like(samples)), dim=2)
-        samples = torch.fft.ifft(samples, norm="ortho")
+        
+        #if rfft:
+        #    samples = torch.fft.irfft(samples, norm="ortho") * 2
+        #else:
+        #    samples = torch.cat((samples, torch.zeros_like(samples)), dim=2)
+        #    samples = torch.fft.ifft(samples, norm="ortho") * 2
+        if rfft:
+            samples = torch.fft.irfft(samples, window_len, norm="ortho") * window
+        else:
+            samples = torch.cat((samples, torch.zeros_like(samples)), dim=2)
+            samples = torch.fft.ifft(samples, norm="ortho") * window * 2
 
         slices_1 = samples[:, 0::2, :]
         slices_2 = samples[:, 1::2, :]
         raw_samples = torch.zeros((bsz, raw_sample_len), dtype=samples.dtype, device=samples.device)
-        raw_samples[:, :-half_window_len]  = slices_1.reshape(bsz, -1)
-        raw_samples[:, half_window_len: ] += slices_2.reshape(bsz, -1)
+        #weight = torch.zeros((bsz, raw_sample_len), dtype=samples.dtype, device=samples.device)
+        #weight[:, :num_chunks*window_len ]  = window.repeat(num_chunks).unsqueeze(0)
+        #weight[:, -num_chunks*window_len:] += window.repeat(num_chunks).unsqueeze(0)
+
+        raw_samples[:, :num_chunks*window_len ]  = slices_1.reshape(bsz, -1) #/ weight[:, :num_chunks*window_len ]
+        raw_samples[:, -num_chunks*window_len:] += slices_2.reshape(bsz, -1) #/ weight[:, -num_chunks*window_len:]
         
-        return raw_samples * 2.
+        return raw_samples
 
     @staticmethod
     def get_loss(sample, target, model_params, reduction="mean"):
@@ -324,7 +376,7 @@ class DualOverlappedFormat:
 
     @staticmethod
     def get_sample_crop_width(model_params):
-        return model_params["sample_raw_length"]
+        return model_params["sample_raw_length"] - int(model_params.get("rfft", False))
     
     @staticmethod
     def get_num_channels(model_params):
@@ -349,6 +401,8 @@ class DualOverlappedFormat:
         bsz = raw_samples.shape[0]
 
         fftshift = model_params.get("fftshift", True)
+        ifft = model_params.get("ifft", False)
+        rfft = model_params.get("rfft", False)
 
         if window is None:
             window = DualOverlappedFormat.get_window(chunk_len, device=raw_samples.device)
@@ -356,17 +410,33 @@ class DualOverlappedFormat:
         raw_samples[:, :half_chunk_len]  *= window[:half_chunk_len]
         raw_samples[:, -half_chunk_len:] *= window[half_chunk_len:]
 
-        fft = torch.fft.fft(raw_samples, norm="ortho")[:, :half_sample_len + half_chunk_len]
-        fft[:, half_sample_len:] = 0.
+        if rfft:
+            fft = torch.fft.rfft(raw_samples, norm="ortho")
+            fft = torch.cat((fft, torch.zeros((bsz, half_chunk_len), dtype=torch.complex64, device=fft.device)), dim=1)
+        else:
+            fft = torch.fft.fft(raw_samples, norm="ortho")[:, :half_sample_len + half_chunk_len]
+            fft[:, half_sample_len:] = 0.
+            fft[:, 0] /= 2 # ?
 
         slices_1 = fft[:, :half_sample_len].view(bsz, num_chunks, chunk_len)
         slices_2 = fft[:,  half_chunk_len:].view(bsz, num_chunks, chunk_len)
 
-        samples = torch.cat((slices_1, slices_2), dim=2).view(bsz, num_chunks*2, chunk_len) * window
+        samples = torch.cat((slices_1, slices_2), dim=2).view(bsz, num_chunks*2, chunk_len)# * window
         if fftshift:
-            samples = torch.fft.fft(torch.fft.fftshift(samples, dim=-1), norm="ortho")
+            if ifft:
+                samples = torch.fft.ifft(torch.fft.fftshift(samples, dim=-1), norm="ortho")
+            else:
+                samples = torch.fft.fft(torch.fft.fftshift(samples, dim=-1), norm="ortho")
         else:
-            samples = torch.fft.fft(samples, norm="ortho")
+            if ifft:
+                samples = torch.fft.ifft(samples, norm="ortho")
+                samples[:, 0, :] /= 2 # ?
+            else:
+                samples = torch.fft.fft(samples, norm="ortho")
+                samples[:, 0, :] /= 2 # ?
+
+        samples -= samples.mean(dim=(2,), keepdim=True)
+
         if random_phase_offset:
             samples *= torch.exp(2j*np.pi*torch.rand(1, device=samples.device))
         samples = torch.view_as_real(samples).permute(0, 3, 1, 2).contiguous()
@@ -389,9 +459,17 @@ class DualOverlappedFormat:
         bsz = samples.shape[0]
 
         fftshift = model_params.get("fftshift", True)
+        ifft = model_params.get("ifft", False)
+        rfft = model_params.get("rfft", False)
         sample_std = model_params.get("sample_std", 1.)
 
-        samples = samples.clone().permute(0, 2, 3, 1).contiguous() * sample_std
+        window = DualOverlappedFormat.get_window(chunk_len, device=samples.device)
+
+        samples = samples - samples.mean(dim=(3,), keepdim=True)
+        #samples = samples - samples.mean(dim=(2,3,), keepdim=True) #?
+        #samples = samples - samples.mean(dim=(2,), keepdim=True) #?
+
+        samples = samples.permute(0, 2, 3, 1).contiguous() * sample_std
 
         if fftshift:
             # this mitigates clicking artifacts somehow
@@ -399,20 +477,29 @@ class DualOverlappedFormat:
             samples -= samples.mean(dim=1, keepdim=True) * (-samples.std(dim=1, keepdim=True) * 20).exp()
             #samples -= samples.mean(dim=(1,3), keepdim=True) * (-samples.std(dim=(1,3), keepdim=True) * 16).exp()
 
-            samples = torch.fft.fftshift(torch.fft.ifft(torch.view_as_complex(samples), norm="ortho"), dim=-1)
+            if ifft:
+                samples = torch.fft.fftshift(torch.fft.fft(torch.view_as_complex(samples), norm="ortho"), dim=-1)
+            else:
+                samples = torch.fft.fftshift(torch.fft.ifft(torch.view_as_complex(samples), norm="ortho"), dim=-1)
         else:
-            samples = torch.fft.ifft(torch.view_as_complex(samples), norm="ortho")
-            samples[:, :, 0] = 0 # mitigate clicking artifacts
+            if ifft:
+                samples = torch.fft.fft(torch.view_as_complex(samples), norm="ortho")
+            else:
+                samples = torch.fft.ifft(torch.view_as_complex(samples), norm="ortho")
+            #samples[:, :, 0] = 0 # mitigate clicking artifacts
 
-        slices_1 = samples[:, 0::2, :]
-        slices_2 = samples[:, 1::2, :]
+        slices_1 = samples[:, 0::2, :] * window #!
+        slices_2 = samples[:, 1::2, :] * window
 
         fft = torch.zeros((bsz, sample_len), dtype=torch.complex64, device=samples.device)
         fft[:, :half_sample_len] = slices_1.reshape(bsz, -1)
         fft[:,  half_chunk_len:half_sample_len+half_chunk_len] += slices_2.reshape(bsz, -1)
         fft[:, half_sample_len:half_sample_len+half_chunk_len] = 0.
         
-        return torch.fft.ifft(fft, norm="ortho") * 2.
+        if rfft:
+            return torch.fft.irfft(fft, sample_len - 1 , norm="ortho")
+        else:
+            return torch.fft.ifft(fft, norm="ortho") * 2.
 
     @staticmethod
     def get_loss(sample, target, model_params, reduction="mean"):
@@ -559,7 +646,11 @@ class DualNormalFormat:
 
     @staticmethod
     def get_sample_crop_width(model_params):
-        return model_params["sample_raw_length"]
+        rfft = model_params.get("rfft", False)
+        if rfft:
+            return model_params["sample_raw_length"] - 1
+        else:
+            return model_params["sample_raw_length"]
     
     @staticmethod
     def get_num_channels(model_params):
@@ -585,15 +676,31 @@ class DualNormalFormat:
         half_window_len = model_params["spatial_window_length"] // 2
         raw_samples = raw_samples.clone()
 
+        ifft = model_params.get("ifft", False)
+        rfft = model_params.get("rfft", False)
+
         if half_window_len > 0:
             if window is None:
                 window = DualNormalFormat.get_window(half_window_len*2, device=raw_samples.device).square_() # this might need to go back to just chunk_len
             raw_samples[:, :half_window_len]  *= window[:half_window_len]
             raw_samples[:, -half_window_len:] *= window[half_window_len:]
 
-        fft = torch.fft.fft(raw_samples, norm="ortho")[:, :half_sample_len].view(bsz, num_chunks, chunk_len)
-        fft = torch.fft.fft(fft, norm="ortho")
-        
+        if rfft:
+            fft = torch.fft.rfft(raw_samples, norm="ortho")
+        else:
+            fft = torch.fft.fft(raw_samples, norm="ortho")
+            fft[:, 0] /= 2 
+            fft = fft[:, :half_sample_len]
+            #fft = sfft(raw_samples)
+
+
+        fft = fft.view(bsz, num_chunks, chunk_len)
+
+        if ifft:
+            fft = torch.fft.ifft(fft, norm="ortho")
+        else:
+            fft = torch.fft.fft(fft, norm="ortho")
+
         if random_phase_offset:
             fft *= torch.exp(2j*np.pi*torch.rand(1, device=fft.device))
         samples = torch.view_as_real(fft).permute(0, 3, 1, 2).contiguous()
@@ -616,13 +723,27 @@ class DualNormalFormat:
         bsz = samples.shape[0]
         samples = samples.clone()
 
-        samples = torch.view_as_complex(samples.permute(0, 2, 3, 1).contiguous())
-        samples = torch.fft.ifft(samples, norm="ortho")
-        #samples[:, :, 0] = 0; samples[:, 1:, 0] -= samples[:, 1:, 0].mean(dim=1, keepdim=True) # remove annoying clicking due to lack of windowing
-        samples = samples.view(bsz, half_sample_len)
-        samples = torch.cat((samples, torch.zeros_like(samples)), dim=1)
+        ifft = model_params.get("ifft", False)
+        rfft = model_params.get("rfft", False)
 
-        return torch.fft.ifft(samples, norm="ortho") * 2.
+        samples = torch.view_as_complex(samples.permute(0, 2, 3, 1).contiguous())
+        if ifft:
+            samples = torch.fft.fft(samples, norm="ortho")
+        else:
+            samples = torch.fft.ifft(samples, norm="ortho")
+
+        #samples[:, :, 0] = 0; samples[:, 1:, 0] -= samples[:, 1:, 0].mean(dim=1, keepdim=True) # remove annoying clicking due to lack of windowing
+        #samples -= samples.mean(dim=(1, 2), keepdim=True)
+
+        samples = samples.view(bsz, half_sample_len)
+        
+        if rfft:
+            samples = torch.cat((samples, torch.zeros_like(samples)), dim=1)
+            return torch.fft.irfft(samples, samples.shape[1]-1, norm="ortho").type(samples.dtype)
+        else:
+            samples = torch.cat((samples, torch.zeros_like(samples)), dim=1)
+            return torch.fft.ifft(samples, norm="ortho") * 2.
+            #return isfft(samples)
 
     @staticmethod
     @torch.no_grad()

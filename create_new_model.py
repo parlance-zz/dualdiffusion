@@ -7,7 +7,7 @@ from dual_diffusion_pipeline import DualDiffusionPipeline
 load_dotenv()
 torch.manual_seed(200)
 
-MODEL_NAME = "dualdiffusion2d_330_time_overlapped_v8_256embed_4vae"
+MODEL_NAME = "dualdiffusion2d_330_overlapped_rfft_v8_256embed_4vae"
 MODEL_PARAMS = {
     #"prediction_type": "sample",
     "prediction_type": "v_prediction",
@@ -19,18 +19,31 @@ MODEL_PARAMS = {
     "beta_end" : 0.02,
     #"rescale_betas_zero_snr": True,
     "rescale_betas_zero_snr": False,
-    "sample_raw_length": 65536*2,
     "sample_raw_channels": int(os.environ.get("DATASET_NUM_CHANNELS")),
-    "num_chunks": 256, 
     "sample_rate": int(os.environ.get("DATASET_SAMPLE_RATE")),
     "freq_embedding_dim": 0,
     "time_embedding_dim": 0,
-    "sample_format": "time_overlapped",
-    
+
+    #"sample_format": "time_overlapped",
+    #"sample_raw_length": 65536*2,
+    #"num_chunks": 256, 
+    #"rfft": True,
+
+    "sample_format": "overlapped",
+    "sample_raw_length": 65536*2,
+    "num_chunks": 128, 
+    "spatial_window_length": 512,
+    "rfft": True,
+    "ifft": True,
+    "fftshift": False,
+
     #"sample_format": "normal",
-    #"spatial_window_length": 1024,
-    #"fftshift": True,
-    #"fftshift": False,
+    #"sample_raw_length": 65536*2,
+    #"num_chunks": 256, 
+    #"spatial_window_length": 512,
+    #"rfft": True,
+    #"ifft": True,
+
     #"sample_std": 0.021220825965105643,
     #"sample_format": "ln",
     #"ln_amplitude_floor": -12,

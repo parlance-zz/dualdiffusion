@@ -74,29 +74,66 @@ def get_dataset_stats():
 
 def reconstruction_test(sample_num=1):
 
+    torch.manual_seed(200)
+
+    """
     model_params = {
         "sample_raw_length": 65536*2,
         "num_chunks": 256,
         "sample_format": "time_overlapped",
-        #"sample_format": "normal",
         "freq_embedding_dim": 0,
         "time_embedding_dim": 0,
         "spatial_window_length": 0,
-        #"spatial_window_length": 1024,
+        "rfft": True,
     }
+    """
+    """
+    model_params = {
+        #"sample_raw_length": 65536*4,
+        "sample_raw_length": 65536*2,
+        "num_chunks": 256,
+        "sample_format": "normal",
+        "freq_embedding_dim": 0,
+        "time_embedding_dim": 0,
+        "spatial_window_length": 512,
+        "ifft": True,
+        #"rfft": True,
+    }
+    """
+    #"""
+    model_params = {
+        #"sample_raw_length": 65536*4,
+        "sample_raw_length": 65536*2,
+        "num_chunks": 128,
+        "sample_format": "overlapped",
+        "freq_embedding_dim": 0,
+        "time_embedding_dim": 0,
+        "spatial_window_length": 512,
+        "ifft": True,
+        "rfft": True,
+        "fftshift": False,
+    }
+    #"""
+
     format = DualDiffusionPipeline.get_sample_format(model_params)
     crop_width = format.get_sample_crop_width(model_params)
 
     raw_sample = np.fromfile(f"./dataset/samples/{sample_num}.raw", dtype=np.int16, count=crop_width) / 32768.
     raw_sample = torch.from_numpy(raw_sample.astype(np.float32)).unsqueeze(0).to("cuda")
-    #raw_sample = torch.sin(torch.arange(0, crop_width) / 400).unsqueeze(0).to("cuda")
+    
+    #raw_sample = torch.randn((1, crop_width), dtype=torch.float32).to("cuda")
+    #raw_sample[:, (crop_width)//5:(crop_width)//5*3] = 0
+    #raw_sample[:, (crop_width)//5*3:] /= 2
+
     raw_sample.cpu().numpy().tofile("./debug/debug_raw_original.raw")
 
-    freq_sample, _ = format.raw_to_sample(raw_sample, model_params)
+    freq_sample, _ = format.raw_to_sample(raw_sample, model_params, random_phase_offset=True)
     print("Sample shape:", freq_sample.shape)
     print("Sample mean:", freq_sample.mean(dim=(2,3)), freq_sample.mean())
     print("Sample std:", freq_sample.std().item())
     freq_sample.cpu().numpy().tofile("./debug/debug_sample.raw")
+    
+    freq_sample += torch.ones_like(freq_sample) * 0.05
 
     raw_sample = format.sample_to_raw(freq_sample, model_params).real
     raw_sample /= raw_sample.abs().max()
@@ -208,8 +245,8 @@ def embedding_test():
 
 def vae_test():
 
-    model_name = "dualdiffusion2d_330_overlapped_v8_256embed_16vae"
-    num_samples = 8
+    model_name = "dualdiffusion2d_330_overlapped_rfft_v8_256embed_4vae"
+    num_samples = 4
     #device = "cuda"
     device = "cpu"
     fp16 = False
@@ -224,8 +261,8 @@ def vae_test():
     output_path = os.path.join(model_path, "output")
     os.makedirs(output_path, exist_ok=True)
 
-    crop_width = model_params["sample_raw_length"]
     format = DualDiffusionPipeline.get_sample_format(model_params)
+    crop_width = format.get_sample_crop_width(model_params)
     print("Sample shape: ", format.get_sample_shape(model_params))
 
     dataset_path = DATASET_PATH = os.environ.get("DATASET_PATH", "./")
@@ -236,6 +273,7 @@ def vae_test():
     #vae_path = "D:/dualdiffusion/models/dualdiffusion2d_330_overlapped_v8_256embed_16vae/old checkpoints/vae_checkpoint-49400/vae"
     model_dtype = torch.float16 if fp16 else torch.float32
     vae = AutoencoderKLDual.from_pretrained(vae_path, torch_dtype=model_dtype).to(device)
+    last_global_step = vae.config["last_global_step"]
 
     for filename in test_samples:
         raw_sample = np.fromfile(os.path.join(dataset_path, filename), dtype=np.int16, count=crop_width) / 32768.
@@ -246,12 +284,12 @@ def vae_test():
         output = format.sample_to_raw(output.type(torch.float32), model_params).real
         
         raw_sample /= raw_sample.abs().max()
-        output_flac_file_path = os.path.join(output_path, filename.replace(".raw", ".flac"))
+        output_flac_file_path = os.path.join(output_path, f"step_{last_global_step}_{filename.replace('.raw', '_original.flac')}")
         torchaudio.save(output_flac_file_path, raw_sample.cpu(), sample_rate, bits_per_sample=16)
         print(f"Saved flac output to {output_flac_file_path}")
 
         output /= output.abs().max()
-        output_flac_file_path = os.path.join(output_path, filename.replace(".raw", "_decoded.flac"))
+        output_flac_file_path = os.path.join(output_path, f"step_{last_global_step}_{filename.replace('.raw', '_decoded.flac')}")
         torchaudio.save(output_flac_file_path, output.cpu(), sample_rate, bits_per_sample=16)
         print(f"Saved flac output to {output_flac_file_path}")
 
@@ -268,10 +306,10 @@ if __name__ == "__main__":
 
     load_dotenv()
 
-    reconstruction_test(sample_num=1)
+    #reconstruction_test(sample_num=2)
     #get_dataset_stats(DualOverlappedFormat)
     #embedding_test()
-    #vae_test()
+    vae_test()
 
     model_name = "dualdiffusion2d_330_v9_256embed_vae"
     #model_name = "dualdiffusion2d_118"
