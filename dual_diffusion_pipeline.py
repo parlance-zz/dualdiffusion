@@ -37,7 +37,8 @@ def compute_snr(noise_scheduler, timesteps):
     snr = (alpha / sigma) ** 2
     return snr
 
-def mdct(x, block_width, random_phase_offset=False):
+
+def mdct(x, block_width, complex=False, random_phase_offset=False):
 
     pad_tuple = (block_width//2, block_width//2) + (0,0,) * (x.ndim-1)
     x = F.pad(x, pad_tuple).unfold(-1, block_width, block_width//2)
@@ -54,7 +55,10 @@ def mdct(x, block_width, random_phase_offset=False):
     if random_phase_offset:
         y *= torch.exp(2j*torch.pi*torch.rand(1, device=y.device))
 
-    return y.real * 2
+    if complex:
+        return y * 2
+    else:
+        return y.real * 2
 
 def imdct(x):
     N = x.shape[-1]
@@ -68,17 +72,40 @@ def imdct(x):
     x = torch.cat((x / post_shift, torch.zeros_like(x)), dim=-1)
     y = (torch.fft.ifft(x) / pre_shift).real * window
 
-    raw_sample = torch.zeros(y.shape[:-2] + ((y.shape[-2] + 1) * y.shape[-1] // 2,), device=y.device)
+    padded_sample_len = (y.shape[-2] + 1) * y.shape[-1] // 2
+    raw_sample = torch.zeros(y.shape[:-2] + (padded_sample_len,), device=y.device)
     raw_sample[..., :-N]  = y[...,  ::2, :].reshape(*raw_sample[..., :-N].shape)
     raw_sample[..., N: ] += y[..., 1::2, :].reshape(*raw_sample[...,  N:].shape)
 
     return raw_sample[..., N:-N] * 2
 
-def to_ulaw(x, u=16384):
-    return torch.sign(x) * torch.log(1 + u * torch.abs(x)) / np.log(1 + u)
+def to_ulaw(x, u=255):
 
-def from_ulaw(x, u=16384):
-    return torch.sign(x) * ((1 + u) ** torch.abs(x) - 1) / u
+    complex = False
+    if torch.is_complex(x):
+        complex = True
+        x = torch.view_as_real(x)
+
+    x = torch.sign(x) * torch.log(1 + u * torch.abs(x)) / np.log(1 + u)
+
+    if complex:
+        x = torch.view_as_complex(x)
+    
+    return x
+
+def from_ulaw(x, u=255):
+
+    complex = False
+    if torch.is_complex(x):
+        complex = True
+        x = torch.view_as_real(x)
+
+    x = torch.sign(x) * ((1 + u) ** torch.abs(x) - 1) / u
+
+    if complex:
+        x = torch.view_as_complex(x)
+
+    return x
 
 class DualMDCTFormat:
 
@@ -90,7 +117,7 @@ class DualMDCTFormat:
     @staticmethod
     def get_num_channels(model_params):
         freq_embedding_dim = model_params["freq_embedding_dim"]
-        channels = model_params["sample_raw_channels"]
+        channels = model_params["sample_raw_channels"] * (1 + int(model_params.get("complex", False)))
         return (channels + freq_embedding_dim, channels)
 
     @staticmethod
@@ -100,14 +127,18 @@ class DualMDCTFormat:
         num_chunks = model_params["num_chunks"]
         block_width = num_chunks * 2
         u = model_params.get("u", None)
+        complex = model_params.get("complex", False)
 
-        samples = mdct(raw_samples, block_width, random_phase_offset=random_phase_offset)
+        samples = mdct(raw_samples, block_width, complex=complex, random_phase_offset=random_phase_offset)
 
         if u is not None:
             samples /= samples.abs().amax(dim=(1, 2), keepdim=True)
             samples = to_ulaw(samples, u=u)
 
-        samples = samples.permute(0, 2, 1).contiguous().unsqueeze(1)
+        if complex:
+            samples = torch.view_as_real(samples).permute(0, 3, 2, 1).contiguous()
+        else:
+            samples = samples.permute(0, 2, 1).contiguous().unsqueeze(1)
         
         if "sample_std" in model_params:
             samples /= model_params["sample_std"]
@@ -123,7 +154,11 @@ class DualMDCTFormat:
         sample_std = model_params.get("sample_std", 1.)
         samples = samples * sample_std
 
-        samples = samples.squeeze(1).permute(0, 2, 1).contiguous()
+        complex = model_params.get("complex", False)
+        if complex:
+            samples = torch.view_as_complex(samples.permute(0, 3, 2, 1).contiguous())
+        else:
+            samples = samples.squeeze(1).permute(0, 2, 1).contiguous()
 
         u = model_params.get("u", None)
         if u is not None:

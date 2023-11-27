@@ -16,6 +16,7 @@ def get_dataset_stats():
         "sample_raw_length": 65536*2,
         "num_chunks": 256,
         "sample_format": "mdct",
+        "complex": True,
         "u": 16384,
         "sample_std": 1,
     }
@@ -117,8 +118,9 @@ def reconstruction_test(sample_num=1):
         "sample_raw_length": 65536*2,
         "num_chunks": 256,
         "sample_format": "mdct",
+        "complex": True,
         "u": 16384,
-        "sample_std": 0.4276631181668562,
+        "sample_std": 0.4197056818852289,
         "freq_embedding_dim": 0,
         "time_embedding_dim": 0,
     }

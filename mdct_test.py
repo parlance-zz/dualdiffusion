@@ -11,7 +11,7 @@ test_sample = 0
 block_width = 512
 crop_width = 65536*2 - block_width // 2
 
-def mdct(x, block_width, random_phase_offset=False):
+def mdct(x, block_width, complex=False, random_phase_offset=False):
 
     pad_tuple = (block_width//2, block_width//2) + (0,0,) * (x.ndim-1)
     x = F.pad(x, pad_tuple).unfold(-1, block_width, block_width//2)
@@ -28,7 +28,10 @@ def mdct(x, block_width, random_phase_offset=False):
     if random_phase_offset:
         y *= torch.exp(2j*torch.pi*torch.rand(1, device=y.device))
 
-    return y.real * 2
+    if complex:
+        return y * 2
+    else:
+        return y.real * 2
 
 def imdct(x):
     N = x.shape[-1]
@@ -50,10 +53,32 @@ def imdct(x):
     return raw_sample[..., N:-N] * 2
 
 def to_ulaw(x, u=255):
-    return torch.sign(x) * torch.log(1 + u * torch.abs(x)) / np.log(1 + u)
+
+    complex = False
+    if torch.is_complex(x):
+        complex = True
+        x = torch.view_as_real(x)
+
+    x = torch.sign(x) * torch.log(1 + u * torch.abs(x)) / np.log(1 + u)
+
+    if complex:
+        x = torch.view_as_complex(x)
+    
+    return x
 
 def from_ulaw(x, u=255):
-    return torch.sign(x) * ((1 + u) ** torch.abs(x) - 1) / u
+
+    complex = False
+    if torch.is_complex(x):
+        complex = True
+        x = torch.view_as_real(x)
+
+    x = torch.sign(x) * ((1 + u) ** torch.abs(x) - 1) / u
+
+    if complex:
+        x = torch.view_as_complex(x)
+
+    return x
 
 raw_sample = np.fromfile(os.path.join(dataset_path, f"{test_sample}.raw"), dtype=np.int16, count=crop_width) / 32768.
 raw_sample = torch.from_numpy(raw_sample.astype(np.float32))
@@ -61,12 +86,12 @@ raw_sample.cpu().numpy().tofile("./debug/raw_sample.raw")
 
 #raw_sample = raw_sample.unsqueeze(0)
 #raw_sample = raw_sample.repeat(2, 1)
-Xk = mdct(raw_sample, block_width, random_phase_offset=False)
+Xk = mdct(raw_sample, block_width, complex=True, random_phase_offset=False)
 
 Xk /= Xk.abs().max()
 Xk = to_ulaw(Xk, u=16384)
 Xk.cpu().numpy().tofile("./debug/mdct_ulaw.raw")
-#Xk += torch.randn_like(Xk) * 1e-2
+Xk += torch.randn_like(Xk) * 5e-2
 #Xk = (Xk * 16).type(torch.int32) / 16.
 #Xk.cpu().numpy().tofile("./debug/mdct_ulaw_quantized.raw")
 Xk = from_ulaw(Xk, u=16384)
