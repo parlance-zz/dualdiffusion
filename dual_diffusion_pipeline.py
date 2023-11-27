@@ -2,6 +2,7 @@ import os
 from typing import Union
 import numpy as np
 import torch
+import torch.nn.functional as F
 import cv2
 
 from diffusers.schedulers import DPMSolverMultistepScheduler, DDIMScheduler, DPMSolverSDEScheduler
@@ -10,18 +11,6 @@ from diffusers.pipelines.pipeline_utils import DiffusionPipeline
 
 from unet2d_dual import UNet2DDualModel
 from autoencoder_kl_dual import AutoencoderKLDual
-
-def to_freq(x):
-    x = x.permute(0, 2, 3, 1).contiguous().float()
-    x = torch.fft.fft2(torch.view_as_complex(x), norm="ortho")
-    x = torch.view_as_real(x)
-    return x.permute(0, 3, 1, 2).contiguous()
-
-def to_spatial(x):
-    x = x.permute(0, 2, 3, 1).contiguous().float()
-    x = torch.fft.ifft2(torch.view_as_complex(x), norm="ortho")
-    x = torch.view_as_real(x)
-    return x.permute(0, 3, 1, 2).contiguous()
 
 def compute_snr(noise_scheduler, timesteps):
     """
@@ -48,38 +37,114 @@ def compute_snr(noise_scheduler, timesteps):
     snr = (alpha / sigma) ** 2
     return snr
 
+def mdct(x, block_width, random_phase_offset=False):
 
-@torch.no_grad()
-def sfft(x, real=True):
+    pad_tuple = (block_width//2, block_width//2) + (0,0,) * (x.ndim-1)
+    x = F.pad(x, pad_tuple).unfold(-1, block_width, block_width//2)
 
-    #x = x.repeat_interleave(2, 1)
+    N = x.shape[-1] // 2
+    n = torch.arange(2*N, device=x.device)
+    k = torch.arange(0.5, N + 0.5, device=x.device)
 
-    shift = torch.exp(1j * np.pi * torch.arange(0, x.shape[-1], device=x.device) / x.shape[-1])
-    sfft = torch.fft.fft(x * shift)
+    window = torch.sin(np.pi * (n + 0.5) / (2*N))
+    pre_shift = torch.exp(-1j * torch.pi / 2 / N * n)
+    post_shift = torch.exp(-1j * torch.pi / 2 / N * (N + 1) * k)
+    
+    y = torch.fft.fft(x * pre_shift * window)[..., :N] * post_shift
+    if random_phase_offset:
+        y *= torch.exp(2j*torch.pi*torch.rand(1, device=y.device))
 
-    sfft[..., 0] /= torch.sqrt(torch.tensor(sfft.shape[-1], device=sfft.device))
-    sfft[..., 1:] *= torch.sqrt(2 / torch.tensor(sfft.shape[-1], device=sfft.device))
+    return y.real * 2
 
-    sfft.cpu().numpy().tofile("./debug/debug_sfft.raw")
-    if real:
-        return sfft[..., :sfft.shape[-1]//2]
-    else:
-        return sfft
+def imdct(x):
+    N = x.shape[-1]
+    n = torch.arange(2*N, device=x.device)
+    k = torch.arange(0.5, N + 0.5, device=x.device)
 
-@torch.no_grad()
-def isfft(x, real=True):
+    window = torch.sin(np.pi * (n + 0.5) / (2*N))
+    pre_shift = torch.exp(-1j * torch.pi / 2 / N * n)
+    post_shift = torch.exp(-1j * torch.pi / 2 / N * (N + 1) * k)
+    
+    x = torch.cat((x / post_shift, torch.zeros_like(x)), dim=-1)
+    y = (torch.fft.ifft(x) / pre_shift).real * window
 
-    if real:
-        #conj = x.flip(-1)
-        #conj = conj.real - 1j*conj.imag
-        #x = torch.cat((x, conj), dim=-1)
-        #x.cpu().numpy().tofile("./debug/debug_sfft2.raw")
-        x = torch.cat((x, torch.zeros_like(x)), dim=-1)
+    raw_sample = torch.zeros(y.shape[:-2] + ((y.shape[-2] + 1) * y.shape[-1] // 2,), device=y.device)
+    raw_sample[..., :-N]  = y[...,  ::2, :].reshape(*raw_sample[..., :-N].shape)
+    raw_sample[..., N: ] += y[..., 1::2, :].reshape(*raw_sample[...,  N:].shape)
 
-    isfft = torch.fft.ifft(x)
-    shift = torch.exp(1j * np.pi * torch.arange(0, x.shape[-1], device=x.device) / x.shape[-1])
+    return raw_sample[..., N:-N] * 2
 
-    return isfft / shift
+def to_ulaw(x, u=16384):
+    return torch.sign(x) * torch.log(1 + u * torch.abs(x)) / np.log(1 + u)
+
+def from_ulaw(x, u=16384):
+    return torch.sign(x) * ((1 + u) ** torch.abs(x) - 1) / u
+
+class DualMDCTFormat:
+
+    @staticmethod
+    def get_sample_crop_width(model_params):
+        block_width = model_params["num_chunks"] * 2
+        return model_params["sample_raw_length"] - block_width // 2
+    
+    @staticmethod
+    def get_num_channels(model_params):
+        freq_embedding_dim = model_params["freq_embedding_dim"]
+        channels = model_params["sample_raw_channels"]
+        return (channels + freq_embedding_dim, channels)
+
+    @staticmethod
+    @torch.no_grad()
+    def raw_to_sample(raw_samples, model_params, window=None, random_phase_offset=False):
+        
+        num_chunks = model_params["num_chunks"]
+        block_width = num_chunks * 2
+        u = model_params.get("u", None)
+
+        samples = mdct(raw_samples, block_width, random_phase_offset=random_phase_offset)
+
+        if u is not None:
+            samples /= samples.abs().amax(dim=(1, 2), keepdim=True)
+            samples = to_ulaw(samples, u=u)
+
+        samples = samples.permute(0, 2, 1).contiguous().unsqueeze(1)
+        
+        if "sample_std" in model_params:
+            samples /= model_params["sample_std"]
+        else:
+            samples /= samples.std(dim=(1, 2, 3), keepdim=True).clip(min=1e-8)
+
+        return samples, window
+
+    @staticmethod
+    @torch.no_grad()
+    def sample_to_raw(samples, model_params):
+        
+        sample_std = model_params.get("sample_std", 1.)
+        samples = samples * sample_std
+
+        samples = samples.squeeze(1).permute(0, 2, 1).contiguous()
+
+        u = model_params.get("u", None)
+        if u is not None:
+            samples = from_ulaw(samples, u=u)
+        
+        return imdct(samples)
+
+    @staticmethod
+    def get_loss(sample, target, model_params, reduction="mean"):
+        return torch.nn.functional.mse_loss(sample.float(), target.float(), reduction=reduction)
+    
+    @staticmethod
+    def get_sample_shape(model_params, bsz=1, length=1):
+        _, num_output_channels = DualTimeOverlappedFormat.get_num_channels(model_params)
+
+        crop_width = DualTimeOverlappedFormat.get_sample_crop_width(model_params)
+        num_chunks = model_params["num_chunks"]
+        chunk_len = crop_width // num_chunks - 1
+
+        return (bsz, num_output_channels, num_chunks, chunk_len*length,)
+
 
 class DualTimeOverlappedFormat:
 
@@ -193,8 +258,8 @@ class DualTimeOverlappedFormat:
 
         crop_width = DualTimeOverlappedFormat.get_sample_crop_width(model_params)
         num_chunks = model_params["num_chunks"]
-        half_window_len = num_chunks
-        chunk_len = crop_width // half_window_len - 1
+        window_len = num_chunks * 2 - int(model_params.get("rfft", False))
+        chunk_len = crop_width // window_len * 2
 
         return (bsz, num_output_channels, num_chunks, chunk_len*length,)
    
@@ -827,6 +892,8 @@ class DualDiffusionPipeline(DiffusionPipeline):
             return DualEmbeddingFormat
         elif sample_format == "time_overlapped":
             return DualTimeOverlappedFormat
+        elif sample_format == "mdct":
+            return DualMDCTFormat
         else:
             raise ValueError(f"Unknown sample format '{sample_format}'")
         

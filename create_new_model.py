@@ -7,7 +7,7 @@ from dual_diffusion_pipeline import DualDiffusionPipeline
 load_dotenv()
 torch.manual_seed(200)
 
-MODEL_NAME = "dualdiffusion2d_330_overlapped_rfft_v8_256embed_4vae"
+MODEL_NAME = "dualdiffusion2d_330_mdct_u16384_v8_256embed_4vae"
 MODEL_PARAMS = {
     #"prediction_type": "sample",
     "prediction_type": "v_prediction",
@@ -29,13 +29,19 @@ MODEL_PARAMS = {
     #"num_chunks": 256, 
     #"rfft": True,
 
-    "sample_format": "overlapped",
+    #"sample_format": "overlapped",
+    #"sample_raw_length": 65536*2,
+    #"num_chunks": 128, 
+    #"spatial_window_length": 512,
+    #"rfft": True,
+    #"ifft": True,
+    #"fftshift": False,
+
+    "sample_format": "mdct",
     "sample_raw_length": 65536*2,
-    "num_chunks": 128, 
-    "spatial_window_length": 512,
-    "rfft": True,
-    "ifft": True,
-    "fftshift": False,
+    "num_chunks": 256,
+    "u": 16384,
+    "sample_std": 0.4276631181668562,
 
     #"sample_format": "normal",
     #"sample_raw_length": 65536*2,
@@ -81,8 +87,10 @@ VAE_PARAMS = {
 
   "freq_embedding_dim": 256,
   "time_embedding_dim": 256,
-}
 
+  "in_channels": DualDiffusionPipeline.get_sample_format(MODEL_PARAMS).get_num_channels(MODEL_PARAMS)[0],
+  "out_channels": DualDiffusionPipeline.get_sample_format(MODEL_PARAMS).get_num_channels(MODEL_PARAMS)[1],
+}
 
 UNET_PARAMS = {
     #"dropout": (0, 0, 0, 0.1, 0.15, 0.25),
@@ -164,14 +172,11 @@ UPSCALER_PARAMS = None
 if __name__ == "__main__":
 
     if VAE_PARAMS is not None:
-        VAE_PARAMS["in_channels"]  = MODEL_PARAMS["sample_raw_channels"]*2
-        VAE_PARAMS["out_channels"] = MODEL_PARAMS["sample_raw_channels"]*2
-
         UNET_PARAMS["in_channels"]  = VAE_PARAMS["latent_channels"] + MODEL_PARAMS["freq_embedding_dim"] + MODEL_PARAMS["time_embedding_dim"]
         UNET_PARAMS["out_channels"] = VAE_PARAMS["latent_channels"]
     else:
-        UNET_PARAMS["in_channels"]  = MODEL_PARAMS["sample_raw_channels"]*2 + MODEL_PARAMS["freq_embedding_dim"] + MODEL_PARAMS["time_embedding_dim"]
-        UNET_PARAMS["out_channels"] = MODEL_PARAMS["sample_raw_channels"]*2
+        UNET_PARAMS["in_channels"]  = DualDiffusionPipeline.get_sample_format(MODEL_PARAMS).get_num_channels(MODEL_PARAMS)[0]
+        UNET_PARAMS["out_channels"] = DualDiffusionPipeline.get_sample_format(MODEL_PARAMS).get_num_channels(MODEL_PARAMS)[1]
         
     NEW_MODEL_PATH = os.path.join(os.environ.get("MODEL_PATH"), MODEL_NAME)
 

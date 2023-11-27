@@ -7,24 +7,22 @@ import torch
 import torchaudio
 import json
 
-from dual_diffusion_pipeline import DualDiffusionPipeline, DualLogFormat, DualNormalFormat, DualOverlappedFormat
+from dual_diffusion_pipeline import DualDiffusionPipeline, DualLogFormat, DualNormalFormat, DualOverlappedFormat, DualMDCTFormat
 from attention_processor_dual import SeparableAttnProcessor2_0
 from autoencoder_kl_dual import AutoencoderKLDual
 
 def get_dataset_stats():
     model_params = {
-        "sample_raw_length": 65536,
-        "num_chunks": 128,
-        "ln_amplitude_mean": 0.,
-        "ln_amplitude_std": 1.,
-        "phase_integral_mean": 0.,
-        "phase_integral_std": 1,
+        "sample_raw_length": 65536*2,
+        "num_chunks": 256,
+        "sample_format": "mdct",
+        "u": 16384,
         "sample_std": 1,
-        "spatial_window_length": 256,
     }
-    crop_width = model_params["sample_raw_length"]
+    
     format = DualDiffusionPipeline.get_sample_format(model_params)
-
+    crop_width = format.get_sample_crop_width(model_params)
+    
     if format == DualLogFormat:
         ln_amplitude_mean = 0.
         ln_amplitude_std = 0.
@@ -35,10 +33,11 @@ def get_dataset_stats():
     num_samples = 0
     window = None
     
-    sample_list = os.listdir("./dataset/samples")
+    dataset_path = os.environ.get("DATASET_PATH", "./dataset/samples")
+    sample_list = os.listdir(dataset_path)
     for filename in sample_list:
         if filename.endswith(".raw"):
-            raw_sample = np.fromfile(os.path.join("./dataset/samples", filename), dtype=np.int16, count=crop_width) / 32768.
+            raw_sample = np.fromfile(os.path.join(dataset_path, filename), dtype=np.int16, count=crop_width) / 32768.
             raw_sample = torch.from_numpy(raw_sample.astype(np.float32)).unsqueeze(0).to("cuda")
             
             sample, window = format.raw_to_sample(raw_sample, model_params, window)
@@ -100,7 +99,7 @@ def reconstruction_test(sample_num=1):
         #"rfft": True,
     }
     """
-    #"""
+    """
     model_params = {
         #"sample_raw_length": 65536*4,
         "sample_raw_length": 65536*2,
@@ -113,7 +112,16 @@ def reconstruction_test(sample_num=1):
         "rfft": True,
         "fftshift": False,
     }
-    #"""
+    """
+    model_params = {
+        "sample_raw_length": 65536*2,
+        "num_chunks": 256,
+        "sample_format": "mdct",
+        "u": 16384,
+        "sample_std": 0.4276631181668562,
+        "freq_embedding_dim": 0,
+        "time_embedding_dim": 0,
+    }
 
     format = DualDiffusionPipeline.get_sample_format(model_params)
     crop_width = format.get_sample_crop_width(model_params)
@@ -121,9 +129,11 @@ def reconstruction_test(sample_num=1):
     raw_sample = np.fromfile(f"./dataset/samples/{sample_num}.raw", dtype=np.int16, count=crop_width) / 32768.
     raw_sample = torch.from_numpy(raw_sample.astype(np.float32)).unsqueeze(0).to("cuda")
     
-    #raw_sample = torch.randn((1, crop_width), dtype=torch.float32).to("cuda")
-    #raw_sample[:, (crop_width)//5:(crop_width)//5*3] = 0
-    #raw_sample[:, (crop_width)//5*3:] /= 2
+    """
+    raw_sample = torch.randn((1, crop_width), dtype=torch.float32).to("cuda")
+    raw_sample[:, (crop_width)//5:(crop_width)//5*3] = 0
+    raw_sample[:, (crop_width)//5*3:] /= 2
+    """
 
     raw_sample.cpu().numpy().tofile("./debug/debug_raw_original.raw")
 
@@ -133,8 +143,6 @@ def reconstruction_test(sample_num=1):
     print("Sample std:", freq_sample.std().item())
     freq_sample.cpu().numpy().tofile("./debug/debug_sample.raw")
     
-    freq_sample += torch.ones_like(freq_sample) * 0.05
-
     raw_sample = format.sample_to_raw(freq_sample, model_params).real
     raw_sample /= raw_sample.abs().max()
     raw_sample.cpu().numpy().tofile("./debug/debug_reconstruction.raw")
@@ -245,7 +253,7 @@ def embedding_test():
 
 def vae_test():
 
-    model_name = "dualdiffusion2d_330_overlapped_rfft_v8_256embed_4vae"
+    model_name = "dualdiffusion2d_330_mdct_u16384_v8_256embed_4vae"
     num_samples = 4
     #device = "cuda"
     device = "cpu"
@@ -265,7 +273,7 @@ def vae_test():
     crop_width = format.get_sample_crop_width(model_params)
     print("Sample shape: ", format.get_sample_shape(model_params))
 
-    dataset_path = DATASET_PATH = os.environ.get("DATASET_PATH", "./")
+    dataset_path = os.environ.get("DATASET_PATH", "./dataset/samples")
     test_samples = sorted(os.listdir(dataset_path), key=lambda x: int(x.split(".")[0]))[:num_samples]
     #test_samples = np.random.choice(os.listdir(dataset_path), num_samples, replace=False)
     
@@ -306,8 +314,8 @@ if __name__ == "__main__":
 
     load_dotenv()
 
-    #reconstruction_test(sample_num=2)
-    #get_dataset_stats(DualOverlappedFormat)
+    #reconstruction_test(sample_num=0)
+    #get_dataset_stats()
     #embedding_test()
     vae_test()
 
