@@ -5,7 +5,7 @@ accelerate launch^
  --allow_tf32^
  --train_data_dir="D:/dualdiffusion/dataset/samples"^
  --raw_sample_format="int16"^
- --pretrained_model_name_or_path="D:/dualdiffusion/models/dualdiffusion2d_330_mdct_complex_v8_256embed_4vae"^
+ --pretrained_model_name_or_path="D:/dualdiffusion/models/dualdiffusion2d_330_mdct_u255_v8_256embed_8vae"^
  --module="vae"^
  --train_batch_size=1^
  --num_train_epochs=500^
@@ -20,6 +20,8 @@ accelerate launch^
  --num_validation_samples=5^
  --num_validation_epochs=5
 
+REM --max_grad_norm=25
+ 
 REM --phase_augmentation=False
 
 REM --gradient_checkpointing

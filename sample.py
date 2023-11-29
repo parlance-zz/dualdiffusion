@@ -118,9 +118,8 @@ def reconstruction_test(sample_num=1):
         "sample_raw_length": 65536*2,
         "num_chunks": 256,
         "sample_format": "mdct",
-        "complex": True,
-        "u": 16384,
-        "sample_std": 0.4197056818852289,
+        #"complex": True,
+        "u": 255,
         "freq_embedding_dim": 0,
         "time_embedding_dim": 0,
     }
@@ -256,7 +255,7 @@ def embedding_test():
 def vae_test():
 
     #dualdiffusion2d_330_mdct_v8_256embed_4vae
-    model_name = "dualdiffusion2d_330_mdct_u255_v8_256embed_4vae"
+    model_name = "dualdiffusion2d_330_mdct_u255_v8_256embed_8vae"
     num_samples = 4
     #device = "cuda"
     device = "cpu"
@@ -317,7 +316,7 @@ if __name__ == "__main__":
 
     load_dotenv()
 
-    #reconstruction_test(sample_num=2)
+    reconstruction_test(sample_num=2)
     #get_dataset_stats()
     #embedding_test()
     vae_test()

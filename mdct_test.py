@@ -7,7 +7,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 dataset_path = os.environ.get("DATASET_PATH", "./")
-test_sample = 0
+test_sample = 2
 block_width = 512
 crop_width = 65536*2 - block_width // 2
 
@@ -33,12 +33,15 @@ def mdct(x, block_width, complex=False, random_phase_offset=False):
     else:
         return y.real * 2
 
-def imdct(x):
+def imdct(x, square_window=False):
     N = x.shape[-1]
     n = torch.arange(2*N, device=x.device)
     k = torch.arange(0.5, N + 0.5, device=x.device)
 
     window = torch.sin(np.pi * (n + 0.5) / (2*N))
+    if square_window:
+        window = window.square()
+
     pre_shift = torch.exp(-1j * torch.pi / 2 / N * n)
     post_shift = torch.exp(-1j * torch.pi / 2 / N * (N + 1) * k)
     
@@ -59,6 +62,7 @@ def to_ulaw(x, u=255):
         complex = True
         x = torch.view_as_real(x)
 
+    x /= x.abs().amax(dim=tuple(range(x.ndim-2-int(complex), x.ndim)), keepdim=True)
     x = torch.sign(x) * torch.log(1 + u * torch.abs(x)) / np.log(1 + u)
 
     if complex:
@@ -73,6 +77,7 @@ def from_ulaw(x, u=255):
         complex = True
         x = torch.view_as_real(x)
 
+    x /= x.abs().amax(dim=tuple(range(x.ndim-2-int(complex), x.ndim)), keepdim=True)
     x = torch.sign(x) * ((1 + u) ** torch.abs(x) - 1) / u
 
     if complex:
@@ -86,36 +91,16 @@ raw_sample.cpu().numpy().tofile("./debug/raw_sample.raw")
 
 #raw_sample = raw_sample.unsqueeze(0)
 #raw_sample = raw_sample.repeat(2, 1)
-Xk = mdct(raw_sample, block_width, complex=False, random_phase_offset=False)
+Xk = mdct(raw_sample, block_width, complex=True, random_phase_offset=False)
 
-Xk /= Xk.abs().max()
-
-Xk = to_ulaw(Xk, u=255) / 0.218751876669106
-#Xk = torch.view_as_real(Xk)
-#Xk /= Xk.std()
-
-#eps = 4e-2
-#Xk_pow = Xk.square() #.sum(dim=-1, keepdim=True)
-#Xk /= Xk_pow.sqrt() + eps
-
-Xk += torch.randn_like(Xk) * 2e-2
-
-#Xk *= Xk_pow.sqrt() + eps
-#Xk = torch.view_as_complex(Xk)
-
-#Xk.cpu().numpy().tofile("./debug/mdct_ulaw.raw")
+Xk = to_ulaw(Xk, u=255)
+Xk /= Xk.std()
 
 #Xk += torch.randn_like(Xk) * 2e-2
-
-#Xk -= Xk.mean()
-
-#Xk = torch.view_as_real(Xk)
-
 
 print("Xk shape:", Xk.shape, "Xk mean:", (Xk / Xk.std()).mean().item(), "Xk std:", Xk.std().item())
 Xk.cpu().numpy().tofile("./debug/mdct.raw")
 
-Xk = from_ulaw(Xk * 0.218751876669106, u=255) 
-
+Xk = from_ulaw(Xk, u=255) 
 y = imdct(Xk)
 y.cpu().numpy().tofile("./debug/imdct.raw")

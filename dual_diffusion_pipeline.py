@@ -86,6 +86,7 @@ def to_ulaw(x, u=255):
         complex = True
         x = torch.view_as_real(x)
 
+    x /= x.abs().amax(dim=tuple(range(x.ndim-2-int(complex), x.ndim)), keepdim=True)
     x = torch.sign(x) * torch.log(1 + u * torch.abs(x)) / np.log(1 + u)
 
     if complex:
@@ -100,6 +101,7 @@ def from_ulaw(x, u=255):
         complex = True
         x = torch.view_as_real(x)
 
+    x /= x.abs().amax(dim=tuple(range(x.ndim-2-int(complex), x.ndim)), keepdim=True)
     x = torch.sign(x) * ((1 + u) ** torch.abs(x) - 1) / u
 
     if complex:
@@ -132,7 +134,6 @@ class DualMDCTFormat:
         samples = mdct(raw_samples, block_width, complex=complex, random_phase_offset=random_phase_offset)
 
         if u is not None:
-            samples /= samples.abs().amax(dim=(1, 2), keepdim=True)
             samples = to_ulaw(samples, u=u)
 
         if complex:

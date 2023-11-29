@@ -77,10 +77,6 @@ def compute_snr(noise_scheduler, timesteps):
     snr = (alpha / sigma) ** 2
     return snr
 
-
-def ln_loss(x, y, eps=1e-4):
-    return (torch.log(x.square() + eps) - torch.log(y.square() + eps)).square()
-
 def log_validation_unet(pipeline, args, accelerator, global_step):
 
     sample_rate = pipeline.config["model_params"]["sample_rate"]
@@ -1076,11 +1072,12 @@ def main():
                     
                     posterior = module.encode(samples, return_dict=False)[0]
                     recon = module.decode(posterior.sample(), return_dict=False)[0]                    
-                    
+                    #recon = recon / recon.std(dim=(1,2,3), keepdim=True)
+
                     # raw mse loss bootstraps the initial training of the vae
                     #vae_recon_loss = F.mse_loss(recon, samples, reduction="sum") / samples.numel()
                     #vae_recon_loss = F.l1_loss(recon, samples, reduction="sum") / samples.numel()
-                    vae_recon_loss = ln_loss(recon, samples).sum() / samples.numel()
+                    vae_recon_loss = F.mse_loss(recon, samples, reduction="mean").sqrt()
 
                     # this perceptual loss approximates a more stable ~log error rather than raw square error without using logarithms
                     # however, a reasonable max grad norm (~1) is still required to ensure stability
@@ -1113,7 +1110,7 @@ def main():
 
                     vae_recon_loss_weight = 1   #0.0001
                     vae_percept_loss_weight = 0 #0.9999
-                    vae_kl_loss_weight = 1e-9 #1e-8
+                    vae_kl_loss_weight = 1e-8 #1e-8
                     #loss = vae_recon_loss_weight * vae_recon_loss + vae_percept_loss_weight * vae_percept_loss + vae_kl_loss_weight * vae_kl_loss
                     loss = vae_recon_loss_weight * vae_recon_loss + vae_kl_loss_weight * vae_kl_loss
 
