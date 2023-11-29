@@ -37,7 +37,7 @@ def compute_snr(noise_scheduler, timesteps):
     snr = (alpha / sigma) ** 2
     return snr
 
-
+# fast overlapped modified discrete cosine transform type iv - becomes mclt when complex is True
 def mdct(x, block_width, complex=False, random_phase_offset=False):
 
     pad_tuple = (block_width//2, block_width//2) + (0,0,) * (x.ndim-1)
@@ -47,7 +47,7 @@ def mdct(x, block_width, complex=False, random_phase_offset=False):
     n = torch.arange(2*N, device=x.device)
     k = torch.arange(0.5, N + 0.5, device=x.device)
 
-    window = torch.sin(np.pi * (n + 0.5) / (2*N))
+    window = torch.sin(torch.pi * (n + 0.5) / (2*N))
     pre_shift = torch.exp(-1j * torch.pi / 2 / N * n)
     post_shift = torch.exp(-1j * torch.pi / 2 / N * (N + 1) * k)
     
@@ -65,7 +65,7 @@ def imdct(x):
     n = torch.arange(2*N, device=x.device)
     k = torch.arange(0.5, N + 0.5, device=x.device)
 
-    window = torch.sin(np.pi * (n + 0.5) / (2*N))
+    window = torch.sin(torch.pi * (n + 0.5) / (2*N))
     pre_shift = torch.exp(-1j * torch.pi / 2 / N * n)
     post_shift = torch.exp(-1j * torch.pi / 2 / N * (N + 1) * k)
     
@@ -202,7 +202,7 @@ class DualTimeOverlappedFormat:
     def get_window(window_len, device):
         #x = torch.arange(0, window_len, device=device) / (window_len-1)
         x = (torch.arange(0, window_len, device=device)+0.5) / (window_len - 1)
-        return (1 + torch.cos(x * 2.*np.pi - np.pi)) * 0.5
+        return (1 + torch.cos(x * 2.*torch.pi - torch.pi)) * 0.5
 
     @staticmethod
     @torch.no_grad()
@@ -232,7 +232,7 @@ class DualTimeOverlappedFormat:
         samples = samples.permute(0, 2, 1).contiguous()
 
         if random_phase_offset:
-            samples *= torch.exp(2j*np.pi*torch.rand(1, device=samples.device))
+            samples *= torch.exp(2j*torch.pi*torch.rand(1, device=samples.device))
         samples = torch.view_as_real(samples).permute(0, 3, 1, 2).contiguous()
         
         if "sample_std" in model_params:
@@ -316,7 +316,7 @@ class DualEmbeddingFormat:
     @torch.no_grad()
     def get_window(window_len, device):
         x = torch.arange(0, window_len, device=device) / (window_len - 1)
-        return (1 + torch.cos(x * 2.*np.pi - np.pi)) * 0.5
+        return (1 + torch.cos(x * 2.*torch.pi - torch.pi)) * 0.5
 
     """
     # v8
@@ -331,7 +331,7 @@ class DualEmbeddingFormat:
             with torch.no_grad():
                 num_freq_orders = freq_embedding_dim // 2
                 ln_x = torch.arange(0, hidden_states.shape[2]*num_freq_orders, device=hidden_states.device).log2()
-                ln_x *= np.pi / ln_x[-1]; ln_x[0] = -np.pi/2
+                ln_x *= torch.pi / ln_x[-1]; ln_x[0] = -torch.pi/2
                 ln_x = ln_x.view(hidden_states.shape[2], num_freq_orders).permute(1, 0).contiguous()
                 ln_x *= torch.arange(0, num_freq_orders, device=ln_x.device).view(-1, 1) + 0.5
                 freq_embeddings = torch.view_as_real(torch.exp(1j * ln_x)).permute(0, 2, 1).reshape(1, freq_embedding_dim, hidden_states.shape[2], 1)
@@ -344,7 +344,7 @@ class DualEmbeddingFormat:
                 k = torch.arange(0, num_time_orders, device=hidden_states.device) + 0.5
                 x = torch.arange(0, num_time_orders*hidden_states.shape[3], device=hidden_states.device)
                 x = x.view(hidden_states.shape[3], num_time_orders).permute(1, 0).contiguous() 
-                time_embeddings = k.view(-1, 1) * x / (hidden_states.shape[3]*num_time_orders) * np.pi
+                time_embeddings = k.view(-1, 1) * x / (hidden_states.shape[3]*num_time_orders) * torch.pi
                 time_embeddings = torch.view_as_real(torch.exp(1j * time_embeddings)).permute(0, 2, 1).reshape(1, time_embedding_dim, 1, hidden_states.shape[3])
                 time_embeddings = (time_embeddings * 1.4142135623730950488016887242097).repeat(hidden_states.shape[0], 1, hidden_states.shape[2], 1)
                 
@@ -365,7 +365,7 @@ class DualEmbeddingFormat:
             with torch.no_grad():
                 num_freq_orders = freq_embedding_dim // 2
                 ln_x = torch.arange(0, hidden_states.shape[2], device=hidden_states.device).log2()
-                ln_x *= np.pi / ln_x[-1]; ln_x[0] = -np.pi/2
+                ln_x *= torch.pi / ln_x[-1]; ln_x[0] = -torch.pi/2
                 ln_x = (torch.arange(0, num_freq_orders, device=ln_x.device).view(-1, 1) + 0.5) * ln_x.view(1, -1)
                 freq_embeddings = torch.view_as_real(torch.exp(1j * ln_x)).permute(0, 2, 1).reshape(1, freq_embedding_dim, hidden_states.shape[2], 1)
                 freq_embeddings = freq_embeddings.repeat(hidden_states.shape[0], 1, 1, hidden_states.shape[3])
@@ -376,7 +376,7 @@ class DualEmbeddingFormat:
                 num_time_orders = time_embedding_dim // 2
                 k = torch.arange(0, num_time_orders, device=hidden_states.device) + 0.5
                 x = torch.arange(0, hidden_states.shape[3], device=hidden_states.device) 
-                time_embeddings = k.view(-1, 1) * x.view(1, -1) / hidden_states.shape[3] * np.pi
+                time_embeddings = k.view(-1, 1) * x.view(1, -1) / hidden_states.shape[3] * torch.pi
                 time_embeddings = torch.view_as_real(torch.exp(1j * time_embeddings)).permute(0, 2, 1).reshape(1, time_embedding_dim, 1, hidden_states.shape[3])
                 time_embeddings = time_embeddings.repeat(hidden_states.shape[0], 1, hidden_states.shape[2], 1)
                 
@@ -406,7 +406,7 @@ class DualEmbeddingFormat:
         fft[:, 0, 0] = 0 # remove DC component
         fft = torch.fft.fft(fft, norm="ortho")
         if random_phase_offset:
-            fft *= torch.exp(2j*np.pi*torch.rand(1, device=fft.device))
+            fft *= torch.exp(2j*torch.pi*torch.rand(1, device=fft.device))
         samples = torch.view_as_real(fft).permute(0, 3, 1, 2).contiguous()
 
         # unit variance
@@ -488,7 +488,7 @@ class DualOverlappedFormat:
     @torch.no_grad()
     def get_window(window_len, device):
         x = torch.arange(0, window_len, device=device) / (window_len - 1)
-        return (1 + torch.cos(x * 2.*np.pi - np.pi)) * 0.5
+        return (1 + torch.cos(x * 2.*torch.pi - torch.pi)) * 0.5
 
     @staticmethod
     @torch.no_grad()
@@ -538,7 +538,7 @@ class DualOverlappedFormat:
         samples -= samples.mean(dim=(2,), keepdim=True)
 
         if random_phase_offset:
-            samples *= torch.exp(2j*np.pi*torch.rand(1, device=samples.device))
+            samples *= torch.exp(2j*torch.pi*torch.rand(1, device=samples.device))
         samples = torch.view_as_real(samples).permute(0, 3, 1, 2).contiguous()
         
         if "sample_std" in model_params:
@@ -628,7 +628,7 @@ class DualLogFormat:
     @torch.no_grad()
     def get_window(window_len, device):
         x = torch.arange(0, window_len, device=device) / (window_len - 1)
-        return (1 + torch.cos(x * 2.*np.pi - np.pi)) * 0.5
+        return (1 + torch.cos(x * 2.*torch.pi - torch.pi)) * 0.5
 
     """
     @staticmethod
@@ -638,8 +638,8 @@ class DualLogFormat:
         diff[:, :, 1:] = x[:, :, 1:] - x[:, :, :-1]
         diff[:, :, 0] = x[:, :, 0]
         diff[:, :, 0].cpu().numpy().tofile("./debug/debug_cumdiff.raw")
-        diff[diff[:, :, :] < -np.pi] += 2.*np.pi
-        diff[diff[:, :, :] >  np.pi] -= 2.*np.pi
+        diff[diff[:, :, :] < -torch.pi] += 2.*torch.pi
+        diff[diff[:, :, :] >  torch.pi] -= 2.*torch.pi
         return torch.cumsum(diff[:, :, :], dim=-1)
     """
 
@@ -762,7 +762,7 @@ class DualNormalFormat:
     @torch.no_grad()
     def get_window(window_len, device):
         x = torch.arange(0, window_len, device=device) / (window_len - 1)
-        return (1 + torch.cos(x * 2.*np.pi - np.pi)) * 0.5
+        return (1 + torch.cos(x * 2.*torch.pi - torch.pi)) * 0.5
 
     @staticmethod
     @torch.no_grad()
@@ -802,7 +802,7 @@ class DualNormalFormat:
             fft = torch.fft.fft(fft, norm="ortho")
 
         if random_phase_offset:
-            fft *= torch.exp(2j*np.pi*torch.rand(1, device=fft.device))
+            fft *= torch.exp(2j*torch.pi*torch.rand(1, device=fft.device))
         samples = torch.view_as_real(fft).permute(0, 3, 1, 2).contiguous()
 
         # unit variance

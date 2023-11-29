@@ -78,6 +78,9 @@ def compute_snr(noise_scheduler, timesteps):
     return snr
 
 
+def ln_loss(x, y, eps=1e-4):
+    return (torch.log(x.square() + eps) - torch.log(y.square() + eps)).square()
+
 def log_validation_unet(pipeline, args, accelerator, global_step):
 
     sample_rate = pipeline.config["model_params"]["sample_rate"]
@@ -508,7 +511,17 @@ def main():
         if not is_tensorboard_available():
             raise ImportError("Make sure to install tensorboard if you want to use it for logging during training.")
         port = int(os.environ.get("TENSORBOARD_HTTP_PORT", 6006))
-        tensorboard_monitor_process = subprocess.Popen(['tensorboard', '--logdir', logging_dir, '--bind_all', '--port', f'{port}'])
+        tensorboard_args = [
+            "tensorboard",
+            "--logdir",
+            logging_dir,
+            "--bind_all",
+            "--port",
+            str(port),
+            "--samples_per_plugin",
+            "scalars=2000",
+        ]
+        tensorboard_monitor_process = subprocess.Popen(tensorboard_args)
 
         def cleanup_process():
             try:
@@ -1065,12 +1078,14 @@ def main():
                     recon = module.decode(posterior.sample(), return_dict=False)[0]                    
                     
                     # raw mse loss bootstraps the initial training of the vae
-                    vae_recon_loss = F.mse_loss(recon, samples, reduction="sum") / samples.numel()
+                    #vae_recon_loss = F.mse_loss(recon, samples, reduction="sum") / samples.numel()
+                    #vae_recon_loss = F.l1_loss(recon, samples, reduction="sum") / samples.numel()
+                    vae_recon_loss = ln_loss(recon, samples).sum() / samples.numel()
 
                     # this perceptual loss approximates a more stable ~log error rather than raw square error without using logarithms
                     # however, a reasonable max grad norm (~1) is still required to ensure stability
-                    #percept_eps = 2e-3 #1e-4
-                    #sample_pow = samples[:, 0, :, :].square() + samples[:, 1, :, :].square()
+                    #percept_eps = 2e-1 #2e-2
+                    #sample_pow = samples.square().sum(dim=1, keepdim=True)
 
                     #sample_freq_pow = (sample_pow.sum(dim=2, keepdim=True).sqrt().unsqueeze(1)) / (2 * samples.shape[3]) ** 0.5 + percept_eps
                     #sample_time_pow = (sample_pow.sum(dim=1, keepdim=True).sqrt().unsqueeze(1)) / (2 * samples.shape[2]) ** 0.5 + percept_eps
@@ -1086,8 +1101,11 @@ def main():
                     #sample_time_pow = (sample_pow.sum(dim=1, keepdim=True).unsqueeze(1) / samples.shape[3]).sqrt() + percept_eps
                     #vae_percept_loss  = F.mse_loss(recon / sample_freq_pow, samples / sample_freq_pow, reduction="sum") / samples.numel()
                     #vae_percept_loss += 0.5 * F.mse_loss(recon / sample_time_pow, samples / sample_time_pow, reduction="sum") / samples.numel()
-                    #vae_percept_weight = sample_pow.sqrt().unsqueeze(1) + percept_eps
+
+                    #vae_percept_weight = sample_pow.sqrt() + percept_eps
                     #vae_percept_loss = F.mse_loss(recon / vae_percept_weight, samples / vae_percept_weight, reduction="sum") / samples.numel()
+                    #vae_percept_loss = vae_percept_loss.sqrt()
+
                     vae_percept_loss = torch.zeros_like(vae_recon_loss)
 
                     # lastly, standard KL divergence loss
@@ -1095,7 +1113,7 @@ def main():
 
                     vae_recon_loss_weight = 1   #0.0001
                     vae_percept_loss_weight = 0 #0.9999
-                    vae_kl_loss_weight = 1e-8 #1e-6   #1e-8
+                    vae_kl_loss_weight = 1e-9 #1e-8
                     #loss = vae_recon_loss_weight * vae_recon_loss + vae_percept_loss_weight * vae_percept_loss + vae_kl_loss_weight * vae_kl_loss
                     loss = vae_recon_loss_weight * vae_recon_loss + vae_kl_loss_weight * vae_kl_loss
 

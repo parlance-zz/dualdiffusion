@@ -7,7 +7,7 @@ from dual_diffusion_pipeline import DualDiffusionPipeline
 load_dotenv()
 torch.manual_seed(200)
 
-MODEL_NAME = "dualdiffusion2d_330_mdct_complex_u16384_v8_256embed_4vae"
+MODEL_NAME = "dualdiffusion2d_330_mdct_u255_v8_256embed_4vae"
 MODEL_PARAMS = {
     #"prediction_type": "sample",
     "prediction_type": "v_prediction",
@@ -38,11 +38,12 @@ MODEL_PARAMS = {
     #"fftshift": False,
 
     "sample_format": "mdct",
+    "u": 255,
     "sample_raw_length": 65536*2,
     "num_chunks": 256,
-    "complex": True,
-    "u": 16384,
-    "sample_std": 0.4197056818852289,
+    #"complex": True,
+    #"u": 16384,
+    "sample_std": 0.218751876669106,
 
     #"sample_format": "normal",
     #"sample_raw_length": 65536*2,

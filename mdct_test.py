@@ -86,18 +86,36 @@ raw_sample.cpu().numpy().tofile("./debug/raw_sample.raw")
 
 #raw_sample = raw_sample.unsqueeze(0)
 #raw_sample = raw_sample.repeat(2, 1)
-Xk = mdct(raw_sample, block_width, complex=True, random_phase_offset=False)
+Xk = mdct(raw_sample, block_width, complex=False, random_phase_offset=False)
 
 Xk /= Xk.abs().max()
-Xk = to_ulaw(Xk, u=16384)
-Xk.cpu().numpy().tofile("./debug/mdct_ulaw.raw")
-Xk += torch.randn_like(Xk) * 5e-2
-#Xk = (Xk * 16).type(torch.int32) / 16.
-#Xk.cpu().numpy().tofile("./debug/mdct_ulaw_quantized.raw")
-Xk = from_ulaw(Xk, u=16384)
+
+Xk = to_ulaw(Xk, u=255) / 0.218751876669106
+#Xk = torch.view_as_real(Xk)
+#Xk /= Xk.std()
+
+#eps = 4e-2
+#Xk_pow = Xk.square() #.sum(dim=-1, keepdim=True)
+#Xk /= Xk_pow.sqrt() + eps
+
+Xk += torch.randn_like(Xk) * 2e-2
+
+#Xk *= Xk_pow.sqrt() + eps
+#Xk = torch.view_as_complex(Xk)
+
+#Xk.cpu().numpy().tofile("./debug/mdct_ulaw.raw")
+
+#Xk += torch.randn_like(Xk) * 2e-2
+
+#Xk -= Xk.mean()
+
+#Xk = torch.view_as_real(Xk)
+
 
 print("Xk shape:", Xk.shape, "Xk mean:", (Xk / Xk.std()).mean().item(), "Xk std:", Xk.std().item())
 Xk.cpu().numpy().tofile("./debug/mdct.raw")
+
+Xk = from_ulaw(Xk * 0.218751876669106, u=255) 
 
 y = imdct(Xk)
 y.cpu().numpy().tofile("./debug/imdct.raw")

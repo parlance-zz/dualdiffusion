@@ -16,8 +16,8 @@ def get_dataset_stats():
         "sample_raw_length": 65536*2,
         "num_chunks": 256,
         "sample_format": "mdct",
-        "complex": True,
-        "u": 16384,
+        "complex": False,
+        "u": 255,
         "sample_std": 1,
     }
     
@@ -139,7 +139,7 @@ def reconstruction_test(sample_num=1):
 
     raw_sample.cpu().numpy().tofile("./debug/debug_raw_original.raw")
 
-    freq_sample, _ = format.raw_to_sample(raw_sample, model_params, random_phase_offset=True)
+    freq_sample, _ = format.raw_to_sample(raw_sample, model_params, random_phase_offset=False)
     print("Sample shape:", freq_sample.shape)
     print("Sample mean:", freq_sample.mean(dim=(2,3)), freq_sample.mean())
     print("Sample std:", freq_sample.std().item())
@@ -255,7 +255,8 @@ def embedding_test():
 
 def vae_test():
 
-    model_name = "dualdiffusion2d_330_mdct_u16384_v8_256embed_4vae"
+    #dualdiffusion2d_330_mdct_v8_256embed_4vae
+    model_name = "dualdiffusion2d_330_mdct_u255_v8_256embed_4vae"
     num_samples = 4
     #device = "cuda"
     device = "cpu"
@@ -316,7 +317,7 @@ if __name__ == "__main__":
 
     load_dotenv()
 
-    #reconstruction_test(sample_num=0)
+    #reconstruction_test(sample_num=2)
     #get_dataset_stats()
     #embedding_test()
     vae_test()
