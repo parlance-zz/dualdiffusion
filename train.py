@@ -1072,12 +1072,37 @@ def main():
                     
                     posterior = module.encode(samples, return_dict=False)[0]
                     recon = module.decode(posterior.sample(), return_dict=False)[0]                    
-                    #recon = recon / recon.std(dim=(1,2,3), keepdim=True)
-
+                              
                     # raw mse loss bootstraps the initial training of the vae
                     #vae_recon_loss = F.mse_loss(recon, samples, reduction="sum") / samples.numel()
                     #vae_recon_loss = F.l1_loss(recon, samples, reduction="sum") / samples.numel()
-                    vae_recon_loss = F.mse_loss(recon, samples, reduction="mean").sqrt()
+                    #vae_recon_loss = F.mse_loss(recon, samples, reduction="none")
+                    #vae_recon_loss[:, 1:, :, :] = vae_recon_loss[:, 1:, :, :] / 8
+                    #vae_recon_loss = vae_recon_loss.mean().sqrt()
+                    
+
+                    recon_abs = recon[:, 0, :, :]
+                    samples_abs = samples[:, 0, :, :]
+                    #samples_abs = samples_abs / samples_abs.amax(dim=(1,2), keepdim=True)
+                    #pos_weight = model_params.get("pos_weight", None)
+                    #if pos_weight is not None: pos_weight = torch.tensor(1/pos_weight)
+                    #pos_weight = None
+                    #vae_recon_loss_abs = F.binary_cross_entropy_with_logits(recon_abs, samples_abs, reduction="mean", pos_weight=pos_weight)# / np.log(2)
+                    recon_abs = F.sigmoid(recon_abs) * samples_abs.amax(dim=(1,2), keepdim=True)
+                    vae_recon_loss_abs = F.mse_loss(recon_abs, samples_abs, reduction="mean") 
+
+                    #f = (-2*torch.log(torch.rand_like(samples_abs)+1e-8)).sqrt().unsqueeze(1)
+
+                    recon_phase = recon[:, 1:, :, :]# * f
+                    #recon_phase = recon_phase / recon_phase.std(dim=(1,2,3), keepdim=True)
+                    #recon_phase = recon_phase / recon_phase.square().sum(dim=1, keepdim=True).clip(min=1e-8).sqrt()
+                    samples_phase = samples[:, 1:, :, :]# * f
+                    #samples_phase = samples_phase / samples_phase.std(dim=(1,2,3), keepdim=True)
+                    #samples_phase = samples_phase / samples_phase.square().sum(dim=1, keepdim=True).clip(min=1e-8).sqrt()
+
+                    
+                    vae_recon_loss_phase = F.mse_loss(recon_phase, samples_phase, reduction="mean")
+                    vae_recon_loss = (vae_recon_loss_phase + vae_recon_loss_abs) * 0.5
 
                     # this perceptual loss approximates a more stable ~log error rather than raw square error without using logarithms
                     # however, a reasonable max grad norm (~1) is still required to ensure stability
@@ -1110,7 +1135,7 @@ def main():
 
                     vae_recon_loss_weight = 1   #0.0001
                     vae_percept_loss_weight = 0 #0.9999
-                    vae_kl_loss_weight = 1e-8 #1e-8
+                    vae_kl_loss_weight = 0 #1e-8
                     #loss = vae_recon_loss_weight * vae_recon_loss + vae_percept_loss_weight * vae_percept_loss + vae_kl_loss_weight * vae_kl_loss
                     loss = vae_recon_loss_weight * vae_recon_loss + vae_kl_loss_weight * vae_kl_loss
 

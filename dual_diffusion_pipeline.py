@@ -86,8 +86,8 @@ def to_ulaw(x, u=255):
         complex = True
         x = torch.view_as_real(x)
 
-    x /= x.abs().amax(dim=tuple(range(x.ndim-2-int(complex), x.ndim)), keepdim=True)
-    x = torch.sign(x) * torch.log(1 + u * torch.abs(x)) / np.log(1 + u)
+    x = x / x.abs().amax(dim=tuple(range(x.ndim-2-int(complex), x.ndim)), keepdim=True)
+    x = torch.sign(x) * torch.log(1 + u * x.abs()) / np.log(1 + u)
 
     if complex:
         x = torch.view_as_complex(x)
@@ -101,13 +101,82 @@ def from_ulaw(x, u=255):
         complex = True
         x = torch.view_as_real(x)
 
-    x /= x.abs().amax(dim=tuple(range(x.ndim-2-int(complex), x.ndim)), keepdim=True)
-    x = torch.sign(x) * ((1 + u) ** torch.abs(x) - 1) / u
+    x = x / x.abs().amax(dim=tuple(range(x.ndim-2-int(complex), x.ndim)), keepdim=True)
+    x = torch.sign(x) * ((1 + u) ** x.abs() - 1) / u
 
     if complex:
         x = torch.view_as_complex(x)
 
     return x
+
+class DualMCLTBCEFormat:
+
+    @staticmethod
+    def get_sample_crop_width(model_params):
+        block_width = model_params["num_chunks"] * 2
+        return model_params["sample_raw_length"] - block_width // 2
+    
+    @staticmethod
+    def get_num_channels(model_params):
+        freq_embedding_dim = model_params["freq_embedding_dim"]
+        channels = model_params["sample_raw_channels"] * 3
+        return (channels + freq_embedding_dim, channels)
+
+    @staticmethod
+    @torch.no_grad()
+    def raw_to_sample(raw_samples, model_params, window=None, random_phase_offset=False):
+        
+        num_chunks = model_params["num_chunks"]
+        block_width = num_chunks * 2
+
+        samples = mdct(raw_samples, block_width, complex=True, random_phase_offset=random_phase_offset)
+        samples = samples.permute(0, 2, 1)
+
+        samples_abs = to_ulaw(samples.abs(), u=22000)
+        #samples_abs = to_ulaw(samples.abs(), u=22000)
+        #samples += torch.randn_like(samples) * 1e-8
+        #samples_abs = (samples.abs() + 1e-20).log()
+        samples_abs /= samples_abs.std(dim=(1,2), keepdim=True).clip(min=1e-8)
+
+        f = (-2*torch.log(torch.rand_like(samples_abs)+1e-10)).sqrt()
+        #f = 1
+
+        #f = samples_abs - samples_abs.mean(dim=(1,2), keepdim=True)
+        #f /= f.std(dim=(1,2), keepdim=True).clip(min=1e-8)
+        #f = (torch.erf(f) + 1) / 2
+        #f = (-2*torch.log(f+1e-10)) ** (1/4)
+        
+        samples_phase = torch.view_as_real(samples / samples.abs().clip(min=1e-8) * f).permute(0, 3, 1, 2).contiguous()
+        #samples_phase = torch.view_as_real(samples / samples.abs().clip(min=1e-8) * samples_abs.square()).permute(0, 3, 1, 2).contiguous()
+        #samples_phase = torch.view_as_real(samples / samples.abs().clip(min=1e-8)).permute(0, 3, 1, 2).contiguous()
+        samples_phase /= samples_phase.std(dim=(1, 2, 3), keepdim=True).clip(min=1e-8)
+
+        samples = torch.cat((samples_abs.unsqueeze(1), samples_phase), dim=1)
+        return samples, window
+
+    @staticmethod
+    @torch.no_grad()
+    def sample_to_raw(samples, model_params):
+        
+        samples_abs = from_ulaw(samples[:, 0, :, :].permute(0, 2, 1).contiguous(), u=22000)
+        samples_phase = torch.view_as_complex(samples[:, 1:, :, :].permute(0, 3, 2, 1).contiguous())
+
+        samples = samples_abs * samples_phase / samples_phase.abs().clip(min=1e-8)
+        return imdct(samples)
+
+    @staticmethod
+    def get_loss(sample, target, model_params, reduction="mean"):
+        return torch.nn.functional.mse_loss(sample.float(), target.float(), reduction=reduction)
+    
+    @staticmethod
+    def get_sample_shape(model_params, bsz=1, length=1):
+        _, num_output_channels = DualTimeOverlappedFormat.get_num_channels(model_params)
+
+        crop_width = DualTimeOverlappedFormat.get_sample_crop_width(model_params)
+        num_chunks = model_params["num_chunks"]
+        chunk_len = crop_width // num_chunks - 1
+
+        return (bsz, num_output_channels, num_chunks, chunk_len*length,)
 
 class DualMDCTFormat:
 
@@ -180,7 +249,6 @@ class DualMDCTFormat:
         chunk_len = crop_width // num_chunks - 1
 
         return (bsz, num_output_channels, num_chunks, chunk_len*length,)
-
 
 class DualTimeOverlappedFormat:
 
@@ -299,7 +367,6 @@ class DualTimeOverlappedFormat:
 
         return (bsz, num_output_channels, num_chunks, chunk_len*length,)
    
-
 class DualEmbeddingFormat:
 
     @staticmethod
@@ -471,7 +538,6 @@ class DualEmbeddingFormat:
         num_chunks = model_params["num_chunks"]
         default_length = model_params["sample_raw_length"] // num_chunks // 2
         return (bsz, num_output_channels, num_chunks, default_length*length,)
-
 
 class DualOverlappedFormat:
 
@@ -930,6 +996,8 @@ class DualDiffusionPipeline(DiffusionPipeline):
             return DualTimeOverlappedFormat
         elif sample_format == "mdct":
             return DualMDCTFormat
+        elif sample_format == "mcltbce":
+            return DualMCLTBCEFormat
         else:
             raise ValueError(f"Unknown sample format '{sample_format}'")
         

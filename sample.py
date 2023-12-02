@@ -7,7 +7,7 @@ import torch
 import torchaudio
 import json
 
-from dual_diffusion_pipeline import DualDiffusionPipeline, DualLogFormat, DualNormalFormat, DualOverlappedFormat, DualMDCTFormat
+from dual_diffusion_pipeline import DualDiffusionPipeline, DualLogFormat, DualNormalFormat, DualOverlappedFormat, DualMDCTFormat, DualMCLTBCEFormat
 from attention_processor_dual import SeparableAttnProcessor2_0
 from autoencoder_kl_dual import AutoencoderKLDual
 
@@ -15,10 +15,10 @@ def get_dataset_stats():
     model_params = {
         "sample_raw_length": 65536*2,
         "num_chunks": 256,
-        "sample_format": "mdct",
-        "complex": False,
-        "u": 255,
-        "sample_std": 1,
+        "sample_format": "mcltbce",
+        #"complex": False,
+        #"u": 255,
+        #"sample_std": 1,
     }
     
     format = DualDiffusionPipeline.get_sample_format(model_params)
@@ -29,6 +29,9 @@ def get_dataset_stats():
         ln_amplitude_std = 0.
         phase_integral_mean = 0.
         phase_integral_std = 0.
+    elif format == DualMCLTBCEFormat:
+        pos_examples = 0.
+        neg_examples = 0.
     else:
         sample_std = 0.
     num_samples = 0
@@ -48,6 +51,11 @@ def get_dataset_stats():
                 ln_amplitude_std += sample[:, 0, :, :].std(dim=(0,1,2)).item()
                 phase_integral_mean += sample[:, 1:, :, :].mean(dim=(0,1,2,3)).item()
                 phase_integral_std += sample[:, 1:, :, :].std(dim=(0,1,2,3)).item()
+            elif format == DualMCLTBCEFormat:
+                sample_abs = sample[:, 0, :, :]
+                sample_abs /= sample_abs.amax(dim=(1,2), keepdim=True)
+                pos_examples += sample_abs.sum().item()
+                neg_examples += (1-sample_abs).sum().item()
             else:
                 sample_std += sample.std().item()
 
@@ -64,6 +72,10 @@ def get_dataset_stats():
         print(f"ln_amplitude_std: {ln_amplitude_std}")
         print(f"phase_integral_mean: {phase_integral_mean}")
         print(f"phase_integral_std: {phase_integral_std}")
+        print(f"total samples processed: {num_samples}")
+    elif format == DualMCLTBCEFormat:
+        print(f"pos_examples: {pos_examples}")
+        print(f"neg_examples: {neg_examples}")
         print(f"total samples processed: {num_samples}")
     else:
         sample_std /= num_samples
@@ -117,9 +129,9 @@ def reconstruction_test(sample_num=1):
     model_params = {
         "sample_raw_length": 65536*2,
         "num_chunks": 256,
-        "sample_format": "mdct",
+        "sample_format": "mcltbce",
         #"complex": True,
-        "u": 255,
+        #"u": 255,
         "freq_embedding_dim": 0,
         "time_embedding_dim": 0,
     }
@@ -144,6 +156,13 @@ def reconstruction_test(sample_num=1):
     print("Sample std:", freq_sample.std().item())
     freq_sample.cpu().numpy().tofile("./debug/debug_sample.raw")
     
+    sample_abs = freq_sample[:, 0, :, :]
+    sample_phase = freq_sample[:, 1:, :, :]
+    #sample_abs += torch.randn_like(sample_abs).abs() * 0.1
+    #sample_abs /= sample_abs.amax(dim=(1,), keepdim=True).clamp(min=1e-5)
+    histogram = np.histogram(sample_phase.cpu().numpy(), bins=256)
+    histogram[0].astype(np.int32).tofile("./debug/debug_histogram.raw")
+
     raw_sample = format.sample_to_raw(freq_sample, model_params).real
     raw_sample /= raw_sample.abs().max()
     raw_sample.cpu().numpy().tofile("./debug/debug_reconstruction.raw")
@@ -255,7 +274,7 @@ def embedding_test():
 def vae_test():
 
     #dualdiffusion2d_330_mdct_v8_256embed_4vae
-    model_name = "dualdiffusion2d_330_mdct_u255_v8_256embed_8vae"
+    model_name = "dualdiffusion2d_330_mcltbce_v8_256embed_8vae"
     num_samples = 4
     #device = "cuda"
     device = "cpu"
@@ -290,9 +309,19 @@ def vae_test():
         raw_sample = torch.from_numpy(raw_sample.astype(np.float32)).unsqueeze(0).to(device)
         sample, window = format.raw_to_sample(raw_sample, model_params)
 
-        output = vae(sample.type(model_dtype)).sample.cpu()
+        latents = vae.encode(sample.type(model_dtype), return_dict=False)[0].sample()
+        output = vae.decode(latents, return_dict=False)[0]
+        if format == DualMCLTBCEFormat:
+            output[:, 0, :, :] = torch.nn.functional.sigmoid(output[:, 0, :, :])
+            output[:, 1:, :, :] = sample[:, 1:, :, :]
+        output_sample_file_path = os.path.join(output_path, f"step_{last_global_step}_{filename.replace('.raw', '_sample.raw')}")
+        output.detach().type(torch.float32).cpu().numpy().tofile(output_sample_file_path)
+
         output = format.sample_to_raw(output.type(torch.float32), model_params).real
         
+        output_latents_file_path = os.path.join(output_path, f"step_{last_global_step}_{filename.replace('.raw', '_latents.raw')}")
+        latents.detach().type(torch.float32).cpu().numpy().tofile(output_latents_file_path)
+
         raw_sample /= raw_sample.abs().max()
         output_flac_file_path = os.path.join(output_path, f"step_{last_global_step}_{filename.replace('.raw', '_original.flac')}")
         torchaudio.save(output_flac_file_path, raw_sample.cpu(), sample_rate, bits_per_sample=16)
@@ -316,7 +345,7 @@ if __name__ == "__main__":
 
     load_dotenv()
 
-    reconstruction_test(sample_num=2)
+    reconstruction_test(sample_num=25)
     #get_dataset_stats()
     #embedding_test()
     vae_test()

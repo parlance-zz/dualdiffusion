@@ -19,7 +19,8 @@ accelerate launch \
   --seed=200 \
   --lr_scheduler="constant_with_warmup" \
   --num_validation_samples=5 \
-  --num_validation_epochs=5
+  --num_validation_epochs=5 \
+  --max_grad_norm=50
 
 #  --max_grad_norm=50
 

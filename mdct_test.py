@@ -11,6 +11,22 @@ test_sample = 2
 block_width = 512
 crop_width = 65536*2 - block_width // 2
 
+def kaiser(window_len, beta, device):    
+    alpha = (window_len - 1) / 2
+    n = torch.arange(window_len, device=device)
+    return torch.special.i0(beta * torch.sqrt(1 - ((n - alpha) / alpha).square())) / torch.special.i0(torch.tensor(beta))
+
+def kaiser_derived(window_len, beta, device):
+    kaiserw = kaiser(window_len // 2 + 1, beta, device)
+    csum = torch.cumsum(kaiserw, dim=0)
+    halfw = torch.sqrt(csum[:-1] / csum[-1])
+
+    w = torch.zeros(window_len, device=device)
+    w[:window_len//2] = halfw
+    w[-window_len//2:] = halfw.flip(0)
+
+    return w
+
 def mdct(x, block_width, complex=False, random_phase_offset=False):
 
     pad_tuple = (block_width//2, block_width//2) + (0,0,) * (x.ndim-1)
@@ -21,6 +37,9 @@ def mdct(x, block_width, complex=False, random_phase_offset=False):
     k = torch.arange(0.5, N + 0.5, device=x.device)
 
     window = torch.sin(np.pi * (n + 0.5) / (2*N))
+    #window = kaiser_derived(2*N, 4*torch.pi, device=x.device)
+    window.cpu().numpy().tofile("./debug/mdct_window.raw")
+
     pre_shift = torch.exp(-1j * torch.pi / 2 / N * n)
     post_shift = torch.exp(-1j * torch.pi / 2 / N * (N + 1) * k)
     
@@ -33,14 +52,13 @@ def mdct(x, block_width, complex=False, random_phase_offset=False):
     else:
         return y.real * 2
 
-def imdct(x, square_window=False):
+def imdct(x):
     N = x.shape[-1]
     n = torch.arange(2*N, device=x.device)
     k = torch.arange(0.5, N + 0.5, device=x.device)
 
     window = torch.sin(np.pi * (n + 0.5) / (2*N))
-    if square_window:
-        window = window.square()
+    #window = kaiser_derived(2*N, 4*torch.pi, device=x.device)
 
     pre_shift = torch.exp(-1j * torch.pi / 2 / N * n)
     post_shift = torch.exp(-1j * torch.pi / 2 / N * (N + 1) * k)
@@ -93,14 +111,16 @@ raw_sample.cpu().numpy().tofile("./debug/raw_sample.raw")
 #raw_sample = raw_sample.repeat(2, 1)
 Xk = mdct(raw_sample, block_width, complex=True, random_phase_offset=False)
 
-Xk = to_ulaw(Xk, u=255)
+Xk = to_ulaw(Xk, u=2000)
+
 Xk /= Xk.std()
 
-#Xk += torch.randn_like(Xk) * 2e-2
+#noise = torch.randn_like(Xk) * 1e-2
+#Xk += noise
 
 print("Xk shape:", Xk.shape, "Xk mean:", (Xk / Xk.std()).mean().item(), "Xk std:", Xk.std().item())
 Xk.cpu().numpy().tofile("./debug/mdct.raw")
 
-Xk = from_ulaw(Xk, u=255) 
+Xk = from_ulaw(Xk, u=2000) 
 y = imdct(Xk)
 y.cpu().numpy().tofile("./debug/imdct.raw")
