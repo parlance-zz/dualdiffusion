@@ -158,10 +158,8 @@ def reconstruction_test(sample_num=1):
     
     sample_abs = freq_sample[:, 0, :, :]
     sample_phase = freq_sample[:, 1:, :, :]
-    #sample_abs += torch.randn_like(sample_abs).abs() * 0.1
-    #sample_abs /= sample_abs.amax(dim=(1,), keepdim=True).clamp(min=1e-5)
-    histogram = np.histogram(sample_phase.cpu().numpy(), bins=256)
-    histogram[0].astype(np.int32).tofile("./debug/debug_histogram.raw")
+    np.histogram(sample_abs.cpu().numpy(), bins=256)[0].astype(np.int32).tofile("./debug/debug_histogram_abs.raw")
+    np.histogram(sample_phase.cpu().numpy(), bins=256)[0].astype(np.int32).tofile("./debug/debug_histogram_phase.raw")
 
     raw_sample = format.sample_to_raw(freq_sample, model_params).real
     raw_sample /= raw_sample.abs().max()
@@ -274,8 +272,8 @@ def embedding_test():
 def vae_test():
 
     #dualdiffusion2d_330_mdct_v8_256embed_4vae
-    model_name = "dualdiffusion2d_330_mcltbce_v8_256embed_8vae"
-    num_samples = 4
+    model_name = "dualdiffusion2d_330_mcltbce_v8_256embed_2vae"
+    num_samples = 1
     #device = "cuda"
     device = "cpu"
     fp16 = False
@@ -313,7 +311,9 @@ def vae_test():
         output = vae.decode(latents, return_dict=False)[0]
         if format == DualMCLTBCEFormat:
             output[:, 0, :, :] = torch.nn.functional.sigmoid(output[:, 0, :, :])
-            output[:, 1:, :, :] = sample[:, 1:, :, :]
+            #output[:, 1:, :, :] = sample[   :, 1:, :, :]
+            output[:, 1:, :, :] = torch.nn.functional.tanh(output[:, 1:, :, :]) * torch.erfinv(torch.tensor(0.99999, device=output.device)) / (0.5**0.5)
+
         output_sample_file_path = os.path.join(output_path, f"step_{last_global_step}_{filename.replace('.raw', '_sample.raw')}")
         output.detach().type(torch.float32).cpu().numpy().tofile(output_sample_file_path)
 
@@ -345,7 +345,7 @@ if __name__ == "__main__":
 
     load_dotenv()
 
-    reconstruction_test(sample_num=25)
+    reconstruction_test(sample_num=1)
     #get_dataset_stats()
     #embedding_test()
     vae_test()

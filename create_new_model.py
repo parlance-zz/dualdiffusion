@@ -7,7 +7,7 @@ from dual_diffusion_pipeline import DualDiffusionPipeline
 load_dotenv()
 torch.manual_seed(200)
 
-MODEL_NAME = "dualdiffusion2d_330_mcltbce_v8_256embed_8vae"
+MODEL_NAME = "dualdiffusion2d_330_mcltbce_v8_256embed_2vae_normal_phase"
 MODEL_PARAMS = {
     #"prediction_type": "sample",
     "prediction_type": "v_prediction",
@@ -68,7 +68,7 @@ MODEL_PARAMS = {
 
 #VAE_PARAMS = None
 VAE_PARAMS = {
-  "latent_channels": 8,
+  "latent_channels": 2,
   "sample_size": (256, 512),
   "act_fn": "silu",
   "conv_size": (3,3),

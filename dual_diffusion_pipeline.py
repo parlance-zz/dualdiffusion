@@ -132,24 +132,33 @@ class DualMCLTBCEFormat:
         samples = mdct(raw_samples, block_width, complex=True, random_phase_offset=random_phase_offset)
         samples = samples.permute(0, 2, 1)
 
+        samples = (samples + torch.randn_like(samples) * 1e-3)
+
         samples_abs = to_ulaw(samples.abs(), u=22000)
-        #samples_abs = to_ulaw(samples.abs(), u=22000)
-        #samples += torch.randn_like(samples) * 1e-8
-        #samples_abs = (samples.abs() + 1e-20).log()
         samples_abs /= samples_abs.std(dim=(1,2), keepdim=True).clip(min=1e-8)
 
-        f = (-2*torch.log(torch.rand_like(samples_abs)+1e-10)).sqrt()
-        #f = 1
+        #samples_abs = samples.abs()
+        #samples_abs /= samples_abs.abs().amax(dim=(1,2), keepdim=True).clip(min=1e-8)
+        #samples_abs = samples_abs *2 - 1
+        #samples_abs = torch.erfinv(samples_abs*0.99)
+        #samples_abs -= samples_abs.amin(dim=(1,2), keepdim=True)
+        #samples_abs /= samples_abs.std(dim=(1,2), keepdim=True).clip(min=1e-8) 
 
-        #f = samples_abs - samples_abs.mean(dim=(1,2), keepdim=True)
-        #f /= f.std(dim=(1,2), keepdim=True).clip(min=1e-8)
-        #f = (torch.erf(f) + 1) / 2
-        #f = (-2*torch.log(f+1e-10)) ** (1/4)
-        
-        samples_phase = torch.view_as_real(samples / samples.abs().clip(min=1e-8) * f).permute(0, 3, 1, 2).contiguous()
-        #samples_phase = torch.view_as_real(samples / samples.abs().clip(min=1e-8) * samples_abs.square()).permute(0, 3, 1, 2).contiguous()
+        #"""
+        #samples2 = (samples + torch.randn_like(samples) * 1e-6)
+        samples2 = samples
+        samples_phase = samples2.angle().unsqueeze(1)
+        samples_phase[:, :, 1:, :] -= samples_phase[:, :, :-1, :].clone()
+        samples2 = torch.exp(1j * samples_phase).squeeze(1)
+
+        samples_phase = torch.view_as_real(samples2 / samples2.abs().clip(min=1e-8)).permute(0, 3, 1, 2).contiguous()
+        samples_phase[:, 0, :, :] = torch.acos(samples_phase[:, 0, :, :]) / np.pi * 2 - 1
+        samples_phase[:, 1, :, :] = torch.acos(samples_phase[:, 1, :, :]) / np.pi * 2 - 1
+        samples_phase = torch.erfinv(samples_phase*0.99999) / (0.5 ** 0.5)
+        #"""
+
         #samples_phase = torch.view_as_real(samples / samples.abs().clip(min=1e-8)).permute(0, 3, 1, 2).contiguous()
-        samples_phase /= samples_phase.std(dim=(1, 2, 3), keepdim=True).clip(min=1e-8)
+        #samples_phase /= (0.5 ** 0.5)#samples_phase.std(dim=(1, 2, 3), keepdim=True).clip(min=1e-8)
 
         samples = torch.cat((samples_abs.unsqueeze(1), samples_phase), dim=1)
         return samples, window
@@ -159,9 +168,17 @@ class DualMCLTBCEFormat:
     def sample_to_raw(samples, model_params):
         
         samples_abs = from_ulaw(samples[:, 0, :, :].permute(0, 2, 1).contiguous(), u=22000)
-        samples_phase = torch.view_as_complex(samples[:, 1:, :, :].permute(0, 3, 2, 1).contiguous())
 
-        samples = samples_abs * samples_phase / samples_phase.abs().clip(min=1e-8)
+        samples_phase = torch.cos((torch.erf(samples[:, 1:, :, :] * (0.5 ** 0.5)) + 1) * torch.pi / 2)
+        samples_phase = torch.view_as_complex(samples_phase.permute(0, 3, 2, 1).contiguous()).angle()
+        samples_phase = torch.cumsum(samples_phase, dim=2)
+        samples_phase = torch.exp(1j * samples_phase)
+
+        #samples_phase = torch.view_as_complex(samples[:, 1:, :, :].permute(0, 3, 2, 1).contiguous())
+        #samples = samples_abs * samples_phase / samples_phase.abs().clip(min=1e-8)
+
+        samples = samples_abs * samples_phase
+
         return imdct(samples)
 
     @staticmethod
