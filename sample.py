@@ -22,15 +22,15 @@ def multiscale_spectral_loss_test():
         "freq_embedding_dim": 0,
         "time_embedding_dim": 0,
         "multiscale_spectral_loss": {
-            "num_filters": 12,
-            "num_octaves": 12,
-            "filter_std": torch.pi,
+            "num_filters": 30,
+            "num_octaves": 10,
+            "filter_std": 2,
             "max_q": 1,
             "u": 20000,
         }
     }
 
-    sample_num = 0
+    sample_num = 23
 
     format = DualDiffusionPipeline.get_sample_format(model_params)
     crop_width = format.get_sample_crop_width(model_params)

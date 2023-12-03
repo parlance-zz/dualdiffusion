@@ -982,12 +982,14 @@ class DualMultiscaleSpectralLoss:
         filter_q = torch.exp2(-torch.arange(0, num_filters) / num_filters * num_octaves) * max_q
         fft_q = torch.arange(0, crop_width // 2 + 1) / (crop_width // 2)
         self.filters = torch.exp(-filter_std * torch.log(filter_q.view(-1, 1) / fft_q.view(1, -1)).square())
+        #self.filters[:, ::2] *= -1
 
         debug_path = os.environ.get("DEBUG_PATH", None)
         if debug_path is not None:
             os.makedirs(debug_path, exist_ok=True)
             self.filters.cpu().numpy().tofile(os.path.join(debug_path, "debug_multiscale_spectral_loss_filters.raw"))
             self.filters.mean(dim=0).cpu().numpy().tofile(os.path.join(debug_path, "debug_multiscale_spectral_loss_filter_coverage.raw"))
+            torch.fft.fftshift(torch.fft.ifft(self.filters, norm="ortho").resolve_conj()).cpu().numpy().tofile(os.path.join(debug_path, "debug_multiscale_spectral_loss_filters_ifft.raw"))
 
         padding = torch.zeros((num_filters, crop_width // 2 - 1), device=self.filters.device)
         self.filters = torch.cat((self.filters, padding), dim=1).unsqueeze(0)
@@ -1002,16 +1004,22 @@ class DualMultiscaleSpectralLoss:
 
         sample_fft = torch.fft.fft(sample, norm="ortho")
         sample_filtered_abs = torch.fft.ifft(sample_fft.view(bsz, 1, -1) * self.filters, norm="ortho").abs()
-        sample_filtered_abs = sample_filtered_abs / sample_filtered_abs.amax(dim=-1, keepdim=True)
+        sample_filtered_abs = sample_filtered_abs / sample_filtered_abs.amax(dim=(1,2), keepdim=True)
         sample_filtered_ln = (sample_filtered_abs * u + 1).log() / np.log(u + 1)
 
         target_fft = torch.fft.fft(target, norm="ortho")
         target_filtered_abs = torch.fft.ifft(target_fft.view(bsz, 1, -1) * self.filters, norm="ortho").abs()
-        target_filtered_abs = target_filtered_abs / target_filtered_abs.amax(dim=-1, keepdim=True)
+        target_filtered_abs = target_filtered_abs / target_filtered_abs.amax(dim=(1,2), keepdim=True)
         target_filtered_ln = (target_filtered_abs * u + 1).log() / np.log(u + 1)
 
-        #sample_filtered_ln.cpu().numpy().tofile("./debug/debug_multiscale_spectral_loss_filtered_sample.raw")
-
+        """
+        sample_filtered_ln.cpu().numpy().tofile("./debug/debug_multiscale_spectral_loss_filtered_sample_absln.raw")
+        np.histogram(sample_filtered_ln.cpu().numpy(), bins=256)[0].astype(np.int32).tofile("./debug/debug_multiscale_spectral_loss_filtered_sample_absln_histo.raw")
+        sample_filtered = torch.fft.ifft(sample_fft.view(bsz, 1, -1) * self.filters, norm="ortho")
+        sample_filtered.cpu().numpy().tofile("./debug/debug_multiscale_spectral_loss_filtered_sample.raw")
+        sample_filtered.sum(dim=1).cpu().numpy().tofile("./debug/debug_multiscale_spectral_loss_filtered_reconstruction.raw")
+        """
+        
         return torch.nn.functional.mse_loss(sample_filtered_ln, target_filtered_ln, reduction="mean")
     
 class DualDiffusionPipeline(DiffusionPipeline):
