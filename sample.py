@@ -7,9 +7,48 @@ import torch
 import torchaudio
 import json
 
-from dual_diffusion_pipeline import DualDiffusionPipeline, DualLogFormat, DualNormalFormat, DualOverlappedFormat, DualMDCTFormat, DualMCLTBCEFormat
+from dual_diffusion_pipeline import DualDiffusionPipeline, DualLogFormat, DualNormalFormat, DualOverlappedFormat, DualMDCTFormat, DualMCLTBCEFormat, DualMultiscaleSpectralLoss
 from attention_processor_dual import SeparableAttnProcessor2_0
 from autoencoder_kl_dual import AutoencoderKLDual
+
+def multiscale_spectral_loss_test():
+    torch.manual_seed(200)
+
+    model_params = {
+        "sample_raw_length": 65536*2,
+        "num_chunks": 256,
+        "sample_format": "mdct",
+        "complex": True,
+        "freq_embedding_dim": 0,
+        "time_embedding_dim": 0,
+        "multiscale_spectral_loss": {
+            "num_filters": 12,
+            "num_octaves": 12,
+            "filter_std": torch.pi,
+            "max_q": 1,
+            "u": 20000,
+        }
+    }
+
+    sample_num = 0
+
+    format = DualDiffusionPipeline.get_sample_format(model_params)
+    crop_width = format.get_sample_crop_width(model_params)
+
+    dataset_path = os.environ.get("DATASET_PATH", "./dataset/samples")
+    raw_sample = np.fromfile(os.path.join(dataset_path, f"{sample_num}.raw"), dtype=np.int16, count=crop_width) / 32768.
+    raw_sample = torch.from_numpy(raw_sample.astype(np.float32)).unsqueeze(0)
+
+    raw_sample.cpu().numpy().tofile("./debug/debug_raw_original.raw")
+
+    sample, _ = format.raw_to_sample(raw_sample, model_params, random_phase_offset=False)
+    recon = format.sample_to_raw(sample, model_params).real
+
+    loss_fn = DualMultiscaleSpectralLoss(model_params, format)
+    loss = loss_fn(recon, raw_sample)
+    
+    print(loss)
+    exit()
 
 def get_dataset_stats():
     model_params = {
@@ -272,7 +311,7 @@ def embedding_test():
 def vae_test():
 
     #dualdiffusion2d_330_mdct_v8_256embed_4vae
-    model_name = "dualdiffusion2d_330_mcltbce_v8_256embed_2vae"
+    model_name = "dualdiffusion2d_330_mcltbce_v8_256embed_2vae_normal_phase"
     num_samples = 1
     #device = "cuda"
     device = "cpu"
@@ -345,7 +384,8 @@ if __name__ == "__main__":
 
     load_dotenv()
 
-    reconstruction_test(sample_num=1)
+    multiscale_spectral_loss_test()
+    #reconstruction_test(sample_num=1)
     #get_dataset_stats()
     #embedding_test()
     vae_test()

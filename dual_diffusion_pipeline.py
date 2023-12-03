@@ -235,11 +235,11 @@ class DualMDCTFormat:
         return samples, window
 
     @staticmethod
-    @torch.no_grad()
     def sample_to_raw(samples, model_params):
         
-        sample_std = model_params.get("sample_std", 1.)
-        samples = samples * sample_std
+        sample_std = model_params.get("sample_std", 1)
+        if sample_std != 1:
+            samples = samples * sample_std
 
         complex = model_params.get("complex", False)
         if complex:
@@ -964,9 +964,59 @@ class DualNormalFormat:
         num_chunks = model_params["num_chunks"]
         default_length = model_params["sample_raw_length"] // num_chunks // 2
         return (bsz, num_output_channels, num_chunks, default_length*length,)
+
+class DualMultiscaleSpectralLoss:
+
+    @torch.no_grad()
+    def __init__(self, model_params, format):
         
+        loss_params = model_params["multiscale_spectral_loss"]
+        self.loss_params = loss_params
+
+        num_filters = loss_params["num_filters"]
+        num_octaves = loss_params["num_octaves"]
+        filter_std = loss_params["filter_std"]
+        max_q = loss_params["max_q"]
+        crop_width = format.get_sample_crop_width(model_params)
+
+        filter_q = torch.exp2(-torch.arange(0, num_filters) / num_filters * num_octaves) * max_q
+        fft_q = torch.arange(0, crop_width // 2 + 1) / (crop_width // 2)
+        self.filters = torch.exp(-filter_std * torch.log(filter_q.view(-1, 1) / fft_q.view(1, -1)).square())
+
+        debug_path = os.environ.get("DEBUG_PATH", None)
+        if debug_path is not None:
+            os.makedirs(debug_path, exist_ok=True)
+            self.filters.cpu().numpy().tofile(os.path.join(debug_path, "debug_multiscale_spectral_loss_filters.raw"))
+            self.filters.mean(dim=0).cpu().numpy().tofile(os.path.join(debug_path, "debug_multiscale_spectral_loss_filter_coverage.raw"))
+
+        padding = torch.zeros((num_filters, crop_width // 2 - 1), device=self.filters.device)
+        self.filters = torch.cat((self.filters, padding), dim=1).unsqueeze(0)
+
+    def __call__(self, sample, target):
+
+        u = self.loss_params["u"]
+        bsz = sample.shape[0]
+
+        if self.filters.device != sample.device:
+            self.filters = self.filters.to(sample.device)
+
+        sample_fft = torch.fft.fft(sample, norm="ortho")
+        sample_filtered_abs = torch.fft.ifft(sample_fft.view(bsz, 1, -1) * self.filters, norm="ortho").abs()
+        sample_filtered_abs = sample_filtered_abs / sample_filtered_abs.amax(dim=-1, keepdim=True)
+        sample_filtered_ln = (sample_filtered_abs * u + 1).log() / np.log(u + 1)
+
+        target_fft = torch.fft.fft(target, norm="ortho")
+        target_filtered_abs = torch.fft.ifft(target_fft.view(bsz, 1, -1) * self.filters, norm="ortho").abs()
+        target_filtered_abs = target_filtered_abs / target_filtered_abs.amax(dim=-1, keepdim=True)
+        target_filtered_ln = (target_filtered_abs * u + 1).log() / np.log(u + 1)
+
+        #sample_filtered_ln.cpu().numpy().tofile("./debug/debug_multiscale_spectral_loss_filtered_sample.raw")
+
+        return torch.nn.functional.mse_loss(sample_filtered_ln, target_filtered_ln, reduction="mean")
+    
 class DualDiffusionPipeline(DiffusionPipeline):
 
+    @torch.no_grad()
     def __init__(
         self,
         unet: UNet2DDualModel,
@@ -998,7 +1048,11 @@ class DualDiffusionPipeline(DiffusionPipeline):
             model_params["sample_format"] = "normal"
         self.format = DualDiffusionPipeline.get_sample_format(model_params)
 
+        if "multiscale_spectral_loss" in model_params:
+            self.multiscale_spectral_loss = DualMultiscaleSpectralLoss(model_params, self.format)
+
     @staticmethod
+    @torch.no_grad()
     def get_sample_format(model_params):
         sample_format = model_params["sample_format"]
         if sample_format == "ln":
@@ -1019,6 +1073,7 @@ class DualDiffusionPipeline(DiffusionPipeline):
             raise ValueError(f"Unknown sample format '{sample_format}'")
         
     @staticmethod
+    @torch.no_grad()
     def create_new(model_params, unet_params, vae_params=None, upscaler_params=None):
         
         unet = UNet2DDualModel(**unet_params)
@@ -1200,6 +1255,7 @@ class DualDiffusionPipeline(DiffusionPipeline):
         if loops > 0: raw_sample = raw_sample.repeat(1, loops+1)
         return raw_sample
     
+    @torch.no_grad()
     def set_module_tiling(self, module):
         F, _pair = torch.nn.functional, torch.nn.modules.utils._pair
 
@@ -1219,12 +1275,14 @@ class DualDiffusionPipeline(DiffusionPipeline):
 
         module._conv_forward = _conv_forward.__get__(module)
 
+    @torch.no_grad()
     def remove_module_tiling(self, module):
         try:
             del module._conv_forward
         except AttributeError:
             pass
 
+    @torch.no_grad()
     def set_tiling_mode(self, tiling: bool):
 
         if self.tiling_mode == tiling:

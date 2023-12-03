@@ -29,7 +29,11 @@ def kaiser_derived(window_len, beta, device):
 
 def mdct(x, block_width, complex=False, random_phase_offset=False):
 
-    pad_tuple = (block_width//2, block_width//2) + (0,0,) * (x.ndim-1)
+    padding = block_width // 2
+    if ((x.shape[-1] + padding) // block_width) % 2 != 0:
+        padding += block_width // 4
+
+    pad_tuple = (padding, padding) + (0,0,) * (x.ndim-1)
     x = F.pad(x, pad_tuple).unfold(-1, block_width, block_width//2)
 
     N = x.shape[-1] // 2
@@ -38,7 +42,7 @@ def mdct(x, block_width, complex=False, random_phase_offset=False):
 
     window = torch.sin(np.pi * (n + 0.5) / (2*N))
     #window = kaiser_derived(2*N, 4*torch.pi, device=x.device)
-    window.cpu().numpy().tofile("./debug/mdct_window.raw")
+    #window.cpu().numpy().tofile("./debug/mdct_window.raw")
 
     pre_shift = torch.exp(-1j * torch.pi / 2 / N * n)
     post_shift = torch.exp(-1j * torch.pi / 2 / N * (N + 1) * k)
@@ -67,7 +71,7 @@ def imdct(x):
     y = (torch.fft.ifft(x) / pre_shift).real * window
 
     padded_sample_len = (y.shape[-2] + 1) * y.shape[-1] // 2
-    raw_sample = torch.zeros(y.shape[:-2] + (padded_sample_len,), device=y.device)
+    raw_sample = torch.zeros(y.shape[:-2] + (padded_sample_len,), device=y.device, dtype=y.dtype)
     raw_sample[..., :-N]  = y[...,  ::2, :].reshape(*raw_sample[..., :-N].shape)
     raw_sample[..., N: ] += y[..., 1::2, :].reshape(*raw_sample[...,  N:].shape)
 
@@ -111,9 +115,9 @@ raw_sample.cpu().numpy().tofile("./debug/raw_sample.raw")
 #raw_sample = raw_sample.repeat(2, 1)
 Xk = mdct(raw_sample, block_width, complex=True, random_phase_offset=False)
 
-Xk = to_ulaw(Xk, u=2000)
+#Xk = to_ulaw(Xk, u=2000)
 
-Xk /= Xk.std()
+#Xk /= Xk.std()
 
 #noise = torch.randn_like(Xk) * 1e-2
 #Xk += noise
@@ -121,6 +125,6 @@ Xk /= Xk.std()
 print("Xk shape:", Xk.shape, "Xk mean:", (Xk / Xk.std()).mean().item(), "Xk std:", Xk.std().item())
 Xk.cpu().numpy().tofile("./debug/mdct.raw")
 
-Xk = from_ulaw(Xk, u=2000) 
+#Xk = from_ulaw(Xk, u=2000) 
 y = imdct(Xk)
 y.cpu().numpy().tofile("./debug/imdct.raw")
