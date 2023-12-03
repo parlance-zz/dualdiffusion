@@ -982,20 +982,20 @@ class DualMultiscaleSpectralLoss:
         filter_q = torch.exp2(-torch.arange(0, num_filters) / num_filters * num_octaves) * max_q
         fft_q = torch.arange(0, crop_width // 2 + 1) / (crop_width // 2)
         self.filters = torch.exp(-filter_std * torch.log(filter_q.view(-1, 1) / fft_q.view(1, -1)).square())
-        #self.filters[:, ::2] *= -1
+        
+        padding = torch.zeros((num_filters, crop_width // 2 - 1), device=self.filters.device)
+        self.filters = torch.cat((self.filters, padding), dim=1).unsqueeze(0)
 
         debug_path = os.environ.get("DEBUG_PATH", None)
         if debug_path is not None:
             os.makedirs(debug_path, exist_ok=True)
-            self.filters.cpu().numpy().tofile(os.path.join(debug_path, "debug_multiscale_spectral_loss_filters.raw"))
-            self.filters.mean(dim=0).cpu().numpy().tofile(os.path.join(debug_path, "debug_multiscale_spectral_loss_filter_coverage.raw"))
-            torch.fft.fftshift(torch.fft.ifft(self.filters, norm="ortho").resolve_conj()).cpu().numpy().tofile(os.path.join(debug_path, "debug_multiscale_spectral_loss_filters_ifft.raw"))
-
-        padding = torch.zeros((num_filters, crop_width // 2 - 1), device=self.filters.device)
-        self.filters = torch.cat((self.filters, padding), dim=1).unsqueeze(0)
+            self.filters[:, :, :crop_width // 2 + 1].cpu().numpy().tofile(os.path.join(debug_path, "debug_multiscale_spectral_loss_filters.raw"))
+            self.filters[:, :, :crop_width // 2 + 1].mean(dim=(0, 1)).cpu().numpy().tofile(os.path.join(debug_path, "debug_multiscale_spectral_loss_filter_coverage.raw"))
+            torch.fft.fftshift(torch.fft.ifft(self.filters, norm="ortho"), dim=-1).cpu().numpy().tofile(os.path.join(debug_path, "debug_multiscale_spectral_loss_filters_ifft.raw"))
 
     def __call__(self, sample, target):
-
+        
+        num_filters = self.filters.shape[1]
         u = self.loss_params["u"]
         bsz = sample.shape[0]
 
@@ -1019,8 +1019,8 @@ class DualMultiscaleSpectralLoss:
         sample_filtered.cpu().numpy().tofile("./debug/debug_multiscale_spectral_loss_filtered_sample.raw")
         sample_filtered.sum(dim=1).cpu().numpy().tofile("./debug/debug_multiscale_spectral_loss_filtered_reconstruction.raw")
         """
-        
-        return torch.nn.functional.mse_loss(sample_filtered_ln, target_filtered_ln, reduction="mean")
+
+        return torch.nn.functional.mse_loss(sample_filtered_ln, target_filtered_ln, reduction="mean") * num_filters
     
 class DualDiffusionPipeline(DiffusionPipeline):
 

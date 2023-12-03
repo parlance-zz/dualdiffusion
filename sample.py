@@ -22,9 +22,9 @@ def multiscale_spectral_loss_test():
         "freq_embedding_dim": 0,
         "time_embedding_dim": 0,
         "multiscale_spectral_loss": {
-            "num_filters": 30,
+            "num_filters": 120,
             "num_octaves": 10,
-            "filter_std": 2,
+            "filter_std": 500,
             "max_q": 1,
             "u": 20000,
         }
@@ -311,7 +311,7 @@ def embedding_test():
 def vae_test():
 
     #dualdiffusion2d_330_mdct_v8_256embed_4vae
-    model_name = "dualdiffusion2d_330_mcltbce_v8_256embed_2vae_normal_phase"
+    model_name = "dualdiffusion2d_330_mdct_complex_v8_256embed_2vae_mssloss"
     num_samples = 1
     #device = "cuda"
     device = "cpu"
