@@ -472,8 +472,10 @@ class SeparableAttnProcessor2_0:
 
         if freq_embedding_dim > 0:    
             num_freq_orders = freq_embedding_dim // 2
-            ln_x = torch.arange(0, hidden_states_shape[2]*num_freq_orders, device=device).log2()
-            ln_x *= 3.1415926535897932384626433832795 / ln_x[-1]; ln_x[0] = -3.1415926535897932384626433832795/2
+            #ln_x = torch.arange(0, hidden_states_shape[2]*num_freq_orders, device=device).log2()
+            #ln_x *= 3.1415926535897932384626433832795 / ln_x[-1]; ln_x[0] = -3.1415926535897932384626433832795/2
+            ln_x = torch.arange(0.5, hidden_states_shape[2]*num_freq_orders+0.5, device=device).log2()
+            ln_x *= 3.1415926535897932384626433832795 / ln_x[-1]
             ln_x = ln_x.view(hidden_states_shape[2], num_freq_orders).permute(1, 0).contiguous()
             ln_x *= torch.arange(0, num_freq_orders, device=device).view(-1, 1) + 0.5
             freq_embeddings = torch.view_as_real(torch.exp(1j * ln_x)).permute(0, 2, 1).reshape(1, freq_embedding_dim, hidden_states_shape[2], 1)
