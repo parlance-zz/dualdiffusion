@@ -22,9 +22,18 @@ def multiscale_spectral_loss_test():
         "freq_embedding_dim": 0,
         "time_embedding_dim": 0,
         "multiscale_spectral_loss": {
-            "num_filters": 120,
+            #"num_filters": 120,
+            #"filter_std": 500,
+            #"num_filters": 60,
+            #"filter_std": 125,
+            #"num_filters": 30,
+            #"filter_std": 31.25,
+            #"num_filters": 15,
+            #"filter_std": 7.8125,
+            "num_filters": 8,
+            "filter_std": 2,
+            "num_orders": 5,
             "num_octaves": 10,
-            "filter_std": 500,
             "max_q": 1,
             "u": 20000,
         }
@@ -36,14 +45,15 @@ def multiscale_spectral_loss_test():
     crop_width = format.get_sample_crop_width(model_params)
 
     dataset_path = os.environ.get("DATASET_PATH", "./dataset/samples")
-    #raw_sample = np.fromfile(os.path.join(dataset_path, f"{sample_num}.raw"), dtype=np.int16, count=crop_width) / 32768.
-    raw_sample = np.fromfile("./debug/test.raw", dtype=np.int16, count=crop_width) / 32768.
+    raw_sample = np.fromfile(os.path.join(dataset_path, f"{sample_num}.raw"), dtype=np.int16, count=crop_width) / 32768.
     raw_sample = torch.from_numpy(raw_sample.astype(np.float32)).unsqueeze(0)
 
     raw_sample.cpu().numpy().tofile("./debug/debug_raw_original.raw")
 
     sample, _ = format.raw_to_sample(raw_sample, model_params, random_phase_offset=False)
     recon = format.sample_to_raw(sample, model_params).real
+
+    recon.cpu().numpy().tofile("./debug/debug_reconstruction.raw")
 
     loss_fn = DualMultiscaleSpectralLoss(model_params, format)
     loss = loss_fn(recon, raw_sample)
@@ -312,7 +322,7 @@ def embedding_test():
 def vae_test():
 
     #dualdiffusion2d_330_mdct_v8_256embed_4vae
-    model_name = "dualdiffusion2d_330_mdct_complex_v8_256embed_2vae_mssloss"
+    model_name = "dualdiffusion2d_330_mclt_v8_256embed_2vae_mssloss"
     num_samples = 1
     #device = "cuda"
     device = "cpu"

@@ -156,7 +156,7 @@ class DualMCLTFormat:
         samples_phase = torch.nn.functional.tanh(samples[:, 1:3, :, :].permute(0, 3, 2, 1).contiguous())
         samples_phase = torch.view_as_complex(samples_phase)
         samples_phase = samples_phase / samples_phase.abs().clip(min=1e-8)
-        
+
         samples_noise_phase = torch.exp(torch.rand_like(samples_noise_abs) * (2j * torch.pi))
 
         samples = samples_abs * samples_phase + samples_noise_abs * samples_noise_phase
@@ -954,17 +954,29 @@ class DualMultiscaleSpectralLoss:
         loss_params = model_params["multiscale_spectral_loss"]
         self.loss_params = loss_params
 
+        num_orders = loss_params["num_orders"]
         num_filters = loss_params["num_filters"]
         num_octaves = loss_params["num_octaves"]
         filter_std = loss_params["filter_std"]
         max_q = loss_params["max_q"]
         crop_width = format.get_sample_crop_width(model_params)
 
-        filter_q = torch.exp2(-torch.arange(0, num_filters) / num_filters * num_octaves) * max_q
         fft_q = torch.arange(0, crop_width // 2 + 1) / (crop_width // 2)
-        self.filters = torch.exp(-filter_std * torch.log(filter_q.view(-1, 1) / fft_q.view(1, -1)).square())
-        
-        padding = torch.zeros((num_filters, crop_width // 2 - 1), device=self.filters.device)
+        self.filters = None
+
+        for i in range(num_orders):
+            filter_q = torch.exp2(-torch.arange(0, num_filters) / num_filters * num_octaves) * max_q
+            filters = torch.exp(-filter_std * torch.log(filter_q.view(-1, 1) / fft_q.view(1, -1)).square())
+
+            if self.filters is None:
+                self.filters = filters
+            else:
+                self.filters = torch.cat((self.filters, filters), dim=0)
+
+            filter_std *= 4
+            num_filters *= 2
+
+        padding = torch.zeros((self.filters.shape[0], crop_width // 2 - 1), device=self.filters.device)
         self.filters = torch.cat((self.filters, padding), dim=1).unsqueeze(0)
 
         debug_path = os.environ.get("DEBUG_PATH", None)

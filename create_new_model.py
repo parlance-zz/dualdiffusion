@@ -37,22 +37,32 @@ MODEL_PARAMS = {
     #"ifft": True,
     #"fftshift": False,
 
-    "sample_format": "mclt",
+    #"sample_format": "mclt",
+    #"sample_raw_length": 65536*2,
+    #"num_chunks": 256,
+    #"u": 20000,
+    #"multiscale_spectral_loss": {
+    #    "num_filters": 8,
+    #    "num_octaves": 10,
+    #    "filter_std": 2,
+    #    "num_orders": 5,
+    #    "max_q": 1,
+    #    "u": 20000,
+    #}
+    
+    "sample_format": "mdct",
+    "complex": True,
     "sample_raw_length": 65536*2,
     "num_chunks": 256,
     "u": 20000,
     "multiscale_spectral_loss": {
-        "num_filters": 120,
+        "num_filters": 8,
         "num_octaves": 10,
-        "filter_std": 500,
+        "filter_std": 2,
+        "num_orders": 5,
         "max_q": 1,
         "u": 20000,
     }
-    
-    #"sample_format": "mcltbce",
-    #"sample_raw_length": 65536*2,
-    #"num_chunks": 256,
-    #"pos_weight": 2.129015562746317381309,
 
     #"sample_format": "normal",
     #"sample_raw_length": 65536*2,
