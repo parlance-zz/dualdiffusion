@@ -109,7 +109,7 @@ def from_ulaw(x, u=255):
 
     return x
 
-class DualMCLTBCEFormat:
+class DualMCLTFormat:
 
     @staticmethod
     def get_sample_crop_width(model_params):
@@ -120,7 +120,7 @@ class DualMCLTBCEFormat:
     def get_num_channels(model_params):
         freq_embedding_dim = model_params["freq_embedding_dim"]
         channels = model_params["sample_raw_channels"] * 3
-        return (channels + freq_embedding_dim, channels)
+        return (channels + freq_embedding_dim, channels + 1)
 
     @staticmethod
     @torch.no_grad()
@@ -128,57 +128,38 @@ class DualMCLTBCEFormat:
         
         num_chunks = model_params["num_chunks"]
         block_width = num_chunks * 2
+        u = model_params.get("u", None)
 
         samples = mdct(raw_samples, block_width, complex=True, random_phase_offset=random_phase_offset)
         samples = samples.permute(0, 2, 1)
 
-        samples = (samples + torch.randn_like(samples) * 1e-3)
-
-        samples_abs = to_ulaw(samples.abs(), u=22000)
+        samples_abs = samples.abs()
+        if u is not None:
+            samples_abs = to_ulaw(samples_abs, u=u)
         samples_abs /= samples_abs.std(dim=(1,2), keepdim=True).clip(min=1e-8)
 
-        #samples_abs = samples.abs()
-        #samples_abs /= samples_abs.abs().amax(dim=(1,2), keepdim=True).clip(min=1e-8)
-        #samples_abs = samples_abs *2 - 1
-        #samples_abs = torch.erfinv(samples_abs*0.99)
-        #samples_abs -= samples_abs.amin(dim=(1,2), keepdim=True)
-        #samples_abs /= samples_abs.std(dim=(1,2), keepdim=True).clip(min=1e-8) 
-
-        #"""
-        #samples2 = (samples + torch.randn_like(samples) * 1e-6)
-        samples2 = samples
-        samples_phase = samples2.angle().unsqueeze(1)
-        samples_phase[:, :, 1:, :] -= samples_phase[:, :, :-1, :].clone()
-        samples2 = torch.exp(1j * samples_phase).squeeze(1)
-
-        samples_phase = torch.view_as_real(samples2 / samples2.abs().clip(min=1e-8)).permute(0, 3, 1, 2).contiguous()
-        samples_phase[:, 0, :, :] = torch.acos(samples_phase[:, 0, :, :]) / np.pi * 2 - 1
-        samples_phase[:, 1, :, :] = torch.acos(samples_phase[:, 1, :, :]) / np.pi * 2 - 1
-        samples_phase = torch.erfinv(samples_phase*0.99999) / (0.5 ** 0.5)
-        #"""
-
-        #samples_phase = torch.view_as_real(samples / samples.abs().clip(min=1e-8)).permute(0, 3, 1, 2).contiguous()
-        #samples_phase /= (0.5 ** 0.5)#samples_phase.std(dim=(1, 2, 3), keepdim=True).clip(min=1e-8)
+        samples_phase = torch.view_as_real(samples / samples.abs().clip(min=1e-8)).permute(0, 3, 1, 2).contiguous() / (0.5**0.5)
 
         samples = torch.cat((samples_abs.unsqueeze(1), samples_phase), dim=1)
         return samples, window
 
     @staticmethod
-    @torch.no_grad()
     def sample_to_raw(samples, model_params):
         
-        samples_abs = from_ulaw(samples[:, 0, :, :].permute(0, 2, 1).contiguous(), u=22000)
+        u = model_params.get("u", None)
+        samples_abs = torch.nn.functional.sigmoid(samples[:, 0, :, :].permute(0, 2, 1).contiguous())
+        samples_noise_abs = torch.nn.functional.sigmoid(samples[:, 3, :, :].permute(0, 2, 1).contiguous())
+        if u is not None:
+            samples_abs = from_ulaw(samples_abs, u=u)
+            samples_noise_abs = from_ulaw(samples_noise_abs, u=u)
 
-        samples_phase = torch.cos((torch.erf(samples[:, 1:, :, :] * (0.5 ** 0.5)) + 1) * torch.pi / 2)
-        samples_phase = torch.view_as_complex(samples_phase.permute(0, 3, 2, 1).contiguous()).angle()
-        samples_phase = torch.cumsum(samples_phase, dim=2)
-        samples_phase = torch.exp(1j * samples_phase)
+        samples_phase = torch.nn.functional.tanh(samples[:, 1:3, :, :].permute(0, 3, 2, 1).contiguous())
+        samples_phase = torch.view_as_complex(samples_phase)
+        samples_phase = samples_phase / samples_phase.abs().clip(min=1e-8)
+        
+        samples_noise_phase = torch.exp(torch.rand_like(samples_noise_abs) * (2j * torch.pi))
 
-        #samples_phase = torch.view_as_complex(samples[:, 1:, :, :].permute(0, 3, 2, 1).contiguous())
-        #samples = samples_abs * samples_phase / samples_phase.abs().clip(min=1e-8)
-
-        samples = samples_abs * samples_phase
-
+        samples = samples_abs * samples_phase + samples_noise_abs * samples_noise_phase
         return imdct(samples)
 
     @staticmethod
@@ -1075,8 +1056,8 @@ class DualDiffusionPipeline(DiffusionPipeline):
             return DualTimeOverlappedFormat
         elif sample_format == "mdct":
             return DualMDCTFormat
-        elif sample_format == "mcltbce":
-            return DualMCLTBCEFormat
+        elif sample_format == "mclt":
+            return DualMCLTFormat
         else:
             raise ValueError(f"Unknown sample format '{sample_format}'")
         

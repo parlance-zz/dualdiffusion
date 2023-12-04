@@ -7,7 +7,7 @@ from dual_diffusion_pipeline import DualDiffusionPipeline
 load_dotenv()
 torch.manual_seed(200)
 
-MODEL_NAME = "dualdiffusion2d_330_mdct_complex_v8_256embed_2vae_mssloss"
+MODEL_NAME = "dualdiffusion2d_330_mclt_v8_256embed_2vae_mssloss"
 MODEL_PARAMS = {
     #"prediction_type": "sample",
     "prediction_type": "v_prediction",
@@ -37,16 +37,16 @@ MODEL_PARAMS = {
     #"ifft": True,
     #"fftshift": False,
 
-    "sample_format": "mdct",
+    "sample_format": "mclt",
     "sample_raw_length": 65536*2,
     "num_chunks": 256,
-    "complex": True,
+    "u": 20000,
     "multiscale_spectral_loss": {
-        "num_filters": 12,
-        "num_octaves": 12,
-        "filter_std": torch.pi,
+        "num_filters": 120,
+        "num_octaves": 10,
+        "filter_std": 500,
         "max_q": 1,
-        "u": 22000,
+        "u": 20000,
     }
     
     #"sample_format": "mcltbce",

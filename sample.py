@@ -7,7 +7,7 @@ import torch
 import torchaudio
 import json
 
-from dual_diffusion_pipeline import DualDiffusionPipeline, DualLogFormat, DualNormalFormat, DualOverlappedFormat, DualMDCTFormat, DualMCLTBCEFormat, DualMultiscaleSpectralLoss
+from dual_diffusion_pipeline import DualDiffusionPipeline, DualLogFormat, DualNormalFormat, DualOverlappedFormat, DualMDCTFormat, DualMCLTFormat, DualMultiscaleSpectralLoss
 from attention_processor_dual import SeparableAttnProcessor2_0
 from autoencoder_kl_dual import AutoencoderKLDual
 
@@ -36,7 +36,8 @@ def multiscale_spectral_loss_test():
     crop_width = format.get_sample_crop_width(model_params)
 
     dataset_path = os.environ.get("DATASET_PATH", "./dataset/samples")
-    raw_sample = np.fromfile(os.path.join(dataset_path, f"{sample_num}.raw"), dtype=np.int16, count=crop_width) / 32768.
+    #raw_sample = np.fromfile(os.path.join(dataset_path, f"{sample_num}.raw"), dtype=np.int16, count=crop_width) / 32768.
+    raw_sample = np.fromfile("./debug/test.raw", dtype=np.int16, count=crop_width) / 32768.
     raw_sample = torch.from_numpy(raw_sample.astype(np.float32)).unsqueeze(0)
 
     raw_sample.cpu().numpy().tofile("./debug/debug_raw_original.raw")
@@ -68,7 +69,7 @@ def get_dataset_stats():
         ln_amplitude_std = 0.
         phase_integral_mean = 0.
         phase_integral_std = 0.
-    elif format == DualMCLTBCEFormat:
+    elif format == DualMCLTFormat:
         pos_examples = 0.
         neg_examples = 0.
     else:
@@ -90,7 +91,7 @@ def get_dataset_stats():
                 ln_amplitude_std += sample[:, 0, :, :].std(dim=(0,1,2)).item()
                 phase_integral_mean += sample[:, 1:, :, :].mean(dim=(0,1,2,3)).item()
                 phase_integral_std += sample[:, 1:, :, :].std(dim=(0,1,2,3)).item()
-            elif format == DualMCLTBCEFormat:
+            elif format == DualMCLTFormat:
                 sample_abs = sample[:, 0, :, :]
                 sample_abs /= sample_abs.amax(dim=(1,2), keepdim=True)
                 pos_examples += sample_abs.sum().item()
@@ -112,7 +113,7 @@ def get_dataset_stats():
         print(f"phase_integral_mean: {phase_integral_mean}")
         print(f"phase_integral_std: {phase_integral_std}")
         print(f"total samples processed: {num_samples}")
-    elif format == DualMCLTBCEFormat:
+    elif format == DualMCLTFormat:
         print(f"pos_examples: {pos_examples}")
         print(f"neg_examples: {neg_examples}")
         print(f"total samples processed: {num_samples}")
@@ -348,15 +349,11 @@ def vae_test():
 
         latents = vae.encode(sample.type(model_dtype), return_dict=False)[0].sample()
         output = vae.decode(latents, return_dict=False)[0]
-        if format == DualMCLTBCEFormat:
-            output[:, 0, :, :] = torch.nn.functional.sigmoid(output[:, 0, :, :])
-            #output[:, 1:, :, :] = sample[   :, 1:, :, :]
-            output[:, 1:, :, :] = torch.nn.functional.tanh(output[:, 1:, :, :]) * torch.erfinv(torch.tensor(0.99999, device=output.device)) / (0.5**0.5)
 
         output_sample_file_path = os.path.join(output_path, f"step_{last_global_step}_{filename.replace('.raw', '_sample.raw')}")
         output.detach().type(torch.float32).cpu().numpy().tofile(output_sample_file_path)
 
-        output = format.sample_to_raw(output.type(torch.float32), model_params).real
+        output = format.sample_to_raw(output.type(torch.float32), model_params).real.detach()
         
         output_latents_file_path = os.path.join(output_path, f"step_{last_global_step}_{filename.replace('.raw', '_latents.raw')}")
         latents.detach().type(torch.float32).cpu().numpy().tofile(output_latents_file_path)
@@ -384,7 +381,7 @@ if __name__ == "__main__":
 
     load_dotenv()
 
-    multiscale_spectral_loss_test()
+    #multiscale_spectral_loss_test()
     #reconstruction_test(sample_num=1)
     #get_dataset_stats()
     #embedding_test()
