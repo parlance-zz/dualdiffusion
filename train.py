@@ -1084,9 +1084,9 @@ def main():
 
                     vae_recon_loss_weight = 1  
                     vae_percept_loss_weight = 0
-                    vae_kl_loss_weight = 0 #1e-8
+                    vae_kl_loss_weight = 1e-5
 
-                    loss = vae_recon_loss
+                    loss = vae_recon_loss + vae_kl_loss_weight * vae_kl_loss
                     #loss = vae_recon_loss_weight * vae_recon_loss + vae_percept_loss_weight * vae_percept_loss + vae_kl_loss_weight * vae_kl_loss
                     #loss = vae_recon_loss_weight * vae_recon_loss + vae_percept_loss_weight * vae_percept_loss# + vae_kl_loss_weight * vae_kl_loss
 

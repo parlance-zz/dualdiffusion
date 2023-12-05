@@ -7,7 +7,7 @@ from dual_diffusion_pipeline import DualDiffusionPipeline
 load_dotenv()
 torch.manual_seed(200)
 
-MODEL_NAME = "dualdiffusion2d_330_mclt_v8_256embed_2vae_mssloss"
+MODEL_NAME = "dualdiffusion2d_330_mclt_v8_256embed_8vae_mssloss2"
 MODEL_PARAMS = {
     #"prediction_type": "sample",
     "prediction_type": "v_prediction",
@@ -37,7 +37,26 @@ MODEL_PARAMS = {
     #"ifft": True,
     #"fftshift": False,
 
-    #"sample_format": "mclt",
+    "sample_format": "mclt",
+    "sample_raw_length": 65536*2,
+    "num_chunks": 256,
+    #"u": 20000,
+    "multiscale_spectral_loss": {
+        "u": 20000,
+        "block_widths": [
+            16,
+            32,
+            64,
+            128,
+            256,
+            512,
+            1024,
+            2048,
+        ]
+    }
+    
+    #"sample_format": "mdct",
+    #"complex": True,
     #"sample_raw_length": 65536*2,
     #"num_chunks": 256,
     #"u": 20000,
@@ -49,20 +68,6 @@ MODEL_PARAMS = {
     #    "max_q": 1,
     #    "u": 20000,
     #}
-    
-    "sample_format": "mdct",
-    "complex": True,
-    "sample_raw_length": 65536*2,
-    "num_chunks": 256,
-    "u": 20000,
-    "multiscale_spectral_loss": {
-        "num_filters": 8,
-        "num_octaves": 10,
-        "filter_std": 2,
-        "num_orders": 5,
-        "max_q": 1,
-        "u": 20000,
-    }
 
     #"sample_format": "normal",
     #"sample_raw_length": 65536*2,
@@ -83,7 +88,7 @@ MODEL_PARAMS = {
 
 #VAE_PARAMS = None
 VAE_PARAMS = {
-  "latent_channels": 2,
+  "latent_channels": 8,
   "sample_size": (256, 512),
   "act_fn": "silu",
   "conv_size": (3,3),

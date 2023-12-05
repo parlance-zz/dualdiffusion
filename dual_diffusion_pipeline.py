@@ -38,46 +38,47 @@ def compute_snr(noise_scheduler, timesteps):
     return snr
 
 # fast overlapped modified discrete cosine transform type iv - becomes mclt when complex is True
-def mdct(x, block_width, complex=False, random_phase_offset=False):
+def mdct(x, block_width):
 
-    pad_tuple = (block_width//2, block_width//2) + (0,0,) * (x.ndim-1)
+    padding_left = padding_right = block_width // 2
+    remainder = x.shape[-1] % (block_width // 2)
+    if remainder > 0:
+        padding_right += block_width // 2 - remainder
+
+    pad_tuple = (padding_left, padding_right) + (0,0,) * (x.ndim-1)
     x = F.pad(x, pad_tuple).unfold(-1, block_width, block_width//2)
 
     N = x.shape[-1] // 2
     n = torch.arange(2*N, device=x.device)
     k = torch.arange(0.5, N + 0.5, device=x.device)
 
-    window = torch.sin(torch.pi * (n + 0.5) / (2*N))
+    window = torch.sin(np.pi * (n + 0.5) / (2*N))
     pre_shift = torch.exp(-1j * torch.pi / 2 / N * n)
     post_shift = torch.exp(-1j * torch.pi / 2 / N * (N + 1) * k)
     
-    y = torch.fft.fft(x * pre_shift * window)[..., :N] * post_shift
-    if random_phase_offset:
-        y *= torch.exp(2j*torch.pi*torch.rand(1, device=y.device))
-
-    if complex:
-        return y * 2
-    else:
-        return y.real * 2
+    return torch.fft.fft(x * pre_shift * window)[..., :N] * post_shift * (2 ** 0.5)
 
 def imdct(x):
     N = x.shape[-1]
     n = torch.arange(2*N, device=x.device)
     k = torch.arange(0.5, N + 0.5, device=x.device)
 
-    window = torch.sin(torch.pi * (n + 0.5) / (2*N))
+    window = torch.sin(np.pi * (n + 0.5) / (2*N))
     pre_shift = torch.exp(-1j * torch.pi / 2 / N * n)
     post_shift = torch.exp(-1j * torch.pi / 2 / N * (N + 1) * k)
     
     x = torch.cat((x / post_shift, torch.zeros_like(x)), dim=-1)
-    y = (torch.fft.ifft(x) / pre_shift).real * window
+    y = (torch.fft.ifft(x) / pre_shift) * window
 
     padded_sample_len = (y.shape[-2] + 1) * y.shape[-1] // 2
-    raw_sample = torch.zeros(y.shape[:-2] + (padded_sample_len,), device=y.device)
-    raw_sample[..., :-N]  = y[...,  ::2, :].reshape(*raw_sample[..., :-N].shape)
-    raw_sample[..., N: ] += y[..., 1::2, :].reshape(*raw_sample[...,  N:].shape)
+    raw_sample = torch.zeros(y.shape[:-2] + (padded_sample_len,), device=y.device, dtype=y.dtype)
+    y_even = y[...,  ::2, :].reshape(*y[...,  ::2, :].shape[:-2], -1)
+    y_odd  = y[..., 1::2, :].reshape(*y[..., 1::2, :].shape[:-2], -1)
+    raw_sample[..., :y_even.shape[-1]] = y_even
+    raw_sample[..., N:y_odd.shape[-1] + N] += y_odd
 
-    return raw_sample[..., N:-N] * 2
+    return raw_sample[..., N:-N] * (2 ** 0.5)
+
 
 def to_ulaw(x, u=255):
 
@@ -87,7 +88,7 @@ def to_ulaw(x, u=255):
         x = torch.view_as_real(x)
 
     x = x / x.abs().amax(dim=tuple(range(x.ndim-2-int(complex), x.ndim)), keepdim=True)
-    x = torch.sign(x) * torch.log(1 + u * x.abs()) / np.log(1 + u)
+    x = torch.sign(x) * torch.log1p(u * x.abs()) / np.log(1 + u)
 
     if complex:
         x = torch.view_as_complex(x)
@@ -114,13 +115,13 @@ class DualMCLTFormat:
     @staticmethod
     def get_sample_crop_width(model_params):
         block_width = model_params["num_chunks"] * 2
-        return model_params["sample_raw_length"] - block_width // 2
+        return model_params["sample_raw_length"] + block_width
     
     @staticmethod
     def get_num_channels(model_params):
         freq_embedding_dim = model_params["freq_embedding_dim"]
-        channels = model_params["sample_raw_channels"] * 3
-        return (channels + freq_embedding_dim, channels + 1)
+        channels = model_params["sample_raw_channels"] * 2
+        return (channels + freq_embedding_dim, channels + 2)
 
     @staticmethod
     @torch.no_grad()
@@ -128,19 +129,16 @@ class DualMCLTFormat:
         
         num_chunks = model_params["num_chunks"]
         block_width = num_chunks * 2
-        u = model_params.get("u", None)
 
-        samples = mdct(raw_samples, block_width, complex=True, random_phase_offset=random_phase_offset)
+        samples = mdct(raw_samples, block_width)[..., 1:-2, :]
         samples = samples.permute(0, 2, 1)
 
-        samples_abs = samples.abs()
-        if u is not None:
-            samples_abs = to_ulaw(samples_abs, u=u)
-        samples_abs /= samples_abs.std(dim=(1,2), keepdim=True).clip(min=1e-8)
+        if random_phase_offset:
+            samples *= torch.exp(2j*torch.pi*torch.rand(1, device=samples.device))
+            
+        samples = torch.view_as_real(samples).permute(0, 3, 1, 2).contiguous()
+        samples = samples / samples.std(dim=(1,2,3), keepdim=True).clip(min=1e-8)
 
-        samples_phase = torch.view_as_real(samples / samples.abs().clip(min=1e-8)).permute(0, 3, 1, 2).contiguous() / (0.5**0.5)
-
-        samples = torch.cat((samples_abs.unsqueeze(1), samples_phase), dim=1)
         return samples, window
 
     @staticmethod
@@ -153,14 +151,14 @@ class DualMCLTFormat:
             samples_abs = from_ulaw(samples_abs, u=u)
             samples_noise_abs = from_ulaw(samples_noise_abs, u=u)
 
-        samples_phase = torch.nn.functional.tanh(samples[:, 1:3, :, :].permute(0, 3, 2, 1).contiguous())
+        #samples_phase = torch.nn.functional.tanh(samples[:, 1:3, :, :].permute(0, 3, 2, 1).contiguous())
+        samples_phase = samples[:, 1:3, :, :].permute(0, 3, 2, 1).contiguous()
         samples_phase = torch.view_as_complex(samples_phase)
-        samples_phase = samples_phase / samples_phase.abs().clip(min=1e-8)
 
         samples_noise_phase = torch.exp(torch.rand_like(samples_noise_abs) * (2j * torch.pi))
 
         samples = samples_abs * samples_phase + samples_noise_abs * samples_noise_phase
-        return imdct(samples)
+        return imdct(samples).real
 
     @staticmethod
     def get_loss(sample, target, model_params, reduction="mean"):
@@ -172,7 +170,7 @@ class DualMCLTFormat:
 
         crop_width = DualTimeOverlappedFormat.get_sample_crop_width(model_params)
         num_chunks = model_params["num_chunks"]
-        chunk_len = crop_width // num_chunks - 1
+        chunk_len = crop_width // num_chunks - 2
 
         return (bsz, num_output_channels, num_chunks, chunk_len*length,)
 
@@ -198,8 +196,13 @@ class DualMDCTFormat:
         u = model_params.get("u", None)
         complex = model_params.get("complex", False)
 
-        samples = mdct(raw_samples, block_width, complex=complex, random_phase_offset=random_phase_offset)
+        samples = mdct(raw_samples, block_width)
 
+        if random_phase_offset:
+            samples *= torch.exp(2j*torch.pi*torch.rand(1, device=samples.device))
+
+        if not complex:
+            samples = samples.real
         if u is not None:
             samples = to_ulaw(samples, u=u)
 
@@ -232,7 +235,7 @@ class DualMDCTFormat:
         if u is not None:
             samples = from_ulaw(samples, u=u)
         
-        return imdct(samples)
+        return imdct(samples).real
 
     @staticmethod
     def get_loss(sample, target, model_params, reduction="mean"):
@@ -946,6 +949,42 @@ class DualNormalFormat:
         default_length = model_params["sample_raw_length"] // num_chunks // 2
         return (bsz, num_output_channels, num_chunks, default_length*length,)
 
+class DualMultiscaleSpectralLoss2:
+
+    @torch.no_grad()
+    def __init__(self, model_params):
+        
+        loss_params = model_params["multiscale_spectral_loss"]
+        self.model_params = model_params
+        self.loss_params = loss_params
+        self.block_widths = loss_params["block_widths"]
+        self.u = loss_params["u"]
+
+    def __call__(self, sample, target):
+        
+        block_width = self.model_params["num_chunks"] * 2
+        sample = sample[:, block_width // 2:-block_width]
+        assert(sample.shape == target.shape)
+
+        loss = torch.zeros(1, device=sample.device)
+
+        for block_width in self.block_widths:
+            for offset in range(0, block_width // 4 + 1, block_width // 4):
+
+                sample_fft_abs = mdct(sample[:, offset:], block_width)[:, 1:-2, :].abs()
+                target_fft_abs = mdct(target[:, offset:], block_width)[:, 1:-2, :].abs()
+
+                sample_fft_abs = sample_fft_abs / sample_fft_abs.amax(dim=(1,2), keepdim=True)
+                target_fft_abs = target_fft_abs / target_fft_abs.amax(dim=(1,2), keepdim=True)
+
+                sample_fft_abs_ln = (sample_fft_abs * self.u).log1p()
+                target_fft_abs_ln = (target_fft_abs * self.u).log1p()
+
+                loss += torch.nn.functional.l1_loss(sample_fft_abs_ln,  target_fft_abs_ln,  reduction="mean")
+                loss += torch.nn.functional.l1_loss(sample_fft_abs, target_fft_abs, reduction="mean")
+
+        return loss / (len(self.block_widths) * 4)
+    
 class DualMultiscaleSpectralLoss:
 
     @torch.no_grad()
@@ -962,16 +1001,24 @@ class DualMultiscaleSpectralLoss:
         crop_width = format.get_sample_crop_width(model_params)
 
         fft_q = torch.arange(0, crop_width // 2 + 1) / (crop_width // 2)
+
         self.filters = None
+        self.filter_weights = None
 
         for i in range(num_orders):
             filter_q = torch.exp2(-torch.arange(0, num_filters) / num_filters * num_octaves) * max_q
             filters = torch.exp(-filter_std * torch.log(filter_q.view(-1, 1) / fft_q.view(1, -1)).square())
+            filter_weights = torch.tensor(1/num_filters).repeat(num_filters)
 
             if self.filters is None:
                 self.filters = filters
             else:
                 self.filters = torch.cat((self.filters, filters), dim=0)
+
+            if self.filter_weights is None:
+                self.filter_weights = filter_weights
+            else:
+                self.filter_weights = torch.cat((self.filter_weights, filter_weights), dim=0)
 
             filter_std *= 4
             num_filters *= 2
@@ -988,22 +1035,23 @@ class DualMultiscaleSpectralLoss:
 
     def __call__(self, sample, target):
         
-        num_filters = self.filters.shape[1]
         u = self.loss_params["u"]
         bsz = sample.shape[0]
 
         if self.filters.device != sample.device:
             self.filters = self.filters.to(sample.device)
+        if self.filter_weights.device != sample.device:
+            self.filter_weights = self.filter_weights.to(sample.device)
 
         sample_fft = torch.fft.fft(sample, norm="ortho")
         sample_filtered_abs = torch.fft.ifft(sample_fft.view(bsz, 1, -1) * self.filters, norm="ortho").abs()
         sample_filtered_abs = sample_filtered_abs / sample_filtered_abs.amax(dim=(1,2), keepdim=True)
-        sample_filtered_ln = (sample_filtered_abs * u + 1).log() / np.log(u + 1)
+        sample_filtered_ln = (sample_filtered_abs * u).log1p()# / np.log(u + 1)
 
         target_fft = torch.fft.fft(target, norm="ortho")
         target_filtered_abs = torch.fft.ifft(target_fft.view(bsz, 1, -1) * self.filters, norm="ortho").abs()
         target_filtered_abs = target_filtered_abs / target_filtered_abs.amax(dim=(1,2), keepdim=True)
-        target_filtered_ln = (target_filtered_abs * u + 1).log() / np.log(u + 1)
+        target_filtered_ln = (target_filtered_abs * u).log1p()# / np.log(u + 1)
 
         """
         sample_filtered_ln.cpu().numpy().tofile("./debug/debug_multiscale_spectral_loss_filtered_sample_absln.raw")
@@ -1012,8 +1060,10 @@ class DualMultiscaleSpectralLoss:
         sample_filtered.cpu().numpy().tofile("./debug/debug_multiscale_spectral_loss_filtered_sample.raw")
         sample_filtered.sum(dim=1).cpu().numpy().tofile("./debug/debug_multiscale_spectral_loss_filtered_reconstruction.raw")
         """
-
-        return torch.nn.functional.mse_loss(sample_filtered_ln, target_filtered_ln, reduction="mean") * num_filters
+        loss  = torch.nn.functional.l1_loss(sample_filtered_ln,  target_filtered_ln,  reduction="none")
+        loss += torch.nn.functional.l1_loss(sample_filtered_abs, target_filtered_abs, reduction="none")
+        loss = (loss.mean(dim=(0, 2), keepdim=False) * self.filter_weights).mean() * 25
+        return loss
     
 class DualDiffusionPipeline(DiffusionPipeline):
 
@@ -1050,7 +1100,8 @@ class DualDiffusionPipeline(DiffusionPipeline):
         self.format = DualDiffusionPipeline.get_sample_format(model_params)
 
         if "multiscale_spectral_loss" in model_params:
-            self.multiscale_spectral_loss = DualMultiscaleSpectralLoss(model_params, self.format)
+            #self.multiscale_spectral_loss = DualMultiscaleSpectralLoss(model_params, self.format)
+            self.multiscale_spectral_loss = DualMultiscaleSpectralLoss2(model_params)
 
     @staticmethod
     @torch.no_grad()
