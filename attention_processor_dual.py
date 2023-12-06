@@ -270,7 +270,10 @@ class SeparableAttnProcessor2_0:
         if attn.group_norm_v is not None:
             v_hidden_states = attn.group_norm_v(hidden_states)
             qk_hidden_states = attn.group_norm_qk(hidden_states)
-
+        else:
+            v_hidden_states = hidden_states
+            qk_hidden_states = hidden_states
+            
         v_hidden_states = attn.shape_for_attention(v_hidden_states, attn.separate_attn_dim)
         qk_hidden_states = attn.shape_for_attention(qk_hidden_states, attn.separate_attn_dim)
     

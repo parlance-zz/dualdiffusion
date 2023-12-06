@@ -105,7 +105,7 @@ VAE_PARAMS = {
   "layers_per_mid_block": 1,
   "add_mid_attention": True,
 
-  "norm_num_groups": 32,
+  "norm_num_groups": 0,#32,
 
   "downsample_type": "conv",
   "upsample_type": "conv",

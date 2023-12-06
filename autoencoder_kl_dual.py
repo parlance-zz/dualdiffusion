@@ -127,7 +127,10 @@ class EncoderDual(nn.Module):
         )
 
         # out
-        self.conv_norm_out = nn.GroupNorm(num_channels=block_out_channels[-1], num_groups=norm_num_groups[-1], eps=norm_eps)
+        if norm_num_groups[-1] != 0:
+            self.conv_norm_out = nn.GroupNorm(num_channels=block_out_channels[-1], num_groups=norm_num_groups[-1], eps=norm_eps)
+        else:
+            self.conv_norm_out = nn.Identity()
         self.conv_act = get_activation(act_fn)
 
         conv_out_channels = 2 * out_channels if double_z else out_channels
@@ -285,7 +288,10 @@ class DecoderDual(nn.Module):
             prev_output_channel = output_channel
 
         # out
-        self.conv_norm_out = nn.GroupNorm(num_channels=block_out_channels[0], num_groups=norm_num_groups[-1], eps=norm_eps)
+        if norm_num_groups[-1] != 0:
+            self.conv_norm_out = nn.GroupNorm(num_channels=block_out_channels[0], num_groups=norm_num_groups[-1], eps=norm_eps)
+        else:
+            self.conv_norm_out = nn.Identity()
         self.conv_act = get_activation(act_fn)
         self.conv_out = nn.Conv2d(block_out_channels[0], out_channels, 3, padding=1)
 
