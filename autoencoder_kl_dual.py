@@ -523,8 +523,6 @@ class AutoencoderKLDual(ModelMixin, ConfigMixin):
             h = self.encoder(x)
 
         moments = self.quant_conv(h)
-        # remove global mean from mean channels
-        #moments[:, ::2, :, :] = moments[:, ::2, :, :] - moments[:, ::2, :, :].mean(dim=(2, 3), keepdim=True) # ?
         posterior = DiagonalGaussianDistribution(moments)
 
         if not return_dict:

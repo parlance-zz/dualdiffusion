@@ -7,7 +7,7 @@ from dual_diffusion_pipeline import DualDiffusionPipeline
 load_dotenv()
 torch.manual_seed(200)
 
-MODEL_NAME = "dualdiffusion2d_330_mclt_v8_256embed_8vae_mssloss2"
+MODEL_NAME = "dualdiffusion2d_330_mclt_v8_256embed_8vae_mssloss3"
 MODEL_PARAMS = {
     #"prediction_type": "sample",
     "prediction_type": "v_prediction",
@@ -21,8 +21,6 @@ MODEL_PARAMS = {
     "rescale_betas_zero_snr": False,
     "sample_raw_channels": int(os.environ.get("DATASET_NUM_CHANNELS")),
     "sample_rate": int(os.environ.get("DATASET_SAMPLE_RATE")),
-    "freq_embedding_dim": 0,
-    "time_embedding_dim": 0,
 
     #"sample_format": "time_overlapped",
     #"sample_raw_length": 65536*2,
@@ -52,7 +50,15 @@ MODEL_PARAMS = {
             512,
             1024,
             2048,
-        ]
+            4096,
+            8192,
+            16384,
+        ],
+        "block_offsets": [
+            0,
+            0.16666666666666666666666,
+            0.33333333333333333333333,
+        ],
     }
     
     #"sample_format": "mdct",
@@ -188,17 +194,14 @@ UNET_PARAMS = {
     ),
 }
 
-
 #UPSCALER_PARAMS = {
 #}
 UPSCALER_PARAMS = None
 
-
-
 if __name__ == "__main__":
 
     if VAE_PARAMS is not None:
-        UNET_PARAMS["in_channels"]  = VAE_PARAMS["latent_channels"] + MODEL_PARAMS["freq_embedding_dim"] + MODEL_PARAMS["time_embedding_dim"]
+        UNET_PARAMS["in_channels"]  = VAE_PARAMS["latent_channels"]
         UNET_PARAMS["out_channels"] = VAE_PARAMS["latent_channels"]
     else:
         UNET_PARAMS["in_channels"]  = DualDiffusionPipeline.get_sample_format(MODEL_PARAMS).get_num_channels(MODEL_PARAMS)[0]

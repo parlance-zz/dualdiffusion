@@ -7,7 +7,7 @@ import torch
 import torchaudio
 import json
 
-from dual_diffusion_pipeline import DualDiffusionPipeline, DualLogFormat, DualNormalFormat, DualOverlappedFormat, DualMDCTFormat, DualMCLTFormat, DualMultiscaleSpectralLoss
+from dual_diffusion_pipeline import DualDiffusionPipeline, DualNormalFormat, DualOverlappedFormat, DualMDCTFormat, DualMCLTFormat, DualMultiscaleSpectralLoss2
 from attention_processor_dual import SeparableAttnProcessor2_0
 from autoencoder_kl_dual import AutoencoderKLDual
 
@@ -17,25 +17,28 @@ def multiscale_spectral_loss_test():
     model_params = {
         "sample_raw_length": 65536*2,
         "num_chunks": 256,
-        "sample_format": "mdct",
+        "sample_format": "mclt",
         "complex": True,
-        "freq_embedding_dim": 0,
-        "time_embedding_dim": 0,
         "multiscale_spectral_loss": {
-            #"num_filters": 120,
-            #"filter_std": 500,
-            #"num_filters": 60,
-            #"filter_std": 125,
-            #"num_filters": 30,
-            #"filter_std": 31.25,
-            #"num_filters": 15,
-            #"filter_std": 7.8125,
-            "num_filters": 8,
-            "filter_std": 2,
-            "num_orders": 5,
-            "num_octaves": 10,
-            "max_q": 1,
             "u": 20000,
+            "block_widths": [
+                16,
+                32,
+                64,
+                128,
+                256,
+                512,
+                1024,
+                2048,
+                4096,
+                8192,
+            ],
+            "block_offsets": [
+                0,
+                0.125,
+                0.25,
+                0.375,
+            ],
         }
     }
 
@@ -51,11 +54,12 @@ def multiscale_spectral_loss_test():
     raw_sample.cpu().numpy().tofile("./debug/debug_raw_original.raw")
 
     sample, _ = format.raw_to_sample(raw_sample, model_params, random_phase_offset=False)
-    recon = format.sample_to_raw(sample, model_params).real
+    #recon = format.sample_to_raw(sample, model_params).real
+    recon = DualMDCTFormat.sample_to_raw(sample, model_params).real
 
     recon.cpu().numpy().tofile("./debug/debug_reconstruction.raw")
 
-    loss_fn = DualMultiscaleSpectralLoss(model_params, format)
+    loss_fn = DualMultiscaleSpectralLoss2(model_params)
     loss = loss_fn(recon, raw_sample)
     
     print(loss)
@@ -140,23 +144,10 @@ def reconstruction_test(sample_num=1):
 
     """
     model_params = {
-        "sample_raw_length": 65536*2,
-        "num_chunks": 256,
-        "sample_format": "time_overlapped",
-        "freq_embedding_dim": 0,
-        "time_embedding_dim": 0,
-        "spatial_window_length": 0,
-        "rfft": True,
-    }
-    """
-    """
-    model_params = {
         #"sample_raw_length": 65536*4,
         "sample_raw_length": 65536*2,
         "num_chunks": 256,
         "sample_format": "normal",
-        "freq_embedding_dim": 0,
-        "time_embedding_dim": 0,
         "spatial_window_length": 512,
         "ifft": True,
         #"rfft": True,
@@ -168,8 +159,6 @@ def reconstruction_test(sample_num=1):
         "sample_raw_length": 65536*2,
         "num_chunks": 128,
         "sample_format": "overlapped",
-        "freq_embedding_dim": 0,
-        "time_embedding_dim": 0,
         "spatial_window_length": 512,
         "ifft": True,
         "rfft": True,
@@ -179,11 +168,9 @@ def reconstruction_test(sample_num=1):
     model_params = {
         "sample_raw_length": 65536*2,
         "num_chunks": 256,
-        "sample_format": "mcltbce",
+        "sample_format": "mclt",
         #"complex": True,
         #"u": 255,
-        "freq_embedding_dim": 0,
-        "time_embedding_dim": 0,
     }
 
     format = DualDiffusionPipeline.get_sample_format(model_params)
@@ -215,16 +202,6 @@ def reconstruction_test(sample_num=1):
     raw_sample /= raw_sample.abs().max()
     raw_sample.cpu().numpy().tofile("./debug/debug_reconstruction.raw")
     
-    if model_params["freq_embedding_dim"] > 0 or model_params["time_embedding_dim"] > 0:
-        freq_sample = DualDiffusionPipeline.add_embeddings(freq_sample,
-                                                        model_params["freq_embedding_dim"],
-                                                        model_params["time_embedding_dim"],
-                                                        model_params["sample_format"])
-        print("Sample shape (with freq embedding):", freq_sample.shape)
-        print("Sample mean (with freq embedding):", freq_sample.mean().item())
-        print("Sample std (with freq embedding):", freq_sample.std().item())
-        freq_sample.cpu().numpy().tofile("./debug/debug_sample_with_freq_embedding.raw")
-    
     exit()
 
 def get_embedding_response(query_embed, key_embed, exp_scale):
@@ -251,27 +228,19 @@ def embedding_test():
     freq_embed = embeddings[0, :freq_embedding_dim,  :, 0]
     time_embed = embeddings[0,  freq_embedding_dim:, 0, :]
     
-    #sample = torch.zeros(sample_shape)
-    #sample = DualDiffusionPipeline.add_embeddings(sample, freq_embedding_dim, time_embedding_dim)
-    #freq_embed = sample[0, base_n_channels:base_n_channels+freq_embedding_dim,  :, 0]
-    #time_embed = sample[0, base_n_channels+freq_embedding_dim:, 0, :]
-
     print("freq_embed_std: ", freq_embed.std().item(), "freq_embed_mean: ", freq_embed.mean().item())
     print("time_embed_std: ", time_embed.std().item(), "time_embed_mean: ", time_embed.mean().item())
-    #print("combined_std: ", embeddings.std().item(), "combined_mean: ", embeddings.mean().item())
     print("")
 
     def g(dim, x, std):
         x = torch.linspace(-1, 1, dim) - x
         w = torch.exp(-0.5*(x/std)**2)
         return w / w.square().sum() ** 0.5
-        #return w/w.max()
     
     def lg(dim, x, std):
         x = torch.linspace(0, 1, dim) / x
         w = torch.exp(-0.5*(torch.log2(x)/std)**2)
         return w / w.square().sum() ** 0.5
-        #return w/w.max()
     
     #freq_test_weight = lg(sample_resolution_freq, 0.4, 0.05)
     #freq_test_weight += lg(sample_resolution_freq, 0.2, 0.05)
@@ -323,7 +292,7 @@ def vae_test():
 
     #dualdiffusion2d_330_mdct_v8_256embed_4vae
     model_name = "dualdiffusion2d_330_mclt_v8_256embed_8vae_mssloss2"
-    num_samples = 1
+    num_samples = 6
     #device = "cuda"
     device = "cpu"
     fp16 = False
@@ -343,8 +312,8 @@ def vae_test():
     print("Sample shape: ", format.get_sample_shape(model_params))
 
     dataset_path = os.environ.get("DATASET_PATH", "./dataset/samples")
-    test_samples = sorted(os.listdir(dataset_path), key=lambda x: int(x.split(".")[0]))[:num_samples]
-    #test_samples = np.random.choice(os.listdir(dataset_path), num_samples, replace=False)
+    #test_samples = sorted(os.listdir(dataset_path), key=lambda x: int(x.split(".")[0]))[:num_samples]
+    test_samples = np.random.choice(os.listdir(dataset_path), num_samples, replace=False)
     
     vae_path = os.path.join(model_path, "vae")
     #vae_path = "D:/dualdiffusion/models/dualdiffusion2d_330_overlapped_v8_256embed_16vae/old checkpoints/vae_checkpoint-49400/vae"
@@ -444,51 +413,3 @@ if __name__ == "__main__":
         print(f"Saved flac output to {output_flac_file_path}")
 
         seed += 1
-
-
-"""
-def img_test():
-    model_params = {
-        "sample_raw_length": 65536*2,
-        "num_chunks": 128,
-    }
-    sample = np.fromfile("./dataset/samples/66.raw", dtype=np.int16, count=model_params["sample_raw_length"]) / 32768.
-    sample = torch.from_numpy(sample).unsqueeze(0).to("cuda")
-    sample, window = DualDiffusionPipeline.raw_to_sample(sample, model_params)
-    DualDiffusionPipeline.save_sample_img(sample, "test.png")
-    exit()
-
-def embedding_test():
-    num_positions = 256
-    embedding_dim = 32
-
-    positions = ((torch.arange(0, num_positions, 1, dtype=torch.float32) + 0.5) / num_positions).log()
-    positions = positions / positions[0] * num_positions / 4
-
-    pe = DualDiffusionPipeline.get_positional_embedding(positions, embedding_dim)
-    output = torch.zeros((num_positions, num_positions), dtype=torch.float32)
-
-    for x in range(num_positions):
-        a = pe[:, x]
-        for y in range(num_positions):
-            output[x, y] = ( pe[:, y] * a).sum()
-
-    output.cpu().numpy().tofile("./output/debug_embeddings.raw")
-    exit()
-
-def attention_shaping_test():
-    from unet2d_dual_blocks import shape_for_attention, unshape_for_attention
-
-    hidden_states_original = torch.randn((4, 32, 256, 256), dtype=torch.float32).to("cuda")
-
-    for attn_dim in range(2, 3+1):
-        hidden_states = hidden_states_original.clone()
-        original_shape = hidden_states.shape
-
-        hidden_states = shape_for_attention(hidden_states, attn_dim)
-        hidden_states = unshape_for_attention(hidden_states, attn_dim, original_shape)
-
-        assert(torch.equal(hidden_states_original, hidden_states))
-    
-    exit()
-"""

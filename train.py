@@ -563,8 +563,6 @@ def main():
     noise_scheduler = pipeline.scheduler
     model_params = pipeline.config["model_params"]
     sample_crop_width = pipeline.format.get_sample_crop_width(model_params)
-    freq_embedding_dim = model_params["freq_embedding_dim"]
-    time_embedding_dim = model_params["time_embedding_dim"]
     
     if args.module == "unet":
         module_class = UNet2DDualModel
@@ -974,23 +972,21 @@ def main():
                     if not debug_written:
                         logger.info(f"Samples mean: {samples.mean(dim=(1,2,3))} - Samples std: {samples.std(dim=(1,2,3))}")
                         logger.info(f"Samples shape: {samples.shape}")
+
                         debug_path = os.environ.get("DEBUG_PATH", None)
                         if debug_path is not None:
                             os.makedirs(debug_path, exist_ok=True)
+
                             samples.detach().cpu().numpy().tofile(os.path.join(debug_path, "debug_train_samples.raw"))
                             raw_samples.detach().cpu().numpy().tofile(os.path.join(debug_path, "debug_train_raw_samples.raw"))
+
                             if vae is None:
                                 pipeline.format.sample_to_raw(samples.detach(), model_params).real.cpu().numpy().tofile(os.path.join(debug_path, "debug_train_reconstructed_raw_samples.raw"))
                             else:       
                                 vae.decode(samples.detach() / vae.config.scaling_factor).sample.cpu().numpy().tofile(os.path.join(debug_path, "debug_train_reconstructed_raw_samples.raw"))
+                        
+                        debug_written = True
 
-                            samples_with_embedding = DualDiffusionPipeline.add_embeddings(samples,
-                                                                                          freq_embedding_dim,
-                                                                                          time_embedding_dim,
-                                                                                          format_hint=model_params["sample_format"])
-                            samples_with_embedding.detach().cpu().numpy().tofile(os.path.join(debug_path, "debug_train_samples_with_embedding.raw"))
-                            del samples_with_embedding
-                            
                     # Sample a random timestep for each image
                     timesteps = torch.randint(0, noise_scheduler.config.num_train_timesteps, (samples.shape[0],), device=samples.device).long()
 
@@ -1000,21 +996,7 @@ def main():
                         model_input = noise_scheduler.add_noise(samples, new_noise, timesteps)
                     else:
                         model_input = noise_scheduler.add_noise(samples, noise, timesteps)
-                    if freq_embedding_dim > 0:
-                        pitch_augmentation = np.exp2((np.random.rand()*2-1) * args.pitch_augmentation_range)
-                        tempo_augmentation = np.exp2((np.random.rand()*2-1) * args.tempo_augmentation_range)
-
-                        model_input = DualDiffusionPipeline.add_embeddings(model_input,
-                                                                           freq_embedding_dim,
-                                                                           time_embedding_dim,
-                                                                           format_hint=model_params["sample_format"],
-                                                                           pitch_augmentation=pitch_augmentation,
-                                                                           tempo_augmentation=tempo_augmentation)
-                        if (not debug_written) and (debug_path is not None):
-                            model_input.detach().cpu().numpy().tofile(os.path.join(debug_path, "debug_train_model_input.raw"))
-                        
-                    debug_written = True
-                        
+                            
                     model_input = noise_scheduler.scale_model_input(model_input, timesteps)
                     
                     if noise_scheduler.config.prediction_type == "epsilon":
@@ -1033,10 +1015,7 @@ def main():
                     model_output = module(model_input, timesteps).sample
 
                     if args.snr_gamma is None:
-                        if vae is None:
-                            loss = pipeline.format.get_loss(model_output, target, model_params, reduction="mean")
-                        else:
-                            loss = F.mse_loss(model_output.float(), target.float(), reduction="mean")
+                        loss = F.mse_loss(model_output.float(), target.float(), reduction="mean")
                     else:
                         # Compute loss-weights as per Section 3.4 of https://arxiv.org/abs/2303.09556.
                         # Since we predict the noise instead of x_0, the original formulation is slightly changed.
@@ -1056,10 +1035,7 @@ def main():
                         # We first calculate the original loss. Then we mean over the non-batch dimensions and
                         # rebalance the sample-wise losses with their respective loss weights.
                         # Finally, we take the mean of the rebalanced loss.
-                        if vae is None:
-                            loss = pipeline.format.get_loss(model_output, target, model_params, reduction="none")
-                        else:
-                            loss = F.mse_loss(model_output.float(), target.float(), reduction="none")
+                        loss = F.mse_loss(model_output.float(), target.float(), reduction="none")
                         loss = loss.mean(dim=list(range(1, len(loss.shape)))) * mse_loss_weights
                         loss = loss.mean()
 
@@ -1084,7 +1060,7 @@ def main():
 
                     vae_recon_loss_weight = 1  
                     vae_percept_loss_weight = 0
-                    vae_kl_loss_weight = 1e-5
+                    vae_kl_loss_weight = 1e-8
 
                     loss = vae_recon_loss + vae_kl_loss_weight * vae_kl_loss
                     #loss = vae_recon_loss_weight * vae_recon_loss + vae_percept_loss_weight * vae_percept_loss + vae_kl_loss_weight * vae_kl_loss

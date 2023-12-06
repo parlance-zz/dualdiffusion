@@ -37,7 +37,7 @@ def compute_snr(noise_scheduler, timesteps):
     snr = (alpha / sigma) ** 2
     return snr
 
-# fast overlapped modified discrete cosine transform type iv - becomes mclt when complex is True
+# fast overlapped modified discrete cosine transform type iv - becomes mclt with complex output
 def mdct(x, block_width):
 
     padding_left = padding_right = block_width // 2
@@ -79,7 +79,6 @@ def imdct(x):
 
     return raw_sample[..., N:-N] * (2 ** 0.5)
 
-
 def to_ulaw(x, u=255):
 
     complex = False
@@ -119,9 +118,8 @@ class DualMCLTFormat:
     
     @staticmethod
     def get_num_channels(model_params):
-        freq_embedding_dim = model_params["freq_embedding_dim"]
         channels = model_params["sample_raw_channels"] * 2
-        return (channels + freq_embedding_dim, channels + 2)
+        return (channels, channels + 2)
 
     @staticmethod
     @torch.no_grad()
@@ -144,14 +142,9 @@ class DualMCLTFormat:
     @staticmethod
     def sample_to_raw(samples, model_params):
         
-        u = model_params.get("u", None)
-        samples_abs = torch.nn.functional.sigmoid(samples[:, 0, :, :].permute(0, 2, 1).contiguous())
-        samples_noise_abs = torch.nn.functional.sigmoid(samples[:, 3, :, :].permute(0, 2, 1).contiguous())
-        if u is not None:
-            samples_abs = from_ulaw(samples_abs, u=u)
-            samples_noise_abs = from_ulaw(samples_noise_abs, u=u)
+        samples_abs = samples[:, 0, :, :].permute(0, 2, 1).contiguous().sigmoid()
+        samples_noise_abs = samples[:, 3, :, :].permute(0, 2, 1).contiguous().sigmoid()
 
-        #samples_phase = torch.nn.functional.tanh(samples[:, 1:3, :, :].permute(0, 3, 2, 1).contiguous())
         samples_phase = samples[:, 1:3, :, :].permute(0, 3, 2, 1).contiguous()
         samples_phase = torch.view_as_complex(samples_phase)
 
@@ -161,14 +154,10 @@ class DualMCLTFormat:
         return imdct(samples).real
 
     @staticmethod
-    def get_loss(sample, target, model_params, reduction="mean"):
-        return torch.nn.functional.mse_loss(sample.float(), target.float(), reduction=reduction)
-    
-    @staticmethod
     def get_sample_shape(model_params, bsz=1, length=1):
-        _, num_output_channels = DualTimeOverlappedFormat.get_num_channels(model_params)
+        _, num_output_channels = DualMCLTFormat.get_num_channels(model_params)
 
-        crop_width = DualTimeOverlappedFormat.get_sample_crop_width(model_params)
+        crop_width = DualMCLTFormat.get_sample_crop_width(model_params)
         num_chunks = model_params["num_chunks"]
         chunk_len = crop_width // num_chunks - 2
 
@@ -183,9 +172,8 @@ class DualMDCTFormat:
     
     @staticmethod
     def get_num_channels(model_params):
-        freq_embedding_dim = model_params["freq_embedding_dim"]
         channels = model_params["sample_raw_channels"] * (1 + int(model_params.get("complex", False)))
-        return (channels + freq_embedding_dim, channels)
+        return (channels, channels)
 
     @staticmethod
     @torch.no_grad()
@@ -238,307 +226,14 @@ class DualMDCTFormat:
         return imdct(samples).real
 
     @staticmethod
-    def get_loss(sample, target, model_params, reduction="mean"):
-        return torch.nn.functional.mse_loss(sample.float(), target.float(), reduction=reduction)
-    
-    @staticmethod
     def get_sample_shape(model_params, bsz=1, length=1):
-        _, num_output_channels = DualTimeOverlappedFormat.get_num_channels(model_params)
+        _, num_output_channels = DualMDCTFormat.get_num_channels(model_params)
 
-        crop_width = DualTimeOverlappedFormat.get_sample_crop_width(model_params)
+        crop_width = DualMDCTFormat.get_sample_crop_width(model_params)
         num_chunks = model_params["num_chunks"]
         chunk_len = crop_width // num_chunks - 1
 
         return (bsz, num_output_channels, num_chunks, chunk_len*length,)
-
-class DualTimeOverlappedFormat:
-
-    @staticmethod
-    def get_sample_crop_width(model_params):
-        rfft = model_params.get("rfft", False)
-        if rfft:
-            return model_params["sample_raw_length"] 
-        else:
-            return model_params["sample_raw_length"] + model_params["num_chunks"]
-    
-    @staticmethod
-    def get_num_channels(model_params):
-        freq_embedding_dim = model_params["freq_embedding_dim"]
-        channels = model_params["sample_raw_channels"] * 2
-        return (channels + freq_embedding_dim, channels)
-    
-    @staticmethod
-    @torch.no_grad()
-    def get_window(window_len, device):
-        #x = torch.arange(0, window_len, device=device) / (window_len-1)
-        x = (torch.arange(0, window_len, device=device)+0.5) / (window_len - 1)
-        return (1 + torch.cos(x * 2.*torch.pi - torch.pi)) * 0.5
-
-    @staticmethod
-    @torch.no_grad()
-    def raw_to_sample(raw_samples, model_params, window=None, random_phase_offset=False):
-        
-        rfft = model_params.get("rfft", False)
-
-        num_chunks = model_params["num_chunks"]
-        window_len = num_chunks * 2 - int(rfft)
-        chunk_len = raw_samples.shape[1] // window_len * 2
-        bsz = raw_samples.shape[0]
-        
-        if window is None:
-            window = DualTimeOverlappedFormat.get_window(window_len, device=raw_samples.device)
-
-        slices_1 = raw_samples[:, :num_chunks*window_len ].view(bsz, num_chunks, window_len)# * window
-        slices_2 = raw_samples[:, -num_chunks*window_len:].view(bsz, num_chunks, window_len)# * window
-        if rfft:
-            slices_1_fft = torch.fft.rfft(slices_1, norm="ortho")
-            slices_2_fft = torch.fft.rfft(slices_2, norm="ortho")
-        else:
-            slices_1_fft = torch.fft.fft(slices_1, norm="ortho")[:, :, :num_chunks] 
-            slices_2_fft = torch.fft.fft(slices_2, norm="ortho")[:, :, :num_chunks]
-            #samples[:, :, 0] /= 2
-
-        samples = torch.cat((slices_1_fft, slices_2_fft), dim=2).view(bsz, chunk_len, num_chunks)
-        samples = samples.permute(0, 2, 1).contiguous()
-
-        if random_phase_offset:
-            samples *= torch.exp(2j*torch.pi*torch.rand(1, device=samples.device))
-        samples = torch.view_as_real(samples).permute(0, 3, 1, 2).contiguous()
-        
-        if "sample_std" in model_params:
-            samples /= model_params["sample_std"]
-        else:
-            samples /= samples.std(dim=(1, 2, 3), keepdim=True).clip(min=1e-8)
-
-        return samples, window
-
-    @staticmethod
-    @torch.no_grad()
-    def sample_to_raw(samples, model_params):
-        
-        rfft = model_params.get("rfft", False)
-        
-        num_chunks = samples.shape[2]
-        chunk_len = samples.shape[3]
-        raw_sample_len = (chunk_len + 1 - int(rfft)) * num_chunks
-        bsz = samples.shape[0]
-
-        window_len = num_chunks * 2 - int(rfft)
-        window = DualTimeOverlappedFormat.get_window(window_len, device=samples.device)
-
-        sample_std = model_params.get("sample_std", 1.)
-        samples = samples.clone().permute(0, 3, 2, 1).contiguous() * sample_std
-        samples = torch.view_as_complex(samples)
-        
-        #if rfft:
-        #    samples = torch.fft.irfft(samples, norm="ortho") * 2
-        #else:
-        #    samples = torch.cat((samples, torch.zeros_like(samples)), dim=2)
-        #    samples = torch.fft.ifft(samples, norm="ortho") * 2
-        if rfft:
-            samples = torch.fft.irfft(samples, window_len, norm="ortho") * window
-        else:
-            samples = torch.cat((samples, torch.zeros_like(samples)), dim=2)
-            samples = torch.fft.ifft(samples, norm="ortho") * window * 2
-
-        slices_1 = samples[:, 0::2, :]
-        slices_2 = samples[:, 1::2, :]
-        raw_samples = torch.zeros((bsz, raw_sample_len), dtype=samples.dtype, device=samples.device)
-        #weight = torch.zeros((bsz, raw_sample_len), dtype=samples.dtype, device=samples.device)
-        #weight[:, :num_chunks*window_len ]  = window.repeat(num_chunks).unsqueeze(0)
-        #weight[:, -num_chunks*window_len:] += window.repeat(num_chunks).unsqueeze(0)
-
-        raw_samples[:, :num_chunks*window_len ]  = slices_1.reshape(bsz, -1) #/ weight[:, :num_chunks*window_len ]
-        raw_samples[:, -num_chunks*window_len:] += slices_2.reshape(bsz, -1) #/ weight[:, -num_chunks*window_len:]
-        
-        return raw_samples
-
-    @staticmethod
-    def get_loss(sample, target, model_params, reduction="mean"):
-        return torch.nn.functional.mse_loss(sample.float(), target.float(), reduction=reduction)
-    
-    @staticmethod
-    def get_sample_shape(model_params, bsz=1, length=1):
-        _, num_output_channels = DualTimeOverlappedFormat.get_num_channels(model_params)
-
-        crop_width = DualTimeOverlappedFormat.get_sample_crop_width(model_params)
-        num_chunks = model_params["num_chunks"]
-        window_len = num_chunks * 2 - int(model_params.get("rfft", False))
-        chunk_len = crop_width // window_len * 2
-
-        return (bsz, num_output_channels, num_chunks, chunk_len*length,)
-   
-class DualEmbeddingFormat:
-
-    @staticmethod
-    def get_sample_crop_width(model_params):
-        return model_params["sample_raw_length"]
-    
-    @staticmethod
-    def get_num_channels(model_params):
-        freq_embedding_dim = model_params["freq_embedding_dim"]
-        time_embedding_dim = model_params["time_embedding_dim"]
-        channels = model_params["sample_raw_channels"] * 2
-        return (channels + freq_embedding_dim + time_embedding_dim, channels)
-
-    @staticmethod
-    @torch.no_grad()
-    def get_window(window_len, device):
-        x = torch.arange(0, window_len, device=device) / (window_len - 1)
-        return (1 + torch.cos(x * 2.*torch.pi - torch.pi)) * 0.5
-
-    """
-    # v8
-    @staticmethod
-    @torch.no_grad()
-    def add_embeddings(hidden_states, freq_embedding_dim, time_embedding_dim, format_hint="", pitch_augmentation=1., tempo_augmentation=1.):
-
-        if freq_embedding_dim % 2 != 0 or time_embedding_dim % 2 != 0:
-            raise ValueError(f"freq_embedding_dim and time_embedding_dim must be divisible by 2. got freq_embedding_dim: {freq_embedding_dim} time_embedding_dim: {time_embedding_dim}")
-
-        if freq_embedding_dim > 0:
-            with torch.no_grad():
-                num_freq_orders = freq_embedding_dim // 2
-                ln_x = torch.arange(0, hidden_states.shape[2]*num_freq_orders, device=hidden_states.device).log2()
-                ln_x *= torch.pi / ln_x[-1]; ln_x[0] = -torch.pi/2
-                ln_x = ln_x.view(hidden_states.shape[2], num_freq_orders).permute(1, 0).contiguous()
-                ln_x *= torch.arange(0, num_freq_orders, device=ln_x.device).view(-1, 1) + 0.5
-                freq_embeddings = torch.view_as_real(torch.exp(1j * ln_x)).permute(0, 2, 1).reshape(1, freq_embedding_dim, hidden_states.shape[2], 1)
-                freq_embeddings = (freq_embeddings * 1.4142135623730950488016887242097).repeat(hidden_states.shape[0], 1, 1, hidden_states.shape[3])
-            hidden_states = torch.cat((hidden_states, freq_embeddings.type(hidden_states.dtype)), dim=1)
-
-        if time_embedding_dim > 0:
-            with torch.no_grad():
-                num_time_orders = time_embedding_dim // 2
-                k = torch.arange(0, num_time_orders, device=hidden_states.device) + 0.5
-                x = torch.arange(0, num_time_orders*hidden_states.shape[3], device=hidden_states.device)
-                x = x.view(hidden_states.shape[3], num_time_orders).permute(1, 0).contiguous() 
-                time_embeddings = k.view(-1, 1) * x / (hidden_states.shape[3]*num_time_orders) * torch.pi
-                time_embeddings = torch.view_as_real(torch.exp(1j * time_embeddings)).permute(0, 2, 1).reshape(1, time_embedding_dim, 1, hidden_states.shape[3])
-                time_embeddings = (time_embeddings * 1.4142135623730950488016887242097).repeat(hidden_states.shape[0], 1, hidden_states.shape[2], 1)
-                
-            hidden_states = torch.cat((hidden_states, time_embeddings.type(hidden_states.dtype)), dim=1)
-
-        return hidden_states
-    """
-
-    # v9
-    @staticmethod
-    @torch.no_grad()
-    def add_embeddings(hidden_states, freq_embedding_dim, time_embedding_dim, format_hint="", pitch_augmentation=1., tempo_augmentation=1.):
-
-        if freq_embedding_dim % 2 != 0 or time_embedding_dim % 2 != 0:
-            raise ValueError(f"freq_embedding_dim and time_embedding_dim must be divisible by 2. got freq_embedding_dim: {freq_embedding_dim} time_embedding_dim: {time_embedding_dim}")
-
-        if freq_embedding_dim > 0:
-            with torch.no_grad():
-                num_freq_orders = freq_embedding_dim // 2
-                ln_x = torch.arange(0, hidden_states.shape[2], device=hidden_states.device).log2()
-                ln_x *= torch.pi / ln_x[-1]; ln_x[0] = -torch.pi/2
-                ln_x = (torch.arange(0, num_freq_orders, device=ln_x.device).view(-1, 1) + 0.5) * ln_x.view(1, -1)
-                freq_embeddings = torch.view_as_real(torch.exp(1j * ln_x)).permute(0, 2, 1).reshape(1, freq_embedding_dim, hidden_states.shape[2], 1)
-                freq_embeddings = freq_embeddings.repeat(hidden_states.shape[0], 1, 1, hidden_states.shape[3])
-            hidden_states = torch.cat((hidden_states, freq_embeddings.type(hidden_states.dtype)), dim=1)
-
-        if time_embedding_dim > 0:
-            with torch.no_grad():
-                num_time_orders = time_embedding_dim // 2
-                k = torch.arange(0, num_time_orders, device=hidden_states.device) + 0.5
-                x = torch.arange(0, hidden_states.shape[3], device=hidden_states.device) 
-                time_embeddings = k.view(-1, 1) * x.view(1, -1) / hidden_states.shape[3] * torch.pi
-                time_embeddings = torch.view_as_real(torch.exp(1j * time_embeddings)).permute(0, 2, 1).reshape(1, time_embedding_dim, 1, hidden_states.shape[3])
-                time_embeddings = time_embeddings.repeat(hidden_states.shape[0], 1, hidden_states.shape[2], 1)
-                
-            hidden_states = torch.cat((hidden_states, time_embeddings.type(hidden_states.dtype)), dim=1)
-
-        return hidden_states
-    
-    @staticmethod
-    @torch.no_grad()
-    def raw_to_sample(raw_samples, model_params, window=None, random_phase_offset=False):
-
-        num_chunks = model_params["num_chunks"]
-        sample_len = model_params["sample_raw_length"]
-        half_sample_len = sample_len // 2
-        chunk_len = half_sample_len // num_chunks
-        bsz = raw_samples.shape[0]
-        half_window_len = model_params["spatial_window_length"] // 2
-        raw_samples = raw_samples.clone()
-
-        if half_window_len > 0:
-            if window is None:
-                window = DualEmbeddingFormat.get_window(half_window_len*2, device=raw_samples.device).square_() # this might need to go back to just chunk_len
-            raw_samples[:, :half_window_len]  *= window[:half_window_len]
-            raw_samples[:, -half_window_len:] *= window[half_window_len:]
-
-        fft = torch.fft.fft(raw_samples, norm="ortho")[:, :half_sample_len].view(bsz, num_chunks, chunk_len)
-        fft[:, 0, 0] = 0 # remove DC component
-        fft = torch.fft.fft(fft, norm="ortho")
-        if random_phase_offset:
-            fft *= torch.exp(2j*torch.pi*torch.rand(1, device=fft.device))
-        samples = torch.view_as_real(fft).permute(0, 3, 1, 2).contiguous()
-
-        # unit variance
-        if "sample_std" in model_params:
-            samples /= model_params["sample_std"]
-        else:
-            samples /= samples.std(dim=(1, 2, 3), keepdim=True).clip(min=1e-8) 
-        return samples, window
-
-    @staticmethod
-    @torch.no_grad()
-    def sample_to_raw(samples, model_params):
-
-        num_chunks = samples.shape[2]
-        chunk_len = samples.shape[3]
-        sample_len = num_chunks * chunk_len * 2
-        half_sample_len = sample_len // 2
-        bsz = samples.shape[0]
-        samples = samples.clone()
-
-        samples = torch.view_as_complex(samples.permute(0, 2, 3, 1).contiguous())
-        samples = torch.fft.ifft(samples, norm="ortho")
-        #samples[:, :, 0] = 0; samples[:, 1:, 0] -= samples[:, 1:, 0].mean(dim=1, keepdim=True) # remove annoying clicking due to lack of windowing
-        samples = samples.view(bsz, half_sample_len)
-        samples = torch.cat((samples, torch.zeros_like(samples)), dim=1)
-
-        return torch.fft.ifft(samples, norm="ortho") * 2.
-
-    @staticmethod
-    @torch.no_grad()
-    def save_sample_img(sample, img_path, include_phase=False):
-        
-        num_chunks = sample.shape[2]
-        chunk_len = sample.shape[3]
-        bsz = sample.shape[0]
-
-        sample = torch.view_as_complex(sample.clone().detach().permute(0, 2, 3, 1).contiguous().float())
-        sample *= torch.arange(num_chunks//8, num_chunks+num_chunks//8).to(sample.device).view(1, num_chunks, 1)
-        sample = sample.view(bsz * num_chunks, chunk_len)
-        amp = sample.abs(); amp = (amp / torch.max(amp)).cpu().numpy()
-        
-        if include_phase:
-            phase = sample.angle().cpu().numpy()
-            cv2_img = np.zeros((bsz * num_chunks, chunk_len, 3), dtype=np.uint8)
-            cv2_img[:, :, 0] = (np.sin(phase) + 1) * 255/2 * amp
-            cv2_img[:, :, 1] = (np.sin(phase + 2*np.pi/3) + 1) * 255/2 * amp
-            cv2_img[:, :, 2] = (np.sin(phase + 4*np.pi/3) + 1) * 255/2 * amp
-        else:
-            cv2_img = (amp * 255).astype(np.uint8)
-            cv2_img = cv2.applyColorMap(cv2_img, cv2.COLORMAP_JET)
-
-        cv2.imwrite(img_path, cv2.flip(cv2_img, -1))
-
-    @staticmethod
-    def get_loss(sample, target, model_params, reduction="mean"):
-        return torch.nn.functional.mse_loss(sample.float(), target.float(), reduction=reduction)
-    
-    @staticmethod
-    def get_sample_shape(model_params, bsz=1, length=1):
-        _, num_output_channels = DualNormalFormat.get_num_channels(model_params)
-        num_chunks = model_params["num_chunks"]
-        default_length = model_params["sample_raw_length"] // num_chunks // 2
-        return (bsz, num_output_channels, num_chunks, default_length*length,)
 
 class DualOverlappedFormat:
 
@@ -548,9 +243,8 @@ class DualOverlappedFormat:
     
     @staticmethod
     def get_num_channels(model_params):
-        freq_embedding_dim = model_params["freq_embedding_dim"]
         channels = model_params["sample_raw_channels"] * 2
-        return (channels + freq_embedding_dim, channels)
+        return (channels, channels)
     
     @staticmethod
     @torch.no_grad()
@@ -670,146 +364,12 @@ class DualOverlappedFormat:
             return torch.fft.ifft(fft, norm="ortho") * 2.
 
     @staticmethod
-    def get_loss(sample, target, model_params, reduction="mean"):
-        return torch.nn.functional.mse_loss(sample.float(), target.float(), reduction=reduction)
-    
-    @staticmethod
     def get_sample_shape(model_params, bsz=1, length=1):
         _, num_output_channels = DualOverlappedFormat.get_num_channels(model_params)
         num_chunks = model_params["num_chunks"]
         default_length = model_params["sample_raw_length"] // num_chunks // 2
-        return (bsz, num_output_channels, num_chunks*2, default_length*length,)
-    
-class DualLogFormat:
+        return (bsz, num_output_channels, num_chunks*2, default_length*length,)   
 
-    @staticmethod
-    def get_sample_crop_width(model_params):
-        return model_params["sample_raw_length"]
-    
-    @staticmethod
-    def get_num_channels(model_params):
-        freq_embedding_dim = model_params["freq_embedding_dim"]
-        channels = model_params["sample_raw_channels"] * 3
-        return (channels + freq_embedding_dim, channels)
-    
-    @staticmethod
-    @torch.no_grad()
-    def get_window(window_len, device):
-        x = torch.arange(0, window_len, device=device) / (window_len - 1)
-        return (1 + torch.cos(x * 2.*torch.pi - torch.pi)) * 0.5
-
-    """
-    @staticmethod
-    @torch.no_grad()
-    def phase_integral(x):
-        diff = torch.zeros_like(x)
-        diff[:, :, 1:] = x[:, :, 1:] - x[:, :, :-1]
-        diff[:, :, 0] = x[:, :, 0]
-        diff[:, :, 0].cpu().numpy().tofile("./debug/debug_cumdiff.raw")
-        diff[diff[:, :, :] < -torch.pi] += 2.*torch.pi
-        diff[diff[:, :, :] >  torch.pi] -= 2.*torch.pi
-        return torch.cumsum(diff[:, :, :], dim=-1)
-    """
-
-    @staticmethod
-    @torch.no_grad()
-    def raw_to_sample(raw_samples, model_params, window=None):
-        num_chunks = model_params["num_chunks"]
-        sample_len = model_params["sample_raw_length"]
-        half_sample_len = sample_len // 2
-        chunk_len = half_sample_len // num_chunks
-        half_chunk_len = chunk_len // 2
-        bsz = raw_samples.shape[0]
-
-        ln_amplitude_floor = model_params["ln_amplitude_floor"]
-        ln_amplitude_mean = model_params["ln_amplitude_mean"]
-        ln_amplitude_std = model_params["ln_amplitude_std"]
-        phase_integral_std = model_params["phase_integral_std"]
-
-        if window is None:
-            window = DualLogFormat.get_window(chunk_len, device=raw_samples.device)
-
-        raw_samples[:, :half_chunk_len]  *= window[:half_chunk_len]
-        raw_samples[:, -half_chunk_len:] *= window[half_chunk_len:]
-
-        fft = torch.fft.fft(raw_samples, norm="ortho")[:, :half_sample_len + half_chunk_len]
-        fft[:, half_sample_len:] = 0.
-
-        slices_1 = fft[:, :half_sample_len].view(bsz, num_chunks, chunk_len)
-        slices_2 = fft[:,  half_chunk_len:].view(bsz, num_chunks, chunk_len)
-
-        samples = torch.cat((slices_1, slices_2), dim=2).view(bsz, num_chunks*2, chunk_len) * window
-        samples_complex = torch.fft.fft(torch.fft.fftshift(samples, dim=-1), norm="ortho")
-        samples_abs = samples_complex.abs().clip(min=1e-20)
-        #samples_phase = torch.view_as_real(samples_complex / samples_abs)
-        samples_phase = torch.view_as_real(samples_complex)
-        samples_ln_amplitude = samples_abs.log().unsqueeze(-1).clip(min=ln_amplitude_floor)
-        #samples_phase *= samples_ln_amplitude - ln_amplitude_floor
-        samples = torch.cat((samples_ln_amplitude, samples_phase), dim=-1)
-
-        samples[:, :, :, 0] = (samples[:, :, :, 0] - ln_amplitude_mean) / ln_amplitude_std
-        samples[:, :, :, 1:] /= phase_integral_std
-
-        samples = samples.permute(0, 3, 1, 2).contiguous()
-        return samples, window
-
-    @staticmethod
-    @torch.no_grad()
-    def sample_to_raw(samples, model_params):
-        num_chunks = samples.shape[2] // 2
-        chunk_len = samples.shape[3]
-        half_chunk_len = chunk_len // 2
-        sample_len = num_chunks * chunk_len * 2
-        half_sample_len = sample_len // 2
-        bsz = samples.shape[0]
-
-        ln_amplitude_mean = model_params["ln_amplitude_mean"]
-        ln_amplitude_std = model_params["ln_amplitude_std"]
-
-        samples = samples.clone().permute(0, 2, 3, 1).contiguous()
-        samples[:, :, :, 0] = samples[:, :, :, 0] * ln_amplitude_std + ln_amplitude_mean
-        
-        samples[:, :, :, 1:] /= (samples[:, :, :, 1].square() + samples[:, :, :, 2].square()).sqrt().unsqueeze(-1).clip(min=1e-10)
-        samples = samples[:, :, :, 1:] * samples[:, :, :, 0].unsqueeze(-1).exp()
-        
-        samples = torch.fft.fftshift(torch.fft.ifft(torch.view_as_complex(samples), norm="ortho"), dim=-1)
-
-        slices_1 = samples[:, 0::2, :]
-        slices_2 = samples[:, 1::2, :]
-
-        fft = torch.zeros((bsz, sample_len), dtype=torch.complex64, device="cuda")
-        fft[:, :half_sample_len] = slices_1.reshape(bsz, -1)
-        fft[:,  half_chunk_len:half_sample_len+half_chunk_len] += slices_2.reshape(bsz, -1)
-        fft[:, half_sample_len:half_sample_len+half_chunk_len] = 0.
-        
-        return torch.fft.ifft(fft, norm="ortho") * 2.
-
-    @staticmethod
-    def get_loss(sample, target, model_params, reduction="mean"):
-        
-        ln_amplitude_mean = model_params["ln_amplitude_mean"]
-        ln_amplitude_std = model_params["ln_amplitude_std"]
-
-        sample = sample.clone().float()
-        sample[:, 0, :, :] = sample[:, 0, :, :] * ln_amplitude_std + ln_amplitude_mean
-
-        target = target.clone().float()
-        target[:, 0, :, :] = target[:, 0, :, :] * ln_amplitude_std + ln_amplitude_mean
-
-        sample_phase = sample[:, 1:, :, :] / (sample[:, 1, :, :].square() + sample[:, 2, :, :].square()).sqrt().unsqueeze(1).clip(min=1e-10)
-        target_phase = target[:, 1:, :, :] / (target[:, 1, :, :].square() + target[:, 2, :, :].square()).sqrt().unsqueeze(1).clip(min=1e-10)
-        sample = sample_phase * sample[:, 0, :, :].unsqueeze(1).exp() / 0.03526712161930658
-        target = target_phase * target[:, 0, :, :].unsqueeze(1).exp() / 0.03526712161930658
-
-        return torch.nn.functional.mse_loss(sample, target, reduction=reduction)
-    
-    @staticmethod
-    def get_sample_shape(model_params, bsz=1, length=1):
-        _, num_output_channels = DualLogFormat.get_num_channels(model_params)
-        num_chunks = model_params["num_chunks"]
-        default_length = model_params["sample_raw_length"] // num_chunks // 2
-        return (bsz, num_output_channels, num_chunks*2, default_length*length,)
-        
 class DualNormalFormat:
 
     @staticmethod
@@ -822,9 +382,8 @@ class DualNormalFormat:
     
     @staticmethod
     def get_num_channels(model_params):
-        freq_embedding_dim = model_params["freq_embedding_dim"]
         channels = model_params["sample_raw_channels"] * 2
-        return (channels + freq_embedding_dim, channels)
+        return (channels, channels)
 
     @staticmethod
     @torch.no_grad()
@@ -939,10 +498,6 @@ class DualNormalFormat:
         cv2.imwrite(img_path, cv2.flip(cv2_img, -1))
 
     @staticmethod
-    def get_loss(sample, target, model_params, reduction="mean"):
-        return torch.nn.functional.mse_loss(sample.float(), target.float(), reduction=reduction)
-    
-    @staticmethod
     def get_sample_shape(model_params, bsz=1, length=1):
         _, num_output_channels = DualNormalFormat.get_num_channels(model_params)
         num_chunks = model_params["num_chunks"]
@@ -953,23 +508,37 @@ class DualMultiscaleSpectralLoss2:
 
     @torch.no_grad()
     def __init__(self, model_params):
-        
-        loss_params = model_params["multiscale_spectral_loss"]
         self.model_params = model_params
-        self.loss_params = loss_params
+
+        loss_params = model_params["multiscale_spectral_loss"]
         self.block_widths = loss_params["block_widths"]
         self.u = loss_params["u"]
+
+        if "block_offsets" in loss_params:
+            self.block_offsets = loss_params["block_offsets"]
+        else:
+            self.block_offsets = [0, 0.25]
+
+        self.block_weights = torch.tensor(self.block_widths, dtype=torch.float32)#torch.arange(1, len(self.block_widths) + 1, dtype=torch.float32)
+        self.block_weights /= self.block_weights.sum() / self.block_weights.shape[0]
 
     def __call__(self, sample, target):
         
         block_width = self.model_params["num_chunks"] * 2
-        sample = sample[:, block_width // 2:-block_width]
+        target = target[:, block_width // 2:-block_width]
         assert(sample.shape == target.shape)
+
+        if self.block_weights.device != sample.device:
+            self.block_weights = self.block_weights.to(sample.device)
+        if self.block_weights.dtype != sample.dtype:
+            self.block_weights = self.block_weights.to(sample.dtype)
 
         loss = torch.zeros(1, device=sample.device)
 
-        for block_width in self.block_widths:
-            for offset in range(0, block_width // 4 + 1, block_width // 4):
+        for block_num, block_width in enumerate(self.block_widths):
+            for block_offset in self.block_offsets:
+
+                offset = int(block_offset * block_width)
 
                 sample_fft_abs = mdct(sample[:, offset:], block_width)[:, 1:-2, :].abs()
                 target_fft_abs = mdct(target[:, offset:], block_width)[:, 1:-2, :].abs()
@@ -980,10 +549,11 @@ class DualMultiscaleSpectralLoss2:
                 sample_fft_abs_ln = (sample_fft_abs * self.u).log1p()
                 target_fft_abs_ln = (target_fft_abs * self.u).log1p()
 
-                loss += torch.nn.functional.l1_loss(sample_fft_abs_ln,  target_fft_abs_ln,  reduction="mean")
-                loss += torch.nn.functional.l1_loss(sample_fft_abs, target_fft_abs, reduction="mean")
+                loss_weight = self.block_weights[block_num]
+                loss += torch.nn.functional.l1_loss(sample_fft_abs_ln, target_fft_abs_ln,  reduction="mean") * loss_weight
+                loss += torch.nn.functional.l1_loss(sample_fft_abs, target_fft_abs, reduction="mean") * loss_weight
 
-        return loss / (len(self.block_widths) * 4)
+        return loss / (len(self.block_widths) * len(self.block_offsets) * 2)
     
 class DualMultiscaleSpectralLoss:
 
@@ -1107,16 +677,11 @@ class DualDiffusionPipeline(DiffusionPipeline):
     @torch.no_grad()
     def get_sample_format(model_params):
         sample_format = model_params["sample_format"]
-        if sample_format == "ln":
-            return DualLogFormat
-        elif sample_format == "normal":
+
+        if sample_format == "normal":
             return DualNormalFormat
         elif sample_format == "overlapped":
             return DualOverlappedFormat
-        elif sample_format == "embedding":
-            return DualEmbeddingFormat
-        elif sample_format == "time_overlapped":
-            return DualTimeOverlappedFormat
         elif sample_format == "mdct":
             return DualMDCTFormat
         elif sample_format == "mclt":
@@ -1179,12 +744,7 @@ class DualDiffusionPipeline(DiffusionPipeline):
     @staticmethod
     @torch.no_grad()
     def add_embeddings(freq_samples, freq_embedding_dim, time_embedding_dim, format_hint="normal", pitch_augmentation=1., tempo_augmentation=1.):
-        return DualEmbeddingFormat.add_embeddings(freq_samples,
-                                                  freq_embedding_dim,
-                                                  time_embedding_dim,
-                                                  format_hint=format_hint,
-                                                  pitch_augmentation=pitch_augmentation,
-                                                  tempo_augmentation=tempo_augmentation)
+        raise NotImplementedError()
     
     @torch.no_grad()
     def upscale(self, raw_sample):
@@ -1261,21 +821,11 @@ class DualDiffusionPipeline(DiffusionPipeline):
         sample = torch.randn(sample_shape, device=self.device, dtype=self.unet.dtype, generator=generator)
         sample *= noise_scheduler.init_noise_sigma
 
-        freq_embedding_dim = model_params["freq_embedding_dim"]
-        time_embedding_dim = model_params["time_embedding_dim"]
-
         for _, t in enumerate(self.progress_bar(timesteps)):
             
             model_input = sample
-            if freq_embedding_dim > 0 or time_embedding_dim > 0:
-                model_input = DualDiffusionPipeline.add_embeddings(model_input,
-                                                                   freq_embedding_dim,
-                                                                   time_embedding_dim,
-                                                                   format_hint=model_params["sample_format"])
             model_input = noise_scheduler.scale_model_input(model_input, t)
             model_output = self.unet(model_input, t).sample
-
-            #model_output = model_output[:, :, :, :sample.shape[3]]
 
             scheduler_args = {
                 "model_output": model_output,
@@ -1297,7 +847,7 @@ class DualDiffusionPipeline(DiffusionPipeline):
         if getattr(self, "vae", None) is None:
             raw_sample = self.format.sample_to_raw(sample, model_params).real
         else:
-            raw_sample = self.vae.decode(sample / self.vae.config.scaling_factor).sample
+            #raw_sample = self.vae.decode(sample / self.vae.config.scaling_factor).sample
             raise NotImplementedError()
         
         if getattr(self, "upscaler", None) is not None:
