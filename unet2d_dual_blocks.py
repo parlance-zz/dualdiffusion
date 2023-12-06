@@ -126,7 +126,10 @@ class DualResnetBlock2D(nn.Module):
         elif self.time_embedding_norm == "spatial":
             self.norm1 = SpatialNorm(in_channels, temb_channels)
         else:
-            self.norm1 = torch.nn.GroupNorm(num_groups=groups, num_channels=in_channels, eps=eps, affine=True)
+            if groups > 0:
+                self.norm1 = torch.nn.GroupNorm(num_groups=groups, num_channels=in_channels, eps=eps, affine=True)
+            else:
+                self.norm1 = nn.Identity()
 
         self.conv1 = torch.nn.Conv2d(in_channels, out_channels, kernel_size=conv_size, stride=1, padding=(conv_size[0]//2,conv_size[1]//2))
 
@@ -147,7 +150,10 @@ class DualResnetBlock2D(nn.Module):
         elif self.time_embedding_norm == "spatial":
             self.norm2 = SpatialNorm(out_channels, temb_channels)
         else:
-            self.norm2 = torch.nn.GroupNorm(num_groups=groups_out, num_channels=out_channels, eps=eps, affine=True)
+            if groups_out > 0:
+                self.norm2 = torch.nn.GroupNorm(num_groups=groups_out, num_channels=out_channels, eps=eps, affine=True)
+            else:
+                self.norm2 = nn.Identity()
 
         self.dropout = torch.nn.Dropout(dropout)
         conv_2d_out_channels = conv_2d_out_channels or out_channels

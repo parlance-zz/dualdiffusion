@@ -78,12 +78,7 @@ def get_dataset_stats():
     format = DualDiffusionPipeline.get_sample_format(model_params)
     crop_width = format.get_sample_crop_width(model_params)
     
-    if format == DualLogFormat:
-        ln_amplitude_mean = 0.
-        ln_amplitude_std = 0.
-        phase_integral_mean = 0.
-        phase_integral_std = 0.
-    elif format == DualMCLTFormat:
+    if format == DualMCLTFormat:
         pos_examples = 0.
         neg_examples = 0.
     else:
@@ -100,12 +95,7 @@ def get_dataset_stats():
             
             sample, window = format.raw_to_sample(raw_sample, model_params, window)
 
-            if format == DualLogFormat:
-                ln_amplitude_mean += sample[:, 0, :, :].mean(dim=(0,1,2)).item()
-                ln_amplitude_std += sample[:, 0, :, :].std(dim=(0,1,2)).item()
-                phase_integral_mean += sample[:, 1:, :, :].mean(dim=(0,1,2,3)).item()
-                phase_integral_std += sample[:, 1:, :, :].std(dim=(0,1,2,3)).item()
-            elif format == DualMCLTFormat:
+            if format == DualMCLTFormat:
                 sample_abs = sample[:, 0, :, :]
                 sample_abs /= sample_abs.amax(dim=(1,2), keepdim=True)
                 pos_examples += sample_abs.sum().item()
@@ -117,17 +107,7 @@ def get_dataset_stats():
             if num_samples % 100 == 0:
                 print(f"Processed {num_samples}/{len(sample_list)} samples")
 
-    if format == DualLogFormat:
-        ln_amplitude_mean /= num_samples
-        ln_amplitude_std /= num_samples
-        phase_integral_mean /= num_samples
-        phase_integral_std /= num_samples
-        print(f"ln_amplitude_mean: {ln_amplitude_mean}")
-        print(f"ln_amplitude_std: {ln_amplitude_std}")
-        print(f"phase_integral_mean: {phase_integral_mean}")
-        print(f"phase_integral_std: {phase_integral_std}")
-        print(f"total samples processed: {num_samples}")
-    elif format == DualMCLTFormat:
+    if format == DualMCLTFormat:
         print(f"pos_examples: {pos_examples}")
         print(f"neg_examples: {neg_examples}")
         print(f"total samples processed: {num_samples}")

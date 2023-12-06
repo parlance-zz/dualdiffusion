@@ -1056,7 +1056,7 @@ def main():
                     vae_percept_loss = torch.zeros_like(vae_recon_loss)
                     
                     # lastly, standard KL divergence loss
-                    vae_kl_loss = posterior.kl().sum() / samples.numel()
+                    vae_kl_loss = posterior.kl().sum() / posterior.mean.numel() #/ samples.numel()
 
                     vae_recon_loss_weight = 1  
                     vae_percept_loss_weight = 0

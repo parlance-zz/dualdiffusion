@@ -519,8 +519,8 @@ class DualMultiscaleSpectralLoss2:
         else:
             self.block_offsets = [0, 0.25]
 
-        self.block_weights = torch.tensor(self.block_widths, dtype=torch.float32)#torch.arange(1, len(self.block_widths) + 1, dtype=torch.float32)
-        self.block_weights /= self.block_weights.sum() / self.block_weights.shape[0]
+        self.block_weights = torch.arange(1, len(self.block_widths) + 1, dtype=torch.float32)
+        self.block_weights /= self.block_weights.mean()
 
     def __call__(self, sample, target):
         
@@ -536,10 +536,14 @@ class DualMultiscaleSpectralLoss2:
         loss = torch.zeros(1, device=sample.device)
 
         for block_num, block_width in enumerate(self.block_widths):
-            for block_offset in self.block_offsets:
-
-                offset = int(block_offset * block_width)
-
+            for offset_num, block_offset in enumerate(self.block_offsets):
+                
+                if offset_num < len(self.block_offsets) - 1:
+                    next_offset = int(self.block_offsets[offset_num+1] * block_width)
+                else:
+                    next_offset = int(0.5 * block_width)
+                offset = np.random.randint(block_offset, next_offset)
+                
                 sample_fft_abs = mdct(sample[:, offset:], block_width)[:, 1:-2, :].abs()
                 target_fft_abs = mdct(target[:, offset:], block_width)[:, 1:-2, :].abs()
 

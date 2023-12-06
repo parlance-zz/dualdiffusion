@@ -68,7 +68,7 @@ class SeparableAttention(nn.Module):
         self.scale = dim_head**-0.5 if self.scale_qk else 1.0
         self.heads = heads
 
-        if norm_num_groups is not None:
+        if (norm_num_groups is not None) and (norm_num_groups != 0):
             if norm_num_groups < 0: norm_num_groups = self.inner_dim // abs(norm_num_groups)
             self.group_norm_v = nn.GroupNorm(num_channels=self.inner_dim, num_groups=norm_num_groups, eps=eps, affine=True)
             self.group_norm_qk = nn.GroupNorm(num_channels=self.inner_dim, num_groups=norm_num_groups, eps=eps, affine=True)
