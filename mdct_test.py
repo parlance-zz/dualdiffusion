@@ -27,7 +27,7 @@ def kaiser_derived(window_len, beta, device):
 
     return w
 
-def mdct(x, block_width):
+def mdct(x, block_width, window_degree=1):
 
     padding_left = padding_right = block_width // 2
     remainder = x.shape[-1] % (block_width // 2)
@@ -41,7 +41,11 @@ def mdct(x, block_width):
     n = torch.arange(2*N, device=x.device)
     k = torch.arange(0.5, N + 0.5, device=x.device)
 
-    window = torch.sin(np.pi * (n + 0.5) / (2*N))
+    if window_degree == 0:
+        window = 1
+    else:
+        window = torch.sin(torch.pi * (n + 0.5) / (2*N))
+        if window_degree == 2: window = window.square()
     #window = kaiser_derived(2*N, 4*torch.pi, device=x.device)
     #window.cpu().numpy().tofile("./debug/mdct_window.raw")
 
@@ -50,12 +54,16 @@ def mdct(x, block_width):
     
     return torch.fft.fft(x * pre_shift * window)[..., :N] * post_shift * (2 ** 0.5)
 
-def imdct(x):
+def imdct(x, window_degree=1):
     N = x.shape[-1]
     n = torch.arange(2*N, device=x.device)
     k = torch.arange(0.5, N + 0.5, device=x.device)
 
-    window = torch.sin(np.pi * (n + 0.5) / (2*N))
+    if window_degree == 0:
+        window = 1
+    else:
+        window = torch.sin(np.pi * (n + 0.5) / (2*N))
+        if window_degree == 2: window = window.square()
     #window = kaiser_derived(2*N, 4*torch.pi, device=x.device)
 
     pre_shift = torch.exp(-1j * torch.pi / 2 / N * n)
@@ -108,7 +116,7 @@ raw_sample = np.fromfile(os.path.join(dataset_path, f"{test_sample}.raw"), dtype
 raw_sample = torch.from_numpy(raw_sample.astype(np.float32))
 raw_sample.cpu().numpy().tofile("./debug/raw_sample.raw")
 
-Xk = mdct(raw_sample, block_width)[..., 1:-2, :]
+Xk = mdct(raw_sample, block_width, window_degree=1)[..., 1:-2, :]
 
 #Xk = to_ulaw(Xk, u=2000)
 #Xk /= Xk.std()
@@ -118,6 +126,15 @@ Xk = mdct(raw_sample, block_width)[..., 1:-2, :]
 print("Xk shape:", Xk.shape, "Xk mean:", (Xk / Xk.std()).mean().item(), "Xk std:", Xk.std().item())
 Xk.cpu().numpy().tofile("./debug/mdct.raw")
 
+samples_noise_phase = torch.exp(torch.rand_like(Xk) * (2j * torch.pi))
+noise_amplitude = torch.exp(-100*torch.linspace(-1, 1, Xk.shape[-1]).square())
+#Xk = noise_amplitude.view(1, -1) * samples_noise_phase
+#Xk = torch.zeros_like(Xk)
+#Xk[::2, 100] = 1
+#Xk[1::2, 100] = -1
+Xk -= Xk.mean(dim=0, keepdim=True)
+
+
 #Xk = from_ulaw(Xk, u=2000) 
-y = imdct(Xk).real
+y = imdct(Xk.real, window_degree=1).real
 y.cpu().numpy().tofile("./debug/imdct.raw")
