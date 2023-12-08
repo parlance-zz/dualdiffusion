@@ -47,6 +47,7 @@ class EncoderDual(nn.Module):
         conv_size = (3,3),
         freq_embedding_dim: Union[int, Tuple[int]] = 0,
         time_embedding_dim: Union[int, Tuple[int]] = 0,
+        add_attention: Union[bool, Tuple[bool]] = True,
     ):
         super().__init__()
         self.layers_per_block = layers_per_block
@@ -77,6 +78,7 @@ class EncoderDual(nn.Module):
             _pre_attention = pre_attention[i]
             _freq_embedding_dim = freq_embedding_dim[i]
             _time_embedding_dim = time_embedding_dim[i]
+            _add_attention = add_attention[i]
 
             down_block = SeparableAttnDownBlock2D(
                 num_layers=layers_per_block,
@@ -94,6 +96,7 @@ class EncoderDual(nn.Module):
                 conv_size=conv_size,
                 freq_embedding_dim=_freq_embedding_dim,
                 time_embedding_dim=_time_embedding_dim,
+                add_attention=_add_attention,
                 return_skip_samples=False,
                 temb_channels=None,
             )
@@ -197,6 +200,7 @@ class DecoderDual(nn.Module):
         conv_size = (3,3),
         freq_embedding_dim: Union[int, Tuple[int]] = 0,
         time_embedding_dim: Union[int, Tuple[int]] = 0,
+        add_attention: Union[bool, Tuple[bool]] = True,
     ):
         super().__init__()
         self.layers_per_block = layers_per_block
@@ -245,6 +249,7 @@ class DecoderDual(nn.Module):
         reversed_pre_attention = list(reversed(pre_attention))
         reversed_freq_embedding_dim = list(reversed(freq_embedding_dim))
         reversed_time_embedding_dim = list(reversed(time_embedding_dim))
+        reversed_add_attention = list(reversed(add_attention))
 
         # up
         reversed_block_out_channels = list(reversed(block_out_channels))
@@ -262,6 +267,7 @@ class DecoderDual(nn.Module):
             _pre_attention = reversed_pre_attention[i]
             _freq_embedding_dim = reversed_freq_embedding_dim[i]
             _time_embedding_dim = reversed_time_embedding_dim[i]
+            _add_attention = reversed_add_attention[i]
 
             up_block = SeparableAttnUpBlock2D(
                 num_layers=layers_per_block + 1,
@@ -281,6 +287,7 @@ class DecoderDual(nn.Module):
                 conv_size=conv_size,
                 freq_embedding_dim=_freq_embedding_dim,
                 time_embedding_dim=_time_embedding_dim,
+                add_attention=_add_attention,
                 use_skip_samples=False,
             )
 
@@ -372,6 +379,7 @@ class AutoencoderKLDual(ModelMixin, ConfigMixin):
         conv_size = (3,3),
         freq_embedding_dim: Union[int, Tuple[int]] = 0,
         time_embedding_dim: Union[int, Tuple[int]] = 0,
+        add_attention: Union[bool, Tuple[bool]] = True,
         last_global_step: int = 0,
     ):
         super().__init__()
@@ -406,6 +414,11 @@ class AutoencoderKLDual(ModelMixin, ConfigMixin):
                 f"Must provide the same number of `time_embedding_dim` as `block_out_channels`. `time_embedding_dim`: {time_embedding_dim}. `block_out_channels`: {block_out_channels}."
             ) 
         
+        if not isinstance(add_attention, bool) and len(add_attention) != len(block_out_channels):
+            raise ValueError(
+                f"Must provide the same number of `add_attention` as `block_out_channels`. `add_attention`: {add_attention}. `block_out_channels`: {block_out_channels}."
+            )
+        
         if isinstance(attention_num_heads, int):
             attention_num_heads = (attention_num_heads,) * len(block_out_channels)
         if isinstance(norm_num_groups, int):
@@ -422,6 +435,8 @@ class AutoencoderKLDual(ModelMixin, ConfigMixin):
             freq_embedding_dim = (freq_embedding_dim,) * len(block_out_channels)
         if isinstance(time_embedding_dim, int):
             time_embedding_dim = (time_embedding_dim,) * len(block_out_channels)
+        if isinstance(add_attention, bool):
+            add_attention = (add_attention,) * len(block_out_channels)
 
         # pass init params to Encoder
         self.encoder = EncoderDual(
@@ -444,6 +459,7 @@ class AutoencoderKLDual(ModelMixin, ConfigMixin):
             conv_size = conv_size,
             freq_embedding_dim=freq_embedding_dim,
             time_embedding_dim=time_embedding_dim,
+            add_attention=add_attention,
         )
 
         # pass init params to Decoder
@@ -466,6 +482,7 @@ class AutoencoderKLDual(ModelMixin, ConfigMixin):
             conv_size = conv_size,
             freq_embedding_dim=freq_embedding_dim,
             time_embedding_dim=time_embedding_dim,
+            add_attention=add_attention,
         )
 
         self.quant_conv = nn.Conv2d(2 * latent_channels, 2 * latent_channels, 1)

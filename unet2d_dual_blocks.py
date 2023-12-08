@@ -262,6 +262,7 @@ class SeparableAttnDownBlock2D(nn.Module):
         return_skip_samples=True,
         freq_embedding_dim=0,
         time_embedding_dim=0,
+        add_attention=True,
     ):
         super().__init__()
         resnets = []
@@ -275,6 +276,7 @@ class SeparableAttnDownBlock2D(nn.Module):
         self.return_skip_samples = return_skip_samples
         self.freq_embedding_dim = freq_embedding_dim
         self.time_embedding_dim = time_embedding_dim
+        self.add_attention = add_attention
 
         for i in range(num_layers):
             _in_channels = in_channels if i == 0 else out_channels
@@ -294,47 +296,50 @@ class SeparableAttnDownBlock2D(nn.Module):
                 )
             )
         
-        attn_block_count = 0
-        for i in range(num_layers+int(self.pre_attention)):
-            _channels = in_channels if i == 0 and self.pre_attention else out_channels
-            input_channels = _channels
-            for _ in range(2 if double_attention else 1):
-                attn_dim = self.separate_attn_dim[attn_block_count]
-                if attn_dim == 0:
-                    _freq_embedding_dim = self.freq_embedding_dim
-                    _time_embedding_dim = self.time_embedding_dim
-                elif attn_dim == 2:
-                    _freq_embedding_dim = 0
-                    _time_embedding_dim = self.time_embedding_dim
-                elif attn_dim == 3:
-                    _freq_embedding_dim = self.freq_embedding_dim
-                    _time_embedding_dim = 0
-                else:
-                    raise ValueError(f"attn_dim must be 2, 3, or 0. got {attn_dim}")
-                attentions.append(
-                    SeparableAttention(
-                        input_channels,
-                        freq_embedding_dim=_freq_embedding_dim,
-                        time_embedding_dim=_time_embedding_dim,
-                        heads=attention_num_heads,
-                        dim_head=input_channels // attention_num_heads,
-                        rescale_output_factor=output_scale_factor,
-                        eps=resnet_eps,
-                        norm_num_groups=resnet_groups,
-                        residual_connection=True,
-                        bias=True,
-                        upcast_softmax=True,
-                        dropout=dropout,
-                        separate_attn_dim=attn_dim,
-                    )
-                )
-                attn_block_count += 1
-
-        if len(attentions) != len(separate_attn_dim):
-            raise ValueError(f"separate_attn_dim must have the same length as attentions. got {len(separate_attn_dim)} and {len(attentions)}")
-        
-        self.attentions = nn.ModuleList(attentions)
         self.resnets = nn.ModuleList(resnets)
+
+        if self.add_attention:
+            attn_block_count = 0
+            for i in range(num_layers+int(self.pre_attention)):
+                _channels = in_channels if i == 0 and self.pre_attention else out_channels
+                input_channels = _channels
+                for _ in range(2 if double_attention else 1):
+                    attn_dim = self.separate_attn_dim[attn_block_count]
+                    if attn_dim == 0:
+                        _freq_embedding_dim = self.freq_embedding_dim
+                        _time_embedding_dim = self.time_embedding_dim
+                    elif attn_dim == 2:
+                        _freq_embedding_dim = 0
+                        _time_embedding_dim = self.time_embedding_dim
+                    elif attn_dim == 3:
+                        _freq_embedding_dim = self.freq_embedding_dim
+                        _time_embedding_dim = 0
+                    else:
+                        raise ValueError(f"attn_dim must be 2, 3, or 0. got {attn_dim}")
+                    attentions.append(
+                        SeparableAttention(
+                            input_channels,
+                            freq_embedding_dim=_freq_embedding_dim,
+                            time_embedding_dim=_time_embedding_dim,
+                            heads=attention_num_heads,
+                            dim_head=input_channels // attention_num_heads,
+                            rescale_output_factor=output_scale_factor,
+                            eps=resnet_eps,
+                            norm_num_groups=resnet_groups,
+                            residual_connection=True,
+                            bias=True,
+                            upcast_softmax=True,
+                            dropout=dropout,
+                            separate_attn_dim=attn_dim,
+                        )
+                    )
+                    attn_block_count += 1
+
+            if len(attentions) != len(separate_attn_dim):
+                raise ValueError(f"separate_attn_dim must have the same length as attentions. got {len(separate_attn_dim)} and {len(attentions)}")
+            
+            self.attentions = nn.ModuleList(attentions)
+        
 
         if downsample_type == "conv":
             self.downsamplers = nn.ModuleList(
@@ -368,18 +373,20 @@ class SeparableAttnDownBlock2D(nn.Module):
     def forward(self, hidden_states, temb=None, upsample_size=None):
         output_states = ()
 
-        attn_block_count = 0
-        if self.pre_attention:
-            for _ in range(2 if self.double_attention else 1):
-                hidden_states = self.attentions[attn_block_count](hidden_states)
-                attn_block_count += 1
+        if self.add_attention:
+            attn_block_count = 0
+            if self.pre_attention:
+                for _ in range(2 if self.double_attention else 1):
+                    hidden_states = self.attentions[attn_block_count](hidden_states)
+                    attn_block_count += 1
 
         for resnet in self.resnets:
             hidden_states = resnet(hidden_states, temb)
 
-            for _ in range(2 if self.double_attention else 1):
-                hidden_states = self.attentions[attn_block_count](hidden_states)
-                attn_block_count += 1
+            if self.add_attention:
+                for _ in range(2 if self.double_attention else 1):
+                    hidden_states = self.attentions[attn_block_count](hidden_states)
+                    attn_block_count += 1
 
             if self.return_skip_samples:
                 output_states = output_states + (hidden_states,)
@@ -421,6 +428,7 @@ class SeparableAttnUpBlock2D(nn.Module):
         use_skip_samples=True,
         freq_embedding_dim=0,
         time_embedding_dim=0,
+        add_attention=True,
     ):
         super().__init__()
         resnets = []
@@ -434,6 +442,7 @@ class SeparableAttnUpBlock2D(nn.Module):
         self.use_skip_samples = use_skip_samples
         self.freq_embedding_dim = freq_embedding_dim
         self.time_embedding_dim = time_embedding_dim
+        self.add_attention = add_attention
 
         for i in range(num_layers):
             if self.use_skip_samples:
@@ -458,48 +467,50 @@ class SeparableAttnUpBlock2D(nn.Module):
                 )
             )
         
-        attn_block_count = 0
-        for i in range(num_layers+int(self.pre_attention)):
-            _channels = prev_output_channel if i == 0 and self.pre_attention else out_channels
-            input_channels = _channels
-            for _ in range(2 if double_attention else 1):
-                attn_dim = self.separate_attn_dim[attn_block_count]
-                if attn_dim == 0:
-                    _freq_embedding_dim = self.freq_embedding_dim
-                    _time_embedding_dim = self.time_embedding_dim
-                elif attn_dim == 2:
-                    _freq_embedding_dim = 0
-                    _time_embedding_dim = self.time_embedding_dim
-                elif attn_dim == 3:
-                    _freq_embedding_dim = self.freq_embedding_dim
-                    _time_embedding_dim = 0
-                else:
-                    raise ValueError(f"attn_dim must be 2, 3, or 0. got {attn_dim}")
-                attentions.append(
-                    SeparableAttention(
-                        input_channels,
-                        freq_embedding_dim=_freq_embedding_dim,
-                        time_embedding_dim=_time_embedding_dim,
-                        heads=attention_num_heads,
-                        dim_head=input_channels // attention_num_heads,
-                        rescale_output_factor=output_scale_factor,
-                        eps=resnet_eps,
-                        norm_num_groups=resnet_groups,
-                        residual_connection=True,
-                        bias=True,
-                        upcast_softmax=True,
-                        dropout=dropout,
-                        separate_attn_dim=attn_dim,
-                    )
-                )
-                attn_block_count += 1
-
-        if len(attentions) != len(separate_attn_dim):
-            raise ValueError(f"separate_attn_dim must have the same length as attentions. got {len(separate_attn_dim)} and {len(attentions)}")
-        
-        self.attentions = nn.ModuleList(attentions)
         self.resnets = nn.ModuleList(resnets)
 
+        if self.add_attention:
+            attn_block_count = 0
+            for i in range(num_layers+int(self.pre_attention)):
+                _channels = prev_output_channel if i == 0 and self.pre_attention else out_channels
+                input_channels = _channels
+                for _ in range(2 if double_attention else 1):
+                    attn_dim = self.separate_attn_dim[attn_block_count]
+                    if attn_dim == 0:
+                        _freq_embedding_dim = self.freq_embedding_dim
+                        _time_embedding_dim = self.time_embedding_dim
+                    elif attn_dim == 2:
+                        _freq_embedding_dim = 0
+                        _time_embedding_dim = self.time_embedding_dim
+                    elif attn_dim == 3:
+                        _freq_embedding_dim = self.freq_embedding_dim
+                        _time_embedding_dim = 0
+                    else:
+                        raise ValueError(f"attn_dim must be 2, 3, or 0. got {attn_dim}")
+                    attentions.append(
+                        SeparableAttention(
+                            input_channels,
+                            freq_embedding_dim=_freq_embedding_dim,
+                            time_embedding_dim=_time_embedding_dim,
+                            heads=attention_num_heads,
+                            dim_head=input_channels // attention_num_heads,
+                            rescale_output_factor=output_scale_factor,
+                            eps=resnet_eps,
+                            norm_num_groups=resnet_groups,
+                            residual_connection=True,
+                            bias=True,
+                            upcast_softmax=True,
+                            dropout=dropout,
+                            separate_attn_dim=attn_dim,
+                        )
+                    )
+                    attn_block_count += 1
+
+            if len(attentions) != len(separate_attn_dim):
+                raise ValueError(f"separate_attn_dim must have the same length as attentions. got {len(separate_attn_dim)} and {len(attentions)}")
+            
+            self.attentions = nn.ModuleList(attentions)
+        
         if upsample_type == "conv":
             self.upsamplers = nn.ModuleList([Upsample2D(out_channels, use_conv=True, out_channels=out_channels)])
         elif upsample_type == "resnet":
@@ -525,11 +536,12 @@ class SeparableAttnUpBlock2D(nn.Module):
 
     def forward(self, hidden_states, res_hidden_states_tuple, temb=None, upsample_size=None):
         
-        attn_block_count = 0
-        if self.pre_attention:
-            for _ in range(2 if self.double_attention else 1):
-                hidden_states = self.attentions[attn_block_count](hidden_states)
-                attn_block_count += 1
+        if self.add_attention:
+            attn_block_count = 0
+            if self.pre_attention:
+                for _ in range(2 if self.double_attention else 1):
+                    hidden_states = self.attentions[attn_block_count](hidden_states)
+                    attn_block_count += 1
 
         for resnet in self.resnets:
             if self.use_skip_samples:
@@ -539,9 +551,10 @@ class SeparableAttnUpBlock2D(nn.Module):
             
             hidden_states = resnet(hidden_states, temb)
 
-            for _ in range(2 if self.double_attention else 1):
-                hidden_states = self.attentions[attn_block_count](hidden_states)
-                attn_block_count += 1
+            if self.add_attention:
+                for _ in range(2 if self.double_attention else 1):
+                    hidden_states = self.attentions[attn_block_count](hidden_states)
+                    attn_block_count += 1
 
         if self.upsamplers is not None:
             for upsampler in self.upsamplers:
@@ -604,6 +617,8 @@ class SeparableMidBlock2D(nn.Module):
                 )
             )
 
+        self.resnets = nn.ModuleList(resnets)
+        
         if self.add_attention:
             attn_block_count = 0
             for _ in range(num_layers):
@@ -644,8 +659,7 @@ class SeparableMidBlock2D(nn.Module):
             if len(attentions) != len(separate_attn_dim):
                 raise ValueError(f"separate_attn_dim must have the same length as attentions. got {len(separate_attn_dim)} and {len(attentions)}")
         
-        self.attentions = nn.ModuleList(attentions)
-        self.resnets = nn.ModuleList(resnets)
+            self.attentions = nn.ModuleList(attentions)
 
         if mid_block_bottleneck_channels > 0:
             self.conv_bottleneck = nn.Conv2d(in_channels, mid_block_bottleneck_channels, kernel_size=(3,3), padding=(1, 1))

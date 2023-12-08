@@ -128,7 +128,7 @@ class DualMCLTFormat:
     
     @staticmethod
     def get_num_channels(model_params):
-        channels = model_params["sample_raw_channels"] # * 2
+        channels = model_params["sample_raw_channels"] * 2
         return (channels, channels + 2)
 
     @staticmethod
@@ -140,29 +140,24 @@ class DualMCLTFormat:
 
         samples = mdct(raw_samples, block_width, window_degree=1)[..., 1:-2, :]
         samples = samples.permute(0, 2, 1)
-
-        #if random_phase_offset:
-        #    samples *= torch.exp(2j*torch.pi*torch.rand(1, device=samples.device))
         
-        #samples = torch.view_as_real(samples).permute(0, 3, 1, 2).contiguous()
-        samples = samples.real.unsqueeze(1)
+        samples = torch.view_as_real(samples).permute(0, 3, 1, 2).contiguous()
+        samples = samples / samples.square().sum(dim=(1,2,3), keepdim=True).mean(dim=(1,2,3), keepdim=True).sqrt().clip(min=1e-8)
 
-        samples = samples / samples.std(dim=(1,2,3), keepdim=True).clip(min=1e-8)
         return samples, window
 
     @staticmethod
     def sample_to_raw(samples, model_params):
         
         samples_abs = samples[:, 0, :, :].permute(0, 2, 1).contiguous().sigmoid()
-        #samples_phase = samples[:, 1:3, :, :].permute(0, 3, 2, 1).contiguous()
-        #samples_phase = torch.view_as_complex(samples_phase)
-        samples_phase = samples[:, 1, :, :].permute(0, 2, 1).contiguous()
+        samples_phase = samples[:, 1:3, :, :].permute(0, 3, 2, 1).contiguous()
+        samples_phase = samples_phase / samples_phase.square().sum(dim=(1,2,3), keepdim=True).mean(dim=(1,2,3), keepdim=True).sqrt().clip(min=1e-8)
+        samples_phase = torch.view_as_complex(samples_phase)
         samples_waveform = samples_abs * samples_phase
 
-        #samples_noise_abs = samples[:, 3, :, :].permute(0, 2, 1).contiguous().sigmoid()
-        samples_noise_abs = samples[:, 2, :, :].permute(0, 2, 1).contiguous().sigmoid()
-        samples_noise_phase = torch.exp(torch.rand_like(samples_noise_abs) * (2j * torch.pi))
-        samples_noise = samples_noise_abs * samples_noise_phase
+        samples_noise_abs = samples[:, 3, :, :].permute(0, 2, 1).contiguous().sigmoid()
+        samples_noise_phase = torch.randn_like(samples_noise_abs)
+        samples_noise = samples_noise_abs * samples_noise_phase * 0.5
         
         return imdct(samples_waveform, window_degree=1).real + imdct(samples_noise, window_degree=2).real
 
@@ -535,9 +530,6 @@ class DualMultiscaleSpectralLoss2:
         #self.block_weights = torch.arange(1, len(self.block_widths) + 1, dtype=torch.float32) #.sqrt()
         #self.block_weights /= self.block_weights.mean()
 
-        #self.min_time_resolution_width = int(512 / 48000 * model_params["sample_rate"])
-        self.min_time_resolution_width = 128#int(512 / 48000 * 8000)
-
     def __call__(self, sample, target):
         
         sample_block_width = self.model_params["num_chunks"] * 2
@@ -552,20 +544,13 @@ class DualMultiscaleSpectralLoss2:
         loss = torch.zeros(1, device=sample.device)
 
         for block_num, block_width in enumerate(self.block_widths):
-
-            #if block_width > self.min_time_resolution_width:
-            #if block_num > 0:
-            if block_width > sample_block_width:
-                cutoff_freq = block_width // 4
-            else:
-                cutoff_freq = block_width // 2
                 
             for block_offset in self.block_offsets:
 
                 offset = int(block_offset * block_width)
 
-                sample_fft_abs = mdct(sample[:, offset:], block_width, window_degree=2)[:, 1:-2, :cutoff_freq].abs()
-                target_fft_abs = mdct(target[:, offset:], block_width, window_degree=2)[:, 1:-2, :cutoff_freq].abs()
+                sample_fft_abs = mdct(sample[:, offset:], block_width, window_degree=2)[:, 3:-3, :].abs()
+                target_fft_abs = mdct(target[:, offset:], block_width, window_degree=2)[:, 3:-3, :].abs()
 
                 sample_fft_abs = sample_fft_abs / sample_fft_abs.amax(dim=(1,2), keepdim=True)
                 target_fft_abs = target_fft_abs / target_fft_abs.amax(dim=(1,2), keepdim=True)

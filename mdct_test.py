@@ -8,7 +8,7 @@ load_dotenv()
 
 dataset_path = os.environ.get("DATASET_PATH", "./")
 test_sample = 2
-block_width = 512
+block_width = 128
 crop_width = 65536*2 + block_width
 
 def kaiser(window_len, beta, device):    
@@ -123,18 +123,26 @@ Xk = mdct(raw_sample, block_width, window_degree=1)[..., 1:-2, :]
 #noise = torch.randn_like(Xk) * 1e-2
 #Xk += noise
 
+
+
+#samples_noise_phase = torch.exp(torch.rand_like(Xk) * (2j * torch.pi))
+#samples_noise_phase *= torch.rand_like(samples_noise_phase)
+#noise_amplitude = torch.exp(-100*torch.linspace(-1, 1, Xk.shape[-1]).square())
+#Xk = Xk.real
+#samples_noise_phase = torch.rand_like(Xk.real) * 2 - 1
+#Xk *= samples_noise_phase
+#Xk = samples_noise_phase * noise_amplitude.view(1, -1)
+#Xk = from_ulaw(torch.randn_like(Xk), u=255)#.real + 
+
+#raw_sample = torch.rand_like(raw_sample)
+#Xk = mdct(raw_sample, block_width, window_degree=2)[..., 1:-2, :]
+#Xk *= noise_amplitude.view(1, -1)
+
+#Xk[:, 0] = 0
+
 print("Xk shape:", Xk.shape, "Xk mean:", (Xk / Xk.std()).mean().item(), "Xk std:", Xk.std().item())
 Xk.cpu().numpy().tofile("./debug/mdct.raw")
 
-samples_noise_phase = torch.exp(torch.rand_like(Xk) * (2j * torch.pi))
-noise_amplitude = torch.exp(-100*torch.linspace(-1, 1, Xk.shape[-1]).square())
-#Xk = noise_amplitude.view(1, -1) * samples_noise_phase
-#Xk = torch.zeros_like(Xk)
-#Xk[::2, 100] = 1
-#Xk[1::2, 100] = -1
-Xk -= Xk.mean(dim=0, keepdim=True)
+y = imdct(Xk, window_degree=1).real
 
-
-#Xk = from_ulaw(Xk, u=2000) 
-y = imdct(Xk.real, window_degree=1).real
 y.cpu().numpy().tofile("./debug/imdct.raw")

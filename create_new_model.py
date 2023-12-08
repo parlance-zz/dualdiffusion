@@ -7,7 +7,7 @@ from dual_diffusion_pipeline import DualDiffusionPipeline
 load_dotenv()
 torch.manual_seed(200)
 
-MODEL_NAME = "dualdiffusion2d_330_mclt_v8_256embed_8vae_mssloss4"
+MODEL_NAME = "dualdiffusion2d_350_mclt_v8_256embed_4vae_mssloss10"
 MODEL_PARAMS = {
     #"prediction_type": "sample",
     "prediction_type": "v_prediction",
@@ -37,11 +37,11 @@ MODEL_PARAMS = {
 
     "sample_format": "mclt",
     "sample_raw_length": 65536*2,
-    "num_chunks": 256,
-    #"u": 20000,
+    "num_chunks": 64,
     "multiscale_spectral_loss": {
-        "u": 20000,
+        "u": 16000,
         "block_widths": [
+            8,
             16,
             32,
             64,
@@ -51,8 +51,6 @@ MODEL_PARAMS = {
             1024,
             2048,
             4096,
-            8192,
-            16384,
         ],
         "block_offsets": [
             0,
@@ -95,8 +93,8 @@ MODEL_PARAMS = {
 
 #VAE_PARAMS = None
 VAE_PARAMS = {
-  "latent_channels": 8,
-  "sample_size": (256, 512),
+  "latent_channels": 4,
+  "sample_size": (64, 2048),
   "act_fn": "silu",
   "conv_size": (3,3),
   
@@ -112,13 +110,16 @@ VAE_PARAMS = {
   "upsample_type": "conv",
 
   "attention_num_heads": (8,16,32,32),
-  "separate_attn_dim_down": (2,3),
-  "separate_attn_dim_up": (3,2,3),    
+  #"separate_attn_dim_down": (2,3),
+  #"separate_attn_dim_up": (3,2,3),
+  "separate_attn_dim_down": (3,3),
+  "separate_attn_dim_up": (3,3,3),
   "separate_attn_dim_mid": (0,),
   "double_attention": False,
   "pre_attention": False,
+  #"add_attention": False,
 
-  "freq_embedding_dim": 256,
+  "freq_embedding_dim": 64,
   "time_embedding_dim": 256,
 
   "in_channels": DualDiffusionPipeline.get_sample_format(MODEL_PARAMS).get_num_channels(MODEL_PARAMS)[0],

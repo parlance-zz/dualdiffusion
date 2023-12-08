@@ -65,6 +65,7 @@ class UNet2DDualModel(ModelMixin, ConfigMixin):
         no_conv_in: bool = False,
         freq_embedding_dim: Union[int, Tuple[int]] = 0,
         time_embedding_dim: Union[int, Tuple[int]] = 0,
+        add_attention: Union[bool, Tuple[bool]] = True,
         use_skip_samples: bool = True,
         last_global_step: int = 0,
     ):
@@ -123,6 +124,11 @@ class UNet2DDualModel(ModelMixin, ConfigMixin):
                 f"Must provide the same number of `time_embedding_dim` as `down_block_types`. `time_embedding_dim`: {time_embedding_dim}. `down_block_types`: {down_block_types}."
             )
         
+        if not isinstance(add_attention, bool) and len(add_attention) != len(down_block_types):
+            raise ValueError(
+                f"Must provide the same number of `add_attention` as `down_block_types`. `add_attention`: {add_attention}. `down_block_types`: {down_block_types}."
+            )
+        
         # input
         if no_conv_in:
             self.conv_in = nn.Identity()
@@ -173,6 +179,8 @@ class UNet2DDualModel(ModelMixin, ConfigMixin):
             freq_embedding_dim = (freq_embedding_dim,) * len(down_block_types)
         if isinstance(time_embedding_dim, int):
             time_embedding_dim = (time_embedding_dim,) * len(down_block_types)
+        if isinstance(add_attention, bool):
+            add_attention = (add_attention,) * len(down_block_types)
 
         def set_dropout_p(model, p_value):
             for module in model.children():
@@ -197,6 +205,7 @@ class UNet2DDualModel(ModelMixin, ConfigMixin):
             _pre_attention = pre_attention[i]
             _freq_embedding_dim = freq_embedding_dim[i]
             _time_embedding_dim = time_embedding_dim[i]
+            _add_attention = add_attention[i]
 
             if down_block_type == "SeparableAttnDownBlock2D":
                 down_block = SeparableAttnDownBlock2D(
@@ -218,6 +227,7 @@ class UNet2DDualModel(ModelMixin, ConfigMixin):
                     conv_size=conv_size,
                     freq_embedding_dim=_freq_embedding_dim,
                     time_embedding_dim=_time_embedding_dim,
+                    add_attention=_add_attention,
                     return_skip_samples=use_skip_samples,
                 )
             else:
@@ -293,6 +303,7 @@ class UNet2DDualModel(ModelMixin, ConfigMixin):
         reversed_pre_attention = list(reversed(pre_attention))
         reversed_freq_embedding_dim = list(reversed(freq_embedding_dim))
         reversed_time_embedding_dim = list(reversed(time_embedding_dim))
+        reversed_add_attention = list(reversed(add_attention))
 
         # up
         reversed_block_out_channels = list(reversed(block_out_channels))
@@ -314,6 +325,7 @@ class UNet2DDualModel(ModelMixin, ConfigMixin):
             _pre_attention = reversed_pre_attention[i]
             _freq_embedding_dim = reversed_freq_embedding_dim[i]
             _time_embedding_dim = reversed_time_embedding_dim[i]
+            _add_attention = reversed_add_attention[i]
 
             if up_block_type == "SeparableAttnUpBlock2D":
                 up_block = SeparableAttnUpBlock2D(
@@ -335,6 +347,7 @@ class UNet2DDualModel(ModelMixin, ConfigMixin):
                     conv_size=conv_size,
                     freq_embedding_dim=_freq_embedding_dim,
                     time_embedding_dim=_time_embedding_dim,
+                    add_attention=_add_attention,
                     use_skip_samples=use_skip_samples,
                 )
             else:
