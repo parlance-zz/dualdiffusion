@@ -908,8 +908,10 @@ def main():
         train_loss = 0.0
 
         if args.module == "vae":
-            vae_recon_train_loss = 0.0
-            vae_kl_train_loss = 0.0
+            vae_recon_train_loss = 0.
+            vae_kl_train_loss = 0.
+            vae_latents_mean = 0.
+            vae_latents_std = 0.
 
         checkpoint_saved_this_epoch = False
                 
@@ -1017,13 +1019,16 @@ def main():
                                                                     random_phase_offset=args.phase_augmentation)
                     
                     posterior = module.encode(samples, return_dict=False)[0]
-                    recon = module.decode(posterior.sample(), return_dict=False)[0]                    
+                    latents = posterior.sample()
+                    latents_mean = latents.mean()
+                    latents_std = latents.std()
+                    recon = module.decode(latents, return_dict=False)[0]                    
                     
                     recon_raw_samples = pipeline.format.sample_to_raw(recon, model_params).real
                     vae_recon_loss = module.multiscale_spectral_loss(recon_raw_samples, raw_samples)
                     vae_kl_loss = posterior.kl().sum() / posterior.mean.numel()
 
-                    vae_recon_loss_weight = 1  
+                    vae_recon_loss_weight = 1
                     vae_kl_loss_weight = args.kl_loss_weight
                     loss = vae_recon_loss + vae_kl_loss_weight * vae_kl_loss
 
@@ -1039,9 +1044,14 @@ def main():
                     vae_recon_train_loss += vae_recon_avg_loss.item() / args.gradient_accumulation_steps
                     vae_kl_avg_loss = accelerator.gather(vae_kl_loss.repeat(args.train_batch_size)).mean()
                     vae_kl_train_loss += vae_kl_avg_loss.item() / args.gradient_accumulation_steps
-                    
+                    vae_latents_avg_mean = accelerator.gather(latents_mean.repeat(args.train_batch_size)).mean()
+                    vae_latents_mean += vae_latents_avg_mean.item() / args.gradient_accumulation_steps
+                    vae_latents_avg_std = accelerator.gather(latents_std.repeat(args.train_batch_size)).mean()
+                    vae_latents_std += vae_latents_avg_std.item() / args.gradient_accumulation_steps
+
                 # Backpropagate
                 accelerator.backward(loss)
+
                 if accelerator.sync_gradients:
                     grad_norm = accelerator.clip_grad_norm_(module.parameters(), args.max_grad_norm).item()
                     if math.isinf(grad_norm) or math.isnan(grad_norm):
@@ -1069,6 +1079,8 @@ def main():
                 if args.module == "vae":
                     logs["vae/recon_loss"] = vae_recon_train_loss
                     logs["vae/kl_loss"] = vae_kl_train_loss
+                    logs["vae/latents_mean"] = vae_latents_mean
+                    logs["vae/latents_std"] = vae_latents_std
                     logs["loss_weight/recon"] = vae_recon_loss_weight
                     logs["loss_weight/kl"] = vae_kl_loss_weight
                 if args.use_ema:
