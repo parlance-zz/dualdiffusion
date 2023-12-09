@@ -235,22 +235,6 @@ def parse_args():
         help="Whether or not to use gradient checkpointing to save memory at the expense of slower backward pass.",
     )
     parser.add_argument(
-        "--dropout",
-        type=float,
-        default=None,
-        help="Set the probability for dropout modules in the module, retain the dropout values from the pretrained model if not specified.",
-    )
-    parser.add_argument(
-        "--dropout_depth",
-        type=int,
-        default=3,
-        help=("Minimum block depth to apply dropout;",
-              " For example, in a UNet / VAE with 6 down-blocks and a dropout depth of 3,",
-              " dropout is only applied to the last 3 down-blocks, mid-block, and first 3 up-blocks.",
-              " Setting this to 0 will apply the dropout value to all blocks.",
-        )
-    )
-    parser.add_argument(
         "--learning_rate",
         type=float,
         default=1e-4,
@@ -694,6 +678,7 @@ def main():
     total_batch_size = 0
     
     logger.info(f"Using phase augmentation: {args.phase_augmentation}")
+    logger.info(f"Using pitch augmentation range: {args.pitch_augmentation_range}")
 
     def transform_samples(examples):
         
@@ -872,8 +857,7 @@ def main():
     if args.module == "vae":
         logger.info(f"Using KL loss weight of {args.kl_loss_weight}")
         logger.info(f"Multiscale spectral loss params: {module.config.multiscale_spectral_loss}")
-
-    logger.info(f"Sample shape: {pipeline.format.get_sample_shape(model_params, bsz=args.train_batch_size)}")
+        logger.info(f"Sample shape: {pipeline.format.get_sample_shape(model_params, bsz=args.train_batch_size)}")
                 
     # correction to min snr for v-prediction, not 100% sure this is correct
     if args.snr_gamma is not None:
@@ -887,23 +871,6 @@ def main():
             
     if args.input_perturbation > 0:
         logger.info(f"Using input perturbation of {args.input_perturbation}")
-
-    if args.dropout is not None:
-        logger.info(f"Setting dropout probability to {args.dropout} for block depth >= {args.dropout_depth}")
-
-        def set_dropout_p(model, p_value):
-            for module in model.children():
-                if isinstance(module, torch.nn.Dropout):
-                    module.p = p_value
-                else:
-                    set_dropout_p(module, p_value)
-
-        for i in range(args.dropout_depth, len(module.down_blocks)):
-            set_dropout_p(module.down_blocks[i], args.dropout)
-        if len(module.down_blocks) >= args.dropout_depth:
-            set_dropout_p(module.mid_block, args.dropout)
-        for i in range(args.dropout_depth, len(module.up_blocks)):
-            set_dropout_p(module.up_blocks[i-args.dropout_depth], args.dropout)
 
     timesteps = None
     torch.cuda.empty_cache()

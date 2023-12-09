@@ -172,19 +172,6 @@ UNET_PARAMS = {
 
     #"block_out_channels": (256, 384, 640, 1024), # 320
     "block_out_channels": (128, 256, 512, 512), # 330
-
-    "down_block_types": (
-        "SeparableAttnDownBlock2D",
-        "SeparableAttnDownBlock2D",
-        "SeparableAttnDownBlock2D",
-        "SeparableAttnDownBlock2D",
-    ),
-    "up_block_types": (
-        "SeparableAttnUpBlock2D",
-        "SeparableAttnUpBlock2D",
-        "SeparableAttnUpBlock2D",
-        "SeparableAttnUpBlock2D",
-    ),
 }
 
 

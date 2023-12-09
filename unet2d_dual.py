@@ -44,12 +44,9 @@ class UNet2DDualModel(ModelMixin, ConfigMixin):
         time_embedding_type: str = "positional",
         freq_shift: int = 0,
         flip_sin_to_cos: bool = True,
-        down_block_types: Tuple[str] = ("SeparableAttnDownBlock2D", "SeparableAttnDownBlock2D", "SeparableAttnDownBlock2D", "SeparableAttnDownBlock2D"),
-        up_block_types: Tuple[str] = ("SeparableAttnUpBlock2D", "SeparableAttnUpBlock2D", "SeparableAttnUpBlock2D", "SeparableAttnUpBlock2D"),
         block_out_channels: Tuple[int] = (128, 192, 320, 512),
         layers_per_block: int = 2,
         add_mid_attention: bool = True,
-        use_separable_mid_block: bool = True,
         layers_per_mid_block: int = 1,
         mid_block_scale_factor: float = 1,
         mid_block_bottleneck_channels: int = 0,
@@ -87,54 +84,44 @@ class UNet2DDualModel(ModelMixin, ConfigMixin):
         time_embed_dim = block_out_channels[0] * 4
 
         # Check inputs
-        if len(down_block_types) != len(up_block_types):
+        if not isinstance(attention_num_heads, int) and len(attention_num_heads) != len(block_out_channels):
             raise ValueError(
-                f"Must provide the same number of `down_block_types` as `up_block_types`. `down_block_types`: {down_block_types}. `up_block_types`: {up_block_types}."
-            )
-
-        if len(block_out_channels) != len(down_block_types):
-            raise ValueError(
-                f"Must provide the same number of `block_out_channels` as `down_block_types`. `block_out_channels`: {block_out_channels}. `down_block_types`: {down_block_types}."
-            )
-
-        if not isinstance(attention_num_heads, int) and len(attention_num_heads) != len(down_block_types):
-            raise ValueError(
-                f"Must provide the same number of `attention_num_heads` as `down_block_types`. `attention_num_heads`: {attention_num_heads}. `down_block_types`: {down_block_types}."
+                f"Must provide the same number of `attention_num_heads` as `block_out_channels`. `attention_num_heads`: {attention_num_heads}. `block_out_channels`: {block_out_channels}."
             )   
 
-        if not isinstance(norm_num_groups, int) and len(norm_num_groups) != len(down_block_types):
+        if not isinstance(norm_num_groups, int) and len(norm_num_groups) != len(block_out_channels):
             raise ValueError(
-                f"Must provide the same number of `norm_num_groups` as `down_block_types`. `norm_num_groups`: {norm_num_groups}. `down_block_types`: {down_block_types}."
+                f"Must provide the same number of `norm_num_groups` as `block_out_channels`. `norm_num_groups`: {norm_num_groups}. `block_out_channels`: {block_out_channels}."
             )
         
-        if not isinstance(dropout, float) and len(dropout) != len(down_block_types):
+        if not isinstance(dropout, float) and len(dropout) != len(block_out_channels):
             raise ValueError(
-                f"Must provide the same number of `dropout` as `down_block_types`. `dropout`: {dropout}. `down_block_types`: {down_block_types}."
+                f"Must provide the same number of `dropout` as `block_out_channels`. `dropout`: {dropout}. `block_out_channels`: {block_out_channels}."
             )
         
-        if not isinstance(double_attention, bool) and len(double_attention) != len(down_block_types):
+        if not isinstance(double_attention, bool) and len(double_attention) != len(block_out_channels):
             raise ValueError(
-                f"Must provide the same number of `double_attention` as `down_block_types`. `double_attention`: {double_attention}. `down_block_types`: {down_block_types}."
+                f"Must provide the same number of `double_attention` as `block_out_channels`. `double_attention`: {double_attention}. `block_out_channels`: {block_out_channels}."
             )
         
-        if not isinstance(pre_attention, bool) and len(pre_attention) != len(down_block_types):
+        if not isinstance(pre_attention, bool) and len(pre_attention) != len(block_out_channels):
             raise ValueError(
-                f"Must provide the same number of `pre_attention` as `down_block_types`. `pre_attention`: {pre_attention}. `down_block_types`: {down_block_types}."
+                f"Must provide the same number of `pre_attention` as `block_out_channels`. `pre_attention`: {pre_attention}. `block_out_channels`: {block_out_channels}."
             )
         
-        if not isinstance(freq_embedding_dim, int) and len(freq_embedding_dim) != len(down_block_types):
+        if not isinstance(freq_embedding_dim, int) and len(freq_embedding_dim) != len(block_out_channels):
             raise ValueError(
-                f"Must provide the same number of `freq_embedding_dim` as `down_block_types`. `freq_embedding_dim`: {freq_embedding_dim}. `down_block_types`: {down_block_types}."
+                f"Must provide the same number of `freq_embedding_dim` as `block_out_channels`. `freq_embedding_dim`: {freq_embedding_dim}. `block_out_channels`: {block_out_channels}."
             )
         
-        if not isinstance(time_embedding_dim, int) and len(time_embedding_dim) != len(down_block_types):
+        if not isinstance(time_embedding_dim, int) and len(time_embedding_dim) != len(block_out_channels):
             raise ValueError(
-                f"Must provide the same number of `time_embedding_dim` as `down_block_types`. `time_embedding_dim`: {time_embedding_dim}. `down_block_types`: {down_block_types}."
+                f"Must provide the same number of `time_embedding_dim` as `block_out_channels`. `time_embedding_dim`: {time_embedding_dim}. `block_out_channels`: {block_out_channels}."
             )
         
-        if not isinstance(add_attention, bool) and len(add_attention) != len(down_block_types):
+        if not isinstance(add_attention, bool) and len(add_attention) != len(block_out_channels):
             raise ValueError(
-                f"Must provide the same number of `add_attention` as `down_block_types`. `add_attention`: {add_attention}. `down_block_types`: {down_block_types}."
+                f"Must provide the same number of `add_attention` as `block_out_channels`. `add_attention`: {add_attention}. `block_out_channels`: {block_out_channels}."
             )
         
         # input
@@ -170,36 +157,29 @@ class UNet2DDualModel(ModelMixin, ConfigMixin):
         self.up_blocks = nn.ModuleList([])
 
         if isinstance(attention_num_heads, int):
-            attention_num_heads = (attention_num_heads,) * len(down_block_types)
+            attention_num_heads = (attention_num_heads,) * len(block_out_channels)
         if isinstance(norm_num_groups, int):
-            norm_num_groups = (norm_num_groups,) * len(down_block_types)
+            norm_num_groups = (norm_num_groups,) * len(block_out_channels)
         if isinstance(dropout, float):
-            dropout = (dropout,) * len(down_block_types)
+            dropout = (dropout,) * len(block_out_channels)
         if isinstance(separate_attn_dim_down, int):
             separate_attn_dim_down = (separate_attn_dim_down,)
         if isinstance(separate_attn_dim_up, int):
             separate_attn_dim_up = (separate_attn_dim_up,)
         if isinstance(double_attention, bool):
-            double_attention = (double_attention,) * len(down_block_types)
+            double_attention = (double_attention,) * len(block_out_channels)
         if isinstance(pre_attention, bool):
-            pre_attention = (pre_attention,) * len(down_block_types)
+            pre_attention = (pre_attention,) * len(block_out_channels)
         if isinstance(freq_embedding_dim, int):
-            freq_embedding_dim = (freq_embedding_dim,) * len(down_block_types)
+            freq_embedding_dim = (freq_embedding_dim,) * len(block_out_channels)
         if isinstance(time_embedding_dim, int):
-            time_embedding_dim = (time_embedding_dim,) * len(down_block_types)
+            time_embedding_dim = (time_embedding_dim,) * len(block_out_channels)
         if isinstance(add_attention, bool):
-            add_attention = (add_attention,) * len(down_block_types)
-
-        def set_dropout_p(model, p_value):
-            for module in model.children():
-                if isinstance(module, torch.nn.Dropout):
-                    module.p = p_value
-                else:
-                    set_dropout_p(module, p_value)
+            add_attention = (add_attention,) * len(block_out_channels)
 
         # down
         output_channel = block_out_channels[0]
-        for i, down_block_type in enumerate(down_block_types):
+        for i in range(len(block_out_channels)):
             input_channel = output_channel
             output_channel = block_out_channels[i]
 
@@ -215,47 +195,28 @@ class UNet2DDualModel(ModelMixin, ConfigMixin):
             _time_embedding_dim = time_embedding_dim[i]
             _add_attention = add_attention[i]
 
-            if down_block_type == "SeparableAttnDownBlock2D":
-                down_block = SeparableAttnDownBlock2D(
-                    num_layers=layers_per_block,
-                    in_channels=input_channel,
-                    out_channels=output_channel,
-                    temb_channels=time_embed_dim,
-                    resnet_eps=norm_eps,
-                    resnet_act_fn=act_fn,
-                    resnet_groups=_norm_num_groups,
-                    attention_num_heads=_attention_num_heads,
-                    downsample_padding=downsample_padding,
-                    resnet_time_scale_shift=resnet_time_scale_shift,
-                    downsample_type=_downsample_type,
-                    separate_attn_dim=separate_attn_dim_down,
-                    double_attention=_double_attention,
-                    pre_attention=_pre_attention,
-                    dropout=_dropout,
-                    conv_size=conv_size,
-                    freq_embedding_dim=_freq_embedding_dim,
-                    time_embedding_dim=_time_embedding_dim,
-                    add_attention=_add_attention,
-                    return_skip_samples=use_skip_samples,
-                )
-            else:
-                down_block = get_down_block(
-                    down_block_type,
-                    num_layers=layers_per_block,
-                    in_channels=input_channel,
-                    out_channels=output_channel,
-                    temb_channels=time_embed_dim,
-                    add_downsample=not is_final_block,
-                    resnet_eps=norm_eps,
-                    resnet_act_fn=act_fn,
-                    resnet_groups=_norm_num_groups,
-                    attention_head_dim=output_channel // _attention_num_heads,
-                    downsample_padding=downsample_padding,
-                    resnet_time_scale_shift=resnet_time_scale_shift,
-                    downsample_type=_downsample_type,
-                )
-                set_dropout_p(down_block, _dropout) # default blocks don't apply dropout to all modules
-
+            down_block = SeparableAttnDownBlock2D(
+                num_layers=layers_per_block,
+                in_channels=input_channel,
+                out_channels=output_channel,
+                temb_channels=time_embed_dim,
+                resnet_eps=norm_eps,
+                resnet_act_fn=act_fn,
+                resnet_groups=_norm_num_groups,
+                attention_num_heads=_attention_num_heads,
+                downsample_padding=downsample_padding,
+                resnet_time_scale_shift=resnet_time_scale_shift,
+                downsample_type=_downsample_type,
+                separate_attn_dim=separate_attn_dim_down,
+                double_attention=_double_attention,
+                pre_attention=_pre_attention,
+                dropout=_dropout,
+                conv_size=conv_size,
+                freq_embedding_dim=_freq_embedding_dim,
+                time_embedding_dim=_time_embedding_dim,
+                add_attention=_add_attention,
+                return_skip_samples=use_skip_samples,
+            )
             self.down_blocks.append(down_block)
 
         # mid
@@ -267,42 +228,26 @@ class UNet2DDualModel(ModelMixin, ConfigMixin):
         _freq_embedding_dim = freq_embedding_dim[-1]
         _time_embedding_dim = time_embedding_dim[-1]
 
-        if use_separable_mid_block:
-            self.mid_block = SeparableMidBlock2D(
-                in_channels=block_out_channels[-1],
-                temb_channels=time_embed_dim,
-                resnet_eps=norm_eps,
-                resnet_act_fn=act_fn,
-                output_scale_factor=mid_block_scale_factor,
-                resnet_time_scale_shift=resnet_time_scale_shift,
-                attention_num_heads=_attention_num_heads,
-                resnet_groups=_norm_num_groups,
-                add_attention=add_mid_attention,
-                pre_attention=_pre_attention,
-                separate_attn_dim=separate_attn_dim_mid,
-                double_attention=_double_attention,
-                dropout=_dropout,
-                conv_size=conv_size,
-                num_layers=layers_per_mid_block,
-                freq_embedding_dim=_freq_embedding_dim,
-                time_embedding_dim=_time_embedding_dim,
-                mid_block_bottleneck_channels=mid_block_bottleneck_channels,
-            )
-        else:
-            self.mid_block = UNetMidBlock2D(
-                in_channels=block_out_channels[-1],
-                temb_channels=time_embed_dim,
-                resnet_eps=norm_eps,
-                resnet_act_fn=act_fn,
-                output_scale_factor=mid_block_scale_factor,
-                resnet_time_scale_shift=resnet_time_scale_shift,
-                attention_head_dim=block_out_channels[-1] // _attention_num_heads,
-                resnet_groups=_norm_num_groups,
-                add_attention=add_mid_attention,
-                dropout=_dropout,
-                num_layers=layers_per_mid_block,
-            )
-            set_dropout_p(self.mid_block, _dropout) # default blocks don't apply dropout to all modules
+        self.mid_block = SeparableMidBlock2D(
+            in_channels=block_out_channels[-1],
+            temb_channels=time_embed_dim,
+            resnet_eps=norm_eps,
+            resnet_act_fn=act_fn,
+            output_scale_factor=mid_block_scale_factor,
+            resnet_time_scale_shift=resnet_time_scale_shift,
+            attention_num_heads=_attention_num_heads,
+            resnet_groups=_norm_num_groups,
+            add_attention=add_mid_attention,
+            pre_attention=_pre_attention,
+            separate_attn_dim=separate_attn_dim_mid,
+            double_attention=_double_attention,
+            dropout=_dropout,
+            conv_size=conv_size,
+            num_layers=layers_per_mid_block,
+            freq_embedding_dim=_freq_embedding_dim,
+            time_embedding_dim=_time_embedding_dim,
+            mid_block_bottleneck_channels=mid_block_bottleneck_channels,
+        )
 
         reversed_attention_num_heads = list(reversed(attention_num_heads))
         reversed_norm_num_groups = list(reversed(norm_num_groups))
@@ -316,7 +261,7 @@ class UNet2DDualModel(ModelMixin, ConfigMixin):
         # up
         reversed_block_out_channels = list(reversed(block_out_channels))
         output_channel = reversed_block_out_channels[0]
-        for i, up_block_type in enumerate(up_block_types):
+        for i in range(len(block_out_channels)):
             prev_output_channel = output_channel
             output_channel = reversed_block_out_channels[i]
             input_channel = reversed_block_out_channels[min(i + 1, len(block_out_channels) - 1)]
@@ -335,48 +280,30 @@ class UNet2DDualModel(ModelMixin, ConfigMixin):
             _time_embedding_dim = reversed_time_embedding_dim[i]
             _add_attention = reversed_add_attention[i]
 
-            if up_block_type == "SeparableAttnUpBlock2D":
-                up_block = SeparableAttnUpBlock2D(
-                    num_layers=layers_per_block + 1,
-                    in_channels=input_channel,
-                    out_channels=output_channel,
-                    prev_output_channel=prev_output_channel,
-                    temb_channels=time_embed_dim,
-                    resnet_eps=norm_eps,
-                    resnet_act_fn=act_fn,
-                    resnet_groups=_norm_num_groups,
-                    attention_num_heads=_attention_num_heads,
-                    resnet_time_scale_shift=resnet_time_scale_shift,
-                    upsample_type=_upsample_type,
-                    separate_attn_dim=separate_attn_dim_up,
-                    double_attention=_double_attention,
-                    pre_attention=_pre_attention,
-                    dropout=_dropout,
-                    conv_size=conv_size,
-                    freq_embedding_dim=_freq_embedding_dim,
-                    time_embedding_dim=_time_embedding_dim,
-                    add_attention=_add_attention,
-                    use_skip_samples=use_skip_samples,
-                )
-            else:
-                up_block = get_up_block(
-                    up_block_type,
-                    num_layers=layers_per_block + 1,
-                    in_channels=input_channel,
-                    out_channels=output_channel,
-                    prev_output_channel=prev_output_channel,
-                    temb_channels=time_embed_dim,
-                    add_upsample=not is_final_block,
-                    resnet_eps=norm_eps,
-                    resnet_act_fn=act_fn,
-                    resnet_groups=_norm_num_groups,
-                    attention_head_dim=output_channel // _attention_num_heads,
-                    resnet_time_scale_shift=resnet_time_scale_shift,
-                    upsample_type=_upsample_type,
-                )
-                set_dropout_p(up_block, _dropout) # default blocks don't apply dropout to all modules
-
+            up_block = SeparableAttnUpBlock2D(
+                num_layers=layers_per_block + 1,
+                in_channels=input_channel,
+                out_channels=output_channel,
+                prev_output_channel=prev_output_channel,
+                temb_channels=time_embed_dim,
+                resnet_eps=norm_eps,
+                resnet_act_fn=act_fn,
+                resnet_groups=_norm_num_groups,
+                attention_num_heads=_attention_num_heads,
+                resnet_time_scale_shift=resnet_time_scale_shift,
+                upsample_type=_upsample_type,
+                separate_attn_dim=separate_attn_dim_up,
+                double_attention=_double_attention,
+                pre_attention=_pre_attention,
+                dropout=_dropout,
+                conv_size=conv_size,
+                freq_embedding_dim=_freq_embedding_dim,
+                time_embedding_dim=_time_embedding_dim,
+                add_attention=_add_attention,
+                use_skip_samples=use_skip_samples,
+            )
             self.up_blocks.append(up_block)
+
             prev_output_channel = output_channel
 
         # out
