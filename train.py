@@ -869,6 +869,12 @@ def main():
         if args.resume_from_checkpoint is None:
             args.resume_from_checkpoint = "latest"
     
+    if args.module == "vae":
+        logger.info(f"Using KL loss weight of {args.kl_loss_weight}")
+        logger.info(f"Multiscale spectral loss params: {module.config.multiscale_spectral_loss}")
+
+    logger.info(f"Sample shape: {pipeline.format.get_sample_shape(model_params, bsz=args.train_batch_size)}")
+                
     # correction to min snr for v-prediction, not 100% sure this is correct
     if args.snr_gamma is not None:
         logger.info(f"Using min-SNR loss weighting - SNR gamma ({args.snr_gamma})")

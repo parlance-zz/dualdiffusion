@@ -19,7 +19,8 @@ accelerate launch^
  --lr_scheduler="constant_with_warmup"^
  --num_validation_samples=5^
  --num_validation_epochs=5^
- --max_grad_norm=10
+ --max_grad_norm=10^
+ --kl_loss_weight=1e-8
 
 REM --max_grad_norm=25
  
