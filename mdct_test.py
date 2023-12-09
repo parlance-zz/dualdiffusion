@@ -123,11 +123,14 @@ Xk = mdct(raw_sample, block_width, window_degree=1)[..., 1:-2, :]
 #noise = torch.randn_like(Xk) * 1e-2
 #Xk += noise
 
-
+#samples_noise_phase = (torch.rand_like(Xk.real) * 2j * torch.pi).exp()
+samples_noise_phase = torch.randn_like(Xk)
+noise_amplitude = torch.exp(-100*torch.linspace(-1, 1, Xk.shape[-1]).square())
+Xk = samples_noise_phase * noise_amplitude.view(1, -1)
 
 #samples_noise_phase = torch.exp(torch.rand_like(Xk) * (2j * torch.pi))
 #samples_noise_phase *= torch.rand_like(samples_noise_phase)
-#noise_amplitude = torch.exp(-100*torch.linspace(-1, 1, Xk.shape[-1]).square())
+
 #Xk = Xk.real
 #samples_noise_phase = torch.rand_like(Xk.real) * 2 - 1
 #Xk *= samples_noise_phase
@@ -143,6 +146,6 @@ Xk = mdct(raw_sample, block_width, window_degree=1)[..., 1:-2, :]
 print("Xk shape:", Xk.shape, "Xk mean:", (Xk / Xk.std()).mean().item(), "Xk std:", Xk.std().item())
 Xk.cpu().numpy().tofile("./debug/mdct.raw")
 
-y = imdct(Xk, window_degree=1).real
+y = imdct(Xk, window_degree=2).real
 
 y.cpu().numpy().tofile("./debug/imdct.raw")

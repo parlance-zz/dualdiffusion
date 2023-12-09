@@ -12,7 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import numpy as np
 import torch
 from torch import nn
 import torch.nn.functional as F
@@ -45,6 +44,93 @@ def get_activation(act_fn):
         return torch.sinc
     else:
         raise ValueError(f"Unsupported activation function: {act_fn}")
+
+
+"""
+class DualDownsample2D(nn.Module):
+
+    def __init__(self, channels, out_channels=None, padding=1, stride=2, conv_size=3):
+        super().__init__()
+        self.channels = channels
+        self.out_channels = out_channels or channels
+        self.padding = padding
+
+        self.conv = nn.Conv2d(self.channels, self.out_channels, conv_size, stride=stride, padding=padding)
+
+    def forward(self, hidden_states):
+        assert hidden_states.shape[1] == self.channels
+        if self.padding == 0:
+            pad = (0, 1, 0, 1)
+            hidden_states = F.pad(hidden_states, pad, mode="constant", value=0)
+
+        hidden_states = self.conv(hidden_states)
+        return hidden_states
+
+class DualUpsample2D(nn.Module):
+
+    def __init__(self, channels, out_channels=None, ):
+        super().__init__()
+        self.channels = channels
+        self.out_channels = out_channels or channels
+        self.use_conv = use_conv
+        self.use_conv_transpose = use_conv_transpose
+        self.name = name
+
+        conv = None
+        if use_conv_transpose:
+            conv = nn.ConvTranspose2d(channels, self.out_channels, 4, 2, 1)
+        elif use_conv:
+            conv = LoRACompatibleConv(self.channels, self.out_channels, 3, padding=1)
+
+        # TODO(Suraj, Patrick) - clean up after weight dicts are correctly renamed
+        if name == "conv":
+            self.conv = conv
+        else:
+            self.Conv2d_0 = conv
+
+    def forward(self, hidden_states, output_size=None, scale: float = 1.0):
+        assert hidden_states.shape[1] == self.channels
+
+        if self.use_conv_transpose:
+            return self.conv(hidden_states)
+
+        # Cast to float32 to as 'upsample_nearest2d_out_frame' op does not support bfloat16
+        # TODO(Suraj): Remove this cast once the issue is fixed in PyTorch
+        # https://github.com/pytorch/pytorch/issues/86679
+        dtype = hidden_states.dtype
+        if dtype == torch.bfloat16:
+            hidden_states = hidden_states.to(torch.float32)
+
+        # upsample_nearest_nhwc fails with large batch sizes. see https://github.com/huggingface/diffusers/issues/984
+        if hidden_states.shape[0] >= 64:
+            hidden_states = hidden_states.contiguous()
+
+        # if `output_size` is passed we force the interpolation output
+        # size and do not make use of `scale_factor=2`
+        if output_size is None:
+            hidden_states = F.interpolate(hidden_states, scale_factor=2.0, mode="nearest")
+        else:
+            hidden_states = F.interpolate(hidden_states, size=output_size, mode="nearest")
+
+        # If the input is bfloat16, we cast back to bfloat16
+        if dtype == torch.bfloat16:
+            hidden_states = hidden_states.to(dtype)
+
+        # TODO(Suraj, Patrick) - clean up after weight dicts are correctly renamed
+        if self.use_conv:
+            if self.name == "conv":
+                if isinstance(self.conv, LoRACompatibleConv):
+                    hidden_states = self.conv(hidden_states, scale)
+                else:
+                    hidden_states = self.conv(hidden_states)
+            else:
+                if isinstance(self.Conv2d_0, LoRACompatibleConv):
+                    hidden_states = self.Conv2d_0(hidden_states, scale)
+                else:
+                    hidden_states = self.Conv2d_0(hidden_states)
+
+        return hidden_states
+"""
 
 class DualResnetBlock2D(nn.Module):
     r"""

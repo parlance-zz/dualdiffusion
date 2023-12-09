@@ -7,7 +7,7 @@ from dual_diffusion_pipeline import DualDiffusionPipeline
 load_dotenv()
 torch.manual_seed(200)
 
-MODEL_NAME = "dualdiffusion2d_350_mclt_v8_256embed_4vae_mssloss10"
+MODEL_NAME = "dualdiffusion2d_350_mclt_v8_256embed_8vae_mssloss14"
 MODEL_PARAMS = {
     #"prediction_type": "sample",
     "prediction_type": "v_prediction",
@@ -22,26 +22,12 @@ MODEL_PARAMS = {
     "sample_raw_channels": int(os.environ.get("DATASET_NUM_CHANNELS")),
     "sample_rate": int(os.environ.get("DATASET_SAMPLE_RATE")),
 
-    #"sample_format": "time_overlapped",
-    #"sample_raw_length": 65536*2,
-    #"num_chunks": 256, 
-    #"rfft": True,
-
-    #"sample_format": "overlapped",
-    #"sample_raw_length": 65536*2,
-    #"num_chunks": 128, 
-    #"spatial_window_length": 512,
-    #"rfft": True,
-    #"ifft": True,
-    #"fftshift": False,
-
     "sample_format": "mclt",
     "sample_raw_length": 65536*2,
     "num_chunks": 64,
     "multiscale_spectral_loss": {
         "u": 16000,
         "block_widths": [
-            8,
             16,
             32,
             64,
@@ -54,49 +40,18 @@ MODEL_PARAMS = {
         ],
         "block_offsets": [
             0,
-            0.125,
             0.25,
-            0.375,
         ]
     }
-    
-    #"sample_format": "mdct",
-    #"complex": True,
-    #"sample_raw_length": 65536*2,
-    #"num_chunks": 256,
-    #"u": 20000,
-    #"multiscale_spectral_loss": {
-    #    "num_filters": 8,
-    #    "num_octaves": 10,
-    #    "filter_std": 2,
-    #    "num_orders": 5,
-    #    "max_q": 1,
-    #    "u": 20000,
-    #}
-
-    #"sample_format": "normal",
-    #"sample_raw_length": 65536*2,
-    #"num_chunks": 256, 
-    #"spatial_window_length": 512,
-    #"rfft": True,
-    #"ifft": True,
-
-    #"sample_std": 0.021220825965105643,
-    #"sample_format": "ln",
-    #"ln_amplitude_floor": -12,
-    #"ln_amplitude_mean": -6.1341057,
-    #"ln_amplitude_std": 1.66477387,
-    #"phase_integral_mean": 0,
-    #"phase_integral_std": 4.32964091,
 }
 
 
 #VAE_PARAMS = None
 VAE_PARAMS = {
-  "latent_channels": 4,
+  "latent_channels": 8,
   "sample_size": (64, 2048),
   "act_fn": "silu",
-  "conv_size": (3,3),
+  "conv_size": (1,3),
   
   "block_out_channels": [128, 256, 512, 512],
   "layers_per_block": 2,
@@ -119,7 +74,7 @@ VAE_PARAMS = {
   "pre_attention": False,
   #"add_attention": False,
 
-  "freq_embedding_dim": 64,
+  "freq_embedding_dim": 256,
   "time_embedding_dim": 256,
 
   "in_channels": DualDiffusionPipeline.get_sample_format(MODEL_PARAMS).get_num_channels(MODEL_PARAMS)[0],

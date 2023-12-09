@@ -5,7 +5,7 @@ accelerate launch^
  --allow_tf32^
  --train_data_dir="D:/dualdiffusion/dataset/samples"^
  --raw_sample_format="int16"^
- --pretrained_model_name_or_path="D:/dualdiffusion/models/dualdiffusion2d_350_mclt_v8_256embed_4vae_mssloss10"^
+ --pretrained_model_name_or_path="D:/dualdiffusion/models/dualdiffusion2d_350_mclt_v8_256embed_8vae_mssloss14"^
  --module="vae"^
  --train_batch_size=1^
  --num_train_epochs=500^

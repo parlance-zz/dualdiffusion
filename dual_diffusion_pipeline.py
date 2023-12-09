@@ -150,14 +150,13 @@ class DualMCLTFormat:
     def sample_to_raw(samples, model_params):
         
         samples_abs = samples[:, 0, :, :].permute(0, 2, 1).contiguous().sigmoid()
-        samples_phase = samples[:, 1:3, :, :].permute(0, 3, 2, 1).contiguous()
-        samples_phase = samples_phase / samples_phase.square().sum(dim=(1,2,3), keepdim=True).mean(dim=(1,2,3), keepdim=True).sqrt().clip(min=1e-8)
+        samples_phase = samples[:, 1:3, :, :].permute(0, 3, 2, 1).contiguous().tanh()
         samples_phase = torch.view_as_complex(samples_phase)
         samples_waveform = samples_abs * samples_phase
 
         samples_noise_abs = samples[:, 3, :, :].permute(0, 2, 1).contiguous().sigmoid()
-        samples_noise_phase = torch.randn_like(samples_noise_abs)
-        samples_noise = samples_noise_abs * samples_noise_phase * 0.5
+        samples_noise_phase = torch.rand_like(samples_noise_abs) / 4
+        samples_noise = samples_noise_abs * samples_noise_phase
         
         return imdct(samples_waveform, window_degree=1).real + imdct(samples_noise, window_degree=2).real
 
@@ -520,15 +519,21 @@ class DualMultiscaleSpectralLoss2:
 
         loss_params = model_params["multiscale_spectral_loss"]
         self.block_widths = loss_params["block_widths"]
-        self.u = loss_params["u"]
+        self.u = loss_params.get("u", 16000)
+        self.sigma = loss_params.get("sigma", 2)
+        self.block_offsets = loss_params.get("block_offsets", [0, 0.25])
 
-        if "block_offsets" in loss_params:
-            self.block_offsets = loss_params["block_offsets"]
-        else:
-            self.block_offsets = [0, 0.25]
+        self.block_weights = []
+        for block_num, block_width in enumerate(self.block_widths):
+      
+            filter_q = 2 ** -block_num
+            n_bins = block_width // 2
+            mdct_q = torch.arange(0.5, n_bins + 0.5) / n_bins
 
-        #self.block_weights = torch.arange(1, len(self.block_widths) + 1, dtype=torch.float32) #.sqrt()
-        #self.block_weights /= self.block_weights.mean()
+            filter = torch.exp(-self.sigma * torch.log(mdct_q / filter_q).square())
+            self.block_weights.append(filter.view(1, 1, -1))
+
+        self.loss_scale = 1 / (len(self.block_widths) * len(self.block_offsets) * 2)
 
     def __call__(self, sample, target):
         
@@ -536,34 +541,35 @@ class DualMultiscaleSpectralLoss2:
         target = target[:, sample_block_width // 2:-sample_block_width]
         assert(sample.shape == target.shape)
 
-        #if self.block_weights.device != sample.device:
-        #    self.block_weights = self.block_weights.to(sample.device)
-        #if self.block_weights.dtype != sample.dtype:
-        #    self.block_weights = self.block_weights.to(sample.dtype)
+        if self.block_weights[0].device != sample.device:
+            for block_num, block_weight in enumerate(self.block_weights):
+                self.block_weights[block_num] = block_weight.to(sample.device)
 
         loss = torch.zeros(1, device=sample.device)
 
         for block_num, block_width in enumerate(self.block_widths):
-                
             for block_offset in self.block_offsets:
 
                 offset = int(block_offset * block_width)
-
-                sample_fft_abs = mdct(sample[:, offset:], block_width, window_degree=2)[:, 3:-3, :].abs()
-                target_fft_abs = mdct(target[:, offset:], block_width, window_degree=2)[:, 3:-3, :].abs()
+                sample_fft_abs = mdct(sample[:, offset:], block_width, window_degree=2)[:, 1:-2, :].abs()
+                target_fft_abs = mdct(target[:, offset:], block_width, window_degree=2)[:, 1:-2, :].abs()
 
                 sample_fft_abs = sample_fft_abs / sample_fft_abs.amax(dim=(1,2), keepdim=True)
                 target_fft_abs = target_fft_abs / target_fft_abs.amax(dim=(1,2), keepdim=True)
-
                 sample_fft_abs_ln = (sample_fft_abs * self.u).log1p()
                 target_fft_abs_ln = (target_fft_abs * self.u).log1p()
 
-                #loss_weight = self.block_weights[block_num]
-                loss += torch.nn.functional.l1_loss(sample_fft_abs_ln, target_fft_abs_ln,  reduction="mean")# * loss_weight
-                loss += torch.nn.functional.l1_loss(sample_fft_abs, target_fft_abs, reduction="mean")# * loss_weight
+                block_weight = self.block_weights[block_num]
+                sample_fft_abs = sample_fft_abs * block_weight
+                target_fft_abs = target_fft_abs * block_weight
+                sample_fft_abs_ln = sample_fft_abs_ln * block_weight
+                target_fft_abs_ln = target_fft_abs_ln * block_weight
 
-        return loss / (len(self.block_widths) * len(self.block_offsets) * 2)
-    
+                loss += torch.nn.functional.l1_loss(sample_fft_abs_ln, target_fft_abs_ln,  reduction="mean")
+                loss += torch.nn.functional.l1_loss(sample_fft_abs, target_fft_abs, reduction="mean")
+
+        return loss * self.loss_scale
+
 class DualMultiscaleSpectralLoss:
 
     @torch.no_grad()

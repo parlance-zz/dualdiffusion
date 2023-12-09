@@ -271,7 +271,7 @@ def embedding_test():
 def vae_test():
 
     #dualdiffusion2d_330_mdct_v8_256embed_4vae
-    model_name = "dualdiffusion2d_350_mclt_v8_256embed_4vae_mssloss10"
+    model_name = "dualdiffusion2d_350_mclt_v8_256embed_8vae_mssloss14"
     num_samples = 4
     #device = "cuda"
     device = "cpu"
