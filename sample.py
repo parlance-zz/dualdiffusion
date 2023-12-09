@@ -7,7 +7,7 @@ import torch
 import torchaudio
 import json
 
-from dual_diffusion_pipeline import DualDiffusionPipeline, DualNormalFormat, DualOverlappedFormat, DualMDCTFormat, DualMCLTFormat, DualMultiscaleSpectralLoss2
+from dual_diffusion_pipeline import DualDiffusionPipeline, DualMCLTFormat
 from attention_processor_dual import SeparableAttnProcessor2_0
 from autoencoder_kl_dual import AutoencoderKLDual
 

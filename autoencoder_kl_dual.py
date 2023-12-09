@@ -24,7 +24,65 @@ from diffusers.models.vae import DecoderOutput, DiagonalGaussianDistribution
 from diffusers.models.autoencoder_kl import AutoencoderKLOutput
 
 from unet2d_dual_blocks import SeparableAttnDownBlock2D, SeparableAttnUpBlock2D, SeparableMidBlock2D, get_activation
+from dual_diffusion_utils import mdct
 
+class DualMultiscaleSpectralLoss:
+
+    @torch.no_grad()
+    def __init__(self, loss_params):
+    
+        self.sample_block_width = loss_params["sample_block_width"]
+        self.block_widths = loss_params["block_widths"]
+        self.u = loss_params["u"]
+        self.sigma = loss_params["sigma"]
+        self.block_offsets = loss_params["block_offsets"]
+
+        self.block_weights = []
+        for block_num, block_width in enumerate(self.block_widths):
+      
+            filter_q = 2 ** -block_num
+            n_bins = block_width // 2
+            mdct_q = torch.arange(0.5, n_bins + 0.5) / n_bins
+
+            filter = torch.exp(-self.sigma * torch.log(mdct_q / filter_q).square())
+            self.block_weights.append(filter.view(1, 1, -1))
+
+        self.loss_scale = 1 / (len(self.block_widths) * len(self.block_offsets) * 2)
+
+    def __call__(self, sample, target):
+        
+        target = target[:, self.sample_block_width // 2:-self.sample_block_width]
+        assert(sample.shape == target.shape)
+
+        if self.block_weights[0].device != sample.device:
+            for block_num, block_weight in enumerate(self.block_weights):
+                self.block_weights[block_num] = block_weight.to(sample.device)
+
+        loss = torch.zeros(1, device=sample.device)
+
+        for block_num, block_width in enumerate(self.block_widths):
+            for block_offset in self.block_offsets:
+
+                offset = int(block_offset * block_width)
+                sample_fft_abs = mdct(sample[:, offset:], block_width, window_degree=2)[:, 1:-2, :].abs()
+                target_fft_abs = mdct(target[:, offset:], block_width, window_degree=2)[:, 1:-2, :].abs()
+
+                sample_fft_abs = sample_fft_abs / sample_fft_abs.amax(dim=(1,2), keepdim=True)
+                target_fft_abs = target_fft_abs / target_fft_abs.amax(dim=(1,2), keepdim=True)
+                sample_fft_abs_ln = (sample_fft_abs * self.u).log1p()
+                target_fft_abs_ln = (target_fft_abs * self.u).log1p()
+
+                block_weight = self.block_weights[block_num]
+                sample_fft_abs = sample_fft_abs * block_weight
+                target_fft_abs = target_fft_abs * block_weight
+                sample_fft_abs_ln = sample_fft_abs_ln * block_weight
+                target_fft_abs_ln = target_fft_abs_ln * block_weight
+
+                loss += torch.nn.functional.l1_loss(sample_fft_abs_ln, target_fft_abs_ln,  reduction="mean")
+                loss += torch.nn.functional.l1_loss(sample_fft_abs, target_fft_abs, reduction="mean")
+
+        return loss * self.loss_scale
+    
 class EncoderDual(nn.Module):
     def __init__(
         self,
@@ -380,6 +438,7 @@ class AutoencoderKLDual(ModelMixin, ConfigMixin):
         freq_embedding_dim: Union[int, Tuple[int]] = 0,
         time_embedding_dim: Union[int, Tuple[int]] = 0,
         add_attention: Union[bool, Tuple[bool]] = True,
+        multiscale_spectral_loss: dict = None,
         last_global_step: int = 0,
     ):
         super().__init__()
@@ -500,6 +559,11 @@ class AutoencoderKLDual(ModelMixin, ConfigMixin):
         )
         self.tile_latent_min_size = int(sample_size / (2 ** (len(self.config.block_out_channels) - 1)))
         self.tile_overlap_factor = 0.25
+
+        if multiscale_spectral_loss is not None:
+            self.multiscale_spectral_loss = DualMultiscaleSpectralLoss(multiscale_spectral_loss)
+        else:
+            raise ValueError("Must provide multiscale_spectral_loss_params")
 
     def _set_gradient_checkpointing(self, module, value=False):
         if isinstance(module, (EncoderDual, DecoderDual)):

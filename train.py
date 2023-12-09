@@ -1050,13 +1050,13 @@ def main():
                     recon = module.decode(posterior.sample(), return_dict=False)[0]                    
                     
                     recon_raw_samples = pipeline.format.sample_to_raw(recon, model_params).real
-                    vae_recon_loss = pipeline.multiscale_spectral_loss(recon_raw_samples, raw_samples)
+                    vae_recon_loss = module.multiscale_spectral_loss(recon_raw_samples, raw_samples)
 
                     # unused
                     vae_percept_loss = torch.zeros_like(vae_recon_loss)
                     
                     # lastly, standard KL divergence loss
-                    vae_kl_loss = posterior.kl().sum() / posterior.mean.numel() #/ samples.numel()
+                    vae_kl_loss = posterior.kl().sum() / posterior.mean.numel()
 
                     vae_recon_loss_weight = 1  
                     vae_percept_loss_weight = 0

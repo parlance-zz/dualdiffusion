@@ -25,60 +25,60 @@ MODEL_PARAMS = {
     "sample_format": "mclt",
     "sample_raw_length": 65536*2,
     "num_chunks": 64,
+}
+
+#VAE_PARAMS = None
+VAE_PARAMS = {
     "multiscale_spectral_loss": {
+        "sample_block_width": 2*64,
         "u": 16000,
+        "sigma:": 1,
         "block_widths": [
-            16,
-            32,
-            64,
             128,
             256,
             512,
             1024,
             2048,
             4096,
+            8192,
         ],
         "block_offsets": [
             0,
             0.25,
         ]
-    }
-}
+    },
 
+    "latent_channels": 8,
+    "sample_size": (64, 2048),
+    "act_fn": "silu",
+    "conv_size": (1,3),
 
-#VAE_PARAMS = None
-VAE_PARAMS = {
-  "latent_channels": 8,
-  "sample_size": (64, 2048),
-  "act_fn": "silu",
-  "conv_size": (1,3),
-  
-  "block_out_channels": [128, 256, 512, 512],
-  "layers_per_block": 2,
+    "block_out_channels": [128, 256, 512, 512],
+    "layers_per_block": 2,
 
-  "layers_per_mid_block": 1,
-  "add_mid_attention": True,
+    "layers_per_mid_block": 1,
+    "add_mid_attention": True,
 
-  "norm_num_groups": 32,
+    "norm_num_groups": 32,
 
-  "downsample_type": "conv",
-  "upsample_type": "conv",
+    "downsample_type": "conv",
+    "upsample_type": "conv",
 
-  "attention_num_heads": (8,16,32,32),
-  #"separate_attn_dim_down": (2,3),
-  #"separate_attn_dim_up": (3,2,3),
-  "separate_attn_dim_down": (3,3),
-  "separate_attn_dim_up": (3,3,3),
-  "separate_attn_dim_mid": (0,),
-  "double_attention": False,
-  "pre_attention": False,
-  #"add_attention": False,
+    "attention_num_heads": (8,16,32,32),
+    #"separate_attn_dim_down": (2,3),
+    #"separate_attn_dim_up": (3,2,3),
+    "separate_attn_dim_down": (3,3),
+    "separate_attn_dim_up": (3,3,3),
+    "separate_attn_dim_mid": (0,),
+    "double_attention": False,
+    "pre_attention": False,
+    #"add_attention": False,
 
-  "freq_embedding_dim": 256,
-  "time_embedding_dim": 256,
+    "freq_embedding_dim": 256,
+    "time_embedding_dim": 256,
 
-  "in_channels": DualDiffusionPipeline.get_sample_format(MODEL_PARAMS).get_num_channels(MODEL_PARAMS)[0],
-  "out_channels": DualDiffusionPipeline.get_sample_format(MODEL_PARAMS).get_num_channels(MODEL_PARAMS)[1],
+    "in_channels": DualDiffusionPipeline.get_sample_format(MODEL_PARAMS).get_num_channels(MODEL_PARAMS)[0],
+    "out_channels": DualDiffusionPipeline.get_sample_format(MODEL_PARAMS).get_num_channels(MODEL_PARAMS)[1],
 }
 
 UNET_PARAMS = {
