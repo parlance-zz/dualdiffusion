@@ -1,3 +1,25 @@
+# MIT License
+#
+# Copyright (c) 2023 Christopher Friesen
+#
+# Permission is hereby granted, free of charge, to any person obtaining a copy
+# of this software and associated documentation files (the "Software"), to deal
+# in the Software without restriction, including without limitation the rights
+# to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+# copies of the Software, and to permit persons to whom the Software is
+# furnished to do so, subject to the following conditions:
+# 
+# The above copyright notice and this permission notice shall be included in all
+# copies or substantial portions of the Software.
+# 
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+# SOFTWARE.
+
 import os
 from dotenv import load_dotenv
 
@@ -10,8 +32,9 @@ torch.manual_seed(200)
 MODEL_NAME = "dualdiffusion2d_350_mclt_v8_256embed_8vae_mssloss14"
 MODEL_PARAMS = {
     #"prediction_type": "sample",
-    "prediction_type": "v_prediction",
     #"prediction_type": "epsilon",
+    "prediction_type": "v_prediction",
+
     #"beta_schedule": "trained_betas",
     #"beta_schedule": "linear", 
     "beta_schedule": "squaredcos_cap_v2", 
@@ -19,6 +42,7 @@ MODEL_PARAMS = {
     "beta_end" : 0.02,
     #"rescale_betas_zero_snr": True,
     "rescale_betas_zero_snr": False,
+
     "sample_raw_channels": int(os.environ.get("DATASET_NUM_CHANNELS")),
     "sample_rate": int(os.environ.get("DATASET_SAMPLE_RATE")),
 
@@ -30,10 +54,9 @@ MODEL_PARAMS = {
 #VAE_PARAMS = None
 VAE_PARAMS = {
     "multiscale_spectral_loss": {
-        "sample_block_width": 2*64,
-        "u": 16000,
-        "sigma:": 1,
+        "sample_block_width": 2*MODEL_PARAMS["num_chunks"],
         "block_widths": [
+            64,
             128,
             256,
             512,
@@ -45,7 +68,10 @@ VAE_PARAMS = {
         "block_offsets": [
             0,
             0.25,
-        ]
+        ],
+        "u": 16000,
+        "first_octave": -1,
+        "sigma:": 0.5,
     },
 
     "latent_channels": 8,
@@ -73,6 +99,7 @@ VAE_PARAMS = {
     "double_attention": False,
     "pre_attention": False,
     #"add_attention": False,
+    "add_attention": True,
 
     "freq_embedding_dim": 256,
     "time_embedding_dim": 256,

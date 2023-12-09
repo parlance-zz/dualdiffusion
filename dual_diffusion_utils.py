@@ -1,3 +1,25 @@
+# MIT License
+#
+# Copyright (c) 2023 Christopher Friesen
+#
+# Permission is hereby granted, free of charge, to any person obtaining a copy
+# of this software and associated documentation files (the "Software"), to deal
+# in the Software without restriction, including without limitation the rights
+# to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+# copies of the Software, and to permit persons to whom the Software is
+# furnished to do so, subject to the following conditions:
+# 
+# The above copyright notice and this permission notice shall be included in all
+# copies or substantial portions of the Software.
+# 
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+# SOFTWARE.
+
 import numpy as np
 import torch
 import torch.nn.functional as F
@@ -44,6 +66,24 @@ def compute_snr(noise_scheduler, timesteps):
     # Compute SNR.
     snr = (alpha / sigma) ** 2
     return snr
+
+# kaiser derived window for mclt/mdct, unused
+def _kaiser(window_len, beta, device):    
+    alpha = (window_len - 1) / 2
+    n = torch.arange(window_len, device=device)
+    return torch.special.i0(beta * torch.sqrt(1 - ((n - alpha) / alpha).square())) / torch.special.i0(torch.tensor(beta))
+
+def kaiser_derived_window(window_len, beta=4*torch.pi, device="cpu"):
+
+    kaiserw = _kaiser(window_len // 2 + 1, beta, device)
+    csum = torch.cumsum(kaiserw, dim=0)
+    halfw = torch.sqrt(csum[:-1] / csum[-1])
+
+    w = torch.zeros(window_len, device=device)
+    w[:window_len//2] = halfw
+    w[-window_len//2:] = halfw.flip(0)
+
+    return w
 
 # fast overlapped modified discrete cosine transform type iv - becomes mclt with complex output
 def mdct(x, block_width, window_degree=1):

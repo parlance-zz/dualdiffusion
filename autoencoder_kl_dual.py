@@ -1,16 +1,24 @@
-# Copyright 2023 The HuggingFace Team. All rights reserved.
+# MIT License
 #
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
+# Copyright (c) 2023 Christopher Friesen
 #
-#     http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+# Permission is hereby granted, free of charge, to any person obtaining a copy
+# of this software and associated documentation files (the "Software"), to deal
+# in the Software without restriction, including without limitation the rights
+# to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+# copies of the Software, and to permit persons to whom the Software is
+# furnished to do so, subject to the following conditions:
+# 
+# The above copyright notice and this permission notice shall be included in all
+# copies or substantial portions of the Software.
+# 
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+# SOFTWARE.
 
 from typing import Optional, Tuple, Union
 
@@ -23,8 +31,8 @@ from diffusers.models.modeling_utils import ModelMixin
 from diffusers.models.vae import DecoderOutput, DiagonalGaussianDistribution
 from diffusers.models.autoencoder_kl import AutoencoderKLOutput
 
-from unet2d_dual_blocks import SeparableAttnDownBlock2D, SeparableAttnUpBlock2D, SeparableMidBlock2D, get_activation
-from dual_diffusion_utils import mdct
+from unet2d_dual_blocks import SeparableAttnDownBlock2D, SeparableAttnUpBlock2D, SeparableMidBlock2D
+from dual_diffusion_utils import mdct, get_activation
 
 class DualMultiscaleSpectralLoss:
 
@@ -33,18 +41,29 @@ class DualMultiscaleSpectralLoss:
     
         self.sample_block_width = loss_params["sample_block_width"]
         self.block_widths = loss_params["block_widths"]
-        self.u = loss_params["u"]
-        self.sigma = loss_params["sigma"]
         self.block_offsets = loss_params["block_offsets"]
+        self.u = loss_params["u"]
+        self.block_octaves = loss_params["block_octaves"]
+        self.sigma = loss_params["sigma"]
 
+        if isinstance(self.sigma, Tuple):
+            if len(self.sigma) != len(self.block_widths):
+                raise ValueError(f"Must provide the same number of `sigma` as `block_widths`. `sigma`: {self.sigma}. `block_widths`: {self.block_widths}.")
+        else:
+            self.sigma = (self.sigma,) * len(self.block_widths)
+
+        if len(self.block_octaves) != len(self.block_widths):
+            raise ValueError(f"Must provide the same number of `block_octaves` as `block_widths`. `block_octaves`: {self.block_octaves}. `block_widths`: {self.block_widths}.")
+        
         self.block_weights = []
         for block_num, block_width in enumerate(self.block_widths):
       
-            filter_q = 2 ** -block_num
+            block_q = 2 ** -self.block_octaves[block_num]
             n_bins = block_width // 2
             mdct_q = torch.arange(0.5, n_bins + 0.5) / n_bins
+            sigma = self.sigma[block_num]
 
-            filter = torch.exp(-self.sigma * torch.log(mdct_q / filter_q).square())
+            filter = torch.exp(-sigma * torch.log(mdct_q / block_q).square())
             self.block_weights.append(filter.view(1, 1, -1))
 
         self.loss_scale = 1 / (len(self.block_widths) * len(self.block_offsets) * 2)
@@ -79,7 +98,7 @@ class DualMultiscaleSpectralLoss:
                 target_fft_abs_ln = target_fft_abs_ln * block_weight
 
                 loss += torch.nn.functional.l1_loss(sample_fft_abs_ln, target_fft_abs_ln,  reduction="mean")
-                loss += torch.nn.functional.l1_loss(sample_fft_abs, target_fft_abs, reduction="mean")
+                loss += torch.nn.functional.mse_loss(sample_fft_abs, target_fft_abs, reduction="mean").sqrt()
 
         return loss * self.loss_scale
     
@@ -90,15 +109,15 @@ class EncoderDual(nn.Module):
         out_channels=4,
         act_fn="silu",
         double_z=True,
-        block_out_channels=(128, 256, 512, 512,),
+        block_out_channels=(128,256,512,512,),
         layers_per_block=2,
         layers_per_mid_block: int = 1,
         norm_num_groups: Union[int, Tuple[int]] = 32,
         norm_eps: float = 1e-6,
         downsample_type: str = "conv",
         add_mid_attention: bool = True,
-        attention_num_heads: Union[int, Tuple[int]] = (8,8,16,16),
-        separate_attn_dim_down: Tuple[int] = (2,3),
+        attention_num_heads: Union[int, Tuple[int]] = (8,16,32,32),
+        separate_attn_dim_down: Tuple[int] = (3,3),
         separate_attn_dim_mid: Tuple[int] = (0,),
         double_attention: Union[bool, Tuple[bool]] = False,
         pre_attention: Union[bool, Tuple[bool]] = False,
@@ -243,15 +262,15 @@ class DecoderDual(nn.Module):
         in_channels=4,
         out_channels=2,
         act_fn="silu",
-        block_out_channels=(128, 256, 512, 512,),
+        block_out_channels=(128,256,512,512,),
         layers_per_block=2,
         layers_per_mid_block: int = 1,
         norm_num_groups: Union[int, Tuple[int]] = 32,
         norm_eps: float = 1e-6,
         upsample_type: str = "conv",
         add_mid_attention: bool = True,
-        attention_num_heads: Union[int, Tuple[int]] = (8,8,16,16),
-        separate_attn_dim_up: Tuple[int] = (3,2,3),
+        attention_num_heads: Union[int, Tuple[int]] = (8,16,32,32),
+        separate_attn_dim_up: Tuple[int] = (3,3,3),
         separate_attn_dim_mid: Tuple[int] = (0,),
         double_attention: Union[bool, Tuple[bool]] = False,
         pre_attention: Union[bool, Tuple[bool]] = False,
@@ -417,9 +436,9 @@ class AutoencoderKLDual(ModelMixin, ConfigMixin):
         in_channels: int = 2,
         out_channels: int = 2,
         act_fn: str = "silu",
-        block_out_channels: Tuple[int] = (128, 256, 512, 512,),
+        block_out_channels: Tuple[int] = (128,256,512,512,),
         latent_channels: int = 4,
-        sample_size: Tuple[int, int] = (512, 512,),
+        sample_size: Tuple[int, int] = (64,2048,),
         scaling_factor: float = 0.18215,
         layers_per_block=2,
         layers_per_mid_block: int = 1,
@@ -428,9 +447,9 @@ class AutoencoderKLDual(ModelMixin, ConfigMixin):
         downsample_type: str = "conv",
         upsample_type: str = "conv",
         add_mid_attention: bool = True,
-        attention_num_heads: Union[int, Tuple[int]] = (8,8,16,16),
-        separate_attn_dim_down: Tuple[int] = (2,3),
-        separate_attn_dim_up: Tuple[int] = (3,2,3),    
+        attention_num_heads: Union[int, Tuple[int]] = (8,16,32,32),
+        separate_attn_dim_down: Tuple[int] = (3,3),
+        separate_attn_dim_up: Tuple[int] = (3,3,3),    
         separate_attn_dim_mid: Tuple[int] = (0,),
         double_attention: Union[bool, Tuple[bool]] = False,
         pre_attention: Union[bool, Tuple[bool]] = False,
