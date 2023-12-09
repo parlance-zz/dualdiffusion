@@ -905,7 +905,6 @@ def main():
         for i in range(args.dropout_depth, len(module.up_blocks)):
             set_dropout_p(module.up_blocks[i-args.dropout_depth], args.dropout)
 
-    window = None
     timesteps = None
     torch.cuda.empty_cache()
 
@@ -936,10 +935,7 @@ def main():
                 raw_samples = batch["input"]
 
                 if args.module == "unet":
-                    samples, window = pipeline.format.raw_to_sample(raw_samples,
-                                                                    model_params,
-                                                                    window=window,
-                                                                    random_phase_offset=args.phase_augmentation)
+                    samples = pipeline.format.raw_to_sample(raw_samples, model_params)
                     if vae is not None:
                         samples = vae.encode(samples).latent_dist.sample() * vae.config.scaling_factor
 
@@ -1019,10 +1015,7 @@ def main():
 
                 elif args.module == "vae":
 
-                    samples, window = pipeline.format.raw_to_sample(raw_samples,
-                                                                    model_params,
-                                                                    window=window,
-                                                                    random_phase_offset=args.phase_augmentation)
+                    samples = pipeline.format.raw_to_sample(raw_samples, model_params)
                     
                     posterior = module.encode(samples, return_dict=False)[0]
                     latents = posterior.sample()

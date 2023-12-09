@@ -75,9 +75,9 @@ def multiscale_spectral_loss_test():
 
     raw_sample.cpu().numpy().tofile("./debug/debug_raw_original.raw")
 
-    sample, _ = format.raw_to_sample(raw_sample, model_params, random_phase_offset=False)
+    sample = format.raw_to_sample(raw_sample, model_params)
     #recon = format.sample_to_raw(sample, model_params).real
-    recon = DualMDCTFormat.sample_to_raw(sample, model_params).real
+    recon = DualMCLTFormat.sample_to_raw(sample, model_params).real
 
     recon.cpu().numpy().tofile("./debug/debug_reconstruction.raw")
 
@@ -106,7 +106,6 @@ def get_dataset_stats():
     else:
         sample_std = 0.
     num_samples = 0
-    window = None
     
     dataset_path = os.environ.get("DATASET_PATH", "./dataset/samples")
     sample_list = os.listdir(dataset_path)
@@ -115,7 +114,7 @@ def get_dataset_stats():
             raw_sample = np.fromfile(os.path.join(dataset_path, filename), dtype=np.int16, count=crop_width) / 32768.
             raw_sample = torch.from_numpy(raw_sample.astype(np.float32)).unsqueeze(0).to("cuda")
             
-            sample, window = format.raw_to_sample(raw_sample, model_params, window)
+            sample = format.raw_to_sample(raw_sample, model_params)
 
             if format == DualMCLTFormat:
                 sample_abs = sample[:, 0, :, :]
@@ -189,7 +188,7 @@ def reconstruction_test(sample_num=1):
 
     raw_sample.cpu().numpy().tofile("./debug/debug_raw_original.raw")
 
-    freq_sample, _ = format.raw_to_sample(raw_sample, model_params, random_phase_offset=False)
+    freq_sample = format.raw_to_sample(raw_sample, model_params)
     print("Sample shape:", freq_sample.shape)
     print("Sample mean:", freq_sample.mean(dim=(2,3)), freq_sample.mean())
     print("Sample std:", freq_sample.std().item())
@@ -326,7 +325,7 @@ def vae_test():
     for filename in test_samples:
         raw_sample = np.fromfile(os.path.join(dataset_path, filename), dtype=np.int16, count=crop_width) / 32768.
         raw_sample = torch.from_numpy(raw_sample.astype(np.float32)).unsqueeze(0).to(device)
-        sample, window = format.raw_to_sample(raw_sample, model_params)
+        sample = format.raw_to_sample(raw_sample, model_params)
 
         latents = vae.encode(sample.type(model_dtype), return_dict=False)[0].sample()
         output = vae.decode(latents, return_dict=False)[0]

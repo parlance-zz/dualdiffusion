@@ -47,7 +47,7 @@ class DualMCLTFormat:
 
     @staticmethod
     @torch.no_grad()
-    def raw_to_sample(raw_samples, model_params, window=None, random_phase_offset=False):
+    def raw_to_sample(raw_samples, model_params):
         
         num_chunks = model_params["num_chunks"]
         block_width = num_chunks * 2
@@ -58,7 +58,7 @@ class DualMCLTFormat:
         samples = torch.view_as_real(samples).permute(0, 3, 1, 2).contiguous()
         samples = samples / samples.square().sum(dim=(1,2,3), keepdim=True).mean(dim=(1,2,3), keepdim=True).sqrt().clip(min=1e-8)
 
-        return samples, window
+        return samples
 
     @staticmethod
     def sample_to_raw(samples, model_params):
