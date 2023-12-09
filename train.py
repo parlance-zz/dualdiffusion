@@ -137,9 +137,6 @@ def log_validation_vae(pipeline, args, accelerator, global_step):
         else:
             logger.warn(f"audio logging not implemented for {tracker.name}")
 
-def log_validation_upscaler(pipeline, args, accelerator, global_step):
-    raise NotImplementedError()
-
 def parse_args():
     parser = argparse.ArgumentParser(description="DualDiffusion training script.")
     parser.add_argument(
@@ -157,7 +154,7 @@ def parse_args():
         type=str,
         default="unet",
         required=False,
-        help="Which module in the model to train. Choose between ['unet', 'vae', 'upscaler']",
+        help="Which module in the model to train. Choose between ['unet', 'vae']",
     )
     parser.add_argument(
         "--revision",
@@ -276,6 +273,12 @@ def parse_args():
     )
     parser.add_argument(
         "--lr_warmup_steps", type=int, default=500, help="Number of steps for the warmup in the lr scheduler."
+    )
+    parser.add_argument(
+        "--kl_loss_weight",
+        type=float,
+        default=1e-8,
+        help="Loss weighting for KL divergence in VAE training.",
     )
     parser.add_argument(
         "--snr_gamma",
@@ -446,7 +449,7 @@ def parse_args():
         args.non_ema_revision = args.revision
 
     args.module = args.module.lower().strip()
-    if args.module not in ["unet", "vae", "upscaler"]:
+    if args.module not in ["unet", "vae"]:
         raise ValueError(f"Unknown module {args.module}")
     
     return args
@@ -556,27 +559,11 @@ def main():
             vae.requires_grad_(False)
             vae = vae.to(accelerator.device)
 
-        if getattr(pipeline, "upscaler", None) is not None:
-            pipeline.upscaler = pipeline.upscaler.to("cpu")
-
     elif args.module == "vae":
         module_class = AutoencoderKLDual
 
         if getattr(pipeline, "unet", None) is not None:
             pipeline.unet = pipeline.unet.to("cpu")
-        if getattr(pipeline, "upscaler", None) is not None:
-            pipeline.upscaler = pipeline.upscaler.to("cpu")
-
-    elif args.module == "upscaler":
-        #module_class = UNet2DDualModel
-        raise NotImplementedError("Upscaler training not implemented yet")
-        sample_crop_width = module.config["sample_crop_width"]
-
-        if getattr(pipeline, "unet", None) is not None:
-            pipeline.unet = pipeline.unet.to("cpu")
-
-        if getattr(pipeline, "vae", None) is not None:
-            pipeline.vae = pipeline.vae.to("cpu")
     else:
         raise ValueError(f"Unknown module {args.module}")
     
@@ -922,7 +909,6 @@ def main():
 
         if args.module == "vae":
             vae_recon_train_loss = 0.0
-            vae_percept_train_loss = 0.0
             vae_kl_train_loss = 0.0
 
         checkpoint_saved_this_epoch = False
@@ -1035,25 +1021,12 @@ def main():
                     
                     recon_raw_samples = pipeline.format.sample_to_raw(recon, model_params).real
                     vae_recon_loss = module.multiscale_spectral_loss(recon_raw_samples, raw_samples)
-
-                    # unused
-                    vae_percept_loss = torch.zeros_like(vae_recon_loss)
-                    
-                    # lastly, standard KL divergence loss
                     vae_kl_loss = posterior.kl().sum() / posterior.mean.numel()
 
                     vae_recon_loss_weight = 1  
-                    vae_percept_loss_weight = 0
-                    vae_kl_loss_weight = 1e-8
-
+                    vae_kl_loss_weight = args.kl_loss_weight
                     loss = vae_recon_loss + vae_kl_loss_weight * vae_kl_loss
-                    #loss = vae_recon_loss_weight * vae_recon_loss + vae_percept_loss_weight * vae_percept_loss + vae_kl_loss_weight * vae_kl_loss
-                    #loss = vae_recon_loss_weight * vae_recon_loss + vae_percept_loss_weight * vae_percept_loss# + vae_kl_loss_weight * vae_kl_loss
 
-                elif args.module == "upscaler":
-
-                    raise NotImplementedError()
-                
                 else:
                     raise ValueError(f"Unknown module {args.module}")
                 
@@ -1064,8 +1037,6 @@ def main():
                 if args.module == "vae":
                     vae_recon_avg_loss = accelerator.gather(vae_recon_loss.repeat(args.train_batch_size)).mean()
                     vae_recon_train_loss += vae_recon_avg_loss.item() / args.gradient_accumulation_steps
-                    vae_percept_avg_loss = accelerator.gather(vae_percept_loss.repeat(args.train_batch_size)).mean()
-                    vae_percept_train_loss += vae_percept_avg_loss.item() / args.gradient_accumulation_steps
                     vae_kl_avg_loss = accelerator.gather(vae_kl_loss.repeat(args.train_batch_size)).mean()
                     vae_kl_train_loss += vae_kl_avg_loss.item() / args.gradient_accumulation_steps
                     
@@ -1097,10 +1068,8 @@ def main():
                         "grad_norm": grad_norm}
                 if args.module == "vae":
                     logs["vae/recon_loss"] = vae_recon_train_loss
-                    logs["vae/percept_loss"] = vae_percept_train_loss
                     logs["vae/kl_loss"] = vae_kl_train_loss
                     logs["loss_weight/recon"] = vae_recon_loss_weight
-                    logs["loss_weight/percept"] = vae_percept_loss_weight
                     logs["loss_weight/kl"] = vae_kl_loss_weight
                 if args.use_ema:
                     logs["ema_decay"] = ema_module.cur_decay_value    
@@ -1112,7 +1081,6 @@ def main():
                 
                 if args.module == "vae":
                     vae_recon_train_loss = 0.0
-                    vae_percept_train_loss = 0.0
                     vae_kl_train_loss = 0.0
 
                 if global_step % args.checkpointing_steps == 0:
@@ -1191,14 +1159,6 @@ def main():
                                 accelerator,
                                 global_step,
                             )
-                        elif args.module == "upscaler":
-                            #log_validation_upscaler(
-                            #    pipeline,
-                            #    args,
-                            #    accelerator,
-                            #    global_step,
-                            #)
-                            raise NotImplementedError()
                         else:
                             raise ValueError(f"Unknown module {args.module}")
 

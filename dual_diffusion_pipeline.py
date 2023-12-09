@@ -92,14 +92,10 @@ class DualDiffusionPipeline(DiffusionPipeline):
         unet: UNet2DDualModel,
         scheduler: DDIMScheduler,
         vae: AutoencoderKLDual, 
-        #upscaler: UNet2DDualModel = None, 
         model_params: dict = None,
     ):
         super().__init__()
 
-        #modules = {"unet": unet, "scheduler": scheduler}
-        #if vae is not None: modules["vae"] = vae
-        #if upscaler is not None: modules["upscaler"] = upscaler
         modules = {
             "unet": unet,
             "scheduler": scheduler,
@@ -128,7 +124,7 @@ class DualDiffusionPipeline(DiffusionPipeline):
         
     @staticmethod
     @torch.no_grad()
-    def create_new(model_params, unet_params, vae_params=None, upscaler_params=None):
+    def create_new(model_params, unet_params, vae_params=None):
         
         unet = UNet2DDualModel(**unet_params)
         
@@ -169,13 +165,6 @@ class DualDiffusionPipeline(DiffusionPipeline):
         else:
             vae = None
 
-        if upscaler_params is not None:
-            #upscaler = Upscaler(**upscaler_params)
-            raise NotImplementedError()
-        else:
-            upscaler = None
-
-        #return DualDiffusionPipeline(unet, scheduler, vae=vae, upscaler=upscaler, model_params=model_params)
         return DualDiffusionPipeline(unet, scheduler, vae, model_params=model_params)
 
     @staticmethod
@@ -286,9 +275,6 @@ class DualDiffusionPipeline(DiffusionPipeline):
         else:
             #raw_sample = self.vae.decode(sample / self.vae.config.scaling_factor).sample
             raise NotImplementedError()
-        
-        if getattr(self, "upscaler", None) is not None:
-            raw_sample = self.upscale(raw_sample)
 
         raw_sample *= 0.18215 / raw_sample.std(dim=1, keepdim=True).clip(min=1e-5)
         if loops > 0: raw_sample = raw_sample.repeat(1, loops+1)

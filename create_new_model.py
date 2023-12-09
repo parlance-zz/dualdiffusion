@@ -69,8 +69,17 @@ VAE_PARAMS = {
             0,
             0.25,
         ],
+        "block_octaves": [
+            -1,
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+        ],
         "u": 16000,
-        "first_octave": -1,
         "sigma:": 0.5,
     },
 
@@ -178,9 +187,6 @@ UNET_PARAMS = {
     ),
 }
 
-#UPSCALER_PARAMS = {
-#}
-UPSCALER_PARAMS = None
 
 if __name__ == "__main__":
 
@@ -197,6 +203,6 @@ if __name__ == "__main__":
         print(f"Warning: Output folder already exists '{NEW_MODEL_PATH}'")
         if input("Overwrite existing model? (y/n): ").lower() not in ["y","yes"]: exit()
     
-    pipeline = DualDiffusionPipeline.create_new(MODEL_PARAMS, UNET_PARAMS, vae_params=VAE_PARAMS, upscaler_params=UPSCALER_PARAMS)
+    pipeline = DualDiffusionPipeline.create_new(MODEL_PARAMS, UNET_PARAMS, vae_params=VAE_PARAMS)
     pipeline.save_pretrained(NEW_MODEL_PATH, safe_serialization=True)
     print(f"Created new DualDiffusion model with config at '{NEW_MODEL_PATH}'")
