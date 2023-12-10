@@ -170,7 +170,7 @@ def from_ulaw(x, u=255):
 
     return x
 
-def normalize_lufs(raw_samples, sample_rate, target_lufs=-15.0):
+def normalize_lufs(raw_samples, sample_rate, target_lufs=-16.0):
 
     original_shape = raw_samples.shape
 
@@ -186,7 +186,7 @@ def normalize_lufs(raw_samples, sample_rate, target_lufs=-15.0):
     gain = gain.view((*gain.shape,) + (1,) * (raw_samples.ndim - gain.ndim))
     return (raw_samples * gain).view(original_shape)
 
-def save_flac(raw_samples, sample_rate, output_path, target_lufs=-15.0):
+def save_flac(raw_samples, sample_rate, output_path, target_lufs=-16.0):
     
     raw_samples = raw_samples.detach().real
     if raw_samples.ndim == 1:
