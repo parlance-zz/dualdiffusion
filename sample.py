@@ -32,6 +32,7 @@ import json
 from dual_diffusion_pipeline import DualDiffusionPipeline, DualMCLTFormat
 from attention_processor_dual import SeparableAttnProcessor2_0
 from autoencoder_kl_dual import AutoencoderKLDual
+from dual_diffusion_utils import save_flac, save_raw, load_raw
 
 def multiscale_spectral_loss_test():
     torch.manual_seed(200)
@@ -323,29 +324,25 @@ def vae_test():
     last_global_step = vae.config["last_global_step"]
 
     for filename in test_samples:
-        raw_sample = np.fromfile(os.path.join(dataset_path, filename), dtype=np.int16, count=crop_width) / 32768.
-        raw_sample = torch.from_numpy(raw_sample.astype(np.float32)).unsqueeze(0).to(device)
-        sample = format.raw_to_sample(raw_sample, model_params)
+        input_raw_sample = load_raw(os.path.join(dataset_path, filename), dtype=np.int16, count=crop_width)
+        input_raw_sample = input_raw_sample.unsqueeze(0).to(device)
+        input_sample = format.raw_to_sample(input_raw_sample, model_params)
 
-        latents = vae.encode(sample.type(model_dtype), return_dict=False)[0].sample()
-        output = vae.decode(latents, return_dict=False)[0]
+        latents = vae.encode(input_sample.type(model_dtype), return_dict=False)[0].sample()
+        output_sample = vae.decode(latents, return_dict=False)[0]
+        output_raw_sample = format.sample_to_raw(output_sample.type(torch.float32), model_params)
 
-        output_sample_file_path = os.path.join(output_path, f"step_{last_global_step}_{filename.replace('.raw', '_sample.raw')}")
-        output.detach().type(torch.float32).cpu().numpy().tofile(output_sample_file_path)
-
-        output = format.sample_to_raw(output.type(torch.float32), model_params).real.detach()
-        
         output_latents_file_path = os.path.join(output_path, f"step_{last_global_step}_{filename.replace('.raw', '_latents.raw')}")
-        latents.detach().type(torch.float32).cpu().numpy().tofile(output_latents_file_path)
+        save_raw(latents, output_latents_file_path)
+        output_sample_file_path = os.path.join(output_path, f"step_{last_global_step}_{filename.replace('.raw', '_sample.raw')}")
+        save_raw(output_sample, output_sample_file_path)
 
-        raw_sample /= raw_sample.abs().max()
         output_flac_file_path = os.path.join(output_path, f"step_{last_global_step}_{filename.replace('.raw', '_original.flac')}")
-        torchaudio.save(output_flac_file_path, raw_sample.cpu(), sample_rate, bits_per_sample=16)
+        save_flac(input_raw_sample, sample_rate, output_flac_file_path)
         print(f"Saved flac output to {output_flac_file_path}")
 
-        output /= output.abs().max()
         output_flac_file_path = os.path.join(output_path, f"step_{last_global_step}_{filename.replace('.raw', '_decoded.flac')}")
-        torchaudio.save(output_flac_file_path, output.cpu(), sample_rate, bits_per_sample=16)
+        save_flac(output_raw_sample, sample_rate, output_flac_file_path)
         print(f"Saved flac output to {output_flac_file_path}")
 
     exit()

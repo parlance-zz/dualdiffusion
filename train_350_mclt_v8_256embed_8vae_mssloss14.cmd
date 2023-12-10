@@ -20,8 +20,8 @@ accelerate launch^
  --num_validation_samples=5^
  --num_validation_epochs=5^
  --max_grad_norm=10^
- --kl_loss_weight=1e-8^
- --kl_loss_global_weight=1e-6
+ --kl_loss_weight=1e-5^
+ --kl_loss_global_weight=0
 
 REM --max_grad_norm=25
  

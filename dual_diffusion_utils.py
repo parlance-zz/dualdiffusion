@@ -20,10 +20,13 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
+import os
 import numpy as np
 import torch
 import torch.nn.functional as F
 import torch.nn as nn
+import torchaudio
+import torchaudio.transforms as T
 import cv2
 
 def get_activation(act_fn):
@@ -167,6 +170,120 @@ def from_ulaw(x, u=255):
 
     return x
 
+def normalize_lufs(raw_samples, sample_rate, target_lufs=-15.0):
+
+    original_shape = raw_samples.shape
+
+    if raw_samples.ndim == 1:
+        raw_samples = raw_samples.view(1, 1, -1)
+    elif raw_samples.ndim == 2:
+        raw_samples = raw_samples.view(raw_samples.shape[0], 1, -1)
+
+    loudness_transform = T.Loudness(sample_rate)
+    current_lufs = loudness_transform(raw_samples)    
+    gain = 10. ** ((target_lufs - current_lufs) / 20.0)
+
+    gain = gain.view((*gain.shape,) + (1,) * (raw_samples.ndim - gain.ndim))
+    return (raw_samples * gain).view(original_shape)
+
+def save_flac(raw_samples, sample_rate, output_path, target_lufs=-15.0):
+    
+    raw_samples = raw_samples.detach().real
+    if raw_samples.ndim == 1:
+        raw_samples = raw_samples.view(1, -1)
+    elif raw_samples.ndim == 2:
+        raw_samples = raw_samples.view(raw_samples.shape[0], -1)
+    elif raw_samples.ndim == 3:
+        raw_samples = raw_samples.permute(1, 2, 0).view(raw_samples.shape[1], -1)
+
+    if target_lufs is not None:
+        raw_samples = normalize_lufs(raw_samples, sample_rate, target_lufs)
+
+    directory = os.path.dirname(output_path)
+    if not os.path.exists(directory):
+        os.makedirs(directory)
+    
+    torchaudio.save(output_path, raw_samples.cpu(), sample_rate, bits_per_sample=16)
+
+def save_raw(tensor, output_path):  
+    directory = os.path.dirname(output_path)
+    if not os.path.exists(directory):
+        os.makedirs(directory)
+
+    if tensor.dtype == torch.float16:
+        tensor = tensor.float()
+    elif tensor.dtype == torch.complex32:
+        tensor = tensor.complex64()
+    tensor.detach().cpu().numpy().tofile(output_path)
+
+def dtype_size_in_bytes(dtype):
+    if dtype == torch.float16 or dtype == np.float16:
+        return 2
+    elif dtype == torch.float32 or dtype == np.float32:
+        return 4
+    elif dtype == torch.float64 or dtype == np.float64:
+        return 8
+    elif dtype == torch.int8 or dtype == np.int8:
+        return 1
+    elif dtype == torch.int16 or dtype == np.int16:
+        return 2
+    elif dtype == torch.int32 or dtype == np.int32:
+        return 4
+    elif dtype == torch.int64 or dtype == np.int64:
+        return 8
+    elif dtype == torch.complex32:
+        return 4
+    elif dtype == torch.complex64 or dtype == np.complex64:
+        return 8
+    elif dtype == torch.complex128 or dtype == np.complex128:
+        return 16
+    else:
+        raise ValueError(f"Unsupported dtype: {dtype}")
+
+def torch_dtype_to_numpy(dtype):
+    if dtype == torch.float16 or dtype == np.float16:
+        return np.float16
+    elif dtype == torch.float32 or dtype == np.float32:
+        return np.float32
+    elif dtype == torch.float64 or dtype == np.float64:
+        return np.float64
+    elif dtype == torch.int8 or dtype == np.int8:
+        return np.int8
+    elif dtype == torch.int16 or dtype == np.int16:
+        return np.int16
+    elif dtype == torch.int32 or dtype == np.int32:
+        return np.int32
+    elif dtype == torch.int64 or dtype == np.int64:
+        return np.int64
+    elif dtype == torch.complex32:
+        raise ValueError("Numpy does not support equivalent dtype: torch.complex32")
+    elif dtype == torch.complex64 or dtype == np.complex64:
+        return np.complex64
+    elif dtype == torch.complex128 or dtype == np.complex128:
+        return np.complex128
+    else:
+        raise ValueError(f"Unsupported dtype: {dtype}")
+    
+def load_raw(input_path, dtype=torch.int16, start=0, count=-1):
+    dtype = torch_dtype_to_numpy(dtype)
+    offset = start * dtype_size_in_bytes(dtype)
+    tensor = torch.from_numpy(np.fromfile(input_path, dtype=dtype, count=count, offset=offset))
+    
+    if dtype == np.int8:
+        return tensor / 128.
+    elif dtype == np.int16:
+        return tensor / 32768.
+    elif dtype == np.int32:
+        return tensor / 2147483648.
+    elif dtype == np.uint8:
+        return tensor / 255.
+    elif dtype == np.uint16:
+        return tensor / 65535.
+    elif dtype == np.uint32:
+        return tensor / 4294967295.
+
+    return tensor
+    
 @torch.no_grad()
 def save_sample_img(sample, img_path, include_phase=False):
     

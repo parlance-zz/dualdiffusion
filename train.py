@@ -1012,7 +1012,12 @@ def main():
                     vae_recon_loss_weight = 1
                     vae_kl_loss_weight = args.kl_loss_weight
                     vae_kl_loss_global_weight = args.kl_loss_global_weight
-                    loss = vae_recon_loss + vae_kl_loss_weight * vae_kl_loss + vae_kl_loss_global_weight * vae_kl_loss_global
+
+                    loss = vae_recon_loss
+                    if vae_kl_loss_weight > 0:
+                        loss += vae_kl_loss_weight * vae_kl_loss
+                    if vae_kl_loss_global_weight > 0:
+                        loss += vae_kl_loss_global_weight * vae_kl_loss_global
 
                 else:
                     raise ValueError(f"Unknown module {args.module}")
