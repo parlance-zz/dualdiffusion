@@ -29,7 +29,7 @@ from dual_diffusion_pipeline import DualDiffusionPipeline
 load_dotenv()
 torch.manual_seed(200)
 
-MODEL_NAME = "dualdiffusion2d_350_mclt_v8_256embed_8vae_mssloss14"
+MODEL_NAME = "dualdiffusion2d_350_mclt_v8_256embed_8vae_mssloss15"
 MODEL_PARAMS = {
     #"prediction_type": "sample",
     #"prediction_type": "epsilon",
@@ -49,11 +49,14 @@ MODEL_PARAMS = {
     "sample_format": "mclt",
     "sample_raw_length": 65536*2,
     "num_chunks": 64,
+    "u": 16000,
+    "add_abs_input": True,
 }
 
 #VAE_PARAMS = None
 VAE_PARAMS = {
     "multiscale_spectral_loss": {
+        "sample_rate": MODEL_PARAMS["sample_rate"],
         "sample_block_width": 2*MODEL_PARAMS["num_chunks"],
         "block_widths": [
             64,
@@ -75,12 +78,12 @@ VAE_PARAMS = {
             1,
             2,
             3,
-            4,
-            5,
-            6,
+            3.8,
+            4.3,
+            4.6,
         ],
         "u": 16000,
-        "sigma:": 0.125,
+        "sigma": 0.1,
     },
 
     "latent_channels": 8,
@@ -132,8 +135,6 @@ UNET_PARAMS = {
     #"attention_num_heads": 4,
     "attention_num_heads": (8,8,16,16),
 
-    #"use_separable_mid_block": False,
-    "use_separable_mid_block": True,
     "separate_attn_dim_mid": (0,),
     "add_mid_attention": True,
     "layers_per_mid_block": 1,

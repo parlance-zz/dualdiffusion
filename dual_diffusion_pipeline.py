@@ -31,7 +31,7 @@ from diffusers.pipelines.pipeline_utils import DiffusionPipeline
 
 from unet2d_dual import UNet2DDualModel
 from autoencoder_kl_dual import AutoencoderKLDual
-from dual_diffusion_utils import compute_snr, mdct, imdct
+from dual_diffusion_utils import compute_snr, mdct, imdct, normalize_lufs, save_raw
 
 class DualMCLTFormat:
 
@@ -42,8 +42,9 @@ class DualMCLTFormat:
     
     @staticmethod
     def get_num_channels(model_params):
-        channels = model_params["sample_raw_channels"] * 2
-        return (channels, channels + 2)
+        in_channels = model_params["sample_raw_channels"] * (2 + int(model_params.get("add_abs_input", False)))
+        out_channels = model_params["sample_raw_channels"] * 2 + 2
+        return (in_channels, out_channels)
 
     @staticmethod
     @torch.no_grad()
@@ -52,12 +53,23 @@ class DualMCLTFormat:
         num_chunks = model_params["num_chunks"]
         block_width = num_chunks * 2
 
+        raw_samples = normalize_lufs(raw_samples, model_params["sample_rate"], target_lufs=-55)
+
         samples = mdct(raw_samples, block_width, window_degree=1)[..., 1:-2, :]
         samples = samples.permute(0, 2, 1)
-        
-        samples = torch.view_as_real(samples).permute(0, 3, 1, 2).contiguous()
-        samples = samples / samples.square().sum(dim=(1,2,3), keepdim=True).mean(dim=(1,2,3), keepdim=True).sqrt().clip(min=1e-8)
 
+        if model_params.get("add_abs_input", False):
+            samples_abs = samples.abs()
+            samples = samples / samples_abs.sqrt().clamp(min=1e-8)
+            u = model_params.get("u", None)
+            if u is not None:
+                samples_abs = (samples_abs * u).log1p() / np.log(u + 1)
+            
+        samples = torch.view_as_real(samples).permute(0, 3, 1, 2).contiguous()
+
+        if model_params.get("add_abs_input", False):
+            samples = torch.cat([samples_abs.unsqueeze(1), samples], dim=1)
+            
         return samples
 
     @staticmethod
@@ -69,7 +81,8 @@ class DualMCLTFormat:
         samples_waveform = samples_abs * samples_phase
 
         samples_noise_abs = samples[:, 3, :, :].permute(0, 2, 1).contiguous().sigmoid()
-        samples_noise_phase = torch.rand_like(samples_noise_abs) / 4
+        #samples_noise_phase = torch.rand_like(samples_noise_abs) / 4
+        samples_noise_phase = torch.randn_like(samples_noise_abs)
         samples_noise = samples_noise_abs * samples_noise_phase
         
         return imdct(samples_waveform, window_degree=1).real + imdct(samples_noise, window_degree=2).real

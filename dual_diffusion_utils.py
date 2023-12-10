@@ -26,7 +26,7 @@ import torch
 import torch.nn.functional as F
 import torch.nn as nn
 import torchaudio
-import torchaudio.transforms as T
+import torchaudio.functional as AF
 import cv2
 
 def get_activation(act_fn):
@@ -170,7 +170,7 @@ def from_ulaw(x, u=255):
 
     return x
 
-def normalize_lufs(raw_samples, sample_rate, target_lufs=-16.0):
+def normalize_lufs(raw_samples, sample_rate, target_lufs=-18.0):
 
     original_shape = raw_samples.shape
 
@@ -179,14 +179,13 @@ def normalize_lufs(raw_samples, sample_rate, target_lufs=-16.0):
     elif raw_samples.ndim == 2:
         raw_samples = raw_samples.view(raw_samples.shape[0], 1, -1)
 
-    loudness_transform = T.Loudness(sample_rate)
-    current_lufs = loudness_transform(raw_samples)    
+    current_lufs = AF.loudness(raw_samples, sample_rate)
     gain = 10. ** ((target_lufs - current_lufs) / 20.0)
 
     gain = gain.view((*gain.shape,) + (1,) * (raw_samples.ndim - gain.ndim))
     return (raw_samples * gain).view(original_shape)
 
-def save_flac(raw_samples, sample_rate, output_path, target_lufs=-16.0):
+def save_flac(raw_samples, sample_rate, output_path, target_lufs=-18.0):
     
     raw_samples = raw_samples.detach().real
     if raw_samples.ndim == 1:
@@ -307,3 +306,18 @@ def save_sample_img(sample, img_path, include_phase=False):
         cv2_img = cv2.applyColorMap(cv2_img, cv2.COLORMAP_JET)
 
     cv2.imwrite(img_path, cv2.flip(cv2_img, -1))
+
+"""
+# lufs normalization test
+a = load_raw("./dataset/samples/80.raw")
+a = normalize_lufs(a, 8000, target_lufs=-55)
+a = mdct(a, 512, window_degree=2)
+save_raw(a / a.abs().sqrt().clamp(min=1e-8), "./debug/lufs_test_mdct.raw")
+b = imdct(a, window_degree=0).real
+save_raw(b, "./debug/lufs_test.raw")
+a = a.abs()
+save_raw(a, "./debug/lufs_test_abs.raw")
+u = 16000
+a = (a * u).log1p() / np.log(1 + u)
+save_raw(a, "./debug/lufs_test_ulaw.raw")
+"""

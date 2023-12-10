@@ -32,20 +32,21 @@ from diffusers.models.vae import DecoderOutput, DiagonalGaussianDistribution
 from diffusers.models.autoencoder_kl import AutoencoderKLOutput
 
 from unet2d_dual_blocks import SeparableAttnDownBlock2D, SeparableAttnUpBlock2D, SeparableMidBlock2D
-from dual_diffusion_utils import mdct, get_activation
+from dual_diffusion_utils import mdct, get_activation, normalize_lufs
 
 class DualMultiscaleSpectralLoss:
 
     @torch.no_grad()
     def __init__(self, loss_params):
     
+        self.sample_rate = loss_params["sample_rate"]
         self.sample_block_width = loss_params["sample_block_width"]
         self.block_widths = loss_params["block_widths"]
         self.block_offsets = loss_params["block_offsets"]
         self.u = loss_params["u"]
         self.block_octaves = loss_params["block_octaves"]
         self.sigma = loss_params["sigma"]
-
+        
         if isinstance(self.sigma, Tuple):
             if len(self.sigma) != len(self.block_widths):
                 raise ValueError(f"Must provide the same number of `sigma` as `block_widths`. `sigma`: {self.sigma}. `block_widths`: {self.block_widths}.")
@@ -73,6 +74,9 @@ class DualMultiscaleSpectralLoss:
         target = target[:, self.sample_block_width // 2:-self.sample_block_width]
         assert(sample.shape == target.shape)
 
+        sample = normalize_lufs(sample, self.sample_rate, target_lufs=-55)
+        target = normalize_lufs(target, self.sample_rate, target_lufs=-55)
+        
         if self.block_weights[0].device != sample.device:
             for block_num, block_weight in enumerate(self.block_weights):
                 self.block_weights[block_num] = block_weight.to(sample.device)
@@ -86,16 +90,16 @@ class DualMultiscaleSpectralLoss:
                 sample_fft_abs = mdct(sample[:, offset:], block_width, window_degree=2)[:, 1:-2, :].abs()
                 target_fft_abs = mdct(target[:, offset:], block_width, window_degree=2)[:, 1:-2, :].abs()
 
-                sample_fft_abs = sample_fft_abs / sample_fft_abs.amax(dim=(1,2), keepdim=True)
-                target_fft_abs = target_fft_abs / target_fft_abs.amax(dim=(1,2), keepdim=True)
+                #sample_fft_abs = sample_fft_abs / sample_fft_abs.amax(dim=(1,2), keepdim=True)
+                #target_fft_abs = target_fft_abs / target_fft_abs.amax(dim=(1,2), keepdim=True)
                 sample_fft_abs_ln = (sample_fft_abs * self.u).log1p()
                 target_fft_abs_ln = (target_fft_abs * self.u).log1p()
 
-                block_weight = self.block_weights[block_num]
-                sample_fft_abs = sample_fft_abs * block_weight
-                target_fft_abs = target_fft_abs * block_weight
-                sample_fft_abs_ln = sample_fft_abs_ln * block_weight
-                target_fft_abs_ln = target_fft_abs_ln * block_weight
+                #block_weight = self.block_weights[block_num]
+                #sample_fft_abs = sample_fft_abs * block_weight
+                #target_fft_abs = target_fft_abs * block_weight
+                #sample_fft_abs_ln = sample_fft_abs_ln * block_weight
+                #target_fft_abs_ln = target_fft_abs_ln * block_weight
 
                 loss += torch.nn.functional.l1_loss(sample_fft_abs_ln, target_fft_abs_ln,  reduction="mean")
                 loss += torch.nn.functional.mse_loss(sample_fft_abs, target_fft_abs, reduction="mean").sqrt()
