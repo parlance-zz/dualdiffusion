@@ -80,7 +80,7 @@ VAE_PARAMS = {
             6,
         ],
         "u": 16000,
-        "sigma:": 0.5,
+        "sigma:": 0.125,
     },
 
     "latent_channels": 8,

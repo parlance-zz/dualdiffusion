@@ -255,7 +255,6 @@ class EncoderDual(nn.Module):
 
         return sample
 
-
 class DecoderDual(nn.Module):
     def __init__(
         self,

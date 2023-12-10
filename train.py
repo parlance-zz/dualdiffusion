@@ -265,6 +265,12 @@ def parse_args():
         help="Loss weighting for KL divergence in VAE training.",
     )
     parser.add_argument(
+        "--kl_loss_global_weight",
+        type=float,
+        default=1e-6,
+        help="Loss weighting for KL divergence of the overall latents mean/std in VAE training.",
+    )
+    parser.add_argument(
         "--snr_gamma",
         type=float,
         default=None,
@@ -856,6 +862,7 @@ def main():
     
     if args.module == "vae":
         logger.info(f"Using KL loss weight of {args.kl_loss_weight}")
+        logger.info(f"Using KL global loss weight of {args.kl_loss_global_weight}")
         logger.info(f"Multiscale spectral loss params: {module.config.multiscale_spectral_loss}")
         logger.info(f"Sample shape: {pipeline.format.get_sample_shape(model_params, bsz=args.train_batch_size)}")
                 
@@ -882,6 +889,7 @@ def main():
         if args.module == "vae":
             vae_recon_train_loss = 0.
             vae_kl_train_loss = 0.
+            vae_kl_global_train_loss = 0.
             vae_latents_mean = 0.
             vae_latents_std = 0.
 
@@ -992,11 +1000,19 @@ def main():
                     
                     recon_raw_samples = pipeline.format.sample_to_raw(recon, model_params).real
                     vae_recon_loss = module.multiscale_spectral_loss(recon_raw_samples, raw_samples)
+
                     vae_kl_loss = posterior.kl().sum() / posterior.mean.numel()
 
+                    latents_non_bsz_dim = tuple(range(1, latents.ndim))
+                    latents_global_mean = latents.mean(dim=latents_non_bsz_dim)
+                    latents_global_var = latents.std(dim=latents_non_bsz_dim).square()
+                    latents_global_logvar = (latents_global_var + 1e-8).log()
+                    vae_kl_loss_global = 0.5 * torch.sum(torch.pow(latents_global_mean, 2) + latents_global_var - 1.0 - latents_global_logvar) / latents.shape[0]
+                
                     vae_recon_loss_weight = 1
                     vae_kl_loss_weight = args.kl_loss_weight
-                    loss = vae_recon_loss + vae_kl_loss_weight * vae_kl_loss
+                    vae_kl_loss_global_weight = args.kl_loss_global_weight
+                    loss = vae_recon_loss + vae_kl_loss_weight * vae_kl_loss + vae_kl_loss_global_weight * vae_kl_loss_global
 
                 else:
                     raise ValueError(f"Unknown module {args.module}")
@@ -1008,10 +1024,16 @@ def main():
                 if args.module == "vae":
                     vae_recon_avg_loss = accelerator.gather(vae_recon_loss.repeat(args.train_batch_size)).mean()
                     vae_recon_train_loss += vae_recon_avg_loss.item() / args.gradient_accumulation_steps
+
                     vae_kl_avg_loss = accelerator.gather(vae_kl_loss.repeat(args.train_batch_size)).mean()
                     vae_kl_train_loss += vae_kl_avg_loss.item() / args.gradient_accumulation_steps
+
+                    vae_kl_global_avg_loss = accelerator.gather(vae_kl_loss_global.repeat(args.train_batch_size)).mean()
+                    vae_kl_global_train_loss += vae_kl_global_avg_loss.item() / args.gradient_accumulation_steps
+
                     vae_latents_avg_mean = accelerator.gather(latents_mean.repeat(args.train_batch_size)).mean()
                     vae_latents_mean += vae_latents_avg_mean.item() / args.gradient_accumulation_steps
+
                     vae_latents_avg_std = accelerator.gather(latents_std.repeat(args.train_batch_size)).mean()
                     vae_latents_std += vae_latents_avg_std.item() / args.gradient_accumulation_steps
 
@@ -1045,10 +1067,12 @@ def main():
                 if args.module == "vae":
                     logs["vae/recon_loss"] = vae_recon_train_loss
                     logs["vae/kl_loss"] = vae_kl_train_loss
+                    logs["vae/kl_global_loss"] = vae_kl_global_train_loss
                     logs["vae/latents_mean"] = vae_latents_mean
                     logs["vae/latents_std"] = vae_latents_std
                     logs["loss_weight/recon"] = vae_recon_loss_weight
                     logs["loss_weight/kl"] = vae_kl_loss_weight
+                    logs["loss_weight/kl_global"] = vae_kl_loss_global_weight
                 if args.use_ema:
                     logs["ema_decay"] = ema_module.cur_decay_value    
 
@@ -1058,9 +1082,12 @@ def main():
                 train_loss = 0.0
                 
                 if args.module == "vae":
-                    vae_recon_train_loss = 0.0
-                    vae_kl_train_loss = 0.0
-
+                    vae_recon_train_loss = 0.
+                    vae_kl_train_loss = 0.
+                    vae_kl_global_train_loss = 0.
+                    vae_latents_mean = 0.
+                    vae_latents_std = 0.
+                    
                 if global_step % args.checkpointing_steps == 0:
                     if accelerator.is_main_process:
                         
