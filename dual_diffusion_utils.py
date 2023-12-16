@@ -71,14 +71,14 @@ def compute_snr(noise_scheduler, timesteps):
     return snr
 
 # kaiser derived window for mclt/mdct, unused
-def _kaiser(window_len, beta, device):    
+def get_kaiser_window(window_len, beta=4*torch.pi, device="cpu"):    
     alpha = (window_len - 1) / 2
     n = torch.arange(window_len, device=device)
     return torch.special.i0(beta * torch.sqrt(1 - ((n - alpha) / alpha).square())) / torch.special.i0(torch.tensor(beta))
 
-def kaiser_derived_window(window_len, beta=4*torch.pi, device="cpu"):
+def get_kaiser_derived_window(window_len, beta=4*torch.pi, device="cpu"):
 
-    kaiserw = _kaiser(window_len // 2 + 1, beta, device)
+    kaiserw = get_kaiser_window(window_len // 2 + 1, beta, device)
     csum = torch.cumsum(kaiserw, dim=0)
     halfw = torch.sqrt(csum[:-1] / csum[-1])
 
@@ -112,7 +112,7 @@ def mdct(x, block_width, window_degree=1):
     pre_shift = torch.exp(-1j * torch.pi / 2 / N * n)
     post_shift = torch.exp(-1j * torch.pi / 2 / N * (N + 1) * k)
     
-    return torch.fft.fft(x * pre_shift * window)[..., :N] * post_shift * (2 ** 0.5)
+    return torch.fft.fft(x * pre_shift * window, norm="forward")[..., :N] * post_shift * 2 * N ** 0.5
 
 def imdct(x, window_degree=1):
     N = x.shape[-1]
@@ -129,7 +129,7 @@ def imdct(x, window_degree=1):
     post_shift = torch.exp(-1j * torch.pi / 2 / N * (N + 1) * k)
     
     x = torch.cat((x / post_shift, torch.zeros_like(x)), dim=-1)
-    y = (torch.fft.ifft(x) / pre_shift) * window
+    y = (torch.fft.ifft(x, norm="backward") / pre_shift) * window
 
     padded_sample_len = (y.shape[-2] + 1) * y.shape[-1] // 2
     raw_sample = torch.zeros(y.shape[:-2] + (padded_sample_len,), device=y.device, dtype=y.dtype)
@@ -138,7 +138,7 @@ def imdct(x, window_degree=1):
     raw_sample[..., :y_even.shape[-1]] = y_even
     raw_sample[..., N:y_odd.shape[-1] + N] += y_odd
 
-    return raw_sample[..., N:-N] * (2 ** 0.5)
+    return raw_sample[..., N:-N] * 2 * N ** 0.5
 
 def to_ulaw(x, u=255):
 
@@ -170,7 +170,7 @@ def from_ulaw(x, u=255):
 
     return x
 
-def normalize_lufs(raw_samples, sample_rate, target_lufs=-18.0):
+def normalize_lufs(raw_samples, sample_rate, target_lufs=-20.0):
 
     original_shape = raw_samples.shape
 
@@ -185,7 +185,7 @@ def normalize_lufs(raw_samples, sample_rate, target_lufs=-18.0):
     gain = gain.view((*gain.shape,) + (1,) * (raw_samples.ndim - gain.ndim))
     return (raw_samples * gain).view(original_shape)
 
-def save_flac(raw_samples, sample_rate, output_path, target_lufs=-18.0):
+def save_flac(raw_samples, sample_rate, output_path, target_lufs=-20.0):
     
     raw_samples = raw_samples.detach().real
     if raw_samples.ndim == 1:
@@ -213,7 +213,7 @@ def save_raw(tensor, output_path):
         tensor = tensor.float()
     elif tensor.dtype == torch.complex32:
         tensor = tensor.complex64()
-    tensor.detach().cpu().numpy().tofile(output_path)
+    tensor.detach().resolve_conj().cpu().numpy().tofile(output_path)
 
 def dtype_size_in_bytes(dtype):
     if dtype == torch.float16 or dtype == np.float16:
@@ -307,17 +307,163 @@ def save_sample_img(sample, img_path, include_phase=False):
 
     cv2.imwrite(img_path, cv2.flip(cv2_img, -1))
 
+class ScaleNorm(nn.Module):
+    def __init__(self, num_features, init_scale=1):
+        super(ScaleNorm, self).__init__()
+
+        self.num_features = num_features
+        self.scale = nn.Parameter(torch.ones(num_features) * np.log(np.exp(init_scale) - 1))
+
+    def forward(self, x):
+
+        view_shape = (1, -1,) + (1,) * (x.ndim - 2)
+        return x * F.softplus(self.scale).view(view_shape)
+
+def hz_to_mels(hz):
+    return 1127. * torch.log(1 + hz / 700.)
+
+def mels_to_hz(mels):
+    return 700. * (torch.exp(mels / 1127.) - 1)
+
+def get_mel_density(hz):
+    return 1127. / (700. + hz)
+
+def get_hann_window(window_len, device="cpu"):
+    n = torch.arange(window_len, device=device) / (window_len - 1)
+    return 0.5 - 0.5 * torch.cos(2 * torch.pi * n)
 """
-# lufs normalization test
 a = load_raw("./dataset/samples/80.raw")
-a = normalize_lufs(a, 8000, target_lufs=-55)
-a = mdct(a, 512, window_degree=2)
-save_raw(a / a.abs().sqrt().clamp(min=1e-8), "./debug/lufs_test_mdct.raw")
-b = imdct(a, window_degree=0).real
-save_raw(b, "./debug/lufs_test.raw")
-a = a.abs()
-save_raw(a, "./debug/lufs_test_abs.raw")
-u = 16000
-a = (a * u).log1p() / np.log(1 + u)
-save_raw(a, "./debug/lufs_test_ulaw.raw")
+a = mdct(a, 128, window_degree=1)
+a_abs = a.abs()
+a_abs = a_abs / a_abs.amax(dim=-1, keepdim=True)
+a_kld = -a_abs * (a_abs+1e-8).log()
+a_kld /= a_kld.amax(dim=-1, keepdim=True)
+a_kld = a_kld ** 0.5
+signal_mask = (a_kld < a_kld.mean(dim=-1, keepdim=True)).type(torch.float32)
+signal_mask /= signal_mask.amax(dim=-1, keepdim=True)
+noise_mask = 1 - signal_mask
+
+noise_mask =1
+signal_mask = 1
+a_imdct = imdct(a, window_degree=1).real
+save_raw(a_imdct, "./debug/test_a.raw")
+
+noise_masked_a_imdct = imdct(a * noise_mask, window_degree=1).real
+save_raw(noise_masked_a_imdct, "./debug/test_noise_masked_a.raw")
+
+signal_masked_a_imdct = imdct(a * signal_mask, window_degree=1).real
+save_raw(signal_masked_a_imdct, "./debug/test_signal_masked_a.raw")
+
+a = a / a.abs().square().sum().sqrt()
+b = torch.randn_like(a) * a.abs()
+b = b / b.abs().square().sum().sqrt()
+
+reconstructed_imdct = imdct(a*noise_mask, window_degree=1).real + imdct(b*signal_mask, window_degree=2).real
+save_raw(reconstructed_imdct, "./debug/test_reconstructed.raw")
+"""
+
+"""
+a = torch.randn(65536*2)
+b = torch.randn(65536*2)
+#b = load_raw("./dataset/samples/80.raw", count=65536*2)
+
+a = mdct(a, 128, window_degree=2)
+a_abs = a.abs()
+a_abs = a_abs / a_abs.amax(dim=-1, keepdim=True)
+a_ln = (a_abs * 16000).log1p()
+
+b = mdct(b, 128, window_degree=2)
+b_abs = b.abs()
+b_abs[:, :] = torch.randn_like(b_abs).abs()** 0.25
+b_abs = b_abs / b_abs.amax(dim=-1, keepdim=True)
+b_ln = (b_abs * 16000).log1p()
+
+print(b.shape, a.shape)
+rmse_error = F.mse_loss(a_abs, b_abs).sqrt()
+ln_error = F.l1_loss(a_ln, b_ln)
+
+abs_delta = a_abs - b_abs
+ln_delta = a_ln - b_ln
+
+print(f"rmse: {rmse_error}, ln: {ln_error}, total: {rmse_error + ln_error}")
+print(f"abs delta: {abs_delta.mean()}, ln delta: {ln_delta.mean()}")
+"""
+
+"""
+num_filters = 8192
+min_freq = 0.006
+max_freq = 0.85
+crop_width = 65536
+std_octaves = 4
+device = "cuda"
+
+filter_q = torch.rand(num_filters, device=device) * (max_freq - min_freq) + min_freq
+#filter_q = torch.linspace(min_freq, max_freq, num_filters)
+
+filter_std = 2 * torch.exp2(torch.rand(num_filters, device=device) * std_octaves)
+filter_std = filter_std * filter_q / min_freq
+
+fft_q = torch.arange(0, crop_width // 2 + 1, device=device) / (crop_width // 2)
+
+filters = torch.zeros((num_filters, crop_width), device=device)
+filters[:, :crop_width//2 + 1] = torch.exp(-filter_std.view(-1, 1) * torch.log(filter_q.view(-1, 1) / fft_q.view(1, -1)).square())
+filters[:, 0] = 0
+
+
+ifft_filters = torch.fft.fftshift(torch.fft.ifft(filters, norm="ortho"), dim=-1)
+ifft_filters /= ifft_filters.real.amax(dim=-1, keepdim=True)
+ifft_filters_abs = ifft_filters.abs()
+ifft_max_filter_abs = ifft_filters_abs.amax(dim=-1, keepdim=True)
+ifft_filters_abs /= ifft_max_filter_abs
+
+save_raw(ifft_filters_abs, "./debug/ifft_filters_abs.raw")
+save_raw(ifft_filters, "./debug/ifft_filters.raw")
+save_raw(filters[:, :crop_width//2 + 1], "./debug/filters.raw")
+
+filters /= filter_q.sqrt().view(-1, 1)
+coverage = filters[:, :crop_width//2 + 1].sum(dim=0)
+coverage /= coverage.amax()
+save_raw(coverage, "./debug/filter_coverage.raw")
+"""
+
+"""
+mss_params = {
+    "edge_crop_width": 0,
+    "max_freq": 1,
+    "min_freq": 0.006,
+    "min_std": 2,
+    "num_filters": 1024,
+    "sample_block_width": 128,
+    "std_octaves": 20,
+    "u": 16000,
+    "version": 3
+},
+"""
+
+# get list of all samples in ./dataset/samples
+
+"""
+sample_files = []
+for root, dirs, files in os.walk("./dataset/samples"):
+    for file in files:
+        if file.endswith(".raw"):
+            sample_files.append(os.path.join(root, file))
+
+amax = 0
+
+sample_files = sample_files[::-1]
+
+for file in sample_files:
+
+    a = load_raw(file)#.to("cuda")
+    a = normalize_lufs(a, 8000)
+
+    m = mdct(a, 128, window_degree=1) / 15
+    #im = imdct(m, window_degree=1).real
+
+    #save_raw(im, "./debug/test_im.raw")
+    #save_raw(a, "./debug/test_a.raw")
+    amax = max(amax, m.abs().amax().item())
+    print(amax)
+
 """

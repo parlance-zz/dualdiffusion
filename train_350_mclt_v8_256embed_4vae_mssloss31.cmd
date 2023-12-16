@@ -5,11 +5,11 @@ accelerate launch^
  --allow_tf32^
  --train_data_dir="D:/dualdiffusion/dataset/samples"^
  --raw_sample_format="int16"^
- --pretrained_model_name_or_path="D:/dualdiffusion/models/dualdiffusion2d_350_mclt_v8_256embed_8vae_mssloss15"^
+ --pretrained_model_name_or_path="D:/dualdiffusion/models/dualdiffusion2d_350_mclt_v8_256embed_4vae_mssloss31"^
  --module="vae"^
  --train_batch_size=1^
  --num_train_epochs=500^
- --checkpointing_steps=2470^
+ --checkpointing_steps=500^
  --checkpoints_total_limit=1^
  --gradient_accumulation_steps=8^
  --learning_rate=1e-4^
@@ -19,10 +19,12 @@ accelerate launch^
  --lr_scheduler="constant_with_warmup"^
  --num_validation_samples=5^
  --num_validation_epochs=5^
- --max_grad_norm=10^
- --kl_loss_weight=1e-5^
- --kl_loss_global_weight=0
+ --max_grad_norm=1^
+ --kl_loss_weight=1e-4^
+ --kl_loss_global_weight=0^
+ --max_train_samples=800
 
+REM --checkpointing_steps=2470^
 REM --max_grad_norm=25
  
 REM --phase_augmentation=False

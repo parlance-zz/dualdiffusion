@@ -29,7 +29,7 @@ from dual_diffusion_pipeline import DualDiffusionPipeline
 load_dotenv()
 torch.manual_seed(200)
 
-MODEL_NAME = "dualdiffusion2d_350_mclt_v8_256embed_8vae_mssloss15"
+MODEL_NAME = "dualdiffusion2d_350_mclt_v8_256embed_4vae_mssloss31"
 MODEL_PARAMS = {
     #"prediction_type": "sample",
     #"prediction_type": "epsilon",
@@ -49,44 +49,57 @@ MODEL_PARAMS = {
     "sample_format": "mclt",
     "sample_raw_length": 65536*2,
     "num_chunks": 64,
-    "u": 16000,
+    "u": 8000,
     "add_abs_input": True,
+    "mdct_abs_scale": 4.,
+    #"add_abs_input": False,
 }
 
 #VAE_PARAMS = None
 VAE_PARAMS = {
+    #"multiscale_spectral_loss": {
+    #    "sample_rate": MODEL_PARAMS["sample_rate"],
+    #    "sample_block_width": 2*MODEL_PARAMS["num_chunks"],
+    #    "block_widths": [
+    #        16,
+    #        32,
+    #        64,
+    #        128,
+    #        256,
+    #        512,
+    #        1024,
+    #    ],
+    #    "block_offsets": [
+    #        0,
+    #        0.25,
+    #    ],
+    #    "block_octaves": [
+    #        0,
+    #        1,
+    #        2,
+    #        3,
+    #        4,
+    #        5,
+    #        6,
+    #    ],
+    #    "u": 16000,
+    #    "sigma": 1,
+    #},
+    
     "multiscale_spectral_loss": {
-        "sample_rate": MODEL_PARAMS["sample_rate"],
+        "version": 4,
+        "edge_crop_width": 0,
         "sample_block_width": 2*MODEL_PARAMS["num_chunks"],
-        "block_widths": [
-            64,
-            128,
-            256,
-            512,
-            1024,
-            2048,
-            4096,
-            8192,
-        ],
-        "block_offsets": [
-            0,
-            0.25,
-        ],
-        "block_octaves": [
-            -1,
-            0,
-            1,
-            2,
-            3,
-            3.8,
-            4.3,
-            4.6,
-        ],
-        "u": 16000,
-        "sigma": 0.1,
+        "num_filters": 1024,
+        "sample_rate": MODEL_PARAMS["sample_rate"],
+        "min_freq": 0,
+        "max_freq": 8000,
+        "max_logvar": 15,
+        "min_logvar": 0,
+        "u": 8000,
     },
 
-    "latent_channels": 8,
+    "latent_channels": 4,
     "sample_size": (64, 2048),
     "act_fn": "silu",
     "conv_size": (1,3),

@@ -53,7 +53,7 @@ from diffusers.utils.import_utils import is_xformers_available
 from unet2d_dual import UNet2DDualModel
 from autoencoder_kl_dual import AutoencoderKLDual
 from dual_diffusion_pipeline import DualDiffusionPipeline
-from dual_diffusion_utils import compute_snr
+from dual_diffusion_utils import compute_snr, normalize_lufs
 
 # Will error if the minimal version of diffusers is not installed. Remove at your own risks.
 check_min_version("0.21.0.dev0")
@@ -267,7 +267,7 @@ def parse_args():
     parser.add_argument(
         "--kl_loss_global_weight",
         type=float,
-        default=1e-6,
+        default=0,
         help="Loss weighting for KL divergence of the overall latents mean/std in VAE training.",
     )
     parser.add_argument(
@@ -538,9 +538,11 @@ def main():
     pipeline = DualDiffusionPipeline.from_pretrained(args.pretrained_model_name_or_path)
     module = getattr(pipeline, args.module)
     noise_scheduler = pipeline.scheduler
+
     model_params = pipeline.config["model_params"]
+    sample_rate = model_params["sample_rate"]
     sample_crop_width = pipeline.format.get_sample_crop_width(model_params)
-    
+
     if args.module == "unet":
         module_class = UNet2DDualModel
 
@@ -727,7 +729,7 @@ def main():
                 else:
                     raise ValueError(f"Unsupported raw sample format: {args.raw_sample_format}")
                 
-                samples.append(torch.from_numpy(sample))
+                samples.append(normalize_lufs(torch.from_numpy(sample), sample_rate))
             else:
                 print(audio)
                 print(dir(audio))
@@ -994,11 +996,15 @@ def main():
                     
                     posterior = module.encode(samples, return_dict=False)[0]
                     latents = posterior.sample()
+
+                    #nonbatch_dims = tuple(range(1, latents.ndim))
+                    #latents = latents - latents.clone().mean(dim=nonbatch_dims, keepdim=True)
+                    #latents = latents / latents.clone().std(dim=nonbatch_dims, keepdim=True)
                     latents_mean = latents.mean()
                     latents_std = latents.std()
                     recon = module.decode(latents, return_dict=False)[0]                    
                     
-                    recon_raw_samples = pipeline.format.sample_to_raw(recon, model_params).real
+                    recon_raw_samples = pipeline.format.sample_to_raw(recon, model_params)
                     vae_recon_loss = module.multiscale_spectral_loss(recon_raw_samples, raw_samples)
 
                     vae_kl_loss = posterior.kl().sum() / posterior.mean.numel()
@@ -1008,8 +1014,8 @@ def main():
                     latents_global_var = latents.std(dim=latents_non_bsz_dim).square()
                     latents_global_logvar = (latents_global_var + 1e-8).log()
                     vae_kl_loss_global = 0.5 * torch.sum(torch.pow(latents_global_mean, 2) + latents_global_var - 1.0 - latents_global_logvar) / latents.shape[0]
-                
-                    vae_recon_loss_weight = 1
+
+                    vae_recon_loss_weight = 1                
                     vae_kl_loss_weight = args.kl_loss_weight
                     vae_kl_loss_global_weight = args.kl_loss_global_weight
 
@@ -1124,6 +1130,8 @@ def main():
                                             shutil.rmtree(removing_checkpoint)
                             except Exception as e:
                                 logger.error(f"Error removing checkpoints: {e}")
+
+            #torch.cuda.empty_cache()
 
             if global_step >= args.max_train_steps:
                 logger.info(f"Reached max train steps ({args.max_train_steps}) - Training complete")

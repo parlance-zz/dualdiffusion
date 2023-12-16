@@ -293,8 +293,8 @@ def embedding_test():
 def vae_test():
 
     #dualdiffusion2d_330_mdct_v8_256embed_4vae
-    model_name = "dualdiffusion2d_350_mclt_v8_256embed_8vae_mssloss14"
-    num_samples = 8
+    model_name = "dualdiffusion2d_350_mclt_v8_256embed_4vae_mssloss31"
+    num_samples = 1
     #device = "cuda"
     device = "cpu"
     fp16 = False
@@ -316,9 +316,11 @@ def vae_test():
     dataset_path = os.environ.get("DATASET_PATH", "./dataset/samples")
     #test_samples = sorted(os.listdir(dataset_path), key=lambda x: int(x.split(".")[0]))[:num_samples]
     test_samples = np.random.choice(os.listdir(dataset_path), num_samples, replace=False)
+    #test_samples = sorted(os.listdir(dataset_path), key=lambda x: int(x.split(".")[0]))[100:100+num_samples]
     
+    test_samples = ["16819.raw"]
+
     vae_path = os.path.join(model_path, "vae")
-    #vae_path = "D:/dualdiffusion/models/dualdiffusion2d_330_overlapped_v8_256embed_16vae/old checkpoints/vae_checkpoint-49400/vae"
     model_dtype = torch.float16 if fp16 else torch.float32
     vae = AutoencoderKLDual.from_pretrained(vae_path, torch_dtype=model_dtype).to(device)
     last_global_step = vae.config["last_global_step"]
@@ -329,6 +331,8 @@ def vae_test():
         input_sample = format.raw_to_sample(input_raw_sample, model_params)
 
         latents = vae.encode(input_sample.type(model_dtype), return_dict=False)[0].sample()
+        #latents -= latents.mean(dim=(1,2,3), keepdim=True)
+        #latents /= latents.std(dim=(1,2,3), keepdim=True)
         output_sample = vae.decode(latents, return_dict=False)[0]
         output_raw_sample = format.sample_to_raw(output_sample.type(torch.float32), model_params)
 

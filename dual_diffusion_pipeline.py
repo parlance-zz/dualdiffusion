@@ -50,43 +50,54 @@ class DualMCLTFormat:
     @torch.no_grad()
     def raw_to_sample(raw_samples, model_params):
         
+        #mdct_abs_scale = 1#model_params["mdct_abs_scale"]
         num_chunks = model_params["num_chunks"]
         block_width = num_chunks * 2
-
-        raw_samples = normalize_lufs(raw_samples, model_params["sample_rate"], target_lufs=-55)
-
-        samples = mdct(raw_samples, block_width, window_degree=1)[..., 1:-2, :]
-        samples = samples.permute(0, 2, 1)
+        
+        samples = mdct(raw_samples, block_width, window_degree=2)[..., 1:-2, :]
+        samples = samples.permute(0, 2, 1)# / mdct_abs_scale
 
         if model_params.get("add_abs_input", False):
             samples_abs = samples.abs()
-            samples = samples / samples_abs.sqrt().clamp(min=1e-8)
-            u = model_params.get("u", None)
-            if u is not None:
-                samples_abs = (samples_abs * u).log1p() / np.log(u + 1)
-            
-        samples = torch.view_as_real(samples).permute(0, 3, 1, 2).contiguous()
+            samples_abs_amax = samples_abs.amax(dim=(1,2), keepdim=True)
+
+            samples /= samples_abs_amax
+            samples /= samples.abs().sqrt().clamp(min=1e-8)
+
+            #samples_abs /= samples_abs_amax
+            u = model_params["u"]
+            samples_abs = (samples_abs * u).log1p() / np.log(u + 1)
+
+        samples = torch.view_as_real(samples).permute(0, 3, 1, 2).contiguous()#.tanh()
 
         if model_params.get("add_abs_input", False):
             samples = torch.cat([samples_abs.unsqueeze(1), samples], dim=1)
-            
+
         return samples
 
     @staticmethod
     def sample_to_raw(samples, model_params):
-        
-        samples_abs = samples[:, 0, :, :].permute(0, 2, 1).contiguous().sigmoid()
-        samples_phase = samples[:, 1:3, :, :].permute(0, 3, 2, 1).contiguous().tanh()
+
+        samples_abs = samples[:, 0, :, :].permute(0, 2, 1).contiguous()
+        samples_phase = samples[:, 2:, :, :].permute(0, 3, 2, 1).contiguous()
+        #samples_phase = samples_phase - samples_phase.mean(dim=(2), keepdim=True) # ??? this seems to remove the block discontinuities but degrades quality?
         samples_phase = torch.view_as_complex(samples_phase)
+        #samples_abs = samples_abs - samples_abs.amin(dim=(2), keepdim=True)
+        #samples_phase_abs = samples_phase.abs().clamp(min=1e-8)
+        #samples_phase = samples_phase - samples_phase / samples_phase_abs * samples_phase_abs.amin(dim=(2), keepdim=True)
+        #samples_phase = samples_phase - samples_phase.mean(dim=1, keepdim=True)
         samples_waveform = samples_abs * samples_phase
+        samples_waveform_abs = samples_waveform.abs().clamp(min=1e-8)
+        samples_waveform = samples_waveform * (samples_waveform_abs > (samples_waveform_abs.amin(dim=2, keepdim=True) * 4)).float()
+        samples_wave = imdct(samples_waveform, window_degree=2).real
 
-        samples_noise_abs = samples[:, 3, :, :].permute(0, 2, 1).contiguous().sigmoid()
-        #samples_noise_phase = torch.rand_like(samples_noise_abs) / 4
-        samples_noise_phase = torch.randn_like(samples_noise_abs)
+        samples_noise_abs = samples[:, 1, :, :].permute(0, 2, 1).contiguous()
+        samples_noise_phase = torch.randn_like(samples_noise_abs) / (2 ** 0.5)
         samples_noise = samples_noise_abs * samples_noise_phase
-        
-        return imdct(samples_waveform, window_degree=1).real + imdct(samples_noise, window_degree=2).real
+        samples_noise = imdct(samples_noise, window_degree=2).real
 
+        return samples_wave + samples_noise
+    
     @staticmethod
     def get_sample_shape(model_params, bsz=1, length=1):
         _, num_output_channels = DualMCLTFormat.get_num_channels(model_params)

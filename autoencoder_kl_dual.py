@@ -20,8 +20,10 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
+import os
 from typing import Optional, Tuple, Union
 
+import numpy as np
 import torch
 import torch.nn as nn
 
@@ -32,8 +34,275 @@ from diffusers.models.vae import DecoderOutput, DiagonalGaussianDistribution
 from diffusers.models.autoencoder_kl import AutoencoderKLOutput
 
 from unet2d_dual_blocks import SeparableAttnDownBlock2D, SeparableAttnUpBlock2D, SeparableMidBlock2D
-from dual_diffusion_utils import mdct, get_activation, normalize_lufs
+from dual_diffusion_utils import mdct, get_activation, save_raw, hz_to_mels, mels_to_hz, get_mel_density, get_hann_window, get_kaiser_window, ScaleNorm
 
+class DualMultiscaleSpectralLoss4:
+
+    @torch.no_grad()
+    def __init__(self, loss_params):
+
+        self.edge_crop_width = loss_params["edge_crop_width"]
+        self.sample_block_width = loss_params["sample_block_width"]
+        self.num_filters = loss_params["num_filters"]
+        self.min_freq = loss_params["min_freq"]
+        self.max_freq = loss_params["max_freq"]
+        self.min_logvar = loss_params["min_logvar"]
+        self.max_logvar = loss_params["max_logvar"]
+        self.sample_rate = loss_params["sample_rate"]
+        self.u = loss_params["u"]
+
+        self.filters = None
+        self.write_debug = True
+
+    @torch.no_grad()
+    def create_filters(self, crop_width, device="cpu"):
+        
+        if self.filters is None:
+            self.filters = torch.zeros((1, self.num_filters, crop_width), device=device)
+        else:
+            if self.filters.shape[-1] != crop_width:
+                self.filters = torch.zeros((1, self.num_filters, crop_width), device=device)
+
+            if self.filters.device != device:
+                self.filters = self.filters.to(device)
+
+            self.write_debug = False
+
+        # linear frequency spacing
+        filter_hz = torch.rand(self.num_filters, device=device) * (self.max_freq - self.min_freq) + self.min_freq
+        filter_mels = hz_to_mels(filter_hz)
+        
+        # mel scale spacing
+        #min_mels = hz_to_mels(torch.tensor(self.min_freq, device=device))
+        #max_mels = hz_to_mels(torch.tensor(self.max_freq, device=device))
+        #filter_mels = torch.rand(self.num_filters, device=device) * (max_mels - min_mels) + min_mels
+
+        filter_logvar = torch.rand(self.num_filters, device=device) * (self.max_logvar - self.min_logvar) + self.min_logvar
+        filter_var = torch.exp2(filter_logvar)
+
+        fft_q = torch.arange(0, crop_width // 2 + 1, device=device) / (crop_width // 2)
+        fft_mels = hz_to_mels(fft_q * self.sample_rate)
+
+        self.filters[0, :, :crop_width//2 + 1] = torch.exp(-(filter_mels.view(-1, 1) - fft_mels.view(1, -1)).square() / filter_var.view(-1, 1))
+        self.filters /= self.filters.square().mean(dim=-1, keepdim=True)
+
+        # these 2 normalizations are ~= to the power norm above
+        #self.filters /= filter_var.sqrt().view(1, -1, 1) / np.exp2(self.max_logvar / 2)
+        #self.filters *= get_mel_density(filter_hz).view(1, -1, 1)
+
+        #self.filters[0, :, :crop_width//2 + 1] = torch.exp(-torch.log(filter_q.view(-1, 1) / fft_q.view(1, -1)).square() / filter_var.view(-1, 1))
+        #self.filters[0, :, 0] = 0
+        #self.filters /= self.filters.square().mean(dim=-1, keepdim=True)
+
+        if self.write_debug:
+            debug_path = os.environ.get("DEBUG_PATH", None)
+            if debug_path is not None:
+                save_raw(self.filters.abs(), os.path.join(debug_path, "debug_multiscale_spectral_loss_filters.raw"))
+                save_raw(self.filters.abs().mean(dim=1)[0, :crop_width//2+1], os.path.join(debug_path, "debug_multiscale_spectral_loss_filter_coverage.raw"))
+                save_raw(torch.fft.fftshift(torch.fft.ifft(self.filters, norm="ortho"), dim=-1), os.path.join(debug_path, "debug_multiscale_spectral_loss_filters_ifft.raw"))
+
+    def __call__(self, sample, target):
+        
+        target = target[:, self.sample_block_width // 2:-self.sample_block_width]
+
+        if sample.shape != target.shape:
+            raise ValueError(f"sample.shape != target.shape. sample.shape: {sample.shape}. target.shape: {target.shape}.")
+
+        bsz = sample.shape[0]
+        self.create_filters(sample.shape[-1], device=sample.device)
+
+        sample_fft = torch.fft.fft(sample, norm="forward") * 1024
+        sample_filtered_abs = torch.fft.ifft(sample_fft.view(bsz, 1, -1) * self.filters, norm="backward").abs()
+        if self.edge_crop_width > 0:
+            sample_filtered_abs = sample_filtered_abs[:, :, self.edge_crop_width:-self.edge_crop_width]
+        #sample_filtered_abs = sample_filtered_abs / sample_filtered_abs.amax(dim=(1, 2), keepdim=True)
+        #print("sample_filtered_abs_amax: ", sample_filtered_abs.amax(dim=(1, 2), keepdim=True))
+        sample_filtered_abs_ln = (sample_filtered_abs * self.u).log1p() / np.log(self.u + 1)
+
+        target_fft = torch.fft.fft(target, norm="forward") * 1024
+        target_filtered_abs = torch.fft.ifft(target_fft.view(bsz, 1, -1) * self.filters, norm="backward").abs()
+        if self.edge_crop_width > 0:
+            target_filtered_abs = target_filtered_abs[:, :, self.edge_crop_width:-self.edge_crop_width]
+        #target_filtered_abs = target_filtered_abs / target_filtered_abs.amax(dim=(1,2), keepdim=True)
+        #print("target_filtered_abs_amax: ", target_filtered_abs.amax(dim=(1, 2), keepdim=True))
+        target_filtered_abs_ln = (target_filtered_abs * self.u).log1p() / np.log(self.u + 1)
+
+        if self.write_debug:
+            debug_path = os.environ.get("DEBUG_PATH", None)
+            if debug_path is not None:
+                with torch.no_grad():
+                    target_filtered = torch.fft.ifft(target_fft.view(bsz, 1, -1) * self.filters, norm="backward")
+                    save_raw(target_filtered, os.path.join(debug_path, "debug_multiscale_spectral_loss_target_filtered.raw"))
+                    target_reconstructed = target_filtered.mean(dim=1)
+                    save_raw(target_reconstructed, os.path.join(debug_path, "debug_multiscale_spectral_loss_target_reconstructed.raw"))
+                    save_raw(target, os.path.join(debug_path, "debug_multiscale_spectral_loss_target.raw"))
+                torch.cuda.empty_cache()
+            self.write_debug = False             
+        
+        return torch.nn.functional.mse_loss(sample_filtered_abs_ln, target_filtered_abs_ln, reduction="mean") * 10
+    
+class DualMultiscaleSpectralLoss3:
+
+    @torch.no_grad()
+    def __init__(self, loss_params):
+
+        self.edge_crop_width = loss_params["edge_crop_width"]
+        self.sample_block_width = loss_params["sample_block_width"]
+        self.num_filters = loss_params["num_filters"]
+        self.min_freq = loss_params["min_freq"]
+        self.max_freq = loss_params["max_freq"]
+        self.min_std = loss_params["min_std"]
+        self.std_octaves = loss_params["std_octaves"]
+        self.u = loss_params["u"]
+
+        self.filters = None
+        self.write_debug = False
+
+    @torch.no_grad()
+    def create_filters(self, crop_width, device="cpu"):
+        
+        if self.filters is None:
+            self.filters = torch.zeros((1, self.num_filters, crop_width), device=device)
+        else:
+            if self.filters.shape[-1] != crop_width:
+                self.filters = torch.zeros((1, self.num_filters, crop_width), device=device)
+            if self.filters.device != device:
+                self.filters = self.filters.to(device)
+
+            self.write_debug = False
+
+        num_filter_octaves = -np.log2(self.min_freq / self.max_freq)
+        filter_q = torch.exp2(-torch.rand(self.num_filters, device=device) * num_filter_octaves) * self.max_freq
+        fft_q = torch.arange(0, crop_width // 2 + 1, device=device) / (crop_width // 2)
+        
+        filter_std = self.min_std * torch.exp2(torch.rand(self.num_filters, device=device) * self.std_octaves)
+    
+        self.filters[0, :, :crop_width//2 + 1] = torch.exp(-filter_std.view(-1, 1) * torch.log(filter_q.view(-1, 1) / fft_q.view(1, -1)).square())
+        self.filters[0, :, 0] = 0
+
+        if self.write_debug:
+            debug_path = os.environ.get("DEBUG_PATH", None)
+            if debug_path is not None:
+                save_raw(self.filters.abs(), os.path.join(debug_path, "debug_multiscale_spectral_loss_filters.raw"))
+                save_raw(self.filters.abs().mean(dim=1), os.path.join(debug_path, "debug_multiscale_spectral_loss_filter_coverage.raw"))
+                save_raw(torch.fft.fftshift(torch.fft.ifft(self.filters, norm="ortho"), dim=-1), os.path.join(debug_path, "debug_multiscale_spectral_loss_filters_ifft.raw"))
+
+    def __call__(self, sample, target):
+        
+        target = target[:, self.sample_block_width // 2:-self.sample_block_width]
+
+        if sample.shape != target.shape:
+            raise ValueError(f"sample.shape != target.shape. sample.shape: {sample.shape}. target.shape: {target.shape}.")
+
+        bsz = sample.shape[0]
+        self.create_filters(sample.shape[-1], device=sample.device)
+
+        sample_fft = torch.fft.fft(sample, norm="ortho")
+        sample_filtered_abs = torch.fft.ifft(sample_fft.view(bsz, 1, -1) * self.filters, norm="ortho").abs()
+        if self.edge_crop_width > 0:
+            sample_filtered_abs = sample_filtered_abs[:, :, self.edge_crop_width:-self.edge_crop_width]
+        sample_filtered_abs = sample_filtered_abs / sample_filtered_abs.amax(dim=(1, 2), keepdim=True)
+        sample_filtered_abs_ln = (sample_filtered_abs * self.u).log1p() / np.log(self.u + 1)
+
+        target_fft = torch.fft.fft(target, norm="ortho")
+        target_filtered_abs = torch.fft.ifft(target_fft.view(bsz, 1, -1) * self.filters, norm="ortho").abs()
+        if self.edge_crop_width > 0:
+            target_filtered_abs = target_filtered_abs[:, :, self.edge_crop_width:-self.edge_crop_width]
+        target_filtered_abs = target_filtered_abs / target_filtered_abs.amax(dim=(1,2), keepdim=True)
+        target_filtered_abs_ln = (target_filtered_abs * self.u).log1p() / np.log(self.u + 1)
+
+        if self.write_debug:
+            debug_path = os.environ.get("DEBUG_PATH", None)
+            if debug_path is not None:
+                with torch.no_grad():
+                    target_filtered = torch.fft.ifft(target_fft.view(bsz, 1, -1) * self.filters, norm="ortho")
+                    save_raw(target_filtered, os.path.join(debug_path, "debug_multiscale_spectral_loss_target_filtered.raw"))
+                torch.cuda.empty_cache()
+            self.write_debug = False             
+        
+        return torch.nn.functional.mse_loss(sample_filtered_abs_ln, target_filtered_abs_ln, reduction="mean") * 8
+
+class DualMultiscaleSpectralLoss2:
+
+    @torch.no_grad()
+    def __init__(self, loss_params):
+
+        self.edge_crop_width = loss_params["edge_crop_width"]
+        self.sample_block_width = loss_params["sample_block_width"]
+        self.num_filters = loss_params["num_filters"]
+        self.min_freq = loss_params["min_freq"]
+        self.max_freq = loss_params["max_freq"]
+        self.std_octaves = loss_params["std_octaves"]
+        self.u = loss_params["u"]
+
+        self.filters = None
+        self.write_debug = False
+
+    @torch.no_grad()
+    def create_filters(self, crop_width, device="cpu"):
+        
+        if self.filters is None:
+            self.filters = torch.zeros((1, self.num_filters, crop_width), device=device)
+        else:
+            if self.filters.shape[-1] != crop_width:
+                self.filters = torch.zeros((1, self.num_filters, crop_width), device=device)
+
+            if self.filters.device != device:
+                self.filters = self.filters.to(device)
+
+            self.write_debug = False
+
+        filter_q = torch.rand(self.num_filters, device=device) * (self.max_freq - self.min_freq) + self.min_freq
+        filter_std = 2 * torch.exp2(torch.rand(self.num_filters, device=device) * self.std_octaves)
+        filter_std = filter_std * filter_q / self.min_freq
+        fft_q = torch.arange(0, crop_width // 2 + 1, device=device) / (crop_width // 2)
+
+        self.filters[0, :, :crop_width//2 + 1] = torch.exp(-filter_std.view(-1, 1) * torch.log(filter_q.view(-1, 1) / fft_q.view(1, -1)).square())
+        self.filters[0, :, 0] = 0
+        self.filters /= filter_q.sqrt().view(1, -1, 1)
+
+        if self.write_debug:
+            debug_path = os.environ.get("DEBUG_PATH", None)
+            if debug_path is not None:
+                save_raw(self.filters.abs(), os.path.join(debug_path, "debug_multiscale_spectral_loss_filters.raw"))
+                save_raw(self.filters.abs().mean(dim=1), os.path.join(debug_path, "debug_multiscale_spectral_loss_filter_coverage.raw"))
+                save_raw(torch.fft.fftshift(torch.fft.ifft(self.filters, norm="ortho"), dim=-1), os.path.join(debug_path, "debug_multiscale_spectral_loss_filters_ifft.raw"))
+
+    def __call__(self, sample, target):
+        
+        target = target[:, self.sample_block_width // 2:-self.sample_block_width]
+
+        if sample.shape != target.shape:
+            raise ValueError(f"sample.shape != target.shape. sample.shape: {sample.shape}. target.shape: {target.shape}.")
+
+        bsz = sample.shape[0]
+        self.create_filters(sample.shape[-1], device=sample.device)
+
+        sample_fft = torch.fft.fft(sample, norm="ortho")
+        sample_filtered_abs = torch.fft.ifft(sample_fft.view(bsz, 1, -1) * self.filters, norm="ortho").abs()
+        if self.edge_crop_width > 0:
+            sample_filtered_abs = sample_filtered_abs[:, :, self.edge_crop_width:-self.edge_crop_width]
+        sample_filtered_abs = sample_filtered_abs / sample_filtered_abs.amax(dim=(1, 2), keepdim=True)
+        sample_filtered_abs_ln = (sample_filtered_abs * self.u).log1p() / np.log(self.u + 1)
+
+        target_fft = torch.fft.fft(target, norm="ortho")
+        target_filtered_abs = torch.fft.ifft(target_fft.view(bsz, 1, -1) * self.filters, norm="ortho").abs()
+        if self.edge_crop_width > 0:
+            target_filtered_abs = target_filtered_abs[:, :, self.edge_crop_width:-self.edge_crop_width]
+        target_filtered_abs = target_filtered_abs / target_filtered_abs.amax(dim=(1,2), keepdim=True)
+        target_filtered_abs_ln = (target_filtered_abs * self.u).log1p() / np.log(self.u + 1)
+
+        if self.write_debug:
+            debug_path = os.environ.get("DEBUG_PATH", None)
+            if debug_path is not None:
+                with torch.no_grad():
+                    target_filtered = torch.fft.ifft(target_fft.view(bsz, 1, -1) * self.filters, norm="ortho")
+                    save_raw(target_filtered, os.path.join(debug_path, "debug_multiscale_spectral_loss_target_filtered.raw"))
+                torch.cuda.empty_cache()
+            self.write_debug = False             
+        
+        return torch.nn.functional.mse_loss(sample_filtered_abs_ln, target_filtered_abs_ln, reduction="mean") * 8
+    
 class DualMultiscaleSpectralLoss:
 
     @torch.no_grad()
@@ -47,6 +316,7 @@ class DualMultiscaleSpectralLoss:
         self.block_octaves = loss_params["block_octaves"]
         self.sigma = loss_params["sigma"]
         
+        #"""
         if isinstance(self.sigma, Tuple):
             if len(self.sigma) != len(self.block_widths):
                 raise ValueError(f"Must provide the same number of `sigma` as `block_widths`. `sigma`: {self.sigma}. `block_widths`: {self.block_widths}.")
@@ -66,43 +336,46 @@ class DualMultiscaleSpectralLoss:
 
             filter = torch.exp(-sigma * torch.log(mdct_q / block_q).square())
             self.block_weights.append(filter.view(1, 1, -1))
+        #"""
+        
+        #self.abs_loss_scale = torch.log(torch.tensor(self.u, device=target.device))
 
-        self.loss_scale = 1 / (len(self.block_widths) * len(self.block_offsets) * 2)
+        self.loss_scale = 1 / (len(self.block_widths) * len(self.block_offsets))
+        #self.loss_scale = 1 / (len(self.block_widths) * len(self.block_offsets) * 2)
 
     def __call__(self, sample, target):
         
         target = target[:, self.sample_block_width // 2:-self.sample_block_width]
         assert(sample.shape == target.shape)
-
-        sample = normalize_lufs(sample, self.sample_rate, target_lufs=-55)
-        target = normalize_lufs(target, self.sample_rate, target_lufs=-55)
         
-        if self.block_weights[0].device != sample.device:
+        if self.block_weights[0].device != target.device:
             for block_num, block_weight in enumerate(self.block_weights):
-                self.block_weights[block_num] = block_weight.to(sample.device)
+                self.block_weights[block_num] = block_weight.to(target.device)
 
-        loss = torch.zeros(1, device=sample.device)
+        loss = torch.zeros(1, device=target.device)
 
         for block_num, block_width in enumerate(self.block_widths):
             for block_offset in self.block_offsets:
 
                 offset = int(block_offset * block_width)
-                sample_fft_abs = mdct(sample[:, offset:], block_width, window_degree=2)[:, 1:-2, :].abs()
-                target_fft_abs = mdct(target[:, offset:], block_width, window_degree=2)[:, 1:-2, :].abs()
+                block_weight = self.block_weights[block_num]
 
-                #sample_fft_abs = sample_fft_abs / sample_fft_abs.amax(dim=(1,2), keepdim=True)
-                #target_fft_abs = target_fft_abs / target_fft_abs.amax(dim=(1,2), keepdim=True)
-                sample_fft_abs_ln = (sample_fft_abs * self.u).log1p()
-                target_fft_abs_ln = (target_fft_abs * self.u).log1p()
+                #sample_fft_abs = mdct(sample[:, offset:], block_width, window_degree=2)[:, 1:-2, :].abs()
+                #sample_fft_abs_ln = (sample_fft_abs * self.u).log1p() * block_weight
+                sample_fft = mdct(sample[:, offset:], block_width, window_degree=2)[:, 1:-2, :]
+                sample_fft = sample_fft / sample_fft.abs().amax(dim=(1,2), keepdim=True)
+                sample_fft_response = (sample_fft * block_weight).sum(dim=-1, keepdim=True).abs()
+                sample_fft_abs_ln = (sample_fft_response * self.u).log1p()
 
-                #block_weight = self.block_weights[block_num]
-                #sample_fft_abs = sample_fft_abs * block_weight
-                #target_fft_abs = target_fft_abs * block_weight
-                #sample_fft_abs_ln = sample_fft_abs_ln * block_weight
-                #target_fft_abs_ln = target_fft_abs_ln * block_weight
-
-                loss += torch.nn.functional.l1_loss(sample_fft_abs_ln, target_fft_abs_ln,  reduction="mean")
-                loss += torch.nn.functional.mse_loss(sample_fft_abs, target_fft_abs, reduction="mean").sqrt()
+                #target_fft_abs = mdct(target[:, offset:], block_width, window_degree=2)[:, 1:-2, :].abs()
+                #target_fft_abs_ln = (target_fft_abs * self.u).log1p() * block_weight
+                target_fft = mdct(target[:, offset:], block_width, window_degree=2)[:, 1:-2, :]
+                target_fft = target_fft / target_fft.abs().amax(dim=(1,2), keepdim=True)
+                target_fft_response = (target_fft * block_weight).sum(dim=-1, keepdim=True).abs()
+                target_fft_abs_ln = (target_fft_response * self.u).log1p()
+                
+                loss += torch.nn.functional.l1_loss(sample_fft_abs_ln, target_fft_abs_ln, reduction="mean")
+                #loss += torch.nn.functional.l1_loss(sample_fft_abs, target_fft_abs, reduction="mean") * self.abs_loss_scale
 
         return loss * self.loss_scale
     
@@ -382,6 +655,8 @@ class DecoderDual(nn.Module):
         self.conv_act = get_activation(act_fn)
         self.conv_out = nn.Conv2d(block_out_channels[0], out_channels, 3, padding=1)
 
+        self.scale_norm = ScaleNorm(2)
+
         self.gradient_checkpointing = False
 
     def forward(self, z, latent_embeds=None):
@@ -425,9 +700,26 @@ class DecoderDual(nn.Module):
             sample = self.conv_norm_out(sample, latent_embeds)
         sample = self.conv_act(sample)
         sample = self.conv_out(sample)
+        
+        scaled_sample = torch.zeros_like(sample)
 
-        return sample
+        scaled_sample[:, :2, :, :] = self.scale_norm(sample[:, :2, :, :].sigmoid())
+        #scaled_sample[:, :2, :, :] = sample[:, :2, :, :].sigmoid()
 
+        """
+        phase_x_squared = sample[:, 2, :, :].square()
+        phase_y_squared = sample[:, 3, :, :].square()
+        beta = 2 / (1 + torch.exp(-phase_x_squared - phase_y_squared)) - 1
+        norm = (phase_x_squared + phase_y_squared).sqrt().clip(min=1e-8) ** beta
+        waveform = sample[:, 2:, :, :] / norm.unsqueeze(1)
+        scaled_sample[:, 2:, :, :] = waveform# - waveform.mean(dim=3, keepdim=True)
+        """
+
+        waveform = sample[:, 2:, :, :].tanh()
+        #scaled_sample[:, 2:, :, :] = sample[:, 2:, :, :].tanh()
+        scaled_sample[:, 2:, :, :] = waveform #- waveform.mean(dim=3, keepdim=True)
+
+        return scaled_sample
 
 class AutoencoderKLDual(ModelMixin, ConfigMixin):
 
@@ -583,7 +875,17 @@ class AutoencoderKLDual(ModelMixin, ConfigMixin):
         self.tile_overlap_factor = 0.25
 
         if multiscale_spectral_loss is not None:
-            self.multiscale_spectral_loss = DualMultiscaleSpectralLoss(multiscale_spectral_loss)
+            mss_version = multiscale_spectral_loss.get("version", 1)
+            if mss_version == 1:
+                self.multiscale_spectral_loss = DualMultiscaleSpectralLoss(multiscale_spectral_loss)
+            elif mss_version == 2:
+                self.multiscale_spectral_loss = DualMultiscaleSpectralLoss2(multiscale_spectral_loss)
+            elif mss_version == 3:
+                self.multiscale_spectral_loss = DualMultiscaleSpectralLoss3(multiscale_spectral_loss)
+            elif mss_version == 4:
+                self.multiscale_spectral_loss = DualMultiscaleSpectralLoss4(multiscale_spectral_loss)
+            else:
+                raise ValueError("Invalid multiscale_spectral_loss version")
         else:
             raise ValueError("Must provide multiscale_spectral_loss_params")
 
