@@ -29,7 +29,7 @@ from dual_diffusion_pipeline import DualDiffusionPipeline
 load_dotenv()
 torch.manual_seed(200)
 
-MODEL_NAME = "dualdiffusion2d_350_mclt_v8_256embed_4vae_mssloss31"
+MODEL_NAME = "dualdiffusion2d_350_mclt_v8_256embed_4vae_mssloss33"
 MODEL_PARAMS = {
     #"prediction_type": "sample",
     #"prediction_type": "epsilon",
@@ -51,7 +51,6 @@ MODEL_PARAMS = {
     "num_chunks": 64,
     "u": 8000,
     "add_abs_input": True,
-    "mdct_abs_scale": 4.,
     #"add_abs_input": False,
 }
 
@@ -88,7 +87,6 @@ VAE_PARAMS = {
     
     "multiscale_spectral_loss": {
         "version": 4,
-        "edge_crop_width": 0,
         "sample_block_width": 2*MODEL_PARAMS["num_chunks"],
         "num_filters": 1024,
         "sample_rate": MODEL_PARAMS["sample_rate"],
@@ -96,6 +94,8 @@ VAE_PARAMS = {
         "max_freq": 8000,
         "max_logvar": 15,
         "min_logvar": 0,
+        "freq_scale": "mel",
+        "normalize_amplitude": False,
         "u": 8000,
     },
 

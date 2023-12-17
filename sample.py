@@ -293,7 +293,7 @@ def embedding_test():
 def vae_test():
 
     #dualdiffusion2d_330_mdct_v8_256embed_4vae
-    model_name = "dualdiffusion2d_350_mclt_v8_256embed_4vae_mssloss31"
+    model_name = "dualdiffusion2d_350_mclt_v8_256embed_4vae_mssloss33"
     num_samples = 1
     #device = "cuda"
     device = "cpu"
@@ -318,7 +318,7 @@ def vae_test():
     test_samples = np.random.choice(os.listdir(dataset_path), num_samples, replace=False)
     #test_samples = sorted(os.listdir(dataset_path), key=lambda x: int(x.split(".")[0]))[100:100+num_samples]
     
-    test_samples = ["16819.raw"]
+    #test_samples = ["16819.raw"]
 
     vae_path = os.path.join(model_path, "vae")
     model_dtype = torch.float16 if fp16 else torch.float32

@@ -1004,7 +1004,18 @@ def main():
                     latents_std = latents.std()
                     recon = module.decode(latents, return_dict=False)[0]                    
                     
-                    recon_raw_samples = pipeline.format.sample_to_raw(recon, model_params)
+                    recon_raw_samples, recon_abs, recon_noise_abs = pipeline.format.sample_to_raw(recon, model_params, return_abs=True)
+
+                    def count_nans(x):
+                        return (torch.isnan(x).sum() + torch.isinf(x).sum()).item()
+                    if count_nans(recon_raw_samples) > 0:
+                        logger.error(f"Error: recon_raw_samples has {count_nans(recon_raw_samples)} nans/inf")
+                        recon_raw_samples = torch.nan_to_num(recon_raw_samples, nan=0, posinf=0, neginf=0)
+                    if count_nans(raw_samples) > 0:
+                        logger.error(f"Error: raw_samples has {count_nans(raw_samples)} nans/inf")
+                        
+                        raw_samples = torch.nan_to_num(raw_samples, nan=0, posinf=0, neginf=0)
+
                     vae_recon_loss = module.multiscale_spectral_loss(recon_raw_samples, raw_samples)
 
                     vae_kl_loss = posterior.kl().sum() / posterior.mean.numel()
@@ -1014,12 +1025,14 @@ def main():
                     latents_global_var = latents.std(dim=latents_non_bsz_dim).square()
                     latents_global_logvar = (latents_global_var + 1e-8).log()
                     vae_kl_loss_global = 0.5 * torch.sum(torch.pow(latents_global_mean, 2) + latents_global_var - 1.0 - latents_global_logvar) / latents.shape[0]
-
-                    vae_recon_loss_weight = 1                
+                    
+                    vae_recon_noise_abs_loss_weight = 1/20000.
+                    vae_recon_loss_weight = 1
                     vae_kl_loss_weight = args.kl_loss_weight
                     vae_kl_loss_global_weight = args.kl_loss_global_weight
 
-                    loss = vae_recon_loss
+                    vae_recon_noise_loss = (-torch.log((recon_noise_abs + 1e-8) / (recon_noise_abs + recon_abs + 1e-8))).mean()
+                    loss = vae_recon_loss + vae_recon_noise_loss * vae_recon_noise_abs_loss_weight
                     if vae_kl_loss_weight > 0:
                         loss += vae_kl_loss_weight * vae_kl_loss
                     if vae_kl_loss_global_weight > 0:
