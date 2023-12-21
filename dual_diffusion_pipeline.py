@@ -29,8 +29,8 @@ from diffusers.schedulers import DPMSolverMultistepScheduler, DDIMScheduler, DPM
 from diffusers.schedulers import EulerAncestralDiscreteScheduler, KDPM2AncestralDiscreteScheduler
 from diffusers.pipelines.pipeline_utils import DiffusionPipeline
 
-from unet2d_dual import UNet2DDualModel
-from autoencoder_kl_dual import AutoencoderKLDual
+from unet_dual import UNetDualModel
+from autoencoder_kl_dual import AutoencoderKLDual, DiagonalGaussianDistribution
 from dual_diffusion_utils import compute_snr, mdct, imdct, normalize_lufs, save_raw
 
 class DualMCLTFormat:
@@ -42,8 +42,10 @@ class DualMCLTFormat:
     
     @staticmethod
     def get_num_channels(model_params):
-        in_channels = model_params["sample_raw_channels"] * (2 + int(model_params.get("add_abs_input", False)))
-        out_channels = model_params["sample_raw_channels"] * 4
+        #in_channels = model_params["sample_raw_channels"] * model_params["num_chunks"] * 3   #1d
+        #out_channels = model_params["sample_raw_channels"] * model_params["num_chunks"] * 4  #1d
+        in_channels = model_params["sample_raw_channels"] * 3   #2d
+        out_channels = model_params["sample_raw_channels"] * 4  #2d
         return (in_channels, out_channels)
 
     @staticmethod
@@ -56,10 +58,12 @@ class DualMCLTFormat:
         samples = mdct(raw_samples, block_width, window_degree=2)[..., 1:-2, :]
         samples = samples.permute(0, 2, 1)
 
+        samples *= torch.exp(2j * torch.pi * torch.rand(1, device=samples.device))
+        
         if model_params.get("add_abs_input", False):
             samples_abs = samples.abs()
             samples_abs_max = samples_abs.amax(dim=(1,2), keepdim=True).clamp(min=1e-8)
-            #samples_abs /= samples_abs_max
+            samples_abs /= samples_abs_max
             samples /= samples_abs_max
             samples /= samples.abs().sqrt().clamp(min=1e-8)
 
@@ -71,28 +75,28 @@ class DualMCLTFormat:
         if model_params.get("add_abs_input", False):
             samples = torch.cat([samples_abs.unsqueeze(1), samples], dim=1)
 
+        #samples = samples.view(samples.shape[0], -1, samples.shape[3]) #1d
+
         return samples
 
     @staticmethod
-    def sample_to_raw(samples, model_params, return_abs=False):
+    def sample_to_raw(samples, model_params):
+        
+        #samples = samples.view(samples.shape[0], -1, model_params["num_chunks"], samples.shape[2])  #1d
 
-        samples_abs = samples[:, 0, :, :].permute(0, 2, 1).contiguous()
-        samples_phase = samples[:, 2:, :, :].permute(0, 3, 2, 1).contiguous()
-        samples_phase = torch.view_as_complex(samples_phase)
-        #samples_phase = samples_phase - samples_phase.mean(dim=1, keepdim=True)
-        #samples_phase = samples_phase / samples_phase.abs().clamp(min=1e-8)
+        samples_abs = samples[:, 0, :, :].permute(0, 2, 1).contiguous().sigmoid()
+        samples_phase = samples[:, 2:, :, :].permute(0, 3, 2, 1).contiguous().tanh()
+        samples_phase = torch.view_as_complex(samples_phase) #.imag * 1j
+        #samples_phase = samples_phase - samples_phase.mean(dim=(1,2), keepdim=True)
         samples_waveform = samples_abs * samples_phase
         samples_wave = imdct(samples_waveform, window_degree=2).real
 
-        samples_noise_abs = samples[:, 1, :, :].permute(0, 2, 1).contiguous()
+        samples_noise_abs = samples[:, 1, :, :].permute(0, 2, 1).contiguous().sigmoid()
         samples_noise_phase = torch.randn_like(samples_noise_abs)
-        samples_noise = samples_noise_abs * samples_noise_phase
+        samples_noise = samples_noise_abs * samples_noise_phase * 0.5
         samples_noise = imdct(samples_noise, window_degree=2).real
 
-        if return_abs:
-            return samples_wave + samples_noise, samples_abs, samples_noise_abs
-        else:
-            return samples_wave + samples_noise
+        return samples_wave + samples_noise
     
     @staticmethod
     def get_sample_shape(model_params, bsz=1, length=1):
@@ -102,14 +106,15 @@ class DualMCLTFormat:
         num_chunks = model_params["num_chunks"]
         chunk_len = crop_width // num_chunks - 2
 
-        return (bsz, num_output_channels, num_chunks, chunk_len*length,)
+        return (bsz, num_output_channels, num_chunks, chunk_len*length,)   #2d
+        #return (bsz, num_output_channels * num_chunks, chunk_len*length,) #1d
 
 class DualDiffusionPipeline(DiffusionPipeline):
 
     @torch.no_grad()
     def __init__(
         self,
-        unet: UNet2DDualModel,
+        unet: UNetDualModel,
         scheduler: DDIMScheduler,
         vae: AutoencoderKLDual, 
         model_params: dict = None,
@@ -146,7 +151,7 @@ class DualDiffusionPipeline(DiffusionPipeline):
     @torch.no_grad()
     def create_new(model_params, unet_params, vae_params=None):
         
-        unet = UNet2DDualModel(**unet_params)
+        unet = UNetDualModel(**unet_params)
         
         beta_schedule = model_params["beta_schedule"]
         if beta_schedule == "trained_betas":

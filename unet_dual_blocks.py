@@ -21,54 +21,122 @@
 # SOFTWARE.
 
 from typing import Optional
-from functools import partial
 
 import torch
 from torch import nn
 import torch.nn.functional as F
 
 from diffusers.utils import logging
-from diffusers.models.resnet import Upsample2D, Downsample2D
 
 from diffusers.models.attention import AdaGroupNorm
 from diffusers.models.attention_processor import SpatialNorm
-from diffusers.models.resnet import upsample_2d, downsample_2d
 
 from attention_processor_dual import SeparableAttention
 from dual_diffusion_utils import get_activation
 
 logger = logging.get_logger(__name__)  # pylint: disable=invalid-name
 
-class DualResnetBlock2D(nn.Module):
-    r"""
-    A Resnet block.
+class Upsample(nn.Module):
 
-    Parameters:
-        in_channels (`int`): The number of channels in the input.
-        out_channels (`int`, *optional*, default to be `None`):
-            The number of output channels for the first conv2d layer. If None, same as `in_channels`.
-        dropout (`float`, *optional*, defaults to `0.0`): The dropout probability to use.
-        temb_channels (`int`, *optional*, default to `512`): the number of channels in timestep embedding.
-        groups (`int`, *optional*, default to `32`): The number of groups to use for the first normalization layer.
-        groups_out (`int`, *optional*, default to None):
-            The number of groups to use for the second normalization layer. if set to None, same as `groups`.
-        eps (`float`, *optional*, defaults to `1e-6`): The epsilon to use for the normalization.
-        non_linearity (`str`, *optional*, default to `"swish"`): the activation function to use.
-        time_embedding_norm (`str`, *optional*, default to `"default"` ): Time scale shift config.
-            By default, apply timestep embedding conditioning with a simple shift mechanism. Choose "scale_shift" or
-            "ada_group" for a stronger conditioning with scale and shift.
-        kernel (`torch.FloatTensor`, optional, default to None): FIR filter, see
-            [`~models.resnet.FirUpsample2D`] and [`~models.resnet.FirDownsample2D`].
-        output_scale_factor (`float`, *optional*, default to be `1.0`): the scale factor to use for the output.
-        use_in_shortcut (`bool`, *optional*, default to `True`):
-            If `True`, add a 1x1 nn.conv2d layer for skip-connection.
-        up (`bool`, *optional*, default to `False`): If `True`, add an upsample layer.
-        down (`bool`, *optional*, default to `False`): If `True`, add a downsample layer.
-        conv_shortcut_bias (`bool`, *optional*, default to `True`):  If `True`, adds a learnable bias to the
-            `conv_shortcut` output.
-        conv_2d_out_channels (`int`, *optional*, default to `None`): the number of channels in the output.
-            If None, same as `out_channels`.
-    """
+    def __init__(self, channels, upsample_type="conv", out_channels=None, upsample_ratio=(2,2), interpolation="nearest"):
+        super().__init__()
+
+        if isinstance(upsample_ratio, int):
+            upsample_ratio = (upsample_ratio,)
+        if len(upsample_ratio) > 2:
+            raise ValueError(f"upsample_ratio must be an int or a tuple of length 2. got {upsample_ratio}")
+        
+        self.channels = channels
+        self.out_channels = out_channels or channels
+        self.upsample_ratio = upsample_ratio
+        self.upsample_type = upsample_type
+        self.interpolation = interpolation
+
+        if upsample_type == "conv_transpose":
+            if len(upsample_ratio) == 1:
+                conv_class = nn.ConvTranspose1d
+            else:
+                conv_class = nn.ConvTranspose2d
+
+            conv_kernel_size = tuple(x * 2 for x in upsample_ratio)
+            conv_stride = upsample_ratio
+            conv_padding = tuple(x // 2 for x in upsample_ratio)
+            self.conv = conv_class(channels, self.out_channels, conv_kernel_size, conv_stride, conv_padding)
+
+        elif upsample_type == "conv":
+            if len(upsample_ratio) == 1:
+                conv_class = nn.Conv1d
+            else:
+                conv_class = nn.Conv2d
+
+            conv_kernel_size = tuple(x*2 - 1 for x in upsample_ratio)
+            conv_stride = 1
+            conv_padding = tuple(x // 2 for x in conv_kernel_size)
+            self.conv = conv_class(channels, self.out_channels, conv_kernel_size, conv_stride, conv_padding)
+
+        elif upsample_type == "interpolate":
+            self.conv = None
+        else:
+            raise ValueError(f"upsample_type must be conv, conv_transpose, or interpolate. got {upsample_type}")
+
+    def forward(self, inputs):
+        assert inputs.shape[1] == self.channels
+        
+        if self.upsample_type == "conv_transpose":
+            return self.conv(inputs)
+
+        outputs = F.interpolate(inputs, scale_factor=self.upsample_ratio, mode=self.interpolation)
+
+        if self.upsample_type == "conv":
+            outputs = self.conv(outputs)
+
+        return outputs
+
+class Downsample(nn.Module):
+
+    def __init__(self, channels, downsample_type="conv", out_channels=None, downsample_ratio=(2,2)):
+        super().__init__()
+
+        if isinstance(downsample_ratio, int):
+            downsample_ratio = (downsample_ratio,)
+        if len(downsample_ratio) > 2:
+            raise ValueError(f"downsample_ratio must be an int or a tuple of length 2. got {downsample_ratio}")
+        
+        self.channels = channels
+        self.out_channels = out_channels or channels
+        self.downsample_type = downsample_type
+        self.downsample_ratio = downsample_ratio
+
+        if downsample_type == "conv":
+            if len(downsample_ratio) == 1:
+                conv_class = nn.Conv1d
+            else:
+                conv_class = nn.Conv2d
+
+            conv_kernel_size = tuple(x * 2 - 1 for x in downsample_ratio)
+            conv_stride = downsample_ratio
+            conv_padding = tuple(x // 2 for x in conv_kernel_size)
+            self.conv = conv_class(channels, self.out_channels, conv_kernel_size, conv_stride, conv_padding)
+
+        elif downsample_type == "avg":
+            if len(downsample_ratio) == 1:
+                avg_pool_class = nn.AvgPool1d
+            else:
+                avg_pool_class = nn.AvgPool2d
+
+            self.avg_pool = avg_pool_class(kernel_size=downsample_ratio, stride=downsample_ratio)
+        else:
+            raise ValueError(f"downsample_type must be conv or avg. got {downsample_type}")
+
+    def forward(self, inputs):
+        assert inputs.shape[1] == self.channels
+
+        if self.downsample_type == "conv":
+            return self.conv(inputs)
+        else:
+            return self.avg_pool(inputs)
+    
+class DualResnetBlock(nn.Module):
 
     def __init__(
         self,
@@ -85,13 +153,10 @@ class DualResnetBlock2D(nn.Module):
         non_linearity="swish",
         skip_time_act=False,
         time_embedding_norm="default",  # default, scale_shift, ada_group, spatial
-        kernel=None,
         output_scale_factor=1.0,
         use_in_shortcut=None,
-        up=False,
-        down=False,
         conv_shortcut_bias: bool = True,
-        conv_2d_out_channels: Optional[int] = None,
+        conv_out_channels: Optional[int] = None,
         conv_size = (3,3),
     ):
         super().__init__()
@@ -101,11 +166,18 @@ class DualResnetBlock2D(nn.Module):
         out_channels = in_channels if out_channels is None else out_channels
         self.out_channels = out_channels
         self.use_conv_shortcut = conv_shortcut
-        self.up = up
-        self.down = down
         self.output_scale_factor = output_scale_factor
         self.time_embedding_norm = time_embedding_norm
         self.skip_time_act = skip_time_act
+
+        if isinstance(conv_size, int):
+            conv_class = nn.Conv1d
+            conv_padding = conv_size // 2
+        else:
+            if len(conv_size) != 2:
+                raise ValueError(f"conv_size must be an int or a tuple of length 2. got {conv_size}")
+            conv_class = nn.Conv2d
+            conv_padding = (conv_size[0] // 2, conv_size[1] // 2)
 
         if groups < 0:
             groups = in_channels // abs(groups)
@@ -124,7 +196,7 @@ class DualResnetBlock2D(nn.Module):
             else:
                 self.norm1 = nn.Identity()
 
-        self.conv1 = torch.nn.Conv2d(in_channels, out_channels, kernel_size=conv_size, stride=1, padding=(conv_size[0]//2,conv_size[1]//2))
+        self.conv1 = conv_class(in_channels, out_channels, kernel_size=conv_size, stride=1, padding=conv_padding)
 
         if temb_channels is not None:
             if self.time_embedding_norm == "default":
@@ -149,35 +221,17 @@ class DualResnetBlock2D(nn.Module):
                 self.norm2 = nn.Identity()
 
         self.dropout = torch.nn.Dropout(dropout)
-        conv_2d_out_channels = conv_2d_out_channels or out_channels
-        self.conv2 = torch.nn.Conv2d(out_channels, conv_2d_out_channels, kernel_size=conv_size, stride=1, padding=(conv_size[0]//2,conv_size[1]//2))
+        conv_out_channels = conv_out_channels or out_channels
+        self.conv2 = conv_class(out_channels, conv_out_channels, kernel_size=conv_size, stride=1, padding=conv_padding)
 
         self.nonlinearity = get_activation(non_linearity)
 
-        self.upsample = self.downsample = None
-        if self.up:
-            if kernel == "fir":
-                fir_kernel = (1, 3, 3, 1)
-                self.upsample = lambda x: upsample_2d(x, kernel=fir_kernel)
-            elif kernel == "sde_vp":
-                self.upsample = partial(F.interpolate, scale_factor=2.0, mode="nearest")
-            else:
-                self.upsample = Upsample2D(in_channels, use_conv=False)
-        elif self.down:
-            if kernel == "fir":
-                fir_kernel = (1, 3, 3, 1)
-                self.downsample = lambda x: downsample_2d(x, kernel=fir_kernel)
-            elif kernel == "sde_vp":
-                self.downsample = partial(F.avg_pool2d, kernel_size=2, stride=2)
-            else:
-                self.downsample = Downsample2D(in_channels, use_conv=False, padding=1, name="op")
-
-        self.use_in_shortcut = self.in_channels != conv_2d_out_channels if use_in_shortcut is None else use_in_shortcut
+        self.use_in_shortcut = self.in_channels != conv_out_channels if use_in_shortcut is None else use_in_shortcut
 
         self.conv_shortcut = None
         if self.use_in_shortcut:
-            self.conv_shortcut = torch.nn.Conv2d(
-                in_channels, conv_2d_out_channels, kernel_size=1, stride=1, padding=0, bias=conv_shortcut_bias
+            self.conv_shortcut = conv_class(
+                in_channels, conv_out_channels, kernel_size=1, stride=1, padding=0, bias=conv_shortcut_bias
             )
 
     def forward(self, input_tensor, temb):
@@ -189,18 +243,6 @@ class DualResnetBlock2D(nn.Module):
             hidden_states = self.norm1(hidden_states)
 
         hidden_states = self.nonlinearity(hidden_states)
-
-        if self.upsample is not None:
-            # upsample_nearest_nhwc fails with large batch sizes. see https://github.com/huggingface/diffusers/issues/984
-            if hidden_states.shape[0] >= 64:
-                input_tensor = input_tensor.contiguous()
-                hidden_states = hidden_states.contiguous()
-            input_tensor = self.upsample(input_tensor)
-            hidden_states = self.upsample(hidden_states)
-        elif self.downsample is not None:
-            input_tensor = self.downsample(input_tensor)
-            hidden_states = self.downsample(hidden_states)
-
         hidden_states = self.conv1(hidden_states)
 
         if self.time_emb_proj is not None:
@@ -231,7 +273,7 @@ class DualResnetBlock2D(nn.Module):
 
         return output_tensor
 
-class SeparableAttnDownBlock2D(nn.Module):
+class SeparableAttnDownBlock(nn.Module):
     def __init__(
         self,
         in_channels: int,
@@ -246,7 +288,6 @@ class SeparableAttnDownBlock2D(nn.Module):
         resnet_pre_norm: bool = True,
         attention_num_heads=8,
         output_scale_factor=1.0,
-        downsample_padding=1,
         downsample_type="conv",
         separate_attn_dim=(2,3,),
         double_attention=False,
@@ -256,6 +297,7 @@ class SeparableAttnDownBlock2D(nn.Module):
         freq_embedding_dim=0,
         time_embedding_dim=0,
         add_attention=True,
+        downsample_ratio=(2,2),
     ):
         super().__init__()
         resnets = []
@@ -274,7 +316,7 @@ class SeparableAttnDownBlock2D(nn.Module):
         for i in range(num_layers):
             _in_channels = in_channels if i == 0 else out_channels
             resnets.append(
-            DualResnetBlock2D(
+            DualResnetBlock(
                     in_channels=_in_channels,
                     out_channels=out_channels,
                     temb_channels=temb_channels,
@@ -334,36 +376,15 @@ class SeparableAttnDownBlock2D(nn.Module):
             self.attentions = nn.ModuleList(attentions)
         
 
-        if downsample_type == "conv":
-            self.downsamplers = nn.ModuleList(
-                [
-                    Downsample2D(
-                        out_channels, use_conv=True, out_channels=out_channels, padding=downsample_padding, name="op"
-                    )
-                ]
-            )
-        elif downsample_type == "resnet":
-            self.downsamplers = nn.ModuleList(
-                [
-                    DualResnetBlock2D(
-                        in_channels=out_channels,
-                        out_channels=out_channels,
-                        temb_channels=temb_channels,
-                        eps=resnet_eps,
-                        groups=resnet_groups,
-                        dropout=dropout,
-                        time_embedding_norm=resnet_time_scale_shift,
-                        non_linearity=resnet_act_fn,
-                        output_scale_factor=output_scale_factor,
-                        pre_norm=resnet_pre_norm,
-                        down=True,
-                    )
-                ]
-            )
+        if downsample_type is not None:
+            self.downsamplers = nn.ModuleList([Downsample(out_channels,
+                                                          downsample_type=downsample_type,
+                                                          out_channels=out_channels,
+                                                          downsample_ratio=downsample_ratio)])
         else:
             self.downsamplers = None
 
-    def forward(self, hidden_states, temb=None, upsample_size=None):
+    def forward(self, hidden_states, temb=None):
         output_states = ()
 
         if self.add_attention:
@@ -385,11 +406,8 @@ class SeparableAttnDownBlock2D(nn.Module):
                 output_states = output_states + (hidden_states,)
 
         if self.downsamplers is not None:
-            for downsampler in self.downsamplers:      
-                if self.downsample_type == "resnet":
-                    hidden_states = downsampler(hidden_states, temb=temb)
-                else:
-                    hidden_states = downsampler(hidden_states)
+            for downsampler in self.downsamplers:
+                hidden_states = downsampler(hidden_states)
 
             if self.return_skip_samples:
                 output_states += (hidden_states,)
@@ -397,7 +415,7 @@ class SeparableAttnDownBlock2D(nn.Module):
         return hidden_states, output_states
 
 
-class SeparableAttnUpBlock2D(nn.Module):
+class SeparableAttnUpBlock(nn.Module):
     def __init__(
         self,
         in_channels: int,
@@ -422,6 +440,7 @@ class SeparableAttnUpBlock2D(nn.Module):
         freq_embedding_dim=0,
         time_embedding_dim=0,
         add_attention=True,
+        upsample_ratio=(2,2),
     ):
         super().__init__()
         resnets = []
@@ -445,7 +464,7 @@ class SeparableAttnUpBlock2D(nn.Module):
             resnet_in_channels = prev_output_channel if i == 0 else out_channels
 
             resnets.append(
-                DualResnetBlock2D(
+                DualResnetBlock(
                     in_channels=resnet_in_channels + res_skip_channels,
                     out_channels=out_channels,
                     temb_channels=temb_channels,
@@ -504,26 +523,11 @@ class SeparableAttnUpBlock2D(nn.Module):
             
             self.attentions = nn.ModuleList(attentions)
         
-        if upsample_type == "conv":
-            self.upsamplers = nn.ModuleList([Upsample2D(out_channels, use_conv=True, out_channels=out_channels)])
-        elif upsample_type == "resnet":
-            self.upsamplers = nn.ModuleList(
-                [
-                    DualResnetBlock2D(
-                        in_channels=out_channels,
-                        out_channels=out_channels,
-                        temb_channels=temb_channels,
-                        eps=resnet_eps,
-                        groups=resnet_groups,
-                        dropout=dropout,
-                        time_embedding_norm=resnet_time_scale_shift,
-                        non_linearity=resnet_act_fn,
-                        output_scale_factor=output_scale_factor,
-                        pre_norm=resnet_pre_norm,
-                        up=True,
-                    )
-                ]
-            )
+        if upsample_type is not None:
+            self.upsamplers = nn.ModuleList([Upsample(out_channels,
+                                                      upsample_type=upsample_type,
+                                                      out_channels=out_channels,
+                                                      upsample_ratio=upsample_ratio)])
         else:
             self.upsamplers = None
 
@@ -551,14 +555,11 @@ class SeparableAttnUpBlock2D(nn.Module):
 
         if self.upsamplers is not None:
             for upsampler in self.upsamplers:
-                if self.upsample_type == "resnet":
-                    hidden_states = upsampler(hidden_states, temb=temb)
-                else:                
-                    hidden_states = upsampler(hidden_states)
+                hidden_states = upsampler(hidden_states)
 
         return hidden_states
 
-class SeparableMidBlock2D(nn.Module):
+class SeparableMidBlock(nn.Module):
     def __init__(
         self,
         in_channels: int,
@@ -579,7 +580,6 @@ class SeparableMidBlock2D(nn.Module):
         conv_size=(3,3),
         freq_embedding_dim=0,
         time_embedding_dim=0,
-        mid_block_bottleneck_channels=0,
     ):
         super().__init__()
         resnets = []
@@ -591,11 +591,10 @@ class SeparableMidBlock2D(nn.Module):
         self.pre_attention = pre_attention
         self.freq_embedding_dim = freq_embedding_dim
         self.time_embedding_dim = time_embedding_dim
-        self.mid_block_bottleneck_channels = mid_block_bottleneck_channels
 
         for i in range(num_layers+1):
             resnets.append(
-                DualResnetBlock2D(
+                DualResnetBlock(
                     in_channels=in_channels,
                     out_channels=in_channels,
                     temb_channels=temb_channels,
@@ -654,11 +653,6 @@ class SeparableMidBlock2D(nn.Module):
         
             self.attentions = nn.ModuleList(attentions)
 
-        if mid_block_bottleneck_channels > 0:
-            self.conv_bottleneck = nn.Conv2d(in_channels, mid_block_bottleneck_channels, kernel_size=(3,3), padding=(1, 1))
-        else:
-            self.conv_bottleneck = None
-
     def forward(self, hidden_states, temb=None):
         
         attn_block_count = 0
@@ -673,8 +667,5 @@ class SeparableMidBlock2D(nn.Module):
                     attn_block_count += 1
 
             hidden_states = resnet(hidden_states, temb)
-
-        if self.conv_bottleneck is not None:
-            hidden_states = self.conv_bottleneck(hidden_states)
             
         return hidden_states

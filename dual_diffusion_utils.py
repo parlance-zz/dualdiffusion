@@ -173,17 +173,19 @@ def from_ulaw(x, u=255):
 def normalize_lufs(raw_samples, sample_rate, target_lufs=-20.0):
 
     original_shape = raw_samples.shape
-
+    raw_samples = torch.nan_to_num(raw_samples, nan=0, posinf=0, neginf=0)
+    
     if raw_samples.ndim == 1:
         raw_samples = raw_samples.view(1, 1, -1)
     elif raw_samples.ndim == 2:
         raw_samples = raw_samples.view(raw_samples.shape[0], 1, -1)
 
     current_lufs = AF.loudness(raw_samples, sample_rate)
-    gain = 10. ** ((target_lufs - current_lufs) / 20.0)
-
+    gain = (10. ** ((target_lufs - current_lufs) / 20.0)).clamp(min=1e-5, max=1e5)
     gain = gain.view((*gain.shape,) + (1,) * (raw_samples.ndim - gain.ndim))
-    return (raw_samples * gain).view(original_shape)
+
+    normalized_raw_samples = (raw_samples * gain).view(original_shape).clamp(min=-10, max=10)
+    return torch.nan_to_num(normalized_raw_samples, nan=0, posinf=0, neginf=0)
 
 def save_flac(raw_samples, sample_rate, output_path, target_lufs=-20.0):
     

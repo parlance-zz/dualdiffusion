@@ -29,7 +29,7 @@ from dual_diffusion_pipeline import DualDiffusionPipeline
 load_dotenv()
 torch.manual_seed(200)
 
-MODEL_NAME = "dualdiffusion2d_350_mclt_v8_256embed_4vae_mssloss33"
+MODEL_NAME = "dualdiffusion2d_400_mclt_4vae_mssloss3_1"
 MODEL_PARAMS = {
     #"prediction_type": "sample",
     #"prediction_type": "epsilon",
@@ -56,78 +56,81 @@ MODEL_PARAMS = {
 
 #VAE_PARAMS = None
 VAE_PARAMS = {
-    #"multiscale_spectral_loss": {
-    #    "sample_rate": MODEL_PARAMS["sample_rate"],
-    #    "sample_block_width": 2*MODEL_PARAMS["num_chunks"],
-    #    "block_widths": [
-    #        16,
-    #        32,
-    #        64,
-    #        128,
-    #        256,
-    #        512,
-    #        1024,
-    #    ],
-    #    "block_offsets": [
-    #        0,
-    #        0.25,
-    #    ],
-    #    "block_octaves": [
-    #        0,
-    #        1,
-    #        2,
-    #        3,
-    #        4,
-    #        5,
-    #        6,
-    #    ],
-    #    "u": 16000,
-    #    "sigma": 1,
-    #},
-    
     "multiscale_spectral_loss": {
-        "version": 4,
+        "version": 1,
         "sample_block_width": 2*MODEL_PARAMS["num_chunks"],
-        "num_filters": 1024,
-        "sample_rate": MODEL_PARAMS["sample_rate"],
-        "min_freq": 0,
-        "max_freq": 8000,
-        "max_logvar": 15,
-        "min_logvar": 0,
-        "freq_scale": "mel",
-        "normalize_amplitude": False,
+        "block_widths": [
+            16,
+            32,
+            64,
+            128,
+            256,
+            512,
+            1024,
+            2048,
+            4096,
+            8192
+        ],
+        "block_offsets": [
+            0,
+            0.25,
+        ],
         "u": 8000,
+        "use_cepstrum": True,
     },
+    
+    #"multiscale_spectral_loss": {
+    #    "version": 2,
+    #    "sample_block_width": 2*MODEL_PARAMS["num_chunks"],
+    #    "num_filters": 1024,
+    #    "sample_rate": MODEL_PARAMS["sample_rate"],
+    #    "min_freq": 0,
+    #    "max_freq": 4000,
+    #    "max_logvar": 15,
+    #    "min_logvar": -2,
+    #    "freq_scale": "mel",
+    #    "normalize_amplitude": True,
+    #    "u": 8000,
+    #},
 
     "latent_channels": 4,
     "sample_size": (64, 2048),
     "act_fn": "silu",
-    "conv_size": (1,3),
+    "conv_size": (3,3),
 
     "block_out_channels": [128, 256, 512, 512],
+    #"block_out_channels": [192, 256, 384, 512],
     "layers_per_block": 2,
 
     "layers_per_mid_block": 1,
     "add_mid_attention": True,
+    #"add_mid_attention": False,
 
     "norm_num_groups": 32,
 
     "downsample_type": "conv",
+    #"upsample_type": "conv_transpose",
     "upsample_type": "conv",
+    "downsample_ratio": (2,2),
+
+    #"attention_num_heads": (2,4,8,16),
 
     "attention_num_heads": (8,16,32,32),
     #"separate_attn_dim_down": (2,3),
     #"separate_attn_dim_up": (3,2,3),
     "separate_attn_dim_down": (3,3),
     "separate_attn_dim_up": (3,3,3),
+    #"separate_attn_dim_mid": (3,),
     "separate_attn_dim_mid": (0,),
     "double_attention": False,
     "pre_attention": False,
     #"add_attention": False,
     "add_attention": True,
 
-    "freq_embedding_dim": 256,
-    "time_embedding_dim": 256,
+    #"freq_embedding_dim": 256,
+    #"time_embedding_dim": 256,
+    "freq_embedding_dim": 64,
+    "time_embedding_dim": 0,
 
     "in_channels": DualDiffusionPipeline.get_sample_format(MODEL_PARAMS).get_num_channels(MODEL_PARAMS)[0],
     "out_channels": DualDiffusionPipeline.get_sample_format(MODEL_PARAMS).get_num_channels(MODEL_PARAMS)[1],

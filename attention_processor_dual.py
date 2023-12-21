@@ -276,6 +276,12 @@ class SeparableAttnProcessor2_0:
         residual = hidden_states
         hidden_states_original_shape = hidden_states.shape
 
+        if len(hidden_states_original_shape) == 3:
+            hidden_states_1d = True
+            hidden_states = hidden_states.unsqueeze(2)
+        else:
+            hidden_states_1d = False
+
         if attn.group_norm_v is not None:
             v_hidden_states = attn.group_norm_v(hidden_states)
             qk_hidden_states = attn.group_norm_qk(hidden_states)
@@ -340,4 +346,9 @@ class SeparableAttnProcessor2_0:
 
         if attn.residual_connection:
             v_hidden_states = v_hidden_states + residual
-        return v_hidden_states / attn.rescale_output_factor
+        v_hidden_states = v_hidden_states / attn.rescale_output_factor
+
+        if hidden_states_1d:
+            return v_hidden_states.squeeze(2)
+        else:
+            return v_hidden_states

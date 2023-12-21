@@ -50,7 +50,7 @@ from diffusers.training_utils import EMAModel
 from diffusers.utils import check_min_version, deprecate, is_tensorboard_available
 from diffusers.utils.import_utils import is_xformers_available
 
-from unet2d_dual import UNet2DDualModel
+from unet_dual import UNetDualModel
 from autoencoder_kl_dual import AutoencoderKLDual
 from dual_diffusion_pipeline import DualDiffusionPipeline
 from dual_diffusion_utils import compute_snr, normalize_lufs
@@ -265,10 +265,10 @@ def parse_args():
         help="Loss weighting for KL divergence in VAE training.",
     )
     parser.add_argument(
-        "--kl_loss_global_weight",
+        "--kl_loss_recon_weight",
         type=float,
         default=0,
-        help="Loss weighting for KL divergence of the overall latents mean/std in VAE training.",
+        help="Loss weighting for KL divergence of the decoded sample mdct coefficients",
     )
     parser.add_argument(
         "--snr_gamma",
@@ -276,12 +276,6 @@ def parse_args():
         default=None,
         help="SNR weighting gamma to be used if rebalancing the loss. Recommended value is 5.0. "
         "More details here: https://arxiv.org/abs/2303.09556.",
-    )
-    parser.add_argument(
-        "--phase_augmentation",
-        type=lambda x: (str(x).lower() == 'true'),
-        default=True,
-        help="Add a random phase offset to the sample phase (absolute phase invariance)",
     )
     parser.add_argument(
         "--pitch_augmentation_range",
@@ -544,7 +538,7 @@ def main():
     sample_crop_width = pipeline.format.get_sample_crop_width(model_params)
 
     if args.module == "unet":
-        module_class = UNet2DDualModel
+        module_class = UNetDualModel
 
         vae = getattr(pipeline, "vae", None)
         if vae is not None:
@@ -685,8 +679,8 @@ def main():
     debug_last_sample_paths = []
     total_batch_size = 0
     
-    logger.info(f"Using phase augmentation: {args.phase_augmentation}")
     logger.info(f"Using pitch augmentation range: {args.pitch_augmentation_range}")
+    logger.info(f"Using tempo augmentation range: {args.tempo_augmentation_range}")
 
     def transform_samples(examples):
         
@@ -729,7 +723,8 @@ def main():
                 else:
                     raise ValueError(f"Unsupported raw sample format: {args.raw_sample_format}")
                 
-                samples.append(normalize_lufs(torch.from_numpy(sample), sample_rate))
+                #samples.append(normalize_lufs(torch.from_numpy(sample), sample_rate))
+                samples.append(torch.from_numpy(sample))
             else:
                 print(audio)
                 print(dir(audio))
@@ -864,7 +859,7 @@ def main():
     
     if args.module == "vae":
         logger.info(f"Using KL loss weight of {args.kl_loss_weight}")
-        logger.info(f"Using KL global loss weight of {args.kl_loss_global_weight}")
+        logger.info(f"Using KL recon loss weight of {args.kl_loss_recon_weight}")
         logger.info(f"Multiscale spectral loss params: {module.config.multiscale_spectral_loss}")
         logger.info(f"Sample shape: {pipeline.format.get_sample_shape(model_params, bsz=args.train_batch_size)}")
                 
@@ -891,7 +886,7 @@ def main():
         if args.module == "vae":
             vae_recon_train_loss = 0.
             vae_kl_train_loss = 0.
-            vae_kl_global_train_loss = 0.
+            vae_kl_recon_train_loss = 0.
             vae_latents_mean = 0.
             vae_latents_std = 0.
 
@@ -1004,39 +999,21 @@ def main():
                     latents_std = latents.std()
                     recon = module.decode(latents, return_dict=False)[0]                    
                     
-                    recon_raw_samples, recon_abs, recon_noise_abs = pipeline.format.sample_to_raw(recon, model_params, return_abs=True)
-
-                    def count_nans(x):
-                        return (torch.isnan(x).sum() + torch.isinf(x).sum()).item()
-                    if count_nans(recon_raw_samples) > 0:
-                        logger.error(f"Error: recon_raw_samples has {count_nans(recon_raw_samples)} nans/inf")
-                        recon_raw_samples = torch.nan_to_num(recon_raw_samples, nan=0, posinf=0, neginf=0)
-                    if count_nans(raw_samples) > 0:
-                        logger.error(f"Error: raw_samples has {count_nans(raw_samples)} nans/inf")
-                        
-                        raw_samples = torch.nan_to_num(raw_samples, nan=0, posinf=0, neginf=0)
-
+                    recon_raw_samples = pipeline.format.sample_to_raw(recon, model_params)
                     vae_recon_loss = module.multiscale_spectral_loss(recon_raw_samples, raw_samples)
 
                     vae_kl_loss = posterior.kl().sum() / posterior.mean.numel()
-
-                    latents_non_bsz_dim = tuple(range(1, latents.ndim))
-                    latents_global_mean = latents.mean(dim=latents_non_bsz_dim)
-                    latents_global_var = latents.std(dim=latents_non_bsz_dim).square()
-                    latents_global_logvar = (latents_global_var + 1e-8).log()
-                    vae_kl_loss_global = 0.5 * torch.sum(torch.pow(latents_global_mean, 2) + latents_global_var - 1.0 - latents_global_logvar) / latents.shape[0]
+                    vae_kl_loss_recon = torch.tensor(0.) #recon_posterior.kl().sum() / recon_posterior.mean.numel()
                     
-                    vae_recon_noise_abs_loss_weight = 1/20000.
-                    vae_recon_loss_weight = 1
                     vae_kl_loss_weight = args.kl_loss_weight
-                    vae_kl_loss_global_weight = args.kl_loss_global_weight
+                    vae_kl_loss_recon_weight = args.kl_loss_recon_weight
 
-                    vae_recon_noise_loss = (-torch.log((recon_noise_abs + 1e-8) / (recon_noise_abs + recon_abs + 1e-8))).mean()
-                    loss = vae_recon_loss + vae_recon_noise_loss * vae_recon_noise_abs_loss_weight
+                    loss = vae_recon_loss
+                    
                     if vae_kl_loss_weight > 0:
                         loss += vae_kl_loss_weight * vae_kl_loss
-                    if vae_kl_loss_global_weight > 0:
-                        loss += vae_kl_loss_global_weight * vae_kl_loss_global
+                    if vae_kl_loss_recon_weight > 0:
+                        loss += vae_kl_loss_recon_weight * vae_kl_loss_recon
 
                 else:
                     raise ValueError(f"Unknown module {args.module}")
@@ -1052,8 +1029,8 @@ def main():
                     vae_kl_avg_loss = accelerator.gather(vae_kl_loss.repeat(args.train_batch_size)).mean()
                     vae_kl_train_loss += vae_kl_avg_loss.item() / args.gradient_accumulation_steps
 
-                    vae_kl_global_avg_loss = accelerator.gather(vae_kl_loss_global.repeat(args.train_batch_size)).mean()
-                    vae_kl_global_train_loss += vae_kl_global_avg_loss.item() / args.gradient_accumulation_steps
+                    vae_kl_recon_avg_loss = accelerator.gather(vae_kl_loss_recon.repeat(args.train_batch_size)).mean()
+                    vae_kl_recon_train_loss += vae_kl_recon_avg_loss.item() / args.gradient_accumulation_steps
 
                     vae_latents_avg_mean = accelerator.gather(latents_mean.repeat(args.train_batch_size)).mean()
                     vae_latents_mean += vae_latents_avg_mean.item() / args.gradient_accumulation_steps
@@ -1091,12 +1068,11 @@ def main():
                 if args.module == "vae":
                     logs["vae/recon_loss"] = vae_recon_train_loss
                     logs["vae/kl_loss"] = vae_kl_train_loss
-                    logs["vae/kl_global_loss"] = vae_kl_global_train_loss
+                    logs["vae/kl_recon_loss"] = vae_kl_recon_train_loss
                     logs["vae/latents_mean"] = vae_latents_mean
                     logs["vae/latents_std"] = vae_latents_std
-                    logs["loss_weight/recon"] = vae_recon_loss_weight
                     logs["loss_weight/kl"] = vae_kl_loss_weight
-                    logs["loss_weight/kl_global"] = vae_kl_loss_global_weight
+                    logs["loss_weight/kl_recon"] = vae_kl_loss_recon_weight
                 if args.use_ema:
                     logs["ema_decay"] = ema_module.cur_decay_value    
 
@@ -1108,7 +1084,7 @@ def main():
                 if args.module == "vae":
                     vae_recon_train_loss = 0.
                     vae_kl_train_loss = 0.
-                    vae_kl_global_train_loss = 0.
+                    vae_kl_recon_train_loss = 0.
                     vae_latents_mean = 0.
                     vae_latents_std = 0.
                     

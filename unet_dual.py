@@ -21,6 +21,7 @@
 # SOFTWARE.
 
 from typing import Optional, Tuple, Union
+from dataclasses import dataclass
 
 import torch
 import torch.nn as nn
@@ -28,12 +29,15 @@ import torch.nn as nn
 from diffusers.configuration_utils import ConfigMixin, register_to_config
 from diffusers.models.embeddings import GaussianFourierProjection, TimestepEmbedding, Timesteps
 from diffusers.models.modeling_utils import ModelMixin
-from diffusers.models.unet_2d_blocks import UNetMidBlock2D, get_down_block, get_up_block
-from diffusers.models.unet_2d import UNet2DOutput
+from diffusers.utils import BaseOutput
 
-from unet2d_dual_blocks import SeparableAttnDownBlock2D, SeparableMidBlock2D, SeparableAttnUpBlock2D
+from unet_dual_blocks import SeparableAttnDownBlock, SeparableMidBlock, SeparableAttnUpBlock
 
-class UNet2DDualModel(ModelMixin, ConfigMixin):
+@dataclass
+class UNetOutput(BaseOutput):
+    sample: torch.FloatTensor
+
+class UNetDualModel(ModelMixin, ConfigMixin):
 
     @register_to_config
     def __init__(
@@ -49,10 +53,9 @@ class UNet2DDualModel(ModelMixin, ConfigMixin):
         add_mid_attention: bool = True,
         layers_per_mid_block: int = 1,
         mid_block_scale_factor: float = 1,
-        mid_block_bottleneck_channels: int = 0,
-        downsample_padding: int = 1,
-        downsample_type: str = "conv",
+        downsample_type: str = "conv", 
         upsample_type: str = "conv",
+        downsample_ratio: Union[int, Tuple[int]] = (2,2),
         act_fn: str = "silu",
         attention_num_heads: Union[int, Tuple[int]] = (8,12,20,32),
         separate_attn_dim_down: Tuple[int] = (2,3),
@@ -76,14 +79,15 @@ class UNet2DDualModel(ModelMixin, ConfigMixin):
     ):
         super().__init__()
 
-        self.sample_size = sample_size
-        self.freq_embedding_dim = freq_embedding_dim
-        self.time_embedding_dim = time_embedding_dim
         self.use_skip_samples = use_skip_samples
 
-        time_embed_dim = block_out_channels[0] * 4
-
         # Check inputs
+        if not isinstance(conv_size, int):
+            if len(conv_size) != 2:
+                raise ValueError(
+                    f"Convolution kernel size must be int or a tuple of length 2. Got {conv_size}."
+                )
+
         if not isinstance(attention_num_heads, int) and len(attention_num_heads) != len(block_out_channels):
             raise ValueError(
                 f"Must provide the same number of `attention_num_heads` as `block_out_channels`. `attention_num_heads`: {attention_num_heads}. `block_out_channels`: {block_out_channels}."
@@ -124,23 +128,42 @@ class UNet2DDualModel(ModelMixin, ConfigMixin):
                 f"Must provide the same number of `add_attention` as `block_out_channels`. `add_attention`: {add_attention}. `block_out_channels`: {block_out_channels}."
             )
         
+        if not isinstance(downsample_ratio, int):
+            if len(downsample_ratio) != 2:
+                raise ValueError(
+                    f"downsample_ratio must be int or a tuple of length 2. Got {downsample_ratio}."
+                )
+        
+        if isinstance(conv_size, int):
+            conv_class = nn.Conv1d
+        else:
+            conv_class = nn.Conv2d
+
         # input
         if no_conv_in:
             self.conv_in = nn.Identity()
         else:
-            #conv_in_kernel_size = conv_size
-            conv_in_kernel_size = (3,3)
-            self.conv_in = nn.Conv2d(in_channels, block_out_channels[0], kernel_size=conv_in_kernel_size, padding=(conv_in_kernel_size[0]//2, conv_in_kernel_size[1]//2))
+            conv_in_kernel_size = conv_size
+            if isinstance(conv_in_kernel_size, int):
+                conv_in_padding = conv_in_kernel_size // 2
+            else:
+                conv_in_padding = tuple(dim // 2 for dim in conv_in_kernel_size)
+            self.conv_in = conv_class(in_channels, block_out_channels[0], kernel_size=conv_in_kernel_size, padding=conv_in_padding)
 
         # time
-        if time_embedding_type == "fourier":
-            self.time_proj = GaussianFourierProjection(embedding_size=block_out_channels[0], scale=16)
-            timestep_input_dim = 2 * block_out_channels[0]
-        elif time_embedding_type == "positional":
-            self.time_proj = Timesteps(block_out_channels[0], flip_sin_to_cos, freq_shift)
-            timestep_input_dim = block_out_channels[0]
+        time_embed_dim = block_out_channels[0] * 4
+        if time_embedding_type is not None:
+            if time_embedding_type == "fourier":
+                self.time_proj = GaussianFourierProjection(embedding_size=block_out_channels[0], scale=16)
+                timestep_input_dim = 2 * block_out_channels[0]
+            elif time_embedding_type == "positional":
+                self.time_proj = Timesteps(block_out_channels[0], flip_sin_to_cos, freq_shift)
+                timestep_input_dim = block_out_channels[0]
 
-        self.time_embedding = TimestepEmbedding(timestep_input_dim, time_embed_dim)
+            self.time_embedding = TimestepEmbedding(timestep_input_dim, time_embed_dim)
+        else:
+            self.time_proj = None
+            self.time_embedding = None
 
         # class embedding
         if class_embed_type is None and num_class_embeds is not None:
@@ -176,6 +199,8 @@ class UNet2DDualModel(ModelMixin, ConfigMixin):
             time_embedding_dim = (time_embedding_dim,) * len(block_out_channels)
         if isinstance(add_attention, bool):
             add_attention = (add_attention,) * len(block_out_channels)
+        if isinstance(downsample_ratio, int) and (not isinstance(conv_size, int)):
+            downsample_ratio = (downsample_ratio, downsample_ratio)
 
         # down
         output_channel = block_out_channels[0]
@@ -195,7 +220,7 @@ class UNet2DDualModel(ModelMixin, ConfigMixin):
             _time_embedding_dim = time_embedding_dim[i]
             _add_attention = add_attention[i]
 
-            down_block = SeparableAttnDownBlock2D(
+            down_block = SeparableAttnDownBlock(
                 num_layers=layers_per_block,
                 in_channels=input_channel,
                 out_channels=output_channel,
@@ -204,9 +229,10 @@ class UNet2DDualModel(ModelMixin, ConfigMixin):
                 resnet_act_fn=act_fn,
                 resnet_groups=_norm_num_groups,
                 attention_num_heads=_attention_num_heads,
-                downsample_padding=downsample_padding,
-                resnet_time_scale_shift=resnet_time_scale_shift,
                 downsample_type=_downsample_type,
+                #downsample_padding=downsample_padding,
+                downsample_ratio=downsample_ratio,
+                resnet_time_scale_shift=resnet_time_scale_shift,
                 separate_attn_dim=separate_attn_dim_down,
                 double_attention=_double_attention,
                 pre_attention=_pre_attention,
@@ -228,7 +254,7 @@ class UNet2DDualModel(ModelMixin, ConfigMixin):
         _freq_embedding_dim = freq_embedding_dim[-1]
         _time_embedding_dim = time_embedding_dim[-1]
 
-        self.mid_block = SeparableMidBlock2D(
+        self.mid_block = SeparableMidBlock(
             in_channels=block_out_channels[-1],
             temb_channels=time_embed_dim,
             resnet_eps=norm_eps,
@@ -246,7 +272,6 @@ class UNet2DDualModel(ModelMixin, ConfigMixin):
             num_layers=layers_per_mid_block,
             freq_embedding_dim=_freq_embedding_dim,
             time_embedding_dim=_time_embedding_dim,
-            mid_block_bottleneck_channels=mid_block_bottleneck_channels,
         )
 
         reversed_attention_num_heads = list(reversed(attention_num_heads))
@@ -265,8 +290,6 @@ class UNet2DDualModel(ModelMixin, ConfigMixin):
             prev_output_channel = output_channel
             output_channel = reversed_block_out_channels[i]
             input_channel = reversed_block_out_channels[min(i + 1, len(block_out_channels) - 1)]
-            if mid_block_bottleneck_channels > 0 and i == 0:
-                prev_output_channel = mid_block_bottleneck_channels
 
             is_final_block = i == len(block_out_channels) - 1
             if is_final_block is True: _upsample_type = None
@@ -280,7 +303,7 @@ class UNet2DDualModel(ModelMixin, ConfigMixin):
             _time_embedding_dim = reversed_time_embedding_dim[i]
             _add_attention = reversed_add_attention[i]
 
-            up_block = SeparableAttnUpBlock2D(
+            up_block = SeparableAttnUpBlock(
                 num_layers=layers_per_block + 1,
                 in_channels=input_channel,
                 out_channels=output_channel,
@@ -292,6 +315,7 @@ class UNet2DDualModel(ModelMixin, ConfigMixin):
                 attention_num_heads=_attention_num_heads,
                 resnet_time_scale_shift=resnet_time_scale_shift,
                 upsample_type=_upsample_type,
+                upsample_ratio=downsample_ratio,
                 separate_attn_dim=separate_attn_dim_up,
                 double_attention=_double_attention,
                 pre_attention=_pre_attention,
@@ -315,9 +339,12 @@ class UNet2DDualModel(ModelMixin, ConfigMixin):
             self.conv_norm_out = nn.Identity()
         self.conv_act = nn.SiLU()
 
-        #conv_out_kernel_size = conv_size
-        conv_out_kernel_size = (3,3)
-        self.conv_out = nn.Conv2d(block_out_channels[0], out_channels, kernel_size=conv_out_kernel_size, padding=(conv_out_kernel_size[0]//2, conv_out_kernel_size[1]//2))
+        conv_out_kernel_size = conv_size
+        if isinstance(conv_out_kernel_size, int):
+            conv_out_padding = conv_out_kernel_size // 2
+        else:
+            conv_out_padding = tuple(dim // 2 for dim in conv_out_kernel_size)
+        self.conv_out = conv_class(block_out_channels[0], out_channels, kernel_size=conv_out_kernel_size, padding=conv_out_padding)
 
     def forward(
         self,
@@ -325,7 +352,7 @@ class UNet2DDualModel(ModelMixin, ConfigMixin):
         timestep: Union[torch.Tensor, float, int],
         class_labels: Optional[torch.Tensor] = None,
         return_dict: bool = True,
-    ) -> Union[UNet2DOutput, Tuple]:
+    ) -> Union[UNetOutput, Tuple]:
         r"""
         The [`UNet2DModel`] forward method.
 
@@ -345,32 +372,35 @@ class UNet2DDualModel(ModelMixin, ConfigMixin):
         """
 
         # 1. time
-        timesteps = timestep
-        if not torch.is_tensor(timesteps):
-            timesteps = torch.tensor([timesteps], dtype=torch.long, device=sample.device)
-        elif torch.is_tensor(timesteps) and len(timesteps.shape) == 0:
-            timesteps = timesteps[None].to(sample.device)
+        if self.time_embedding is not None:
+            timesteps = timestep
+            if not torch.is_tensor(timesteps):
+                timesteps = torch.tensor([timesteps], dtype=torch.long, device=sample.device)
+            elif torch.is_tensor(timesteps) and len(timesteps.shape) == 0:
+                timesteps = timesteps[None].to(sample.device)
 
-        # broadcast to batch dimension in a way that's compatible with ONNX/Core ML
-        timesteps = timesteps * torch.ones(sample.shape[0], dtype=timesteps.dtype, device=timesteps.device)
+            # broadcast to batch dimension in a way that's compatible with ONNX/Core ML
+            timesteps = timesteps * torch.ones(sample.shape[0], dtype=timesteps.dtype, device=timesteps.device)
 
-        t_emb = self.time_proj(timesteps)
+            t_emb = self.time_proj(timesteps)
 
-        # timesteps does not contain any weights and will always return f32 tensors
-        # but time_embedding might actually be running in fp16. so we need to cast here.
-        # there might be better ways to encapsulate this.
-        t_emb = t_emb.to(dtype=self.dtype)
-        emb = self.time_embedding(t_emb)
+            # timesteps does not contain any weights and will always return f32 tensors
+            # but time_embedding might actually be running in fp16. so we need to cast here.
+            # there might be better ways to encapsulate this.
+            t_emb = t_emb.to(dtype=self.dtype)
+            emb = self.time_embedding(t_emb)
 
-        if self.class_embedding is not None:
-            if class_labels is None:
-                raise ValueError("class_labels should be provided when doing class conditioning")
+            if self.class_embedding is not None:
+                if class_labels is None:
+                    raise ValueError("class_labels should be provided when doing class conditioning")
 
-            if self.config.class_embed_type == "timestep":
-                class_labels = self.time_proj(class_labels)
+                if self.config.class_embed_type == "timestep":
+                    class_labels = self.time_proj(class_labels)
 
-            class_emb = self.class_embedding(class_labels).to(dtype=self.dtype)
-            emb = emb + class_emb
+                class_emb = self.class_embedding(class_labels).to(dtype=self.dtype)
+                emb = emb + class_emb
+        else:
+            emb = None
 
         # 2. pre-process
         if self.use_skip_samples:
@@ -409,11 +439,12 @@ class UNet2DDualModel(ModelMixin, ConfigMixin):
         if skip_sample is not None:
             sample += skip_sample
 
-        if self.config.time_embedding_type == "fourier":
-            timesteps = timesteps.reshape((sample.shape[0], *([1] * len(sample.shape[1:]))))
-            sample = sample / timesteps
+        if self.time_embedding is not None:
+            if self.config.time_embedding_type == "fourier":
+                timesteps = timesteps.reshape((sample.shape[0], *([1] * len(sample.shape[1:]))))
+                sample = sample / timesteps
 
         if not return_dict:
             return (sample,)
 
-        return UNet2DOutput(sample=sample)
+        return UNetOutput(sample=sample)
