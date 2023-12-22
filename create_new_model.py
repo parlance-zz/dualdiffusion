@@ -29,7 +29,7 @@ from dual_diffusion_pipeline import DualDiffusionPipeline
 load_dotenv()
 torch.manual_seed(200)
 
-MODEL_NAME = "dualdiffusion2d_400_mclt_4vae_mssloss1_cepstrum_micro_1"
+MODEL_NAME = "dualdiffusion2d_400_mclt_4vae_mssloss1_cepstrum_micro_noise_1"
 MODEL_PARAMS = {
     #"prediction_type": "sample",
     #"prediction_type": "epsilon",
@@ -68,7 +68,7 @@ VAE_PARAMS = {
             512,
             1024,
             2048,
-#            4096,
+            4096,
 #            8192
         ],
         "block_offsets": [
@@ -134,6 +134,7 @@ VAE_PARAMS = {
     #"freq_embedding_dim": 64,
     "freq_embedding_dim": 0,
     "time_embedding_dim": 0,
+    "noise_embedding_dim": 2,
 
     "in_channels": DualDiffusionPipeline.get_sample_format(MODEL_PARAMS).get_num_channels(MODEL_PARAMS)[0],
     "out_channels": DualDiffusionPipeline.get_sample_format(MODEL_PARAMS).get_num_channels(MODEL_PARAMS)[1],

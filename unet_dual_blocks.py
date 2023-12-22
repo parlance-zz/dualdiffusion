@@ -158,6 +158,7 @@ class DualResnetBlock(nn.Module):
         conv_shortcut_bias: bool = True,
         conv_out_channels: Optional[int] = None,
         conv_size = (3,3),
+        noise_embedding_dim=0,
     ):
         super().__init__()
         self.pre_norm = pre_norm
@@ -169,6 +170,7 @@ class DualResnetBlock(nn.Module):
         self.output_scale_factor = output_scale_factor
         self.time_embedding_norm = time_embedding_norm
         self.skip_time_act = skip_time_act
+        self.noise_embedding_dim = noise_embedding_dim
 
         if isinstance(conv_size, int):
             conv_class = nn.Conv1d
@@ -196,7 +198,7 @@ class DualResnetBlock(nn.Module):
             else:
                 self.norm1 = nn.Identity()
 
-        self.conv1 = conv_class(in_channels, out_channels, kernel_size=conv_size, stride=1, padding=conv_padding)
+        self.conv1 = conv_class(in_channels + noise_embedding_dim, out_channels, kernel_size=conv_size, stride=1, padding=conv_padding)
 
         if temb_channels is not None:
             if self.time_embedding_norm == "default":
@@ -222,7 +224,7 @@ class DualResnetBlock(nn.Module):
 
         self.dropout = torch.nn.Dropout(dropout)
         conv_out_channels = conv_out_channels or out_channels
-        self.conv2 = conv_class(out_channels, conv_out_channels, kernel_size=conv_size, stride=1, padding=conv_padding)
+        self.conv2 = conv_class(out_channels + noise_embedding_dim, conv_out_channels, kernel_size=conv_size, stride=1, padding=conv_padding)
 
         self.nonlinearity = get_activation(non_linearity)
 
@@ -243,6 +245,9 @@ class DualResnetBlock(nn.Module):
             hidden_states = self.norm1(hidden_states)
 
         hidden_states = self.nonlinearity(hidden_states)
+        if self.noise_embedding_dim > 0:
+            noise = torch.randn_like(hidden_states[:, :self.noise_embedding_dim])
+            hidden_states = torch.cat((hidden_states, noise), dim=1)
         hidden_states = self.conv1(hidden_states)
 
         if self.time_emb_proj is not None:
@@ -264,6 +269,9 @@ class DualResnetBlock(nn.Module):
 
         hidden_states = self.nonlinearity(hidden_states)
         hidden_states = self.dropout(hidden_states)
+        if self.noise_embedding_dim > 0:
+            noise = torch.randn_like(hidden_states[:, :self.noise_embedding_dim])
+            hidden_states = torch.cat((hidden_states, noise), dim=1)
         hidden_states = self.conv2(hidden_states)
 
         if self.conv_shortcut is not None:
@@ -414,7 +422,6 @@ class SeparableAttnDownBlock(nn.Module):
 
         return hidden_states, output_states
 
-
 class SeparableAttnUpBlock(nn.Module):
     def __init__(
         self,
@@ -439,6 +446,7 @@ class SeparableAttnUpBlock(nn.Module):
         use_skip_samples=True,
         freq_embedding_dim=0,
         time_embedding_dim=0,
+        noise_embedding_dim=0,
         add_attention=True,
         upsample_ratio=(2,2),
     ):
@@ -454,6 +462,7 @@ class SeparableAttnUpBlock(nn.Module):
         self.use_skip_samples = use_skip_samples
         self.freq_embedding_dim = freq_embedding_dim
         self.time_embedding_dim = time_embedding_dim
+        self.noise_embedding_dim = noise_embedding_dim
         self.add_attention = add_attention
 
         for i in range(num_layers):
@@ -476,6 +485,7 @@ class SeparableAttnUpBlock(nn.Module):
                     output_scale_factor=output_scale_factor,
                     pre_norm=resnet_pre_norm,
                     conv_size=conv_size,
+                    noise_embedding_dim=noise_embedding_dim,
                 )
             )
         

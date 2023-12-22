@@ -498,6 +498,7 @@ class DecoderDual(nn.Module):
         conv_size = (3,3),
         freq_embedding_dim: Union[int, Tuple[int]] = 0,
         time_embedding_dim: Union[int, Tuple[int]] = 0,
+        noise_embedding_dim: Union[int, Tuple[int]] = 0,
         add_attention: Union[bool, Tuple[bool]] = True,
     ):
         super().__init__()
@@ -553,6 +554,7 @@ class DecoderDual(nn.Module):
         reversed_pre_attention = list(reversed(pre_attention))
         reversed_freq_embedding_dim = list(reversed(freq_embedding_dim))
         reversed_time_embedding_dim = list(reversed(time_embedding_dim))
+        reversed_noise_embedding_dim = list(reversed(noise_embedding_dim))
         reversed_add_attention = list(reversed(add_attention))
 
         # up
@@ -571,6 +573,7 @@ class DecoderDual(nn.Module):
             _pre_attention = reversed_pre_attention[i]
             _freq_embedding_dim = reversed_freq_embedding_dim[i]
             _time_embedding_dim = reversed_time_embedding_dim[i]
+            _noise_embedding_dim = reversed_noise_embedding_dim[i]
             _add_attention = reversed_add_attention[i]
 
             up_block = SeparableAttnUpBlock(
@@ -592,6 +595,7 @@ class DecoderDual(nn.Module):
                 conv_size=conv_size,
                 freq_embedding_dim=_freq_embedding_dim,
                 time_embedding_dim=_time_embedding_dim,
+                noise_embedding_dim=_noise_embedding_dim,
                 add_attention=_add_attention,
                 use_skip_samples=False,
             )
@@ -606,8 +610,6 @@ class DecoderDual(nn.Module):
             self.conv_norm_out = nn.Identity()
         self.conv_act = get_activation(act_fn)
         self.conv_out = conv_class(block_out_channels[0], out_channels, conv_size, padding=conv_padding)
-
-        #self.scale_norm = ScaleNorm(2)
 
         self.gradient_checkpointing = False
 
@@ -652,22 +654,6 @@ class DecoderDual(nn.Module):
             sample = self.conv_norm_out(sample, latent_embeds)
         sample = self.conv_act(sample)
         sample = self.conv_out(sample)
-        
-        #scaled_sample = torch.zeros_like(sample)
-
-        #scaled_sample[:, :2, :, :] = self.scale_norm(sample[:, :2, :, :].sigmoid())
-        #scaled_sample[:, :2, :, :] = sample[:, :2, :, :].sigmoid()
-
-        """
-        phase_x_squared = sample[:, 2, :, :].square()
-        phase_y_squared = sample[:, 3, :, :].square()
-        beta = 2 / (1 + torch.exp(-phase_x_squared - phase_y_squared)) - 1
-        norm = (phase_x_squared + phase_y_squared).sqrt().clip(min=1e-8) ** beta
-        waveform = sample[:, 2:, :, :] / norm.unsqueeze(1)
-        scaled_sample[:, 2:, :, :] = waveform# - waveform.mean(dim=3, keepdim=True)
-        """
-
-        #scaled_sample[:, 2:, :, :] = sample[:, 2:, :, :].tanh()
 
         return sample
 
@@ -702,6 +688,7 @@ class AutoencoderKLDual(ModelMixin, ConfigMixin):
         conv_size = (3,3),
         freq_embedding_dim: Union[int, Tuple[int]] = 256,
         time_embedding_dim: Union[int, Tuple[int]] = 256,
+        noise_embedding_dim: Union[int, Tuple[int]] = 0,
         add_attention: Union[bool, Tuple[bool]] = True,
         multiscale_spectral_loss: dict = None,
         last_global_step: int = 0,
@@ -742,7 +729,12 @@ class AutoencoderKLDual(ModelMixin, ConfigMixin):
         if not isinstance(time_embedding_dim, int) and len(time_embedding_dim) != len(block_out_channels):
             raise ValueError(
                 f"Must provide the same number of `time_embedding_dim` as `block_out_channels`. `time_embedding_dim`: {time_embedding_dim}. `block_out_channels`: {block_out_channels}."
-            ) 
+            )
+        
+        if not isinstance(noise_embedding_dim, int) and len(noise_embedding_dim) != len(block_out_channels):
+            raise ValueError(
+                f"Must provide the same number of `noise_embedding_dim` as `block_out_channels`. `noise_embedding_dim`: {noise_embedding_dim}. `block_out_channels`: {block_out_channels}."
+            )
         
         if not isinstance(add_attention, bool) and len(add_attention) != len(block_out_channels):
             raise ValueError(
@@ -776,6 +768,8 @@ class AutoencoderKLDual(ModelMixin, ConfigMixin):
             freq_embedding_dim = (freq_embedding_dim,) * len(block_out_channels)
         if isinstance(time_embedding_dim, int):
             time_embedding_dim = (time_embedding_dim,) * len(block_out_channels)
+        if isinstance(noise_embedding_dim, int):
+            noise_embedding_dim = (noise_embedding_dim,) * len(block_out_channels)
         if isinstance(add_attention, bool):
             add_attention = (add_attention,) * len(block_out_channels)
         if isinstance(downsample_ratio, int) and (not isinstance(conv_size, int)):
@@ -827,6 +821,7 @@ class AutoencoderKLDual(ModelMixin, ConfigMixin):
             conv_size = conv_size,
             freq_embedding_dim=freq_embedding_dim,
             time_embedding_dim=time_embedding_dim,
+            noise_embedding_dim=noise_embedding_dim,
             add_attention=add_attention,
         )
 
