@@ -512,13 +512,6 @@ class DecoderDual(nn.Module):
             
         self.conv_in = conv_class(
             in_channels,
-            block_out_channels[0],
-            kernel_size=conv_size,
-            padding=conv_padding,
-        )
-
-        self.conv_in = conv_class(
-            in_channels,
             block_out_channels[-1],
             kernel_size=conv_size,
             padding=conv_padding,
@@ -607,7 +600,7 @@ class DecoderDual(nn.Module):
             prev_output_channel = output_channel
 
         # out
-        if norm_num_groups[-1] != 0:
+        if reversed_norm_num_groups[-1] != 0:
             self.conv_norm_out = nn.GroupNorm(num_channels=block_out_channels[0], num_groups=norm_num_groups[-1], eps=norm_eps)
         else:
             self.conv_norm_out = nn.Identity()

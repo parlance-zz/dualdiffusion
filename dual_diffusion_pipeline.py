@@ -44,7 +44,7 @@ class DualMCLTFormat:
     def get_num_channels(model_params):
         #in_channels = model_params["sample_raw_channels"] * model_params["num_chunks"] * 3   #1d
         #out_channels = model_params["sample_raw_channels"] * model_params["num_chunks"] * 4  #1d
-        in_channels = model_params["sample_raw_channels"] * 3   #2d
+        in_channels = model_params["sample_raw_channels"] * 2   #2d
         out_channels = model_params["sample_raw_channels"] * 4  #2d
         return (in_channels, out_channels)
 
@@ -55,7 +55,7 @@ class DualMCLTFormat:
         num_chunks = model_params["num_chunks"]
         block_width = num_chunks * 2
         
-        samples = mdct(raw_samples, block_width, window_degree=2)[..., 1:-2, :]
+        samples = mdct(raw_samples, block_width, window_degree=1)[..., 1:-2, :]
         samples = samples.permute(0, 2, 1)
 
         samples *= torch.exp(2j * torch.pi * torch.rand(1, device=samples.device))
@@ -74,7 +74,9 @@ class DualMCLTFormat:
 
         if model_params.get("add_abs_input", False):
             samples = torch.cat([samples_abs.unsqueeze(1), samples], dim=1)
-
+        else:
+            samples /= samples.std(dim=(1,2,3), keepdim=True).clamp(min=1e-8)
+            
         #samples = samples.view(samples.shape[0], -1, samples.shape[3]) #1d
 
         return samples
@@ -84,10 +86,10 @@ class DualMCLTFormat:
         
         #samples = samples.view(samples.shape[0], -1, model_params["num_chunks"], samples.shape[2])  #1d
 
+        """
         samples_abs = samples[:, 0, :, :].permute(0, 2, 1).contiguous().sigmoid()
         samples_phase = samples[:, 2:, :, :].permute(0, 3, 2, 1).contiguous().tanh()
-        samples_phase = torch.view_as_complex(samples_phase) #.imag * 1j
-        #samples_phase = samples_phase - samples_phase.mean(dim=(1,2), keepdim=True)
+        samples_phase = torch.view_as_complex(samples_phase)
         samples_waveform = samples_abs * samples_phase
         samples_wave = imdct(samples_waveform, window_degree=2).real
 
@@ -97,6 +99,17 @@ class DualMCLTFormat:
         samples_noise = imdct(samples_noise, window_degree=2).real
 
         return samples_wave + samples_noise
+        """
+
+        samples_abs = samples[:, 0, :, :].permute(0, 2, 1).contiguous().sigmoid()
+        samples_noise_abs = samples[:, 1, :, :].permute(0, 2, 1).contiguous().sigmoid()
+        samples_phase = samples[:, 2:, :, :].permute(0, 3, 2, 1).contiguous().tanh()
+        samples_phase = torch.view_as_complex(samples_phase) * torch.exp(4j * torch.pi * torch.randn_like(samples_noise_abs) * samples_noise_abs)
+        samples_waveform = samples_abs * samples_phase
+        samples_wave = imdct(samples_waveform, window_degree=1).real
+
+        return samples_wave
+
     
     @staticmethod
     def get_sample_shape(model_params, bsz=1, length=1):

@@ -29,7 +29,7 @@ from dual_diffusion_pipeline import DualDiffusionPipeline
 load_dotenv()
 torch.manual_seed(200)
 
-MODEL_NAME = "dualdiffusion2d_400_mclt_4vae_mssloss3_1"
+MODEL_NAME = "dualdiffusion2d_400_mclt_4vae_mssloss1_cepstrum_micro_1"
 MODEL_PARAMS = {
     #"prediction_type": "sample",
     #"prediction_type": "epsilon",
@@ -49,9 +49,9 @@ MODEL_PARAMS = {
     "sample_format": "mclt",
     "sample_raw_length": 65536*2,
     "num_chunks": 64,
-    "u": 8000,
-    "add_abs_input": True,
-    #"add_abs_input": False,
+    #"u": 8000,
+    #"add_abs_input": True,
+    "add_abs_input": False,
 }
 
 #VAE_PARAMS = None
@@ -60,16 +60,16 @@ VAE_PARAMS = {
         "version": 1,
         "sample_block_width": 2*MODEL_PARAMS["num_chunks"],
         "block_widths": [
-            16,
-            32,
-            64,
+#            16,
+#            32,
+#            64,
             128,
             256,
             512,
             1024,
             2048,
-            4096,
-            8192
+#            4096,
+#            8192
         ],
         "block_offsets": [
             0,
@@ -98,38 +98,41 @@ VAE_PARAMS = {
     "act_fn": "silu",
     "conv_size": (3,3),
 
-    "block_out_channels": [128, 256, 512, 512],
-    #"block_out_channels": [192, 256, 384, 512],
-    "layers_per_block": 2,
+    #"block_out_channels": [128, 256, 512, 512],
+    "block_out_channels": (16, 32, 64, 128),
+    #"layers_per_block": 2,
+    "layers_per_block": 3,
 
-    "layers_per_mid_block": 1,
-    "add_mid_attention": True,
-    #"add_mid_attention": False,
+    "layers_per_mid_block": 2,
+    #"add_mid_attention": True,
+    "add_mid_attention": False,
 
-    "norm_num_groups": 32,
+    #"norm_num_groups": 32,
+    "norm_num_groups": (0, 0, 32, 32),
 
     "downsample_type": "conv",
-    #"upsample_type": "conv_transpose",
-    "upsample_type": "conv",
+    "upsample_type": "conv_transpose",
+    #"upsample_type": "conv",
     "downsample_ratio": (2,2),
 
     #"attention_num_heads": (2,4,8,16),
 
-    "attention_num_heads": (8,16,32,32),
+    #"attention_num_heads": (8,16,32,32),
     #"separate_attn_dim_down": (2,3),
     #"separate_attn_dim_up": (3,2,3),
-    "separate_attn_dim_down": (3,3),
-    "separate_attn_dim_up": (3,3,3),
+    #"separate_attn_dim_down": (3,3),
+    #"separate_attn_dim_up": (3,3,3),
     #"separate_attn_dim_mid": (3,),
-    "separate_attn_dim_mid": (0,),
+    #"separate_attn_dim_mid": (0,),
     "double_attention": False,
     "pre_attention": False,
-    #"add_attention": False,
-    "add_attention": True,
+    "add_attention": False,
+    #"add_attention": True,
 
     #"freq_embedding_dim": 256,
     #"time_embedding_dim": 256,
-    "freq_embedding_dim": 64,
+    #"freq_embedding_dim": 64,
+    "freq_embedding_dim": 0,
     "time_embedding_dim": 0,
 
     "in_channels": DualDiffusionPipeline.get_sample_format(MODEL_PARAMS).get_num_channels(MODEL_PARAMS)[0],

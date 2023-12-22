@@ -292,8 +292,8 @@ def embedding_test():
 
 def vae_test():
 
-    model_name = "dualdiffusion2d_400_mclt_4vae_mssloss3_1"
-    num_samples = 1
+    model_name = "dualdiffusion2d_400_mclt_4vae_mssloss1_cepstrum_micro_1"
+    num_samples = 4
     #device = "cuda"
     device = "cpu"
     fp16 = False
@@ -317,7 +317,7 @@ def vae_test():
     test_samples = np.random.choice(os.listdir(dataset_path), num_samples, replace=False)
     #test_samples = sorted(os.listdir(dataset_path), key=lambda x: int(x.split(".")[0]))[100:100+num_samples]
     
-    #test_samples = ["6917.raw"]
+    #test_samples = ["31171.raw"]
 
     vae_path = os.path.join(model_path, "vae")
     model_dtype = torch.float16 if fp16 else torch.float32
@@ -329,16 +329,23 @@ def vae_test():
         input_raw_sample = input_raw_sample.unsqueeze(0).to(device)
         input_sample = format.raw_to_sample(input_raw_sample, model_params)
 
-        latents = vae.encode(input_sample.type(model_dtype), return_dict=False)[0].sample()
+        posterior = vae.encode(input_sample.type(model_dtype), return_dict=False)[0]
+        latents = posterior.sample()
         #latents -= latents.mean(dim=(1,2,3), keepdim=True)
         #latents /= latents.std(dim=(1,2,3), keepdim=True)
         output_sample = vae.decode(latents, return_dict=False)[0]
         output_raw_sample = format.sample_to_raw(output_sample.type(torch.float32), model_params)
 
+        #input_sample = input_sample / (input_sample[:, 0, :, :].square() + input_sample[:, 1, :, :].square()).sqrt().unsqueeze(1).sqrt()
+        #input_sample = torch.cat((torch.zeros_like(input_sample), input_sample), dim=1)
+        #output_sample = input_sample.permute(0, 1, 3, 2)
+
         output_latents_file_path = os.path.join(output_path, f"step_{last_global_step}_{filename.replace('.raw', '_latents.raw')}")
         save_raw(latents, output_latents_file_path)
         output_sample_file_path = os.path.join(output_path, f"step_{last_global_step}_{filename.replace('.raw', '_sample.raw')}")
         save_raw(output_sample, output_sample_file_path)
+        output_posterior_file_path = os.path.join(output_path, f"step_{last_global_step}_{filename.replace('.raw', '_posterior.raw')}")
+        save_raw(posterior.parameters, output_posterior_file_path)
 
         output_flac_file_path = os.path.join(output_path, f"step_{last_global_step}_{filename.replace('.raw', '_original.flac')}")
         save_flac(input_raw_sample, sample_rate, output_flac_file_path)

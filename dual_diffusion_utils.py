@@ -333,6 +333,7 @@ def get_mel_density(hz):
 def get_hann_window(window_len, device="cpu"):
     n = torch.arange(window_len, device=device) / (window_len - 1)
     return 0.5 - 0.5 * torch.cos(2 * torch.pi * n)
+
 """
 a = load_raw("./dataset/samples/80.raw")
 a = mdct(a, 128, window_degree=1)
@@ -468,4 +469,27 @@ for file in sample_files:
     amax = max(amax, m.abs().amax().item())
     print(amax)
 
+"""
+
+"""
+a = torch.linspace(-1, 1, 65536*2)
+b = torch.cos(torch.pi * a * 12000) * 0.5
+b.numpy().tofile("./debug/test_b.raw")
+
+m = mdct(b, 128, window_degree=0)
+save_raw(m, "./debug/test_m.raw")
+
+c = torch.linspace(0, 1, m.shape[0]).view(-1, 1)
+c += torch.randn_like(c) * 0.1
+
+m += m * torch.exp(2j * torch.pi * c * 1)# * 0.2
+
+#c = torch.randn_like(m, dtype=torch.float32)
+
+#m *= torch.exp(2j * torch.pi * c * 0.1)
+
+#m += c * 0.01 * 2
+
+im = imdct(m, window_degree=2).real
+save_raw(im, "./debug/test_im.raw")
 """
