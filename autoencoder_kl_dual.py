@@ -35,7 +35,7 @@ from diffusers.models.vae import DecoderOutput
 from diffusers.models.autoencoder_kl import AutoencoderKLOutput
 
 from unet_dual_blocks import SeparableAttnDownBlock, SeparableAttnUpBlock, SeparableMidBlock
-from dual_diffusion_utils import mdct, get_activation, save_raw, hz_to_mels, mels_to_hz, get_mel_density, get_hann_window, get_kaiser_window, ScaleNorm
+from dual_diffusion_utils import mdct, get_activation, save_raw, hz_to_mels, mels_to_hz, get_mel_density, get_hann_window, get_kaiser_window, ScaleNorm, stft, get_hann_poisson_window, get_blackman_harris_window, get_flat_top_window
 
 class DiagonalGaussianDistribution(object):
     def __init__(self, parameters, deterministic=False):
@@ -281,38 +281,51 @@ class DualMultiscaleSpectralLoss:
         self.block_widths = loss_params["block_widths"]
         self.block_offsets = loss_params["block_offsets"]
         self.u = loss_params["u"]
-        self.use_cepstrum = loss_params.get("use_cepstrum", False)
         
-        self.loss_scale = 1 / (len(self.block_widths) * len(self.block_offsets))
+        self.loss_scale = 1 / (len(self.block_widths) * len(self.block_offsets) + 1)
 
     def __call__(self, sample, target):
-        
-        target = target[:, self.sample_block_width // 2:-self.sample_block_width]
-        if (sample.shape != target.shape):
-            raise ValueError(f"sample.shape != target.shape. sample.shape: {sample.shape}. target.shape: {target.shape}.")    
 
-        loss = torch.zeros(1, device=target.device)
+        with torch.no_grad():
+            target = target[:, self.sample_block_width // 2:-self.sample_block_width]
+            if (sample.shape != target.shape):
+                raise ValueError(f"sample.shape != target.shape. sample.shape: {sample.shape}. target.shape: {target.shape}.")    
+
+            #window = ((torch.linspace(-torch.pi, torch.pi, target.shape[-1], device=target.device).cos() + 1) * 0.5).view(1, -1)
+            #window = get_hann_poisson_window(target.shape[-1], device=target.device).view(1, -1)
+            window = get_flat_top_window(target.shape[-1], device=target.device).view(1, -1)
+
+            target_fft_abs = torch.fft.rfft(target * window, norm="ortho").abs()
+            target_fft_abs = target_fft_abs / target_fft_abs.amax(dim=1, keepdim=True)
+            target_fft_abs_ln = (target_fft_abs * self.u).log1p()
+            target_fft_cepstrum = torch.fft.rfft(target_fft_abs_ln, norm="ortho")
+
+        sample_fft_abs = torch.fft.rfft(sample * window, norm="ortho").abs()
+        sample_fft_abs = sample_fft_abs / sample_fft_abs.amax(dim=1, keepdim=True)
+        sample_fft_abs_ln = (sample_fft_abs * self.u).log1p()
+        sample_fft_cepstrum = torch.fft.rfft(sample_fft_abs_ln, norm="ortho")
+
+        loss  = torch.nn.functional.mse_loss(sample_fft_cepstrum.real, target_fft_cepstrum.real, reduction="mean") * 0.5
+        loss += torch.nn.functional.mse_loss(sample_fft_cepstrum.imag, target_fft_cepstrum.imag, reduction="mean") * 0.5
 
         for block_width in self.block_widths:
             for block_offset in self.block_offsets:
 
-                offset = int(block_offset * block_width)
+                with torch.no_grad():
+                    offset = int(block_offset * block_width + 0.5)
 
-                sample_fft_abs = mdct(sample[:, offset:], block_width, window_degree=2)[:, 1:-2, :].abs()
+                    target_fft_abs = stft(target[:, offset:], block_width, window_fn="flat_top")[:, 1:-2, :].abs()
+                    target_fft_abs = target_fft_abs / target_fft_abs.amax(dim=(1,2), keepdim=True)
+                    target_fft_abs_ln = (target_fft_abs * self.u).log1p()
+                    target_fft_cepstrum = torch.fft.rfft(target_fft_abs_ln, norm="ortho")
+
+                sample_fft_abs = stft(sample[:, offset:], block_width, window_fn="flat_top")[:, 1:-2, :].abs()
                 sample_fft_abs = sample_fft_abs / sample_fft_abs.amax(dim=(1,2), keepdim=True)
                 sample_fft_abs_ln = (sample_fft_abs * self.u).log1p()
+                sample_fft_cepstrum = torch.fft.rfft(sample_fft_abs_ln, norm="ortho")
 
-                target_fft_abs = mdct(target[:, offset:], block_width, window_degree=2)[:, 1:-2, :].abs()
-                target_fft_abs = target_fft_abs / target_fft_abs.amax(dim=(1,2), keepdim=True)
-                target_fft_abs_ln = (target_fft_abs * self.u).log1p()
-                
-                if self.use_cepstrum:
-                    sample_fft_abs_ln = torch.fft.rfft(sample_fft_abs_ln, norm="ortho")
-                    target_fft_abs_ln = torch.fft.rfft(target_fft_abs_ln, norm="ortho")
-
-                #loss += torch.nn.functional.l1_loss(sample_fft_abs_ln, target_fft_abs_ln, reduction="mean")
-                loss += torch.nn.functional.mse_loss(sample_fft_abs_ln.real, target_fft_abs_ln.real, reduction="mean") * 0.5
-                loss += torch.nn.functional.mse_loss(sample_fft_abs_ln.imag, target_fft_abs_ln.imag, reduction="mean") * 0.5
+                loss += torch.nn.functional.mse_loss(sample_fft_cepstrum.real, target_fft_cepstrum.real, reduction="mean") * 0.5
+                loss += torch.nn.functional.mse_loss(sample_fft_cepstrum.imag, target_fft_cepstrum.imag, reduction="mean") * 0.5
 
         return loss * self.loss_scale
     

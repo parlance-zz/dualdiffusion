@@ -88,8 +88,20 @@ def get_kaiser_derived_window(window_len, beta=4*torch.pi, device="cpu"):
 
     return w
 
+def get_hann_poisson_window(window_len, alpha=2, device="cpu"):
+    x = torch.linspace(0, 1, window_len, device=device)
+    return torch.exp(-alpha * (1 - 2*x).abs()) * 0.5 * (1 - torch.cos(2*torch.pi*x)).requires_grad_(False)
+
+def get_blackman_harris_window(window_len, device="cpu"):
+    x = torch.linspace(0, 2*torch.pi, window_len, device=device)
+    return (0.35875 - 0.48829 * torch.cos(x) + 0.14128 * torch.cos(2*x) - 0.01168 * torch.cos(3*x)).requires_grad_(False)
+
+def get_flat_top_window(window_len, device="cpu"):
+    x = torch.linspace(0, 2*torch.pi, window_len, device=device)
+    return (0.21557895 - 0.41663158 * torch.cos(x) + 0.277263158 * torch.cos(2*x) - 0.083578947 * torch.cos(3*x) + 0.006947368 * torch.cos(4*x)).requires_grad_(False)
+
 # fast overlapped modified discrete cosine transform type iv - becomes mclt with complex output
-def mdct(x, block_width, window_degree=1):
+def mdct(x, block_width, window_fn="hann", window_degree=1):
 
     padding_left = padding_right = block_width // 2
     remainder = x.shape[-1] % (block_width // 2)
@@ -103,27 +115,45 @@ def mdct(x, block_width, window_degree=1):
     n = torch.arange(2*N, device=x.device)
     k = torch.arange(0.5, N + 0.5, device=x.device)
 
-    if window_degree == 0:
-        window = 1
+    if window_fn == "hann":
+        if window_degree == 0:
+            window = 1
+        else:
+            window = torch.sin(torch.pi * (n + 0.5) / (2*N)).requires_grad_(False)
+            if window_degree == 2: window = window.square()
+    elif window_fn == "hann_poisson":
+        window = get_hann_poisson_window(2*N, device=x.device)
+    elif window_fn == "blackman_harris":
+        window = get_blackman_harris_window(2*N, device=x.device)
+    elif window_fn == "flat_top":
+        window = get_flat_top_window(2*N, device=x.device)
     else:
-        window = torch.sin(torch.pi * (n + 0.5) / (2*N))
-        if window_degree == 2: window = window.square()
-
+        raise ValueError(f"Unsupported window function: {window_fn}")
+    
     pre_shift = torch.exp(-1j * torch.pi / 2 / N * n)
     post_shift = torch.exp(-1j * torch.pi / 2 / N * (N + 1) * k)
     
     return torch.fft.fft(x * pre_shift * window, norm="forward")[..., :N] * post_shift * 2 * N ** 0.5
 
-def imdct(x, window_degree=1):
+def imdct(x, window_fn="hann", window_degree=1):
     N = x.shape[-1]
     n = torch.arange(2*N, device=x.device)
     k = torch.arange(0.5, N + 0.5, device=x.device)
 
-    if window_degree == 0:
-        window = 1
+    if window_fn == "hann":
+        if window_degree == 0:
+            window = 1
+        else:
+            window = torch.sin(torch.pi * (n + 0.5) / (2*N)).requires_grad_(False)
+            if window_degree == 2: window = window.square()
+    elif window_fn == "hann_poisson":
+        window = get_hann_poisson_window(2*N, device=x.device)
+    elif window_fn == "blackman_harris":
+        window = get_blackman_harris_window(2*N, device=x.device)
+    elif window_fn == "flat_top":
+        window = get_flat_top_window(2*N, device=x.device)
     else:
-        window = torch.sin(torch.pi * (n + 0.5) / (2*N))
-        if window_degree == 2: window = window.square()
+        raise ValueError(f"Unsupported window function: {window_fn}")
 
     pre_shift = torch.exp(-1j * torch.pi / 2 / N * n)
     post_shift = torch.exp(-1j * torch.pi / 2 / N * (N + 1) * k)
@@ -139,6 +169,33 @@ def imdct(x, window_degree=1):
     raw_sample[..., N:y_odd.shape[-1] + N] += y_odd
 
     return raw_sample[..., N:-N] * 2 * N ** 0.5
+
+def stft(x, block_width, window_fn="hann", window_degree=2):
+
+    padding_left = padding_right = block_width // 2
+    remainder = x.shape[-1] % (block_width // 2)
+    if remainder > 0:
+        padding_right += block_width // 2 - remainder
+
+    pad_tuple = (padding_left, padding_right) + (0,0,) * (x.ndim-1)
+    x = F.pad(x, pad_tuple).unfold(-1, block_width, block_width//2)
+    
+    if window_fn == "hann":
+        if window_degree == 0:
+            window = 1
+        else:
+            window = torch.sin(torch.pi * (n + 0.5) / x.shape[-1]).requires_grad_(False)
+            if window_degree == 2: window = window.square()
+    elif window_fn == "hann_poisson":
+        window = get_hann_poisson_window(x.shape[-1], device=x.device)
+    elif window_fn == "blackman_harris":
+        window = get_blackman_harris_window(x.shape[-1], device=x.device)
+    elif window_fn == "flat_top":
+        window = get_flat_top_window(x.shape[-1], device=x.device)
+    else:
+        raise ValueError(f"Unsupported window function: {window_fn}")
+
+    return torch.fft.rfft(x * window, norm="ortho")
 
 def to_ulaw(x, u=255):
 

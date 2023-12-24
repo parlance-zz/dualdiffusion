@@ -29,7 +29,7 @@ from dual_diffusion_pipeline import DualDiffusionPipeline
 load_dotenv()
 torch.manual_seed(200)
 
-MODEL_NAME = "dualdiffusion2d_400_mclt_4vae_mssloss1_cepstrum_micro_noise_1"
+MODEL_NAME = "dualdiffusion2d_400_mclt_4vae_mssloss1_cepstrum_micro_noise_5"
 MODEL_PARAMS = {
     #"prediction_type": "sample",
     #"prediction_type": "epsilon",
@@ -48,10 +48,11 @@ MODEL_PARAMS = {
 
     "sample_format": "mclt",
     "sample_raw_length": 65536*2,
-    "num_chunks": 64,
+    "num_chunks": 128,
     #"u": 8000,
     #"add_abs_input": True,
     "add_abs_input": False,
+    "noise_octaves": 4,
 }
 
 #VAE_PARAMS = None
@@ -60,16 +61,15 @@ VAE_PARAMS = {
         "version": 1,
         "sample_block_width": 2*MODEL_PARAMS["num_chunks"],
         "block_widths": [
-#            16,
-#            32,
-#            64,
-            128,
             256,
             512,
             1024,
             2048,
             4096,
-#            8192
+            8192,
+            16384,
+            32768,
+            65536,
         ],
         "block_offsets": [
             0,
@@ -134,7 +134,7 @@ VAE_PARAMS = {
     #"freq_embedding_dim": 64,
     "freq_embedding_dim": 0,
     "time_embedding_dim": 0,
-    "noise_embedding_dim": 2,
+    "noise_embedding_dim": 0,
 
     "in_channels": DualDiffusionPipeline.get_sample_format(MODEL_PARAMS).get_num_channels(MODEL_PARAMS)[0],
     "out_channels": DualDiffusionPipeline.get_sample_format(MODEL_PARAMS).get_num_channels(MODEL_PARAMS)[1],

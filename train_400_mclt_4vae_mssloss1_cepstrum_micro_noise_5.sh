@@ -6,13 +6,13 @@ accelerate launch \
   --allow_tf32 \
   --train_data_dir="/home/parlance/dualdiffusion/dataset/samples" \
   --raw_sample_format="int16" \
-  --pretrained_model_name_or_path="/home/parlance/dualdiffusion/models/dualdiffusion2d_350_mclt_v8_256embed_4vae_mssloss32" \
+  --pretrained_model_name_or_path="/home/parlance/dualdiffusion/models/dualdiffusion2d_400_mclt_4vae_mssloss1_cepstrum_micro_noise_5" \
   --module="vae" \
-  --train_batch_size=1 \
-  --num_train_epochs=500 \
-  --checkpointing_steps=247 \
+  --train_batch_size=32 \
+  --num_train_epochs=5000 \
+  --checkpointing_steps=1236 \
   --checkpoints_total_limit=1 \
-  --gradient_accumulation_steps=8 \
+  --gradient_accumulation_steps=1 \
   --learning_rate=1e-4 \
   --report_to="tensorboard" \
   --resume_from_checkpoint=latest \
@@ -20,8 +20,9 @@ accelerate launch \
   --lr_scheduler="constant_with_warmup" \
   --num_validation_samples=5 \
   --num_validation_epochs=5 \
-  --kl_loss_weight=1e-4 \
-  --kl_loss_global_weight=0
+  --kl_loss_weight=1e-5 \
+  --kl_loss_recon_weight=0 \
+  --max_grad_norm=5
 
 # --gradient_checkpointing
 

@@ -1185,7 +1185,7 @@ def main():
 if __name__ == "__main__":
 
     if torch.cuda.is_available():
-        torch.backends.cuda.cufft_plan_cache[0].max_size = 32 # stupid cufft memory leak
+        torch.backends.cuda.cufft_plan_cache[0].max_size = 50 # stupid cufft memory leak
     else:
         print("Error: PyTorch not compiled with CUDA support or CUDA unavailable")
         exit(1)
