@@ -115,7 +115,7 @@ class DualMCLTFormat:
         samples_abs = samples[:, 0, :, :].permute(0, 2, 1).contiguous().sigmoid()
         samples_phase = samples[:, 1:3, :, :].permute(0, 3, 2, 1).contiguous().tanh()
         samples_phase = torch.view_as_complex(samples_phase)
-        samples_waveform = samples_abs * samples_phase * torch.exp(samples_noise / 16)
+        samples_waveform = samples_abs * samples_phase * torch.exp(samples_noise / 4)
         samples_wave = imdct(samples_waveform, window_degree=2).real
 
         return samples_wave

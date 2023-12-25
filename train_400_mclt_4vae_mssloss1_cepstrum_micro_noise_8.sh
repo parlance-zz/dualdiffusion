@@ -6,13 +6,13 @@ accelerate launch \
   --allow_tf32 \
   --train_data_dir="/home/parlance/dualdiffusion/dataset/samples" \
   --raw_sample_format="int16" \
-  --pretrained_model_name_or_path="/home/parlance/dualdiffusion/models/dualdiffusion2d_400_mclt_4vae_mssloss1_cepstrum_micro_noise_5" \
+  --pretrained_model_name_or_path="/home/parlance/dualdiffusion/models/dualdiffusion2d_400_mclt_4vae_mssloss1_cepstrum_micro_noise_8" \
   --module="vae" \
-  --train_batch_size=32 \
+  --train_batch_size=8 \
   --num_train_epochs=5000 \
-  --checkpointing_steps=1236 \
+  --checkpointing_steps=309 \
   --checkpoints_total_limit=1 \
-  --gradient_accumulation_steps=1 \
+  --gradient_accumulation_steps=8 \
   --learning_rate=1e-4 \
   --report_to="tensorboard" \
   --resume_from_checkpoint=latest \

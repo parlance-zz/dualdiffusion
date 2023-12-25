@@ -29,7 +29,7 @@ from dual_diffusion_pipeline import DualDiffusionPipeline
 load_dotenv()
 torch.manual_seed(200)
 
-MODEL_NAME = "dualdiffusion2d_400_mclt_4vae_mssloss1_cepstrum_micro_noise_5"
+MODEL_NAME = "dualdiffusion2d_400_mclt_4vae_mssloss1_cepstrum_micro_noise_8"
 MODEL_PARAMS = {
     #"prediction_type": "sample",
     #"prediction_type": "epsilon",
@@ -48,11 +48,11 @@ MODEL_PARAMS = {
 
     "sample_format": "mclt",
     "sample_raw_length": 65536*2,
-    "num_chunks": 128,
+    "num_chunks": 64,
     #"u": 8000,
     #"add_abs_input": True,
     "add_abs_input": False,
-    "noise_octaves": 4,
+    "noise_octaves": 8,
 }
 
 #VAE_PARAMS = None
@@ -61,6 +61,8 @@ VAE_PARAMS = {
         "version": 1,
         "sample_block_width": 2*MODEL_PARAMS["num_chunks"],
         "block_widths": [
+            67,
+            127,
             257,
             509,
             1021,
@@ -73,9 +75,10 @@ VAE_PARAMS = {
         ],
         "block_offsets": [
             0,
-            0.25,
+            0.33333333333333333,
+            0.66666666666666667,
         ],
-        "u": 1000,
+        "u": 8000,
         "use_cepstrum": True,
     },
     

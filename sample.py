@@ -292,7 +292,7 @@ def embedding_test():
 
 def vae_test():
 
-    model_name = "dualdiffusion2d_400_mclt_4vae_mssloss1_cepstrum_micro_noise_5"
+    model_name = "dualdiffusion2d_400_mclt_4vae_mssloss1_cepstrum_micro_noise_8"
     num_samples = 4
     #device = "cuda"
     device = "cpu"
@@ -318,6 +318,12 @@ def vae_test():
     #test_samples = sorted(os.listdir(dataset_path), key=lambda x: int(x.split(".")[0]))[100:100+num_samples]
     
     #test_samples = ["457.raw"]
+
+    # try to use most recent checkpoint if one exists
+    vae_checkpoints = [f for f in os.listdir(model_path) if os.path.isdir(os.path.join(model_path, f)) and f.startswith("vae_checkpoint")]
+    if len(vae_checkpoints) > 0:
+        vae_checkpoints = sorted(vae_checkpoints, key=lambda x: int(x.split("-")[1]))
+        model_path = os.path.join(model_path, vae_checkpoints[-1])
 
     vae_path = os.path.join(model_path, "vae")
     model_dtype = torch.float16 if fp16 else torch.float32
