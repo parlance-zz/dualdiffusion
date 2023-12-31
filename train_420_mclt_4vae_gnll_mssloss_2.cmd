@@ -5,11 +5,11 @@ accelerate launch^
  --allow_tf32^
  --train_data_dir="D:/dualdiffusion/dataset/samples"^
  --raw_sample_format="int16"^
- --pretrained_model_name_or_path="D:/dualdiffusion/models/dualdiffusion2d_400_mclt_4vae_mssloss1_cepstrum_micro_1"^
+ --pretrained_model_name_or_path="D:/dualdiffusion/models/dualdiffusion2d_420_mclt_4vae_gnll_mssloss_2"^
  --module="vae"^
- --train_batch_size=32^
+ --train_batch_size=16^
  --num_train_epochs=5000^
- --checkpointing_steps=618^
+ --checkpointing_steps=1235^
  --checkpoints_total_limit=1^
  --gradient_accumulation_steps=1^
  --learning_rate=1e-4^

@@ -53,13 +53,26 @@ from diffusers.utils.import_utils import is_xformers_available
 from unet_dual import UNetDualModel
 from autoencoder_kl_dual import AutoencoderKLDual
 from dual_diffusion_pipeline import DualDiffusionPipeline
-from dual_diffusion_utils import compute_snr, normalize_lufs
+from dual_diffusion_utils import compute_snr, normalize_lufs, to_ulaw
 
 # Will error if the minimal version of diffusers is not installed. Remove at your own risks.
 check_min_version("0.21.0.dev0")
 
 logger = get_logger(__name__, log_level="INFO")
 #torch.autograd.set_detect_anomaly(True)
+
+def zero_grad_nan_inf(model):
+    for param in model.parameters():
+        if param.grad is not None:
+            param.grad.data = torch.nan_to_num(param.grad.data, nan=0, posinf=0, neginf=0)
+
+def nan_grad_hook_fn(grad):
+    grad.nan_to_num_(nan=0, posinf=0, neginf=0)
+    return grad
+
+def hook_nan_grad(module):
+    for param in module.parameters():
+        param.register_hook(nan_grad_hook_fn)
 
 def log_validation_unet(pipeline, args, accelerator, global_step):
 
@@ -878,6 +891,7 @@ def main():
 
     timesteps = None
     torch.cuda.empty_cache()
+    #hook_nan_grad(module)
 
     for epoch in range(first_epoch, args.num_train_epochs):
         module.train()
@@ -999,11 +1013,11 @@ def main():
                     latents_std = latents.std()
                     recon = module.decode(latents, return_dict=False)[0]                    
                     
-                    recon_raw_samples = pipeline.format.sample_to_raw(recon, model_params)
-                    vae_recon_loss = module.multiscale_spectral_loss(recon_raw_samples, raw_samples)
+                    recon_raw_samples, recon_raw_variance = pipeline.format.sample_to_raw(recon, model_params, mix_noise=False)
+                    vae_recon_loss = module.multiscale_spectral_loss(recon_raw_samples, recon_raw_variance, raw_samples)
 
                     vae_kl_loss = posterior.kl().sum() / posterior.mean.numel()
-                    vae_kl_loss_recon = torch.tensor(0.) #recon_posterior.kl().sum() / recon_posterior.mean.numel()
+                    vae_kl_loss_recon = torch.tensor(0.)
                     
                     vae_kl_loss_weight = args.kl_loss_weight
                     vae_kl_loss_recon_weight = args.kl_loss_recon_weight
@@ -1042,8 +1056,10 @@ def main():
                 accelerator.backward(loss)
 
                 if accelerator.sync_gradients:
+                    
                     grad_norm = accelerator.clip_grad_norm_(module.parameters(), args.max_grad_norm).item()
                     if math.isinf(grad_norm) or math.isnan(grad_norm):
+                        #zero_grad_nan_inf(module)
                         logger.warning(f"Warning: grad norm is {grad_norm} - step={global_step} loss={loss.item()} timesteps={timesteps} debug_last_sample_paths={debug_last_sample_paths}")
 
                     if math.isnan(grad_norm):
@@ -1185,7 +1201,7 @@ def main():
 if __name__ == "__main__":
 
     if torch.cuda.is_available():
-        torch.backends.cuda.cufft_plan_cache[0].max_size = 50 # stupid cufft memory leak
+        torch.backends.cuda.cufft_plan_cache[0].max_size = 250 # stupid cufft memory leak
     else:
         print("Error: PyTorch not compiled with CUDA support or CUDA unavailable")
         exit(1)

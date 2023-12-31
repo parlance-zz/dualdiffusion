@@ -100,6 +100,15 @@ def get_flat_top_window(window_len, device="cpu"):
     x = torch.linspace(0, 2*torch.pi, window_len, device=device)
     return (0.21557895 - 0.41663158 * torch.cos(x) + 0.277263158 * torch.cos(2*x) - 0.083578947 * torch.cos(3*x) + 0.006947368 * torch.cos(4*x)).requires_grad_(False)
 
+def get_ln_window(window_len, device="cpu"):
+    x = torch.linspace(0, 1, window_len, device=device).requires_grad_(False)
+    w = torch.exp(-torch.log2(x).square() - torch.log2(1-x).square())
+    w[0] = 0; w[-1] = 0
+    return w / w.amax()
+
+def get_blackman_harris2_window(window_len, device="cpu"):
+    return get_blackman_harris_window(window_len, device) * get_flat_top_window(window_len, device)
+
 # fast overlapped modified discrete cosine transform type iv - becomes mclt with complex output
 def mdct(x, block_width, window_fn="hann", window_degree=1):
 
@@ -127,6 +136,8 @@ def mdct(x, block_width, window_fn="hann", window_degree=1):
         window = get_blackman_harris_window(2*N, device=x.device)
     elif window_fn == "flat_top":
         window = get_flat_top_window(2*N, device=x.device)
+    elif window_fn == "ln":
+        window = get_ln_window(2*N, device=x.device)
     else:
         raise ValueError(f"Unsupported window function: {window_fn}")
     
@@ -152,6 +163,8 @@ def imdct(x, window_fn="hann", window_degree=1):
         window = get_blackman_harris_window(2*N, device=x.device)
     elif window_fn == "flat_top":
         window = get_flat_top_window(2*N, device=x.device)
+    elif window_fn == "ln":
+        window = get_ln_window(2*N, device=x.device)
     else:
         raise ValueError(f"Unsupported window function: {window_fn}")
 
@@ -170,23 +183,14 @@ def imdct(x, window_fn="hann", window_degree=1):
 
     return raw_sample[..., N:-N] * 2 * N ** 0.5
 
-def stft(x, block_width, window_fn="hann", window_degree=2, chirp=False, step=None):
+def stft(x, block_width, window_fn="hann", window_degree=2, step=None):
 
-    """
-    padding_left = padding_right = block_width // 2
-    remainder = x.shape[-1] % (block_width // 2)
-    if remainder > 0:
-        padding_right += block_width // 2 - remainder
-
-    pad_tuple = (padding_left, padding_right) + (0,0,) * (x.ndim-1)
-    x = F.pad(x, pad_tuple).unfold(-1, block_width, block_width//2)
-    """
-    block_width = min(block_width, x.shape[-1])
     if step is None:
         step = block_width // 2
 
+    #x = F.pad(x, (0, step+1)).unfold(-1, block_width, step)
     x = x.unfold(-1, block_width, step)
-    
+
     if window_fn == "hann":
         if window_degree == 0:
             window = 1
@@ -199,12 +203,14 @@ def stft(x, block_width, window_fn="hann", window_degree=2, chirp=False, step=No
         window = get_blackman_harris_window(x.shape[-1], device=x.device)
     elif window_fn == "flat_top":
         window = get_flat_top_window(x.shape[-1], device=x.device)
+    elif window_fn == "ln":
+        window = get_ln_window(x.shape[-1], device=x.device)
+    elif window_fn == "none":
+        window = 1
+    elif window_fn == "blackman_harris2":
+        window = get_blackman_harris2_window(x.shape[-1], device=x.device)
     else:
         raise ValueError(f"Unsupported window function: {window_fn}")
-
-    if chirp:
-        window = (window * torch.exp(2j*torch.pi * torch.linspace(0, 1, window.shape[-1], device=window.device).square())).requires_grad_(False)
-        return torch.fft.fft(x * window, norm="ortho")[..., :x.shape[-1]//2]
     
     return torch.fft.rfft(x * window, norm="ortho")
 
@@ -511,8 +517,6 @@ mss_params = {
 },
 """
 
-# get list of all samples in ./dataset/samples
-
 """
 sample_files = []
 for root, dirs, files in os.walk("./dataset/samples"):
@@ -562,41 +566,62 @@ im = imdct(m, window_degree=2).real
 save_raw(im, "./debug/test_im.raw")
 """
 
-def get_ln_window(window_len, q=0.00012, device="cpu"):
-    x = torch.linspace(0, 1, window_len//2+1, device=device).requires_grad_(False)
-    w = torch.exp(-torch.log2(x / q).square())
-    w[0] = 0
-    w = torch.cat((w, torch.zeros(window_len//2-1, device=device)))
-    w = torch.fft.ifft(w, norm="ortho").imag #.abs()
-    return torch.fft.fftshift(w) / w.amax()
+"""
+#test_len = 65536
+test_len = 65536
 
-ln_w = get_ln_window(65536, q=0.00012)
+ln_w = get_ln_window(test_len)
 ln_w.numpy().tofile("./debug/ln_window.raw")
 
-ft_w = get_flat_top_window(65536)
+ft_w = get_flat_top_window(test_len)
 ft_w.numpy().tofile("./debug/ft_window.raw")
 
-sech_w = 1 / torch.cosh(torch.linspace(-torch.pi, torch.pi, 65536))
-sech_w *= get_hann_window(65536)
+sech_w = 1 / torch.cosh(torch.linspace(-torch.pi, torch.pi, test_len))
 sech_w.numpy().tofile("./debug/sech_window.raw")
 
-hann_w = get_hann_window(65536)
+hann_w = get_hann_window(test_len)
 hann_w.numpy().tofile("./debug/hann_window.raw")
 
-rect_w = torch.exp(2j*torch.pi * torch.linspace(0, 1, 65536).square())
+rect_w = torch.ones(test_len)
 
-bh_w = get_blackman_harris_window(65536)
-bh_w = bh_w * rect_w
-bh_w.numpy().tofile("./debug/bh_window.raw")
+bh_w = get_blackman_harris_window(test_len)
 
-hannp = get_hann_poisson_window(65536, alpha=8)
+
+hannp = get_hann_poisson_window(test_len, alpha=2)
 hannp.numpy().tofile("./debug/hannp_window.raw")
 
-#a = load_raw("./dataset/samples/80.raw")[:65536]
-a  = torch.cos(torch.linspace(0, 1000, 65536) + 0.618) * 0.5
-a += torch.cos(torch.linspace(0, 1353.12312, 65536) + 0.3212) * 0.4 * torch.sin(torch.linspace(0, 42312.23123, 65536) + 321.1)
-a += torch.cos(torch.linspace(0, 4000, 65536) + 0.1223) * 0.6
-a += torch.cos(torch.linspace(0, 8432.23123, 65536) + 1.1325) * 0.8 * torch.sin(torch.linspace(0, 12312.23123, 65536) + 112)
+
+a = load_raw("./dataset/samples/80.raw")[:test_len]
+
+#a  = torch.cos(torch.linspace(0, 1000, 65536) + 0.618) * 0.5
+#a += torch.cos(torch.linspace(0, 1353.12312, 65536) + 0.3212) * 0.4 * torch.sin(torch.linspace(0, 42312.23123, 65536) + 321.1)
+#a += torch.cos(torch.linspace(0, 4000, 65536) + 0.1223) * 0.6
+#a += torch.cos(torch.linspace(0, 8432.23123, 65536) + 1.1325) * 0.8 * torch.sin(torch.linspace(0, 12312.23123, 65536) + 112)
+
+a.numpy().tofile("./debug/a.raw")
+
+
+bh_w *= bh_w ** 3 * hannp * ft_w
+bh_w.numpy().tofile("./debug/bh_window.raw")
+
+rfft = torch.fft.rfft(a, norm="ortho")
+rfft_abs = rfft.abs() ** (1/4)
+rfft_abs_min = rfft_abs.mean(dim=-1, keepdim=True)
+rfft_abs_min = torch.min(rfft_abs_min, rfft_abs)
+rfft_abs = rfft_abs ** 4
+rfft_abs_min = rfft_abs_min ** 4
+rfft_noise = rfft / rfft_abs.clip(min=1e-8) * rfft_abs_min
+rfft_tonal = rfft - rfft_noise
+
+
+
+
+noise = torch.fft.irfft(rfft_noise, norm="ortho").real
+tonal = torch.fft.irfft(rfft_tonal, norm="ortho").real
+a = tonal
+tonal.numpy().tofile("./debug/tonal.raw")
+noise.numpy().tofile("./debug/noise.raw")
+
 
 ln_w_a = (torch.fft.fft(a * ln_w, norm="ortho").abs() * 8000).log1p()
 ln_w_a.numpy().tofile("./debug/ln_w_a.raw")
@@ -618,3 +643,5 @@ bh_w_a.numpy().tofile("./debug/bh_w_a.raw")
 
 hannp_w_a = (torch.fft.fft(a * hannp, norm="ortho").abs() * 8000).log1p()
 hannp_w_a.numpy().tofile("./debug/hannp_w_a.raw")
+
+"""

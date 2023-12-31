@@ -45,7 +45,8 @@ class DualMCLTFormat:
         #in_channels = model_params["sample_raw_channels"] * model_params["num_chunks"] * 3   #1d
         #out_channels = model_params["sample_raw_channels"] * model_params["num_chunks"] * 4  #1d
         in_channels = model_params["sample_raw_channels"] * 2   #2d
-        out_channels = model_params["sample_raw_channels"] * (3 + model_params["noise_octaves"]) #2d
+        #out_channels = model_params["sample_raw_channels"] * (2 + model_params["noise_octaves"]) #2d
+        out_channels = model_params["sample_raw_channels"] * 6 #2d
         return (in_channels, out_channels)
 
     @staticmethod
@@ -69,8 +70,9 @@ class DualMCLTFormat:
 
             u = model_params["u"]
             samples_abs = (samples_abs * u).log1p() / np.log(u + 1)
-
+        
         samples = torch.view_as_real(samples).permute(0, 3, 1, 2).contiguous()
+        #samples = samples.real.unsqueeze(1) # 1d
 
         if model_params.get("add_abs_input", False):
             samples = torch.cat([samples_abs.unsqueeze(1), samples], dim=1)
@@ -82,43 +84,33 @@ class DualMCLTFormat:
         return samples
 
     @staticmethod
-    def sample_to_raw(samples, model_params):
+    def sample_to_raw(samples, model_params, mix_noise=True):
         
         #samples = samples.view(samples.shape[0], -1, model_params["num_chunks"], samples.shape[2])  #1d
-
-        """
-        samples_abs = samples[:, 0, :, :].permute(0, 2, 1).contiguous().sigmoid()
-        samples_phase = samples[:, 2:, :, :].permute(0, 3, 2, 1).contiguous().tanh()
-        samples_phase = torch.view_as_complex(samples_phase)
-        samples_waveform = samples_abs * samples_phase
-        samples_wave = imdct(samples_waveform, window_degree=2).real
-
-        samples_noise_abs = samples[:, 1, :, :].permute(0, 2, 1).contiguous().sigmoid()
-        samples_noise_phase = torch.randn_like(samples_noise_abs)
-        samples_noise = samples_noise_abs * samples_noise_phase * 0.5
-        samples_noise = imdct(samples_noise, window_degree=2).real
-
-        return samples_wave + samples_noise
-        """
-        samples_noise_scale = samples[:, 3:, :, :].sigmoid()
-
-        with torch.no_grad():
-            samples_noise = torch.randn_like(samples_noise_scale, dtype=torch.complex64)
-            cut_off = samples_noise.shape[-1] // 2
-            for noise_octave in range(model_params["noise_octaves"]):
-                samples_noise[:, noise_octave, :, cut_off:] = 0
-                cut_off //= 2
-            samples_noise = torch.fft.ifft(samples_noise, dim=-1, norm="ortho").real
-            samples_noise = samples_noise * torch.arange(1, samples_noise.shape[1]+1, device=samples_noise.device).exp2().view(1, -1, 1, 1)
-        samples_noise = (samples_noise * samples_noise_scale).mean(dim=1, keepdim=False).permute(0, 2, 1).contiguous()
 
         samples_abs = samples[:, 0, :, :].permute(0, 2, 1).contiguous().sigmoid()
         samples_phase = samples[:, 1:3, :, :].permute(0, 3, 2, 1).contiguous().tanh()
         samples_phase = torch.view_as_complex(samples_phase)
-        samples_waveform = samples_abs * samples_phase * torch.exp(samples_noise / 4)
-        samples_wave = imdct(samples_waveform, window_degree=2).real
+        samples_waveform = samples_abs * samples_phase
 
-        return samples_wave
+        variance_abs = samples[:, 3, :, :].permute(0, 2, 1).contiguous().sigmoid()
+        variance_phase = samples[:, 4:, :, :].permute(0, 3, 2, 1).contiguous().tanh()
+        variance_phase = torch.view_as_complex(variance_phase)
+        variance_waveform = variance_abs * variance_phase
+
+        samples_wave = imdct(samples_waveform, window_degree=2).real
+        variance_wave = imdct(variance_waveform, window_degree=2).real
+
+        if mix_noise:
+            #variance_wave_fft = torch.fft.rfft(variance_wave, norm="ortho")
+            #variance_wave_fft *= torch.randn_like(variance_wave_fft.real)
+            #noise_wave = torch.fft.irfft(variance_wave_fft, norm="ortho")
+
+            #return samples_wave #+ noise_wave
+            #return variance_wave
+            return samples_wave
+        else:
+            return samples_wave, variance_wave
 
     @staticmethod
     def get_sample_shape(model_params, bsz=1, length=1):

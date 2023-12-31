@@ -292,8 +292,8 @@ def embedding_test():
 
 def vae_test():
 
-    model_name = "dualdiffusion2d_400_mclt_4vae_mssloss1_cepstrum_micro_noise_8"
-    num_samples = 4
+    model_name = "dualdiffusion2d_420_mclt_4vae_gnll_mssloss_2"
+    num_samples = 1
     #device = "cuda"
     device = "cpu"
     fp16 = False
@@ -318,6 +318,7 @@ def vae_test():
     #test_samples = sorted(os.listdir(dataset_path), key=lambda x: int(x.split(".")[0]))[100:100+num_samples]
     
     #test_samples = ["457.raw"]
+    #test_samples = ["27705.raw"] # extremely heavy noise
 
     # try to use most recent checkpoint if one exists
     vae_checkpoints = [f for f in os.listdir(model_path) if os.path.isdir(os.path.join(model_path, f)) and f.startswith("vae_checkpoint")]

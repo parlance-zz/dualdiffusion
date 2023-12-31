@@ -58,7 +58,7 @@ class Upsample(nn.Module):
             else:
                 conv_class = nn.ConvTranspose2d
 
-            conv_kernel_size = tuple(x * 2 for x in upsample_ratio)
+            conv_kernel_size = tuple(x * 2 if x > 1 else 1 for x in upsample_ratio)
             conv_stride = upsample_ratio
             conv_padding = tuple(x // 2 for x in upsample_ratio)
             self.conv = conv_class(channels, self.out_channels, conv_kernel_size, conv_stride, conv_padding)
