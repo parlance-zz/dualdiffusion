@@ -212,7 +212,7 @@ def stft(x, block_width, window_fn="hann", window_degree=2, step=None):
     else:
         raise ValueError(f"Unsupported window function: {window_fn}")
     
-    return torch.fft.rfft(x * window, norm="ortho")
+    return torch.fft.rfft(x * window, norm="forward")
 
 def to_ulaw(x, u=255):
 

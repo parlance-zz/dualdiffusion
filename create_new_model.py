@@ -29,7 +29,7 @@ from dual_diffusion_pipeline import DualDiffusionPipeline
 load_dotenv()
 torch.manual_seed(200)
 
-MODEL_NAME = "dualdiffusion2d_420_mclt_4vae_gnll_mssloss_2"
+MODEL_NAME = "dualdiffusion2d_500_mclt_4vae_qphase_1"
 MODEL_PARAMS = {
     #"prediction_type": "sample",
     #"prediction_type": "epsilon",
@@ -50,9 +50,9 @@ MODEL_PARAMS = {
     "sample_raw_length": 65536*2,
     "num_chunks": 64,
     #"u": 8000,
-    #"add_abs_input": True,
-    "add_abs_input": False,
-    "noise_octaves": 8,
+    #"qphase_dithering": True,
+    "qphase_input": False,
+    "qphase_nquants": 7,
 }
 
 #VAE_PARAMS = None
@@ -73,41 +73,29 @@ VAE_PARAMS = {
             6765,
             10946,
             17711,
-            28657
+            28657,
+            46368,
+            75025,
         ],
         "u": 8000,
     },
-    
-    #"multiscale_spectral_loss": {
-    #    "version": 2,
-    #    "sample_block_width": 2*MODEL_PARAMS["num_chunks"],
-    #    "num_filters": 1024,
-    #    "sample_rate": MODEL_PARAMS["sample_rate"],
-    #    "min_freq": 0,
-    #    "max_freq": 4000,
-    #    "max_logvar": 15,
-    #    "min_logvar": -2,
-    #    "freq_scale": "mel",
-    #    "normalize_amplitude": True,
-    #    "u": 8000,
-    #},
 
     "latent_channels": 4,
     "sample_size": (64, 2048),
     "act_fn": "silu",
     "conv_size": (3,3),
 
-    #"block_out_channels": [128, 256, 512, 512],
-    "block_out_channels": (16, 32, 64, 128),
-    #"layers_per_block": 2,
+    #"block_out_channels": (16, 32, 64, 128),
+    #"layers_per_block": 3,
+    "block_out_channels": (32, 64, 128, 256),
     "layers_per_block": 3,
 
     "layers_per_mid_block": 2,
     #"add_mid_attention": True,
     "add_mid_attention": False,
 
-    #"norm_num_groups": 32,
-    "norm_num_groups": (0, 0, 32, 32),
+    "norm_num_groups": 32,
+    #"norm_num_groups": (0, 0, 32, 32),
 
     "downsample_type": "conv",
     "upsample_type": "conv_transpose",

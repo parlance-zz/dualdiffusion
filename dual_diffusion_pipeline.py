@@ -44,73 +44,75 @@ class DualMCLTFormat:
     def get_num_channels(model_params):
         #in_channels = model_params["sample_raw_channels"] * model_params["num_chunks"] * 3   #1d
         #out_channels = model_params["sample_raw_channels"] * model_params["num_chunks"] * 4  #1d
-        in_channels = model_params["sample_raw_channels"] * 2   #2d
-        #out_channels = model_params["sample_raw_channels"] * (2 + model_params["noise_octaves"]) #2d
-        out_channels = model_params["sample_raw_channels"] * 6 #2d
+
+        qphase_quants = model_params["qphase_nquants"]
+        if model_params.get("qphase_input", False):
+            in_channels = model_params["sample_raw_channels"] * (1 + qphase_quants)
+        else:
+            in_channels = model_params["sample_raw_channels"] * 2
+        out_channels = model_params["sample_raw_channels"] * (1 + qphase_quants)
+
         return (in_channels, out_channels)
 
     @staticmethod
     @torch.no_grad()
     def raw_to_sample(raw_samples, model_params):
         
+        qphase_input = model_params.get("qphase_input", False)
         num_chunks = model_params["num_chunks"]
         block_width = num_chunks * 2
         
-        samples = mdct(raw_samples, block_width, window_degree=2)[..., 1:-2, :]
+        samples = mdct(raw_samples, block_width, window_degree=1)[..., 1:-2, :]
         samples = samples.permute(0, 2, 1)
 
         samples *= torch.exp(2j * torch.pi * torch.rand(1, device=samples.device))
         
-        if model_params.get("add_abs_input", False):
+        if qphase_input:
+            raise NotImplementedError()
             samples_abs = samples.abs()
             samples_abs_max = samples_abs.amax(dim=(1,2), keepdim=True).clamp(min=1e-8)
             samples_abs /= samples_abs_max
             samples /= samples_abs_max
             samples /= samples.abs().sqrt().clamp(min=1e-8)
 
-            u = model_params["u"]
-            samples_abs = (samples_abs * u).log1p() / np.log(u + 1)
+            u = model_params.get("u", None)
+            if u is not None:
+                samples_abs = (samples_abs * u).log1p() / np.log(u + 1)
         
         samples = torch.view_as_real(samples).permute(0, 3, 1, 2).contiguous()
         #samples = samples.real.unsqueeze(1) # 1d
 
-        if model_params.get("add_abs_input", False):
-            samples = torch.cat([samples_abs.unsqueeze(1), samples], dim=1)
+        if qphase_input:
+            raise NotImplementedError()
+            #samples = torch.cat([samples_abs.unsqueeze(1), samples], dim=1)
         else:
             samples /= samples.std(dim=(1,2,3), keepdim=True).clamp(min=1e-8)
             
         #samples = samples.view(samples.shape[0], -1, samples.shape[3]) #1d
-
         return samples
 
     @staticmethod
-    def sample_to_raw(samples, model_params, mix_noise=True):
+    def sample_to_raw(samples, model_params):
         
         #samples = samples.view(samples.shape[0], -1, model_params["num_chunks"], samples.shape[2])  #1d
-
+        
         samples_abs = samples[:, 0, :, :].permute(0, 2, 1).contiguous().sigmoid()
-        samples_phase = samples[:, 1:3, :, :].permute(0, 3, 2, 1).contiguous().tanh()
-        samples_phase = torch.view_as_complex(samples_phase)
+
+        qphase_nquants = samples.shape[1] - 1
+        #samples_phase = torch.nn.functional.log_softmax(samples[:, 1:, :, :].permute(0, 3, 2, 1).contiguous(), dim=-1).exp()
+        #samples_phase = (-torch.nn.functional.silu(samples[:, 1:, :, :].permute(0, 3, 2, 1).contiguous())).exp()
+        #samples_phase = samples[:, 1:, :, :].permute(0, 3, 2, 1).contiguous().sigmoid()
+        #samples_phase = samples[:, 1:, :, :].permute(0, 3, 2, 1).contiguous().exp()# + 1e-10
+
+        #samples_phase = (-torch.nn.functional.softplus(samples[:, 1:, :, :].permute(0, 3, 2, 1).contiguous())).exp()
+        #samples_phase = torch.multinomial(samples_phase.view(-1, qphase_nquants), num_samples=1).view(samples_abs.shape)
+        
+        samples_phase = torch.distributions.Categorical(logits=samples[:, 1:, :, :].permute(0, 3, 2, 1).contiguous(), validate_args=False).sample().view(samples_abs.shape)
+        samples_phase = ((samples_phase + 0.5) / qphase_nquants * 2j * torch.pi).exp()
         samples_waveform = samples_abs * samples_phase
 
-        variance_abs = samples[:, 3, :, :].permute(0, 2, 1).contiguous().sigmoid()
-        variance_phase = samples[:, 4:, :, :].permute(0, 3, 2, 1).contiguous().tanh()
-        variance_phase = torch.view_as_complex(variance_phase)
-        variance_waveform = variance_abs * variance_phase
-
-        samples_wave = imdct(samples_waveform, window_degree=2).real
-        variance_wave = imdct(variance_waveform, window_degree=2).real
-
-        if mix_noise:
-            #variance_wave_fft = torch.fft.rfft(variance_wave, norm="ortho")
-            #variance_wave_fft *= torch.randn_like(variance_wave_fft.real)
-            #noise_wave = torch.fft.irfft(variance_wave_fft, norm="ortho")
-
-            #return samples_wave #+ noise_wave
-            #return variance_wave
-            return samples_wave
-        else:
-            return samples_wave, variance_wave
+        samples_wave = imdct(samples_waveform, window_degree=1).real
+        return samples_wave
 
     @staticmethod
     def get_sample_shape(model_params, bsz=1, length=1):

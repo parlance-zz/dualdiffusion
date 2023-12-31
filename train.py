@@ -1013,8 +1013,8 @@ def main():
                     latents_std = latents.std()
                     recon = module.decode(latents, return_dict=False)[0]                    
                     
-                    recon_raw_samples, recon_raw_variance = pipeline.format.sample_to_raw(recon, model_params, mix_noise=False)
-                    vae_recon_loss = module.multiscale_spectral_loss(recon_raw_samples, recon_raw_variance, raw_samples)
+                    recon_raw_samples = pipeline.format.sample_to_raw(recon, model_params)
+                    vae_recon_loss = module.multiscale_spectral_loss(recon_raw_samples, raw_samples)
 
                     vae_kl_loss = posterior.kl().sum() / posterior.mean.numel()
                     vae_kl_loss_recon = torch.tensor(0.)
