@@ -87,7 +87,7 @@ class DualMCLTFormat:
             #samples = torch.cat([samples_abs.unsqueeze(1), samples], dim=1)
         else:
             samples /= samples.std(dim=(1,2,3), keepdim=True).clamp(min=1e-8)
-            
+
         #samples = samples.view(samples.shape[0], -1, samples.shape[3]) #1d
         return samples
 

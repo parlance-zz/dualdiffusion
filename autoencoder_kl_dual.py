@@ -606,7 +606,7 @@ class DualMultiscaleSpectralLoss:
     
         self.sample_block_width = loss_params["sample_block_width"]
         self.block_widths = loss_params["block_widths"]
-        self.block_overlap = loss_params.get("block_overlap", 3)
+        self.block_overlap = loss_params.get("block_overlap", 6)
         self.u = loss_params["u"]
 
         self.loss_scale = 8 / len(self.block_widths)
@@ -623,16 +623,21 @@ class DualMultiscaleSpectralLoss:
         for block_width in self.block_widths:
 
             step = max(block_width // self.block_overlap, 1)
+            offset = np.random.randint(0, step)
 
-            target_fft_abs = stft(target, block_width, window_fn="blackman_harris", step=step).abs()
+            target_fft_abs = stft(target[:, offset:], block_width, window_fn="blackman_harris", step=step).abs()
             target_fft_abs = target_fft_abs / target_fft_abs.amax(dim=(1,2), keepdim=True)
             target_fft_abs_ln = (target_fft_abs * self.u).log1p() / np.log1p(self.u)
+            target_fft_abs_ln_cepstrum = torch.fft.rfft2(target_fft_abs_ln, norm="ortho")
 
-            sample_fft_abs = stft(sample, block_width, window_fn="blackman_harris", step=step).abs()
+            sample_fft_abs = stft(sample[:, offset:], block_width, window_fn="blackman_harris", step=step).abs()
             sample_fft_abs = sample_fft_abs / sample_fft_abs.amax(dim=(1,2), keepdim=True)
             sample_fft_abs_ln = (sample_fft_abs * self.u).log1p() / np.log1p(self.u)
+            sample_fft_abs_ln_cepstrum = torch.fft.rfft2(sample_fft_abs_ln, norm="ortho")
             
             loss += torch.nn.functional.mse_loss(sample_fft_abs_ln, target_fft_abs_ln, reduction="mean")
+            loss += torch.nn.functional.mse_loss(sample_fft_abs_ln_cepstrum.real, target_fft_abs_ln_cepstrum.real, reduction="mean") * 0.5
+            loss += torch.nn.functional.mse_loss(sample_fft_abs_ln_cepstrum.imag, target_fft_abs_ln_cepstrum.imag, reduction="mean") * 0.5
 
         return loss * self.loss_scale
     
