@@ -408,6 +408,42 @@ def get_hann_window(window_len, device="cpu"):
     n = torch.arange(window_len, device=device) / (window_len - 1)
     return 0.5 - 0.5 * torch.cos(2 * torch.pi * n)
 
+def get_comp_pair(length=65536, n_freqs=1024, freq_similarity=0, amp_similarity=0, phase_similarity=0):
+
+    t = torch.linspace(0, length, length).view(-1, 1)
+
+    f1 = torch.rand(n_freqs).view(1, -1)
+    f2 = f1 * freq_similarity + (1-freq_similarity) * torch.rand(n_freqs).view(1, -1)
+
+    a1 = torch.rand(n_freqs).view(1, -1)
+    a2 = a1 * amp_similarity + (1-amp_similarity) * torch.rand(n_freqs).view(1, -1)
+
+    p1 = torch.rand(n_freqs).view(1, -1)
+    p2 = p1 * phase_similarity + (1-phase_similarity) * torch.rand(n_freqs).view(1, -1)
+
+    y1 = (torch.exp(2j * torch.pi * t * f1 + 2j*torch.pi * p1) * a1).sum(dim=-1)
+    y2 = (torch.exp(2j * torch.pi * t * f2 + 2j*torch.pi * p2) * a2).sum(dim=-1)
+
+    return y1.real, y2.real
+
+"""
+
+torch.set_default_device("cuda")
+torch.manual_seed(200)
+
+total=0
+for i in range(10):
+    y1, y2 = get_comp_pair(length=65536, n_freqs=20, freq_similarity=1, amp_similarity=1, phase_similarity=0)
+    s = get_cross_correlation_s(y1, y2)
+    print(s.sum())
+    total += s.square().mean()
+
+print("")
+print(total)
+save_raw(s, "./debug/debug_s.raw")
+"""
+
+
 """
 a = load_raw("./dataset/samples/80.raw")
 a = mdct(a, 128, window_degree=1)

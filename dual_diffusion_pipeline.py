@@ -50,7 +50,7 @@ class DualMCLTFormat:
             in_channels = model_params["sample_raw_channels"] * (1 + qphase_quants)
         else:
             in_channels = model_params["sample_raw_channels"] * 2
-        out_channels = model_params["sample_raw_channels"] * (1 + qphase_quants)
+        out_channels = model_params["sample_raw_channels"] * (4 + qphase_quants)
 
         return (in_channels, out_channels)
 
@@ -97,6 +97,8 @@ class DualMCLTFormat:
         #samples = samples.view(samples.shape[0], -1, model_params["num_chunks"], samples.shape[2])  #1d
         
         samples_abs = samples[:, 0, :, :].permute(0, 2, 1).contiguous().sigmoid()
+        #samples_noise_abs = samples[:, 1, :, :].permute(0, 2, 1).contiguous().sigmoid()
+        #samples_main_phase = torch.view_as_complex(samples[:, 2:4, :, :].permute(0, 3, 2, 1).contiguous().tanh())
 
         qphase_nquants = samples.shape[1] - 1
         #samples_phase = torch.nn.functional.log_softmax(samples[:, 1:, :, :].permute(0, 3, 2, 1).contiguous(), dim=-1).exp()
@@ -108,7 +110,9 @@ class DualMCLTFormat:
         #samples_phase = torch.multinomial(samples_phase.view(-1, qphase_nquants), num_samples=1).view(samples_abs.shape)
         
         samples_phase = torch.distributions.Categorical(logits=samples[:, 1:, :, :].permute(0, 3, 2, 1).contiguous(), validate_args=False).sample().view(samples_abs.shape)
-        samples_phase = ((samples_phase + 0.5) / qphase_nquants * 2j * torch.pi).exp()
+        samples_phase = (samples_phase / qphase_nquants * 2j * torch.pi).exp()
+        #samples_waveform = (1 - samples_noise_abs) * samples_abs * samples_main_phase + samples_noise_abs * samples_abs * samples_phase * samples_main_phase
+        #samples_waveform = samples_abs * samples_main_phase
         samples_waveform = samples_abs * samples_phase
 
         samples_wave = imdct(samples_waveform, window_degree=1).real
