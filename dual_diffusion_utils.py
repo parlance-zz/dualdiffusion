@@ -74,7 +74,7 @@ def compute_snr(noise_scheduler, timesteps):
 def get_kaiser_window(window_len, beta=4*torch.pi, device="cpu"):    
     alpha = (window_len - 1) / 2
     n = torch.arange(window_len, device=device)
-    return torch.special.i0(beta * torch.sqrt(1 - ((n - alpha) / alpha).square())) / torch.special.i0(torch.tensor(beta))
+    return (torch.special.i0(beta * torch.sqrt(1 - ((n - alpha) / alpha).square())) / torch.special.i0(torch.tensor(beta))).requires_grad_(False)
 
 def get_kaiser_derived_window(window_len, beta=4*torch.pi, device="cpu"):
 
@@ -86,11 +86,11 @@ def get_kaiser_derived_window(window_len, beta=4*torch.pi, device="cpu"):
     w[:window_len//2] = halfw
     w[-window_len//2:] = halfw.flip(0)
 
-    return w
+    return w.requires_grad_(False)
 
 def get_hann_poisson_window(window_len, alpha=2, device="cpu"):
     x = torch.linspace(0, 1, window_len, device=device)
-    return torch.exp(-alpha * (1 - 2*x).abs()) * 0.5 * (1 - torch.cos(2*torch.pi*x)).requires_grad_(False)
+    return (torch.exp(-alpha * (1 - 2*x).abs()) * 0.5 * (1 - torch.cos(2*torch.pi*x))).requires_grad_(False)
 
 def get_blackman_harris_window(window_len, device="cpu"):
     x = torch.linspace(0, 2*torch.pi, window_len, device=device)
@@ -101,13 +101,13 @@ def get_flat_top_window(window_len, device="cpu"):
     return (0.21557895 - 0.41663158 * torch.cos(x) + 0.277263158 * torch.cos(2*x) - 0.083578947 * torch.cos(3*x) + 0.006947368 * torch.cos(4*x)).requires_grad_(False)
 
 def get_ln_window(window_len, device="cpu"):
-    x = torch.linspace(0, 1, window_len, device=device).requires_grad_(False)
+    x = torch.linspace(0, 1, window_len, device=device)
     w = torch.exp(-torch.log2(x).square() - torch.log2(1-x).square())
     w[0] = 0; w[-1] = 0
-    return w / w.amax()
+    return (w / w.amax()).requires_grad_(False)
 
 def get_blackman_harris2_window(window_len, device="cpu"):
-    return get_blackman_harris_window(window_len, device) * get_flat_top_window(window_len, device)
+    return (get_blackman_harris_window(window_len, device) * get_flat_top_window(window_len, device)).requires_grad_(False)
 
 # fast overlapped modified discrete cosine transform type iv - becomes mclt with complex output
 def mdct(x, block_width, window_fn="hann", window_degree=1):

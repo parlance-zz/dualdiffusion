@@ -292,7 +292,7 @@ def embedding_test():
 
 def vae_test():
 
-    model_name = "dualdiffusion2d_500_mclt_4vae_qphase_4"
+    model_name = "dualdiffusion2d_500_mclt_4vae_qphase_5"
     num_samples = 1
     #device = "cuda"
     device = "cpu"
