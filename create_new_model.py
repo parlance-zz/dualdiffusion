@@ -21,6 +21,7 @@
 # SOFTWARE.
 
 import os
+import json
 from dotenv import load_dotenv
 
 import torch
@@ -29,7 +30,7 @@ from dual_diffusion_pipeline import DualDiffusionPipeline
 load_dotenv()
 torch.manual_seed(200)
 
-MODEL_NAME = "dualdiffusion2d_500_mclt_4vae_qphase_5"
+MODEL_NAME = "dualdiffusion2d_600_mclt_4vae_2"
 MODEL_PARAMS = {
     #"prediction_type": "sample",
     #"prediction_type": "epsilon",
@@ -48,47 +49,31 @@ MODEL_PARAMS = {
 
     "sample_format": "mclt",
     "sample_raw_length": 65536*2,
-    "num_chunks": 64,
-    #"u": 8000,
-    #"qphase_dithering": True,
-    "qphase_input": False,
+    "num_chunks": 128,
+    "u": 8000,
+    "qphase_input": True,
     "qphase_nquants": 6,
 }
 
 #VAE_PARAMS = None
 VAE_PARAMS = {
-    "multiscale_spectral_loss": {
-        "version": 1,
-        "sample_block_width": 2*MODEL_PARAMS["num_chunks"],
-        "block_widths": [
-            4,
-            8,
-            16,
-            32,
-            64,
-            128,
-            256,
-            512,
-            1024,
-            2048,
-            4096,
-            8192,
-            16384,
-            32768,
-            65536,
-            131072,
-        ]
-    },
+    #"multiscale_spectral_loss": {
+    #    "version": 6,
+    #    "sample_block_width": 2*MODEL_PARAMS["num_chunks"],
+    #    "low_scale": 4,
+    #    "high_scale": 12,
+    #    "overlap": 4,
+    #},
 
     "latent_channels": 4,
     "sample_size": (64, 2048),
     "act_fn": "silu",
     "conv_size": (3,3),
 
-    "block_out_channels": (16, 32, 64, 128),
-    "layers_per_block": 3,
-    #"block_out_channels": (32, 64, 128, 256),
+    #"block_out_channels": (16, 32, 64, 128),
     #"layers_per_block": 3,
+    "block_out_channels": (32, 64, 128, 256),
+    "layers_per_block": 3,
 
     "layers_per_mid_block": 2,
     #"add_mid_attention": True,
@@ -189,10 +174,17 @@ if __name__ == "__main__":
     if VAE_PARAMS is not None:
         UNET_PARAMS["in_channels"]  = VAE_PARAMS["latent_channels"]
         UNET_PARAMS["out_channels"] = VAE_PARAMS["latent_channels"]
+
+        print("VAE Params:")
+        print(json.dumps(VAE_PARAMS, indent=4))
     else:
         UNET_PARAMS["in_channels"]  = DualDiffusionPipeline.get_sample_format(MODEL_PARAMS).get_num_channels(MODEL_PARAMS)[0]
         UNET_PARAMS["out_channels"] = DualDiffusionPipeline.get_sample_format(MODEL_PARAMS).get_num_channels(MODEL_PARAMS)[1]
-        
+    
+    print("UNET Params:")
+    print(json.dumps(UNET_PARAMS, indent=4))
+    print("")
+    
     NEW_MODEL_PATH = os.path.join(os.environ.get("MODEL_PATH"), MODEL_NAME)
 
     if os.path.exists(NEW_MODEL_PATH):

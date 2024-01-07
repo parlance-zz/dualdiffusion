@@ -34,60 +34,6 @@ from attention_processor_dual import SeparableAttnProcessor2_0
 from autoencoder_kl_dual import AutoencoderKLDual
 from dual_diffusion_utils import save_flac, save_raw, load_raw
 
-def multiscale_spectral_loss_test():
-    torch.manual_seed(200)
-
-    model_params = {
-        "sample_raw_length": 65536*2,
-        "num_chunks": 256,
-        "sample_format": "mclt",
-        "complex": True,
-        "multiscale_spectral_loss": {
-            "u": 20000,
-            "block_widths": [
-                16,
-                32,
-                64,
-                128,
-                256,
-                512,
-                1024,
-                2048,
-                4096,
-                8192,
-            ],
-            "block_offsets": [
-                0,
-                0.125,
-                0.25,
-                0.375,
-            ],
-        }
-    }
-
-    sample_num = 23
-
-    format = DualDiffusionPipeline.get_sample_format(model_params)
-    crop_width = format.get_sample_crop_width(model_params)
-
-    dataset_path = os.environ.get("DATASET_PATH", "./dataset/samples")
-    raw_sample = np.fromfile(os.path.join(dataset_path, f"{sample_num}.raw"), dtype=np.int16, count=crop_width) / 32768.
-    raw_sample = torch.from_numpy(raw_sample.astype(np.float32)).unsqueeze(0)
-
-    raw_sample.cpu().numpy().tofile("./debug/debug_raw_original.raw")
-
-    sample = format.raw_to_sample(raw_sample, model_params)
-    #recon = format.sample_to_raw(sample, model_params).real
-    recon = DualMCLTFormat.sample_to_raw(sample, model_params).real
-
-    recon.cpu().numpy().tofile("./debug/debug_reconstruction.raw")
-
-    loss_fn = DualMultiscaleSpectralLoss2(model_params)
-    loss = loss_fn(recon, raw_sample)
-    
-    print(loss)
-    exit()
-
 def get_dataset_stats():
     model_params = {
         "sample_raw_length": 65536*2,
@@ -138,72 +84,6 @@ def get_dataset_stats():
         print(f"sample_std: {sample_std}")
         print(f"total samples processed: {num_samples}")
         
-    exit()
-
-def reconstruction_test(sample_num=1):
-
-    torch.manual_seed(200)
-
-    """
-    model_params = {
-        #"sample_raw_length": 65536*4,
-        "sample_raw_length": 65536*2,
-        "num_chunks": 256,
-        "sample_format": "normal",
-        "spatial_window_length": 512,
-        "ifft": True,
-        #"rfft": True,
-    }
-    """
-    """
-    model_params = {
-        #"sample_raw_length": 65536*4,
-        "sample_raw_length": 65536*2,
-        "num_chunks": 128,
-        "sample_format": "overlapped",
-        "spatial_window_length": 512,
-        "ifft": True,
-        "rfft": True,
-        "fftshift": False,
-    }
-    """
-    model_params = {
-        "sample_raw_length": 65536*2,
-        "num_chunks": 256,
-        "sample_format": "mclt",
-        #"complex": True,
-        #"u": 255,
-    }
-
-    format = DualDiffusionPipeline.get_sample_format(model_params)
-    crop_width = format.get_sample_crop_width(model_params)
-
-    raw_sample = np.fromfile(f"./dataset/samples/{sample_num}.raw", dtype=np.int16, count=crop_width) / 32768.
-    raw_sample = torch.from_numpy(raw_sample.astype(np.float32)).unsqueeze(0).to("cuda")
-    
-    """
-    raw_sample = torch.randn((1, crop_width), dtype=torch.float32).to("cuda")
-    raw_sample[:, (crop_width)//5:(crop_width)//5*3] = 0
-    raw_sample[:, (crop_width)//5*3:] /= 2
-    """
-
-    raw_sample.cpu().numpy().tofile("./debug/debug_raw_original.raw")
-
-    freq_sample = format.raw_to_sample(raw_sample, model_params)
-    print("Sample shape:", freq_sample.shape)
-    print("Sample mean:", freq_sample.mean(dim=(2,3)), freq_sample.mean())
-    print("Sample std:", freq_sample.std().item())
-    freq_sample.cpu().numpy().tofile("./debug/debug_sample.raw")
-    
-    sample_abs = freq_sample[:, 0, :, :]
-    sample_phase = freq_sample[:, 1:, :, :]
-    np.histogram(sample_abs.cpu().numpy(), bins=256)[0].astype(np.int32).tofile("./debug/debug_histogram_abs.raw")
-    np.histogram(sample_phase.cpu().numpy(), bins=256)[0].astype(np.int32).tofile("./debug/debug_histogram_phase.raw")
-
-    raw_sample = format.sample_to_raw(freq_sample, model_params).real
-    raw_sample /= raw_sample.abs().max()
-    raw_sample.cpu().numpy().tofile("./debug/debug_reconstruction.raw")
-    
     exit()
 
 def get_embedding_response(query_embed, key_embed, exp_scale):
@@ -292,7 +172,7 @@ def embedding_test():
 
 def vae_test():
 
-    model_name = "dualdiffusion2d_500_mclt_4vae_qphase_5"
+    model_name = "dualdiffusion2d_600_mclt_4vae_2"
     num_samples = 1
     #device = "cuda"
     device = "cpu"
@@ -313,13 +193,9 @@ def vae_test():
     print("Sample shape: ", format.get_sample_shape(model_params))
 
     dataset_path = os.environ.get("DATASET_PATH", "./dataset/samples")
-    #test_samples = sorted(os.listdir(dataset_path), key=lambda x: int(x.split(".")[0]))[:num_samples]
     test_samples = np.random.choice(os.listdir(dataset_path), num_samples, replace=False)
-    #test_samples = sorted(os.listdir(dataset_path), key=lambda x: int(x.split(".")[0]))[100:100+num_samples]
     
-    #test_samples = ["457.raw"]
     #test_samples = ["27705.raw"] # extremely heavy noise
-    #test_samples = ["30946.raw"]
 
     # try to use most recent checkpoint if one exists
     vae_checkpoints = [f for f in os.listdir(model_path) if os.path.isdir(os.path.join(model_path, f)) and f.startswith("vae_checkpoint")]
@@ -343,10 +219,6 @@ def vae_test():
         #latents /= latents.std(dim=(1,2,3), keepdim=True)
         output_sample = vae.decode(latents, return_dict=False)[0]
         output_raw_sample = format.sample_to_raw(output_sample.type(torch.float32), model_params)
-
-        #input_sample = input_sample / (input_sample[:, 0, :, :].square() + input_sample[:, 1, :, :].square()).sqrt().unsqueeze(1).sqrt()
-        #input_sample = torch.cat((torch.zeros_like(input_sample), input_sample), dim=1)
-        #output_sample = input_sample.permute(0, 1, 3, 2)
 
         output_latents_file_path = os.path.join(output_path, f"step_{last_global_step}_{filename.replace('.raw', '_latents.raw')}")
         save_raw(latents, output_latents_file_path)
@@ -376,8 +248,6 @@ if __name__ == "__main__":
 
     load_dotenv()
 
-    #multiscale_spectral_loss_test()
-    #reconstruction_test(sample_num=1)
     #get_dataset_stats()
     #embedding_test()
     vae_test()

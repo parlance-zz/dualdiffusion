@@ -1001,7 +1001,7 @@ def main():
 
                 elif args.module == "vae":
 
-                    samples = pipeline.format.raw_to_sample(raw_samples, model_params)
+                    samples, sample_mdct = pipeline.format.raw_to_sample(raw_samples, model_params, return_mdct=True)
                     posterior = module.encode(samples, return_dict=False)[0]
                     latents = posterior.sample()
                     #nonbatch_dims = tuple(range(1, latents.ndim))
@@ -1011,8 +1011,12 @@ def main():
                     latents_std = latents.std()
                     recon = module.decode(latents, return_dict=False)[0]                    
                     
-                    recon_raw_samples = pipeline.format.sample_to_raw(recon, model_params)
-                    vae_recon_real_loss, vae_recon_imag_loss = module.multiscale_spectral_loss(recon_raw_samples, raw_samples)
+                    if module.multiscale_spectral_loss is not None:
+                        recon_raw_samples = pipeline.format.sample_to_raw(recon, model_params, return_mixed=True)
+                        vae_recon_real_loss, vae_recon_imag_loss = module.multiscale_spectral_loss(recon_raw_samples, raw_samples)
+                    else:
+                        recon_mdct = pipeline.format.sample_to_raw(recon, model_params, return_mixed=False)
+                        vae_recon_real_loss, vae_recon_imag_loss = pipeline.format.get_loss(recon_mdct, sample_mdct, model_params)
 
                     vae_kl_loss = posterior.kl().sum() / posterior.mean.numel()
                     

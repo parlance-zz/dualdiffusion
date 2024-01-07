@@ -89,15 +89,15 @@ def get_kaiser_derived_window(window_len, beta=4*torch.pi, device="cpu"):
     return w.requires_grad_(False)
 
 def get_hann_poisson_window(window_len, alpha=2, device="cpu"):
-    x = torch.linspace(0, 1, window_len, device=device)
+    x = torch.arange(window_len, device=device) / window_len
     return (torch.exp(-alpha * (1 - 2*x).abs()) * 0.5 * (1 - torch.cos(2*torch.pi*x))).requires_grad_(False)
 
 def get_blackman_harris_window(window_len, device="cpu"):
-    x = torch.linspace(0, 2*torch.pi, window_len, device=device)
+    x = torch.arange(window_len, device=device) / window_len * 2*torch.pi
     return (0.35875 - 0.48829 * torch.cos(x) + 0.14128 * torch.cos(2*x) - 0.01168 * torch.cos(3*x)).requires_grad_(False)
 
 def get_flat_top_window(window_len, device="cpu"):
-    x = torch.linspace(0, 2*torch.pi, window_len, device=device)
+    x = torch.arange(window_len, device=device) / window_len * 2*torch.pi
     return (0.21557895 - 0.41663158 * torch.cos(x) + 0.277263158 * torch.cos(2*x) - 0.083578947 * torch.cos(3*x) + 0.006947368 * torch.cos(4*x)).requires_grad_(False)
 
 def get_ln_window(window_len, device="cpu"):
@@ -359,7 +359,6 @@ def load_raw(input_path, dtype=torch.int16, start=0, count=-1):
 
     return tensor
     
-@torch.no_grad()
 def save_sample_img(sample, img_path, include_phase=False):
     
     num_chunks = sample.shape[2]
@@ -405,7 +404,7 @@ def get_mel_density(hz):
     return 1127. / (700. + hz)
 
 def get_hann_window(window_len, device="cpu"):
-    n = torch.arange(window_len, device=device) / (window_len - 1)
+    n = torch.arange(window_len, device=device) / window_len
     return 0.5 - 0.5 * torch.cos(2 * torch.pi * n)
 
 def get_comp_pair(length=65536, n_freqs=1024, freq_similarity=0, amp_similarity=0, phase_similarity=0):
@@ -426,258 +425,154 @@ def get_comp_pair(length=65536, n_freqs=1024, freq_similarity=0, amp_similarity=
 
     return y1.real, y2.real
 
+def stft2(x, block_width, overlap=2):
+
+    step = block_width // overlap
+    x = x.unfold(-1, block_width, step)
+    
+    #window = get_hann_window(block_width, device=x.device)
+    window = get_blackman_harris_window(block_width, device=x.device)
+
+    return torch.fft.rfft(x * window, norm="ortho")
+
+def istft2(x, block_width, overlap=2):
+
+    step = block_width // overlap
+
+    signal_len = (x.shape[-2] - 1) * step + block_width
+    y = torch.zeros(x.shape[:-2] + (signal_len,), device=x.device)
+
+    x = torch.fft.irfft(x, n=block_width, norm="ortho")
+
+    for i in range(overlap):
+        t = x[..., i::overlap, :].reshape(*x.shape[:-2], -1)
+        y[..., i*step:i*step + t.shape[-1]] += t
+
+    return y * (2 / overlap)
+
+def get_facsimile(sample, target, num_iterations=16, low_scale=4, high_scale=12, overlap=8, offset=1):
+
+    a = target
+    x = sample
+    
+    for _ in range(num_iterations):
+        for i in range(low_scale, high_scale):
+
+            block_width = int(2 ** i)
+
+            a_stft = stft2(a, block_width, overlap=overlap)
+            x_stft = stft2(x, block_width, overlap=overlap)
+
+            x_stft[:, offset:] = x_stft[:, offset:] / x_stft[:, offset:].abs().clip(min=1e-15) * a_stft[:, offset:].abs()
+            x = istft2(x_stft, block_width, overlap=overlap)
+    
+    return x
+
+def get_lpc_coefficients(X: torch.Tensor, order: int ) -> torch.Tensor:
+    """Forward
+
+    Parameters
+    ----------
+    X: torch.Tensor
+        Input signal to be sliced into frames.
+        Expected input is [ Batch, Samples ]
+
+    Returns
+    -------
+    X: torch.Tensor
+        LPC Coefficients computed from input signal after slicing.
+        Expected output is [ Batch, Frames, Order + 1 ]
+    """
+    p = order + 1
+    B, F, S                = X.size( )
+
+    alphas                 = torch.zeros( ( B, F, p ),
+        dtype         = X.dtype,
+        device        = X.device,
+    )
+    alphas[ :, :, 0 ]      = 1.
+    alphas_prev            = torch.zeros( ( B, F, p ),
+        dtype         = X.dtype,
+        device        = X.device,
+    )
+    alphas_prev[ :, :, 0 ] = 1.
+
+    fwd_error              = X[ :, :, 1:   ]
+    bwd_error              = X[ :, :,  :-1 ]
+
+    den                    = (
+        ( fwd_error * fwd_error ).sum( axis = -1 ) + \
+        ( bwd_error * bwd_error ).sum( axis = -1 )
+    ).unsqueeze( -1 )
+
+    #den = den.clip(min=1e-8) #
+    #den = den + 1
+    #amin = den.amin()
+    #amax = den.amax()
+
+    for i in range( order ):
+        not_ill_cond        = ( den > 0 ).float( )
+        den                *= not_ill_cond
+
+        dot_bfwd            = ( bwd_error * fwd_error ).sum( axis = -1 )\
+                                                        .unsqueeze( -1 )
+
+        reflect_coeff       = -2. * dot_bfwd / den
+        alphas_prev, alphas = alphas, alphas_prev
+
+        if torch.isnan(reflect_coeff).any() or torch.isinf(reflect_coeff).any():
+            break
+
+        for j in range( 1, i + 2 ):
+            alphas = alphas.clone()
+            alphas[ :, :, j ] = alphas_prev[   :, :,         j ] + \
+                                reflect_coeff[ :, :,         0 ] * \
+                                alphas_prev[   :, :, i - j + 1 ]
+
+        fwd_error_tmp       = fwd_error
+        fwd_error           = fwd_error + reflect_coeff * bwd_error
+        bwd_error           = bwd_error + reflect_coeff * fwd_error_tmp
+
+        q                   = 1. - reflect_coeff ** 2
+        den                 = q * den - \
+                                bwd_error[ :, :, -1 ].unsqueeze( -1 ) ** 2 - \
+                                fwd_error[ :, :,  0 ].unsqueeze( -1 ) ** 2
+        
+        #den = den + 1
+        #amin = torch.minimum(amin, den.amin())
+        #amax = torch.maximum(amax, den.amax())
+        #den = den.clip(min=1e-8) #
+
+        fwd_error           = fwd_error[ :, :, 1:   ]
+        bwd_error           = bwd_error[ :, :,  :-1 ]
+
+    #print(alphas.amin(), alphas.amax())
+    #print(alphas.amin(), alphas.amax())
+    #alphas[ alphas != alphas ] = 0.
+    #alphas = torch.nan_to_num(alphas.clip(min=-100, max=100), nan=0.0, posinf=100, neginf=-100)
+    return alphas
+
+# facsimile test   
+"""
+a = load_raw("./dataset/samples/1.raw")[:65536]
+#a = load_raw("./debug/test_y.raw")[:65536]
+a /= a.abs().amax()
+save_raw(a, "./debug/test_a.raw")
+
+x = torch.randn_like(a)
+
+_, x = get_facsimile_loss(x, a, num_iterations=32, overlap=4, return_fax=True)
+#x = get_facsimile2(x, a)
+
+x /= x.abs().amax()
+save_raw(x, "./debug/test_x.raw")
 """
 
-torch.set_default_device("cuda")
-torch.manual_seed(200)
-
-total=0
-for i in range(10):
-    y1, y2 = get_comp_pair(length=65536, n_freqs=20, freq_similarity=1, amp_similarity=1, phase_similarity=0)
-    s = get_cross_correlation_s(y1, y2)
-    print(s.sum())
-    total += s.square().mean()
-
-print("")
-print(total)
-save_raw(s, "./debug/debug_s.raw")
+# angle wrap test
 """
-
-
-"""
-a = load_raw("./dataset/samples/80.raw")
-a = mdct(a, 128, window_degree=1)
-a_abs = a.abs()
-a_abs = a_abs / a_abs.amax(dim=-1, keepdim=True)
-a_kld = -a_abs * (a_abs+1e-8).log()
-a_kld /= a_kld.amax(dim=-1, keepdim=True)
-a_kld = a_kld ** 0.5
-signal_mask = (a_kld < a_kld.mean(dim=-1, keepdim=True)).type(torch.float32)
-signal_mask /= signal_mask.amax(dim=-1, keepdim=True)
-noise_mask = 1 - signal_mask
-
-noise_mask =1
-signal_mask = 1
-a_imdct = imdct(a, window_degree=1).real
-save_raw(a_imdct, "./debug/test_a.raw")
-
-noise_masked_a_imdct = imdct(a * noise_mask, window_degree=1).real
-save_raw(noise_masked_a_imdct, "./debug/test_noise_masked_a.raw")
-
-signal_masked_a_imdct = imdct(a * signal_mask, window_degree=1).real
-save_raw(signal_masked_a_imdct, "./debug/test_signal_masked_a.raw")
-
-a = a / a.abs().square().sum().sqrt()
-b = torch.randn_like(a) * a.abs()
-b = b / b.abs().square().sum().sqrt()
-
-reconstructed_imdct = imdct(a*noise_mask, window_degree=1).real + imdct(b*signal_mask, window_degree=2).real
-save_raw(reconstructed_imdct, "./debug/test_reconstructed.raw")
-"""
-
-"""
-a = torch.randn(65536*2)
-b = torch.randn(65536*2)
-#b = load_raw("./dataset/samples/80.raw", count=65536*2)
-
-a = mdct(a, 128, window_degree=2)
-a_abs = a.abs()
-a_abs = a_abs / a_abs.amax(dim=-1, keepdim=True)
-a_ln = (a_abs * 16000).log1p()
-
-b = mdct(b, 128, window_degree=2)
-b_abs = b.abs()
-b_abs[:, :] = torch.randn_like(b_abs).abs()** 0.25
-b_abs = b_abs / b_abs.amax(dim=-1, keepdim=True)
-b_ln = (b_abs * 16000).log1p()
-
-print(b.shape, a.shape)
-rmse_error = F.mse_loss(a_abs, b_abs).sqrt()
-ln_error = F.l1_loss(a_ln, b_ln)
-
-abs_delta = a_abs - b_abs
-ln_delta = a_ln - b_ln
-
-print(f"rmse: {rmse_error}, ln: {ln_error}, total: {rmse_error + ln_error}")
-print(f"abs delta: {abs_delta.mean()}, ln delta: {ln_delta.mean()}")
-"""
-
-"""
-num_filters = 8192
-min_freq = 0.006
-max_freq = 0.85
-crop_width = 65536
-std_octaves = 4
-device = "cuda"
-
-filter_q = torch.rand(num_filters, device=device) * (max_freq - min_freq) + min_freq
-#filter_q = torch.linspace(min_freq, max_freq, num_filters)
-
-filter_std = 2 * torch.exp2(torch.rand(num_filters, device=device) * std_octaves)
-filter_std = filter_std * filter_q / min_freq
-
-fft_q = torch.arange(0, crop_width // 2 + 1, device=device) / (crop_width // 2)
-
-filters = torch.zeros((num_filters, crop_width), device=device)
-filters[:, :crop_width//2 + 1] = torch.exp(-filter_std.view(-1, 1) * torch.log(filter_q.view(-1, 1) / fft_q.view(1, -1)).square())
-filters[:, 0] = 0
-
-
-ifft_filters = torch.fft.fftshift(torch.fft.ifft(filters, norm="ortho"), dim=-1)
-ifft_filters /= ifft_filters.real.amax(dim=-1, keepdim=True)
-ifft_filters_abs = ifft_filters.abs()
-ifft_max_filter_abs = ifft_filters_abs.amax(dim=-1, keepdim=True)
-ifft_filters_abs /= ifft_max_filter_abs
-
-save_raw(ifft_filters_abs, "./debug/ifft_filters_abs.raw")
-save_raw(ifft_filters, "./debug/ifft_filters.raw")
-save_raw(filters[:, :crop_width//2 + 1], "./debug/filters.raw")
-
-filters /= filter_q.sqrt().view(-1, 1)
-coverage = filters[:, :crop_width//2 + 1].sum(dim=0)
-coverage /= coverage.amax()
-save_raw(coverage, "./debug/filter_coverage.raw")
-"""
-
-"""
-mss_params = {
-    "edge_crop_width": 0,
-    "max_freq": 1,
-    "min_freq": 0.006,
-    "min_std": 2,
-    "num_filters": 1024,
-    "sample_block_width": 128,
-    "std_octaves": 20,
-    "u": 16000,
-    "version": 3
-},
-"""
-
-"""
-sample_files = []
-for root, dirs, files in os.walk("./dataset/samples"):
-    for file in files:
-        if file.endswith(".raw"):
-            sample_files.append(os.path.join(root, file))
-
-amax = 0
-
-sample_files = sample_files[::-1]
-
-for file in sample_files:
-
-    a = load_raw(file)#.to("cuda")
-    a = normalize_lufs(a, 8000)
-
-    m = mdct(a, 128, window_degree=1) / 15
-    #im = imdct(m, window_degree=1).real
-
-    #save_raw(im, "./debug/test_im.raw")
-    #save_raw(a, "./debug/test_a.raw")
-    amax = max(amax, m.abs().amax().item())
-    print(amax)
-
-"""
-
-"""
-a = torch.linspace(-1, 1, 65536*2)
-b = torch.cos(torch.pi * a * 12000) * 0.5
-b.numpy().tofile("./debug/test_b.raw")
-
-m = mdct(b, 128, window_degree=0)
-save_raw(m, "./debug/test_m.raw")
-
-c = torch.linspace(0, 1, m.shape[0]).view(-1, 1)
-c += torch.randn_like(c) * 0.1
-
-m += m * torch.exp(2j * torch.pi * c * 1)# * 0.2
-
-#c = torch.randn_like(m, dtype=torch.float32)
-
-#m *= torch.exp(2j * torch.pi * c * 0.1)
-
-#m += c * 0.01 * 2
-
-im = imdct(m, window_degree=2).real
-save_raw(im, "./debug/test_im.raw")
-"""
-
-"""
-#test_len = 65536
-test_len = 65536
-
-ln_w = get_ln_window(test_len)
-ln_w.numpy().tofile("./debug/ln_window.raw")
-
-ft_w = get_flat_top_window(test_len)
-ft_w.numpy().tofile("./debug/ft_window.raw")
-
-sech_w = 1 / torch.cosh(torch.linspace(-torch.pi, torch.pi, test_len))
-sech_w.numpy().tofile("./debug/sech_window.raw")
-
-hann_w = get_hann_window(test_len)
-hann_w.numpy().tofile("./debug/hann_window.raw")
-
-rect_w = torch.ones(test_len)
-
-bh_w = get_blackman_harris_window(test_len)
-
-
-hannp = get_hann_poisson_window(test_len, alpha=2)
-hannp.numpy().tofile("./debug/hannp_window.raw")
-
-
-a = load_raw("./dataset/samples/80.raw")[:test_len]
-
-#a  = torch.cos(torch.linspace(0, 1000, 65536) + 0.618) * 0.5
-#a += torch.cos(torch.linspace(0, 1353.12312, 65536) + 0.3212) * 0.4 * torch.sin(torch.linspace(0, 42312.23123, 65536) + 321.1)
-#a += torch.cos(torch.linspace(0, 4000, 65536) + 0.1223) * 0.6
-#a += torch.cos(torch.linspace(0, 8432.23123, 65536) + 1.1325) * 0.8 * torch.sin(torch.linspace(0, 12312.23123, 65536) + 112)
-
-a.numpy().tofile("./debug/a.raw")
-
-
-bh_w *= bh_w ** 3 * hannp * ft_w
-bh_w.numpy().tofile("./debug/bh_window.raw")
-
-rfft = torch.fft.rfft(a, norm="ortho")
-rfft_abs = rfft.abs() ** (1/4)
-rfft_abs_min = rfft_abs.mean(dim=-1, keepdim=True)
-rfft_abs_min = torch.min(rfft_abs_min, rfft_abs)
-rfft_abs = rfft_abs ** 4
-rfft_abs_min = rfft_abs_min ** 4
-rfft_noise = rfft / rfft_abs.clip(min=1e-8) * rfft_abs_min
-rfft_tonal = rfft - rfft_noise
-
-
-
-
-noise = torch.fft.irfft(rfft_noise, norm="ortho").real
-tonal = torch.fft.irfft(rfft_tonal, norm="ortho").real
-a = tonal
-tonal.numpy().tofile("./debug/tonal.raw")
-noise.numpy().tofile("./debug/noise.raw")
-
-
-ln_w_a = (torch.fft.fft(a * ln_w, norm="ortho").abs() * 8000).log1p()
-ln_w_a.numpy().tofile("./debug/ln_w_a.raw")
-
-ft_w_a = (torch.fft.fft(a * ft_w, norm="ortho").abs() * 8000).log1p()
-ft_w_a.numpy().tofile("./debug/ft_w_a.raw")
-
-rect_w_a = (torch.fft.fft(a * rect_w, norm="ortho").abs() * 8000).log1p()
-rect_w_a.numpy().tofile("./debug/rect_w_a.raw")
-
-sech_w_a = (torch.fft.fft(a * sech_w, norm="ortho").abs() * 8000).log1p()
-sech_w_a.numpy().tofile("./debug/sech_w_a.raw")
-
-hann_w_a = (torch.fft.fft(a * hann_w, norm="ortho").abs() * 8000).log1p()
-hann_w_a.numpy().tofile("./debug/hann_w_a.raw")
-
-bh_w_a = (torch.fft.fft(a * bh_w, norm="ortho").abs() * 8000).log1p()
-bh_w_a.numpy().tofile("./debug/bh_w_a.raw")
-
-hannp_w_a = (torch.fft.fft(a * hannp, norm="ortho").abs() * 8000).log1p()
-hannp_w_a.numpy().tofile("./debug/hannp_w_a.raw")
-
+angles_tensor = torch.tensor([-2.5, -1.5, 0.0, 1.5, 2.5])  # Example tensor
+add_value = -8.0
+result_tensor = (angles_tensor + add_value + torch.pi) % (2 * torch.pi) - torch.pi
+print(angles_tensor)
+print(result_tensor)
 """

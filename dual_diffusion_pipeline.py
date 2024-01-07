@@ -30,8 +30,8 @@ from diffusers.schedulers import EulerAncestralDiscreteScheduler, KDPM2Ancestral
 from diffusers.pipelines.pipeline_utils import DiffusionPipeline
 
 from unet_dual import UNetDualModel
-from autoencoder_kl_dual import AutoencoderKLDual, DiagonalGaussianDistribution
-from dual_diffusion_utils import compute_snr, mdct, imdct, normalize_lufs, save_raw
+from autoencoder_kl_dual import AutoencoderKLDual
+from dual_diffusion_utils import compute_snr, mdct, imdct, save_raw
 
 class DualMCLTFormat:
 
@@ -42,77 +42,99 @@ class DualMCLTFormat:
     
     @staticmethod
     def get_num_channels(model_params):
-        #in_channels = model_params["sample_raw_channels"] * model_params["num_chunks"] * 3   #1d
-        #out_channels = model_params["sample_raw_channels"] * model_params["num_chunks"] * 4  #1d
-
-        qphase_quants = model_params["qphase_nquants"]
         if model_params.get("qphase_input", False):
-            in_channels = model_params["sample_raw_channels"] * (1 + qphase_quants)
+            in_channels = model_params["sample_raw_channels"] * (1 + model_params["qphase_nquants"])
+            if model_params.get("qphase_nquants", None) is not None:
+                out_channels = in_channels
+            else:
+                out_channels = model_params["sample_raw_channels"] * 3
         else:
             in_channels = model_params["sample_raw_channels"] * 2
-        out_channels = model_params["sample_raw_channels"] * 3#* (4 + qphase_quants)
+            out_channels = model_params["sample_raw_channels"] * 3
 
         return (in_channels, out_channels)
 
     @staticmethod
     @torch.no_grad()
-    def raw_to_sample(raw_samples, model_params):
+    def raw_to_sample(raw_samples, model_params, return_mdct=False):
         
-        qphase_input = model_params.get("qphase_input", False)
-        num_chunks = model_params["num_chunks"]
-        block_width = num_chunks * 2
-        
-        samples = mdct(raw_samples, block_width, window_degree=1)[..., 1:-2, :]
-        samples = samples.permute(0, 2, 1)
+        block_width = model_params["num_chunks"] * 2
+        samples_mdct = mdct(raw_samples, block_width, window_degree=1)[..., 1:-2, :]
 
-        samples *= torch.exp(2j * torch.pi * torch.rand(1, device=samples.device))
-        
-        if qphase_input:
-            raise NotImplementedError()
-            samples_abs = samples.abs()
-            samples_abs_max = samples_abs.amax(dim=(1,2), keepdim=True).clamp(min=1e-8)
-            samples_abs /= samples_abs_max
-            samples /= samples_abs_max
-            samples /= samples.abs().sqrt().clamp(min=1e-8)
+        samples_mdct *= torch.exp(2j * torch.pi * torch.rand(1, device=samples_mdct.device))
 
-            u = model_params.get("u", None)
-            if u is not None:
-                samples_abs = (samples_abs * u).log1p() / np.log(u + 1)
+        samples_mdct_abs = samples_mdct.abs()
+        samples_mdct_abs_max = samples_mdct_abs.amax(dim=(1,2), keepdim=True).clamp(min=1e-10)
+        samples_mdct /= samples_mdct_abs_max
+        samples_mdct_abs /= samples_mdct_abs_max
+        samples_abs_underflow = samples_mdct_abs < 1e-3
+        samples_mdct[samples_abs_underflow] = 1e-3# * torch.exp(2j*torch.pi * torch.rand_like(samples_mdct_abs[samples_abs_underflow]))
         
-        samples = torch.view_as_real(samples).permute(0, 3, 1, 2).contiguous()
-        #samples = samples.real.unsqueeze(1) # 1d
+        if model_params.get("qphase_input", False):
+            samples = samples_mdct.permute(0, 2, 1).contiguous()
 
-        if qphase_input:
-            raise NotImplementedError()
-            #samples = torch.cat([samples_abs.unsqueeze(1), samples], dim=1)
+            u = model_params.get("u", 8000.)
+            samples_abs_ln = ((samples.abs() * u).log1p() / np.log1p(u)).unsqueeze(1)
+
+            qphase_nquants = model_params["qphase_nquants"]
+            samples_phase = ((samples.angle()+torch.pi) / (2*torch.pi)*qphase_nquants + 0.5).long() % qphase_nquants
+            samples_phase = torch.nn.functional.one_hot(samples_phase, num_classes=qphase_nquants).float().permute(0, 3, 1, 2).contiguous()
+
+            samples = torch.cat((samples_abs_ln, samples_phase), dim=1)
         else:
-            samples /= samples.std(dim=(1,2,3), keepdim=True).clamp(min=1e-8)
+            samples = torch.view_as_real(samples_mdct).permute(0, 3, 2, 1).contiguous()
+            samples /= samples.std(dim=(1,2,3), keepdim=True).clamp(min=1e-10)
 
-        #samples = samples.view(samples.shape[0], -1, samples.shape[3]) #1d
-        return samples
+        if return_mdct:
+            return samples, samples_mdct
+        else:
+            return samples
 
     @staticmethod
-    def sample_to_raw(samples, model_params):
-        
-        #samples = samples.view(samples.shape[0], -1, model_params["num_chunks"], samples.shape[2])  #1d
+    def sample_to_raw(samples, model_params, return_mixed=True):
         
         samples_abs = samples[:, 0, :, :].permute(0, 2, 1).contiguous().sigmoid()
-        samples_noise_abs = samples[:, 1, :, :].permute(0, 2, 1).contiguous().sigmoid()
+        #samples_noise_abs = samples[:, 1, :, :].permute(0, 2, 1).contiguous().sigmoid()
         #sample_noise_phase = torch.exp(2j * torch.pi * torch.randn_like(samples_noise_abs) * samples_noise_abs)
-        samples_main_phase = torch.view_as_complex(samples[:, 1:3, :, :].permute(0, 3, 2, 1).contiguous().tanh())
 
-        #qphase_nquants = samples.shape[1] - 4
+        qphase_nquants = model_params.get("qphase_nquants", None)
+        if qphase_nquants is None:
+            samples_phase = torch.view_as_complex(samples[:, 1:3, :, :].permute(0, 3, 2, 1).contiguous().tanh())
+        else:
+            samples_phase = torch.distributions.Categorical(logits=samples[:, 3:, :, :].permute(0, 3, 2, 1).contiguous(), validate_args=False).sample().view(samples_abs.shape)
+            samples_phase = samples_phase * (2*torch.pi / qphase_nquants)
+            samples_phase = samples_phase.cos() + 1j*samples_phase.sin()
+
+        samples_waveform = samples_abs * samples_phase
+
+        if return_mixed:
+            return imdct(samples_waveform, window_degree=1).real
+        else:
+            return samples_waveform
+
+    @staticmethod
+    def get_loss(sample, target, model_params):
         
-        #samples_phase = torch.distributions.Categorical(logits=samples[:, 4:, :, :].permute(0, 3, 2, 1).contiguous(), validate_args=False).sample().view(samples_abs.shape)
-        #samples_phase = (samples_phase / qphase_nquants * 2j * torch.pi).exp()
-        #samples_waveform = samples_abs * samples_main_phase + samples_noise_abs * samples_abs * samples_phase * samples_main_phase
+        sample_abs = sample.abs()
+        sample_abs_underflow = sample_abs < 1e-3
+        sample[sample_abs_underflow] = 1e-3# * torch.exp(2j*torch.pi * torch.rand_like(sample_abs[sample_abs_underflow]))
 
-        samples_waveform = samples_abs * samples_main_phase# * sample_noise_phase
-        #samples_waveform = samples_abs * samples_phase
+        error = (sample / target).log()
 
-        samples_wave = imdct(samples_waveform, window_degree=1).real
-        return samples_wave
+        error_real = error.real - error.real.mean(dim=(1,2), keepdim=True)
+        error_real = error_real.square().mean()
 
+        error_imag_mask = (target.abs() > 1e-3).float()
+        error_imag_numel = error_imag_mask.sum(dim=(1,2), keepdim=True).clip(min=1)
+        error_imag = error.imag * error_imag_mask
+        error_imag = (error_imag - error_imag.sum(dim=(1,2), keepdim=True)/error_imag_numel + torch.pi) % (2*torch.pi) - torch.pi
+        wavelength = torch.linspace(error.shape[-1], 1, error.shape[-1], device=error.device)
+        error_imag = ((error_imag / torch.pi).abs() * wavelength.view(1, 1, -1)).clip(min=1).log().square().mean()
+
+        #error_imag = ((error_imag + torch.pi) / (2*torch.pi) * wavelength.view(1, 1, -1).clip(min=-1).log2()).round().mean()
+
+        return error_real, error_imag
+    
     @staticmethod
     def get_sample_shape(model_params, bsz=1, length=1):
         _, num_output_channels = DualMCLTFormat.get_num_channels(model_params)
