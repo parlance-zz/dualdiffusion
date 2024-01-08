@@ -52,7 +52,7 @@ MODEL_PARAMS = {
     "num_chunks": 128,
     "u": 8000,
     "qphase_input": True,
-    "qphase_nquants": 6,
+    "qphase_nquants": 4,
 }
 
 #VAE_PARAMS = None

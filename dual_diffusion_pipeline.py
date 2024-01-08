@@ -45,7 +45,7 @@ class DualMCLTFormat:
         if model_params.get("qphase_input", False):
             in_channels = model_params["sample_raw_channels"] * (1 + model_params["qphase_nquants"])
             if model_params.get("qphase_nquants", None) is not None:
-                out_channels = in_channels
+                out_channels = in_channels + 1
             else:
                 out_channels = model_params["sample_raw_channels"] * 3
         else:
@@ -58,6 +58,7 @@ class DualMCLTFormat:
     @torch.no_grad()
     def raw_to_sample(raw_samples, model_params, return_mdct=False):
         
+        noise_floor = model_params.get("noise_floor", 1e-3)
         block_width = model_params["num_chunks"] * 2
         samples_mdct = mdct(raw_samples, block_width, window_degree=1)[..., 1:-2, :]
 
@@ -67,8 +68,8 @@ class DualMCLTFormat:
         samples_mdct_abs_max = samples_mdct_abs.amax(dim=(1,2), keepdim=True).clamp(min=1e-10)
         samples_mdct /= samples_mdct_abs_max
         samples_mdct_abs /= samples_mdct_abs_max
-        samples_abs_underflow = samples_mdct_abs < 1e-3
-        samples_mdct[samples_abs_underflow] = 1e-3# * torch.exp(2j*torch.pi * torch.rand_like(samples_mdct_abs[samples_abs_underflow]))
+        samples_abs_underflow = samples_mdct_abs < noise_floor
+        samples_mdct[samples_abs_underflow] = noise_floor# * torch.exp(2j*torch.pi * torch.rand_like(samples_mdct_abs[samples_abs_underflow]))
         
         if model_params.get("qphase_input", False):
             samples = samples_mdct.permute(0, 2, 1).contiguous()
@@ -77,8 +78,12 @@ class DualMCLTFormat:
             samples_abs_ln = ((samples.abs() * u).log1p() / np.log1p(u)).unsqueeze(1)
 
             qphase_nquants = model_params["qphase_nquants"]
-            samples_phase = ((samples.angle()+torch.pi) / (2*torch.pi)*qphase_nquants + 0.5).long() % qphase_nquants
+            #samples_phase = ((samples.angle()+torch.pi) / (2*torch.pi)*qphase_nquants + 0.5).long() % qphase_nquants
+            samples_phase = ((samples.angle().abs()) / (torch.pi)*(qphase_nquants-1) + 0.5).long()
             samples_phase = torch.nn.functional.one_hot(samples_phase, num_classes=qphase_nquants).float().permute(0, 3, 1, 2).contiguous()
+
+            #samples_wave = samples.real.unsqueeze(1)
+            #samples = torch.cat((samples_abs_ln, samples_wave, samples_phase), dim=1)
 
             samples = torch.cat((samples_abs_ln, samples_phase), dim=1)
         else:
@@ -101,37 +106,48 @@ class DualMCLTFormat:
         if qphase_nquants is None:
             samples_phase = torch.view_as_complex(samples[:, 1:3, :, :].permute(0, 3, 2, 1).contiguous().tanh())
         else:
-            samples_phase = torch.distributions.Categorical(logits=samples[:, 3:, :, :].permute(0, 3, 2, 1).contiguous(), validate_args=False).sample().view(samples_abs.shape)
-            samples_phase = samples_phase * (2*torch.pi / qphase_nquants)
+            samples_phase = torch.distributions.Categorical(logits=samples[:, 2:, :, :].permute(0, 3, 2, 1).contiguous(), validate_args=False).sample().view(samples_abs.shape)
+            samples_phase = samples_phase * (torch.pi / (qphase_nquants-1))
+            #samples_phase = samples_phase * (2*torch.pi / qphase_nquants)
             samples_phase = samples_phase.cos() + 1j*samples_phase.sin()
 
-        samples_waveform = samples_abs * samples_phase
+        #samples_phase = samples_phase * torch.view_as_complex(samples[:, 1:3, :, :].permute(0, 3, 2, 1).contiguous().tanh())
+        #samples_wave = samples[:, 1, :, :].permute(0, 2, 1).contiguous().tanh()
+        #samples_wave = (samples[:, 1, :, :].permute(0, 2, 1).contiguous() * 2j*torch.pi).exp()
+        samples_wave = (samples[:, 1, :, :].permute(0, 2, 1).contiguous().sigmoid() * 1j*torch.pi).exp()
+        #samples_waveform = samples_abs * samples_phase
+        samples_waveform = samples_abs * samples_phase * samples_wave
+        noise_floor = model_params.get("noise_floor", 1e-3)
 
         if return_mixed:
-            return imdct(samples_waveform, window_degree=1).real
+            samples_waveform[samples_waveform.abs() < noise_floor] = noise_floor * torch.exp(2j*torch.pi * torch.rand_like(samples_abs[samples_abs < noise_floor]))
+            return imdct(samples_waveform.real, window_degree=1).real
+            #return imdct(samples_waveform, window_degree=1).real
         else:
+            samples_waveform[samples_waveform.abs() < noise_floor] = noise_floor
             return samples_waveform
 
     @staticmethod
     def get_loss(sample, target, model_params):
         
-        sample_abs = sample.abs()
-        sample_abs_underflow = sample_abs < 1e-3
-        sample[sample_abs_underflow] = 1e-3# * torch.exp(2j*torch.pi * torch.rand_like(sample_abs[sample_abs_underflow]))
+        noise_floor = model_params.get("noise_floor", 1e-3)
 
         error = (sample / target).log()
-
         error_real = error.real - error.real.mean(dim=(1,2), keepdim=True)
         error_real = error_real.square().mean()
 
-        error_imag_mask = (target.abs() > 1e-3).float()
-        error_imag_numel = error_imag_mask.sum(dim=(1,2), keepdim=True).clip(min=1)
-        error_imag = error.imag * error_imag_mask
-        error_imag = (error_imag - error_imag.sum(dim=(1,2), keepdim=True)/error_imag_numel + torch.pi) % (2*torch.pi) - torch.pi
-        wavelength = torch.linspace(error.shape[-1], 1, error.shape[-1], device=error.device)
-        error_imag = ((error_imag / torch.pi).abs() * wavelength.view(1, 1, -1)).clip(min=1).log().square().mean()
+        error_imag_mask = (target.abs() > noise_floor).float()
+        #error_imag_numel = error_imag_mask.sum(dim=(1,2), keepdim=True).clip(min=1)
+        #error_imag = error.imag * error_imag_mask
+        #error_imag = (error_imag - error_imag.sum(dim=(1,2), keepdim=True)/error_imag_numel + torch.pi) % (2*torch.pi) - torch.pi
+        #error_imag = (error.imag - error.imag.mean(dim=(1,2), keepdim=True) + torch.pi) % (2*torch.pi) - torch.pi
+        #error_imag = (1 - error.imag.cos()) / 2 * torch.pi
+        error_imag = sample.angle().abs() - target.angle().abs()
+        error_imag = error_imag * error_imag_mask
+        wavelength = torch.linspace(error.shape[-1], 1, error.shape[-1], device=error.device) * 2
+        #error_imag = ((error_imag / torch.pi).abs() * wavelength.view(1, 1, -1)).clip(min=1).log().square().mean()
 
-        #error_imag = ((error_imag + torch.pi) / (2*torch.pi) * wavelength.view(1, 1, -1).clip(min=-1).log2()).round().mean()
+        error_imag = ((error_imag / torch.pi).abs() * wavelength.view(1, 1, -1).clip(min=1).log()).square().mean()
 
         return error_real, error_imag
     
