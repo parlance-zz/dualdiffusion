@@ -30,7 +30,7 @@ from dual_diffusion_pipeline import DualDiffusionPipeline
 load_dotenv()
 torch.manual_seed(200)
 
-MODEL_NAME = "dualdiffusion2d_600_mclt_4vae_8"
+MODEL_NAME = "dualdiffusion2d_600_mclt_4vae_10"
 MODEL_PARAMS = {
     #"prediction_type": "sample",
     #"prediction_type": "epsilon",
@@ -52,18 +52,26 @@ MODEL_PARAMS = {
     "num_chunks": 64,
     "u": 8000,
     "qphase_input": True,
-    "qphase_nquants": 3,
+    "qphase_nquants": 1,
 }
 
 #VAE_PARAMS = None
 VAE_PARAMS = {
-    #"multiscale_spectral_loss": {
-    #    "version": 6,
-    #    "sample_block_width": 2*MODEL_PARAMS["num_chunks"],
-    #    "low_scale": 4,
-    #    "high_scale": 12,
-    #    "overlap": 4,
-    #},
+    "multiscale_spectral_loss": {
+        "version": 3,
+        "sample_block_width": 2*MODEL_PARAMS["num_chunks"],
+        "block_widths": [
+            16,
+            32,
+            64,
+            128,
+            256,
+            512,
+            1024,
+            2048,
+            4096
+        ]
+    },
 
     "latent_channels": 4,
     "sample_size": (64, 2048),

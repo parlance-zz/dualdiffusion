@@ -1010,11 +1010,12 @@ def main():
                     latents_mean = latents.mean()
                     latents_std = latents.std()
                     model_output = module.decode(latents, return_dict=False)[0]                    
-                    recon_samples_dict = pipeline.format.sample_to_raw(model_output, model_params, return_dict=True)
-
-                    if module.multiscale_spectral_loss is not None:    
-                        vae_recon_real_loss, vae_recon_imag_loss = module.multiscale_spectral_loss(recon_samples_dict, samples_dict, model_params)
+                    
+                    if module.multiscale_spectral_loss is not None:
+                        recon_raw_samples = pipeline.format.sample_to_raw(model_output, model_params, return_dict=False)
+                        vae_recon_real_loss, vae_recon_imag_loss = module.multiscale_spectral_loss(recon_raw_samples, samples_dict["raw_samples"], model_params)
                     else:
+                        recon_samples_dict = pipeline.format.sample_to_raw(model_output, model_params, return_dict=True)
                         vae_recon_real_loss, vae_recon_imag_loss = pipeline.format.get_loss(recon_samples_dict, samples_dict, model_params)
 
                     vae_kl_loss = posterior.kl().sum() / posterior.mean.numel()

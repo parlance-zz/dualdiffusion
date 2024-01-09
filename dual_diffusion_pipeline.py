@@ -64,28 +64,24 @@ class DualMCLTFormat:
         u = model_params.get("u", 8000.)
         block_width = model_params["num_chunks"] * 2
         qphase_input = model_params.get("qphase_input", False)
-        qphase_nquants = model_params.get("qphase_nquants", None)
+        #qphase_nquants = model_params.get("qphase_nquants", None)
 
         samples_mdct = mdct(raw_samples, block_width, window_degree=1)[..., 1:-2, :]
-        samples_mdct = samples_mdct.permute(0, 2, 1).contiguous()
+        samples_mdct = samples_mdct.permute(0, 2, 1)
 
         samples_mdct *= torch.exp(2j * torch.pi * torch.rand(1, device=samples_mdct.device))
         samples_mdct_abs = samples_mdct.abs()
         samples_mdct_abs = (samples_mdct_abs / samples_mdct_abs.amax(dim=(1,2), keepdim=True).clip(min=1e-8)).clip(min=noise_floor)
         
         if qphase_input:
-            samples_abs_ln = (samples_mdct_abs * u).log1p() / np.log1p(u)
-            #samples = samples_abs_ln.unsqueeze(1)
-            #samples_qphase = (samples.angle().abs() * (qphase_nquants*2-1) + 0.5).long()
-            #samples_qphase_1h = torch.nn.functional.one_hot(samples_qphase, num_classes=qphase_nquants*2).permute(0, 3, 1, 2)
-            #samples = torch.cat((samples_abs_ln.unsqueeze(1), samples_qphase_1h), dim=1)
-            
+            samples_abs_ln = ((samples_mdct_abs * u).log1p() / np.log1p(u)).unsqueeze(1)
             samples_qphase = (samples_mdct.angle().abs() / torch.pi).unsqueeze(1)
-            samples = torch.cat((samples_abs_ln.unsqueeze(1), samples_qphase), dim=1)
-            for _ in range(qphase_nquants - 1):
-                _samples_qphase = ((samples_qphase[:, -1, :, :] - 0.5).abs() * 2).unsqueeze(1)
-                samples_qphase = torch.cat((samples_qphase, _samples_qphase), dim=1)
+            samples = torch.cat((samples_abs_ln, samples_qphase), dim=1)
 
+            #samples = torch.cat((samples_mdct_abs.unsqueeze(1), samples_qphase), dim=1)
+            #for _ in range(qphase_nquants - 1):
+            #    _samples_qphase = ((samples_qphase[:, -1, :, :] - 0.5).abs() * 2).unsqueeze(1)
+            #    samples_qphase = torch.cat((samples_qphase, _samples_qphase), dim=1)
             #samples = torch.cat((samples_abs_ln.unsqueeze(1), samples_qphase), dim=1)
         else:
             raise NotImplementedError()
@@ -95,10 +91,11 @@ class DualMCLTFormat:
         if return_dict:
             samples_dict = {
                 "samples": samples,
-                "samples_abs": samples_mdct_abs,
+                "raw_samples": (imdct(samples_mdct.permute(0, 2, 1), window_degree=1).real).requires_grad_(False),
+                #"samples_abs": samples_mdct_abs,
                 #"samples_phase": samples_phase_quants,
                 #"samples_phase": samples_phase,
-                "samples_qphase": samples_qphase,
+                #"samples_qphase": samples_qphase,
             }
             return samples_dict
         else:
@@ -118,30 +115,8 @@ class DualMCLTFormat:
 
         if not return_dict:
             samples_abs = samples_abs.permute(0, 2, 1)
-            #samples_phase = (samples_qphase[:, 0, :, :].permute(0, 2, 1) * torch.pi).cos()
-            samples_phase = (samples_qphase.permute(0, 1, 3, 2) * torch.pi).cos()
-
-            """
-            samples_phase = samples_phase.permute(0, 2, 1)
-
-            qphase_nquants = model_params["qphase_nquants"]
-            qphase_logits = samples_qphase.permute(0, 3, 2, 1)
-            samples_qphase = torch.distributions.Categorical(logits=qphase_logits, validate_args=False).sample().squeeze(-1)
-            samples_qphase = samples_qphase / (qphase_nquants-1)
-
-            samples_noise_p = samples_noise_p.permute(0, 2, 1).sigmoid()#* 0
-            samples_phase = ((samples_phase * (1 - samples_noise_p) + samples_qphase * samples_noise_p) * torch.pi).cos()
-
-            qphase_nquants = model_params.get("qphase_nquants", None)
-            if qphase_nquants is None:
-                raise NotImplementedError()
-                samples_phase = torch.view_as_complex(samples[:, 1:3, :, :].permute(0, 3, 2, 1).contiguous().tanh())
-            else:
-                assert(samples_phase.shape[1] == qphase_nquants)
-                phase_logits = samples_phase.permute(0, 2, 3, 1)
-                samples_phase = torch.distributions.Categorical(logits=phase_logits, validate_args=False).sample().squeeze(-1)
-                samples_phase = (samples_phase * (torch.pi / (qphase_nquants-1))).cos()
-            """
+            samples_phase = (samples_qphase[:, 0, :, :].permute(0, 2, 1) * torch.pi).cos()
+            #samples_phase = (samples_qphase.permute(0, 1, 3, 2) * torch.pi).cos()
 
             return imdct(samples_abs * samples_phase, window_degree=1).real
         else:
