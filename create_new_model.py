@@ -30,7 +30,7 @@ from dual_diffusion_pipeline import DualDiffusionPipeline
 load_dotenv()
 torch.manual_seed(200)
 
-MODEL_NAME = "dualdiffusion2d_600_mclt_4vae_2"
+MODEL_NAME = "dualdiffusion2d_600_mclt_4vae_6"
 MODEL_PARAMS = {
     #"prediction_type": "sample",
     #"prediction_type": "epsilon",
@@ -49,7 +49,7 @@ MODEL_PARAMS = {
 
     "sample_format": "mclt",
     "sample_raw_length": 65536*2,
-    "num_chunks": 128,
+    "num_chunks": 64,
     "u": 8000,
     "qphase_input": True,
     "qphase_nquants": 4,

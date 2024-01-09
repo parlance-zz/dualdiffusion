@@ -35,7 +35,7 @@ from diffusers.models.vae import DecoderOutput
 from diffusers.models.autoencoder_kl import AutoencoderKLOutput
 
 from unet_dual_blocks import SeparableAttnDownBlock, SeparableAttnUpBlock, SeparableMidBlock
-from dual_diffusion_utils import get_activation, save_raw, hz_to_mels, stft
+from dual_diffusion_utils import get_activation, save_raw, hz_to_mels, stft, get_mel_density
 
 class DiagonalGaussianDistribution(object):
     def __init__(self, parameters, deterministic=False):
@@ -237,6 +237,74 @@ class DualMultiscaleSpectralLoss2:
         error_imag = torch.zeros_like(error_real)
         return error_real, error_imag
         """
+
+class DualMultiscaleSpectralLoss3:
+
+    @torch.no_grad()
+    def __init__(self, loss_params):
+    
+        self.sample_block_width = loss_params["sample_block_width"]
+        self.block_widths = loss_params["block_widths"]
+        self.block_overlap = loss_params.get("block_overlap", 4)
+        self.u = loss_params.get("u", 8000.)
+        self.noise_floor = loss_params.get("noise_floor", 1e-4)
+        self.sample_rate = loss_params["sample_rate"]
+
+        """
+        self.block_freq_weights = []
+        for block_width in self.block_widths:
+             b = torch.arange(1, block_width // 2 + 1)
+             block_hz = b / (block_width // 2) * self.sample_rate / 2
+             block_freq_weight = get_mel_density(block_hz)
+             block_freq_weight = (block_freq_weight / block_freq_weight.mean()).view(1, 1, -1).requires_grad_(False)
+             self.block_freq_weights.append(block_freq_weight)
+        """
+
+        self.loss_scale = 1 / 32 / len(self.block_widths)
+
+    def __call__(self, sample, target):
+
+        with torch.no_grad():
+            target = target[:, self.sample_block_width // 2:-self.sample_block_width].requires_grad_(False)
+            if (sample.shape != target.shape):
+                raise ValueError(f"sample.shape != target.shape. sample.shape: {sample.shape}. target.shape: {target.shape}.")    
+
+        loss_real = torch.zeros(1, device=sample.device)
+        loss_imag = torch.zeros(1, device=sample.device)
+
+        for b, block_width in enumerate(self.block_widths):
+            
+            #if self.block_freq_weights[b].device != sample.device:
+            #    self.block_freq_weights[b] = self.block_freq_weights[b].to(sample.device)
+
+            block_width = min(block_width, target.shape[-1])
+            step = max(block_width // self.block_overlap, 1)
+            offset = np.random.randint(0, min(target.shape[-1] - block_width + 1, step))        
+
+            target_fft = stft(target[:, offset:], block_width, window_fn="blackman_harris", step=step)
+            sample_fft = stft(sample[:, offset:], block_width, window_fn="blackman_harris", step=step)
+
+            block_hz = torch.linspace(0, self.sample_rate/2, target_fft.shape[-1], device=target_fft.device)
+            mel_density = get_mel_density(block_hz)
+
+            target_fft_abs = target_fft.abs()
+            target_fft_abs = (target_fft_abs / target_fft_abs.amax(dim=(1,2), keepdim=True)).clip(min=self.noise_floor)
+
+            sample_fft_abs = sample_fft.abs()
+            sample_fft_abs = (sample_fft_abs / sample_fft_abs.amax(dim=(1,2), keepdim=True)).clip(min=self.noise_floor)
+
+            loss_real = loss_real + ( (sample_fft_abs / target_fft_abs).log().square() * mel_density.view(1, 1, -1) ).mean() * np.log(block_width)
+
+            error_imag = (sample_fft.angle().abs() - target_fft.angle().abs()) * (target_fft_abs > self.noise_floor).float()
+            #wavelength = torch.linspace(block_width//2+1, 1, block_width//2+1, device=error_imag.device) * 2
+            #wavelength = block_width / torch.linspace(1, block_width//2+1, block_width//2+1, device=error_imag.device)
+            #error_imag = ((error_imag / torch.pi).abs() * wavelength.view(1, 1, -1)).clip(min=1).log().square()
+
+            error_imag = ( (error_imag.abs() / torch.pi * 8).clip(min=1).log().square() * mel_density.view(1, 1, -1) * 16).mean() * np.log(block_width)
+            
+            loss_imag = loss_imag + error_imag.mean()
+
+        return loss_real * self.loss_scale, loss_imag * self.loss_scale
 
 class DualMultiscaleSpectralLoss:
 
@@ -815,12 +883,14 @@ class AutoencoderKLDual(ModelMixin, ConfigMixin):
         self.tile_latent_min_size = int(sample_size / (2 ** (len(self.config.block_out_channels) - 1)))
         self.tile_overlap_factor = 0.25
 
-        if multiscale_spectral_loss is not None:
+        if multiscale_spectral_loss is not None and False:
             mss_version = multiscale_spectral_loss.get("version", 1)
             if mss_version == 1:
                 self.multiscale_spectral_loss = DualMultiscaleSpectralLoss(multiscale_spectral_loss)
             elif mss_version == 2:
                 self.multiscale_spectral_loss = DualMultiscaleSpectralLoss2(multiscale_spectral_loss)
+            elif mss_version == 3:
+                self.multiscale_spectral_loss = DualMultiscaleSpectralLoss3(multiscale_spectral_loss)
             else:
                 raise ValueError("Invalid multiscale_spectral_loss version")
         else:

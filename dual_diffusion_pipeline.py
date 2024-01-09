@@ -31,7 +31,7 @@ from diffusers.pipelines.pipeline_utils import DiffusionPipeline
 
 from unet_dual import UNetDualModel
 from autoencoder_kl_dual import AutoencoderKLDual
-from dual_diffusion_utils import compute_snr, mdct, imdct, save_raw
+from dual_diffusion_utils import compute_snr, mdct, imdct, save_raw, get_mel_density
 
 class DualMCLTFormat:
 
@@ -45,7 +45,7 @@ class DualMCLTFormat:
         if model_params.get("qphase_input", False):
             in_channels = model_params["sample_raw_channels"] * (1 + model_params["qphase_nquants"])
             if model_params.get("qphase_nquants", None) is not None:
-                out_channels = in_channels + 1
+                out_channels = in_channels
             else:
                 out_channels = model_params["sample_raw_channels"] * 3
         else:
@@ -56,98 +56,91 @@ class DualMCLTFormat:
 
     @staticmethod
     @torch.no_grad()
-    def raw_to_sample(raw_samples, model_params, return_mdct=False):
+    def raw_to_sample(raw_samples, model_params, return_dict=False):
         
-        noise_floor = model_params.get("noise_floor", 1e-3)
+        noise_floor = model_params.get("noise_floor", 1e-5)
+        u = model_params.get("u", 8000.)
         block_width = model_params["num_chunks"] * 2
+        qphase_input = model_params.get("qphase_input", False)
+        qphase_nquants = model_params.get("qphase_nquants", None)
+
         samples_mdct = mdct(raw_samples, block_width, window_degree=1)[..., 1:-2, :]
+        samples_mdct = samples_mdct.permute(0, 2, 1).contiguous()
 
         samples_mdct *= torch.exp(2j * torch.pi * torch.rand(1, device=samples_mdct.device))
-
         samples_mdct_abs = samples_mdct.abs()
-        samples_mdct_abs_max = samples_mdct_abs.amax(dim=(1,2), keepdim=True).clamp(min=1e-10)
-        samples_mdct /= samples_mdct_abs_max
-        samples_mdct_abs /= samples_mdct_abs_max
-        samples_abs_underflow = samples_mdct_abs < noise_floor
-        samples_mdct[samples_abs_underflow] = noise_floor# * torch.exp(2j*torch.pi * torch.rand_like(samples_mdct_abs[samples_abs_underflow]))
+        samples_mdct_abs = (samples_mdct_abs / samples_mdct_abs.amax(dim=(1,2), keepdim=True).clip(min=1e-8)).clip(min=noise_floor)
         
-        if model_params.get("qphase_input", False):
-            samples = samples_mdct.permute(0, 2, 1).contiguous()
-
-            u = model_params.get("u", 8000.)
-            samples_abs_ln = ((samples.abs() * u).log1p() / np.log1p(u)).unsqueeze(1)
-
-            qphase_nquants = model_params["qphase_nquants"]
-            #samples_phase = ((samples.angle()+torch.pi) / (2*torch.pi)*qphase_nquants + 0.5).long() % qphase_nquants
-            samples_phase = ((samples.angle().abs()) / (torch.pi)*(qphase_nquants-1) + 0.5).long()
-            samples_phase = torch.nn.functional.one_hot(samples_phase, num_classes=qphase_nquants).float().permute(0, 3, 1, 2).contiguous()
-
-            #samples_wave = samples.real.unsqueeze(1)
-            #samples = torch.cat((samples_abs_ln, samples_wave, samples_phase), dim=1)
-
-            samples = torch.cat((samples_abs_ln, samples_phase), dim=1)
+        if qphase_input:
+            samples_abs_ln = (samples_mdct_abs * u).log1p() / np.log1p(u)
+            samples_phase_quants = (samples_mdct.angle().abs() / torch.pi*(qphase_nquants-1) + 0.5).long()
+            samples_phase_quants_1h = torch.nn.functional.one_hot(samples_phase_quants, num_classes=qphase_nquants).permute(0, 3, 1, 2)
+            samples = torch.cat((samples_abs_ln.unsqueeze(1), samples_phase_quants_1h), dim=1)
         else:
-            samples = torch.view_as_real(samples_mdct).permute(0, 3, 2, 1).contiguous()
+            raise NotImplementedError()
+            samples = torch.view_as_real(samples_mdct).permute(0, 3, 1, 2).contiguous()
             samples /= samples.std(dim=(1,2,3), keepdim=True).clamp(min=1e-10)
 
-        if return_mdct:
-            return samples, samples_mdct
+        if return_dict:
+            samples_dict = {
+                "samples": samples,
+                "samples_abs": samples_mdct_abs,
+                "samples_phase": samples_phase_quants,
+            }
+            return samples_dict
         else:
             return samples
 
     @staticmethod
-    def sample_to_raw(samples, model_params, return_mixed=True):
+    def sample_to_raw(samples, model_params, return_dict=False):
         
-        samples_abs = samples[:, 0, :, :].permute(0, 2, 1).contiguous().sigmoid()
-        #samples_noise_abs = samples[:, 1, :, :].permute(0, 2, 1).contiguous().sigmoid()
-        #sample_noise_phase = torch.exp(2j * torch.pi * torch.randn_like(samples_noise_abs) * samples_noise_abs)
+        noise_floor = model_params.get("noise_floor", 1e-5)
+        u = model_params.get("u", 8000.)
 
-        qphase_nquants = model_params.get("qphase_nquants", None)
-        if qphase_nquants is None:
-            samples_phase = torch.view_as_complex(samples[:, 1:3, :, :].permute(0, 3, 2, 1).contiguous().tanh())
+        samples_abs = samples[:, 0, :, :].sigmoid()
+        samples_phase = samples[:, 1:, :, :]
+        #samples_phase = (samples[:, 1, :, :].permute(0, 2, 1).contiguous().sigmoid() * torch.pi).cos()
+
+        if not return_dict:
+            samples_abs = samples_abs.permute(0, 2, 1)
+
+            qphase_nquants = model_params.get("qphase_nquants", None)
+            if qphase_nquants is None:
+                raise NotImplementedError()
+                samples_phase = torch.view_as_complex(samples[:, 1:3, :, :].permute(0, 3, 2, 1).contiguous().tanh())
+            else:
+                assert(samples_phase.shape[1] == qphase_nquants)
+                phase_logits = samples_phase.permute(0, 2, 3, 1)
+                samples_phase = torch.distributions.Categorical(logits=phase_logits, validate_args=False).sample().view(samples_abs.shape)
+                samples_phase = (samples_phase * (torch.pi / (qphase_nquants-1))).cos()
+
+            return imdct(samples_abs * samples_phase, window_degree=1).real
         else:
-            samples_phase = torch.distributions.Categorical(logits=samples[:, 2:, :, :].permute(0, 3, 2, 1).contiguous(), validate_args=False).sample().view(samples_abs.shape)
-            samples_phase = samples_phase * (torch.pi / (qphase_nquants-1))
-            #samples_phase = samples_phase * (2*torch.pi / qphase_nquants)
-            samples_phase = samples_phase.cos() + 1j*samples_phase.sin()
-
-        #samples_phase = samples_phase * torch.view_as_complex(samples[:, 1:3, :, :].permute(0, 3, 2, 1).contiguous().tanh())
-        #samples_wave = samples[:, 1, :, :].permute(0, 2, 1).contiguous().tanh()
-        #samples_wave = (samples[:, 1, :, :].permute(0, 2, 1).contiguous() * 2j*torch.pi).exp()
-        samples_wave = (samples[:, 1, :, :].permute(0, 2, 1).contiguous().sigmoid() * 1j*torch.pi).exp()
-        #samples_waveform = samples_abs * samples_phase
-        samples_waveform = samples_abs * samples_phase * samples_wave
-        noise_floor = model_params.get("noise_floor", 1e-3)
-
-        if return_mixed:
-            samples_waveform[samples_waveform.abs() < noise_floor] = noise_floor * torch.exp(2j*torch.pi * torch.rand_like(samples_abs[samples_abs < noise_floor]))
-            return imdct(samples_waveform.real, window_degree=1).real
-            #return imdct(samples_waveform, window_degree=1).real
-        else:
-            samples_waveform[samples_waveform.abs() < noise_floor] = noise_floor
-            return samples_waveform
+            #samples_abs_ln = (samples_abs.clip(min=noise_floor) * u).log1p() / np.log1p(u)
+            samples_abs = (samples_abs / samples_abs.amax(dim=(1,2), keepdim=True)).clip(min=noise_floor)
+            samples_dict = {
+                "samples_abs": samples_abs,
+                "samples_phase": samples_phase,
+            }
+            return samples_dict
 
     @staticmethod
     def get_loss(sample, target, model_params):
         
-        noise_floor = model_params.get("noise_floor", 1e-3)
+        block_width = model_params["num_chunks"] * 2
+        sample_rate = model_params["sample_rate"]
 
-        error = (sample / target).log()
-        error_real = error.real - error.real.mean(dim=(1,2), keepdim=True)
-        error_real = error_real.square().mean()
+        block_q = torch.arange(0.5, block_width//2 + 0.5, device=target["samples"].device)
+        mel_density = get_mel_density(block_q * (sample_rate / block_width))
 
-        error_imag_mask = (target.abs() > noise_floor).float()
-        #error_imag_numel = error_imag_mask.sum(dim=(1,2), keepdim=True).clip(min=1)
-        #error_imag = error.imag * error_imag_mask
-        #error_imag = (error_imag - error_imag.sum(dim=(1,2), keepdim=True)/error_imag_numel + torch.pi) % (2*torch.pi) - torch.pi
-        #error_imag = (error.imag - error.imag.mean(dim=(1,2), keepdim=True) + torch.pi) % (2*torch.pi) - torch.pi
-        #error_imag = (1 - error.imag.cos()) / 2 * torch.pi
-        error_imag = sample.angle().abs() - target.angle().abs()
-        error_imag = error_imag * error_imag_mask
-        wavelength = torch.linspace(error.shape[-1], 1, error.shape[-1], device=error.device) * 2
-        #error_imag = ((error_imag / torch.pi).abs() * wavelength.view(1, 1, -1)).clip(min=1).log().square().mean()
+        error_real = (sample["samples_abs"] / target["samples_abs"]).log()
+        error_real = error_real - error_real.mean(dim=(1,2), keepdim=True)
+        error_real = (error_real.square() * mel_density.view(1,-1, 1)).mean() / 16
 
-        error_imag = ((error_imag / torch.pi).abs() * wavelength.view(1, 1, -1).clip(min=1).log()).square().mean()
+        noise_floor = target["samples_abs"].amin(dim=(1,2), keepdim=True)
+        error_imag_mask = target["samples_abs"] > noise_floor
+        error_imag = torch.nn.functional.cross_entropy(sample["samples_phase"], target["samples_phase"], reduction="none")
+        error_imag = (error_imag * error_imag_mask * mel_density.view(1,-1, 1)).mean()
 
         return error_real, error_imag
     

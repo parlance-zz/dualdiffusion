@@ -1001,22 +1001,21 @@ def main():
 
                 elif args.module == "vae":
 
-                    samples, sample_mdct = pipeline.format.raw_to_sample(raw_samples, model_params, return_mdct=True)
-                    posterior = module.encode(samples, return_dict=False)[0]
+                    samples_dict = pipeline.format.raw_to_sample(raw_samples, model_params, return_dict=True)
+                    posterior = module.encode(samples_dict["samples"], return_dict=False)[0]
                     latents = posterior.sample()
                     #nonbatch_dims = tuple(range(1, latents.ndim))
                     #latents = latents - latents.clone().mean(dim=nonbatch_dims, keepdim=True)
                     #latents = latents / latents.clone().std(dim=nonbatch_dims, keepdim=True)
                     latents_mean = latents.mean()
                     latents_std = latents.std()
-                    recon = module.decode(latents, return_dict=False)[0]                    
-                    
-                    if module.multiscale_spectral_loss is not None:
-                        recon_raw_samples = pipeline.format.sample_to_raw(recon, model_params, return_mixed=True)
-                        vae_recon_real_loss, vae_recon_imag_loss = module.multiscale_spectral_loss(recon_raw_samples, raw_samples)
+                    model_output = module.decode(latents, return_dict=False)[0]                    
+                    recon_samples_dict = pipeline.format.sample_to_raw(model_output, model_params, return_dict=True)
+
+                    if module.multiscale_spectral_loss is not None:    
+                        vae_recon_real_loss, vae_recon_imag_loss = module.multiscale_spectral_loss(recon_samples_dict, samples_dict, model_params)
                     else:
-                        recon_mdct = pipeline.format.sample_to_raw(recon, model_params, return_mixed=False)
-                        vae_recon_real_loss, vae_recon_imag_loss = pipeline.format.get_loss(recon_mdct, sample_mdct, model_params)
+                        vae_recon_real_loss, vae_recon_imag_loss = pipeline.format.get_loss(recon_samples_dict, samples_dict, model_params)
 
                     vae_kl_loss = posterior.kl().sum() / posterior.mean.numel()
                     

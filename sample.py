@@ -172,7 +172,7 @@ def embedding_test():
 
 def vae_test():
 
-    model_name = "dualdiffusion2d_600_mclt_4vae_2"
+    model_name = "dualdiffusion2d_600_mclt_4vae_6"
     num_samples = 1
     #device = "cuda"
     device = "cpu"
@@ -196,6 +196,7 @@ def vae_test():
     test_samples = np.random.choice(os.listdir(dataset_path), num_samples, replace=False)
     
     #test_samples = ["27705.raw"] # extremely heavy noise
+    #test_samples = ["26431.raw"] 
     test_samples = ["7149.raw"] 
 
     # try to use most recent checkpoint if one exists
