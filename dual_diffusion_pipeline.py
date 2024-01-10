@@ -47,7 +47,7 @@ class DualMCLTFormat:
             in_channels = model_params["sample_raw_channels"] * 2
             if model_params.get("qphase_nquants", None) is not None:
                 #out_channels = in_channels
-                out_channels = model_params["sample_raw_channels"] * (1 + model_params["qphase_nquants"])
+                out_channels = model_params["sample_raw_channels"] * 3
             else:
                 out_channels = model_params["sample_raw_channels"] * 3
         else:
@@ -91,8 +91,8 @@ class DualMCLTFormat:
         if return_dict:
             samples_dict = {
                 "samples": samples,
-                "raw_samples": (imdct(samples_mdct.permute(0, 2, 1), window_degree=1).real).requires_grad_(False),
-                #"samples_abs": samples_mdct_abs,
+                "raw_samples": imdct(samples_mdct.permute(0, 2, 1), window_degree=1).real.requires_grad_(False),
+                #"samples_abs": samples_mdct_abs.real.requires_grad_(False),
                 #"samples_phase": samples_phase_quants,
                 #"samples_phase": samples_phase,
                 #"samples_qphase": samples_qphase,
@@ -108,15 +108,15 @@ class DualMCLTFormat:
         #u = model_params.get("u", 8000.)
 
         samples_abs = samples[:, 0, :, :].sigmoid()
-        samples_qphase = samples[:, 1:, :, :].sigmoid()
+        samples_abs_noise = samples[:, 1, :, :].sigmoid()
+        samples_qphase = (samples[:, 2, :, :] + samples_abs_noise * torch.randn_like(samples_abs_noise)).sigmoid()
         #samples_phase = samples[:, 1, :, :].sigmoid()
         #samples_noise_p = samples[:, 2, :, :]
         #samples_qphase = samples[:, 3:, :, :]
 
         if not return_dict:
             samples_abs = samples_abs.permute(0, 2, 1)
-            samples_phase = (samples_qphase[:, 0, :, :].permute(0, 2, 1) * torch.pi).cos()
-            #samples_phase = (samples_qphase.permute(0, 1, 3, 2) * torch.pi).cos()
+            samples_phase = (samples_qphase.permute(0, 2, 1) * torch.pi).cos()
 
             return imdct(samples_abs * samples_phase, window_degree=1).real
         else:
@@ -132,46 +132,33 @@ class DualMCLTFormat:
                 "samples_abs": samples_abs,
                 #"samples_phase": samples_phase,
                 #"samples_noise_p": samples_noise_p,
-                "samples_qphase": samples_qphase,
+                #"samples_qphase": samples_qphase,
             }
             return samples_dict
 
     @staticmethod
     def get_loss(sample, target, model_params):
         
-        block_width = model_params["num_chunks"] * 2
-        sample_rate = model_params["sample_rate"]
-        qphase_nquants = model_params["qphase_nquants"]
-        
-        block_q = torch.arange(0.5, block_width//2 + 0.5, device=target["samples"].device)
-        mel_density = get_mel_density(block_q * (sample_rate / block_width))
+        #block_width = model_params["num_chunks"] * 2
+        #sample_rate = model_params["sample_rate"]
+        #qphase_nquants = model_params["qphase_nquants"]
+        #noise_floor = model_params.get("noise_floor", 1e-5)
+
+        #block_q = torch.arange(0.5, block_width//2 + 0.5, device=target["samples"].device)
+        #mel_density = get_mel_density(block_q * (sample_rate / block_width)).view(1, 1,-1, 1)
 
         error_real = (sample["samples_abs"] / target["samples_abs"]).log()
         error_real = (error_real - error_real.mean(dim=(1,2), keepdim=True)).square()
-        error_real = (error_real * mel_density.view(1,-1, 1)).mean() / 16
+        error_real = error_real.mean() / 16
 
-        noise_floor = target["samples_abs"].amin(dim=(1,2), keepdim=True)
-        error_imag_mask = (target["samples_abs"] > noise_floor).unsqueeze(1)
-        block_wavelength = block_width / block_q.view(1, 1,-1, 1)
-        block_wavelength = block_wavelength * (-torch.arange(0, qphase_nquants, device=target["samples"].device).view(1, qphase_nquants, 1, 1)).exp2()
-        #block_wavelength = block_width / block_q.view(1,-1, 1)
+        #error_imag_weight = ((target["samples_abs"] / noise_floor).log().unsqueeze(1) * mel_density).requires_grad_(False)
+        #error_imag_weight = error_imag_weight * (-torch.arange(0, qphase_nquants, device=target["samples"].device).view(1, qphase_nquants, 1, 1)).exp2()
 
-        error_imag = (sample["samples_qphase"] - target["samples_qphase"]).abs() * block_wavelength
-        error_imag = (error_imag.log1p().square() * error_imag_mask).mean()
-        #error_imag = (error_imag.clip(min=1).log().square() * error_imag_mask).mean()
+        #error_imag = (sample["samples_qphase"] - target["samples_qphase"])#.abs() #* block_wavelength
+        #error_imag = (error_imag.square() * error_imag_weight).mean() * 16
+        error_imag = torch.zeros_like(error_real)
 
-        #phase_error_imag  = ((sample["samples_phase"]  - target["samples_phase"]).abs() * block_wavelength).clip(min=1).log().square() * error_imag_mask
-        #qphase_error_imag = ((sample["samples_qphase"] - target["samples_phase"]).abs() * block_wavelength).clip(min=1).log().square() * error_imag_mask
-        #min_error_imag = torch.minimum(phase_error_imag, qphase_error_imag)
-        #min_error_class = (qphase_error_imag == min_error_imag).float()
-        #error_p_num_pos = min_error_class.sum(dim=(1,2), keepdim=True)
-        #error_p_pos_weight = (min_error_class[0, :, :].numel() - error_p_num_pos) / error_p_num_pos
-        #error_p = torch.nn.functional.binary_cross_entropy_with_logits(sample["samples_noise_p"], min_error_class, pos_weight=error_p_pos_weight, reduction="mean")
-        #error_imag = (phase_error_imag*4 + qphase_error_imag/4).mean()
-        #print("error_p: ", error_p.item(), "error_imag: ", error_imag.item())
-        #print("phase_error_imag: ", phase_error_imag.mean().item(), "qphase_error_imag: ", qphase_error_imag.mean().item())
-
-        return error_real, error_imag #+ error_p / 2
+        return error_real, error_imag
     
     @staticmethod
     def get_sample_shape(model_params, bsz=1, length=1):

@@ -172,7 +172,7 @@ def embedding_test():
 
 def vae_test():
 
-    model_name = "dualdiffusion2d_600_mclt_4vae_10"
+    model_name = "dualdiffusion2d_600_mclt_4vae_11"
     num_samples = 1
     #device = "cuda"
     device = "cpu"
@@ -197,7 +197,7 @@ def vae_test():
     
     #test_samples = ["27705.raw"] # extremely heavy noise
     #test_samples = ["26431.raw"] 
-    #test_samples = ["7149.raw"] 
+    #test_samples = ["34000.raw"] 
 
     # try to use most recent checkpoint if one exists
     vae_checkpoints = [f for f in os.listdir(model_path) if os.path.isdir(os.path.join(model_path, f)) and f.startswith("vae_checkpoint")]
@@ -229,8 +229,9 @@ def vae_test():
         output_posterior_file_path = os.path.join(output_path, f"step_{last_global_step}_{filename.replace('.raw', '_posterior.raw')}")
         save_raw(posterior.parameters, output_posterior_file_path)
 
+        original_raw_sample = format.raw_to_sample(input_raw_sample, model_params, return_dict=True)["raw_samples"]
         output_flac_file_path = os.path.join(output_path, f"step_{last_global_step}_{filename.replace('.raw', '_original.flac')}")
-        save_flac(input_raw_sample, sample_rate, output_flac_file_path)
+        save_flac(original_raw_sample, sample_rate, output_flac_file_path)
         print(f"Saved flac output to {output_flac_file_path}")
 
         output_flac_file_path = os.path.join(output_path, f"step_{last_global_step}_{filename.replace('.raw', '_decoded.flac')}")

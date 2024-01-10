@@ -244,7 +244,7 @@ class DualMultiscaleSpectralLoss3:
     def __init__(self, loss_params):
     
         self.block_widths = loss_params["block_widths"]
-        self.block_overlap = loss_params.get("block_overlap", 4)
+        self.block_overlap = loss_params["block_overlap"]
 
         self.loss_scale = 1 / 32 / len(self.block_widths)
 
@@ -254,7 +254,8 @@ class DualMultiscaleSpectralLoss3:
             raise ValueError(f"sample.shape != target.shape. sample.shape: {sample.shape}. target.shape: {target.shape}.")
         
         noise_floor = model_params.get("noise_floor", 1e-5)
-        imag_loss_scale = np.log(1 / noise_floor)
+        sample_rate = model_params["sample_rate"]
+        #imag_loss_scale = np.log(1 / noise_floor)
 
         loss_real = torch.zeros(1, device=sample.device)
         loss_imag = torch.zeros(1, device=sample.device)
@@ -265,22 +266,59 @@ class DualMultiscaleSpectralLoss3:
             step = max(block_width // self.block_overlap, 1)
             offset = np.random.randint(0, min(target.shape[-1] - block_width + 1, step))        
 
-            target_fft = stft(target[:, offset:], block_width, window_fn="blackman_harris", step=step)[:, :, 1:]
+            with torch.no_grad():
+                target_fft = stft(target[:, offset:], block_width, window_fn="blackman_harris", step=step)[:, :, 1:]
+                target_fft_abs = target_fft.abs()
+                target_fft_abs = (target_fft_abs / target_fft_abs.amax(dim=(1,2), keepdim=True)).clip(min=noise_floor)
+                #target_noise_floor = target_fft_abs.amin(dim=2, keepdim=True)
+                #target_phase_weight = (target_fft_abs / target_noise_floor).log()
+                #target_phase_weight = (target_fft_abs / noise_floor).log()
+
+                block_hz = torch.arange(1, target_fft.shape[-1]+1, device=target_fft.device) * (sample_rate/2 / target_fft.shape[-1])
+                mel_density = get_mel_density(block_hz).requires_grad_(False).view(1, 1,-1).requires_grad_(False)
+                                
             sample_fft = stft(sample[:, offset:], block_width, window_fn="blackman_harris", step=step)[:, :, 1:]
-            
-            target_fft_abs = target_fft.abs()
-            target_fft_abs = (target_fft_abs / target_fft_abs.amax(dim=(1,2), keepdim=True)).clip(min=noise_floor)
             sample_fft_abs = sample_fft.abs()
             sample_fft_abs = (sample_fft_abs / sample_fft_abs.amax(dim=(1,2), keepdim=True)).clip(min=noise_floor)
-            loss_real = loss_real + (sample_fft_abs / target_fft_abs).log().square().mean()
 
-            block_q = torch.arange(1, target_fft.shape[-1]+1, device=target_fft.device).requires_grad_(False)
-            block_wavelength = (block_width / block_q).view(1, 1,-1)
-            error_imag = (sample_fft.angle().abs() - target_fft.angle().abs()) * (target_fft_abs > noise_floor) * block_wavelength
+            error_real = (sample_fft_abs / target_fft_abs).log() 
+            loss_real = loss_real + error_real.square().mean()
+            #error_real_cepstrum = torch.fft.rfft(error_real, norm="ortho")
+            #loss_real = loss_real + (error_real_cepstrum.real.square() + error_real_cepstrum.imag.square()).mean() * 0.5
+
+            #loss_real = loss_real + ((sample_fft_abs / target_fft_abs).log().square() * mel_density).mean() * np.log(block_width)
+            #block_wavelength = (block_width / block_q).view(1, 1,-1)
+            #block_wavelength = (4096 / block_q).view(1, 1,-1)
+            #block_wavelength = 128
+
+            #target_phase_weight = (sample_fft_abs / noise_floor).log().detach().requires_grad_(False) * mel_density
+
+            sample_fft_noise_floor = sample_fft_abs.amin(dim=2, keepdim=True) * 1.1
+            target_phase_weight = (sample_fft_abs > sample_fft_noise_floor).detach().requires_grad_(False) * mel_density
+
+            #sample_fft_abs = sample_fft_abs.detach().requires_grad_(False)
+            #target_noise_floor = sample_fft_abs.amin(dim=2, keepdim=True)
+            #target_phase_weight = (sample_fft_abs / target_noise_floor).log() * mel_density
+
+            #block_wavelength = 2048
+            #error_imag = (sample_fft.angle().abs() - target_fft.angle().abs()) * (target_fft_abs > noise_floor) * block_wavelength
+            #error_imag = (sample_fft.angle().abs() - target_fft.angle().abs()) * block_wavelength
             #loss_imag = loss_imag + (error_imag.abs() / torch.pi).clip(min=1).log().square().mean()
-            loss_imag = loss_imag + (error_imag.abs() / torch.pi).log1p().square().mean()
+            #loss_imag = loss_imag + ((error_imag.abs() / torch.pi).clip(min=1).log().square() * target_phase_weight).mean()
+            #loss_imag = loss_imag + (error_imag.abs() / torch.pi).log1p().square().mean()
+            #loss_imag = loss_imag + ((error_imag.abs() / torch.pi).log1p().square() * target_phase_weight).mean() * np.log(block_width)
 
-        return loss_real * self.loss_scale, loss_imag * self.loss_scale * imag_loss_scale
+            #error_imag = ((sample_fft.angle().abs() - target_fft.angle().abs()).abs() * (block_wavelength / torch.pi)).log1p()
+            #loss_imag = loss_imag + error_imag.square().mean()# * np.log(block_width)
+
+            error_imag = sample_fft.angle().abs() - target_fft.angle().abs()
+            loss_imag = loss_imag + (error_imag.square() * target_phase_weight).mean() #* np.log(block_width) / 2
+            #error_imag = (sample_fft.angle().abs() - target_fft.angle().abs()) * target_phase_weight
+            #loss_imag = loss_imag + error_imag.square().mean()
+
+            #loss_imag = loss_imag + (error_imag.square() * target_phase_weight).mean() * np.log(block_width)
+
+        return loss_real * self.loss_scale, loss_imag * self.loss_scale * 10# * imag_loss_scale
 
 class DualMultiscaleSpectralLoss:
 
