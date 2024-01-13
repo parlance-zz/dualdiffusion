@@ -344,11 +344,11 @@ class SeparableAttnProcessor2_0:
 
         v_hidden_states = attn.unshape_for_attention(v_hidden_states, attn.separate_attn_dim, hidden_states_original_shape)
 
+        if hidden_states_1d:
+            v_hidden_states = v_hidden_states.squeeze(2)
+
         if attn.residual_connection:
             v_hidden_states = v_hidden_states + residual
         v_hidden_states = v_hidden_states / attn.rescale_output_factor
 
-        if hidden_states_1d:
-            return v_hidden_states.squeeze(2)
-        else:
-            return v_hidden_states
+        return v_hidden_states
