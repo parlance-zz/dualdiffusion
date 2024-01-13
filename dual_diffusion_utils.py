@@ -428,12 +428,20 @@ def get_comp_pair(length=65536, n_freqs=1024, freq_similarity=0, amp_similarity=
 def stft2(x, block_width, overlap=2):
 
     step = block_width // overlap
+    x = F.pad(x, (step//2, step//2))
     x = x.unfold(-1, block_width, step)
     
-    #window = get_hann_window(block_width, device=x.device)
-    window = get_blackman_harris_window(block_width, device=x.device)
+    window = get_hann_window(block_width, device=x.device)
+    #window = get_blackman_harris_window(block_width, device=x.device)
 
-    return torch.fft.rfft(x * window, norm="ortho")
+    N = x.shape[-1] // 2
+    n = torch.arange(2*N, device=x.device)
+    k = torch.arange(0.5, N + 0.5, device=x.device)
+    pre_shift = torch.exp(-1j * torch.pi / 2 / N * n)
+    post_shift = torch.exp(-1j * torch.pi / 2 / N * (N + 1) * k)
+    return torch.fft.fft(x * pre_shift * window, norm="forward")[..., :N] * post_shift #* 2 * N ** 0.5
+
+    #return torch.fft.rfft(x * window, norm="ortho")
 
 def istft2(x, block_width, overlap=2):
 
@@ -442,29 +450,59 @@ def istft2(x, block_width, overlap=2):
     signal_len = (x.shape[-2] - 1) * step + block_width
     y = torch.zeros(x.shape[:-2] + (signal_len,), device=x.device)
 
-    x = torch.fft.irfft(x, n=block_width, norm="ortho")
+    N = x.shape[-1]
+    n = torch.arange(2*N, device=x.device)
+    k = torch.arange(0.5, N + 0.5, device=x.device)
+    pre_shift = torch.exp(-1j * torch.pi / 2 / N * n)
+    post_shift = torch.exp(-1j * torch.pi / 2 / N * (N + 1) * k)
+    x = (torch.fft.ifft(x / post_shift, n=block_width, norm="backward") / pre_shift).real
+
+    #x = torch.fft.irfft(x, n=block_width, norm="ortho")
 
     for i in range(overlap):
         t = x[..., i::overlap, :].reshape(*x.shape[:-2], -1)
         y[..., i*step:i*step + t.shape[-1]] += t
 
+    y = y[..., step//2:-step//2]
     return y * (2 / overlap)
 
-def get_facsimile(sample, target, num_iterations=16, low_scale=4, high_scale=12, overlap=8, offset=1):
+def get_facsimile(sample, target, num_iterations=100, low_scale=6, high_scale=12, overlap=2):
 
     a = target
     x = sample
     
-    for _ in range(num_iterations):
-        for i in range(low_scale, high_scale):
+    a_stfts = []
+    for i in range(low_scale, high_scale):
+        block_width = int(2 ** i)
+        a_stfts.append(stft2(a, block_width, overlap=overlap).abs())
 
+    for v in range(len(a_stfts)):
+        a_stfts[v] = torch.fft.fft((a_stfts[v] * 8000).log1p(), norm="forward")[..., :a_stfts[v].shape[-1]//2]
+
+    temp = torch.stack([a.flatten() for a in a_stfts], dim=1)
+    print(temp.shape)
+    save_raw(temp, "./debug/test_a_stfts.raw")
+    exit()
+
+    for t in range(num_iterations):
+        for i in range(low_scale, high_scale):
+    
+            i = np.random.randint(low_scale, high_scale)  # this really does have to be random... ????            
             block_width = int(2 ** i)
 
-            a_stft = stft2(a, block_width, overlap=overlap)
+            a_stft = a_stfts[i-low_scale]
             x_stft = stft2(x, block_width, overlap=overlap)
-
-            x_stft[:, offset:] = x_stft[:, offset:] / x_stft[:, offset:].abs().clip(min=1e-15) * a_stft[:, offset:].abs()
+            x_stft = x_stft / x_stft.abs().clip(min=1e-15) * a_stft
+            if t < (num_iterations - 1): x_stft[:, -1] /= 2
             x = istft2(x_stft, block_width, overlap=overlap)
+
+    i = 7 # seems to induce the least artifacts ????
+    block_width = int(2 ** i)
+
+    a_stft = a_stfts[i-low_scale]
+    x_stft = stft2(x, block_width, overlap=overlap)
+    x_stft = x_stft / x_stft.abs().clip(min=1e-15) * a_stft.abs()
+    x = istft2(x_stft, block_width, overlap=overlap)
     
     return x
 
@@ -553,26 +591,21 @@ def get_lpc_coefficients(X: torch.Tensor, order: int ) -> torch.Tensor:
     return alphas
 
 # facsimile test   
-"""
-a = load_raw("./dataset/samples/1.raw")[:65536]
+#"""
+a = load_raw("./dataset/samples/29235.raw")[:65536*2]
 #a = load_raw("./debug/test_y.raw")[:65536]
 a /= a.abs().amax()
 save_raw(a, "./debug/test_a.raw")
 
 x = torch.randn_like(a)
 
-_, x = get_facsimile_loss(x, a, num_iterations=32, overlap=4, return_fax=True)
-#x = get_facsimile2(x, a)
+#x = torch.randn_like(a)
+#x = x **2 * torch.sign(x)
+
+#x = (torch.rand_like(a) * 2 * torch.pi).cos()
+
+x = get_facsimile(x, a)
 
 x /= x.abs().amax()
 save_raw(x, "./debug/test_x.raw")
-"""
-
-# angle wrap test
-"""
-angles_tensor = torch.tensor([-2.5, -1.5, 0.0, 1.5, 2.5])  # Example tensor
-add_value = -8.0
-result_tensor = (angles_tensor + add_value + torch.pi) % (2 * torch.pi) - torch.pi
-print(angles_tensor)
-print(result_tensor)
-"""
+#"""

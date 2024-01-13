@@ -172,7 +172,7 @@ def embedding_test():
 
 def vae_test():
 
-    model_name = "dualdiffusion2d_600_mclt_4vae_11"
+    model_name = "dualdiffusion2d_600_mclt_4vae_15"
     num_samples = 1
     #device = "cuda"
     device = "cpu"
@@ -198,6 +198,7 @@ def vae_test():
     #test_samples = ["27705.raw"] # extremely heavy noise
     #test_samples = ["26431.raw"] 
     #test_samples = ["34000.raw"] 
+    test_samples = ["29235.raw"] 
 
     # try to use most recent checkpoint if one exists
     vae_checkpoints = [f for f in os.listdir(model_path) if os.path.isdir(os.path.join(model_path, f)) and f.startswith("vae_checkpoint")]
@@ -247,7 +248,7 @@ if __name__ == "__main__":
         exit(1)
     else:
         torch.backends.cuda.matmul.allow_tf32 = True
-        torch.backends.cuda.cufft_plan_cache[0].max_size = 32 # stupid cufft memory leak
+        torch.backends.cuda.cufft_plan_cache[0].max_size = 250 # stupid cufft memory leak
 
     load_dotenv()
 
