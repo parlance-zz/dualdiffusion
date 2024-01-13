@@ -172,7 +172,7 @@ def embedding_test():
 
 def vae_test():
 
-    model_name = "dualdiffusion2d_600_mclt_4vae_15"
+    model_name = "dualdiffusion1d_700_mspsd_4vae_1"
     num_samples = 1
     #device = "cuda"
     device = "cpu"
@@ -230,7 +230,8 @@ def vae_test():
         output_posterior_file_path = os.path.join(output_path, f"step_{last_global_step}_{filename.replace('.raw', '_posterior.raw')}")
         save_raw(posterior.parameters, output_posterior_file_path)
 
-        original_raw_sample = format.raw_to_sample(input_raw_sample, model_params, return_dict=True)["raw_samples"]
+        #original_raw_sample = format.raw_to_sample(input_raw_sample, model_params, return_dict=True)["raw_samples"]
+        original_raw_sample = input_raw_sample
         output_flac_file_path = os.path.join(output_path, f"step_{last_global_step}_{filename.replace('.raw', '_original.flac')}")
         save_flac(original_raw_sample, sample_rate, output_flac_file_path)
         print(f"Saved flac output to {output_flac_file_path}")

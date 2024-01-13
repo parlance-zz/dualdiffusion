@@ -76,13 +76,46 @@ class DualMSPSDFormat:
             return psds_ln.requires_grad_(False)
 
     @staticmethod
-    def sample_to_raw(samples, model_params, return_dict=False):
+    def sample_to_raw(samples, model_params, return_dict=False, num_iterations=100):
         
+        low_scale = model_params["low_scale"]
+        high_scale = model_params["high_scale"]
         noise_floor = model_params["noise_floor"]
+        block_overlap = model_params["block_overlap"]
+        window_fn = model_params["window_fn"]
+
         samples_psds = samples.sigmoid().clip(min=noise_floor)
 
         if not return_dict:
-            raise NotImplementedError()
+            
+            x = torch.randn((samples_psds.shape[0], samples_psds.shape[2]), device=samples_psds.device)
+            
+            a_stfts = []
+            for i in range(low_scale, high_scale):
+                block_width = 2 ** i
+                a_stfts.append(samples_psds[:, i-low_scale, :].view(samples_psds.shape[0], -1, block_width//2))
+
+            for t in range(num_iterations):
+                for i in range(low_scale, high_scale):
+            
+                    i = np.random.randint(low_scale, high_scale)  # this really does have to be random... ????            
+                    block_width = 2 ** i
+
+                    a_stft = a_stfts[i-low_scale]
+                    x_stft = stft2(x, block_width, overlap=block_overlap, window_fn=window_fn)
+                    x_stft = x_stft / x_stft.abs().clip(min=1e-15) * a_stft
+                    if t < (num_iterations - 1): x_stft[:, -1] /= 2
+                    x = istft2(x_stft, block_width, overlap=block_overlap)
+
+            i = low_scale+1 # 7 # seems to induce the least artifacts ????
+            block_width = 2 ** i
+
+            a_stft = a_stfts[i-low_scale]
+            x_stft = stft2(x, block_width, overlap=block_overlap, window_fn=window_fn)
+            x_stft = x_stft / x_stft.abs().clip(min=1e-15) * a_stft.abs()
+            x = istft2(x_stft, block_width, overlap=block_overlap)
+            
+            return x
         else:
             samples_dict = {
                 "samples_psds": samples_psds,

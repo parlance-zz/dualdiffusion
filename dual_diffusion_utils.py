@@ -480,14 +480,6 @@ def get_facsimile(sample, target, num_iterations=100, low_scale=6, high_scale=12
         block_width = int(2 ** i)
         a_stfts.append(stft2(a, block_width, overlap=overlap).abs())
 
-    for v in range(len(a_stfts)):
-        a_stfts[v] = torch.fft.fft((a_stfts[v] * 8000).log1p(), norm="forward")[..., :a_stfts[v].shape[-1]//2]
-
-    temp = torch.stack([a.flatten() for a in a_stfts], dim=1)
-    print(temp.shape)
-    save_raw(temp, "./debug/test_a_stfts.raw")
-    exit()
-
     for t in range(num_iterations):
         for i in range(low_scale, high_scale):
     
@@ -596,7 +588,7 @@ def get_lpc_coefficients(X: torch.Tensor, order: int ) -> torch.Tensor:
 
 # facsimile test   
 """
-a = load_raw("./dataset/samples/29235.raw")[:65536*2]
+a = load_raw("./dataset/samples/14301.raw")[:65536*2]
 #a = load_raw("./debug/test_y.raw")[:65536]
 a /= a.abs().amax()
 save_raw(a, "./debug/test_a.raw")
