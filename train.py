@@ -1019,7 +1019,7 @@ def main():
                         vae_recon_real_loss, vae_recon_imag_loss = pipeline.format.get_loss(recon_samples_dict, samples_dict, model_params)
 
                     vae_kl_loss = posterior.kl().sum() / posterior.mean.numel()
-                    
+
                     vae_kl_loss_weight = args.kl_loss_weight
                     vae_recon_imag_loss_weight = args.recon_imag_loss_weight
                     loss = vae_recon_real_loss + vae_kl_loss_weight * vae_kl_loss + vae_recon_imag_loss * vae_recon_imag_loss_weight

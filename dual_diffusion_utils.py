@@ -425,14 +425,18 @@ def get_comp_pair(length=65536, n_freqs=1024, freq_similarity=0, amp_similarity=
 
     return y1.real, y2.real
 
-def stft2(x, block_width, overlap=2):
+def stft2(x, block_width, overlap=2, window_fn="hann"):
 
     step = block_width // overlap
     x = F.pad(x, (step//2, step//2))
     x = x.unfold(-1, block_width, step)
     
-    window = get_hann_window(block_width, device=x.device)
-    #window = get_blackman_harris_window(block_width, device=x.device)
+    if window_fn == "hann":
+        window = get_hann_window(block_width, device=x.device)
+    elif window_fn == "blackman_harris":
+        window = get_blackman_harris_window(block_width, device=x.device)
+    else:
+        raise ValueError(f"Unsupported window function: {window_fn}")
 
     N = x.shape[-1] // 2
     n = torch.arange(2*N, device=x.device)
@@ -591,7 +595,7 @@ def get_lpc_coefficients(X: torch.Tensor, order: int ) -> torch.Tensor:
     return alphas
 
 # facsimile test   
-#"""
+"""
 a = load_raw("./dataset/samples/29235.raw")[:65536*2]
 #a = load_raw("./debug/test_y.raw")[:65536]
 a /= a.abs().amax()
@@ -608,4 +612,4 @@ x = get_facsimile(x, a)
 
 x /= x.abs().amax()
 save_raw(x, "./debug/test_x.raw")
-#"""
+"""

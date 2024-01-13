@@ -31,7 +31,82 @@ from diffusers.pipelines.pipeline_utils import DiffusionPipeline
 
 from unet_dual import UNetDualModel
 from autoencoder_kl_dual import AutoencoderKLDual
-from dual_diffusion_utils import compute_snr, mdct, imdct, save_raw, get_mel_density
+from dual_diffusion_utils import compute_snr, mdct, imdct, save_raw, stft2, istft2
+
+class DualMSPSDFormat:
+
+    @staticmethod
+    def get_sample_crop_width(model_params):
+        return model_params["sample_raw_length"]
+    
+    @staticmethod
+    def get_num_channels(model_params):    
+        num_scales = model_params["high_scale"] - model_params["low_scale"]
+
+        in_channels  = model_params["sample_raw_channels"] * num_scales
+        out_channels = model_params["sample_raw_channels"] * num_scales
+        return (in_channels, out_channels)
+
+    @staticmethod
+    @torch.no_grad()
+    def raw_to_sample(raw_samples, model_params, return_dict=False):
+
+        low_scale = model_params["low_scale"]
+        high_scale = model_params["high_scale"]
+        block_overlap = model_params["block_overlap"]
+        window_fn = model_params["window_fn"]
+        u = model_params["u"]
+        noise_floor = model_params["noise_floor"]
+
+        psds = []
+        for scale in range(low_scale, high_scale):
+            psds.append(stft2(raw_samples, 2 ** scale, overlap=block_overlap, window_fn=window_fn).abs())
+        psds = torch.stack([psd.view(psd.shape[0], -1) for psd in psds], dim=1)
+
+        psds /= psds.amax(dim=(1,2), keepdim=True).clip_(min=1e-8)
+        psds_ln = (psds * u).log1p() / np.log1p(u)
+
+        if return_dict:
+            samples_dict = {
+                "samples": psds_ln.requires_grad_(False),
+                "samples_psds": psds.clip_(min=noise_floor).requires_grad_(False),
+            }
+            return samples_dict
+        else:
+            return psds_ln.requires_grad_(False)
+
+    @staticmethod
+    def sample_to_raw(samples, model_params, return_dict=False):
+        
+        noise_floor = model_params["noise_floor"]
+        samples_psds = samples.sigmoid().clip(min=noise_floor)
+
+        if not return_dict:
+            raise NotImplementedError()
+        else:
+            samples_dict = {
+                "samples_psds": samples_psds,
+            }
+            return samples_dict
+
+    @staticmethod
+    def get_loss(sample, target, model_params):
+        
+        sample_psds = sample["samples_psds"]
+        target_psds = target["samples_psds"]
+
+        error_real = (sample_psds / target_psds).log()
+        loss_real = error_real.square().mean()
+
+        loss_imag = torch.zeros_like(loss_real)
+        return loss_real / 32, loss_imag
+    
+    @staticmethod
+    def get_sample_shape(model_params, bsz=1, length=1):
+        _, num_output_channels = DualMSPSDFormat.get_num_channels(model_params)
+        crop_width = DualMSPSDFormat.get_sample_crop_width(model_params)
+
+        return (bsz, num_output_channels, crop_width)
 
 class DualMCLTFormat:
 
@@ -206,6 +281,8 @@ class DualDiffusionPipeline(DiffusionPipeline):
 
         if sample_format == "mclt":
             return DualMCLTFormat
+        elif sample_format == "mspsd":
+            return DualMSPSDFormat
         else:
             raise ValueError(f"Unknown sample format '{sample_format}'")
         
