@@ -31,7 +31,7 @@ from diffusers.pipelines.pipeline_utils import DiffusionPipeline
 
 from unet_dual import UNetDualModel
 from autoencoder_kl_dual import AutoencoderKLDual
-from dual_diffusion_utils import compute_snr, mdct, imdct, save_raw, stft2, istft2
+from dual_diffusion_utils import compute_snr, mdct, imdct, save_raw, stft2, istft2, get_mel_density, cdct, icdct
 
 class DualMSPSDFormat:
 
@@ -42,9 +42,20 @@ class DualMSPSDFormat:
     @staticmethod
     def get_num_channels(model_params):    
         num_scales = model_params["high_scale"] - model_params["low_scale"]
+        
+        # vanilla
+        #in_channels = model_params["sample_raw_channels"] * num_scales
+        #out_channels = model_params["sample_raw_channels"] * num_scales
 
-        in_channels  = model_params["sample_raw_channels"] * num_scales
-        out_channels = model_params["sample_raw_channels"] * num_scales
+        # positional encoding
+        in_channels = (model_params["sample_raw_channels"]+1) * num_scales
+        #out_channels = model_params["sample_raw_channels"] * num_scales
+        out_channels = (model_params["sample_raw_channels"]+1) * num_scales # with noise channel
+
+        # cepstrum
+        #in_channels = (model_params["sample_raw_channels"]+1) * num_scales
+        #out_channels = (model_params["sample_raw_channels"]+1) * num_scales
+        
         return (in_channels, out_channels)
 
     @staticmethod
@@ -59,61 +70,100 @@ class DualMSPSDFormat:
         noise_floor = model_params["noise_floor"]
 
         psds = []
+        p_encodings = []
         for scale in range(low_scale, high_scale):
-            psds.append(stft2(raw_samples, 2 ** scale, overlap=block_overlap, window_fn=window_fn).abs())
-        psds = torch.stack([psd.view(psd.shape[0], -1) for psd in psds], dim=1)
+            stft_abs = stft2(raw_samples, 2 ** scale, overlap=block_overlap, window_fn=window_fn).abs()
 
-        psds /= psds.amax(dim=(1,2), keepdim=True).clip_(min=1e-8)
+            # cepstrum
+            #stft_abs = (stft_abs / stft_abs.amax(dim=(1,2), keepdim=True).clip_(min=1e-8)).clip_(min=noise_floor)
+            #stft_abs = (stft_abs * u).log1p() / np.log1p(u)
+            #stft_abs = cdct(stft_abs)
+            
+            position_encoding = torch.linspace(-1, 1, stft_abs.shape[2], device=stft_abs.device).view(1, 1,-1).repeat(stft_abs.shape[0], stft_abs.shape[1], 1)
+
+            psds.append(stft_abs)
+            p_encodings.append(position_encoding)
+            
+        psds = torch.stack([psd.view(psd.shape[0], -1) for psd in psds], dim=1)
+        #psds = torch.view_as_real(psds).permute(0, 3, 1, 2).contiguous().view(psds.shape[0], -1, psds.shape[2]) # cepstrum
+        p_encodings = torch.stack([p_encoding.view(p_encoding.shape[0], -1) for p_encoding in p_encodings], dim=1)
+        #psds = torch.stack([psd.view(psd.shape[0], 32, -1) for psd in psds], dim=1)
+        psds /= psds.abs().amax(dim=(1,2), keepdim=True).clip_(min=1e-8)
         psds_ln = (psds * u).log1p() / np.log1p(u)
+        #psds_ln = psds # cepstrum
+        psds_ln = torch.cat((psds_ln, p_encodings), dim=1)
 
         if return_dict:
             samples_dict = {
                 "samples": psds_ln.requires_grad_(False),
+                #"samples": torch.cat((psds, p_encodings), dim=1).requires_grad_(False), #cepstrum
                 "samples_psds": psds.clip_(min=noise_floor).requires_grad_(False),
+                #"samples_psds": psds.requires_grad_(False), #cepstrum
             }
             return samples_dict
         else:
             return psds_ln.requires_grad_(False)
+            #return torch.cat((psds, p_encodings), dim=1).requires_grad_(False) # cepstrum
 
     @staticmethod
-    def sample_to_raw(samples, model_params, return_dict=False, num_iterations=100):
+    def sample_to_raw(samples, model_params, return_dict=False, num_iterations=200):
         
         low_scale = model_params["low_scale"]
         high_scale = model_params["high_scale"]
         noise_floor = model_params["noise_floor"]
         block_overlap = model_params["block_overlap"]
         window_fn = model_params["window_fn"]
+        inv_window_fn = model_params["inv_window_fn"]
+        num_scales = high_scale - low_scale
+        u = model_params["u"]
 
-        samples_psds = samples.sigmoid().clip(min=noise_floor)
+        #samples_psds = samples.sigmoid()
+        samples_psds = samples.view(samples.shape[0], 2, num_scales, -1)
+        samples_psds = (samples_psds[:, 0, :, :] + torch.randn_like(samples_psds[:, 1, :, :]) * samples_psds[:, 1, :, :].sigmoid()).sigmoid()
+
+        samples_psds = (samples_psds / samples_psds.amax(dim=(1,2), keepdim=True).clip(min=1e-8)).clip(min=noise_floor)
+        #samples_psds = samples.tanh()
+        #samples_psds = samples_psds / samples_psds.abs().amax(dim=(1,2), keepdim=True).clip(min=1e-8)
 
         if not return_dict:
             
-            x = torch.randn((samples_psds.shape[0], samples_psds.shape[2]), device=samples_psds.device)
+            x = torch.randn((samples_psds.shape[0], samples_psds.shape[2] * 2 // block_overlap), device=samples_psds.device)
+            #x = torch.randn((samples_psds.shape[0], samples_psds.shape[2]), device=samples_psds.device)
             
             a_stfts = []
             for i in range(low_scale, high_scale):
                 block_width = 2 ** i
+
+                # cepstrum
+                #psds = samples_psds[:, i-low_scale, :].view(samples_psds.shape[0], -1, block_width//2)
+                #psds = icdct(psds)
+                #psds = (psds / psds.abs().amax(dim=(1,2), keepdim=True).clip(min=1e-8)).clip(min=0)
+                #psds = ((1 + u) ** psds - 1) / u
+                #a_stfts.append(psds)
+
                 a_stfts.append(samples_psds[:, i-low_scale, :].view(samples_psds.shape[0], -1, block_width//2))
 
+            scales = np.arange(low_scale, high_scale)
             for t in range(num_iterations):
-                for i in range(low_scale, high_scale):
-            
-                    i = np.random.randint(low_scale, high_scale)  # this really does have to be random... ????            
+                
+                np.random.shuffle(scales)
+                for i in scales:         
                     block_width = 2 ** i
 
                     a_stft = a_stfts[i-low_scale]
                     x_stft = stft2(x, block_width, overlap=block_overlap, window_fn=window_fn)
+
                     x_stft = x_stft / x_stft.abs().clip(min=1e-15) * a_stft
                     if t < (num_iterations - 1): x_stft[:, -1] /= 2
-                    x = istft2(x_stft, block_width, overlap=block_overlap)
+                    x = istft2(x_stft, block_width, overlap=block_overlap, window_fn=inv_window_fn)
 
-            i = low_scale+1 # 7 # seems to induce the least artifacts ????
+            i = low_scale + 2 # 8 # seems to induce the least artifacts ????
             block_width = 2 ** i
 
             a_stft = a_stfts[i-low_scale]
             x_stft = stft2(x, block_width, overlap=block_overlap, window_fn=window_fn)
             x_stft = x_stft / x_stft.abs().clip(min=1e-15) * a_stft.abs()
-            x = istft2(x_stft, block_width, overlap=block_overlap)
+            x = istft2(x_stft, block_width, overlap=block_overlap, window_fn=inv_window_fn)
             
             return x
         else:
@@ -125,14 +175,61 @@ class DualMSPSDFormat:
     @staticmethod
     def get_loss(sample, target, model_params):
         
+        low_scale = model_params["low_scale"]
+        high_scale = model_params["high_scale"]
+        num_scales = high_scale - low_scale
+
         sample_psds = sample["samples_psds"]
         target_psds = target["samples_psds"]
+        
+        #error_real = (sample_psds - target_psds).square().mean() * 16
+        #return error_real, torch.zeros_like(error_real)
 
-        error_real = (sample_psds / target_psds).log()
-        loss_real = error_real.square().mean()
+        loss_real = torch.zeros(1, device=sample_psds.device)
+        for scale in range(num_scales):
+            block_width = 2 ** (scale + low_scale)
+
+            #"""
+            mel_density = get_mel_density(torch.arange(0.5, block_width//2 + 0.5, device=sample_psds.device) * (model_params["sample_rate"] / block_width)).requires_grad_(False).view(1, 1,-1)
+            sample_psd = sample_psds[:, scale, :].view(sample_psds.shape[0], -1, block_width//2).log() * mel_density
+            target_psd = target_psds[:, scale, :].view(target_psds.shape[0], -1, block_width//2).log() * mel_density
+            sample_psd_cepstrum = torch.fft.rfft2(sample_psd, norm="ortho"); sample_psd_cepstrum[:, 0, 0] = 0
+            target_psd_cepstrum = torch.fft.rfft2(target_psd, norm="ortho"); target_psd_cepstrum[:, 0, 0] = 0
+            error_psd = (sample_psd_cepstrum.real - target_psd_cepstrum.real).abs().mean() + (sample_psd_cepstrum.imag - target_psd_cepstrum.imag).abs().mean()
+            loss_real = loss_real + error_psd.mean() / 4
+            #"""
+
+            """
+            #mel_density = get_mel_density(torch.arange(0.5, block_width//2 + 0.5, device=sample_psds.device) * (model_params["sample_rate"] / block_width)).requires_grad_(False)
+            #sample_psd = sample_psds[:, scale, :].view(sample_psds.shape[0], -1, block_width//2).log()
+            #target_psd = target_psds[:, scale, :].view(target_psds.shape[0], -1, block_width//2).log()
+            rel_sample_psd = sample_psd.clone()
+            rel_sample_psd[:, :, 1:] = rel_sample_psd[:, :, 1:] - sample_psd[:, :,:-1] * 0.25
+            rel_sample_psd[:, :,:-1] = rel_sample_psd[:, :,:-1] - sample_psd[:, :, 1:] * 0.25
+            rel_sample_psd[:, 1:, :] = rel_sample_psd[:, 1:, :] - sample_psd[:, :-1,:] * 0.25
+            rel_sample_psd[:, :-1,:] = rel_sample_psd[:, :-1,:] - sample_psd[:, 1:, :] * 0.25
+            rel_target_psd = target_psd.clone()
+            rel_target_psd[:, :, 1:] = rel_target_psd[:, :, 1:] - target_psd[:, :,:-1] * 0.25
+            rel_target_psd[:, :,:-1] = rel_target_psd[:, :,:-1] - target_psd[:, :, 1:] * 0.25
+            rel_target_psd[:, 1:, :] = rel_target_psd[:, 1:, :] - target_psd[:, :-1,:] * 0.25
+            rel_target_psd[:, :-1,:] = rel_target_psd[:, :-1,:] - target_psd[:, 1:, :] * 0.25
+            error_psd = (sample_psd - target_psd).abs()# * mel_density.view(1, 1,-1)
+            loss_real = loss_real + error_psd.mean() / 2
+            """
+
+            kernel = torch.tensor([[-1, -1, -1],
+                                   [-1,  8, -1],
+                                   [-1, -1, -1]], device=sample_psds.device).view(1,1,3,3) / 8
+
+            rel_sample_psd = torch.nn.functional.conv2d(sample_psd.unsqueeze(1), kernel, stride=1, padding=0)
+            rel_target_psd = torch.nn.functional.conv2d(target_psd.unsqueeze(1), kernel, stride=1, padding=0)
+            error_psd = (rel_sample_psd - rel_target_psd).abs()
+            loss_real = loss_real + error_psd.mean() / 2
+            
 
         loss_imag = torch.zeros_like(loss_real)
-        return loss_real / 32, loss_imag
+        #return loss_real / 32, loss_imag
+        return loss_real / num_scales, loss_imag
     
     @staticmethod
     def get_sample_shape(model_params, bsz=1, length=1):

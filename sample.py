@@ -172,7 +172,7 @@ def embedding_test():
 
 def vae_test():
 
-    model_name = "dualdiffusion1d_700_mspsd_4vae_1"
+    model_name = "dualdiffusion1d_700_mspsd_4vae_6"
     num_samples = 1
     #device = "cuda"
     device = "cpu"
@@ -197,8 +197,8 @@ def vae_test():
     
     #test_samples = ["27705.raw"] # extremely heavy noise
     #test_samples = ["26431.raw"] 
-    #test_samples = ["34000.raw"] 
-    test_samples = ["29235.raw"] 
+    #test_samples = ["3559.raw"] 
+    #test_samples = ["29235.raw"] 
 
     # try to use most recent checkpoint if one exists
     vae_checkpoints = [f for f in os.listdir(model_path) if os.path.isdir(os.path.join(model_path, f)) and f.startswith("vae_checkpoint")]

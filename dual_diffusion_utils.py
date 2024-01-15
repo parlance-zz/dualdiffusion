@@ -425,29 +425,65 @@ def get_comp_pair(length=65536, n_freqs=1024, freq_similarity=0, amp_similarity=
 
     return y1.real, y2.real
 
+def dct1_rfft_impl(x):
+    return torch.view_as_real(torch.fft.rfft(x, dim=1))
+
+def cdct(x):
+    """
+    Discrete Cosine Transform, Type I
+
+    :param x: the input signal
+    :return: the DCT-I of the signal over the last dimension
+    """
+    x_shape = x.shape
+    x = x.view(-1, x_shape[-1])
+    x = torch.cat([x, x.flip([1])[:, 1:-1]], dim=1)
+
+    return dct1_rfft_impl(x)[:, :, 0].view(*x_shape)
+
+
+def icdct(X):
+    """
+    The inverse of DCT-I, which is just a scaled DCT-I
+
+    Our definition if idct1 is such that idct1(dct1(x)) == x
+
+    :param X: the input signal
+    :return: the inverse DCT-I of the signal over the last dimension
+    """
+    n = X.shape[-1]
+    return cdct(X) / (2 * (n - 1))
+
 def stft2(x, block_width, overlap=2, window_fn="hann"):
 
     step = block_width // overlap
-    x = F.pad(x, (step//2, step//2))
+    #x = F.pad(x, (step//2, step//2))
+    padding = block_width * (overlap - 1) // overlap // 2
+    x = F.pad(x, (padding, padding))
     x = x.unfold(-1, block_width, step)
-    
-    if window_fn == "hann":
-        window = get_hann_window(block_width, device=x.device)
-    elif window_fn == "blackman_harris":
-        window = get_blackman_harris_window(block_width, device=x.device)
-    else:
-        raise ValueError(f"Unsupported window function: {window_fn}")
 
     N = x.shape[-1] // 2
     n = torch.arange(2*N, device=x.device)
     k = torch.arange(0.5, N + 0.5, device=x.device)
     pre_shift = torch.exp(-1j * torch.pi / 2 / N * n)
     post_shift = torch.exp(-1j * torch.pi / 2 / N * (N + 1) * k)
-    return torch.fft.fft(x * pre_shift * window, norm="forward")[..., :N] * post_shift #* 2 * N ** 0.5
 
-    #return torch.fft.rfft(x * window, norm="ortho")
+    if window_fn == "hann":
+        window = get_hann_window(block_width, device=x.device)
+    elif window_fn == "blackman_harris":
+        window = get_blackman_harris_window(block_width, device=x.device)
+    elif window_fn == "sin":
+        window = torch.sin(torch.pi * (n + 0.5) / x.shape[-1]).requires_grad_(False)
+    elif window_fn == "flat_top":
+        window = get_flat_top_window(block_width, device=x.device)
+    elif window_fn == "none":
+        window = 1
+    else:
+        raise ValueError(f"Unsupported window function: {window_fn}")
 
-def istft2(x, block_width, overlap=2):
+    return torch.fft.fft(x * pre_shift * window, norm="forward")[..., :N] * post_shift
+
+def istft2(x, block_width, overlap=2, window_fn="none"):
 
     step = block_width // overlap
 
@@ -459,46 +495,81 @@ def istft2(x, block_width, overlap=2):
     k = torch.arange(0.5, N + 0.5, device=x.device)
     pre_shift = torch.exp(-1j * torch.pi / 2 / N * n)
     post_shift = torch.exp(-1j * torch.pi / 2 / N * (N + 1) * k)
-    x = (torch.fft.ifft(x / post_shift, n=block_width, norm="backward") / pre_shift).real
 
-    #x = torch.fft.irfft(x, n=block_width, norm="ortho")
+    if window_fn == "hann":
+        window = get_hann_window(block_width, device=x.device)
+    elif window_fn == "blackman_harris":
+        window = get_blackman_harris_window(block_width, device=x.device)
+    elif window_fn == "sin":
+        window = torch.sin(torch.pi * (n + 0.5) / x.shape[-1]).requires_grad_(False)
+    elif window_fn == "flat_top":
+        window = get_flat_top_window(block_width, device=x.device)
+    elif window_fn == "none":
+        window = 1
+    else:
+        raise ValueError(f"Unsupported window function: {window_fn}")
+    
+    x = (torch.fft.ifft(x / post_shift, n=block_width, norm="backward") / pre_shift).real * window
 
     for i in range(overlap):
         t = x[..., i::overlap, :].reshape(*x.shape[:-2], -1)
         y[..., i*step:i*step + t.shape[-1]] += t
 
-    y = y[..., step//2:-step//2]
+    #y = y[..., step//2:-step//2]
+    padding = block_width * (overlap - 1) // overlap // 2
+    y = y[..., padding:-padding]
     return y * (2 / overlap)
 
-def get_facsimile(sample, target, num_iterations=100, low_scale=6, high_scale=12, overlap=2):
+def get_facsimile(sample, target, num_iterations=200, low_scale=6, high_scale=12, overlap=2, window_fn="hann", inv_window_fn="none"):
 
     a = target
     x = sample
     
+    #block_widths = [34, 54, 88, 142, 230, 372, 602, 974, 1576]
     a_stfts = []
     for i in range(low_scale, high_scale):
         block_width = int(2 ** i)
-        a_stfts.append(stft2(a, block_width, overlap=overlap).abs())
+        #block_width = block_widths[i-low_scale]
+        a_stft_abs = stft2(a, block_width, overlap=overlap, window_fn=window_fn).abs()
+
+        #a_stft_abs *= (torch.randn_like(a_stft_abs) * 1).exp()
+        a_stfts.append(a_stft_abs)
+
+    torch.stack([torch.fft.rfft(a.flatten().clip(min=1e-8).log(), norm="forward") for a in a_stfts], dim=1).numpy().tofile("./debug/test_a_stfts.raw")
+
+    scales = np.arange(low_scale, high_scale)
 
     for t in range(num_iterations):
-        for i in range(low_scale, high_scale):
+
+        #y = torch.zeros_like(x)
+        #for i in range(low_scale, high_scale):
+        #for i in range(high_scale-1, low_scale-1, -1):
+        
+        np.random.shuffle(scales)
+        for i in scales:
     
-            i = np.random.randint(low_scale, high_scale)  # this really does have to be random... ????            
+            #i = np.random.randint(low_scale, high_scale)  # this really does have to be random... ????            
             block_width = int(2 ** i)
+            #block_width = block_widths[i-low_scale]
 
             a_stft = a_stfts[i-low_scale]
-            x_stft = stft2(x, block_width, overlap=overlap)
-            x_stft = x_stft / x_stft.abs().clip(min=1e-15) * a_stft
-            if t < (num_iterations - 1): x_stft[:, -1] /= 2
-            x = istft2(x_stft, block_width, overlap=overlap)
+            x_stft = stft2(x, block_width, overlap=overlap, window_fn=window_fn)
 
-    i = 7 # seems to induce the least artifacts ????
+            x_stft = x_stft / x_stft.abs().clip(min=1e-15) * a_stft
+            #a_stfts[i-low_scale] = a_stfts[i-low_scale] * 0.95 + x_stft.abs() * 0.05
+            if t < (num_iterations - 1): x_stft[:, -1] /= 2
+            x = istft2(x_stft, block_width, overlap=overlap, window_fn=inv_window_fn)
+            #y += istft2(x_stft, block_width, overlap=overlap)
+        #x = y
+
+    i = low_scale+2 # seems to induce the least artifacts ????
     block_width = int(2 ** i)
+    #block_width = block_widths[i-low_scale] 
 
     a_stft = a_stfts[i-low_scale]
-    x_stft = stft2(x, block_width, overlap=overlap)
+    x_stft = stft2(x, block_width, overlap=overlap, window_fn=window_fn)
     x_stft = x_stft / x_stft.abs().clip(min=1e-15) * a_stft.abs()
-    x = istft2(x_stft, block_width, overlap=overlap)
+    x = istft2(x_stft, block_width, overlap=overlap, window_fn=inv_window_fn)
     
     return x
 
