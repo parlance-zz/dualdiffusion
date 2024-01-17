@@ -538,7 +538,7 @@ def get_facsimile(sample, target, num_iterations=200, low_scale=6, high_scale=12
 
         a_stft_abs /= a_stft_abs.amax()
         a_stft_abs = a_stft_abs.clip(min=1e-6).log()
-        a_stft_abs -= a_stft_abs.mean()
+        #a_stft_abs -= a_stft_abs.mean()
 
         #q_stft = torch.fft.rfft(a_stft_abs, norm="ortho")[:, :block_width//8]
         q_stft = torch.fft.rfft(a_stft_abs)[:, :block_width//8] / block_width
@@ -725,7 +725,7 @@ def get_lpc_coefficients(X: torch.Tensor, order: int ) -> torch.Tensor:
 
 # facsimile test   
 """
-a = load_raw("./dataset/samples/6100.raw")[:65536*2]
+a = load_raw("./dataset/samples/29235.raw")[:65536*4]
 #a = load_raw("./debug/test_y.raw")[:65536]
 a /= a.abs().amax()
 save_raw(a, "./debug/test_a.raw")
