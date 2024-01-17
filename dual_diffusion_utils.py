@@ -470,6 +470,8 @@ def stft2(x, block_width, overlap=2, window_fn="hann"):
 
     if window_fn == "hann":
         window = get_hann_window(block_width, device=x.device)
+    elif window_fn == "hann^2":
+        window = get_hann_window(block_width, device=x.device).square()
     elif window_fn == "blackman_harris":
         window = get_blackman_harris_window(block_width, device=x.device)
     elif window_fn == "sin":
@@ -498,6 +500,8 @@ def istft2(x, block_width, overlap=2, window_fn="none"):
 
     if window_fn == "hann":
         window = get_hann_window(block_width, device=x.device)
+    elif window_fn == "hann^2":
+        window = get_hann_window(block_width, device=x.device).square()
     elif window_fn == "blackman_harris":
         window = get_blackman_harris_window(block_width, device=x.device)
     elif window_fn == "sin":
@@ -520,57 +524,112 @@ def istft2(x, block_width, overlap=2, window_fn="none"):
     y = y[..., padding:-padding]
     return y * (2 / overlap)
 
-def get_facsimile(sample, target, num_iterations=200, low_scale=6, high_scale=12, overlap=2, window_fn="hann", inv_window_fn="none"):
+def get_facsimile(sample, target, num_iterations=200, low_scale=6, high_scale=12, overlap=4, window_fn="hann^2", inv_window_fn="hann^2"):
 
     a = target
     x = sample
     
-    #block_widths = [34, 54, 88, 142, 230, 372, 602, 974, 1576]
     a_stfts = []
+    q_stfts = []
     for i in range(low_scale, high_scale):
         block_width = int(2 ** i)
-        #block_width = block_widths[i-low_scale]
+        
         a_stft_abs = stft2(a, block_width, overlap=overlap, window_fn=window_fn).abs()
 
-        #a_stft_abs *= (torch.randn_like(a_stft_abs) * 1).exp()
+        a_stft_abs /= a_stft_abs.amax()
+        a_stft_abs = a_stft_abs.clip(min=1e-6).log()
+        a_stft_abs -= a_stft_abs.mean()
+
+        #q_stft = torch.fft.rfft(a_stft_abs, norm="ortho")[:, :block_width//8]
+        q_stft = torch.fft.rfft(a_stft_abs)[:, :block_width//8] / block_width
+        
+        #print( (q_stft.abs() < 1e-3).sum().item())
+        #q_stft[q_stft.abs() < 1e-3] = 1e-3
+        print( (q_stft.abs() < 1e-4).sum().item())
+        q_stft[q_stft.abs() < 1e-4] = 1e-4
+        #print(q_stft.abs().amax())
+
+        q_stft_real = q_stft.abs().log()
+        q_stft_imag = q_stft.angle()
+        print(q_stft_real.amin(), q_stft_real.amax())
+        q_stft = q_stft_real + 1j * q_stft_imag
+        q_stfts.append(q_stft)
+        q_stft = q_stft.exp()
+
+        #a_stft_abs = torch.fft.irfft(q_stft, n=block_width//2, norm="ortho")
+        a_stft_abs = torch.fft.irfft(q_stft * block_width, n=block_width//2)
+        a_stft_abs = a_stft_abs.exp()
+        a_stft_abs /= a_stft_abs.amax()
+
         a_stfts.append(a_stft_abs)
 
-    torch.stack([torch.fft.rfft(a.flatten().clip(min=1e-8).log(), norm="forward") for a in a_stfts], dim=1).numpy().tofile("./debug/test_a_stfts.raw")
-
+    torch.stack([a.flatten() for a in q_stfts], dim=0).numpy().tofile("./debug/test_q_stfts.raw")
+    
     scales = np.arange(low_scale, high_scale)
 
+    #"""
     for t in range(num_iterations):
 
-        #y = torch.zeros_like(x)
         #for i in range(low_scale, high_scale):
         #for i in range(high_scale-1, low_scale-1, -1):
         
         np.random.shuffle(scales)
         for i in scales:
-    
-            #i = np.random.randint(low_scale, high_scale)  # this really does have to be random... ????            
+           
             block_width = int(2 ** i)
-            #block_width = block_widths[i-low_scale]
+
+            a_stft = a_stfts[i-low_scale]
+            x_stft = stft2(x, block_width, overlap=overlap, window_fn=window_fn)
+            x_stft_abs = x_stft.abs()
+            x_stft_abs[x_stft_abs == 0] = 1
+            #x_stft_abs = x_stft_abs.clip(min=1e-15)
+
+            #x_stft[x_stft_abs < a_stft] = (x_stft / x_stft_abs * a_stft)[x_stft_abs < a_stft]
+            x_stft = x_stft / x_stft_abs * a_stft
+            
+            #x_stft[:, -1] /= 2
+            x = istft2(x_stft, block_width, overlap=overlap, window_fn=inv_window_fn)
+    #"""
+    
+    
+    #"""
+    #i = low_scale+2 # seems to induce the least artifacts ????
+    i = low_scale+2 # seems to induce the least artifacts ????
+    block_width = int(2 ** i)
+
+    a_stft = a_stfts[i-low_scale]
+    x_stft = stft2(x, block_width, overlap=overlap, window_fn=window_fn)
+    x_stft_abs = x_stft.abs()
+    x_stft_abs[x_stft_abs == 0] = 1
+    #x_stft_abs = x_stft_abs.clip(min=1e-15)
+    x_stft = x_stft / x_stft_abs * a_stft
+    #x_stft = x_stft / x_stft.abs().clip(min=1e-15) * a_stft.abs()
+    #x_stft[:, -1] = 0
+    x = istft2(x_stft, block_width, overlap=overlap, window_fn=inv_window_fn)
+    return x
+    #"""
+
+    """
+    for t in range(num_iterations):
+        y = torch.zeros_like(x)
+
+        for i in scales:
+            block_width = int(2 ** i)
 
             a_stft = a_stfts[i-low_scale]
             x_stft = stft2(x, block_width, overlap=overlap, window_fn=window_fn)
 
-            x_stft = x_stft / x_stft.abs().clip(min=1e-15) * a_stft
+            x_stft_abs = x_stft.abs().clip(min=1e-15)
+
+            #x_stft[x_stft_abs < a_stft] = (x_stft / x_stft_abs * a_stft)[x_stft_abs < a_stft]
+            x_stft = x_stft / x_stft_abs * a_stft
+            
             #a_stfts[i-low_scale] = a_stfts[i-low_scale] * 0.95 + x_stft.abs() * 0.05
-            if t < (num_iterations - 1): x_stft[:, -1] /= 2
-            x = istft2(x_stft, block_width, overlap=overlap, window_fn=inv_window_fn)
-            #y += istft2(x_stft, block_width, overlap=overlap)
-        #x = y
+            y += istft2(x_stft, block_width, overlap=overlap, window_fn=inv_window_fn)
+        
+        x = y / y.amax()
+    """
 
-    i = low_scale+2 # seems to induce the least artifacts ????
-    block_width = int(2 ** i)
-    #block_width = block_widths[i-low_scale] 
-
-    a_stft = a_stfts[i-low_scale]
-    x_stft = stft2(x, block_width, overlap=overlap, window_fn=window_fn)
-    x_stft = x_stft / x_stft.abs().clip(min=1e-15) * a_stft.abs()
-    x = istft2(x_stft, block_width, overlap=overlap, window_fn=inv_window_fn)
-    
     return x
 
 def get_lpc_coefficients(X: torch.Tensor, order: int ) -> torch.Tensor:
@@ -657,9 +716,16 @@ def get_lpc_coefficients(X: torch.Tensor, order: int ) -> torch.Tensor:
     #alphas = torch.nan_to_num(alphas.clip(min=-100, max=100), nan=0.0, posinf=100, neginf=-100)
     return alphas
 
+#a = load_raw("./dataset/samples/80.raw")[:65536*2]
+#save_raw(a, "./debug/test_input.raw")
+#a = torch.fft.rfft(torch.fft.rfft(a, norm="ortho").abs(), norm="ortho")
+#a = a.abs().log() + a.angle().abs() * 1j
+#save_raw(a, "./debug/test_a.raw")
+
+
 # facsimile test   
 """
-a = load_raw("./dataset/samples/14301.raw")[:65536*2]
+a = load_raw("./dataset/samples/6100.raw")[:65536*2]
 #a = load_raw("./debug/test_y.raw")[:65536]
 a /= a.abs().amax()
 save_raw(a, "./debug/test_a.raw")
