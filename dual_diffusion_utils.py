@@ -542,7 +542,8 @@ class MSPSD:
             block_width = int(2 ** i)
 
             a_stft_abs = stft2(sample, block_width, overlap=self.overlap, window_fn=self.window_fn).abs()
-            a_stft_abs = a_stft_abs / a_stft_abs.amax(dim=(-1,-2), keepdim=True)
+            a_stft_abs = (a_stft_abs / a_stft_abs.amax(dim=(-1,-2), keepdim=True)).clip(min=self.noise_floor).log()
+            a_stft_abs = a_stft_abs - a_stft_abs.mean(dim=(-1,-2), keepdim=True)
             a_stfts.append(a_stft_abs.view(a_stft_abs.shape[:-2] + (-1,)))
 
         return torch.stack(a_stfts, dim=a_stfts[0].ndim-1)
@@ -559,8 +560,6 @@ class MSPSD:
             view_dims = mspsd.shape[:-1] + (-1, block_width // 2)
             a_stft_abs = mspsd.view(view_dims)[..., i-self.low_scale, :, :]
 
-            a_stft_abs = a_stft_abs.clip(min=self.noise_floor).log()
-            a_stft_abs = a_stft_abs - a_stft_abs.mean(dim=(-2,-1), keepdim=True)
             #save_raw(a_stft_abs, f"./debug/a_stft_abs_{i-self.low_scale}.raw")
             
             q_stft = torch.fft.rfft(a_stft_abs, norm="ortho")[..., :, :block_width // 4 // self.cepstrum_crop_factor]
@@ -591,12 +590,12 @@ class MSPSD:
             q_stft = q_stft.permute(list(range(ndim)) + [ndim+1, ndim+2, ndim+0])
             q_stft = torch.view_as_complex(q_stft.contiguous())
 
-            a_stft_abs = torch.fft.irfft(q_stft, n=block_width//2, norm="ortho").exp()
-            a_stft_abs = a_stft_abs / a_stft_abs.amax(dim=(-1,-2), keepdim=True)
+            a_stft_abs = torch.fft.irfft(q_stft, n=block_width//2, norm="ortho")
             a_stfts.append(a_stft_abs.view(a_stft_abs.shape[:-2] + (-1,)))
 
         return torch.stack(a_stfts, dim=a_stfts[0].ndim-1)
 
+    @torch.no_grad()
     def _shape_sample(self, x, mspsd, scale):
         
         block_width = int(2 ** scale)
@@ -609,11 +608,15 @@ class MSPSD:
 
         x_stft = x_stft / x_stft_abs * a_stft_abs
         return istft2(x_stft, block_width, overlap=self.overlap, window_fn=self.inv_window_fn)
-        
+
+    @torch.no_grad() 
     def get_sample(self, mspsd, num_iterations=100):
         
         sample_len = mspsd.shape[-1] * 2 // self.overlap
         x = torch.randn(mspsd.shape[:-2] + (sample_len,), device=mspsd.device)
+
+        mspsd = mspsd.exp()
+        mspsd = mspsd / mspsd.amax(dim=-1, keepdim=True)
 
         scales = np.arange(self.low_scale, self.high_scale)
         for _ in range(num_iterations):
@@ -832,22 +835,6 @@ def get_lpc_coefficients(X: torch.Tensor, order: int ) -> torch.Tensor:
     return alphas
 
 # MSPSD test
-"""
-torch.manual_seed(0)
-np.random.seed(0)
-
-a = torch.linspace(0, torch.pi, 65536).sin()
-#dct = dct1(a)
-#idct = idct1(dct)
-dct = dct_ii(a)
-#dct = dct[:dct.shape[-1]//2]
-#idct = idct2(dct, n=dct.shape[-1]*4)
-idct = idct_ii(dct)
-save_raw(a, "./debug/test_a.raw")
-save_raw(dct, "./debug/test_d.raw")
-save_raw(idct, "./debug/test_i.raw")
-exit()
-"""
 
 """
 mspsd = MSPSD(cepstrum_crop_factor=2)

@@ -172,7 +172,7 @@ def embedding_test():
 
 def vae_test():
 
-    model_name = "dualdiffusion1d_700_mspsd_4vae_6"
+    model_name = "dualdiffusion1d_800_mspsd_cepstrum_4vae_1"
     num_samples = 1
     #device = "cuda"
     device = "cpu"
@@ -197,7 +197,7 @@ def vae_test():
     
     #test_samples = ["27705.raw"] # extremely heavy noise
     #test_samples = ["26431.raw"] 
-    #test_samples = ["3559.raw"] 
+    #test_samples = ["31436.raw"]
     #test_samples = ["29235.raw"] 
 
     # try to use most recent checkpoint if one exists
@@ -225,6 +225,8 @@ def vae_test():
 
         output_latents_file_path = os.path.join(output_path, f"step_{last_global_step}_{filename.replace('.raw', '_latents.raw')}")
         save_raw(latents, output_latents_file_path)
+        output_input_sample_file_path = os.path.join(output_path, f"step_{last_global_step}_{filename.replace('.raw', '_input_sample.raw')}")
+        save_raw(input_sample, output_input_sample_file_path)
         output_sample_file_path = os.path.join(output_path, f"step_{last_global_step}_{filename.replace('.raw', '_sample.raw')}")
         save_raw(output_sample, output_sample_file_path)
         output_posterior_file_path = os.path.join(output_path, f"step_{last_global_step}_{filename.replace('.raw', '_posterior.raw')}")

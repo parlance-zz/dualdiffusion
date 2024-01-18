@@ -30,7 +30,7 @@ from dual_diffusion_pipeline import DualDiffusionPipeline
 load_dotenv()
 torch.manual_seed(200)
 
-MODEL_NAME = "dualdiffusion1d_700_mspsd_4vae_6"
+MODEL_NAME = "dualdiffusion1d_800_mspsd_cepstrum_4vae_1"
 MODEL_PARAMS = {
     #"prediction_type": "sample",
     #"prediction_type": "epsilon",
@@ -49,48 +49,52 @@ MODEL_PARAMS = {
 
     "sample_format": "mspsd",
     "sample_raw_length": 65536*2,
-    "low_scale": 6,
-    "high_scale": 12,
-    "block_overlap": 4,
-    "window_fn": "hann",
-    "inv_window_fn": "hann",
-    "noise_floor": 1e-5,
-    "u": 8000.,
+
+    "mspsd_params": {
+        "low_scale": 7,
+        "high_scale": 11,
+        "overlap": 4,
+        "cepstrum_crop_factor": 2,
+        "window_fn": "hann^2",
+        "inv_window_fn": "hann^2",
+        "noise_floor": 1e-6,
+    }
 }
 
 #VAE_PARAMS = None
 VAE_PARAMS = {
 
-    "latent_channels": 1,
+    "latent_channels": 4,
     "sample_size": (64, 2048),
-    "act_fn": "silu",
+    #"act_fn": "silu",
+    "act_fn": "relu",
     #"conv_size": (3,3),
-    "conv_size": 5,
+    "conv_size": 15,
 
-    #"block_out_channels": (16, 32, 64, 128),
+    #"block_out_channels": (32, 64, 128, 256),
     #"layers_per_block": 3,
-    "block_out_channels": (32, 64, 128, 256),
-    "layers_per_block": 3,
+    "block_out_channels": (96, 192, 384),
+    "layers_per_block": 1,
     #"layers_per_block": 2,
 
-    "layers_per_mid_block": 2,
+    "layers_per_mid_block": 1,
     #"layers_per_mid_block": 1,
     #"add_mid_attention": True,
     "add_mid_attention": False,
 
-    #"norm_num_groups": 32,
-    #"norm_num_groups": (0, 0, 32, 32, 32, 32, 32),
-    "norm_num_groups": (0, 0, 32, 32),
+    "norm_num_groups": 32,
+    #"norm_num_groups": (0, 0, 0, 32),
+    #"norm_num_groups": (0, 0, 32, 32),
 
     #"downsample_type": "conv",
     "upsample_type": "conv_transpose",
     "upsample_type": "conv",
     #"downsample_ratio": (2,2),
-    "downsample_ratio": 4,
+    "downsample_ratio": 8,
 
     #"attention_num_heads": (2,4,8,16),
 
-    #"attention_num_heads": (8,16,32,32,32, 32, 32),
+    "attention_num_heads": (8,16,32),
     #"separate_attn_dim_down": (2,3),
     #"separate_attn_dim_up": (3,2,3),
     #"separate_attn_dim_down": (3,3),

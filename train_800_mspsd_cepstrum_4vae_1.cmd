@@ -5,13 +5,13 @@ accelerate launch^
  --allow_tf32^
  --train_data_dir="D:/dualdiffusion/dataset/samples"^
  --raw_sample_format="int16"^
- --pretrained_model_name_or_path="D:/dualdiffusion/models/dualdiffusion1d_700_mspsd_4vae_6"^
+ --pretrained_model_name_or_path="D:/dualdiffusion/models/dualdiffusion1d_800_mspsd_cepstrum_4vae_1"^
  --module="vae"^
- --train_batch_size=7^
+ --train_batch_size=20^
  --num_train_epochs=5000^
- --checkpointing_steps=941^
+ --checkpointing_steps=988^
  --checkpoints_total_limit=1^
- --gradient_accumulation_steps=3^
+ --gradient_accumulation_steps=1^
  --learning_rate=1e-4^
  --report_to="tensorboard"^
  --resume_from_checkpoint=latest^
@@ -19,7 +19,7 @@ accelerate launch^
  --lr_scheduler="constant_with_warmup"^
  --num_validation_samples=5^
  --num_validation_epochs=5^
- --kl_loss_weight=1e-8^
+ --kl_loss_weight=1e-6^
  --max_grad_norm=5
 
 REM --checkpointing_steps=2470^
