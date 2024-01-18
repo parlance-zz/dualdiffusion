@@ -595,6 +595,22 @@ class MSPSD:
 
         return torch.stack(a_stfts, dim=a_stfts[0].ndim-1)
 
+    def get_mel_weighted_mspsd(self, mspsd, sample_rate):
+
+        a_stfts = []
+
+        for i in range(self.low_scale, self.high_scale):
+            block_width = int(2 ** i)
+            
+            view_dims = mspsd.shape[:-1] + (-1, block_width // 2)
+            a_stft_abs = mspsd.view(view_dims)[..., i-self.low_scale, :, :]
+
+            mel_density = get_mel_density(torch.linspace(0, sample_rate/2, block_width//2, device=mspsd.device))
+            a_stft_abs = a_stft_abs * mel_density.view((1,)*(a_stft_abs.ndim-1) + (-1,))
+            a_stfts.append(a_stft_abs.view(a_stft_abs.shape[:-2] + (-1,)))
+
+        return torch.stack(a_stfts, dim=a_stfts[0].ndim-1)
+    
     @torch.no_grad()
     def _shape_sample(self, x, mspsd, scale):
         
@@ -852,6 +868,9 @@ save_raw(a, "./debug/test_a.raw")
 save_raw(x, "./debug/test_x.raw")
 save_raw(cepstrum, "./debug/test_c.raw")
 save_raw(psd, "./debug/test_p.raw")
+
+psd_mel_weighted = mspsd.get_mel_weighted_mspsd(psd, 8000)
+save_raw(psd_mel_weighted, "./debug/test_p_mel_weighted.raw")
 
 exit()
 """

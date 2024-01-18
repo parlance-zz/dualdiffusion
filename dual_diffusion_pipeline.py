@@ -87,11 +87,12 @@ class DualMSPSDFormat:
     @staticmethod
     def get_loss(sample, target, model_params):
         
-        #mspsd_params = model_params["mspsd_params"]
-        #mspsd = MSPSD(**mspsd_params)
+        sample_rate = model_params["sample_rate"]
+        mspsd_params = model_params["mspsd_params"]
+        mspsd = MSPSD(**mspsd_params)
         
-        sample = sample["samples_psd"]
-        target = target["samples_psd"]
+        sample = mspsd.get_mel_weighted_mspsd(sample["samples_psd"], sample_rate)
+        target = mspsd.get_mel_weighted_mspsd(target["samples_psd"], sample_rate)
 
         loss_real = (sample - target).abs().mean()
 
