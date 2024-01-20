@@ -653,12 +653,12 @@ class MSPSD:
 
         x_stft = stft2(x, block_width, overlap=self.overlap, window_fn=self.window_fn)
         x_stft_abs = x_stft.abs()
-        x_stft_abs = x_stft_abs / x_stft_abs.amax(dim=(-1,-2), keepdim=True)
         x_stft_abs[x_stft_abs == 0] = 1e-10
         x_stft_abs_ln = x_stft_abs.log()
 
         x_stft = x_stft / x_stft_abs * ((1 - b) * a_stft_abs + b * x_stft_abs_ln).exp()
-        return istft2(x_stft, block_width, overlap=self.overlap, window_fn=self.inv_window_fn)
+        x = istft2(x_stft, block_width, overlap=self.overlap, window_fn=self.inv_window_fn)
+        return x / x.abs().amax(dim=-1, keepdim=True)
 
     @torch.no_grad() 
     def get_sample(self, mspsd, num_iterations=400):
