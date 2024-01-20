@@ -28,6 +28,7 @@ import torch.nn as nn
 import torchaudio
 import torchaudio.functional as AF
 import cv2
+from dotenv import load_dotenv
 
 def get_activation(act_fn):
     if act_fn in ["swish", "silu"]:
@@ -451,9 +452,11 @@ def stft2(x, block_width, overlap=2, window_fn="hann"):
     post_shift = torch.exp(-1j * torch.pi / 2 / N * (N + 1) * k)
 
     if window_fn == "hann":
-        window = get_hann_window(block_width, device=x.device)
+        window = get_hann_window(block_width, device=x.device) * 2
+    elif window_fn == "hann^0.5":
+        window = get_hann_window(block_width, device=x.device).sqrt() * (2/torch.pi)
     elif window_fn == "hann^2":
-        window = get_hann_window(block_width, device=x.device).square()
+        window = get_hann_window(block_width, device=x.device).square() * (8/3)
     elif window_fn == "blackman_harris":
         window = get_blackman_harris_window(block_width, device=x.device)
     elif window_fn == "none":
@@ -461,7 +464,7 @@ def stft2(x, block_width, overlap=2, window_fn="hann"):
     else:
         raise ValueError(f"Unsupported window function: {window_fn}")
 
-    return torch.fft.fft(x * pre_shift * window, norm="forward")[..., :N] * post_shift
+    return torch.fft.fft(x * pre_shift * window, norm="forward")[..., :N] * post_shift * 2 * N ** 0.5
 
 def istft2(x, block_width, overlap=2, window_fn="none"):
 
@@ -477,9 +480,11 @@ def istft2(x, block_width, overlap=2, window_fn="none"):
     post_shift = torch.exp(-1j * torch.pi / 2 / N * (N + 1) * k)
 
     if window_fn == "hann":
-        window = get_hann_window(block_width, device=x.device)
+        window = get_hann_window(block_width, device=x.device) * 2
+    elif window_fn == "hann^0.5":
+        window = get_hann_window(block_width, device=x.device).sqrt() * (2/torch.pi)
     elif window_fn == "hann^2":
-        window = get_hann_window(block_width, device=x.device).square()
+        window = get_hann_window(block_width, device=x.device).square() * (8/3)
     elif window_fn == "blackman_harris":
         window = get_blackman_harris_window(block_width, device=x.device)
     elif window_fn == "none":
@@ -487,15 +492,17 @@ def istft2(x, block_width, overlap=2, window_fn="none"):
     else:
         raise ValueError(f"Unsupported window function: {window_fn}")
     
-    x = (torch.fft.ifft(x / post_shift, n=block_width, norm="backward") / pre_shift).real * window
+    x = (torch.fft.ifft(x / post_shift, n=block_width, norm="backward") / pre_shift).real * window * 2 * N ** 0.5
 
     for i in range(overlap):
         t = x[..., i::overlap, :].reshape(*x.shape[:-2], -1)
         y[..., i*step:i*step + t.shape[-1]] += t
 
-    padding = block_width * (overlap - 1) // overlap // 2
-    y = y[..., padding:-padding]
-    return y * (2 / overlap)
+    if overlap > 1:
+        padding = block_width * (overlap - 1) // overlap // 2
+        y = y[..., padding:-padding] / overlap
+
+    return y
 
 def dct2(x):
     N = x.shape[-1] // 2
@@ -525,7 +532,16 @@ def idct2(x, n=None):
 
 class MSPSD:
 
-    def __init__(self, low_scale=7, high_scale=11, overlap=4, noise_floor=1e-6, cepstrum_crop_factor=2, window_fn="hann^2", inv_window_fn="hann^2"):
+    def __init__(self, low_scale=5,
+                       high_scale=11,
+                       overlap=2,
+                       noise_floor=1e-6,
+                       cepstrum_crop_factor=2,
+                       window_fn="hann",
+                       inv_window_fn="none",
+                       use_mel_weighting=False,
+                       sample_rate=0):
+        
         self.low_scale = low_scale
         self.high_scale = high_scale
         self.overlap = overlap
@@ -533,6 +549,8 @@ class MSPSD:
         self.cepstrum_crop_factor = cepstrum_crop_factor
         self.window_fn = window_fn
         self.inv_window_fn = inv_window_fn
+        self.use_mel_weighting = use_mel_weighting
+        self.sample_rate = sample_rate
 
     def get_sample_mspsd(self, sample):
 
@@ -542,8 +560,13 @@ class MSPSD:
             block_width = int(2 ** i)
 
             a_stft_abs = stft2(sample, block_width, overlap=self.overlap, window_fn=self.window_fn).abs()
+
+            #if self.use_mel_weighting:
+            #    mel_density = get_mel_density(torch.linspace(0, self.sample_rate/2, block_width//2, device=a_stft_abs.device))
+            #    a_stft_abs = a_stft_abs / mel_density.view((1,)*(a_stft_abs.ndim-1) + (-1,)).square()
+
             a_stft_abs = (a_stft_abs / a_stft_abs.amax(dim=(-1,-2), keepdim=True)).clip(min=self.noise_floor).log()
-            a_stft_abs = a_stft_abs - a_stft_abs.mean(dim=(-1,-2), keepdim=True)
+            #a_stft_abs = a_stft_abs - a_stft_abs.mean(dim=(-1,-2), keepdim=True)
             a_stfts.append(a_stft_abs.view(a_stft_abs.shape[:-2] + (-1,)))
 
         return torch.stack(a_stfts, dim=a_stfts[0].ndim-1)
@@ -553,9 +576,7 @@ class MSPSD:
         q_stfts = []
 
         for i in range(self.low_scale, self.high_scale):
-            block_width = int(2 ** i)
-            
-            #mel_density = get_mel_density(torch.linspace(0, 4000, block_width//2, device=mspsd.device))
+            block_width = int(2 ** i)   
             
             view_dims = mspsd.shape[:-1] + (-1, block_width // 2)
             a_stft_abs = mspsd.view(view_dims)[..., i-self.low_scale, :, :]
@@ -564,8 +585,17 @@ class MSPSD:
             
             q_stft = torch.fft.rfft(a_stft_abs, norm="ortho")[..., :, :block_width // 4 // self.cepstrum_crop_factor]
 
-            #q_factor = 0.05
-            #q_stft = (q_stft.real/q_factor).round()*q_factor + 1j * (q_stft.imag/q_factor).round()*q_factor
+            #density = torch.linspace(1/(2*block_width) ** 0.5, 1, q_stft.shape[-1], device=q_stft.device)
+            #q_stft = q_stft * density.view((1,)*(a_stft_abs.ndim-1) + (-1,)).square()
+            #q_stft[..., 0] /= (2*block_width) ** 0.5
+
+            #q_stft[q_stft.abs() < 1e-4] = 1e-4
+            #q_stft = q_stft.abs() + 1j * q_stft.angle()
+            #print(q_stft.real.amin(), q_stft.real.amax(), q_stft.imag.amin(), q_stft.imag.amax())
+            #q_factor_real = 1
+            #q_factor_imag = 0.5
+            #q_stft = (q_stft.real/q_factor_real).round()*q_factor_real + 1j * (q_stft.imag/q_factor_imag).round()*q_factor_imag
+            #q_stft = q_stft.real * (q_stft.imag.cos() + 1j * q_stft.imag.sin())
 
             q_stft = torch.view_as_real(q_stft)
             ndim = q_stft.ndim - 3
@@ -590,12 +620,15 @@ class MSPSD:
             q_stft = q_stft.permute(list(range(ndim)) + [ndim+1, ndim+2, ndim+0])
             q_stft = torch.view_as_complex(q_stft.contiguous())
 
+            #q_stft = q_stft.real * (q_stft.imag.cos() + 1j * q_stft.imag.sin())
+            #q_stft[..., 0] *= (2*block_width)**0.5
+
             a_stft_abs = torch.fft.irfft(q_stft, n=block_width//2, norm="ortho")
             a_stfts.append(a_stft_abs.view(a_stft_abs.shape[:-2] + (-1,)))
 
         return torch.stack(a_stfts, dim=a_stfts[0].ndim-1)
 
-    def get_mel_weighted_mspsd(self, mspsd, sample_rate):
+    def get_mel_weighted_mspsd(self, mspsd):
 
         a_stfts = []
 
@@ -605,14 +638,14 @@ class MSPSD:
             view_dims = mspsd.shape[:-1] + (-1, block_width // 2)
             a_stft_abs = mspsd.view(view_dims)[..., i-self.low_scale, :, :]
 
-            mel_density = get_mel_density(torch.linspace(0, sample_rate/2, block_width//2, device=mspsd.device))
+            mel_density = get_mel_density(torch.linspace(0, self.sample_rate/2, block_width//2, device=mspsd.device))
             a_stft_abs = a_stft_abs * mel_density.view((1,)*(a_stft_abs.ndim-1) + (-1,))
             a_stfts.append(a_stft_abs.view(a_stft_abs.shape[:-2] + (-1,)))
 
         return torch.stack(a_stfts, dim=a_stfts[0].ndim-1)
     
     @torch.no_grad()
-    def _shape_sample(self, x, mspsd, scale):
+    def _shape_sample(self, x, mspsd, scale, b):
         
         block_width = int(2 ** scale)
         view_dims = mspsd.shape[:-1] + (-1, block_width // 2)
@@ -620,53 +653,82 @@ class MSPSD:
 
         x_stft = stft2(x, block_width, overlap=self.overlap, window_fn=self.window_fn)
         x_stft_abs = x_stft.abs()
-        x_stft_abs[x_stft_abs == 0] = 1
+        x_stft_abs = x_stft_abs / x_stft_abs.amax(dim=(-1,-2), keepdim=True)
+        x_stft_abs[x_stft_abs == 0] = 1e-10
+        x_stft_abs_ln = x_stft_abs.log()
 
-        x_stft = x_stft / x_stft_abs * a_stft_abs
+        x_stft = x_stft / x_stft_abs * ((1 - b) * a_stft_abs + b * x_stft_abs_ln).exp()
         return istft2(x_stft, block_width, overlap=self.overlap, window_fn=self.inv_window_fn)
 
     @torch.no_grad() 
-    def get_sample(self, mspsd, num_iterations=100):
+    def get_sample(self, mspsd, num_iterations=400):
         
         sample_len = mspsd.shape[-1] * 2 // self.overlap
         x = torch.randn(mspsd.shape[:-2] + (sample_len,), device=mspsd.device)
 
+        """
         mspsd = mspsd.exp()
-        mspsd = mspsd / mspsd.amax(dim=-1, keepdim=True)
 
-        scales = np.arange(self.low_scale, self.high_scale)
-        for _ in range(num_iterations):
-            np.random.shuffle(scales)
-            for i in scales:
-                x = self._shape_sample(x, mspsd, i)
-        x = self._shape_sample(x, mspsd, self.low_scale)
+        if self.use_mel_weighting:
+
+            for i in range(self.low_scale, self.high_scale):
+                block_width = int(2 ** i)
+                
+                view_dims = mspsd.shape[:-1] + (-1, block_width // 2)
+                a_stft_abs = mspsd.view(view_dims)[..., i-self.low_scale, :, :]
+                
+                mel_density = get_mel_density(torch.linspace(0, self.sample_rate/2, block_width//2, device=a_stft_abs.device))
+                a_stft_abs *= mel_density.view((1,)*(a_stft_abs.ndim-1) + (-1,)).square()
+            
+        mspsd = mspsd / mspsd.amax(dim=-1, keepdim=True)
+        """
+
+        scales = list(range(self.low_scale, self.high_scale))
+        for t in range(num_iterations):
+            b = t / num_iterations
+            for i in reversed(scales):
+                x = self._shape_sample(x, mspsd, i, b)
+
         return x / x.abs().amax(dim=-1, keepdim=True)
-        
-def get_facsimile(sample, target, num_iterations=200, low_scale=7, high_scale=11, overlap=4, window_fn="hann^2", inv_window_fn="hann^2"):
+
+#def get_facsimile(sample, target, num_iterations=400, low_scale=5, high_scale=11, overlap=2, window_fn="hann^0.5", inv_window_fn="hann^0.5"):
+def get_facsimile(sample, target, num_iterations=400, low_scale=5, high_scale=11, overlap=2, window_fn="hann", inv_window_fn="none"):
 
     a = target
     x = sample
     
-    #v = torch.fft.ifft(torch.fft.rfft(a)[..., :a.shape[-1]//64], n=a.shape[-1]).abs()
-    #save_raw(v, "./debug/test_v.raw")
-
+    scales = list(range(low_scale, high_scale))
     a_stfts = []
     q_stfts = []
-    for i in range(low_scale, high_scale):
+
+    for i in scales:
         block_width = int(2 ** i)
         
         a_stft_abs = stft2(a, block_width, overlap=overlap, window_fn=window_fn).abs()
-
         a_stft_abs /= a_stft_abs.amax()
-        #a_stft_abs += torch.randn_like(a_stft_abs) * 1e-10
+
+        #a_stft_abs = a_stft_abs.unfold(-1, 2, 2)
+        #a_stft_abs[:, :, :] = a_stft_abs.mean(dim=-1, keepdim=True)
+        #a_stft_abs = a_stft_abs.view(a_stft_abs.shape[:-2] + (-1,))
+        block_hz = torch.linspace(0, 1, block_width//2) * 4000
+        mel_density = get_mel_density(block_hz)
+        mel_density /= mel_density.mean()
+        print(mel_density.amin(), mel_density.amax())
+        a_stft_abs *= (torch.randn_like(a_stft_abs)*1 / mel_density.view(1, -1)).exp()
         
+        #a_stft_abs += torch.randn_like(a_stft_abs) * 1e-10
+
+        #print(i, a_stft_abs.amax())
+
         #a_stft_abs /= a_stft_abs.square().mean(dim=-1, keepdim=True).sqrt()#.clip(min=1e-10)
-        a_stft_abs = a_stft_abs.clip(min=1e-6).log()
-        a_stft_abs -= a_stft_abs.mean()
+        #a_stft_abs = a_stft_abs.clip(min=1e-6).log()
+        #a_stft_abs -= a_stft_abs.mean()
 
         #q_stft = torch.fft.rfft(a_stft_abs, norm="ortho")[:, :block_width//8]
         norm_factor = block_width #** (5/6)#(4/5)
-        q_stft = torch.fft.rfft(a_stft_abs)[:, :block_width//8] / norm_factor
+        
+        #print(a_stft_abs.square().mean())
+        q_stft = torch.fft.rfft(a_stft_abs, norm="backward")[:, :block_width//8] #/ 4#* 8
         
         #print( (q_stft.abs() < 1e-4).sum().item())
         #q_stft[q_stft.abs() < 1e-4] = 1e-4
@@ -686,83 +748,44 @@ def get_facsimile(sample, target, num_iterations=200, low_scale=7, high_scale=11
         #print(q_stft_real.amin(), q_stft_real.amax()) # min = ln(1e-4) 
         #q_stft = q_stft_real + 1j * q_stft_imag
         q_stfts.append(q_stft)
-        print(q_stft.real.abs().amax(), q_stft.imag.abs().amax())
+        #print(q_stft.real.abs().amax(), q_stft.imag.abs().amax())
 
-        #q_stft = q_stft.exp()
 
         #a_stft_abs = torch.fft.irfft(q_stft, n=block_width//2, norm="ortho")
-        a_stft_abs = torch.fft.irfft(q_stft * norm_factor, n=block_width//2)
-        a_stft_abs = a_stft_abs.exp()
-        a_stft_abs /= a_stft_abs.amax()
+        #a_stft_abs = torch.fft.irfft(q_stft, n=block_width//2, norm="backward")
+        #print(a_stft_abs.square().mean())
+        #a_stft_abs = a_stft_abs.exp()
+        #a_stft_abs /= a_stft_abs.amax()
 
         a_stfts.append(a_stft_abs)
 
     torch.stack([a.flatten() for a in q_stfts], dim=0).numpy().tofile("./debug/test_q_stfts.raw")
+    torch.stack([a.flatten() for a in a_stfts], dim=0).numpy().tofile("./debug/test_a_stfts.raw")
     
-    scales = np.arange(low_scale, high_scale)
-
-    #"""
     for t in range(num_iterations):
 
-        for i in range(low_scale, high_scale):
-        #for i in range(high_scale-1, low_scale-1, -1):
-        
-        #np.random.shuffle(scales)
-        #for i in scales:
-           
+        b = (t / num_iterations)# ** 2
+        #b = ((np.cos(b * np.pi)+1)/2) ** 2
+
+        for i in reversed(scales):
+
             block_width = int(2 ** i)
 
             a_stft = a_stfts[i-low_scale]
+
             x_stft = stft2(x, block_width, overlap=overlap, window_fn=window_fn)
             x_stft_abs = x_stft.abs()
-            x_stft_abs[x_stft_abs == 0] = 1
-            #x_stft_abs = x_stft_abs.clip(min=1e-15)
 
-            #x_stft[x_stft_abs < a_stft] = (x_stft / x_stft_abs * a_stft)[x_stft_abs < a_stft]
-            x_stft = x_stft / x_stft_abs * a_stft
+            x_stft_abs[x_stft_abs == 0] = 1e-10
             
-            #x_stft[:, -1] /= 2
-            x = istft2(x_stft, block_width, overlap=overlap, window_fn=inv_window_fn)# * v
-    #"""
-    
-    
-    #"""
-    #i = low_scale+2 # seems to induce the least artifacts ????
-    i = low_scale # seems to induce the least artifacts ????
-    block_width = int(2 ** i)
+            x_stft_abs_ln = x_stft_abs.log()
+            a_stft_abs_ln = a_stft.clip(min=1e-6).log()
 
-    a_stft = a_stfts[i-low_scale]
-    x_stft = stft2(x, block_width, overlap=overlap, window_fn=window_fn)
-    x_stft_abs = x_stft.abs()
-    x_stft_abs[x_stft_abs == 0] = 1
-    #x_stft_abs = x_stft_abs.clip(min=1e-15)
-    x_stft = x_stft / x_stft_abs * a_stft
-    #x_stft = x_stft / x_stft.abs().clip(min=1e-15) * a_stft.abs()
-    #x_stft[:, -1] = 0
-    x = istft2(x_stft, block_width, overlap=overlap, window_fn=inv_window_fn)# * v
-    return x
-    #"""
+            t_stft_abs_ln = a_stft_abs_ln*(1-b) + x_stft_abs_ln*b
+            x_stft = x_stft / x_stft_abs * t_stft_abs_ln.exp()
 
-    """
-    for t in range(num_iterations):
-        y = torch.zeros_like(x)
-
-        for i in scales:
-            block_width = int(2 ** i)
-
-            a_stft = a_stfts[i-low_scale]
-            x_stft = stft2(x, block_width, overlap=overlap, window_fn=window_fn)
-
-            x_stft_abs = x_stft.abs().clip(min=1e-15)
-
-            #x_stft[x_stft_abs < a_stft] = (x_stft / x_stft_abs * a_stft)[x_stft_abs < a_stft]
-            x_stft = x_stft / x_stft_abs * a_stft
-            
-            #a_stfts[i-low_scale] = a_stfts[i-low_scale] * 0.95 + x_stft.abs() * 0.05
-            y += istft2(x_stft, block_width, overlap=overlap, window_fn=inv_window_fn)
-        
-        x = y / y.amax()
-    """
+            x = istft2(x_stft, block_width, overlap=overlap, window_fn=inv_window_fn)
+            x /= x.abs().amax()
 
     return x
 
@@ -850,48 +873,74 @@ def get_lpc_coefficients(X: torch.Tensor, order: int ) -> torch.Tensor:
     #alphas = torch.nan_to_num(alphas.clip(min=-100, max=100), nan=0.0, posinf=100, neginf=-100)
     return alphas
 
-# MSPSD test
+def save_raw_img(x, img_path):
+    
+    x = x.permute(1, 0).contiguous()
+    x -= x.amin()
+    x /= x.amax()
+    x = x.cpu().numpy()
+    
+    cv2_img = (x * 255).astype(np.uint8)
+    cv2_img = cv2.applyColorMap(cv2_img, cv2.COLORMAP_JET)
 
-"""
-mspsd = MSPSD(cepstrum_crop_factor=2)
+    cv2.imwrite(img_path, cv2.flip(cv2_img, 0))
 
-a = load_raw("./dataset/samples/80.raw")[:65536*2]
+if __name__ == "__main__":
 
-psd = mspsd.get_sample_mspsd(a.unsqueeze(0).unsqueeze(0))
-cepstrum = mspsd.mspsd_to_cepstrum(psd)
-#print(torch.randn_like(cepstrum).abs().mean())
+    if not torch.cuda.is_available():
+        print("Error: PyTorch not compiled with CUDA support or CUDA unavailable")
+        exit(1)
+    else:
+        torch.backends.cuda.matmul.allow_tf32 = True
+        torch.backends.cuda.cufft_plan_cache[0].max_size = 250 # stupid cufft memory leak
 
-psd = mspsd.cepstrum_to_mspsd(cepstrum)
-x = mspsd.get_sample(psd)
+    load_dotenv()
 
-save_raw(a, "./debug/test_a.raw")
-save_raw(x, "./debug/test_x.raw")
-save_raw(cepstrum, "./debug/test_c.raw")
-save_raw(psd, "./debug/test_p.raw")
+    # MSPSD test
 
-psd_mel_weighted = mspsd.get_mel_weighted_mspsd(psd, 8000)
-save_raw(psd_mel_weighted, "./debug/test_p_mel_weighted.raw")
+    #"""
+    torch.manual_seed(0)
+    np.random.seed(0)
+    
+    mspsd = MSPSD(cepstrum_crop_factor=2, sample_rate=8000, use_mel_weighting=True)
 
-exit()
-"""
+    a = load_raw("./dataset/samples/1.raw")[:65536*2]
 
-# facsimile test
-"""
-a = load_raw("./dataset/samples/1.raw")[:65536*2]
+    psd = mspsd.get_sample_mspsd(a.unsqueeze(0).unsqueeze(0))
+    #cepstrum = mspsd.mspsd_to_cepstrum(psd)
+    #print(torch.randn_like(cepstrum).abs().mean())
 
-#a = load_raw("./debug/test_y.raw")[:65536]
-a /= a.abs().amax()
-save_raw(a, "./debug/test_a.raw")
+    #psd = mspsd.cepstrum_to_mspsd(cepstrum)
+    x = mspsd.get_sample(psd)
 
-x = torch.randn_like(a)
+    save_raw(a, "./debug/test_a.raw")
+    save_raw(x, "./debug/test_x.raw")
+    #save_raw(cepstrum, "./debug/test_c.raw")
+    save_raw(psd, "./debug/test_p.raw")
 
-#x = torch.randn_like(a)
-#x = x **2 * torch.sign(x)
+    #psd_mel_weighted = mspsd.get_mel_weighted_mspsd(psd)
+    #save_raw(psd_mel_weighted, "./debug/test_p_mel_weighted.raw")
 
-#x = (torch.rand_like(a) * 2 * torch.pi).cos()
+    exit()
+    #"""
 
-x = get_facsimile(x, a)
+    # facsimile test
+    #""""
+    
+    dataset_path = os.environ.get("DATASET_PATH", "./dataset/samples")
+    test_sample = np.random.choice(os.listdir(dataset_path), 1, replace=False)[0]
+    #test_sample = "29235.raw" #"1.raw"
+    print(test_sample)
+    a = load_raw(os.path.join(dataset_path, test_sample))[:65536*2]
+    a /= a.abs().amax()
+    save_raw(a, "./debug/test_a.raw")
 
-x /= x.abs().amax()
-save_raw(x, "./debug/test_x.raw")
-"""
+    torch.manual_seed(0)
+    np.random.seed(0)
+
+    x = torch.randn_like(a)
+    x = get_facsimile(x, a)
+
+    x /= x.abs().amax()
+    save_raw(x, "./debug/test_x.raw")
+    #"""

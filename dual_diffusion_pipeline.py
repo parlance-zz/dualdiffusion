@@ -44,43 +44,49 @@ class DualMSPSDFormat:
         mspsd_params = model_params["mspsd_params"]
         num_scales = mspsd_params["high_scale"] - mspsd_params["low_scale"]
         
-        in_channels =  model_params["sample_raw_channels"] * num_scales * 2
-        out_channels = model_params["sample_raw_channels"] * num_scales * 2
+        in_channels =  model_params["sample_raw_channels"] * num_scales# * 2
+        out_channels = model_params["sample_raw_channels"] * num_scales# * 2
 
         return (in_channels, out_channels)
 
     @staticmethod
     @torch.no_grad()
     def raw_to_sample(raw_samples, model_params, return_dict=False):
-        
+
+        sample_rate = model_params["sample_rate"] 
         mspsd_params = model_params["mspsd_params"]
-        mspsd = MSPSD(**mspsd_params)
+        mspsd = MSPSD(**mspsd_params, sample_rate=sample_rate)
 
         psd = mspsd.get_sample_mspsd(raw_samples)
-        cepstrum = mspsd.mspsd_to_cepstrum(psd)
+        #cepstrum = mspsd.mspsd_to_cepstrum(psd)
         
         if return_dict:
             samples_dict = {
-                "samples": cepstrum.requires_grad_(False),
-                "samples_psd": psd.requires_grad_(False),
+                #"samples": cepstrum.requires_grad_(False),
+                #"samples_psd": psd.requires_grad_(False),
+                "samples": psd.requires_grad_(False),
             }
             return samples_dict
         else:
-            return cepstrum.requires_grad_(False)
+            #return cepstrum.requires_grad_(False)
+            return psd.requires_grad_(False)
 
     @staticmethod
     def sample_to_raw(samples, model_params, return_dict=False, num_iterations=100):
-
+        
+        sample_rate = model_params["sample_rate"]
         mspsd_params = model_params["mspsd_params"]
-        mspsd = MSPSD(**mspsd_params)
-        psd = mspsd.cepstrum_to_mspsd(samples)
+        noise_floor = mspsd_params["noise_floor"]
+        mspsd = MSPSD(**mspsd_params, sample_rate=sample_rate)
+        #psd = mspsd.cepstrum_to_mspsd(samples)
+        psd = samples.sigmoid().clip(min=noise_floor).log()
         
         if not return_dict:
             return mspsd.get_sample(psd, num_iterations=num_iterations)
         else:
             samples_dict = {
                 "samples": samples,
-                "samples_psd": psd,
+                #"samples_psd": psd,
             }
             return samples_dict
 
@@ -89,12 +95,17 @@ class DualMSPSDFormat:
         
         sample_rate = model_params["sample_rate"]
         mspsd_params = model_params["mspsd_params"]
-        mspsd = MSPSD(**mspsd_params)
+        mspsd = MSPSD(**mspsd_params, sample_rate=sample_rate)
         
-        sample = mspsd.get_mel_weighted_mspsd(sample["samples_psd"], sample_rate)
-        target = mspsd.get_mel_weighted_mspsd(target["samples_psd"], sample_rate)
+        #sample = mspsd.get_mel_weighted_mspsd(sample["samples_psd"])
+        #target = mspsd.get_mel_weighted_mspsd(target["samples_psd"])
+        sample = mspsd.get_mel_weighted_mspsd(sample["samples"])
+        target = mspsd.get_mel_weighted_mspsd(target["samples"])
 
         loss_real = (sample - target).abs().mean()
+        
+        #sample = sample["samples_psd"]
+        #target = target["samples_psd"]        
 
         loss_imag = torch.zeros_like(loss_real)
         return loss_real, loss_imag
