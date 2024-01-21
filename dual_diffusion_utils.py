@@ -682,8 +682,8 @@ class MSPSD:
             
         mspsd = mspsd / mspsd.amax(dim=-1, keepdim=True)
         """
-
-        scales = reversed(range(self.low_scale, self.high_scale))
+        
+        scales = range(self.high_scale-1, self.low_scale-1, -1)
         for t in range(num_iterations):
             b = t / num_iterations
             for i in scales:
