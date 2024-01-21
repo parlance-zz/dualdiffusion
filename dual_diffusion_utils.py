@@ -683,10 +683,10 @@ class MSPSD:
         mspsd = mspsd / mspsd.amax(dim=-1, keepdim=True)
         """
 
-        scales = list(range(self.low_scale, self.high_scale))
+        scales = reversed(range(self.low_scale, self.high_scale))
         for t in range(num_iterations):
             b = t / num_iterations
-            for i in reversed(scales):
+            for i in scales:
                 x = self._shape_sample(x, mspsd, i, b)
 
         return x / x.abs().amax(dim=-1, keepdim=True)
