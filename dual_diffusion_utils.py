@@ -184,36 +184,29 @@ def imdct(x, window_fn="hann", window_degree=1):
 
     return raw_sample[..., N:-N] * 2 * N ** 0.5
 
-def stft(x, block_width, window_fn="hann", window_degree=2, step=None):
+def stft(x, block_width, window_fn="hann", step=None):
 
     if step is None:
         step = block_width // 2
 
-    #x = F.pad(x, (0, step+1)).unfold(-1, block_width, step)
     x = x.unfold(-1, block_width, step)
 
     if window_fn == "hann":
-        if window_degree == 0:
-            window = 1
-        else:
-            window = torch.sin(torch.pi * (n + 0.5) / x.shape[-1]).requires_grad_(False)
-            if window_degree == 2: window = window.square()
-    elif window_fn == "hann_poisson":
-        window = get_hann_poisson_window(x.shape[-1], device=x.device)
+        window = get_hann_window(block_width, device=x.device) * 2
+    elif window_fn == "hann^0.5":
+        window = get_hann_window(block_width, device=x.device).sqrt() * (2/torch.pi)
+    elif window_fn == "hann^2":
+        window = get_hann_window(block_width, device=x.device).square() * (8/3)
     elif window_fn == "blackman_harris":
-        window = get_blackman_harris_window(x.shape[-1], device=x.device)
-    elif window_fn == "flat_top":
-        window = get_flat_top_window(x.shape[-1], device=x.device)
-    elif window_fn == "ln":
-        window = get_ln_window(x.shape[-1], device=x.device)
+        window = get_blackman_harris_window(block_width, device=x.device)
+    elif window_fn == "blackman_harris2":
+        window = get_blackman_harris_window(block_width, device=x.device) ** 2
     elif window_fn == "none":
         window = 1
-    elif window_fn == "blackman_harris2":
-        window = get_blackman_harris2_window(x.shape[-1], device=x.device)
     else:
         raise ValueError(f"Unsupported window function: {window_fn}")
     
-    return torch.fft.rfft(x * window, norm="forward")
+    return torch.fft.rfft(x * window, norm="ortho")
 
 def to_ulaw(x, u=255):
 
@@ -536,7 +529,7 @@ class MSPSD:
                        high_scale=11,
                        overlap=2,
                        noise_floor=1e-6,
-                       cepstrum_crop_factor=2,
+                       cepstrum_crop_factor=1,
                        window_fn="hann",
                        inv_window_fn="none",
                        use_mel_weighting=False,
@@ -552,21 +545,25 @@ class MSPSD:
         self.use_mel_weighting = use_mel_weighting
         self.sample_rate = sample_rate
 
-    def get_sample_mspsd(self, sample):
+    def get_sample_mspsd(self, sample, separate_scale_channels=False):
 
         a_stfts = []
 
         for i in range(self.low_scale, self.high_scale):
             block_width = int(2 ** i)
 
-            a_stft_abs = stft2(sample, block_width, overlap=self.overlap, window_fn=self.window_fn).abs()
+            if separate_scale_channels:
+                _sample = sample[..., i-self.low_scale, :]
+            else:
+                _sample = sample
 
-            #if self.use_mel_weighting:
-            #    mel_density = get_mel_density(torch.linspace(0, self.sample_rate/2, block_width//2, device=a_stft_abs.device))
-            #    a_stft_abs = a_stft_abs / mel_density.view((1,)*(a_stft_abs.ndim-1) + (-1,)).square()
-
+            a_stft_abs = stft2(_sample, block_width, overlap=self.overlap, window_fn=self.window_fn).abs()
             a_stft_abs = (a_stft_abs / a_stft_abs.amax(dim=(-1,-2), keepdim=True)).clip(min=self.noise_floor).log()
-            #a_stft_abs = a_stft_abs - a_stft_abs.mean(dim=(-1,-2), keepdim=True)
+            
+            if self.use_mel_weighting:
+                mel_density = get_mel_density(torch.linspace(0, self.sample_rate/2, block_width//2, device=a_stft_abs.device))
+                a_stft_abs = a_stft_abs * mel_density.view((1,)*(a_stft_abs.ndim-1) + (-1,))
+
             a_stfts.append(a_stft_abs.view(a_stft_abs.shape[:-2] + (-1,)))
 
         return torch.stack(a_stfts, dim=a_stfts[0].ndim-1)
@@ -666,9 +663,6 @@ class MSPSD:
         sample_len = mspsd.shape[-1] * 2 // self.overlap
         x = torch.randn(mspsd.shape[:-2] + (sample_len,), device=mspsd.device)
 
-        """
-        mspsd = mspsd.exp()
-
         if self.use_mel_weighting:
 
             for i in range(self.low_scale, self.high_scale):
@@ -678,10 +672,7 @@ class MSPSD:
                 a_stft_abs = mspsd.view(view_dims)[..., i-self.low_scale, :, :]
                 
                 mel_density = get_mel_density(torch.linspace(0, self.sample_rate/2, block_width//2, device=a_stft_abs.device))
-                a_stft_abs *= mel_density.view((1,)*(a_stft_abs.ndim-1) + (-1,)).square()
-            
-        mspsd = mspsd / mspsd.amax(dim=-1, keepdim=True)
-        """
+                a_stft_abs /= mel_density.view((1,)*(a_stft_abs.ndim-1) + (-1,))
         
         scales = range(self.high_scale-1, self.low_scale-1, -1)
         for t in range(num_iterations):
@@ -902,20 +893,20 @@ if __name__ == "__main__":
     torch.manual_seed(0)
     np.random.seed(0)
     
-    mspsd = MSPSD(cepstrum_crop_factor=2, sample_rate=8000, use_mel_weighting=True)
+    mspsd = MSPSD(sample_rate=8000, use_mel_weighting=True, overlap=16, window_fn="blackman_harris", inv_window_fn="blackman_harris")
 
     a = load_raw("./dataset/samples/1.raw")[:65536*2]
 
     psd = mspsd.get_sample_mspsd(a.unsqueeze(0).unsqueeze(0))
-    #cepstrum = mspsd.mspsd_to_cepstrum(psd)
+    cepstrum = mspsd.mspsd_to_cepstrum(psd)
     #print(torch.randn_like(cepstrum).abs().mean())
 
     #psd = mspsd.cepstrum_to_mspsd(cepstrum)
-    x = mspsd.get_sample(psd)
+    x = mspsd.get_sample(psd, num_iterations=100)
 
     save_raw(a, "./debug/test_a.raw")
     save_raw(x, "./debug/test_x.raw")
-    #save_raw(cepstrum, "./debug/test_c.raw")
+    save_raw(cepstrum, "./debug/test_c.raw")
     save_raw(psd, "./debug/test_p.raw")
 
     #psd_mel_weighted = mspsd.get_mel_weighted_mspsd(psd)

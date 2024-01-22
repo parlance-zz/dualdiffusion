@@ -172,7 +172,7 @@ def embedding_test():
 
 def vae_test():
 
-    model_name = "dualdiffusion1d_800_mspsd_cepstrum_4vae_1"
+    model_name = "dualdiffusion2d_900_mclt_6vae_1"
     num_samples = 1
     #device = "cuda"
     device = "cpu"
@@ -196,8 +196,8 @@ def vae_test():
     test_samples = np.random.choice(os.listdir(dataset_path), num_samples, replace=False)
     
     #test_samples = ["27705.raw"] # extremely heavy noise
-    #test_samples = ["26431.raw"] 
-    #test_samples = ["31436.raw"]
+    #test_samples = ["21204.raw"] 
+    #test_samples = ["33927.raw"]
     #test_samples = ["29235.raw"] 
 
     # try to use most recent checkpoint if one exists
@@ -222,6 +222,13 @@ def vae_test():
         #latents /= latents.std(dim=(1,2,3), keepdim=True)
         output_sample = vae.decode(latents, return_dict=False)[0]
         output_raw_sample = format.sample_to_raw(output_sample.type(torch.float32), model_params)
+
+        #output_raw_sample = output_raw_sample[..., :65536]
+        #from dual_diffusion_utils import MSPSD
+        #mspsd = MSPSD(sample_rate=8000, use_mel_weighting=True, overlap=4, window_fn="hann", inv_window_fn="hann")
+        #psd = mspsd.get_sample_mspsd(output_raw_sample)
+        #psd_raw_sample = mspsd.get_sample(psd, num_iterations=100)
+        #save_raw(psd_raw_sample, "./debug/psd_sample.raw")
 
         output_latents_file_path = os.path.join(output_path, f"step_{last_global_step}_{filename.replace('.raw', '_latents.raw')}")
         save_raw(latents, output_latents_file_path)

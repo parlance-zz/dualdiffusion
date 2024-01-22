@@ -30,7 +30,7 @@ from dual_diffusion_pipeline import DualDiffusionPipeline
 load_dotenv()
 torch.manual_seed(200)
 
-MODEL_NAME = "dualdiffusion1d_800_mspsd_cepstrum_4vae_1"
+MODEL_NAME = "dualdiffusion2d_900_mclt_6vae_1"
 MODEL_PARAMS = {
     #"prediction_type": "sample",
     #"prediction_type": "epsilon",
@@ -47,60 +47,64 @@ MODEL_PARAMS = {
     "sample_raw_channels": int(os.environ.get("DATASET_NUM_CHANNELS")),
     "sample_rate": int(os.environ.get("DATASET_SAMPLE_RATE")),
 
-    "sample_format": "mspsd",
+    "sample_format": "mclt",
     "sample_raw_length": 65536*2,
-
-    "mspsd_params": {
-        "low_scale": 7,
-        "high_scale": 11,
-        "overlap": 4,
-        "cepstrum_crop_factor": 2,
-        "window_fn": "hann^2",
-        "inv_window_fn": "hann^2",
-        "noise_floor": 1e-6,
-    }
+    "num_chunks": 64,
+    "u": 8000,
+    "noise_floor": 1e-5,
 }
 
 #VAE_PARAMS = None
 VAE_PARAMS = {
+    "multiscale_spectral_loss": {
+        "version": 3,
+        "block_overlap": 8,
+        "block_widths": [
+            16,
+            32,
+            64,
+            128,
+            256,
+            512,
+            1024,
+            2048,
+        ],
+        #"window_fn": "hann^0.5",
+        "window_fn": "blackman_harris",
+    },
 
-    "latent_channels": 4,
+    "latent_channels": 6,
     "sample_size": (64, 2048),
-    #"act_fn": "silu",
-    "act_fn": "relu",
-    #"conv_size": (3,3),
-    "conv_size": 15,
+    "act_fn": "silu",
+    "conv_size": (3,3),
 
-    #"block_out_channels": (32, 64, 128, 256),
+    #"block_out_channels": (16, 32, 64, 128),
     #"layers_per_block": 3,
-    "block_out_channels": (96, 192, 384),
-    "layers_per_block": 1,
-    #"layers_per_block": 2,
+    "block_out_channels": (32, 64, 128, 256),
+    "layers_per_block": 3,
 
-    "layers_per_mid_block": 1,
-    #"layers_per_mid_block": 1,
+    "layers_per_mid_block": 2,
     #"add_mid_attention": True,
     "add_mid_attention": False,
 
-    "norm_num_groups": 32,
+    #"norm_num_groups": 32,
+    "norm_num_groups": (0, 0, 32, 32),
     #"norm_num_groups": (0, 0, 0, 32),
-    #"norm_num_groups": (0, 0, 32, 32),
 
-    #"downsample_type": "conv",
+    "downsample_type": "conv",
     "upsample_type": "conv_transpose",
-    "upsample_type": "conv",
-    #"downsample_ratio": (2,2),
-    "downsample_ratio": 8,
+    #"upsample_type": "conv",
+    "downsample_ratio": (2,2),
 
     #"attention_num_heads": (2,4,8,16),
 
-    "attention_num_heads": (8,16,32),
+    #"attention_num_heads": (8,16,32,32),
     #"separate_attn_dim_down": (2,3),
     #"separate_attn_dim_up": (3,2,3),
     #"separate_attn_dim_down": (3,3),
     #"separate_attn_dim_up": (3,3,3),
     #"separate_attn_dim_mid": (3,),
-    "separate_attn_dim_mid": (0,),
+    #"separate_attn_dim_mid": (0,),
     "double_attention": False,
     "pre_attention": False,
     "add_attention": False,
@@ -116,6 +120,7 @@ VAE_PARAMS = {
     "in_channels": DualDiffusionPipeline.get_sample_format(MODEL_PARAMS).get_num_channels(MODEL_PARAMS)[0],
     "out_channels": DualDiffusionPipeline.get_sample_format(MODEL_PARAMS).get_num_channels(MODEL_PARAMS)[1],
 }
+
 
 UNET_PARAMS = {
     #"dropout": (0, 0, 0, 0.1, 0.15, 0.25),
