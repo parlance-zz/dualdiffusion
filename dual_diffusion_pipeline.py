@@ -494,8 +494,10 @@ class DualDiffusionPipeline(DiffusionPipeline):
 
         for module in modules:
             for submodule in module.modules():
-                if isinstance(submodule, torch.nn.Conv2d | torch.nn.ConvTranspose2d):
-                    if isinstance(submodule, torch.nn.ConvTranspose2d):
+                if isinstance(submodule, torch.nn.Conv2d | torch.nn.ConvTranspose2d | torch.nn.Conv1d | torch.nn.ConvTranspose1d):
+
+                    if isinstance(submodule, torch.nn.ConvTranspose2d | torch.nn.ConvTranspose1d):
+                        continue
                         raise NotImplementedError(
                             "Assymetric tiling doesn't support this module"
                         )
