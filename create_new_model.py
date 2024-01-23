@@ -30,7 +30,7 @@ from dual_diffusion_pipeline import DualDiffusionPipeline
 load_dotenv()
 torch.manual_seed(200)
 
-MODEL_NAME = "dualdiffusion2d_900_mclt_6vae_1"
+MODEL_NAME = "dualdiffusion2d_900_1"
 MODEL_PARAMS = {
     #"prediction_type": "sample",
     #"prediction_type": "epsilon",
@@ -48,7 +48,7 @@ MODEL_PARAMS = {
     "sample_rate": int(os.environ.get("DATASET_SAMPLE_RATE")),
 
     "sample_format": "mclt",
-    "sample_raw_length": 65536*2,
+    "sample_raw_length": 65536*4,
     "num_chunks": 64,
     "u": 8000,
     "noise_floor": 1e-5,
@@ -135,30 +135,34 @@ UNET_PARAMS = {
     #"use_skip_samples": False,
 
     #"attention_num_heads": 4,
-    "attention_num_heads": (8,8,16,16),
+    "attention_num_heads": (16,16,16,16),
 
     "separate_attn_dim_mid": (0,),
     "add_mid_attention": True,
     "layers_per_mid_block": 1,
     #"mid_block_bottleneck_channels": 32,
 
+    "add_attention": True,
     #"double_attention": True,
     "double_attention": False,
     #"pre_attention": True,
     "pre_attention": False,
+    
     #"no_conv_in": True,
     "no_conv_in": False,
     
-    "separate_attn_dim_down": (2,3,),
-    #"separate_attn_dim_down": (3,),
+    #"separate_attn_dim_down": (2,3,),
+    "separate_attn_dim_down": (0,0),
     
-    "separate_attn_dim_up": (3,2,3,),
-    #"separate_attn_dim_up": (2,3,),
+    #"separate_attn_dim_up": (3,2,3,),
+    "separate_attn_dim_up": (0,0,0),
     
-    "freq_embedding_dim": 256,
-    "time_embedding_dim": 256,
+    #"freq_embedding_dim": 256,
+    #"time_embedding_dim": 256,
     #"freq_embedding_dim": (512, 0, 0, 0,),
     #"time_embedding_dim": 0,
+    "freq_embedding_dim": 0,
+    "time_embedding_dim": 0,
 
     #"downsample_type": "resnet",
     #"upsample_type": "resnet",

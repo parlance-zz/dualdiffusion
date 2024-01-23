@@ -196,7 +196,7 @@ def vae_test():
     test_samples = np.random.choice(os.listdir(dataset_path), num_samples, replace=False)
     
     #test_samples = ["27705.raw"] # extremely heavy noise
-    #test_samples = ["21204.raw"] 
+    test_samples = ["23636.raw"] #som
     #test_samples = ["33927.raw"]
     #test_samples = ["29235.raw"] 
 
@@ -217,6 +217,8 @@ def vae_test():
         input_sample = format.raw_to_sample(input_raw_sample, model_params)
 
         posterior = vae.encode(input_sample.type(model_dtype), return_dict=False)[0]
+        #from autoencoder_kl_dual import DiagonalGaussianDistribution
+        #posterior = DiagonalGaussianDistribution(torch.zeros_like(posterior.parameters))
         latents = posterior.sample()
         #latents -= latents.mean(dim=(1,2,3), keepdim=True)
         #latents /= latents.std(dim=(1,2,3), keepdim=True)
@@ -264,11 +266,11 @@ if __name__ == "__main__":
 
     #get_dataset_stats()
     #embedding_test()
-    vae_test()
+    #vae_test()
 
-    model_name = "dualdiffusion2d_330_v9_256embed_vae"
-    #model_name = "dualdiffusion2d_118"
-    num_samples = 5
+    model_name = "dualdiffusion2d_900_1"
+
+    num_samples = 1
     batch_size = 1
     length = 1
     scheduler = "dpms++"
@@ -276,7 +278,7 @@ if __name__ == "__main__":
     #scheduler = "kdpm2_a"
     #scheduler = "euler_a"
     #scheduler = "dpms++_sde"
-    steps = 999#337 #250
+    steps = 100 #337 #250
     loops = 0
     fp16 = False
     #fp16 = True
@@ -288,7 +290,9 @@ if __name__ == "__main__":
     model_path = os.path.join(os.environ.get("MODEL_PATH", "./"), model_name)
     print(f"Loading DualDiffusion model from '{model_path}' (dtype={model_dtype})...")
     pipeline = DualDiffusionPipeline.from_pretrained(model_path, torch_dtype=model_dtype).to("cuda")
+
     sample_rate = pipeline.config["model_params"]["sample_rate"]
+    last_global_step = pipeline.unet.config.get("last_global_step", 0)
 
     for i in range(num_samples):
         print(f"Generating sample {i+1}/{num_samples}...")
@@ -305,11 +309,8 @@ if __name__ == "__main__":
         output_path = os.path.join(model_path, "output")
         os.makedirs(output_path, exist_ok=True)
 
-        last_global_step = pipeline.config["model_params"].get("unet_last_global_step", None)
-        if last_global_step is None: last_global_step = pipeline.config["model_params"].get("last_global_step", 0)
-
         output_flac_file_path = os.path.join(output_path, f"step_{last_global_step}_{scheduler}{steps}_s{seed}.flac")
-        torchaudio.save(output_flac_file_path, output, sample_rate, bits_per_sample=16)
+        save_flac(output, sample_rate, output_flac_file_path)
         print(f"Saved flac output to {output_flac_file_path}")
 
         seed += 1

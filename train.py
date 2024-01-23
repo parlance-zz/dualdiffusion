@@ -53,7 +53,7 @@ from diffusers.utils.import_utils import is_xformers_available
 from unet_dual import UNetDualModel
 from autoencoder_kl_dual import AutoencoderKLDual
 from dual_diffusion_pipeline import DualDiffusionPipeline
-from dual_diffusion_utils import compute_snr, normalize_lufs, to_ulaw
+from dual_diffusion_utils import compute_snr, normalize_lufs, to_ulaw, save_flac
 
 # Will error if the minimal version of diffusers is not installed. Remove at your own risks.
 check_min_version("0.21.0.dev0")
@@ -96,7 +96,7 @@ def log_validation_unet(pipeline, args, accelerator, global_step):
             samples.append((sample, sample_filename))
 
             sample_output_path = os.path.join(output_path, sample_filename)
-            torchaudio.save(sample_output_path, sample, sample_rate, bits_per_sample=16)
+            save_flac(sample, sample_rate, sample_output_path)
             logger.info(f"Saved sample to to {sample_output_path}")
 
         seed += 1
@@ -557,6 +557,7 @@ def main():
         if vae is not None:
             vae.requires_grad_(False)
             vae = vae.to(accelerator.device)
+            vae.eval()
 
     elif args.module == "vae":
         module_class = AutoencoderKLDual
@@ -923,7 +924,9 @@ def main():
                 if args.module == "unet":
                     samples = pipeline.format.raw_to_sample(raw_samples, model_params)
                     if vae is not None:
-                        samples = vae.encode(samples).latent_dist.sample() * vae.config.scaling_factor
+                        posterior = vae.encode(samples, return_dict=False)[0]
+                        latents = posterior.sample()
+                        samples = latents.requires_grad_(False)
 
                     noise = torch.randn_like(samples) * noise_scheduler.init_noise_sigma
                     if args.input_perturbation > 0:
@@ -942,10 +945,13 @@ def main():
 
                             if vae is None:
                                 pipeline.format.sample_to_raw(samples.detach(), model_params).real.cpu().numpy().tofile(os.path.join(debug_path, "debug_train_reconstructed_raw_samples.raw"))
-                            else:       
-                                vae.decode(samples.detach() / vae.config.scaling_factor).sample.cpu().numpy().tofile(os.path.join(debug_path, "debug_train_reconstructed_raw_samples.raw"))
+                            else:
+                                recon_samples = vae.decode(samples.detach()).sample
+                                recon_samples = pipeline.format.sample_to_raw(recon_samples, model_params).real
+                                recon_samples.detach().cpu().numpy().tofile(os.path.join(debug_path, "debug_train_reconstructed_raw_samples.raw"))
                         
                         debug_written = True
+                        torch.cuda.empty_cache()
 
                     # Sample a random timestep for each image
                     timesteps = torch.randint(0, noise_scheduler.config.num_train_timesteps, (samples.shape[0],), device=samples.device).long()

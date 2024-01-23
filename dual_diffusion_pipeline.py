@@ -217,12 +217,16 @@ class DualMCLTFormat:
         samples_wave = samples_abs * (samples_phase * torch.pi).cos()
         target_wave = target_abs * (target_phase * torch.pi).cos()
 
-        target_freq_pow = target_abs.square().mean(dim=1, keepdim=True)
-        target_time_pow = target_abs.square().mean(dim=2, keepdim=True)
-        target_pow = ((target_freq_pow * target_time_pow) ** (1/4)).clip(min=noise_floor*10)
+        #target_freq_pow = target_abs.square().mean(dim=1, keepdim=True)
+        #target_time_pow = target_abs.square().mean(dim=2, keepdim=True)
+        #target_pow = ((target_freq_pow * target_time_pow) ** (1/4)).clip(min=noise_floor*10)
+
+        #target_mask = target_abs > noise_floor
+        #loss = ((samples_wave - target_wave).abs() / target_pow * mel_density * target_mask).mean() / 16
 
         target_mask = target_abs > noise_floor
-        loss = ((samples_wave - target_wave).abs() / target_pow * mel_density * target_mask).mean() / 4
+        loss = ((samples_wave - target_wave).abs() / (samples_wave.abs().detach() + target_wave.abs() + noise_floor*10) * mel_density * target_mask).mean() / 8
+
 
         #target_abs_ln = target_abs.log()
         #target_abs_ln -= target_abs_ln.amin(dim=(1,2), keepdim=True)
@@ -398,10 +402,23 @@ class DualDiffusionPipeline(DiffusionPipeline):
 
         model_params = self.config["model_params"]
         
-        if getattr(self, "vae", None) is None:
-            sample_shape = self.format.get_sample_shape(model_params, bsz=batch_size, length=length)
-        else:
-            raise NotImplementedError()
+        sample_shape = self.format.get_sample_shape(model_params, bsz=batch_size, length=length)
+        if getattr(self, "vae", None) is not None:
+
+            vae_latent_channels = self.vae.config.latent_channels
+            vae_downsample_ratio = self.vae.config.downsample_ratio
+            vae_num_blocks = len(self.vae.config.block_out_channels)
+
+            if len(sample_shape) == 4:
+                sample_shape = (sample_shape[0],
+                                vae_latent_channels,
+                                sample_shape[2] // vae_downsample_ratio[0] ** (vae_num_blocks-1),
+                                sample_shape[3] // vae_downsample_ratio[1] ** (vae_num_blocks-1))
+            else:
+                if isinstance(vae_downsample_ratio, tuple):
+                    vae_downsample_ratio = vae_downsample_ratio[0]
+                sample_shape = (sample_shape[0], vae_latent_channels, sample_shape[2] // vae_downsample_ratio ** (vae_num_blocks-1))
+
         print(f"Sample shape: {sample_shape}")
 
         sample = torch.randn(sample_shape, device=self.device, dtype=self.unet.dtype, generator=generator)
@@ -421,22 +438,18 @@ class DualDiffusionPipeline(DiffusionPipeline):
             if scheduler != "dpms++_sde":
                 scheduler_args["generator"] = generator
             sample = noise_scheduler.step(**scheduler_args)["prev_sample"]
-        
-        sample = sample.float()
 
         debug_path = os.environ.get("DEBUG_PATH", None)
         if debug_path is not None:
             print("Sample std: ", sample.std(dim=(1,2,3)).item())
             os.makedirs(debug_path, exist_ok=True)
-            sample.cpu().numpy().tofile(os.path.join(debug_path, "debug_sample.raw"))
+            sample.float().cpu().numpy().tofile(os.path.join(debug_path, "debug_sample.raw"))
         
-        if getattr(self, "vae", None) is None:
-            raw_sample = self.format.sample_to_raw(sample, model_params).real
-        else:
-            #raw_sample = self.vae.decode(sample / self.vae.config.scaling_factor).sample
-            raise NotImplementedError()
+        if getattr(self, "vae", None) is not None:
+            sample = self.vae.decode(sample).sample
 
-        raw_sample *= 0.18215 / raw_sample.std(dim=1, keepdim=True).clip(min=1e-5)
+        raw_sample = self.format.sample_to_raw(sample.float(), model_params)
+        raw_sample *= 0.18215 / raw_sample.std(dim=1, keepdim=True).clip(min=1e-8)
         if loops > 0: raw_sample = raw_sample.repeat(1, loops+1)
         return raw_sample
     

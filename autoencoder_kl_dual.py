@@ -274,7 +274,7 @@ class DualMultiscaleSpectralLoss3:
         
         noise_floor = model_params["noise_floor"]
         sample_rate = model_params["sample_rate"]
-        real_loss_scale = (torch.pi ** 2) / (np.log(noise_floor) ** 2) * 2
+        real_loss_scale = (torch.pi ** 2) / (np.log(noise_floor) ** 2) * 6
 
         loss_real = torch.zeros(1, device=sample.device)
         loss_imag = torch.zeros(1, device=sample.device)
