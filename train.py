@@ -407,13 +407,13 @@ def parse_args():
     parser.add_argument(
         "--num_validation_samples",
         type=int,
-        default=10,
+        default=5,
         help="Number of samples to generate for validation.",
     )
     parser.add_argument(
         "--num_validation_steps",
         type=int,
-        default=500,
+        default=60,
         help="Number of steps to use when creating validation samples.",
     )
     parser.add_argument(
@@ -924,15 +924,14 @@ def main():
                 if args.module == "unet":
                     samples = pipeline.format.raw_to_sample(raw_samples, model_params)
                     if vae is not None:
-                        posterior = vae.encode(samples, return_dict=False)[0]
-                        latents = posterior.sample()
-                        samples = latents.requires_grad_(False)
+                        samples = vae.encode(samples, return_dict=False)[0].sample().requires_grad_(False)
 
                     noise = torch.randn_like(samples) * noise_scheduler.init_noise_sigma
                     if args.input_perturbation > 0:
                         new_noise = noise + args.input_perturbation * torch.randn_like(noise)
 
                     if not debug_written:
+                        """
                         logger.info(f"Samples mean: {samples.mean(dim=(1,2,3))} - Samples std: {samples.std(dim=(1,2,3))}")
                         logger.info(f"Samples shape: {samples.shape}")
 
@@ -949,7 +948,7 @@ def main():
                                 recon_samples = vae.decode(samples.detach()).sample
                                 recon_samples = pipeline.format.sample_to_raw(recon_samples, model_params).real
                                 recon_samples.detach().cpu().numpy().tofile(os.path.join(debug_path, "debug_train_reconstructed_raw_samples.raw"))
-                        
+                        """
                         debug_written = True
                         torch.cuda.empty_cache()
 
@@ -1015,7 +1014,7 @@ def main():
                     #latents = latents / latents.clone().std(dim=nonbatch_dims, keepdim=True)
                     latents_mean = latents.mean()
                     latents_std = latents.std()
-                    model_output = module.decode(latents, return_dict=False)[0]                    
+                    model_output = module.decode(latents, return_dict=False)[0]
                     
                     recon_samples_dict = pipeline.format.sample_to_raw(model_output, model_params, return_dict=True)
                     vae_recon_real_loss = torch.zeros(1, device=accelerator.device)
@@ -1167,7 +1166,7 @@ def main():
                 setattr(pipeline, args.module, module)
                 pipeline.save_pretrained(args.output_dir, safe_serialization=True)
             """
-            if args.num_validation_samples > 0:
+            if args.num_validation_samples > 0 and args.num_validation_epochs > 0:
                 if epoch % args.num_validation_epochs == 0:
                     module.eval()
                     logger.info("Running validation... ")
