@@ -52,7 +52,10 @@ class DiagonalGaussianDistribution(object):
 
     def sample(self, generator: Optional[torch.Generator] = None) -> torch.FloatTensor: 
         noise = torch.randn(self.mean.shape, generator=generator, device=self.parameters.device, dtype=self.parameters.dtype)
-        return self.mean + self.std * noise
+        # return self.mean + self.std * noise
+        latents = self.mean + self.std * noise
+        normalization_dims = tuple(range(1, len(latents.shape)))
+        return (latents - latents.mean(dim=normalization_dims, keepdim=True)) / latents.std(dim=normalization_dims, keepdim=True).clip(min=1e-8)
 
     def kl(self, other=None):
         if self.deterministic:
@@ -274,7 +277,7 @@ class DualMultiscaleSpectralLoss3:
         
         noise_floor = model_params["noise_floor"]
         sample_rate = model_params["sample_rate"]
-        real_loss_scale = (torch.pi ** 2) / (np.log(noise_floor) ** 2) * 6
+        real_loss_scale = torch.pi / abs(np.log(noise_floor)) * 2.45
 
         loss_real = torch.zeros(1, device=sample.device)
         loss_imag = torch.zeros(1, device=sample.device)
@@ -298,12 +301,14 @@ class DualMultiscaleSpectralLoss3:
             sample_fft_abs = (sample_fft_abs / sample_fft_abs.amax(dim=(1,2), keepdim=True)).clip(min=noise_floor)
 
             error_real = (sample_fft_abs / target_fft_abs).log()
-            loss_real = loss_real + (error_real.square() * mel_density).mean()
+            loss_real = loss_real + (error_real.abs() * mel_density).mean()
 
-            sample_fft_noise_floor = sample_fft_abs.amin(dim=2, keepdim=True) * 1.1
-            target_phase_weight = (sample_fft_abs > sample_fft_noise_floor).detach().requires_grad_(False) * mel_density
-            error_imag = sample_fft.angle().abs() - target_fft.angle().abs()
-            loss_imag = loss_imag + (error_imag.square() * target_phase_weight).mean()
+            target_fft_noise_floor = target_fft_abs.amin(dim=2, keepdim=True) * 1.1
+            target_phase_weight = (target_fft_abs > target_fft_noise_floor).requires_grad_(False) * mel_density
+            error_imag = (sample_fft.angle() - target_fft.angle()).abs()
+            error_imag_wrap_mask = (error_imag > torch.pi).detach().requires_grad_(False)
+            error_imag[error_imag_wrap_mask] = 2*torch.pi - error_imag[error_imag_wrap_mask]
+            loss_imag = loss_imag + (error_imag * target_phase_weight).mean()
 
         return loss_real * self.loss_scale * real_loss_scale, loss_imag * self.loss_scale
 
@@ -656,7 +661,10 @@ class DecoderDual(nn.Module):
         self.gradient_checkpointing = False
 
     def forward(self, z, latent_embeds=None):
-        sample = z
+        
+        #sample = z
+        normalization_dims = tuple(range(1, len(z.shape)))
+        sample = (z - z.mean(dim=normalization_dims, keepdim=True)) / z.std(dim=normalization_dims, keepdim=True).clip(min=1e-8)
         sample = self.conv_in(sample)
 
         upscale_dtype = next(iter(self.up_blocks.parameters())).dtype
@@ -895,6 +903,9 @@ class AutoencoderKLDual(ModelMixin, ConfigMixin):
                 raise ValueError("Invalid multiscale_spectral_loss version")
         else:
             self.multiscale_spectral_loss = None
+
+        self.recon_error_logvar_real = nn.Parameter(torch.zeros(1))
+        self.recon_error_logvar_imag = nn.Parameter(torch.zeros(1))
             
     def _set_gradient_checkpointing(self, module, value=False):
         if isinstance(module, (EncoderDual, DecoderDual)):
