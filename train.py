@@ -278,12 +278,6 @@ def parse_args():
         help="Loss weighting for KL divergence in VAE training.",
     )
     parser.add_argument(
-        "--recon_imag_loss_weight",
-        type=float,
-        default=1,
-        help="Loss weighting for phase information in VAE training.",
-    )
-    parser.add_argument(
         "--snr_gamma",
         type=float,
         default=None,
@@ -294,13 +288,13 @@ def parse_args():
         "--pitch_augmentation_range",
         type=float,
         default=0, #2/12,
-        help="Modulate the pitch of the sample by a random amount within this range (in octaves)",
+        help="Modulate the pitch of the sample by a random amount within this range (in octaves) - Currently unused",
     )
     parser.add_argument(
         "--tempo_augmentation_range",
         type=float,
         default=0, #0.167,
-        help="Modulate the tempo of the sample by a random amount within this range (value of 1 is double/half speed)",
+        help="Modulate the tempo of the sample by a random amount within this range (value of 1 is double/half speed)  - Currently unused",
     )
     parser.add_argument(
         "--use_8bit_adam", action="store_true", help="Whether or not to use 8-bit Adam from bitsandbytes."
@@ -931,7 +925,6 @@ def main():
                         new_noise = noise + args.input_perturbation * torch.randn_like(noise)
 
                     if not debug_written:
-                        """
                         logger.info(f"Samples mean: {samples.mean(dim=(1,2,3))} - Samples std: {samples.std(dim=(1,2,3))}")
                         logger.info(f"Samples shape: {samples.shape}")
 
@@ -948,7 +941,7 @@ def main():
                                 recon_samples = vae.decode(samples.detach()).sample
                                 recon_samples = pipeline.format.sample_to_raw(recon_samples, model_params).real
                                 recon_samples.detach().cpu().numpy().tofile(os.path.join(debug_path, "debug_train_reconstructed_raw_samples.raw"))
-                        """
+
                         debug_written = True
                         torch.cuda.empty_cache()
 
@@ -1009,9 +1002,7 @@ def main():
                     samples_dict = pipeline.format.raw_to_sample(raw_samples, model_params, return_dict=True)
                     posterior = module.encode(samples_dict["samples"], return_dict=False)[0]
                     latents = posterior.sample()
-                    #nonbatch_dims = tuple(range(1, latents.ndim))
-                    #latents = latents - latents.clone().mean(dim=nonbatch_dims, keepdim=True)
-                    #latents = latents / latents.clone().std(dim=nonbatch_dims, keepdim=True)
+
                     latents_mean = latents.mean()
                     latents_std = latents.std()
                     model_output = module.decode(latents, return_dict=False)[0]
@@ -1024,17 +1015,17 @@ def main():
                         mss_real_loss, mss_imag_loss = module.multiscale_spectral_loss(recon_samples_dict, samples_dict, model_params)
                         vae_recon_real_loss = vae_recon_real_loss + mss_real_loss
                         vae_recon_imag_loss = vae_recon_imag_loss + mss_imag_loss
-                    
                     format_real_loss, format_imag_loss = pipeline.format.get_loss(recon_samples_dict, samples_dict, model_params)
                     vae_recon_real_loss = vae_recon_real_loss + format_real_loss
                     vae_recon_imag_loss = vae_recon_imag_loss + format_imag_loss
 
+                    vae_recon_real_nll_loss = vae_recon_real_loss / module.recon_error_logvar_real.exp() + module.recon_error_logvar_real
+                    vae_recon_imag_nll_loss = vae_recon_imag_loss / module.recon_error_logvar_imag.exp() + module.recon_error_logvar_imag
+                    
                     vae_kl_loss = posterior.kl().sum() / posterior.mean.numel()
-
                     vae_kl_loss_weight = args.kl_loss_weight
-                    vae_recon_imag_loss_weight = args.recon_imag_loss_weight
-                    loss = vae_recon_real_loss + vae_kl_loss_weight * vae_kl_loss + vae_recon_imag_loss * vae_recon_imag_loss_weight
 
+                    loss = vae_recon_real_nll_loss + vae_recon_imag_nll_loss + vae_kl_loss_weight * vae_kl_loss
                 else:
                     raise ValueError(f"Unknown module {args.module}")
                 
@@ -1094,7 +1085,6 @@ def main():
                     logs["vae/latents_mean"] = vae_latents_mean
                     logs["vae/latents_std"] = vae_latents_std
                     logs["loss_weight/kl"] = vae_kl_loss_weight
-                    logs["loss_weight/recon_imag"] = vae_recon_imag_loss_weight
                 if args.use_ema:
                     logs["ema_decay"] = ema_module.cur_decay_value    
 
