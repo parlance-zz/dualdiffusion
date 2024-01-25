@@ -867,7 +867,6 @@ def main():
     
     if args.module == "vae":
         logger.info(f"Using KL loss weight of {args.kl_loss_weight}")
-        logger.info(f"Using recon_imag loss weight of {args.recon_imag_loss_weight}")
         logger.info(f"Multiscale spectral loss params: {module.config.multiscale_spectral_loss}")
         logger.info(f"Sample shape: {pipeline.format.get_sample_shape(model_params, bsz=args.train_batch_size)}")
                 
