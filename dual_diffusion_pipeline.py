@@ -133,7 +133,7 @@ class DualMCLTFormat:
     @staticmethod
     def get_num_channels(model_params):
         in_channels = model_params["sample_raw_channels"] * 2
-        out_channels = model_params["sample_raw_channels"] * 4
+        out_channels = model_params["sample_raw_channels"] * 2
 
         return (in_channels, out_channels)
 
@@ -160,8 +160,8 @@ class DualMCLTFormat:
             samples_dict = {
                 "samples": samples,
                 "raw_samples": imdct(samples_mdct.permute(0, 2, 1), window_degree=1).real.requires_grad_(False),
-                "samples_abs": samples_mdct_abs.requires_grad_(False),
-                "samples_phase": samples_qphase.squeeze(1).requires_grad_(False),
+                #"samples_abs": samples_mdct_abs.requires_grad_(False),
+                #"samples_phase": samples_qphase.squeeze(1).requires_grad_(False),
             }
             return samples_dict
         else:
@@ -173,12 +173,7 @@ class DualMCLTFormat:
         noise_floor = model_params["noise_floor"]
 
         samples_abs = samples[:, 0, :, :].sigmoid()
-        samples_abs_noise = samples[:, 1, :, :].sigmoid()
-
-        #samples_qphase = (samples[:, 2, :, :] + samples_abs_noise * torch.randn_like(samples_abs_noise)).sigmoid()
-
-        samples_qphase = (samples[:, 2, :, :] + samples_abs_noise * torch.randn_like(samples_abs_noise)).sigmoid()
-        samples_qphase = samples_qphase + (samples[:, 3, :, :].sigmoid() - 0.5) / 2
+        samples_qphase = samples[:, 1, :, :].sigmoid()
 
         samples_abs = (samples_abs.permute(0, 2, 1) / samples_abs.amax(dim=(1,2), keepdim=True).clip(min=1e-8)).clip(min=noise_floor)
         samples_phase = (samples_qphase.permute(0, 2, 1) * torch.pi).cos()
@@ -188,8 +183,8 @@ class DualMCLTFormat:
             return raw_samples
         else:
             samples_dict = {
-                "samples_abs": samples_abs.permute(0, 2, 1),
-                "samples_phase": samples_qphase,
+                #"samples_abs": samples_abs.permute(0, 2, 1),
+                #"samples_phase": samples_qphase,
                 "raw_samples": raw_samples,
             }
             return samples_dict
@@ -197,6 +192,9 @@ class DualMCLTFormat:
     @staticmethod
     def get_loss(sample, target, model_params):
         
+        loss = torch.zeros(1, device=sample["raw_samples"].device)
+        return loss, loss
+
         noise_floor = model_params["noise_floor"]
         block_width = model_params["num_chunks"] * 2
         sample_rate = model_params["sample_rate"]
@@ -442,11 +440,12 @@ class DualDiffusionPipeline(DiffusionPipeline):
         debug_path = os.environ.get("DEBUG_PATH", None)
         if debug_path is not None:
             print("Sample std: ", sample.std(dim=(1,2,3)).item())
-            os.makedirs(debug_path, exist_ok=True)
-            sample.float().cpu().numpy().tofile(os.path.join(debug_path, "debug_sample.raw"))
+            print("Sample mean: ", sample.mean(dim=(1,2,3)).item())
+            save_raw(sample, os.path.join(debug_path, "debug_sample.raw"))
         
         if getattr(self, "vae", None) is not None:
             sample = self.vae.decode(sample).sample
+            save_raw(sample, os.path.join(debug_path, "debug_decoded_sample.raw"))
 
         raw_sample = self.format.sample_to_raw(sample.float(), model_params)
         raw_sample *= 0.18215 / raw_sample.std(dim=1, keepdim=True).clip(min=1e-8)
