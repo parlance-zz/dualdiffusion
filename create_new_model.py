@@ -30,19 +30,24 @@ from dual_diffusion_pipeline import DualDiffusionPipeline
 load_dotenv()
 torch.manual_seed(200)
 
-MODEL_NAME = "dualdiffusion2d_900_1"
+MODEL_NAME = "dualdiffusion2d_900_4"
 MODEL_PARAMS = {
     #"prediction_type": "sample",
     #"prediction_type": "epsilon",
     "prediction_type": "v_prediction",
 
+    "beta_schedule": "scaled_linear",
+    "beta_start": 0.00085,
+    "beta_end": 0.012,
+
     #"beta_schedule": "trained_betas",
     #"beta_schedule": "linear", 
-    "beta_schedule": "squaredcos_cap_v2", 
-    "beta_start" : 0.0001,
-    "beta_end" : 0.02,
-    #"rescale_betas_zero_snr": True,
-    "rescale_betas_zero_snr": False,
+    #"beta_start" : 0.0001,
+    #"beta_end" : 0.02,
+    #"beta_schedule": "squaredcos_cap_v2", 
+
+    "rescale_betas_zero_snr": True,
+    #"rescale_betas_zero_snr": False,
 
     "sample_raw_channels": int(os.environ.get("DATASET_NUM_CHANNELS")),
     "sample_rate": int(os.environ.get("DATASET_SAMPLE_RATE")),
@@ -60,7 +65,6 @@ VAE_PARAMS = {
         "version": 3,
         "block_overlap": 8,
         "block_widths": [
-            16,
             32,
             64,
             128,
@@ -68,12 +72,18 @@ VAE_PARAMS = {
             512,
             1024,
             2048,
+            4096,
+            8192,
+            16384,
+            32768,
+            65536,
+            131072,
         ],
         #"window_fn": "hann^0.5",
         "window_fn": "blackman_harris",
     },
 
-    "latent_channels": 6,
+    "latent_channels": 8,
     "sample_size": (64, 2048),
     "act_fn": "silu",
     "conv_size": (3,3),
@@ -84,8 +94,8 @@ VAE_PARAMS = {
     "layers_per_block": 3,
 
     "layers_per_mid_block": 2,
-    #"add_mid_attention": True,
-    "add_mid_attention": False,
+    "add_mid_attention": True,
+    #"add_mid_attention": False,
 
     #"norm_num_groups": 32,
     "norm_num_groups": (0, 0, 32, 32),
@@ -96,15 +106,15 @@ VAE_PARAMS = {
     #"upsample_type": "conv",
     "downsample_ratio": (2,2),
 
+    "attention_num_heads": (8,8,8,8),
     #"attention_num_heads": (2,4,8,16),
-
     #"attention_num_heads": (8,16,32,32),
     #"separate_attn_dim_down": (2,3),
     #"separate_attn_dim_up": (3,2,3),
     #"separate_attn_dim_down": (3,3),
     #"separate_attn_dim_up": (3,3,3),
     #"separate_attn_dim_mid": (3,),
-    #"separate_attn_dim_mid": (0,),
+    "separate_attn_dim_mid": (0,0),
     "double_attention": False,
     "pre_attention": False,
     "add_attention": False,
