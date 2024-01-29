@@ -53,7 +53,7 @@ from diffusers.utils.import_utils import is_xformers_available
 from unet_dual import UNetDualModel
 from autoencoder_kl_dual import AutoencoderKLDual
 from dual_diffusion_pipeline import DualDiffusionPipeline
-from dual_diffusion_utils import compute_snr, normalize_lufs, to_ulaw, save_flac
+from dual_diffusion_utils import compute_snr, save_flac, save_raw
 
 # Will error if the minimal version of diffusers is not installed. Remove at your own risks.
 check_min_version("0.21.0.dev0")
@@ -110,6 +110,12 @@ def log_validation_unet(pipeline, args, accelerator, global_step):
                                          sample_rate=sample_rate)
         else:
             logger.warn(f"audio logging not implemented for {tracker.name}")
+
+    timestep_error_logvar = getattr(pipeline.unet, "timestep_error_logvar", None)
+    if timestep_error_logvar is not None:
+        debug_path = os.environ.get("DEBUG_PATH", None)
+        if debug_path is not None:
+            save_raw(timestep_error_logvar, os.path.join(debug_path, f"timestep_error_logvar_{global_step}.raw"))
 
 def log_validation_vae(pipeline, args, accelerator, global_step):
 
@@ -334,7 +340,7 @@ def parse_args():
     parser.add_argument("--adam_beta2", type=float, default=0.999, help="The beta2 parameter for the Adam optimizer.")
     parser.add_argument("--adam_weight_decay", type=float, default=1e-2, help="Weight decay to use.")
     parser.add_argument("--adam_epsilon", type=float, default=1e-08, help="Epsilon value for the Adam optimizer")
-    parser.add_argument("--max_grad_norm", default=1.0, type=float, help="Max gradient norm.")
+    parser.add_argument("--max_grad_norm", default=1., type=float, help="Max gradient norm.")
     parser.add_argument(
         "--logging_dir",
         type=str,
@@ -401,13 +407,13 @@ def parse_args():
     parser.add_argument(
         "--num_validation_samples",
         type=int,
-        default=5,
+        default=4,
         help="Number of samples to generate for validation.",
     )
     parser.add_argument(
         "--num_validation_steps",
         type=int,
-        default=60,
+        default=250,
         help="Number of steps to use when creating validation samples.",
     )
     parser.add_argument(
@@ -972,7 +978,17 @@ def main():
                     model_output = module(model_input, timesteps).sample
 
                     if args.snr_gamma is None:
-                        loss = F.mse_loss(model_output.float(), target.float(), reduction="mean")
+                        timestep_error_logvar = getattr(module, "timestep_error_logvar", None)
+                        if timestep_error_logvar is None:
+                            loss = F.mse_loss(model_output.float(), target.float(), reduction="mean")
+                        else:
+                            loss = F.mse_loss(model_output.float(), target.float(), reduction="none")
+                            timestep_error_logvar = timestep_error_logvar[timesteps].view(-1, (loss.ndim-1) * (1,))
+
+                            print(timestep_error_logvar.shape, loss.shape)
+                            exit()
+                            loss = (loss / timestep_error_logvar.exp() + timestep_error_logvar).mean()
+                            
                     else:
                         # Compute loss-weights as per Section 3.4 of https://arxiv.org/abs/2303.09556.
                         # Since we predict the noise instead of x_0, the original formulation is slightly changed.

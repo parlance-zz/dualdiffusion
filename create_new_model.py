@@ -46,8 +46,8 @@ MODEL_PARAMS = {
     #"beta_end" : 0.02,
     #"beta_schedule": "squaredcos_cap_v2", 
 
-    "rescale_betas_zero_snr": True,
-    #"rescale_betas_zero_snr": False,
+    #"rescale_betas_zero_snr": True,
+    "rescale_betas_zero_snr": False,
 
     "sample_raw_channels": int(os.environ.get("DATASET_NUM_CHANNELS")),
     "sample_rate": int(os.environ.get("DATASET_SAMPLE_RATE")),
@@ -145,7 +145,7 @@ UNET_PARAMS = {
     #"use_skip_samples": False,
 
     #"attention_num_heads": 4,
-    "attention_num_heads": (16,16,16,16),
+    "attention_num_heads": (8,8,8,8),
 
     "separate_attn_dim_mid": (0,),
     "add_mid_attention": True,
@@ -171,8 +171,8 @@ UNET_PARAMS = {
     #"time_embedding_dim": 256,
     #"freq_embedding_dim": (512, 0, 0, 0,),
     #"time_embedding_dim": 0,
-    "freq_embedding_dim": 0,
-    "time_embedding_dim": 0,
+    "freq_embedding_dim": 256,
+    "time_embedding_dim": 1024,
 
     #"downsample_type": "resnet",
     #"upsample_type": "resnet",
@@ -188,7 +188,7 @@ UNET_PARAMS = {
     "layers_per_block": 2,
 
     #"block_out_channels": (256, 384, 640, 1024), # 320
-    "block_out_channels": (128, 256, 512, 512), # 330
+    "block_out_channels": (256, 384, 512, 768), # 330
 }
 
 

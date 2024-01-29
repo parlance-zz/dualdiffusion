@@ -277,7 +277,7 @@ class DualMultiscaleSpectralLoss3:
         
         noise_floor = model_params["noise_floor"]
         sample_rate = model_params["sample_rate"]
-        real_loss_scale = torch.pi / abs(np.log(noise_floor)) * 2.45
+        real_loss_scale = 1/2
 
         loss_real = torch.zeros(1, device=sample.device)
         loss_imag = torch.zeros(1, device=sample.device)
@@ -291,19 +291,19 @@ class DualMultiscaleSpectralLoss3:
             with torch.no_grad():
                 target_fft = stft(target[:, offset:], block_width, window_fn=self.window_fn, step=step)
                 target_fft_abs = target_fft.abs()
-                target_fft_abs = (target_fft_abs / target_fft_abs.amax(dim=(1,2), keepdim=True)).clip(min=noise_floor)
+                target_fft_abs = (target_fft_abs / target_fft_abs.square().mean(dim=(1,2), keepdim=True).clip(min=noise_floor**2).sqrt()).clip(min=noise_floor)
 
                 block_hz = torch.arange(1, target_fft.shape[-1]+1, device=target_fft.device) * (sample_rate/2 / target_fft.shape[-1])
-                mel_density = get_mel_density(block_hz).requires_grad_(False).view(1, 1,-1).requires_grad_(False)
+                mel_density = get_mel_density(block_hz).view(1, 1,-1).requires_grad_(False)
                                 
             sample_fft = stft(sample[:, offset:], block_width, window_fn=self.window_fn, step=step)
             sample_fft_abs = sample_fft.abs()
-            sample_fft_abs = (sample_fft_abs / sample_fft_abs.amax(dim=(1,2), keepdim=True)).clip(min=noise_floor)
+            sample_fft_abs = (sample_fft_abs / sample_fft_abs.square().mean(dim=(1,2), keepdim=True).clip(min=noise_floor**2).sqrt()).clip(min=noise_floor)
 
             error_real = (sample_fft_abs / target_fft_abs).log()
-            loss_real = loss_real + (error_real.abs() * mel_density).mean()
+            loss_real = loss_real + error_real.abs().mean()
 
-            target_fft_noise_floor = target_fft_abs.amin(dim=2, keepdim=True) * 1.1
+            target_fft_noise_floor = target_fft_abs.amin(dim=2, keepdim=True) * 1.5 #* 1.1
             target_phase_weight = (target_fft_abs > target_fft_noise_floor).requires_grad_(False) * mel_density
             error_imag = (sample_fft.angle() - target_fft.angle()).abs()
             error_imag_wrap_mask = (error_imag > torch.pi).detach().requires_grad_(False)

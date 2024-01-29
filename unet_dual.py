@@ -76,10 +76,12 @@ class UNetDualModel(ModelMixin, ConfigMixin):
         add_attention: Union[bool, Tuple[bool]] = True,
         use_skip_samples: bool = True,
         last_global_step: int = 0,
+        num_diffusion_timesteps: int = 1000,
     ):
         super().__init__()
 
         self.use_skip_samples = use_skip_samples
+        self.num_diffusion_timesteps = num_diffusion_timesteps
 
         # Check inputs
         if not isinstance(conv_size, int):
@@ -345,6 +347,8 @@ class UNetDualModel(ModelMixin, ConfigMixin):
         else:
             conv_out_padding = tuple(dim // 2 for dim in conv_out_kernel_size)
         self.conv_out = conv_class(block_out_channels[0], out_channels, kernel_size=conv_out_kernel_size, padding=conv_out_padding)
+
+        self.timestep_error_logvar = nn.Parameter(torch.zeros(self.num_diffusion_timesteps))
 
     def forward(
         self,

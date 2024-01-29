@@ -288,39 +288,23 @@ class DualDiffusionPipeline(DiffusionPipeline):
     @torch.no_grad()
     def create_new(model_params, unet_params, vae_params=None):
         
-        unet = UNetDualModel(**unet_params)
-        
         beta_schedule = model_params["beta_schedule"]
         if beta_schedule == "trained_betas":
-            def alpha_bar_fn(t):
-                a = 2 #4
-                y = -1/(1 + a*t)**4 + 2/(1 + a*t)**2
-                y -= -1/(1 + a)**4 + 2/(1 + a)**2
-                return y
-            
-            trained_betas = []
-            num_diffusion_timesteps = 1000
-            for i in range(num_diffusion_timesteps):
-                t1 = i / num_diffusion_timesteps
-                t2 = (i + 1) / num_diffusion_timesteps
-                trained_betas.append(1 - alpha_bar_fn(t2) / alpha_bar_fn(t1))
-        else:
-            trained_betas = None
+            raise NotImplementedError()
 
         scheduler = DDIMScheduler(clip_sample_range=20.,
                                   prediction_type=model_params["prediction_type"],
                                   beta_schedule=beta_schedule,
                                   beta_start=model_params["beta_start"],
                                   beta_end=model_params["beta_end"],
-                                  trained_betas=trained_betas,
                                   rescale_betas_zero_snr=model_params["rescale_betas_zero_snr"],)
         
         snr = compute_snr(scheduler, scheduler.timesteps)
         debug_path = os.environ.get("DEBUG_PATH", None)
         if debug_path is not None:
-            os.makedirs(debug_path, exist_ok=True)
-            snr.log().cpu().numpy().tofile(os.path.join(debug_path, "debug_schedule_ln_snr.raw"))
-            np.array(trained_betas).astype(np.float32).tofile(os.path.join(debug_path, "debug_schedule_betas.raw"))
+            save_raw(snr.log(), os.path.join(debug_path, "debug_schedule_ln_snr.raw"))
+
+        unet = UNetDualModel(**unet_params, num_diffusion_timesteps=scheduler.config.num_train_timesteps)
 
         if vae_params is not None:
             vae = AutoencoderKLDual(**vae_params)
@@ -363,6 +347,7 @@ class DualDiffusionPipeline(DiffusionPipeline):
             trained_betas = self.scheduler.config["trained_betas"]
         else:
             trained_betas = None
+        beta_schedule = "linear"
 
         scheduler = scheduler.lower().strip()
         if scheduler == "ddim":

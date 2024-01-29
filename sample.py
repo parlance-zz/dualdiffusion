@@ -26,13 +26,13 @@ from dotenv import load_dotenv
 
 import numpy as np
 import torch
-import torchaudio
 import json
+import datetime
 
 from dual_diffusion_pipeline import DualDiffusionPipeline, DualMCLTFormat
 from attention_processor_dual import SeparableAttnProcessor2_0
 from autoencoder_kl_dual import AutoencoderKLDual
-from dual_diffusion_utils import save_flac, save_raw, load_raw
+from dual_diffusion_utils import save_flac, save_raw, load_raw, load_flac
 
 def get_dataset_stats():
     model_params = {
@@ -172,18 +172,23 @@ def embedding_test():
 
 def vae_test():
 
-    model_name = "dualdiffusion2d_900_mclt_6vae_1"
+    model_name = "dualdiffusion2d_900_4"
     num_samples = 1
-    #device = "cuda"
-    device = "cpu"
-    fp16 = False
-    #fp16 = True
+    device = "cuda"
+    #device = "cpu"
+    #fp16 = False
+    fp16 = True
 
     model_path = os.path.join(os.environ.get("MODEL_PATH", "./"), model_name)
     with open(os.path.join(model_path, "model_index.json"), "r") as f:
         model_index = json.load(f)
     model_params = model_index["model_params"]
     sample_rate = model_params["sample_rate"]
+
+    # 44.1khz settings
+    model_params["num_chunks"] = 352 # best quality @ 44.1khz (multiply num_chunks by new_sample_rate / original_sample_rate)
+    model_params["sample_raw_length"] = 65536*32
+    sample_rate = 44100
 
     output_path = os.path.join(model_path, "output")
     os.makedirs(output_path, exist_ok=True)
@@ -196,7 +201,7 @@ def vae_test():
     test_samples = np.random.choice(os.listdir(dataset_path), num_samples, replace=False)
     
     #test_samples = ["27705.raw"] # extremely heavy noise
-    test_samples = ["23636.raw"] #som
+    #test_samples = ["23655.raw"] #som
     #test_samples = ["33927.raw"]
     #test_samples = ["29235.raw"] 
 
@@ -211,26 +216,21 @@ def vae_test():
     vae = AutoencoderKLDual.from_pretrained(vae_path, torch_dtype=model_dtype).to(device)
     last_global_step = vae.config["last_global_step"]
 
-    for filename in test_samples:
-        input_raw_sample = load_raw(os.path.join(dataset_path, filename), dtype=np.int16, count=crop_width)
-        input_raw_sample = input_raw_sample.unsqueeze(0).to(device)
-        input_sample = format.raw_to_sample(input_raw_sample, model_params)
+    start_time = datetime.datetime.now()
 
+    for filename in test_samples:
+        #input_raw_sample = load_raw(os.path.join(dataset_path, filename), dtype=np.int16, count=crop_width)
+        #input_raw_sample = input_raw_sample.unsqueeze(0).to(device)
+
+        input_raw_sample = load_flac("./dataset/samples_hq/23654.flac", count=crop_width).to(device)
+        
+        input_sample = format.raw_to_sample(input_raw_sample, model_params)
         posterior = vae.encode(input_sample.type(model_dtype), return_dict=False)[0]
         #from autoencoder_kl_dual import DiagonalGaussianDistribution
         #posterior = DiagonalGaussianDistribution(torch.zeros_like(posterior.parameters))
         latents = posterior.sample()
-        #latents -= latents.mean(dim=(1,2,3), keepdim=True)
-        #latents /= latents.std(dim=(1,2,3), keepdim=True)
         output_sample = vae.decode(latents, return_dict=False)[0]
         output_raw_sample = format.sample_to_raw(output_sample.type(torch.float32), model_params)
-
-        #output_raw_sample = output_raw_sample[..., :65536]
-        #from dual_diffusion_utils import MSPSD
-        #mspsd = MSPSD(sample_rate=8000, use_mel_weighting=True, overlap=4, window_fn="hann", inv_window_fn="hann")
-        #psd = mspsd.get_sample_mspsd(output_raw_sample)
-        #psd_raw_sample = mspsd.get_sample(psd, num_iterations=100)
-        #save_raw(psd_raw_sample, "./debug/psd_sample.raw")
 
         output_latents_file_path = os.path.join(output_path, f"step_{last_global_step}_{filename.replace('.raw', '_latents.raw')}")
         save_raw(latents, output_latents_file_path)
@@ -241,8 +241,7 @@ def vae_test():
         output_posterior_file_path = os.path.join(output_path, f"step_{last_global_step}_{filename.replace('.raw', '_posterior.raw')}")
         save_raw(posterior.parameters, output_posterior_file_path)
 
-        #original_raw_sample = format.raw_to_sample(input_raw_sample, model_params, return_dict=True)["raw_samples"]
-        original_raw_sample = input_raw_sample
+        original_raw_sample = format.raw_to_sample(input_raw_sample, model_params, return_dict=True)["raw_samples"]
         output_flac_file_path = os.path.join(output_path, f"step_{last_global_step}_{filename.replace('.raw', '_original.flac')}")
         save_flac(original_raw_sample, sample_rate, output_flac_file_path)
         print(f"Saved flac output to {output_flac_file_path}")
@@ -250,6 +249,8 @@ def vae_test():
         output_flac_file_path = os.path.join(output_path, f"step_{last_global_step}_{filename.replace('.raw', '_decoded.flac')}")
         save_flac(output_raw_sample, sample_rate, output_flac_file_path)
         print(f"Saved flac output to {output_flac_file_path}")
+
+    print(f"Finished in: {datetime.datetime.now() - start_time}")
 
     exit()
 
@@ -266,25 +267,25 @@ if __name__ == "__main__":
 
     #get_dataset_stats()
     #embedding_test()
-    #vae_test()
+    vae_test()
 
-    model_name = "dualdiffusion2d_900_1"
+    model_name = "dualdiffusion2d_900_4"
 
-    num_samples = 1
+    num_samples = 4
     batch_size = 1
     length = 1
-    scheduler = "dpms++"
-    #scheduler = "ddim"
-    #scheduler = "kdpm2_a"
-    #scheduler = "euler_a"
-    #scheduler = "dpms++_sde"
-    steps = 100 #337 #250
+    scheduler = "dpms++"     # generates nearly identical outputs to ddim, latent diffusion or not
+    #scheduler = "ddim"       # these 2 are probably the best overall
+    #scheduler = "kdpm2_a"     # wow! does waaayyy better with latent diffusion! probably still not as good as dpms++ or ddim
+    #scheduler = "euler_a"    # different, unclear if good
+    #scheduler = "dpms++_sde" # on par with dpms++ and ddim, but more unpredictable
+    steps = 550 #337 #250
     loops = 0
     fp16 = False
     #fp16 = True
     
     seed = np.random.randint(10000, 99999-num_samples)
-    #seed = 1000
+    #seed = 69767
 
     model_dtype = torch.float16 if fp16 else torch.float32
     model_path = os.path.join(os.environ.get("MODEL_PATH", "./"), model_name)

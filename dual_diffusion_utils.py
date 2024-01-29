@@ -352,6 +352,15 @@ def load_raw(input_path, dtype=torch.int16, start=0, count=-1):
         return tensor / 4294967295.
 
     return tensor
+
+def load_flac(input_path, start=0, count=-1, return_sample_rate=False):
+    tensor, sample_rate = torchaudio.load(input_path, frame_offset=start, num_frames=count)
+    tensor = tensor[..., :count] # for whatever reason torchaudio will return more samples than requested
+
+    if return_sample_rate:
+        return tensor, sample_rate
+    else:
+        return tensor
     
 def save_sample_img(sample, img_path, include_phase=False):
     
@@ -886,6 +895,11 @@ if __name__ == "__main__":
         torch.backends.cuda.cufft_plan_cache[0].max_size = 250 # stupid cufft memory leak
 
     load_dotenv()
+
+    a = get_mel_density(torch.linspace(0, 4000, 65536))
+    print(a.mean())
+    print( (1/a).mean())
+    exit()
 
     # MSPSD test
 

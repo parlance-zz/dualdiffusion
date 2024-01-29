@@ -5,22 +5,22 @@ accelerate launch^
  --allow_tf32^
  --train_data_dir="D:/dualdiffusion/dataset/samples"^
  --raw_sample_format="int16"^
- --pretrained_model_name_or_path="D:/dualdiffusion/models/dualdiffusion2d_900_1"^
- --module="unet"^
- --train_batch_size=46^
+ --pretrained_model_name_or_path="D:/dualdiffusion/models/dualdiffusion2d_900_4"^
+ --module="vae"^
+ --train_batch_size=6^
  --num_train_epochs=5000^
- --checkpointing_steps=430^
+ --checkpointing_steps=471^
  --checkpoints_total_limit=1^
- --gradient_accumulation_steps=1^
- --learning_rate=1e-4^
+ --gradient_accumulation_steps=7^
+ --learning_rate=5e-6^
  --report_to="tensorboard"^
  --resume_from_checkpoint=latest^
- --seed=300^
+ --seed=200^
  --lr_scheduler="constant_with_warmup"^
  --num_validation_samples=5^
  --num_validation_epochs=5^
- --kl_loss_weight=0^
- --max_grad_norm=1
+ --kl_loss_weight=8e-4^
+ --max_grad_norm=15
 
 REM --checkpointing_steps=2470^
 REM --max_grad_norm=25
