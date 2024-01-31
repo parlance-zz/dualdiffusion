@@ -70,17 +70,14 @@ class UNetDualModel(ModelMixin, ConfigMixin):
         num_class_embeds: Optional[int] = None,
         dropout: Union[float, Tuple[float]] = 0.0,
         conv_size = (3,3),
-        no_conv_in: bool = False,
         freq_embedding_dim: Union[int, Tuple[int]] = 0,
         time_embedding_dim: Union[int, Tuple[int]] = 0,
         add_attention: Union[bool, Tuple[bool]] = True,
-        use_skip_samples: bool = True,
         last_global_step: int = 0,
         num_diffusion_timesteps: int = 1000,
     ):
         super().__init__()
 
-        self.use_skip_samples = use_skip_samples
         self.num_diffusion_timesteps = num_diffusion_timesteps
 
         # Check inputs
@@ -142,15 +139,12 @@ class UNetDualModel(ModelMixin, ConfigMixin):
             conv_class = nn.Conv2d
 
         # input
-        if no_conv_in:
-            self.conv_in = nn.Identity()
+        conv_in_kernel_size = conv_size
+        if isinstance(conv_in_kernel_size, int):
+            conv_in_padding = conv_in_kernel_size // 2
         else:
-            conv_in_kernel_size = conv_size
-            if isinstance(conv_in_kernel_size, int):
-                conv_in_padding = conv_in_kernel_size // 2
-            else:
-                conv_in_padding = tuple(dim // 2 for dim in conv_in_kernel_size)
-            self.conv_in = conv_class(in_channels, block_out_channels[0], kernel_size=conv_in_kernel_size, padding=conv_in_padding)
+            conv_in_padding = tuple(dim // 2 for dim in conv_in_kernel_size)
+        self.conv_in = conv_class(in_channels, block_out_channels[0], kernel_size=conv_in_kernel_size, padding=conv_in_padding)
 
         # time
         time_embed_dim = block_out_channels[0] * 4
@@ -243,7 +237,6 @@ class UNetDualModel(ModelMixin, ConfigMixin):
                 freq_embedding_dim=_freq_embedding_dim,
                 time_embedding_dim=_time_embedding_dim,
                 add_attention=_add_attention,
-                return_skip_samples=use_skip_samples,
             )
             self.down_blocks.append(down_block)
 
@@ -326,7 +319,6 @@ class UNetDualModel(ModelMixin, ConfigMixin):
                 freq_embedding_dim=_freq_embedding_dim,
                 time_embedding_dim=_time_embedding_dim,
                 add_attention=_add_attention,
-                use_skip_samples=use_skip_samples,
             )
             self.up_blocks.append(up_block)
 
@@ -407,8 +399,7 @@ class UNetDualModel(ModelMixin, ConfigMixin):
             emb = None
 
         # 2. pre-process
-        if self.use_skip_samples:
-            skip_sample = sample
+        skip_sample = sample
         sample = self.conv_in(sample)
 
         # 3. down
@@ -441,7 +432,7 @@ class UNetDualModel(ModelMixin, ConfigMixin):
         sample = self.conv_out(sample)
 
         if skip_sample is not None:
-            sample += skip_sample
+            sample = sample + skip_sample
 
         if self.time_embedding is not None:
             if self.config.time_embedding_type == "fourier":
