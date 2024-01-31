@@ -30,7 +30,7 @@ from dual_diffusion_pipeline import DualDiffusionPipeline
 
 if __name__ == "__main__":
 
-    load_dotenv()
+    load_dotenv(override=True)
 
     model_name = "dualdiffusion2d_330_v8_256embed_3_noskip"
     #module_name_filter = ["*attentions*group_norm_*.weight"]
