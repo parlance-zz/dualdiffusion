@@ -21,6 +21,9 @@
 # SOFTWARE.
 
 import os
+from io import BytesIO
+from json import dumps
+
 import numpy as np
 import torch
 import torch.nn.functional as F
@@ -29,6 +32,10 @@ import torchaudio
 import torchaudio.functional as AF
 import cv2
 from dotenv import load_dotenv
+
+def dict_str(d, indent=4):
+    if d is None: return "None"
+    return dumps(d, indent=indent)
 
 def get_activation(act_fn):
     if act_fn in ["swish", "silu"]:
@@ -55,8 +62,6 @@ def compute_snr(noise_scheduler, timesteps):
     sqrt_alphas_cumprod = alphas_cumprod**0.5
     sqrt_one_minus_alphas_cumprod = (1.0 - alphas_cumprod) ** 0.5
 
-    # Expand the tensors.
-    # Adapted from https://github.com/TiankaiHang/Min-SNR-Diffusion-Training/blob/521b624bd70c67cee4bdf49225915f5945a872e3/guided_diffusion/gaussian_diffusion.py#L1026
     sqrt_alphas_cumprod = sqrt_alphas_cumprod.to(device=timesteps.device)[timesteps].float()
     while len(sqrt_alphas_cumprod.shape) < len(timesteps.shape):
         sqrt_alphas_cumprod = sqrt_alphas_cumprod[..., None]
@@ -67,11 +72,9 @@ def compute_snr(noise_scheduler, timesteps):
         sqrt_one_minus_alphas_cumprod = sqrt_one_minus_alphas_cumprod[..., None]
     sigma = sqrt_one_minus_alphas_cumprod.expand(timesteps.shape)
 
-    # Compute SNR.
     snr = (alpha / sigma) ** 2
     return snr
 
-# kaiser derived window for mclt/mdct, unused
 def get_kaiser_window(window_len, beta=4*torch.pi, device="cpu"):    
     alpha = (window_len - 1) / 2
     n = torch.arange(window_len, device=device)
@@ -101,16 +104,6 @@ def get_flat_top_window(window_len, device="cpu"):
     x = torch.arange(window_len, device=device) / window_len * 2*torch.pi
     return (0.21557895 - 0.41663158 * torch.cos(x) + 0.277263158 * torch.cos(2*x) - 0.083578947 * torch.cos(3*x) + 0.006947368 * torch.cos(4*x)).requires_grad_(False)
 
-def get_ln_window(window_len, device="cpu"):
-    x = torch.linspace(0, 1, window_len, device=device)
-    w = torch.exp(-torch.log2(x).square() - torch.log2(1-x).square())
-    w[0] = 0; w[-1] = 0
-    return (w / w.amax()).requires_grad_(False)
-
-def get_blackman_harris2_window(window_len, device="cpu"):
-    return (get_blackman_harris_window(window_len, device) * get_flat_top_window(window_len, device)).requires_grad_(False)
-
-# fast overlapped modified discrete cosine transform type iv - becomes mclt with complex output
 def mdct(x, block_width, window_fn="hann", window_degree=1):
 
     padding_left = padding_right = block_width // 2
@@ -137,8 +130,6 @@ def mdct(x, block_width, window_fn="hann", window_degree=1):
         window = get_blackman_harris_window(2*N, device=x.device)
     elif window_fn == "flat_top":
         window = get_flat_top_window(2*N, device=x.device)
-    elif window_fn == "ln":
-        window = get_ln_window(2*N, device=x.device)
     else:
         raise ValueError(f"Unsupported window function: {window_fn}")
     
@@ -164,8 +155,6 @@ def imdct(x, window_fn="hann", window_degree=1):
         window = get_blackman_harris_window(2*N, device=x.device)
     elif window_fn == "flat_top":
         window = get_flat_top_window(2*N, device=x.device)
-    elif window_fn == "ln":
-        window = get_ln_window(2*N, device=x.device)
     else:
         raise ValueError(f"Unsupported window function: {window_fn}")
 
@@ -238,7 +227,99 @@ def from_ulaw(x, u=255):
 
     return x
 
-def normalize_lufs(raw_samples, sample_rate, target_lufs=-20.0):
+STR_DTYPE_TO_NUMPY_DTYPE = {
+    "float16": np.float16,
+    "float32": np.float32,
+    "float64": np.float64,
+    "int8": np.int8,
+    "int16": np.int16,
+    "int32": np.int32,
+    "int64": np.int64,
+    "uint8": np.uint8,
+    "uint16": np.uint16,
+    "uint32": np.uint32,
+    "uint64": np.uint64,
+    "complex64": np.complex64,
+    "complex128": np.complex128
+}
+
+STR_DTYPE_SIZE = {
+    "float16": 2,
+    "float32": 4,
+    "float64": 8,
+    "int8": 1,
+    "int16": 2,
+    "int32": 4,
+    "int64": 8,
+    "uint8": 1,
+    "uint16": 2,
+    "uint32": 4,
+    "uint64": 8,
+    "complex64": 8,
+    "complex128": 16
+}
+
+STR_DTYPE_MAX_VALUE = {
+    "float16": 1.,
+    "float32": 1.,
+    "float64": 1.,
+    "int8": 128.,
+    "int16": 32768.,
+    "int32": 2147483648.,
+    "int64": 9223372036854775808.,
+    "uint8": 255.,
+    "uint16": 65535.,
+    "uint32": 4294967295.,
+    "uint64": 18446744073709551615.,
+    "complex64": 1.,
+    "complex128": 1.
+}
+
+def save_raw(tensor, output_path):  
+    directory = os.path.dirname(output_path)
+    if not os.path.exists(directory):
+        os.makedirs(directory)
+
+    if tensor.dtype == torch.float16:
+        tensor = tensor.float()
+    elif tensor.dtype == torch.complex32:
+        tensor = tensor.complex64()
+    tensor.detach().resolve_conj().cpu().numpy().tofile(output_path)
+
+def load_raw(input_path, dtype="int16", num_channels=1, start=0, count=-1):
+
+    dtype = STR_DTYPE_TO_NUMPY_DTYPE.get(dtype, None)
+    if dtype is None:
+        raise ValueError(f"Unsupported dtype: {dtype} - Supported dtypes: {list(STR_DTYPE_TO_NUMPY_DTYPE.keys())}")
+    dtype_size = STR_DTYPE_SIZE[dtype]
+
+    if isinstance(input_path, str):
+        sample_len = os.path.getsize(input_path) // dtype_size // num_channels
+    else:
+        if not isinstance(input_path, (bytes, bytearray)):
+            raise ValueError(f"Unsupported input_path type: {type(input_path)}")
+        sample_len = len(input_path) // dtype_size // num_channels
+
+    if sample_len < count:
+        raise ValueError(f"Requested {count} samples, but only {sample_len} available")
+    if start < 0:
+        if count < 0:
+            raise ValueError(f"If start < 0 count cannot be < 0")
+        start = np.random.randint(0, sample_len - count + 1)
+    elif start > 0 and count > 0:
+        if sample_len < start + count:
+            raise ValueError(f"Requested {start + count} samples, but only {sample_len} available")
+
+    offset = start * dtype_size * num_channels
+
+    if isinstance(input_path, str):
+        tensor = torch.from_numpy(np.fromfile(input_path, dtype=dtype, count=count * num_channels, offset=offset))
+    else:
+        tensor = torch.from_numpy(np.frombuffer(input_path, dtype=dtype, count=count * num_channels, offset=offset))
+
+    return (tensor / STR_DTYPE_MAX_VALUE[dtype]).view(num_channels, -1)
+
+def normalize_lufs(raw_samples, sample_rate, target_lufs=-25.0):
 
     original_shape = raw_samples.shape
     raw_samples = torch.nan_to_num(raw_samples, nan=0, posinf=0, neginf=0)
@@ -255,15 +336,11 @@ def normalize_lufs(raw_samples, sample_rate, target_lufs=-20.0):
     normalized_raw_samples = (raw_samples * gain).view(original_shape).clamp(min=-10, max=10)
     return torch.nan_to_num(normalized_raw_samples, nan=0, posinf=0, neginf=0)
 
-def save_flac(raw_samples, sample_rate, output_path, target_lufs=-20.0):
+def save_audio(raw_samples, sample_rate, output_path, target_lufs=-25.0):
     
     raw_samples = raw_samples.detach().real
     if raw_samples.ndim == 1:
         raw_samples = raw_samples.view(1, -1)
-    elif raw_samples.ndim == 2:
-        raw_samples = raw_samples.view(raw_samples.shape[0], -1)
-    elif raw_samples.ndim == 3:
-        raw_samples = raw_samples.permute(1, 2, 0).view(raw_samples.shape[1], -1)
 
     if target_lufs is not None:
         raw_samples = normalize_lufs(raw_samples, sample_rate, target_lufs)
@@ -274,88 +351,28 @@ def save_flac(raw_samples, sample_rate, output_path, target_lufs=-20.0):
     
     torchaudio.save(output_path, raw_samples.cpu(), sample_rate, bits_per_sample=16)
 
-def save_raw(tensor, output_path):  
-    directory = os.path.dirname(output_path)
-    if not os.path.exists(directory):
-        os.makedirs(directory)
+def load_audio(input_path, start=0, count=-1, return_sample_rate=False):
 
-    if tensor.dtype == torch.float16:
-        tensor = tensor.float()
-    elif tensor.dtype == torch.complex32:
-        tensor = tensor.complex64()
-    tensor.detach().resolve_conj().cpu().numpy().tofile(output_path)
-
-def dtype_size_in_bytes(dtype):
-    if dtype == torch.float16 or dtype == np.float16:
-        return 2
-    elif dtype == torch.float32 or dtype == np.float32:
-        return 4
-    elif dtype == torch.float64 or dtype == np.float64:
-        return 8
-    elif dtype == torch.int8 or dtype == np.int8:
-        return 1
-    elif dtype == torch.int16 or dtype == np.int16:
-        return 2
-    elif dtype == torch.int32 or dtype == np.int32:
-        return 4
-    elif dtype == torch.int64 or dtype == np.int64:
-        return 8
-    elif dtype == torch.complex32:
-        return 4
-    elif dtype == torch.complex64 or dtype == np.complex64:
-        return 8
-    elif dtype == torch.complex128 or dtype == np.complex128:
-        return 16
-    else:
-        raise ValueError(f"Unsupported dtype: {dtype}")
-
-def torch_dtype_to_numpy(dtype):
-    if dtype == torch.float16 or dtype == np.float16:
-        return np.float16
-    elif dtype == torch.float32 or dtype == np.float32:
-        return np.float32
-    elif dtype == torch.float64 or dtype == np.float64:
-        return np.float64
-    elif dtype == torch.int8 or dtype == np.int8:
-        return np.int8
-    elif dtype == torch.int16 or dtype == np.int16:
-        return np.int16
-    elif dtype == torch.int32 or dtype == np.int32:
-        return np.int32
-    elif dtype == torch.int64 or dtype == np.int64:
-        return np.int64
-    elif dtype == torch.complex32:
-        raise ValueError("Numpy does not support equivalent dtype: torch.complex32")
-    elif dtype == torch.complex64 or dtype == np.complex64:
-        return np.complex64
-    elif dtype == torch.complex128 or dtype == np.complex128:
-        return np.complex128
-    else:
-        raise ValueError(f"Unsupported dtype: {dtype}")
+    if isinstance(input_path, bytes):
+        input_path = BytesIO(input_path)
+    elif not isinstance(input_path, str):
+        raise ValueError(f"Unsupported input_path type: {type(input_path)}")
     
-def load_raw(input_path, dtype=torch.int16, start=0, count=-1):
-    dtype = torch_dtype_to_numpy(dtype)
-    offset = start * dtype_size_in_bytes(dtype)
-    tensor = torch.from_numpy(np.fromfile(input_path, dtype=dtype, count=count, offset=offset))
-    
-    if dtype == np.int8:
-        return tensor / 128.
-    elif dtype == np.int16:
-        return tensor / 32768.
-    elif dtype == np.int32:
-        return tensor / 2147483648.
-    elif dtype == np.uint8:
-        return tensor / 255.
-    elif dtype == np.uint16:
-        return tensor / 65535.
-    elif dtype == np.uint32:
-        return tensor / 4294967295.
+    sample_len = torchaudio.info(input_path).num_frames
+    if sample_len < count:
+        raise ValueError(f"Requested {count} samples, but only {sample_len} available")
+    if start < 0:
+        if count < 0:
+            raise ValueError(f"If start < 0 count cannot be < 0")
+        start = np.random.randint(0, sample_len - count + 1)
+    elif start > 0 and count > 0:
+        if sample_len < start + count:
+            raise ValueError(f"Requested {start + count} samples, but only {sample_len} available")
 
-    return tensor
-
-def load_flac(input_path, start=0, count=-1, return_sample_rate=False):
     tensor, sample_rate = torchaudio.load(input_path, frame_offset=start, num_frames=count)
-    tensor = tensor[..., :count] # for whatever reason torchaudio will return more samples than requested
+
+    if count >= 0:
+        tensor = tensor[..., :count] # for whatever reason torchaudio will return more samples than requested
 
     if return_sample_rate:
         return tensor, sample_rate
@@ -428,18 +445,6 @@ def get_comp_pair(length=65536, n_freqs=1024, freq_similarity=0, amp_similarity=
 
     return y1.real, y2.real
 
-
-    """
-    The inverse of DCT-I, which is just a scaled DCT-I
-
-    Our definition if idct1 is such that idct1(dct1(x)) == x
-
-    :param X: the input signal
-    :return: the inverse DCT-I of the signal over the last dimension
-    """
-    n = X.shape[-1]
-    return dct1(X) / (2 * (n - 1))
-
 def stft2(x, block_width, overlap=2, window_fn="hann"):
 
     step = block_width // overlap
@@ -505,32 +510,6 @@ def istft2(x, block_width, overlap=2, window_fn="none"):
         y = y[..., padding:-padding] / overlap
 
     return y
-
-def dct2(x):
-    N = x.shape[-1] // 2
-    n = torch.arange(2*N, device=x.device)
-    k = torch.arange(0.5, N + 0.5, device=x.device)
-    pre_shift = torch.exp(-1j * torch.pi / 2 / N * n)
-    post_shift = torch.exp(-1j * torch.pi / 2 / N * (N + 1) * k)
-
-    return torch.fft.fft(x * pre_shift, norm="forward")[..., :N] * post_shift * 2 * N#(2 * N ** 0.5)
-
-def idct2(x, n=None):
-    
-    if n is not None:
-        #norm_factor = 1 / x.shape[-1]**0.5
-        norm_factor = 2 / n
-        x = F.pad(x, (0, n//2 - x.shape[-1]))
-    else:
-        norm_factor = 2 #* x.shape[-1] ** 0.5
-        
-    N = x.shape[-1]
-    n = torch.arange(2*N, device=x.device)
-    k = torch.arange(0.5, N + 0.5, device=x.device)
-    pre_shift = torch.exp(-1j * torch.pi / 2 / N * n)
-    post_shift = torch.exp(-1j * torch.pi / 2 / N * (N + 1) * k)
-
-    return (torch.fft.ifft(x / post_shift, n=2*N, norm="forward") / pre_shift).real * norm_factor #* (2 * N ** 0.5)
 
 class MSPSD:
 
@@ -691,8 +670,7 @@ class MSPSD:
 
         return x / x.abs().amax(dim=-1, keepdim=True)
 
-#def get_facsimile(sample, target, num_iterations=400, low_scale=5, high_scale=11, overlap=2, window_fn="hann^0.5", inv_window_fn="hann^0.5"):
-def get_facsimile(sample, target, num_iterations=400, low_scale=5, high_scale=11, overlap=2, window_fn="hann", inv_window_fn="none"):
+def get_facsimile(sample, target, num_iterations=400, low_scale=5, high_scale=11, overlap=2, window_fn="hann^0.5", inv_window_fn="hann^0.5"):
 
     a = target
     x = sample
@@ -894,16 +872,10 @@ if __name__ == "__main__":
         torch.backends.cuda.matmul.allow_tf32 = True
         torch.backends.cuda.cufft_plan_cache[0].max_size = 250 # stupid cufft memory leak
 
-    load_dotenv()
-
-    a = get_mel_density(torch.linspace(0, 4000, 65536))
-    print(a.mean())
-    print( (1/a).mean())
-    exit()
+    load_dotenv(override=True)
 
     # MSPSD test
-
-    #"""
+    """
     torch.manual_seed(0)
     np.random.seed(0)
     
@@ -927,10 +899,10 @@ if __name__ == "__main__":
     #save_raw(psd_mel_weighted, "./debug/test_p_mel_weighted.raw")
 
     exit()
-    #"""
+    """
 
     # facsimile test
-    #""""
+    """"
     
     dataset_path = os.environ.get("DATASET_PATH", "./dataset/samples")
     test_sample = np.random.choice(os.listdir(dataset_path), 1, replace=False)[0]
@@ -948,4 +920,4 @@ if __name__ == "__main__":
 
     x /= x.abs().amax()
     save_raw(x, "./debug/test_x.raw")
-    #"""
+    """
