@@ -3,7 +3,7 @@
 accelerate launch \
   train.py \
   --mixed_precision="fp16" \
-  --pretrained_model_name_or_path="/home/parlance/dualdiffusion/models/dualdiffusion2d_900_8" \
+  --pretrained_model_name_or_path="/home/parlance/dualdiffusion/models/dualdiffusion2d_1000_2" \
   --module="vae" \
   --train_batch_size=2 \
   --num_train_epochs=5000 \
