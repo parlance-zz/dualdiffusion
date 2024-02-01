@@ -144,9 +144,9 @@ class DiagonalDegenerateDistribution(object):
 
     def kl(self):
         
-        non_bsz_dims = tuple(range(1, len(self.parameters.shape)))
-        mean = self.parameters.mean(dim=non_bsz_dims, keepdim=True)
-        var = self.parameters.var(dim=non_bsz_dims, keepdim=True).clip(min=1e-10)
+        kl_reduction_dims = tuple(range(2, len(self.parameters.shape)))
+        mean = self.parameters.mean(dim=kl_reduction_dims, keepdim=True)
+        var = self.parameters.var(dim=kl_reduction_dims, keepdim=True).clip(min=1e-10)
 
         return mean.square() + var - 1 - var.log()
 
