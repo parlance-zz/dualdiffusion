@@ -55,7 +55,7 @@ class DualMultiscaleSpectralLoss:
 
         if (sample.shape != target.shape):
             raise ValueError(f"sample.shape != target.shape. sample.shape: {sample.shape}. target.shape: {target.shape}.")
-        
+
         noise_floor = model_params["noise_floor"]
         sample_rate = model_params["sample_rate"]
 
@@ -69,21 +69,21 @@ class DualMultiscaleSpectralLoss:
             offset = np.random.randint(0, min(target.shape[-1] - block_width + 1, step))        
 
             with torch.no_grad():
-                target_fft = stft(target[:, offset:], block_width, window_fn=self.window_fn, step=step)
+                target_fft = stft(target[:, :, offset:], block_width, window_fn=self.window_fn, step=step)
                 target_fft_abs = target_fft.abs()
-                target_fft_abs = (target_fft_abs / target_fft_abs.square().mean(dim=(1,2), keepdim=True).clip(min=noise_floor**2).sqrt()).clip(min=noise_floor)
+                target_fft_abs = (target_fft_abs / target_fft_abs.square().mean(dim=(1,2,3), keepdim=True).clip(min=noise_floor**2).sqrt()).clip(min=noise_floor)
 
                 block_hz = torch.arange(1, target_fft.shape[-1]+1, device=target_fft.device) * (sample_rate/2 / target_fft.shape[-1])
-                mel_density = get_mel_density(block_hz).view(1, 1,-1).requires_grad_(False)
+                mel_density = get_mel_density(block_hz).view(1, 1, 1,-1).requires_grad_(False)
                                 
-            sample_fft = stft(sample[:, offset:], block_width, window_fn=self.window_fn, step=step)
+            sample_fft = stft(sample[:, :, offset:], block_width, window_fn=self.window_fn, step=step)
             sample_fft_abs = sample_fft.abs()
-            sample_fft_abs = (sample_fft_abs / sample_fft_abs.square().mean(dim=(1,2), keepdim=True).clip(min=noise_floor**2).sqrt()).clip(min=noise_floor)
+            sample_fft_abs = (sample_fft_abs / sample_fft_abs.square().mean(dim=(1,2,3), keepdim=True).clip(min=noise_floor**2).sqrt()).clip(min=noise_floor)
 
             error_real = (sample_fft_abs / target_fft_abs).log()
             loss_real = loss_real + error_real.abs().mean()
 
-            target_fft_noise_floor = target_fft_abs.amin(dim=2, keepdim=True) * 1.5
+            target_fft_noise_floor = target_fft_abs.amin(dim=3, keepdim=True) * 1.5
             target_phase_weight = (target_fft_abs > target_fft_noise_floor).requires_grad_(False) * mel_density
             error_imag = (sample_fft.angle() - target_fft.angle()).abs()
             error_imag_wrap_mask = (error_imag > torch.pi).detach().requires_grad_(False)
@@ -436,6 +436,7 @@ class DecoderDual(nn.Module):
                 time_embedding_dim=_time_embedding_dim,
                 add_attention=_add_attention,
                 use_noise_channel=use_noise_channel,
+                use_skip_samples=False,
             )
 
             self.up_blocks.append(up_block)
@@ -611,7 +612,8 @@ class AutoencoderKLDual(ModelMixin, ConfigMixin):
             in_channels=in_channels,
             out_channels=latent_channels,
             act_fn=act_fn,
-            double_z=True,
+            #double_z=True,
+            double_z=False,
             block_out_channels=block_out_channels,
             layers_per_block=layers_per_block,
             layers_per_mid_block=layers_per_mid_block,
