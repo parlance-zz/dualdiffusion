@@ -137,16 +137,16 @@ class DiagonalGaussianDistribution(object):
 
 class DiagonalDegenerateDistribution(object):
     def __init__(self, parameters):
-        self.parameters = parameters
+        self.parameters = self.mean = parameters
 
     def sample(self, generator: Optional[torch.Generator] = None) -> torch.FloatTensor: 
-        return self.parameters
+        return self.mean
 
     def kl(self):
         
-        kl_reduction_dims = tuple(range(2, len(self.parameters.shape)))
-        mean = self.parameters.mean(dim=kl_reduction_dims, keepdim=True)
-        var = self.parameters.var(dim=kl_reduction_dims, keepdim=True).clip(min=1e-10)
+        kl_reduction_dims = tuple(range(2, len(self.mean.shape)))
+        mean = self.mean.mean(dim=kl_reduction_dims, keepdim=True)
+        var = self.mean.var(dim=kl_reduction_dims, keepdim=True).clip(min=1e-10)
 
         return mean.square() + var - 1 - var.log()
 
@@ -154,7 +154,7 @@ class DiagonalDegenerateDistribution(object):
         raise NotImplementedError()
     
     def mode(self):
-        return self.parameters
+        return self.mean
 
 class EncoderDual(nn.Module):
     def __init__(
