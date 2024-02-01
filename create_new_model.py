@@ -113,7 +113,7 @@ VAE_PARAMS = {
     "downsample_ratio": (2,2),
 
     "attention_num_heads": (8,8,8,8),
-    "separate_attn_dim_mid": (0,0),
+    "separate_attn_dim_mid": (2,3),
     "double_attention": False,
     "pre_attention": False,
     "add_attention": False,
