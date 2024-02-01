@@ -50,6 +50,8 @@ if __name__ == "__main__":
     loops = 0
     fp16 = False
     #fp16 = True
+    device = "cuda"
+    #device = "cpu"
     
     seed = np.random.randint(10000, 99999-num_samples)
     #seed = 69767
@@ -57,7 +59,9 @@ if __name__ == "__main__":
     model_dtype = torch.float16 if fp16 else torch.float32
     model_path = os.path.join(os.environ.get("MODEL_PATH", "./"), model_name)
     print(f"Loading DualDiffusion model from '{model_path}' (dtype={model_dtype})...")
-    pipeline = DualDiffusionPipeline.from_pretrained(model_path, torch_dtype=model_dtype).to("cuda")
+    pipeline = DualDiffusionPipeline.from_pretrained(model_path,
+                                                     torch_dtype=model_dtype,
+                                                     load_latest_checkpoints=True).to(device)
     last_global_step = pipeline.unet.config["last_global_step"]
 
     output_path = os.path.join(model_path, "output")

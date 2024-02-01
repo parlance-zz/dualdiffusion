@@ -46,6 +46,7 @@ if __name__ == "__main__":
 
     model_path = os.path.join(os.environ.get("MODEL_PATH", "./"), model_name)
     model_dtype = torch.float16 if fp16 else torch.float32
+    print(f"Loading DualDiffusion model from '{model_path}' (dtype={model_dtype})...")
     pipeline = DualDiffusionPipeline.from_pretrained(model_path,
                                                      torch_dtype=model_dtype,
                                                      load_latest_checkpoints=True)
