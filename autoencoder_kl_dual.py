@@ -35,7 +35,62 @@ from diffusers.models.vae import DecoderOutput
 from diffusers.models.autoencoder_kl import AutoencoderKLOutput
 
 from unet_dual_blocks import SeparableAttnDownBlock, SeparableAttnUpBlock, SeparableMidBlock
-from dual_diffusion_utils import get_activation, save_raw, hz_to_mels, stft, get_mel_density
+from dual_diffusion_utils import get_activation, stft, get_mel_density
+
+class DualMultiscaleSpectralLoss:
+
+    @torch.no_grad()
+    def __init__(self, loss_params):
+    
+        self.block_widths = loss_params["block_widths"]
+        self.block_overlap = loss_params["block_overlap"]
+        self.window_fn = loss_params["window_fn"]
+
+        self.loss_scale = 1 / len(self.block_widths)
+
+    def __call__(self, sample, target, model_params):
+
+        sample = sample["raw_samples"]
+        target = target["raw_samples"]
+
+        if (sample.shape != target.shape):
+            raise ValueError(f"sample.shape != target.shape. sample.shape: {sample.shape}. target.shape: {target.shape}.")
+        
+        noise_floor = model_params["noise_floor"]
+        sample_rate = model_params["sample_rate"]
+
+        loss_real = torch.zeros(1, device=sample.device)
+        loss_imag = torch.zeros(1, device=sample.device)
+
+        for block_width in self.block_widths:
+            
+            block_width = min(block_width, target.shape[-1])
+            step = max(block_width // self.block_overlap, 1)
+            offset = np.random.randint(0, min(target.shape[-1] - block_width + 1, step))        
+
+            with torch.no_grad():
+                target_fft = stft(target[:, offset:], block_width, window_fn=self.window_fn, step=step)
+                target_fft_abs = target_fft.abs()
+                target_fft_abs = (target_fft_abs / target_fft_abs.square().mean(dim=(1,2), keepdim=True).clip(min=noise_floor**2).sqrt()).clip(min=noise_floor)
+
+                block_hz = torch.arange(1, target_fft.shape[-1]+1, device=target_fft.device) * (sample_rate/2 / target_fft.shape[-1])
+                mel_density = get_mel_density(block_hz).view(1, 1,-1).requires_grad_(False)
+                                
+            sample_fft = stft(sample[:, offset:], block_width, window_fn=self.window_fn, step=step)
+            sample_fft_abs = sample_fft.abs()
+            sample_fft_abs = (sample_fft_abs / sample_fft_abs.square().mean(dim=(1,2), keepdim=True).clip(min=noise_floor**2).sqrt()).clip(min=noise_floor)
+
+            error_real = (sample_fft_abs / target_fft_abs).log()
+            loss_real = loss_real + error_real.abs().mean()
+
+            target_fft_noise_floor = target_fft_abs.amin(dim=2, keepdim=True) * 1.5
+            target_phase_weight = (target_fft_abs > target_fft_noise_floor).requires_grad_(False) * mel_density
+            error_imag = (sample_fft.angle() - target_fft.angle()).abs()
+            error_imag_wrap_mask = (error_imag > torch.pi).detach().requires_grad_(False)
+            error_imag[error_imag_wrap_mask] = 2*torch.pi - error_imag[error_imag_wrap_mask]
+            loss_imag = loss_imag + (error_imag * target_phase_weight).mean()
+
+        return loss_real * self.loss_scale, loss_imag * self.loss_scale
 
 class DiagonalGaussianDistribution(object):
     def __init__(self, parameters, deterministic=False):
@@ -52,10 +107,7 @@ class DiagonalGaussianDistribution(object):
 
     def sample(self, generator: Optional[torch.Generator] = None) -> torch.FloatTensor: 
         noise = torch.randn(self.mean.shape, generator=generator, device=self.parameters.device, dtype=self.parameters.dtype)
-        # return self.mean + self.std * noise
-        latents = self.mean + self.std * noise
-        normalization_dims = tuple(range(1, len(latents.shape)))
-        return (latents - latents.mean(dim=normalization_dims, keepdim=True)) / latents.std(dim=normalization_dims, keepdim=True).clip(min=1e-8)
+        return self.mean + self.std * noise
 
     def kl(self, other=None):
         if self.deterministic:
@@ -83,285 +135,26 @@ class DiagonalGaussianDistribution(object):
     def mode(self):
         return self.mean
 
-class DualMultiscaleSpectralLoss2:
+class DiagonalDegenerateDistribution(object):
+    def __init__(self, parameters):
+        self.parameters = parameters
 
-    @torch.no_grad()
-    def __init__(self, loss_params):
+    def sample(self, generator: Optional[torch.Generator] = None) -> torch.FloatTensor: 
+        return self.parameters
+
+    def kl(self):
         
-        self.num_filters = loss_params["num_filters"]
-        self.min_freq = loss_params["min_freq"]
-        self.max_freq = loss_params["max_freq"]
-        #self.logvar = loss_params["logvar"]
-        self.min_logvar = loss_params["min_logvar"]
-        self.max_logvar = loss_params["max_logvar"]
-        self.half_sample_rate = loss_params["sample_rate"] / 2
-        self.freq_scale = loss_params["freq_scale"]
-        self.max_crop_width = loss_params.get("max_crop_width", 0)
-        self.max_batch_filters = loss_params.get("max_batch_filters", 0)
+        non_bsz_dims = tuple(range(1, len(self.parameters.shape)))
+        mean = self.parameters.mean(dim=non_bsz_dims, keepdim=True)
+        var = self.parameters.var(dim=non_bsz_dims, keepdim=True).clip(min=1e-10)
 
-        if self.num_filters < 1:
-            raise ValueError(f"num_filters must be greater than 0. num_filters: {self.num_filters}.")
-        if self.min_freq < 0 or self.min_freq > self.half_sample_rate:
-            raise ValueError(f"min_freq must be between 0 and sample_rate/2. min_freq: {self.min_freq}. sample_rate/2: {self.half_sample_rate}.")
-        if self.max_freq < 0 or self.max_freq > self.half_sample_rate:
-            raise ValueError(f"max_freq must be between 0 and sample_rate/2. max_freq: {self.max_freq}. sample_rate/2: {self.half_sample_rate}.")
-        if self.min_freq > self.max_freq:
-            raise ValueError(f"min_freq must be less than max_freq. min_freq: {self.min_freq}. max_freq: {self.max_freq}.")
-        if self.min_logvar > self.max_logvar:
-            raise ValueError(f"min_logvar must be less than max_logvar. min_logvar: {self.min_logvar}. max_logvar: {self.max_logvar}.")
-                
-        if self.freq_scale == "hz":
-            self.freq_scale_func = lambda x: x / self.half_sample_rate
-            #self.inv_freq_scale_func = lambda x: x * self.half_sample_rate
-        elif self.freq_scale == "log":
-            self.freq_scale_func = lambda x: (x / self.half_sample_rate).log()
-            #self.inv_freq_scale_func = lambda x: (x.exp() * self.half_sample_rate)
-        elif self.freq_scale == "mel":
-            self.freq_scale_func = hz_to_mels
-            #self.inv_freq_scale_func = mels_to_hz
-        else:
-            raise ValueError(f"Unknown `filter_scale` value: {self.freq_scale}.")
-        
-        self.filters = None
-        self.write_debug = True
-        #self.create_filters(self.crop_width)
+        return mean.square() + var - 1 - var.log()
 
-    @torch.no_grad()
-    def create_filters(self, crop_width, device="cpu"):
-        
-        if crop_width % 2 != 0:
-            raise ValueError(f"crop_width must be even. crop_width: {crop_width}.")
-        
-        """
-        if self.filters is not None:
-            if self.filters.shape[-1] == (crop_width // 2 + 1):
-                if self.filters.device != device:
-                    self.filters = self.filters.to(device)
-                self.write_debug = False
-                return
-        """
-
-        min_q = self.freq_scale_func(torch.tensor(self.min_freq, device=device))
-        max_q = self.freq_scale_func(torch.tensor(self.max_freq, device=device))
-        #filter_q = torch.linspace(min_q, max_q, self.num_filters, device=device)
-        #filter_var = 2 ** self.logvar
-        filter_q = torch.rand(self.num_filters, device=device) * (max_q - min_q) + min_q
-        filter_var = (torch.rand(self.num_filters, device=device) * (self.max_logvar - self.min_logvar) + self.min_logvar).exp2()
-
-        fft_hz = torch.linspace(0, self.half_sample_rate, crop_width//2+1, device=device)
-        fft_q = self.freq_scale_func(fft_hz)
-
-        self.filters = torch.exp(-(filter_q.view(-1, 1) - fft_q.view(1, -1)).square() / filter_var.view(-1, 1))#.type(torch.float16)
-        self.filters /= self.filters.square().sum(dim=1, keepdim=True) / crop_width ** 0.5
-        filter_chirp = (torch.rand(self.num_filters, device=device)*2 - 1) * crop_width/4
-        fft_q = (fft_q / fft_q.amax()).square()
-        self.filters = self.filters * torch.exp(2j*torch.pi * filter_chirp.view(-1, 1) * fft_q.view(1, -1))
-
-        #self.filters[:, 0] = 0
-        #self.filters /= self.filters.square().mean(dim=1, keepdim=True)
-        #self.filters *= torch.exp(-(3985 - fft_hz.view(1, -1)).clip(max=0).square() / 25)
-
-        if self.write_debug:
-            debug_path = os.environ.get("DEBUG_PATH", None)
-            if debug_path is not None:
-                save_raw(self.filters.mean(dim=0), os.path.join(debug_path, "debug_multiscale_spectral_loss_filter_coverage.raw"))
-            self.write_debug = False
-
-        self.filters = self.filters.unsqueeze(0).requires_grad_(False)
-
-    def __call__(self, sample, target, model_params):
-        
-        noise_floor = model_params.get("noise_floor", 1e-5)
-
-        if sample.shape != target.shape:
-            raise ValueError(f"sample.shape != target.shape. sample.shape: {sample.shape}. target.shape: {target.shape}.")
-
-        if self.max_crop_width > 0:
-            crop_width = min(sample.shape[-1], self.max_crop_width)
-            crop_pos = np.random.randint(0, sample.shape[-1] - crop_width + 1)
-            sample = sample[..., crop_pos:crop_pos+crop_width]
-            target = target[..., crop_pos:crop_pos+crop_width]
-        else:
-            crop_width = sample.shape[-1]
-
-        self.create_filters(crop_width, device=sample.device)
-
-        with torch.no_grad():
-            target_fft = torch.fft.rfft(target, norm="ortho").unsqueeze(1) * self.filters
-            target_ifft = torch.fft.ifft(target_fft, n=crop_width, norm="ortho")
-            target_ifft[target_ifft.abs() < noise_floor] = noise_floor
-            target_abs = target_ifft.abs().clip(min=noise_floor)
-
-            #target_fft_noise_floor = target_abs.amin(dim=1, keepdim=True) * 1.1
-
-        """
-        if self.max_batch_filters > 0:
-            num_batch_filters = min(self.num_filters, self.max_batch_filters)
-            filter_base = np.random.randint(0, self.num_filters - num_batch_filters + 1)
-            filters = self.filters[:, filter_base:filter_base+num_batch_filters, :]
-        else:
-            filters = self.filters
-        """
-
-        sample_fft = torch.fft.rfft(sample, norm="ortho").unsqueeze(1) * self.filters
-        sample_ifft = torch.fft.ifft(sample_fft, n=crop_width, norm="ortho")
-        sample_ifft[sample_ifft.abs() < noise_floor] = noise_floor
-        sample_abs = sample_ifft.abs().clip(min=noise_floor)
-        
-        error_real = (sample_abs / target_abs).log()
-        #error_real = error_real - error_real.mean(dim=(1,2), keepdim=True)
-        loss_real = error_real.square().mean()
-        
-        error_imag = (sample_ifft.angle().abs() - target_ifft.angle().abs()) # * (target_abs > target_fft_noise_floor)
-        #error_imag = error_imag - error_imag.mean(dim=(1,2), keepdim=True)
-        loss_imag = error_imag.square().mean()
-        
-        #return loss_real / 2, loss_imag
-        return loss_real / 4, loss_imag
+    def nll(self, sample, dims=[1, 2, 3]):
+        raise NotImplementedError()
     
-        """
-        sample_normalized = sample_ifft / sample_abs
-        target_normalized = target_ifft / target_abs
-        t_rel_phase = (sample_normalized[:, :, 1:] / sample_normalized[:, :, :-1]) / (target_normalized[:, :, 1:] / target_normalized[:, :, :-1])
-        f_rel_phase = (sample_normalized[:, 1:, :] / sample_normalized[:, :-1, :]) / (target_normalized[:, 1:, :] / target_normalized[:, :-1, :])
-        error_imag = (1 - t_rel_phase.real).mean() + (1 - f_rel_phase.real).mean()
-
-        sample_filtered[sample_filtered.abs() < 1e-8] = 1e-8
-        target_filtered[target_filtered.abs() < 1e-8] = 1e-8
-
-        sample_filtered_abs = sample_filtered.abs()
-        sample_filtered_abs_ln = sample_filtered_abs.log()
-    
-        target_filtered_abs = target_filtered.abs()
-        target_filtered_abs_ln = target_filtered_abs.log()
-
-        error_mask = (target_filtered_abs_ln[:, 1:-1] - (target_filtered_abs_ln[:, 2:] + target_filtered_abs_ln[:, :-2]) * 0.5) > 0
-        error_real = (sample_filtered_abs_ln[:, 1:-1] - target_filtered_abs_ln[:, 1:-1]).square() * error_mask
-
-        sample_normalized = sample_filtered / sample_filtered_abs
-        target_normalized = target_filtered / target_filtered_abs
-        
-        rel_phase = (sample_normalized[:, 1:-1] / sample_normalized[:, :-2]) / (target_normalized[:, 1:-1] / target_normalized[:, :-2])
-        error_imag = (1 - rel_phase.real) * error_mask
-
-        return error_real.mean(), error_imag.mean()
-        """
-        
-        """
-        sample_filtered_abs = torch.einsum("bfse,bfse->bfe", sample_fft, self.filters).square().sum(dim=-1).clip(min=1e-10)
-        target_filtered_abs = torch.einsum("bfse,bfse->bfe", target_fft, self.filters).square_().sum(dim=-1).clip_(min=1e-10)
-
-        error_real = (sample_filtered_abs / target_filtered_abs).log().square().mean() / 16
-        error_imag = torch.zeros_like(error_real)
-        return error_real, error_imag
-        """
-
-class DualMultiscaleSpectralLoss3:
-
-    @torch.no_grad()
-    def __init__(self, loss_params):
-    
-        self.block_widths = loss_params["block_widths"]
-        self.block_overlap = loss_params["block_overlap"]
-        self.window_fn = loss_params["window_fn"]
-
-        self.loss_scale = 1 / len(self.block_widths)
-
-    def __call__(self, sample, target, model_params):
-
-        sample = sample["raw_samples"]
-        target = target["raw_samples"]
-
-        if (sample.shape != target.shape):
-            raise ValueError(f"sample.shape != target.shape. sample.shape: {sample.shape}. target.shape: {target.shape}.")
-        
-        noise_floor = model_params["noise_floor"]
-        sample_rate = model_params["sample_rate"]
-        real_loss_scale = 1/2
-
-        loss_real = torch.zeros(1, device=sample.device)
-        loss_imag = torch.zeros(1, device=sample.device)
-
-        for block_width in self.block_widths:
-            
-            block_width = min(block_width, target.shape[-1])
-            step = max(block_width // self.block_overlap, 1)
-            offset = np.random.randint(0, min(target.shape[-1] - block_width + 1, step))        
-
-            with torch.no_grad():
-                target_fft = stft(target[:, offset:], block_width, window_fn=self.window_fn, step=step)
-                target_fft_abs = target_fft.abs()
-                target_fft_abs = (target_fft_abs / target_fft_abs.square().mean(dim=(1,2), keepdim=True).clip(min=noise_floor**2).sqrt()).clip(min=noise_floor)
-
-                block_hz = torch.arange(1, target_fft.shape[-1]+1, device=target_fft.device) * (sample_rate/2 / target_fft.shape[-1])
-                mel_density = get_mel_density(block_hz).view(1, 1,-1).requires_grad_(False)
-                                
-            sample_fft = stft(sample[:, offset:], block_width, window_fn=self.window_fn, step=step)
-            sample_fft_abs = sample_fft.abs()
-            sample_fft_abs = (sample_fft_abs / sample_fft_abs.square().mean(dim=(1,2), keepdim=True).clip(min=noise_floor**2).sqrt()).clip(min=noise_floor)
-
-            error_real = (sample_fft_abs / target_fft_abs).log()
-            loss_real = loss_real + error_real.abs().mean()
-
-            target_fft_noise_floor = target_fft_abs.amin(dim=2, keepdim=True) * 1.5 #* 1.1
-            target_phase_weight = (target_fft_abs > target_fft_noise_floor).requires_grad_(False) * mel_density
-            error_imag = (sample_fft.angle() - target_fft.angle()).abs()
-            error_imag_wrap_mask = (error_imag > torch.pi).detach().requires_grad_(False)
-            error_imag[error_imag_wrap_mask] = 2*torch.pi - error_imag[error_imag_wrap_mask]
-            loss_imag = loss_imag + (error_imag * target_phase_weight).mean()
-
-        return loss_real * self.loss_scale * real_loss_scale, loss_imag * self.loss_scale
-
-class DualMultiscaleSpectralLoss:
-
-    @torch.no_grad()
-    def __init__(self, loss_params):
-    
-        self.sample_block_width = loss_params["sample_block_width"]
-        self.block_widths = loss_params["block_widths"]
-        self.block_overlap = loss_params.get("block_overlap", 4)
-        self.sample_rate = loss_params["sample_rate"]
-
-        """
-        self.block_freq_weights = []
-        for block_width in self.block_widths:
-             b = torch.arange(1, block_width // 2 + 1)
-             block_hz = b / (block_width // 2) * self.sample_rate / 2
-             block_freq_weight = get_mel_density(block_hz)
-             block_freq_weight = (block_freq_weight / block_freq_weight.mean()).view(1, 1, -1).requires_grad_(False)
-             self.block_freq_weights.append(block_freq_weight)
-        """
-
-        self.loss_scale = 1 / 4 / len(self.block_widths)
-
-    def __call__(self, sample, target):
-
-        with torch.no_grad():
-            target = target[:, self.sample_block_width // 2:-self.sample_block_width].requires_grad_(False)
-            if (sample.shape != target.shape):
-                raise ValueError(f"sample.shape != target.shape. sample.shape: {sample.shape}. target.shape: {target.shape}.")    
-
-        sample = sample / sample.square().mean(dim=1, keepdim=True).sqrt()
-        target = target / target.square().mean(dim=1, keepdim=True).sqrt()
-
-        loss = torch.zeros(1, device=sample.device)
-
-        for b, block_width in enumerate(self.block_widths):
-            
-            #if self.block_freq_weights[b].device != sample.device:
-            #    self.block_freq_weights[b] = self.block_freq_weights[b].to(sample.device)
-
-            block_width = min(block_width, target.shape[-1])
-            step = max(block_width // self.block_overlap, 1)
-            offset = np.random.randint(0, min(target.shape[-1] - block_width + 1, step))        
-
-            target_fft_abs_ln = stft(target[:, offset:], block_width, window_fn="blackman_harris", step=step).abs().clip(min=1e-6).log2()
-            sample_fft_abs_ln = stft(sample[:, offset:], block_width, window_fn="blackman_harris", step=step).abs().clip(min=1e-6).log2()
-            
-            error = (sample_fft_abs_ln - target_fft_abs_ln).square()
-            loss += error.mean()
-
-        return loss * self.loss_scale, torch.zeros_like(loss)
+    def mode(self):
+        return self.parameters
 
 class EncoderDual(nn.Module):
     def __init__(
@@ -442,7 +235,6 @@ class EncoderDual(nn.Module):
                 freq_embedding_dim=_freq_embedding_dim,
                 time_embedding_dim=_time_embedding_dim,
                 add_attention=_add_attention,
-                return_skip_samples=False,
                 temb_channels=None,
             )
 
@@ -545,11 +337,13 @@ class DecoderDual(nn.Module):
         conv_size = (3,3),
         freq_embedding_dim: Union[int, Tuple[int]] = 0,
         time_embedding_dim: Union[int, Tuple[int]] = 0,
-        noise_embedding_dim: Union[int, Tuple[int]] = 0,
+        use_noise_channel: bool = True,
         add_attention: Union[bool, Tuple[bool]] = True,
     ):
         super().__init__()
+
         self.layers_per_block = layers_per_block
+        self.use_noise_channel = use_noise_channel
 
         if isinstance(conv_size, int):
             conv_class = nn.Conv1d
@@ -601,7 +395,6 @@ class DecoderDual(nn.Module):
         reversed_pre_attention = list(reversed(pre_attention))
         reversed_freq_embedding_dim = list(reversed(freq_embedding_dim))
         reversed_time_embedding_dim = list(reversed(time_embedding_dim))
-        reversed_noise_embedding_dim = list(reversed(noise_embedding_dim))
         reversed_add_attention = list(reversed(add_attention))
 
         # up
@@ -620,7 +413,6 @@ class DecoderDual(nn.Module):
             _pre_attention = reversed_pre_attention[i]
             _freq_embedding_dim = reversed_freq_embedding_dim[i]
             _time_embedding_dim = reversed_time_embedding_dim[i]
-            _noise_embedding_dim = reversed_noise_embedding_dim[i]
             _add_attention = reversed_add_attention[i]
 
             up_block = SeparableAttnUpBlock(
@@ -642,9 +434,8 @@ class DecoderDual(nn.Module):
                 conv_size=conv_size,
                 freq_embedding_dim=_freq_embedding_dim,
                 time_embedding_dim=_time_embedding_dim,
-                noise_embedding_dim=_noise_embedding_dim,
                 add_attention=_add_attention,
-                use_skip_samples=False,
+                use_noise_channel=use_noise_channel,
             )
 
             self.up_blocks.append(up_block)
@@ -662,9 +453,7 @@ class DecoderDual(nn.Module):
 
     def forward(self, z, latent_embeds=None):
         
-        #sample = z
-        normalization_dims = tuple(range(1, len(z.shape)))
-        sample = (z - z.mean(dim=normalization_dims, keepdim=True)) / z.std(dim=normalization_dims, keepdim=True).clip(min=1e-8)
+        sample = z
         sample = self.conv_in(sample)
 
         upscale_dtype = next(iter(self.up_blocks.parameters())).dtype
@@ -738,9 +527,8 @@ class AutoencoderKLDual(ModelMixin, ConfigMixin):
         conv_size = (3,3),
         freq_embedding_dim: Union[int, Tuple[int]] = 256,
         time_embedding_dim: Union[int, Tuple[int]] = 256,
-        noise_embedding_dim: Union[int, Tuple[int]] = 0,
+        use_noise_channel: bool = True,
         add_attention: Union[bool, Tuple[bool]] = True,
-        multiscale_spectral_loss: dict = None,
         last_global_step: int = 0,
     ):
         super().__init__()
@@ -781,11 +569,6 @@ class AutoencoderKLDual(ModelMixin, ConfigMixin):
                 f"Must provide the same number of `time_embedding_dim` as `block_out_channels`. `time_embedding_dim`: {time_embedding_dim}. `block_out_channels`: {block_out_channels}."
             )
         
-        if not isinstance(noise_embedding_dim, int) and len(noise_embedding_dim) != len(block_out_channels):
-            raise ValueError(
-                f"Must provide the same number of `noise_embedding_dim` as `block_out_channels`. `noise_embedding_dim`: {noise_embedding_dim}. `block_out_channels`: {block_out_channels}."
-            )
-        
         if not isinstance(add_attention, bool) and len(add_attention) != len(block_out_channels):
             raise ValueError(
                 f"Must provide the same number of `add_attention` as `block_out_channels`. `add_attention`: {add_attention}. `block_out_channels`: {block_out_channels}."
@@ -818,8 +601,6 @@ class AutoencoderKLDual(ModelMixin, ConfigMixin):
             freq_embedding_dim = (freq_embedding_dim,) * len(block_out_channels)
         if isinstance(time_embedding_dim, int):
             time_embedding_dim = (time_embedding_dim,) * len(block_out_channels)
-        if isinstance(noise_embedding_dim, int):
-            noise_embedding_dim = (noise_embedding_dim,) * len(block_out_channels)
         if isinstance(add_attention, bool):
             add_attention = (add_attention,) * len(block_out_channels)
         if isinstance(downsample_ratio, int) and (not isinstance(conv_size, int)):
@@ -871,11 +652,12 @@ class AutoencoderKLDual(ModelMixin, ConfigMixin):
             conv_size = conv_size,
             freq_embedding_dim=freq_embedding_dim,
             time_embedding_dim=time_embedding_dim,
-            noise_embedding_dim=noise_embedding_dim,
+            use_noise_channel=use_noise_channel,
             add_attention=add_attention,
         )
 
-        self.quant_conv = conv_class(2 * latent_channels, 2 * latent_channels, 1)
+        #self.quant_conv = conv_class(2 * latent_channels, 2 * latent_channels, 1)
+        self.quant_conv = conv_class(latent_channels, latent_channels, 1)
         self.post_quant_conv = conv_class(latent_channels, latent_channels, 1)
 
         self.use_slicing = False
@@ -891,21 +673,10 @@ class AutoencoderKLDual(ModelMixin, ConfigMixin):
         self.tile_latent_min_size = int(sample_size / (2 ** (len(self.config.block_out_channels) - 1)))
         self.tile_overlap_factor = 0.25
 
-        if multiscale_spectral_loss is not None:
-            mss_version = multiscale_spectral_loss.get("version", 1)
-            if mss_version == 1:
-                self.multiscale_spectral_loss = DualMultiscaleSpectralLoss(multiscale_spectral_loss)
-            elif mss_version == 2:
-                self.multiscale_spectral_loss = DualMultiscaleSpectralLoss2(multiscale_spectral_loss)
-            elif mss_version == 3:
-                self.multiscale_spectral_loss = DualMultiscaleSpectralLoss3(multiscale_spectral_loss)
-            else:
-                raise ValueError("Invalid multiscale_spectral_loss version")
-        else:
-            self.multiscale_spectral_loss = None
-
-        self.recon_error_logvar_real = nn.Parameter(torch.zeros(1))
-        self.recon_error_logvar_imag = nn.Parameter(torch.zeros(1))
+        self.mss_error_logvar_real = nn.Parameter(torch.zeros(1))
+        self.mss_error_logvar_imag = nn.Parameter(torch.zeros(1))
+        self.format_error_logvar_real = nn.Parameter(torch.zeros(1))
+        self.format_error_logvar_imag = nn.Parameter(torch.zeros(1))
             
     def _set_gradient_checkpointing(self, module, value=False):
         if isinstance(module, (EncoderDual, DecoderDual)):
@@ -952,7 +723,8 @@ class AutoencoderKLDual(ModelMixin, ConfigMixin):
             h = self.encoder(x)
 
         moments = self.quant_conv(h)
-        posterior = DiagonalGaussianDistribution(moments)
+        #posterior = DiagonalGaussianDistribution(moments)
+        posterior = DiagonalDegenerateDistribution(moments)
 
         if not return_dict:
             return (posterior,)
@@ -1043,7 +815,8 @@ class AutoencoderKLDual(ModelMixin, ConfigMixin):
             result_rows.append(torch.cat(result_row, dim=3))
 
         moments = torch.cat(result_rows, dim=2)
-        posterior = DiagonalGaussianDistribution(moments)
+        #posterior = DiagonalGaussianDistribution(moments)
+        posterior = DiagonalDegenerateDistribution(moments)
 
         if not return_dict:
             return (posterior,)
@@ -1125,3 +898,23 @@ class AutoencoderKLDual(ModelMixin, ConfigMixin):
             return (dec,)
 
         return DecoderOutput(sample=dec)
+
+    def get_latent_shape(self, sample_shape):
+        vae_latent_channels = self.config.latent_channels
+        vae_downsample_ratio = self.config.downsample_ratio
+        vae_num_blocks = len(self.config.block_out_channels)
+
+        if len(sample_shape) == 4:
+            if isinstance(vae_downsample_ratio, int):
+                vae_downsample_ratio = (vae_downsample_ratio, vae_downsample_ratio)
+
+            latent_shape = (sample_shape[0],
+                            vae_latent_channels,
+                            sample_shape[2] // vae_downsample_ratio[0] ** (vae_num_blocks-1),
+                            sample_shape[3] // vae_downsample_ratio[1] ** (vae_num_blocks-1))
+        else:
+            if isinstance(vae_downsample_ratio, tuple):
+                vae_downsample_ratio = vae_downsample_ratio[0]
+            latent_shape = (sample_shape[0], vae_latent_channels, sample_shape[2] // vae_downsample_ratio ** (vae_num_blocks-1))
+        
+        return latent_shape
