@@ -135,7 +135,7 @@ class DualMCLTFormat:
     @staticmethod
     def get_num_channels(model_params):
         in_channels = model_params["sample_raw_channels"] * 2
-        out_channels = model_params["sample_raw_channels"] * 3
+        out_channels = model_params["sample_raw_channels"] * 2 #3
 
         return (in_channels, out_channels)
 
@@ -182,10 +182,12 @@ class DualMCLTFormat:
 
         samples = samples.tanh()
 
-        samples_abs_ln, samples_qphase1, samples_qphase2 = samples.chunk(3, dim=1)        
+        #samples_abs_ln, samples_qphase1, samples_qphase2 = samples.chunk(3, dim=1)        
         #phase_norm = (samples_qphase1.abs() + samples_qphase2.abs()).clip(min=1e-10)
-        phase_norm = (samples_qphase1.abs() + (samples_qphase2+1)/2).clip(min=1e-10)
-        phase = (((samples_qphase1 / phase_norm) + 1) / 2 * torch.pi).cos()
+        #phase_norm = (samples_qphase1.abs() + (samples_qphase2+1)/2).clip(min=1e-10)
+        #phase = (((samples_qphase1 / phase_norm) + 1) / 2 * torch.pi).cos()
+        samples_abs_ln, samples_qphase1 = samples.chunk(2, dim=1)        
+        phase = ((samples_qphase1+1)/2 * torch.pi).cos()
         abs = ((1 + u) ** (samples_abs_ln+1)/2 - 1) / u
         raw_samples = imdct((abs * phase).permute(0, 1, 3, 2), window_degree=1).real
 
@@ -314,15 +316,15 @@ class DualDiffusionPipeline(DiffusionPipeline):
             vae_checkpoints = [f for f in os.listdir(model_path) if os.path.isdir(os.path.join(model_path, f)) and f.startswith("vae_checkpoint")]
             if len(vae_checkpoints) > 0:
                 vae_checkpoints = sorted(vae_checkpoints, key=lambda x: int(x.split("-")[1]))
-                vae_path = os.path.join(model_path, vae_checkpoints[-1])
+                vae_path = os.path.join(model_path, vae_checkpoints[-1], "vae")
         vae = AutoencoderKLDual.from_pretrained(vae_path, torch_dtype=torch_dtype)
 
         unet_path = os.path.join(model_path, "unet")
         if load_latest_checkpoints:
             unet_checkpoints = [f for f in os.listdir(model_path) if os.path.isdir(os.path.join(model_path, f)) and f.startswith("unet_checkpoint")]
             if len(unet_checkpoints) > 0:
-                unet_checkpoints = sorted(vae_checkpoints, key=lambda x: int(x.split("-")[1]))
-                unet_path = os.path.join(model_path, vae_checkpoints[-1])
+                unet_checkpoints = sorted(unet_checkpoints, key=lambda x: int(x.split("-")[1]))
+                unet_path = os.path.join(model_path, unet_checkpoints[-1], "unet")
         unet = UNetDualModel.from_pretrained(unet_path, torch_dtype=torch_dtype)
 
         scheduler_path = os.path.join(model_path, "scheduler")
