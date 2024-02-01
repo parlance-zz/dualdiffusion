@@ -21,54 +21,41 @@
 # SOFTWARE.
 
 import os
-import json
 from dotenv import load_dotenv
 
 import torch
 from dual_diffusion_pipeline import DualDiffusionPipeline
+from dual_diffusion_utils import dict_str
 
-load_dotenv()
-torch.manual_seed(200)
+MODEL_NAME = "dualdiffusion2d_1000_1"
+MODEL_SEED = 200
 
-MODEL_NAME = "dualdiffusion2d_900_4"
 MODEL_PARAMS = {
-    #"prediction_type": "sample",
-    #"prediction_type": "epsilon",
-    "prediction_type": "v_prediction",
-
-    "beta_schedule": "scaled_linear",
-    "beta_start": 0.00085,
-    "beta_end": 0.012,
-
-    #"beta_schedule": "trained_betas",
-    #"beta_schedule": "linear", 
-    #"beta_start" : 0.0001,
-    #"beta_end" : 0.02,
-    #"beta_schedule": "squaredcos_cap_v2", 
-
-    #"rescale_betas_zero_snr": True,
-    "rescale_betas_zero_snr": False,
-
+    # dataset format params
     "sample_raw_channels": int(os.environ.get("DATASET_NUM_CHANNELS")),
     "sample_rate": int(os.environ.get("DATASET_SAMPLE_RATE")),
 
+    # sample format params
     "sample_format": "mclt",
-    "sample_raw_length": 65536*4,
-    "num_chunks": 64,
+    "sample_raw_length": 65536*8,
+    "num_chunks": 256,
     "u": 8000,
     "noise_floor": 1e-5,
-}
 
-#VAE_PARAMS = None
-VAE_PARAMS = {
+    # diffusion unet training params
+    "input_perturbation": 0.1,
+    "snr_gamma": 5,
+
+    # vae unet training params
+    "kl_loss_weight": 1e-5,
+    "format_real_loss_weight": 0,
+    "format_imag_loss_weight": 0,
+    "mss_real_loss_weight": 1,
+    "mss_imag_loss_weight": 1,
+
     "multiscale_spectral_loss": {
-        "version": 3,
         "block_overlap": 8,
         "block_widths": [
-            32,
-            64,
-            128,
-            256,
             512,
             1024,
             2048,
@@ -79,17 +66,35 @@ VAE_PARAMS = {
             65536,
             131072,
         ],
-        #"window_fn": "hann^0.5",
         "window_fn": "blackman_harris",
     },
+}
 
-    "latent_channels": 8,
+SCHEDULER_PARAMS = {
+    #"prediction_type": "sample",
+    #"prediction_type": "epsilon",
+    "prediction_type": "v_prediction",
+
+    "beta_schedule": "scaled_linear",
+    "beta_start": 0.00085,
+    "beta_end": 0.012,
+
+    #"beta_schedule": "linear", 
+    #"beta_start" : 0.0001,
+    #"beta_end" : 0.02,
+
+    #"beta_schedule": "squaredcos_cap_v2",
+
+    "rescale_betas_zero_snr": True,
+    #"rescale_betas_zero_snr": False,
+}
+
+VAE_PARAMS = {
+    "latent_channels": 4,
     "sample_size": (64, 2048),
     "act_fn": "silu",
     "conv_size": (3,3),
 
-    #"block_out_channels": (16, 32, 64, 128),
-    #"layers_per_block": 3,
     "block_out_channels": (32, 64, 128, 256),
     "layers_per_block": 3,
 
@@ -99,7 +104,6 @@ VAE_PARAMS = {
 
     #"norm_num_groups": 32,
     "norm_num_groups": (0, 0, 32, 32),
-    #"norm_num_groups": (0, 0, 0, 32),
 
     "downsample_type": "conv",
     "upsample_type": "conv_transpose",
@@ -107,45 +111,28 @@ VAE_PARAMS = {
     "downsample_ratio": (2,2),
 
     "attention_num_heads": (8,8,8,8),
-    #"attention_num_heads": (2,4,8,16),
-    #"attention_num_heads": (8,16,32,32),
-    #"separate_attn_dim_down": (2,3),
-    #"separate_attn_dim_up": (3,2,3),
-    #"separate_attn_dim_down": (3,3),
-    #"separate_attn_dim_up": (3,3,3),
-    #"separate_attn_dim_mid": (3,),
     "separate_attn_dim_mid": (0,0),
     "double_attention": False,
     "pre_attention": False,
     "add_attention": False,
     #"add_attention": True,
 
-    #"freq_embedding_dim": 256,
-    #"time_embedding_dim": 256,
-    #"freq_embedding_dim": 64,
     "freq_embedding_dim": 0,
     "time_embedding_dim": 0,
-    "noise_embedding_dim": 0,
+
+    "use_noise_channel": True,
 
     "in_channels": DualDiffusionPipeline.get_sample_format(MODEL_PARAMS).get_num_channels(MODEL_PARAMS)[0],
     "out_channels": DualDiffusionPipeline.get_sample_format(MODEL_PARAMS).get_num_channels(MODEL_PARAMS)[1],
 }
 
-
 UNET_PARAMS = {
-    #"dropout": (0, 0, 0, 0.1, 0.15, 0.25),
-    "dropout": 0.0,
-
+    "dropout": 0.,
     "act_fn": "silu",
-
-    #"conv_size": (1,3),
     "conv_size": (3,3),
 
-    "use_skip_samples": True,
-    #"use_skip_samples": False,
-
     #"attention_num_heads": 4,
-    "attention_num_heads": (8,8,8,8),
+    "attention_num_heads": (8,8,8),
 
     "separate_attn_dim_mid": (0,),
     "add_mid_attention": True,
@@ -157,9 +144,6 @@ UNET_PARAMS = {
     "double_attention": False,
     #"pre_attention": True,
     "pre_attention": False,
-    
-    #"no_conv_in": True,
-    "no_conv_in": False,
     
     #"separate_attn_dim_down": (2,3,),
     "separate_attn_dim_down": (0,0),
@@ -179,7 +163,6 @@ UNET_PARAMS = {
     "downsample_type": "conv",
     "upsample_type": "conv",
 
-    "norm_eps": 1e-05,
     "norm_num_groups": 32,
     #"norm_num_groups": (32, 64, 128, 128,),
     #"norm_num_groups": -4,
@@ -188,24 +171,29 @@ UNET_PARAMS = {
     "layers_per_block": 2,
 
     #"block_out_channels": (256, 384, 640, 1024), # 320
-    "block_out_channels": (256, 384, 512, 768), # 330
+    "block_out_channels": (256, 416, 672), # 330
 }
 
 
 if __name__ == "__main__":
+
+    load_dotenv(override=True)
+    torch.manual_seed(MODEL_SEED)
 
     if VAE_PARAMS is not None:
         UNET_PARAMS["in_channels"]  = VAE_PARAMS["latent_channels"]
         UNET_PARAMS["out_channels"] = VAE_PARAMS["latent_channels"]
 
         print("VAE Params:")
-        print(json.dumps(VAE_PARAMS, indent=4))
+        print(dict_str(VAE_PARAMS))
     else:
         UNET_PARAMS["in_channels"]  = DualDiffusionPipeline.get_sample_format(MODEL_PARAMS).get_num_channels(MODEL_PARAMS)[0]
         UNET_PARAMS["out_channels"] = DualDiffusionPipeline.get_sample_format(MODEL_PARAMS).get_num_channels(MODEL_PARAMS)[1]
     
     print("UNET Params:")
-    print(json.dumps(UNET_PARAMS, indent=4))
+    print(dict_str(UNET_PARAMS))
+    print("Scheduler Params:")
+    print(dict_str(SCHEDULER_PARAMS))
     print("")
     
     NEW_MODEL_PATH = os.path.join(os.environ.get("MODEL_PATH"), MODEL_NAME)
@@ -214,6 +202,6 @@ if __name__ == "__main__":
         print(f"Warning: Output folder already exists '{NEW_MODEL_PATH}'")
         if input("Overwrite existing model? (y/n): ").lower() not in ["y","yes"]: exit()
     
-    pipeline = DualDiffusionPipeline.create_new(MODEL_PARAMS, UNET_PARAMS, vae_params=VAE_PARAMS)
+    pipeline = DualDiffusionPipeline.create_new(MODEL_PARAMS, UNET_PARAMS, SCHEDULER_PARAMS, vae_params=VAE_PARAMS)
     pipeline.save_pretrained(NEW_MODEL_PATH, safe_serialization=True)
     print(f"Created new DualDiffusion model with config at '{NEW_MODEL_PATH}'")
