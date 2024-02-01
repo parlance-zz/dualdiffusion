@@ -30,7 +30,7 @@ from dual_diffusion_utils import dict_str
 load_dotenv(override=True)
 
 MODEL_NAME = "dualdiffusion2d_1000_1"
-MODEL_SEED = 200
+MODEL_SEED = 400
 
 MODEL_PARAMS = {
     # dataset format params
@@ -39,7 +39,7 @@ MODEL_PARAMS = {
 
     # sample format params
     "sample_format": "mclt",
-    "sample_raw_length": 65536*8,
+    "sample_raw_length": 40*256*8*8,
     "num_chunks": 256,
     "u": 8000,
     "noise_floor": 1e-5,
