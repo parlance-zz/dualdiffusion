@@ -75,6 +75,7 @@ class DualMultiscaleSpectralLoss:
 
                 block_hz = torch.arange(1, target_fft.shape[-1]+1, device=target_fft.device) * (sample_rate/2 / target_fft.shape[-1])
                 mel_density = get_mel_density(block_hz).view(1, 1, 1,-1).requires_grad_(False)
+                mel_density /= mel_density.mean()
                                 
             sample_fft = stft(sample[:, :, offset:], block_width, window_fn=self.window_fn, step=step)
             sample_fft_abs = sample_fft.abs()
