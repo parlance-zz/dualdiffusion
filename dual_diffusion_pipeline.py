@@ -22,6 +22,8 @@
 
 import os
 from typing import Union
+import json
+
 import numpy as np
 import torch
 
@@ -299,6 +301,35 @@ class DualDiffusionPipeline(DiffusionPipeline):
 
         return DualDiffusionPipeline(unet, scheduler, vae, model_params=model_params)
     
+    @staticmethod
+    @torch.no_grad()
+    def from_pretrained(model_path, torch_dtype=torch.float32, device="cpu", load_latest_checkpoints=False):
+        
+        with open(os.path.join(model_path, "model_index.json"), "r") as f:
+            model_index = json.load(f)
+        model_params = model_index["model_params"]
+
+        vae_path = os.path.join(model_path, "vae")
+        if load_latest_checkpoints:
+            vae_checkpoints = [f for f in os.listdir(model_path) if os.path.isdir(os.path.join(model_path, f)) and f.startswith("vae_checkpoint")]
+            if len(vae_checkpoints) > 0:
+                vae_checkpoints = sorted(vae_checkpoints, key=lambda x: int(x.split("-")[1]))
+                vae_path = os.path.join(model_path, vae_checkpoints[-1])
+        vae = AutoencoderKLDual.from_pretrained(vae_path, torch_dtype=torch_dtype)
+
+        unet_path = os.path.join(model_path, "unet")
+        if load_latest_checkpoints:
+            unet_checkpoints = [f for f in os.listdir(model_path) if os.path.isdir(os.path.join(model_path, f)) and f.startswith("unet_checkpoint")]
+            if len(unet_checkpoints) > 0:
+                unet_checkpoints = sorted(vae_checkpoints, key=lambda x: int(x.split("-")[1]))
+                unet_path = os.path.join(model_path, vae_checkpoints[-1])
+        unet = UNetDualModel.from_pretrained(unet_path, torch_dtype=torch_dtype)
+
+        scheduler_path = os.path.join(model_path, "scheduler")
+        scheduler = DDIMScheduler.from_pretrained(scheduler_path, torch_dtype=torch_dtype)
+        
+        return DualDiffusionPipeline(unet, scheduler, vae, model_params=model_params).to(device)
+        
     @torch.no_grad()
     def __call__(
         self,
