@@ -436,6 +436,7 @@ class SeparableAttnUpBlock(nn.Module):
         add_attention=True,
         upsample_ratio=(2,2),
         use_noise_channel=False,
+        use_skip_samples=True,
     ):
         super().__init__()
         resnets = []
@@ -446,13 +447,17 @@ class SeparableAttnUpBlock(nn.Module):
         self.conv_size = conv_size
         self.double_attention = double_attention
         self.pre_attention = pre_attention
+        self.use_skip_samples = use_skip_samples
         self.freq_embedding_dim = freq_embedding_dim
         self.time_embedding_dim = time_embedding_dim
         self.add_attention = add_attention
         self.use_noise_channel = use_noise_channel
 
         for i in range(num_layers):
-            res_skip_channels = in_channels if (i == num_layers - 1) else out_channels
+            if self.use_skip_samples:
+                res_skip_channels = in_channels if (i == num_layers - 1) else out_channels
+            else:
+                res_skip_channels = 0
             resnet_in_channels = prev_output_channel if i == 0 else out_channels
 
             resnets.append(
@@ -538,9 +543,10 @@ class SeparableAttnUpBlock(nn.Module):
                     attn_block_count += 1
 
         for resnet in self.resnets:
-            res_hidden_states = res_hidden_states_tuple[-1]
-            res_hidden_states_tuple = res_hidden_states_tuple[:-1]
-            hidden_states = torch.cat([hidden_states, res_hidden_states], dim=1)
+            if self.use_skip_samples:
+                res_hidden_states = res_hidden_states_tuple[-1]
+                res_hidden_states_tuple = res_hidden_states_tuple[:-1]
+                hidden_states = torch.cat([hidden_states, res_hidden_states], dim=1)
             
             hidden_states = resnet(hidden_states, temb)
 
