@@ -66,6 +66,7 @@ if __name__ == "__main__":
 
     for filename in test_samples:
         #input_raw_sample = load_raw(os.path.join(dataset_path, filename), dtype=np.int16, count=crop_width)
+        file_ext = os.path.splitext(filename)[1]
         input_raw_sample = load_audio(os.path.join(dataset_path, filename), start=-1, count=crop_width)
         input_raw_sample = input_raw_sample.unsqueeze(0).to(device)
 
@@ -76,17 +77,17 @@ if __name__ == "__main__":
         output_sample = vae.decode(latents, return_dict=False)[0]
         output_raw_sample = pipeline.format.sample_to_raw(output_sample.type(torch.float32), model_params)
 
-        save_raw(latents, os.path.join(output_path,f"step_{last_global_step}_{filename.replace('.raw', '_latents.raw')}"))
-        save_raw(input_sample, os.path.join(output_path, f"step_{last_global_step}_{filename.replace('.raw', '_input_sample.raw')}"))
-        save_raw(output_sample, os.path.join(output_path, f"step_{last_global_step}_{filename.replace('.raw', '_sample.raw')}"))
-        save_raw(posterior.parameters, os.path.join(output_path, f"step_{last_global_step}_{filename.replace('.raw', '_posterior.raw')}"))
+        save_raw(latents, os.path.join(output_path,f"step_{last_global_step}_{filename.replace(file_ext, '_latents.raw')}"))
+        save_raw(input_sample, os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_input_sample.raw')}"))
+        save_raw(output_sample, os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_sample.raw')}"))
+        save_raw(posterior.parameters, os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_posterior.raw')}"))
 
-        output_flac_file_path = os.path.join(output_path, f"step_{last_global_step}_{filename.replace('.raw', '_original.flac')}")
-        save_audio(input_sample_dict["raw_samples"], model_params["sample_rate"], output_flac_file_path)
+        output_flac_file_path = os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_original.flac')}")
+        save_audio(input_sample_dict["raw_samples"].squeeze(0), model_params["sample_rate"], output_flac_file_path)
         print(f"Saved flac output to {output_flac_file_path}")
 
-        output_flac_file_path = os.path.join(output_path, f"step_{last_global_step}_{filename.replace('.raw', '_decoded.flac')}")
-        save_audio(output_raw_sample, model_params["sample_rate"], output_flac_file_path)
+        output_flac_file_path = os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_decoded.flac')}")
+        save_audio(output_raw_sample.squeeze(0), model_params["sample_rate"], output_flac_file_path)
         print(f"Saved flac output to {output_flac_file_path}")
 
     print(f"Finished in: {datetime.datetime.now() - start_time}")
