@@ -45,27 +45,18 @@ if __name__ == "__main__":
     #fp16 = True
 
     model_path = os.path.join(os.environ.get("MODEL_PATH", "./"), model_name)
-    with open(os.path.join(model_path, "model_index.json"), "r") as f:
-        model_index = json.load(f)
-    model_params = model_index["model_params"]
-
-    format = DualDiffusionPipeline.get_sample_format(model_params)
-    crop_width = format.get_sample_crop_width(model_params)
-    print("Sample shape: ", format.get_sample_shape(model_params))
+    model_dtype = torch.float16 if fp16 else torch.float32
+    pipeline = DualDiffusionPipeline.from_pretrained(model_path,
+                                                     torch_dtype=model_dtype,
+                                                     load_latest_checkpoints=True)
+    model_params = pipeline.config["model_params"]
+    crop_width = pipeline.format.get_sample_crop_width(model_params)
+    vae = pipeline.vae.to(device)
+    last_global_step = vae.config["last_global_step"]
 
     dataset_path = os.environ.get("DATASET_PATH", "./dataset/samples")
     test_samples = np.random.choice(os.listdir(dataset_path), num_samples, replace=False)
-
-    # try to use most recent checkpoint if one exists
-    vae_checkpoints = [f for f in os.listdir(model_path) if os.path.isdir(os.path.join(model_path, f)) and f.startswith("vae_checkpoint")]
-    if len(vae_checkpoints) > 0:
-        vae_checkpoints = sorted(vae_checkpoints, key=lambda x: int(x.split("-")[1]))
-        model_path = os.path.join(model_path, vae_checkpoints[-1])
-
-    vae_path = os.path.join(model_path, "vae")
-    model_dtype = torch.float16 if fp16 else torch.float32
-    vae = AutoencoderKLDual.from_pretrained(vae_path, torch_dtype=model_dtype).to(device)
-    last_global_step = vae.config["last_global_step"]
+    print("Sample shape: ", pipeline.format.get_sample_shape(model_params))
 
     output_path = os.path.join(model_path, "output")
     os.makedirs(output_path, exist_ok=True)
@@ -74,16 +65,15 @@ if __name__ == "__main__":
 
     for filename in test_samples:
         #input_raw_sample = load_raw(os.path.join(dataset_path, filename), dtype=np.int16, count=crop_width)
-        #input_raw_sample = load_flac("./dataset/samples_hq/23643.flac", start=-1, count=crop_width).to(device)
         input_raw_sample = load_audio(os.path.join(dataset_path, filename), start=-1, count=crop_width)
         input_raw_sample = input_raw_sample.unsqueeze(0).to(device)
 
-        input_sample_dict = format.raw_to_sample(input_raw_sample, model_params, return_dict=True)
+        input_sample_dict = pipeline.format.raw_to_sample(input_raw_sample, model_params, return_dict=True)
         input_sample = input_sample_dict["samples"]
         posterior = vae.encode(input_sample.type(model_dtype), return_dict=False)[0]
         latents = posterior.sample()
         output_sample = vae.decode(latents, return_dict=False)[0]
-        output_raw_sample = format.sample_to_raw(output_sample.type(torch.float32), model_params)
+        output_raw_sample = pipeline.format.sample_to_raw(output_sample.type(torch.float32), model_params)
 
         save_raw(latents, os.path.join(output_path,f"step_{last_global_step}_{filename.replace('.raw', '_latents.raw')}"))
         save_raw(input_sample, os.path.join(output_path, f"step_{last_global_step}_{filename.replace('.raw', '_input_sample.raw')}"))
