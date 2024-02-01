@@ -27,6 +27,8 @@ import torch
 from dual_diffusion_pipeline import DualDiffusionPipeline
 from dual_diffusion_utils import dict_str
 
+load_dotenv(override=True)
+
 MODEL_NAME = "dualdiffusion2d_1000_1"
 MODEL_SEED = 200
 
@@ -50,10 +52,10 @@ MODEL_PARAMS = {
     "kl_loss_weight": 1e-5,
     "format_real_loss_weight": 0,
     "format_imag_loss_weight": 0,
-    "mss_real_loss_weight": 1,
-    "mss_imag_loss_weight": 1,
 
     "multiscale_spectral_loss": {
+        "real_loss_weight": 1,
+        "imag_loss_weight": 1,    
         "block_overlap": 8,
         "block_widths": [
             512,
@@ -177,8 +179,10 @@ UNET_PARAMS = {
 
 if __name__ == "__main__":
 
-    load_dotenv(override=True)
     torch.manual_seed(MODEL_SEED)
+
+    print("Models Params:")
+    print(dict_str(MODEL_PARAMS))
 
     if VAE_PARAMS is not None:
         UNET_PARAMS["in_channels"]  = VAE_PARAMS["latent_channels"]
