@@ -531,7 +531,7 @@ class SeparableAttnUpBlock(nn.Module):
     def forward(self, hidden_states, res_hidden_states_tuple, temb=None, upsample_size=None):
         
         if self.use_noise_channel:
-            noise_channel = hidden_states[:, 0].unsqueeze(1)
+            noise_channel = -hidden_states[:, 0].unsqueeze(1).sigmoid() * 10
             noise_channel = torch.randn_like(noise_channel) * noise_channel.exp()
             hidden_states = torch.cat((noise_channel, hidden_states[:, 1:]), dim=1)
             
