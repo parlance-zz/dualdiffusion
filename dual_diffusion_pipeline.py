@@ -182,12 +182,12 @@ class DualMCLTFormat:
 
         samples = samples.tanh()
 
-        samples_abs_ln, samples_qphase1, samples_qphase2 = samples.chunk(num_channels, dim=1)        
+        samples_abs_ln, samples_qphase1, samples_qphase2 = samples.chunk(3, dim=1)        
         #phase_norm = (samples_qphase1.abs() + samples_qphase2.abs()).clip(min=1e-10)
         phase_norm = (samples_qphase1.abs() + (samples_qphase2+1)/2).clip(min=1e-10)
         phase = (((samples_qphase1 / phase_norm) + 1) / 2 * torch.pi).cos()
         abs = ((1 + u) ** (samples_abs_ln+1)/2 - 1) / u
-        raw_samples = imdct((abs * phase).permute(0, 2, 1), window_degree=1).real
+        raw_samples = imdct((abs * phase).permute(0, 1, 3, 2), window_degree=1).real
 
         if not return_dict:
             return raw_samples
