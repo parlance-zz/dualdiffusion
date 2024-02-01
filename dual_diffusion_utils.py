@@ -33,6 +33,15 @@ import torchaudio.functional as AF
 import cv2
 from dotenv import load_dotenv
 
+def init_cuda():
+    if not torch.cuda.is_available():
+        print("Error: PyTorch not compiled with CUDA support or CUDA unavailable")
+        exit(1)
+    else:
+        torch.backends.cuda.matmul.allow_tf32 = True
+        torch.backends.cuda.cufft_plan_cache[0].max_size = 250 # stupid cufft memory leak
+    
+
 def dict_str(d, indent=4):
     if d is None: return "None"
     return dumps(d, indent=indent)
@@ -865,13 +874,7 @@ def save_raw_img(x, img_path):
 
 if __name__ == "__main__":
 
-    if not torch.cuda.is_available():
-        print("Error: PyTorch not compiled with CUDA support or CUDA unavailable")
-        exit(1)
-    else:
-        torch.backends.cuda.matmul.allow_tf32 = True
-        torch.backends.cuda.cufft_plan_cache[0].max_size = 250 # stupid cufft memory leak
-
+    init_cuda()
     load_dotenv(override=True)
 
     # MSPSD test
