@@ -297,8 +297,8 @@ def save_raw(tensor, output_path):
 
 def load_raw(input_path, dtype="int16", num_channels=1, start=0, count=-1):
 
-    dtype = STR_DTYPE_TO_NUMPY_DTYPE.get(dtype, None)
-    if dtype is None:
+    np_dtype = STR_DTYPE_TO_NUMPY_DTYPE.get(dtype, None)
+    if np_dtype is None:
         raise ValueError(f"Unsupported dtype: {dtype} - Supported dtypes: {list(STR_DTYPE_TO_NUMPY_DTYPE.keys())}")
     dtype_size = STR_DTYPE_SIZE[dtype]
 
@@ -322,21 +322,21 @@ def load_raw(input_path, dtype="int16", num_channels=1, start=0, count=-1):
     offset = start * dtype_size * num_channels
 
     if isinstance(input_path, str):
-        tensor = torch.from_numpy(np.fromfile(input_path, dtype=dtype, count=count * num_channels, offset=offset))
+        tensor = torch.from_numpy(np.fromfile(input_path, dtype=np_dtype, count=count * num_channels, offset=offset))
     else:
-        tensor = torch.from_numpy(np.frombuffer(input_path, dtype=dtype, count=count * num_channels, offset=offset))
+        tensor = torch.from_numpy(np.frombuffer(input_path, dtype=np_dtype, count=count * num_channels, offset=offset))
 
     return (tensor / STR_DTYPE_MAX_VALUE[dtype]).view(num_channels, -1)
 
 def normalize_lufs(raw_samples, sample_rate, target_lufs=-25.0):
-
+    return raw_samples / raw_samples.abs().amax()
     original_shape = raw_samples.shape
     raw_samples = torch.nan_to_num(raw_samples, nan=0, posinf=0, neginf=0)
     
     if raw_samples.ndim == 1:
         raw_samples = raw_samples.view(1, 1, -1)
     elif raw_samples.ndim == 2:
-        raw_samples = raw_samples.view(raw_samples.shape[0], 1, -1)
+        raw_samples = raw_samples.view(1, raw_samples.shape[0], -1)
 
     current_lufs = AF.loudness(raw_samples, sample_rate)
     gain = (10. ** ((target_lufs - current_lufs) / 20.0)).clamp(min=1e-5, max=1e5)

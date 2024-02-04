@@ -22,14 +22,12 @@
 
 import os
 import datetime
-import json
 
 from dotenv import load_dotenv
 import numpy as np
 import torch
 
 from dual_diffusion_pipeline import DualDiffusionPipeline
-from autoencoder_kl_dual import AutoencoderKLDual
 from dual_diffusion_utils import init_cuda, save_audio, save_raw, load_raw, load_audio
 
 if __name__ == "__main__":
@@ -37,7 +35,7 @@ if __name__ == "__main__":
     init_cuda()
     load_dotenv(override=True)
 
-    model_name = "dualdiffusion2d_1000_1"
+    model_name = "dualdiffusion2d_1000_6"
     num_samples = 1
     #device = "cuda"
     device = "cpu"
@@ -56,6 +54,8 @@ if __name__ == "__main__":
     last_global_step = vae.config["last_global_step"]
 
     dataset_path = os.environ.get("DATASET_PATH", "./dataset/samples")
+    dataset_format = os.environ.get("DATASET_FORMAT", ".flac")
+    dataset_raw_format = os.environ.get("DATASET_RAW_FORMAT", "int16")
     test_samples = np.random.choice(os.listdir(dataset_path), num_samples, replace=False)
     print("Sample shape: ", pipeline.format.get_sample_shape(model_params))
 
@@ -65,17 +65,24 @@ if __name__ == "__main__":
     start_time = datetime.datetime.now()
 
     for filename in test_samples:
-        #input_raw_sample = load_raw(os.path.join(dataset_path, filename), dtype=np.int16, count=crop_width)
+        
         file_ext = os.path.splitext(filename)[1]
-        input_raw_sample = load_audio(os.path.join(dataset_path, filename), start=-1, count=crop_width)
+        if dataset_format == ".raw":
+            input_raw_sample = load_raw(os.path.join(dataset_path, filename),
+                                        dtype=dataset_raw_format, start=-1, count=crop_width)
+        else:
+            input_raw_sample = load_audio(os.path.join(dataset_path, filename), start=-1, count=crop_width)
         input_raw_sample = input_raw_sample.unsqueeze(0).to(device)
 
         input_sample_dict = pipeline.format.raw_to_sample(input_raw_sample, model_params, return_dict=True)
         input_sample = input_sample_dict["samples"]
         posterior = vae.encode(input_sample.type(model_dtype), return_dict=False)[0]
         latents = posterior.sample()
-        output_sample = vae.decode(latents, return_dict=False)[0]
-        output_raw_sample = pipeline.format.sample_to_raw(output_sample.type(torch.float32), model_params)
+        model_output = vae.decode(latents, return_dict=False)[0]
+        output_sample_dict = pipeline.format.sample_to_raw(model_output.type(torch.float32), model_params, return_dict=True)
+        #output_sample_dict = pipeline.format.sample_to_raw(model_output.type(torch.float32), model_params, return_dict=True, abs_replacement=input_sample[:, 0:model_params["sample_raw_channels"]])
+        output_sample = output_sample_dict["samples"]
+        output_raw_sample = output_sample_dict["raw_samples"]
 
         save_raw(latents, os.path.join(output_path,f"step_{last_global_step}_{filename.replace(file_ext, '_latents.raw')}"))
         save_raw(input_sample, os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_input_sample.raw')}"))

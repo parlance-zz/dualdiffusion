@@ -29,7 +29,7 @@ from dual_diffusion_utils import dict_str
 
 load_dotenv(override=True)
 
-MODEL_NAME = "dualdiffusion2d_1000_1"
+MODEL_NAME = "dualdiffusion2d_1000_6"
 MODEL_SEED = 400
 
 MODEL_PARAMS = {
@@ -39,7 +39,7 @@ MODEL_PARAMS = {
 
     # sample format params
     "sample_format": "mclt",
-    "sample_raw_length": 40*256*8*8,
+    "sample_raw_length": 65536*4,
     "num_chunks": 256,
     "u": 8000,
     "noise_floor": 1e-5,
@@ -49,13 +49,13 @@ MODEL_PARAMS = {
     "snr_gamma": 5,
 
     # vae unet training params
-    "kl_loss_weight": 1e-5,
-    "format_real_loss_weight": 0,
-    "format_imag_loss_weight": 0,
+    "kl_loss_weight": 1e-6,
+    "format_real_loss_weight": 1,
+    "format_imag_loss_weight": 1,
 
     "multiscale_spectral_loss": {
-        "real_loss_weight": 1,
-        "imag_loss_weight": 1,    
+        "real_loss_weight": 0,
+        "imag_loss_weight": 0,    
         "block_overlap": 8,
         "block_widths": [
             512,
@@ -66,7 +66,7 @@ MODEL_PARAMS = {
             16384,
             32768,
             65536,
-            131072,
+            131072
         ],
         "window_fn": "blackman_harris",
     },
@@ -92,12 +92,12 @@ SCHEDULER_PARAMS = {
 }
 
 VAE_PARAMS = {
-    "latent_channels": 4,
+    "latent_channels": 2,
     "sample_size": (64, 2048),
     "act_fn": "silu",
     "conv_size": (3,3),
 
-    "block_out_channels": (32, 64, 128, 256),
+    "block_out_channels": (32, 96, 288),
     "layers_per_block": 3,
 
     "layers_per_mid_block": 2,
@@ -105,14 +105,15 @@ VAE_PARAMS = {
     #"add_mid_attention": False,
 
     #"norm_num_groups": 32,
-    "norm_num_groups": (0, 0, 32, 32),
+    #"norm_num_groups": (0, 0, 32, 32),
+    "norm_num_groups": (0, 0, 32),
 
     "downsample_type": "conv",
     "upsample_type": "conv_transpose",
     #"upsample_type": "conv",
     "downsample_ratio": (2,2),
 
-    "attention_num_heads": (8,8,8,8),
+    "attention_num_heads": (8,8,8),
     "separate_attn_dim_mid": (2,3),
     "double_attention": False,
     "pre_attention": False,
@@ -122,7 +123,8 @@ VAE_PARAMS = {
     "freq_embedding_dim": 0,
     "time_embedding_dim": 0,
 
-    "use_noise_channel": True,
+    #"use_noise_channel": True,
+    "use_noise_channel": False,
 
     "in_channels": DualDiffusionPipeline.get_sample_format(MODEL_PARAMS).get_num_channels(MODEL_PARAMS)[0],
     "out_channels": DualDiffusionPipeline.get_sample_format(MODEL_PARAMS).get_num_channels(MODEL_PARAMS)[1],

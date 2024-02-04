@@ -56,7 +56,7 @@ class DualMultiscaleSpectralLoss:
         if (sample.shape != target.shape):
             raise ValueError(f"sample.shape != target.shape. sample.shape: {sample.shape}. target.shape: {target.shape}.")
 
-        noise_floor = model_params["noise_floor"]
+        #noise_floor = model_params["noise_floor"]
         sample_rate = model_params["sample_rate"]
 
         loss_real = torch.zeros(1, device=sample.device)
@@ -70,26 +70,38 @@ class DualMultiscaleSpectralLoss:
 
             with torch.no_grad():
                 target_fft = stft(target[:, :, offset:], block_width, window_fn=self.window_fn, step=step)
-                target_fft_abs = target_fft.abs()
-                target_fft_abs = (target_fft_abs / target_fft_abs.square().mean(dim=(1,2,3), keepdim=True).clip(min=noise_floor**2).sqrt()).clip(min=noise_floor)
+                #target_fft_abs = target_fft.abs()
+                #target_fft_abs = (target_fft_abs / target_fft_abs.square().mean(dim=(1,2,3), keepdim=True).clip(min=noise_floor**2).sqrt()).clip(min=noise_floor)
 
                 block_hz = torch.arange(1, target_fft.shape[-1]+1, device=target_fft.device) * (sample_rate/2 / target_fft.shape[-1])
                 mel_density = get_mel_density(block_hz).view(1, 1, 1,-1).requires_grad_(False)
                 mel_density /= mel_density.mean()
                                 
             sample_fft = stft(sample[:, :, offset:], block_width, window_fn=self.window_fn, step=step)
-            sample_fft_abs = sample_fft.abs()
-            sample_fft_abs = (sample_fft_abs / sample_fft_abs.square().mean(dim=(1,2,3), keepdim=True).clip(min=noise_floor**2).sqrt()).clip(min=noise_floor)
+            #sample_fft_abs = sample_fft.abs()
+            #sample_fft_abs = (sample_fft_abs / sample_fft_abs.square().mean(dim=(1,2,3), keepdim=True).clip(min=noise_floor**2).sqrt()).clip(min=noise_floor)
 
-            error_real = (sample_fft_abs / target_fft_abs).log()
-            loss_real = loss_real + error_real.abs().mean()
+            #error_real = (sample_fft_abs / target_fft_abs).log()
+            #loss_real = loss_real + error_real.abs().mean()
 
-            target_fft_noise_floor = target_fft_abs.amin(dim=3, keepdim=True) * 1.5
-            target_phase_weight = (target_fft_abs > target_fft_noise_floor).requires_grad_(False) * mel_density
+            #target_fft_noise_floor = target_fft_abs.amin(dim=3, keepdim=True) * 1.5
+            #target_phase_weight = (target_fft_abs > target_fft_noise_floor).requires_grad_(False) * mel_density
+            target_phase_weight = mel_density
             error_imag = (sample_fft.angle() - target_fft.angle()).abs()
             error_imag_wrap_mask = (error_imag > torch.pi).detach().requires_grad_(False)
             error_imag[error_imag_wrap_mask] = 2*torch.pi - error_imag[error_imag_wrap_mask]
             loss_imag = loss_imag + (error_imag * target_phase_weight).mean()
+
+            #sample_cos_angle = sample_fft.angle().abs()
+            #target_cos_angle = target_fft.angle().abs()
+            #sample_sin_angle = (1j*sample_fft).angle().abs()
+            #target_sin_angle = (1j*target_fft).angle().abs()
+            #sample_cos_angle_freq = (sample_cos_angle[:, :, 1:] - sample_cos_angle[:, :, :-1]).abs()
+            #target_cos_angle_freq = (target_cos_angle[:, :, 1:] - target_cos_angle[:, :, :-1]).abs()
+            #sample_sin_angle_freq = (sample_sin_angle[:, :, 1:] - sample_sin_angle[:, :, :-1]).abs()
+            #target_sin_angle_freq = (target_sin_angle[:, :, 1:] - target_sin_angle[:, :, :-1]).abs()
+            #error_imag = (sample_cos_angle_freq - target_cos_angle_freq).abs() + (sample_sin_angle_freq - target_sin_angle_freq).abs()
+            #loss_imag = loss_imag + (error_imag * target_phase_weight[:, :, 1:]).mean()
 
         return loss_real * self.loss_scale, loss_imag * self.loss_scale
 
@@ -114,17 +126,21 @@ class DiagonalGaussianDistribution(object):
         if self.deterministic:
             return torch.Tensor([0.0])
         else:
-            non_bsz_dims = tuple(range(1, len(self.mean.shape)))
+            #non_bsz_dims = tuple(range(1, len(self.mean.shape)))
+            reduction_dims = tuple(range(0, len(self.mean.shape)))
             if other is None:
-                return 0.5 * torch.sum(torch.pow(self.mean, 2) + self.var - 1.0 - self.logvar, dim=non_bsz_dims)
+                #return 0.5 * torch.sum(torch.pow(self.mean, 2) + self.var - 1.0 - self.logvar, dim=non_bsz_dims)
+                return 0.5 * torch.mean(torch.pow(self.mean, 2) + self.var - 1.0 - self.logvar, dim=reduction_dims)
             else:
-                return 0.5 * torch.sum(
+                #return 0.5 * torch.sum(
+                return 0.5 * torch.mean(
                     torch.pow(self.mean - other.mean, 2) / other.var
                     + self.var / other.var
                     - 1.0
                     - self.logvar
                     + other.logvar,
-                    dim=non_bsz_dims,
+                    #dim=non_bsz_dims,
+                    dim=reduction_dims,
                 )
 
     def nll(self, sample, dims=[1, 2, 3]):
@@ -149,7 +165,7 @@ class DiagonalDegenerateDistribution(object):
         mean = self.mean.mean(dim=kl_reduction_dims, keepdim=True)
         var = self.mean.var(dim=kl_reduction_dims, keepdim=True).clip(min=1e-10)
 
-        return mean.square() + var - 1 - var.log()
+        return 0.5 * (mean.square() + var - 1 - var.log()).mean()
 
     def nll(self, sample, dims=[1, 2, 3]):
         raise NotImplementedError()
@@ -613,8 +629,8 @@ class AutoencoderKLDual(ModelMixin, ConfigMixin):
             in_channels=in_channels,
             out_channels=latent_channels,
             act_fn=act_fn,
-            #double_z=True,
-            double_z=False,
+            double_z=True,
+            #double_z=False,
             block_out_channels=block_out_channels,
             layers_per_block=layers_per_block,
             layers_per_mid_block=layers_per_mid_block,
@@ -659,8 +675,8 @@ class AutoencoderKLDual(ModelMixin, ConfigMixin):
             add_attention=add_attention,
         )
 
-        #self.quant_conv = conv_class(2 * latent_channels, 2 * latent_channels, 1)
-        self.quant_conv = conv_class(latent_channels, latent_channels, 1)
+        self.quant_conv = conv_class(2 * latent_channels, 2 * latent_channels, 1)
+        #self.quant_conv = conv_class(latent_channels, latent_channels, 1)
         self.post_quant_conv = conv_class(latent_channels, latent_channels, 1)
 
         self.use_slicing = False
@@ -726,8 +742,8 @@ class AutoencoderKLDual(ModelMixin, ConfigMixin):
             h = self.encoder(x)
 
         moments = self.quant_conv(h)
-        #posterior = DiagonalGaussianDistribution(moments)
-        posterior = DiagonalDegenerateDistribution(moments)
+        posterior = DiagonalGaussianDistribution(moments)
+        #posterior = DiagonalDegenerateDistribution(moments)
 
         if not return_dict:
             return (posterior,)
@@ -818,8 +834,8 @@ class AutoencoderKLDual(ModelMixin, ConfigMixin):
             result_rows.append(torch.cat(result_row, dim=3))
 
         moments = torch.cat(result_rows, dim=2)
-        #posterior = DiagonalGaussianDistribution(moments)
-        posterior = DiagonalDegenerateDistribution(moments)
+        posterior = DiagonalGaussianDistribution(moments)
+        #posterior = DiagonalDegenerateDistribution(moments)
 
         if not return_dict:
             return (posterior,)

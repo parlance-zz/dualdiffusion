@@ -938,7 +938,8 @@ def do_training_loop(args,
                     latents_mean = latents.mean()
                     latents_std = latents.std()
                     model_output = module.decode(latents, return_dict=False)[0]
-                    recon_samples_dict = pipeline.format.sample_to_raw(model_output, model_params, return_dict=True)
+                    abs_replacement = samples_dict["samples"][:, 0:model_params["sample_raw_channels"]]
+                    recon_samples_dict = pipeline.format.sample_to_raw(model_output, model_params, return_dict=True, abs_replacement=abs_replacement)
                     
                     if format_real_loss_weight > 0 or format_imag_loss_weight > 0:
                         format_real_loss, format_imag_loss = pipeline.format.get_loss(recon_samples_dict, samples_dict, model_params)
@@ -955,8 +956,8 @@ def do_training_loop(args,
                         mss_real_loss = mss_imag_loss = mss_real_nll_loss = mss_imag_nll_loss = torch.zeros(1, device=latents.device)
 
                     recon_nll_loss = format_real_nll_loss + format_imag_nll_loss + mss_real_nll_loss + mss_imag_nll_loss
-                    kl_loss = (posterior.kl().sum() / posterior.mean.numel()) * kl_loss_weight
-                    loss = recon_nll_loss + kl_loss
+                    kl_loss = posterior.kl()
+                    loss = recon_nll_loss + kl_loss * kl_loss_weight
                 else:
                     raise ValueError(f"Unknown module {args.module}")
                 
@@ -1007,8 +1008,17 @@ def do_training_loop(args,
                 for channel in module_log_channels:
                     module_logs[channel] = 0.
                     
-                if global_step % args.checkpointing_steps == 0 and accelerator.is_main_process:
-                    save_checkpoint(module, args.module, args.output_dir, global_step, accelerator, args.checkpoints_total_limit)
+                if accelerator.is_main_process:
+                    _save_checkpoint = ((global_step % args.checkpointing_steps) == 0)
+
+                    if os.path.exists(os.path.join(args.output_dir, "_save_checkpoint")):
+                        _save_checkpoint = True
+
+                    if _save_checkpoint:
+                        save_checkpoint(module, args.module, args.output_dir, global_step, accelerator, args.checkpoints_total_limit)
+
+                    if os.path.exists(os.path.join(args.output_dir, "_save_checkpoint")):
+                        os.remove(os.path.join(args.output_dir, "_save_checkpoint"))
 
             if global_step >= max_train_steps:
                 logger.info(f"Reached max train steps ({max_train_steps}) - Training complete")
