@@ -29,7 +29,7 @@ from dual_diffusion_utils import dict_str
 
 load_dotenv(override=True)
 
-MODEL_NAME = "dualdiffusion2d_1000_6"
+MODEL_NAME = "dualdiffusion2d_1000_7"
 MODEL_SEED = 400
 
 MODEL_PARAMS = {
@@ -50,12 +50,12 @@ MODEL_PARAMS = {
 
     # vae unet training params
     "kl_loss_weight": 1e-6,
-    "format_real_loss_weight": 1,
-    "format_imag_loss_weight": 1,
+    "format_real_loss_weight": 0,
+    "format_imag_loss_weight": 0,
 
     "multiscale_spectral_loss": {
-        "real_loss_weight": 0,
-        "imag_loss_weight": 0,    
+        "real_loss_weight": 0.04,
+        "imag_loss_weight": 0.04,    
         "block_overlap": 8,
         "block_widths": [
             512,
