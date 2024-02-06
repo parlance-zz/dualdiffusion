@@ -35,7 +35,7 @@ if __name__ == "__main__":
     init_cuda()
     load_dotenv(override=True)
 
-    model_name = "dualdiffusion2d_1000_6"
+    model_name = "dualdiffusion2d_1000_7"
     num_samples = 1
     #device = "cuda"
     device = "cpu"
@@ -80,7 +80,6 @@ if __name__ == "__main__":
         latents = posterior.sample()
         model_output = vae.decode(latents, return_dict=False)[0]
         output_sample_dict = pipeline.format.sample_to_raw(model_output.type(torch.float32), model_params, return_dict=True)
-        #output_sample_dict = pipeline.format.sample_to_raw(model_output.type(torch.float32), model_params, return_dict=True, abs_replacement=input_sample[:, 0:model_params["sample_raw_channels"]])
         output_sample = output_sample_dict["samples"]
         output_raw_sample = output_sample_dict["raw_samples"]
 
