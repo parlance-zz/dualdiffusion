@@ -849,7 +849,7 @@ def do_training_loop(args,
                 if args.module == "unet":
                     samples = pipeline.format.raw_to_sample(raw_samples, model_params)
                     if vae is not None:
-                        samples = vae.encode(samples.half(), return_dict=False)[0].sample().requires_grad_(False).float()
+                        samples = vae.encode(samples.half(), return_dict=False)[0].sample().float()
 
                     noise = torch.randn_like(samples) * noise_scheduler.init_noise_sigma
                     if args.input_perturbation > 0:
@@ -893,9 +893,6 @@ def do_training_loop(args,
                         target = samples
                     else:
                         raise ValueError(f"Unknown prediction type {noise_scheduler.config.prediction_type}")
-
-                    model_input = model_input.requires_grad_(False)
-                    target = target.requires_grad_(False)
                     
                     model_output = module(model_input, timesteps).sample
 
@@ -938,8 +935,7 @@ def do_training_loop(args,
                     latents_mean = latents.mean()
                     latents_std = latents.std()
                     model_output = module.decode(latents, return_dict=False)[0]
-                    abs_replacement = samples_dict["samples"][:, 0:model_params["sample_raw_channels"]]
-                    recon_samples_dict = pipeline.format.sample_to_raw(model_output, model_params, return_dict=True, abs_replacement=abs_replacement)
+                    recon_samples_dict = pipeline.format.sample_to_raw(model_output, model_params, return_dict=True, original_samples_dict=samples_dict)
                     
                     if format_real_loss_weight > 0 or format_imag_loss_weight > 0:
                         format_real_loss, format_imag_loss = pipeline.format.get_loss(recon_samples_dict, samples_dict, model_params)
