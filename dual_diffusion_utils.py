@@ -325,8 +325,7 @@ def load_raw(input_path, dtype="int16", num_channels=1, start=0, count=-1):
         tensor = torch.from_numpy(np.fromfile(input_path, dtype=np_dtype, count=count * num_channels, offset=offset))
     else:
         tensor = torch.from_numpy(np.frombuffer(input_path, dtype=np_dtype, count=count * num_channels, offset=offset))
-
-    return (tensor / STR_DTYPE_MAX_VALUE[dtype]).view(num_channels, -1)
+    return (tensor / STR_DTYPE_MAX_VALUE[dtype]).view(-1, num_channels).permute(1, 0)
 
 def normalize_lufs(raw_samples, sample_rate, target_lufs=-25.0):
     return raw_samples / raw_samples.abs().amax()
