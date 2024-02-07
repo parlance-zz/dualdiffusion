@@ -28,7 +28,7 @@ import numpy as np
 import torch
 
 from dual_diffusion_pipeline import DualDiffusionPipeline
-from dual_diffusion_utils import init_cuda, save_audio, save_raw, load_raw, load_audio
+from dual_diffusion_utils import init_cuda, save_audio, save_raw, load_raw, load_audio, save_raw_img
 
 if __name__ == "__main__":
 
@@ -41,6 +41,7 @@ if __name__ == "__main__":
     device = "cpu"
     fp16 = False
     #fp16 = True
+    start=0
 
     model_path = os.path.join(os.environ.get("MODEL_PATH", "./"), model_name)
     model_dtype = torch.float16 if fp16 else torch.float32
@@ -57,8 +58,10 @@ if __name__ == "__main__":
     dataset_format = os.environ.get("DATASET_FORMAT", ".flac")
     dataset_raw_format = os.environ.get("DATASET_RAW_FORMAT", "int16")
     test_samples = np.random.choice(os.listdir(dataset_path), num_samples, replace=False)
+    #test_samples = ["Star Fox - 141 Training Mode.flac"]
+    
     print("Sample shape: ", pipeline.format.get_sample_shape(model_params))
-
+    
     output_path = os.path.join(model_path, "output")
     os.makedirs(output_path, exist_ok=True)
 
@@ -69,9 +72,9 @@ if __name__ == "__main__":
         file_ext = os.path.splitext(filename)[1]
         if dataset_format == ".raw":
             input_raw_sample = load_raw(os.path.join(dataset_path, filename),
-                                        dtype=dataset_raw_format, start=-1, count=crop_width)
+                                        dtype=dataset_raw_format, start=start, count=crop_width)
         else:
-            input_raw_sample = load_audio(os.path.join(dataset_path, filename), start=-1, count=crop_width)
+            input_raw_sample = load_audio(os.path.join(dataset_path, filename), start=start, count=crop_width)
         input_raw_sample = input_raw_sample.unsqueeze(0).to(device)
 
         input_sample_dict = pipeline.format.raw_to_sample(input_raw_sample, model_params, return_dict=True)
@@ -87,6 +90,7 @@ if __name__ == "__main__":
         save_raw(input_sample, os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_input_sample.raw')}"))
         save_raw(output_sample, os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_sample.raw')}"))
         save_raw(posterior.parameters, os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_posterior.raw')}"))
+        save_raw_img(latents, os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_latents.png')}"))
 
         output_flac_file_path = os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_original.flac')}")
         save_audio(input_sample_dict["raw_samples"].squeeze(0), model_params["sample_rate"], output_flac_file_path)

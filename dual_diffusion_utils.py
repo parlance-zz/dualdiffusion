@@ -861,13 +861,26 @@ def get_lpc_coefficients(X: torch.Tensor, order: int ) -> torch.Tensor:
 
 def save_raw_img(x, img_path):
     
-    x = x.permute(1, 0).contiguous()
+    x = x.detach().resolve_conj().cpu()
     x -= x.amin()
     x /= x.amax()
-    x = x.cpu().numpy()
-    
-    cv2_img = (x * 255).astype(np.uint8)
-    cv2_img = cv2.applyColorMap(cv2_img, cv2.COLORMAP_JET)
+
+    if (x.ndim >= 3) and (x.ndim <=4):
+        if x.ndim == 4: x = x.squeeze(0)
+        x = x.permute(1, 2, 0).contiguous().numpy()
+        cv2_img = (x * 255).astype(np.uint8)
+        if cv2_img.shape[2] == 2:
+            cv2_img = np.concatenate((cv2_img, np.zeros((cv2_img.shape[0], cv2_img.shape[1], 1))), axis=2)
+            cv2_img[..., 2] = cv2_img[..., 1]
+            cv2_img[..., 1] = 0
+        elif cv2_img.shape[2] > 3:
+            raise ValueError(f"Unsupported number of channels in save_raw_img: {cv2_img.shape[2]}")
+    elif x.ndim == 2:
+        x = x.permute(1, 0).contiguous().numpy()
+        cv2_img = (x * 255).astype(np.uint8)
+        cv2_img = cv2.applyColorMap(cv2_img, cv2.COLORMAP_JET)
+    else:
+        raise ValueError(f"Unsupported number of dimensions in save_raw_img: {x.ndim}")
 
     cv2.imwrite(img_path, cv2.flip(cv2_img, 0))
 
