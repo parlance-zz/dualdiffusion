@@ -50,7 +50,6 @@ class DualMultiscaleSpectralLoss:
 
     def __call__(self, sample, target, model_params):
 
-        #sample = sample["raw_samples"]
         target = target["raw_samples"]
         sample1 = sample["raw_samples_orig_phase"]
         sample2 = sample["raw_samples_orig_abs"]
@@ -68,7 +67,7 @@ class DualMultiscaleSpectralLoss:
 
         loss_real = torch.zeros(1, device=target.device)
         loss_imag = torch.zeros(1, device=target.device)
-        loss_imag2 = torch.zeros(1, device=target.device)
+        #loss_imag2 = torch.zeros(1, device=target.device)
 
         for block_width in self.block_widths:
             
@@ -90,35 +89,23 @@ class DualMultiscaleSpectralLoss:
             sample_fft_abs1 = (sample_fft_abs1 / sample_fft_abs1.square().mean(dim=(1,2,3), keepdim=True).clip(min=noise_floor**2).sqrt()).clip(min=noise_floor)
 
             sample_fft2 = stft(sample2[:, :, offset:], block_width, window_fn=self.window_fn, step=step)
-            sample_fft_abs2 = sample_fft2.abs()
-            sample_fft_abs2 = (sample_fft_abs2 / sample_fft_abs2.square().mean(dim=(1,2,3), keepdim=True).clip(min=noise_floor**2).sqrt()).clip(min=noise_floor)
+            #sample_fft_abs2 = sample_fft2.abs()
+            #sample_fft_abs2 = (sample_fft_abs2 / sample_fft_abs2.square().mean(dim=(1,2,3), keepdim=True).clip(min=noise_floor**2).sqrt()).clip(min=noise_floor)
 
             error_real = (sample_fft_abs1 / target_fft_abs).log()
             loss_real = loss_real + error_real.abs().mean()
 
-            error_imag = (sample_fft_abs2 / target_fft_abs).log()
-            loss_imag2 = loss_imag2 + (error_imag.abs()  * mel_density).mean()
+            #error_imag = (sample_fft_abs2 / target_fft_abs).log()
+            #loss_imag2 = loss_imag2 + (error_imag.abs()  * mel_density).mean()
 
             target_fft_noise_floor = target_fft_abs.amin(dim=3, keepdim=True) * 1.5
             target_phase_weight = (target_fft_abs > target_fft_noise_floor).requires_grad_(False) * mel_density
-            #target_phase_weight = mel_density
             error_imag = (sample_fft2.angle() - target_fft.angle()).abs()
             error_imag_wrap_mask = (error_imag > torch.pi).detach().requires_grad_(False)
             error_imag[error_imag_wrap_mask] = 2*torch.pi - error_imag[error_imag_wrap_mask]
             loss_imag = loss_imag + (error_imag * target_phase_weight).mean()
 
-            #sample_cos_angle = sample_fft.angle().abs()
-            #target_cos_angle = target_fft.angle().abs()
-            #sample_sin_angle = (1j*sample_fft).angle().abs()
-            #target_sin_angle = (1j*target_fft).angle().abs()
-            #sample_cos_angle_freq = (sample_cos_angle[:, :, 1:] - sample_cos_angle[:, :, :-1]).abs()
-            #target_cos_angle_freq = (target_cos_angle[:, :, 1:] - target_cos_angle[:, :, :-1]).abs()
-            #sample_sin_angle_freq = (sample_sin_angle[:, :, 1:] - sample_sin_angle[:, :, :-1]).abs()
-            #target_sin_angle_freq = (target_sin_angle[:, :, 1:] - target_sin_angle[:, :, :-1]).abs()
-            #error_imag = (sample_cos_angle_freq - target_cos_angle_freq).abs() + (sample_sin_angle_freq - target_sin_angle_freq).abs()
-            #loss_imag = loss_imag + (error_imag * target_phase_weight[:, :, 1:]).mean()
-
-        return loss_real * self.loss_scale, loss_imag * self.loss_scale, loss_imag2 * self.loss_scale
+        return loss_real * self.loss_scale, loss_imag * self.loss_scale #, loss_imag2 * self.loss_scale
 
 class DiagonalGaussianDistribution(object):
     def __init__(self, parameters, deterministic=False):
