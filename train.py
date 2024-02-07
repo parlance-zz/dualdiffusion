@@ -945,9 +945,10 @@ def do_training_loop(args,
                         format_real_loss = format_imag_loss = format_real_nll_loss = format_imag_nll_loss = torch.zeros(1, device=latents.device)
 
                     if multiscale_spectral_loss is not None and (mss_real_loss_weight > 0 or mss_imag_loss_weight > 0):
-                        mss_real_loss, mss_imag_loss = multiscale_spectral_loss(recon_samples_dict, samples_dict, model_params)
+                        mss_real_loss, mss_imag_loss, format_imag_loss = multiscale_spectral_loss(recon_samples_dict, samples_dict, model_params)
                         mss_real_nll_loss = (mss_real_loss / module.mss_error_logvar_real.exp() + module.mss_error_logvar_real) * mss_real_loss_weight
                         mss_imag_nll_loss = (mss_imag_loss / module.mss_error_logvar_imag.exp() + module.mss_error_logvar_imag) * mss_imag_loss_weight
+                        format_imag_nll_loss = (format_imag_loss / module.format_error_logvar_imag.exp() + module.format_error_logvar_imag) * mss_imag_loss_weight / torch.pi
                     else:
                         mss_real_loss = mss_imag_loss = mss_real_nll_loss = mss_imag_nll_loss = torch.zeros(1, device=latents.device)
 
