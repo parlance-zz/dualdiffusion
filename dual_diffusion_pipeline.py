@@ -191,10 +191,10 @@ class DualMCLTFormat:
         samples = samples.sigmoid()
         samples_abs, samples_phase1 = samples.chunk(2, dim=1)
         samples_abs = (((1 + u) ** samples_abs - 1) / u).clip(min=noise_floor)
-        samples_phase = samples_phase1 * 2 - 1
-        samples_phase = ((samples_phase / samples_phase.abs().amax(dim=2, keepdim=True).detach())+1) / 2
-        samples_phase = (samples_phase * torch.pi).cos()
-        #samples_phase = (samples_phase1 * torch.pi).cos()
+        #samples_phase = samples_phase1 * 2 - 1
+        #samples_phase = ((samples_phase / samples_phase.abs().amax(dim=2, keepdim=True).detach())+1) / 2
+        #samples_phase = (samples_phase * torch.pi).cos()
+        samples_phase = (samples_phase1 * torch.pi).cos()
 
         if original_samples_dict is not None:
             orig_samples_abs, orig_samples_phase1 = original_samples_dict["samples"].chunk(2, dim=1)
@@ -207,6 +207,9 @@ class DualMCLTFormat:
         else:
             raw_samples_orig_phase = None
             raw_samples_orig_abs = None
+            samples_phase = samples_phase1 * 2 - 1
+            samples_phase = ((samples_phase / samples_phase.abs().amax(dim=2, keepdim=True))+1) / 2
+            samples_phase = (samples_phase * torch.pi).cos()
             raw_samples = imdct((samples_abs * samples_phase).permute(0, 1, 3, 2), window_degree=1).real
 
         if not return_dict:            
