@@ -99,12 +99,12 @@ class DualMultiscaleSpectralLoss:
             loss_real = loss_real + error_real.abs().mean()
 
             error_imag = (sample_fft_abs2 / target_fft_abs).log()
-            loss_imag = loss_imag + error_imag.abs().mean()
+            loss_imag = loss_imag + error_imag.abs().mean() / 2
 
             error_real = (sample_fft1.angle() - target_fft_angle).abs()
             error_real_wrap_mask = (error_real > torch.pi).detach().requires_grad_(False)
             error_real[error_real_wrap_mask] = 2*torch.pi - error_real[error_real_wrap_mask]
-            loss_real = loss_real + (error_real * target_phase_weight).mean()
+            loss_real = loss_real + (error_real * target_phase_weight).mean() / 2
 
             error_imag = (sample_fft2.angle() - target_fft_angle).abs()
             error_imag_wrap_mask = (error_imag > torch.pi).detach().requires_grad_(False)
