@@ -78,7 +78,8 @@ class DualMultiscaleSpectralLoss:
             with torch.no_grad():
                 target_fft = stft(target[:, :, offset:], block_width, window_fn=self.window_fn, step=step)
                 target_fft_abs = target_fft.abs()
-                target_fft_abs = (target_fft_abs / target_fft_abs.square().mean(dim=(1,2,3), keepdim=True).clip(min=noise_floor**2).sqrt()).clip(min=noise_floor)
+                #target_fft_abs = (target_fft_abs / target_fft_abs.square().mean(dim=(1,2,3), keepdim=True).clip(min=noise_floor**2).sqrt()).clip(min=noise_floor)
+                target_fft_abs = target_fft_abs.clip(min=noise_floor)
 
                 block_hz = torch.arange(1, target_fft.shape[-1]+1, device=target_fft.device) * (sample_rate/2 / target_fft.shape[-1])
                 mel_density = get_mel_density(block_hz).view(1, 1, 1,-1).requires_grad_(False)
@@ -86,11 +87,13 @@ class DualMultiscaleSpectralLoss:
                                 
             sample_fft1 = stft(sample1[:, :, offset:], block_width, window_fn=self.window_fn, step=step)
             sample_fft_abs1 = sample_fft1.abs()
-            sample_fft_abs1 = (sample_fft_abs1 / sample_fft_abs1.square().mean(dim=(1,2,3), keepdim=True).clip(min=noise_floor**2).sqrt()).clip(min=noise_floor)
+            #sample_fft_abs1 = (sample_fft_abs1 / sample_fft_abs1.square().mean(dim=(1,2,3), keepdim=True).clip(min=noise_floor**2).sqrt()).clip(min=noise_floor)
+            sample_fft_abs1 = sample_fft_abs1.clip(min=noise_floor)
 
             sample_fft2 = stft(sample2[:, :, offset:], block_width, window_fn=self.window_fn, step=step)
             sample_fft_abs2 = sample_fft2.abs()
-            sample_fft_abs2 = (sample_fft_abs2 / sample_fft_abs2.square().mean(dim=(1,2,3), keepdim=True).clip(min=noise_floor**2).sqrt()).clip(min=noise_floor)
+            #sample_fft_abs2 = (sample_fft_abs2 / sample_fft_abs2.square().mean(dim=(1,2,3), keepdim=True).clip(min=noise_floor**2).sqrt()).clip(min=noise_floor)
+            sample_fft_abs2 = sample_fft_abs2.clip(min=noise_floor)
 
             error_real = (sample_fft_abs1 / target_fft_abs).log()
             loss_real = loss_real + error_real.abs().mean()
