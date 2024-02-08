@@ -862,8 +862,10 @@ def get_lpc_coefficients(X: torch.Tensor, order: int ) -> torch.Tensor:
 def save_raw_img(x, img_path):
     
     x = x.detach().resolve_conj().cpu()
-    x -= x.amin()
-    x /= x.amax()
+    x -= x.amin(dim=(x.ndim-1, x.ndim-2), keepdim=True)
+    x /= x.amax(dim=(x.ndim-1, x.ndim-2), keepdim=True)
+    invert_channel_mask = ((x.mean(dim=(x.ndim-1, x.ndim-2), keepdim=True) > 0.5) * torch.ones_like(x)) > 0.5
+    x[invert_channel_mask] = 1 - x[invert_channel_mask]
 
     if (x.ndim >= 3) and (x.ndim <=4):
         if x.ndim == 4: x = x.squeeze(0)
