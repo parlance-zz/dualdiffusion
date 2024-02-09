@@ -327,8 +327,8 @@ def load_raw(input_path, dtype="int16", num_channels=1, start=0, count=-1):
         tensor = torch.from_numpy(np.frombuffer(input_path, dtype=np_dtype, count=count * num_channels, offset=offset))
     return (tensor / STR_DTYPE_MAX_VALUE[dtype]).view(-1, num_channels).permute(1, 0)
 
-def normalize_lufs(raw_samples, sample_rate, target_lufs=-25.0):
-    return raw_samples / raw_samples.abs().amax()
+def normalize_lufs(raw_samples, sample_rate, target_lufs=-16.):
+    
     original_shape = raw_samples.shape
     raw_samples = torch.nan_to_num(raw_samples, nan=0, posinf=0, neginf=0)
     
@@ -344,7 +344,7 @@ def normalize_lufs(raw_samples, sample_rate, target_lufs=-25.0):
     normalized_raw_samples = (raw_samples * gain).view(original_shape).clamp(min=-10, max=10)
     return torch.nan_to_num(normalized_raw_samples, nan=0, posinf=0, neginf=0)
 
-def save_audio(raw_samples, sample_rate, output_path, target_lufs=-25.0):
+def save_audio(raw_samples, sample_rate, output_path, target_lufs=-16.):
     
     raw_samples = raw_samples.detach().real
     if raw_samples.ndim == 1:
