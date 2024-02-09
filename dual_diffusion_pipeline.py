@@ -134,8 +134,8 @@ class DualMCLTFormat:
     
     @staticmethod
     def get_num_channels(model_params):
-        in_channels = model_params["sample_raw_channels"] * 2#2
-        out_channels = model_params["sample_raw_channels"] * 2#3 #2
+        in_channels = model_params["sample_raw_channels"] * 2
+        out_channels = model_params["sample_raw_channels"] * 2
 
         return (in_channels, out_channels)
 
@@ -149,19 +149,14 @@ class DualMCLTFormat:
 
         samples_mdct = mdct(raw_samples, block_width, window_degree=1)[:, :, 1:-2, :]
         samples_mdct = samples_mdct.permute(0, 1, 3, 2)
-
         samples_mdct *= torch.exp(2j * torch.pi * torch.rand(1, device=samples_mdct.device))
-        #samples = samples_mdct.real
-        #samples /= samples.abs().amax(dim=(1,2,3), keepdim=True).clip(min=1)
+
         samples_mdct_abs = samples_mdct.abs()
         samples_mdct_abs_amax = samples_mdct_abs.amax(dim=(1,2,3), keepdim=True).clip(min=1e-5)
         samples_mdct_abs = (samples_mdct_abs / samples_mdct_abs_amax).clip(min=noise_floor)
-        samples_abs_ln = (samples_mdct_abs * u).log1p() / np.log1p(u)# * 2 - 1
+        samples_abs_ln = (samples_mdct_abs * u).log1p() / np.log1p(u)
         samples_qphase1 = samples_mdct.angle().abs() / torch.pi
 
-        #samples_qphase1 = samples_mdct.angle().abs() / torch.pi# * 2 - 1
-        #samples_qphase2 = (1j*samples_mdct).angle().abs() / torch.pi * 2 - 1
-        #samples = torch.cat((samples_abs_ln, samples_qphase1, samples_qphase2), dim=1).requires_grad_(False)
         samples = torch.cat((samples_abs_ln, samples_qphase1), dim=1)
 
         samples_mdct /= samples_mdct_abs_amax
@@ -171,11 +166,6 @@ class DualMCLTFormat:
             samples_dict = {
                 "samples": samples,
                 "raw_samples": raw_samples,
-                #"samples_abs": samples_abs_ln,
-                #"samples_phase": samples_qphase1,
-                #"samples_abs_ln": samples_abs_ln.requires_grad_(False),
-                #"samples_qphase1": samples_qphase1.requires_grad_(False),
-                #"samples_qphase2": samples_qphase2.requires_grad_(False),
             }
             return samples_dict
         else:
@@ -185,16 +175,13 @@ class DualMCLTFormat:
     def sample_to_raw(samples, model_params, return_dict=False, original_samples_dict=None):
         
         u = model_params["u"]
-        #num_channels = model_params["sample_raw_channels"]
         noise_floor = model_params["noise_floor"]
 
         samples = samples.sigmoid()
         samples_abs, samples_phase1 = samples.chunk(2, dim=1)
         samples_abs = (((1 + u) ** samples_abs - 1) / u).clip(min=noise_floor)
-        #samples_phase = samples_phase1 * 2 - 1
-        #samples_phase = ((samples_phase / samples_phase.abs().amax(dim=2, keepdim=True).detach())+1) / 2
-        #samples_phase = (samples_phase * torch.pi).cos()
         samples_phase = (samples_phase1 * torch.pi).cos()
+        raw_samples = imdct((samples_abs * samples_phase).permute(0, 1, 3, 2), window_degree=1).real
 
         if original_samples_dict is not None:
             orig_samples_abs, orig_samples_phase1 = original_samples_dict["samples"].chunk(2, dim=1)
@@ -203,16 +190,13 @@ class DualMCLTFormat:
 
             raw_samples_orig_phase = imdct((samples_abs * orig_samples_phase).permute(0, 1, 3, 2), window_degree=1).real
             raw_samples_orig_abs = imdct((orig_samples_abs * samples_phase).permute(0, 1, 3, 2), window_degree=1).real
-            #raw_samples = None
-            raw_samples = imdct((samples_abs * samples_phase).permute(0, 1, 3, 2), window_degree=1).real
-
         else:
             raw_samples_orig_phase = None
             raw_samples_orig_abs = None
             #samples_phase = samples_phase1 * 2 - 1
             #samples_phase = ((samples_phase / samples_phase.abs().amax(dim=2, keepdim=True))+1) / 2
             #samples_phase = (samples_phase * torch.pi).cos()
-            raw_samples = imdct((samples_abs * samples_phase).permute(0, 1, 3, 2), window_degree=1).real
+            #raw_samples = imdct((samples_abs * samples_phase).permute(0, 1, 3, 2), window_degree=1).real
 
         if not return_dict:            
             return raw_samples
@@ -220,13 +204,8 @@ class DualMCLTFormat:
             samples_dict = {
                 "samples": samples,
                 "raw_samples": raw_samples,
-                #"samples_abs": samples_abs,
-                #"samples_phase": samples_phase,
                 "raw_samples_orig_phase": raw_samples_orig_phase,
                 "raw_samples_orig_abs": raw_samples_orig_abs,
-                #"samples_abs_ln": samples_abs_ln,
-                #"samples_qphase1": samples_qphase1,
-                #"samples_qphase2": samples_qphase2,
             }
             return samples_dict
 
@@ -236,15 +215,8 @@ class DualMCLTFormat:
         sample_rate = model_params["sample_rate"]
         num_chunks = model_params["num_chunks"]
 
-        #samples_abs_ln = sample["samples_abs_ln"]
-        #samples_qphase1 = sample["samples_qphase1"]
-        #samples_qphase2 = sample["samples_qphase2"]
         samples_abs = sample["samples_abs"]
         samples_phase = sample["samples_phase"]
-
-        #target_abs_ln = target["samples_abs_ln"]
-        #target_qphase1 = target["samples_qphase1"]
-        #target_qphase2 = target["samples_qphase2"]
         target_abs = target["samples_abs"]
         target_phase = target["samples_phase"]
 
@@ -252,24 +224,9 @@ class DualMCLTFormat:
         mel_density = get_mel_density(block_hz).view(1, 1,-1, 1).requires_grad_(False)
         mel_density /= mel_density.mean()
 
-        #imag_loss_mask = (target_abs_ln + 1) > ((target_abs_ln.amin(dim=1, keepdim=True) + 1) * 1.05)
-        #real_loss = (samples_abs_ln - target_abs_ln).square() * 2 #4
-        #imag_loss = ((samples_qphase1 - target_qphase1).square() + (samples_qphase2 - target_qphase2).square()) * (imag_loss_mask * mel_density)
-        #imag_loss = (samples_qphase1 - target_qphase1).square() * (imag_loss_mask * mel_density) 
-
-        #real_loss = (samples_abs - target_abs).abs().clip(min=0.07) - 0.07
-        #imag_loss = ((samples_phase - target_phase).abs().clip(min=0.14) - 0.14) * mel_density
         real_loss = (samples_abs - target_abs).abs()
         imag_loss = (samples_phase - target_phase).abs() * mel_density
 
-        #samples_freq = (samples_qphase1[:, :, :, 1:] - samples_qphase1[:, :, :, :-1]).abs()
-        #target_freq  = (target_qphase1[:, :, :, 1:]  - target_qphase1[:, :, :, :-1]).abs()
-        #imag_loss = (samples_freq - target_freq).square() * (imag_loss_mask[:, :, :, 1:] * mel_density)
-
-        #real_loss = real_loss.clip(min=1/32).log() - np.log(1/32) # i should try this with a non-log format
-        #imag_loss = imag_loss.clip(min=1/32).log() - np.log(1/32)
-
-        #return real_loss.mean(), torch.zeros(1, device=real_loss.device) #imag_loss.mean()
         return real_loss.square().mean(), imag_loss.square().mean()
     
     @staticmethod
