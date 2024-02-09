@@ -93,8 +93,8 @@ class DualMultiscaleSpectralLoss:
             sample_fft_abs1 = sample_fft_abs1.clip(min=noise_floor)
 
             sample_fft2 = stft(sample2[:, :, offset:], block_width, window_fn=self.window_fn, step=step)
-            sample_fft_abs2 = sample_fft2.abs()
-            sample_fft_abs2 = sample_fft_abs2.clip(min=noise_floor)
+            #sample_fft_abs2 = sample_fft2.abs()
+            #sample_fft_abs2 = sample_fft_abs2.clip(min=noise_floor)
 
             sample_fft3 = stft(sample3[:, :, offset:], block_width, window_fn=self.window_fn, step=step)
             sample_fft_abs3 = sample_fft3.abs()
@@ -103,8 +103,8 @@ class DualMultiscaleSpectralLoss:
             error_real = (sample_fft_abs1 / target_fft_abs).log()
             loss_real = loss_real + error_real.abs().mean()
 
-            error_real = (sample_fft_abs2 / target_fft_abs).log()
-            loss_real = loss_real + error_real.abs().mean()
+            #error_real = (sample_fft_abs2 / target_fft_abs).log()
+            #loss_real = loss_real + error_real.abs().mean()
 
             error_real = (sample_fft_abs3 / target_fft_abs).log()
             loss_real = loss_real + error_real.abs().mean()
@@ -119,10 +119,10 @@ class DualMultiscaleSpectralLoss:
             error_imag[error_imag_wrap_mask] = 2*torch.pi - error_imag[error_imag_wrap_mask]
             loss_imag = loss_imag + (error_imag * target_phase_weight).mean()
 
-            error_imag = (sample_fft1.angle() - target_fft_angle).abs()
-            error_imag_wrap_mask = (error_imag > torch.pi).detach().requires_grad_(False)
-            error_imag[error_imag_wrap_mask] = 2*torch.pi - error_imag[error_imag_wrap_mask]
-            loss_imag = loss_imag + (error_imag * target_phase_weight).mean()
+            #error_imag = (sample_fft1.angle() - target_fft_angle).abs()
+            #error_imag_wrap_mask = (error_imag > torch.pi).detach().requires_grad_(False)
+            #error_imag[error_imag_wrap_mask] = 2*torch.pi - error_imag[error_imag_wrap_mask]
+            #loss_imag = loss_imag + (error_imag * target_phase_weight).mean()
 
         return loss_real * self.loss_scale, loss_imag * self.loss_scale
 
