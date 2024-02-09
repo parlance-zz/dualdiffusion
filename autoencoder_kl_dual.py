@@ -53,6 +53,7 @@ class DualMultiscaleSpectralLoss:
         target = target["raw_samples"]
         sample1 = sample["raw_samples_orig_phase"]
         sample2 = sample["raw_samples_orig_abs"]
+        sample3 = sample["raw_samples"]
         
         #save_raw(sample1, "./debug/sample1.raw")
         #save_raw(sample2, "./debug/sample2.raw")
@@ -92,19 +93,21 @@ class DualMultiscaleSpectralLoss:
             sample_fft_abs1 = sample_fft_abs1.clip(min=noise_floor)
 
             sample_fft2 = stft(sample2[:, :, offset:], block_width, window_fn=self.window_fn, step=step)
-            sample_fft_abs2 = sample_fft2.abs()
-            sample_fft_abs2 = sample_fft_abs2.clip(min=noise_floor)
+
+            sample_fft3 = stft(sample3[:, :, offset:], block_width, window_fn=self.window_fn, step=step)
+            sample_fft_abs3 = sample_fft3.abs()
+            sample_fft_abs3 = sample_fft_abs3.clip(min=noise_floor)
 
             error_real = (sample_fft_abs1 / target_fft_abs).log()
             loss_real = loss_real + error_real.abs().mean()
 
-            error_imag = (sample_fft_abs2 / target_fft_abs).log()
-            loss_imag = loss_imag + (error_imag.abs() * target_phase_weight).mean() / 2
+            error_real = (sample_fft_abs3 / target_fft_abs).log()
+            loss_real = loss_real + error_real.abs().mean()
 
-            error_real = (sample_fft1.angle() - target_fft_angle).abs()
-            error_real_wrap_mask = (error_real > torch.pi).detach().requires_grad_(False)
-            error_real[error_real_wrap_mask] = 2*torch.pi - error_real[error_real_wrap_mask]
-            loss_real = loss_real + error_real.mean() / 2
+            error_imag = (sample_fft3.angle() - target_fft_angle).abs()
+            error_imag_wrap_mask = (error_imag > torch.pi).detach().requires_grad_(False)
+            error_imag[error_imag_wrap_mask] = 2*torch.pi - error_imag[error_imag_wrap_mask]
+            loss_imag = loss_imag + (error_imag * target_phase_weight).mean()
 
             error_imag = (sample_fft2.angle() - target_fft_angle).abs()
             error_imag_wrap_mask = (error_imag > torch.pi).detach().requires_grad_(False)
