@@ -64,7 +64,7 @@ class DualMultiscaleSpectralLoss:
             raise ValueError(f"sample.shape != target.shape. sample1.shape: {sample1.shape}. target.shape: {target.shape}.")
 
         noise_floor = model_params["noise_floor"]
-        sample_rate = model_params["sample_rate"]
+        #sample_rate = model_params["sample_rate"]
         add_channelwise_fft = model_params["sample_raw_channels"] > 1
 
         loss_real = torch.zeros(1, device=target.device)
@@ -81,12 +81,12 @@ class DualMultiscaleSpectralLoss:
                 target_fft_abs = target_fft.abs()
                 target_fft_abs = target_fft_abs.clip(min=noise_floor)
 
-                block_hz = torch.arange(1, target_fft.shape[-1]+1, device=target_fft.device) * (sample_rate/2 / target_fft.shape[-1])
-                mel_density = get_mel_density(block_hz).view(1, 1, 1,-1).requires_grad_(False)
-                mel_density /= mel_density.mean()
+                #block_hz = torch.arange(1, target_fft.shape[-1]+1, device=target_fft.device) * (sample_rate/2 / target_fft.shape[-1])
+                #mel_density = get_mel_density(block_hz).view(1, 1, 1,-1).requires_grad_(False)
+                #mel_density /= mel_density.mean()
 
                 target_fft_noise_floor = target_fft_abs.amin(dim=3, keepdim=True) * 1.1
-                target_phase_weight = (target_fft_abs > target_fft_noise_floor).requires_grad_(False) * mel_density
+                target_phase_weight = (target_fft_abs > target_fft_noise_floor).requires_grad_(False)# * mel_density
                 target_fft_angle = target_fft.angle()
 
             sample_fft1 = stft(sample1[:, :, offset:], block_width, window_fn=self.window_fn, step=step, add_channelwise_fft=add_channelwise_fft)
