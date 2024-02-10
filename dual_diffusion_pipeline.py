@@ -128,9 +128,12 @@ class DualMSPSDFormat:
 class DualMCLTFormat:
 
     @staticmethod
-    def get_sample_crop_width(model_params):
+    def get_sample_crop_width(model_params, length=0):
         block_width = model_params["num_chunks"] * 2
-        return model_params["sample_raw_length"] + block_width
+        if length > 0:
+            return length // block_width // 64 * 64 * block_width + block_width
+        else:
+            return model_params["sample_raw_length"] + block_width
     
     @staticmethod
     def get_num_channels(model_params):
@@ -230,14 +233,14 @@ class DualMCLTFormat:
         return real_loss.square().mean(), imag_loss.square().mean()
     
     @staticmethod
-    def get_sample_shape(model_params, bsz=1, length=1):
+    def get_sample_shape(model_params, bsz=1, length=0):
         _, num_output_channels = DualMCLTFormat.get_num_channels(model_params)
 
-        crop_width = DualMCLTFormat.get_sample_crop_width(model_params)
+        crop_width = DualMCLTFormat.get_sample_crop_width(model_params, length=length)
         num_chunks = model_params["num_chunks"]
         chunk_len = crop_width // num_chunks - 2
 
-        return (bsz, num_output_channels, num_chunks, chunk_len*length,)
+        return (bsz, num_output_channels, num_chunks, chunk_len,)
 
 class DualDiffusionPipeline(DiffusionPipeline):
 
@@ -338,14 +341,14 @@ class DualDiffusionPipeline(DiffusionPipeline):
         seed: Union[int, torch.Generator]=None,
         loops: int = 0,
         batch_size: int = 1,
-        length: int = 1,
+        length: int = 0,
     ):
         if (steps <= 0) or (steps > 1000):
             raise ValueError(f"Steps must be between 1 and 1000, got {steps}")
         if loops < 0:
             raise ValueError(f"Loops must be greater than or equal to 0, got {loops}")
-        if length <= 0:
-            raise ValueError(f"Length must be greater than or equal to 1, got {length}")
+        if length < 0:
+            raise ValueError(f"Length must be greater than or equal to 0, got {length}")
 
         self.set_tiling_mode(loops > 0)
 

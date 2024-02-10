@@ -40,7 +40,7 @@ if __name__ == "__main__":
 
     num_samples = 1
     batch_size = 1
-    length = 1
+    length = 0 #32000 * 25
     scheduler = "dpms++"
     #scheduler = "ddim"
     #scheduler = "kdpm2_a"

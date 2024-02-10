@@ -41,7 +41,8 @@ if __name__ == "__main__":
     device = "cpu"
     fp16 = False
     #fp16 = True
-    start=0
+    start = 0
+    length = 32000 * 25
 
     model_path = os.path.join(os.environ.get("MODEL_PATH", "./"), model_name)
     model_dtype = torch.float16 if fp16 else torch.float32
@@ -50,7 +51,7 @@ if __name__ == "__main__":
                                                      torch_dtype=model_dtype,
                                                      load_latest_checkpoints=True)
     model_params = pipeline.config["model_params"]
-    crop_width = pipeline.format.get_sample_crop_width(model_params)
+    crop_width = pipeline.format.get_sample_crop_width(model_params, length=length)
     vae = pipeline.vae.to(device)
     last_global_step = vae.config["last_global_step"]
 
@@ -59,8 +60,10 @@ if __name__ == "__main__":
     dataset_raw_format = os.environ.get("DATASET_RAW_FORMAT", "int16")
     test_samples = np.random.choice(os.listdir(dataset_path), num_samples, replace=False)
     #test_samples = ["Star Fox - 141 Training Mode.flac"]
-    
-    print("Sample shape: ", pipeline.format.get_sample_shape(model_params))
+    #test_samples = ["Marvelous - Mou Hitotsu no Takarajima - 42 Forest Island.flac"] # good bass test
+    #test_samples = ["Mega Man X3 - 09 Blast Hornet.flac"]
+
+    print("Sample shape: ", pipeline.format.get_sample_shape(model_params, length=length))
     
     output_path = os.path.join(model_path, "output")
     os.makedirs(output_path, exist_ok=True)
@@ -83,8 +86,10 @@ if __name__ == "__main__":
         latents = posterior.sample()
         model_output = vae.decode(latents, return_dict=False)[0]
         output_sample_dict = pipeline.format.sample_to_raw(model_output.type(torch.float32), model_params, return_dict=True)
-        output_sample = output_sample_dict["samples"]
         output_raw_sample = output_sample_dict["raw_samples"]
+        #output_sample_dict = pipeline.format.sample_to_raw(model_output.type(torch.float32), model_params, return_dict=True, original_samples_dict=input_sample_dict)
+        #output_raw_sample = output_sample_dict["raw_samples_orig_phase"]
+        output_sample = output_sample_dict["samples"]
 
         save_raw(latents, os.path.join(output_path,f"step_{last_global_step}_{filename.replace(file_ext, '_latents.raw')}"))
         save_raw(input_sample, os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_input_sample.raw')}"))
