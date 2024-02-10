@@ -182,7 +182,7 @@ def imdct(x, window_fn="hann", window_degree=1):
 
     return raw_sample[..., N:-N] * 2 * N ** 0.5
 
-def stft(x, block_width, window_fn="hann", step=None):
+def stft(x, block_width, window_fn="hann", step=None, add_channelwise_fft=False):
 
     if step is None:
         step = block_width // 2
@@ -204,7 +204,12 @@ def stft(x, block_width, window_fn="hann", step=None):
     else:
         raise ValueError(f"Unsupported window function: {window_fn}")
     
-    return torch.fft.rfft(x * window, norm="ortho")
+    x = torch.fft.rfft(x * window, norm="ortho")
+
+    if add_channelwise_fft:
+        return torch.fft.fft(x, norm="ortho", dim=-3)
+    else:
+        return x
 
 def to_ulaw(x, u=255):
 
