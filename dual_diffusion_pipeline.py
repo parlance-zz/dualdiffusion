@@ -130,10 +130,8 @@ class DualMCLTFormat:
     @staticmethod
     def get_sample_crop_width(model_params, length=0):
         block_width = model_params["num_chunks"] * 2
-        if length > 0:
-            return length // block_width // 64 * 64 * block_width + block_width
-        else:
-            return model_params["sample_raw_length"] + block_width
+        if length <= 0: length = model_params["sample_raw_length"]
+        return length // block_width // 64 * 64 * block_width + block_width
     
     @staticmethod
     def get_num_channels(model_params):
