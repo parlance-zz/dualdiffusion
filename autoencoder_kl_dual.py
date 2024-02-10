@@ -77,7 +77,7 @@ class DualMultiscaleSpectralLoss:
             offset = np.random.randint(0, min(target.shape[-1] - block_width + 1, step))        
 
             with torch.no_grad():
-                target_fft = stft(target[:, :, offset:], block_width, window_fn=self.window_fn, step=step, add_channelwise_fft=add_channelwise_fft)
+                target_fft = stft(target[:, :, offset:], block_width, window_fn=self.window_fn, step=step, add_channelwise_fft=add_channelwise_fft)[:, :, :, 1:]
                 target_fft_abs = target_fft.abs()
                 target_fft_abs = target_fft_abs.clip(min=noise_floor)
 
@@ -89,15 +89,15 @@ class DualMultiscaleSpectralLoss:
                 target_phase_weight = (target_fft_abs > target_fft_noise_floor).requires_grad_(False)# * mel_density
                 target_fft_angle = target_fft.angle()
 
-            sample_fft1 = stft(sample1[:, :, offset:], block_width, window_fn=self.window_fn, step=step, add_channelwise_fft=add_channelwise_fft)
+            sample_fft1 = stft(sample1[:, :, offset:], block_width, window_fn=self.window_fn, step=step, add_channelwise_fft=add_channelwise_fft)[:, :, :, 1:]
             sample_fft_abs1 = sample_fft1.abs()
             sample_fft_abs1 = sample_fft_abs1.clip(min=noise_floor)
 
-            sample_fft2 = stft(sample2[:, :, offset:], block_width, window_fn=self.window_fn, step=step, add_channelwise_fft=add_channelwise_fft)
+            sample_fft2 = stft(sample2[:, :, offset:], block_width, window_fn=self.window_fn, step=step, add_channelwise_fft=add_channelwise_fft)[:, :, :, 1:]
             #sample_fft_abs2 = sample_fft2.abs()
             #sample_fft_abs2 = sample_fft_abs2.clip(min=noise_floor)
 
-            sample_fft3 = stft(sample3[:, :, offset:], block_width, window_fn=self.window_fn, step=step, add_channelwise_fft=add_channelwise_fft)
+            sample_fft3 = stft(sample3[:, :, offset:], block_width, window_fn=self.window_fn, step=step, add_channelwise_fft=add_channelwise_fft)[:, :, :, 1:]
             sample_fft_abs3 = sample_fft3.abs()
             sample_fft_abs3 = sample_fft_abs3.clip(min=noise_floor)
 
