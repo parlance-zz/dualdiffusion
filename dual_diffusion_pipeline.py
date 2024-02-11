@@ -224,10 +224,13 @@ class DualMCLTFormat:
         block_size = (8, 8); stride = (2, 2)
         window = get_hann_window(block_size[0], device=samples_wave.device).sqrt()
         window = (window.view(1, -1) * window.view(-1, 1)).view(1, 1, block_size[0], block_size[1])
+
+        samples_wave = torch.nn.functional.pad(samples_wave, (block_size[0]-stride[0], block_size[1]-stride[1], block_size[0]-stride[0], block_size[1]-stride[1]))
+        target_wave  = torch.nn.functional.pad(target_wave,  (block_size[0]-stride[0], block_size[1]-stride[1], block_size[0]-stride[0], block_size[1]-stride[1]))
         samples_wave_unfolded = samples_wave.unfold(2, block_size[0], stride[0]).unfold(3, block_size[1], stride[1])
-        target_wave_unfolded = target_wave.unfold(2, block_size[0], stride[0]).unfold(3, block_size[1], stride[1])
+        target_wave_unfolded  =  target_wave.unfold(2, block_size[0], stride[0]).unfold(3, block_size[1], stride[1])
         samples_fft = torch.fft.rfft2(samples_wave_unfolded * window, norm="ortho")
-        target_fft = torch.fft.rfft2(target_wave_unfolded * window, norm="ortho")
+        target_fft  = torch.fft.rfft2(target_wave_unfolded * window,  norm="ortho")
 
         block_hz = torch.linspace(0, sample_rate/2, samples_fft.shape[2], device=samples_fft.device)
         mel_density = get_mel_density(block_hz).view(1, 1,-1, 1, 1, 1).requires_grad_(False)
