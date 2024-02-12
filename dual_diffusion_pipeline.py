@@ -346,7 +346,7 @@ class DualDiffusionPipeline(DiffusionPipeline):
             if len(vae_checkpoints) > 0:
                 vae_checkpoints = sorted(vae_checkpoints, key=lambda x: int(x.split("-")[1]))
                 vae_path = os.path.join(model_path, vae_checkpoints[-1], "vae")
-        vae = AutoencoderKLDual.from_pretrained(vae_path, torch_dtype=torch_dtype)
+        vae = AutoencoderKLDual.from_pretrained(vae_path, torch_dtype=torch_dtype, device=device)
 
         unet_path = os.path.join(model_path, "unet")
         if load_latest_checkpoints:
@@ -354,12 +354,12 @@ class DualDiffusionPipeline(DiffusionPipeline):
             if len(unet_checkpoints) > 0:
                 unet_checkpoints = sorted(unet_checkpoints, key=lambda x: int(x.split("-")[1]))
                 unet_path = os.path.join(model_path, unet_checkpoints[-1], "unet")
-        unet = UNetDualModel.from_pretrained(unet_path, torch_dtype=torch_dtype)
+        unet = UNetDualModel.from_pretrained(unet_path, torch_dtype=torch_dtype, device=device)
 
         scheduler_path = os.path.join(model_path, "scheduler")
-        scheduler = DDIMScheduler.from_pretrained(scheduler_path, torch_dtype=torch_dtype)
+        scheduler = DDIMScheduler.from_pretrained(scheduler_path, torch_dtype=torch_dtype, device=device)
         
-        return DualDiffusionPipeline(unet, scheduler, vae, model_params=model_params).to(device)
+        return DualDiffusionPipeline(unet, scheduler, vae, model_params=model_params)
         
     @torch.no_grad()
     def __call__(
