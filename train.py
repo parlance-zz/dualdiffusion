@@ -116,6 +116,12 @@ def parse_args():
         default=16,
         help="Batch size (per device) for the training dataloader."
     )
+    parser.add_argument(
+        "--vae_encode_batch_size",
+        type=int,
+        default=0,
+        help="If set, use this batch size for VAE encoding when training diffusion UNet module. Defaults to train_batch_size."
+    )
     parser.add_argument("--num_train_epochs", type=int, default=100)
     parser.add_argument(
         "--gradient_accumulation_steps",
@@ -553,7 +559,7 @@ def load_checkpoint(checkpoint,
 
     return global_step, resume_step, first_epoch
 
-def init_module_pipeline(pretrained_model_name_or_path, module_type, device):
+def init_module_pipeline(pretrained_model_name_or_path, module_type, vae_encode_batch_size, device):
 
     pipeline = DualDiffusionPipeline.from_pretrained(pretrained_model_name_or_path)
     module = getattr(pipeline, module_type)
@@ -566,6 +572,9 @@ def init_module_pipeline(pretrained_model_name_or_path, module_type, device):
             vae.requires_grad_(False)
             vae = vae.to(device).half()
             vae.eval()
+
+            if vae_encode_batch_size > 0:
+                vae.enable_slicing(vae_encode_batch_size)
 
             logger.info(f"Training diffusion model with VAE")
         else:
@@ -1183,6 +1192,7 @@ def main():
 
     pipeline, module, module_class, vae = init_module_pipeline(args.pretrained_model_name_or_path,
                                                                args.module,
+                                                               args.vae_encode_batch_size,
                                                                accelerator.device)
 
     if args.use_ema:
