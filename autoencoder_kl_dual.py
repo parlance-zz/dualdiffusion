@@ -703,7 +703,7 @@ class AutoencoderKLDual(ModelMixin, ConfigMixin):
         #self.quant_conv = conv_class(latent_channels, latent_channels, 1)
         self.post_quant_conv = conv_class(latent_channels, latent_channels, 1)
 
-        self.use_slicing = False
+        self.use_slicing = 0
         self.use_tiling = False
 
         # only relevant if vae tiling is enabled
@@ -740,27 +740,27 @@ class AutoencoderKLDual(ModelMixin, ConfigMixin):
         """
         self.enable_tiling(False)
 
-    def enable_slicing(self):
+    def enable_slicing(self, max_batch_size=1):
         r"""
         Enable sliced VAE decoding. When this option is enabled, the VAE will split the input tensor in slices to
         compute decoding in several steps. This is useful to save some memory and allow larger batch sizes.
         """
-        self.use_slicing = True
+        self.use_slicing = max_batch_size
 
     def disable_slicing(self):
         r"""
         Disable sliced VAE decoding. If `enable_slicing` was previously enabled, this method will go back to computing
         decoding in one step.
         """
-        self.use_slicing = False
+        self.use_slicing = 0
 
     @apply_forward_hook
     def encode(self, x: torch.FloatTensor, return_dict: bool = True) -> AutoencoderKLOutput:
         if self.use_tiling and (x.shape[-1] > self.tile_sample_min_size or x.shape[-2] > self.tile_sample_min_size):
             return self.tiled_encode(x, return_dict=return_dict)
 
-        if self.use_slicing and x.shape[0] > 1:
-            encoded_slices = [self.encoder(x_slice) for x_slice in x.split(1)]
+        if self.use_slicing > 0 and x.shape[0] > 1:
+            encoded_slices = [self.encoder(x_slice) for x_slice in x.split(self.use_slicing)]
             h = torch.cat(encoded_slices)
         else:
             h = self.encoder(x)
