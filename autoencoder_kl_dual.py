@@ -65,7 +65,7 @@ class DualMultiscaleSpectralLoss:
 
         noise_floor = model_params["noise_floor"]
         sample_rate = model_params["sample_rate"]
-        add_channelwise_fft = model_params["sample_raw_channels"] > 1
+        add_channelwise_fft = False #model_params["sample_raw_channels"] > 1
 
         loss_real = torch.zeros(1, device=target.device)
         loss_imag = torch.zeros(1, device=target.device)
@@ -82,7 +82,7 @@ class DualMultiscaleSpectralLoss:
                 target_fft_abs = target_fft_abs.clip(min=noise_floor)
 
                 block_hz = torch.arange(1, target_fft.shape[-1]+1, device=target_fft.device) * (sample_rate/2 / target_fft.shape[-1])
-                mel_density = get_mel_density(block_hz).view(1, 1, 1,-1).requires_grad_(False)
+                mel_density = get_mel_density(block_hz).view(1, 1, 1,-1).requires_grad_(False).square()
                 mel_density /= mel_density.mean()
 
                 target_fft_noise_floor = target_fft_abs.amin(dim=3, keepdim=True) * 1.1
@@ -102,15 +102,15 @@ class DualMultiscaleSpectralLoss:
             sample_fft_abs3 = sample_fft_abs3.clip(min=noise_floor)
 
             error_real = (sample_fft_abs1 / target_fft_abs).log()
-            loss_real = loss_real + error_real.abs().mean()
-            #loss_real = loss_real + (error_real.abs() * mel_density).mean()
+            #loss_real = loss_real + error_real.abs().mean()
+            loss_real = loss_real + (error_real.abs() * mel_density).mean()
 
             #error_real = (sample_fft_abs2 / target_fft_abs).log()
             #loss_real = loss_real + error_real.abs().mean()
 
             error_real = (sample_fft_abs3 / target_fft_abs).log()
-            loss_real = loss_real + error_real.abs().mean()
-            #loss_real = loss_real + (error_real.abs() * mel_density).mean()
+            #loss_real = loss_real + error_real.abs().mean()
+            loss_real = loss_real + (error_real.abs() * mel_density).mean()
 
             error_imag = (sample_fft3.angle() - target_fft_angle).abs()
             error_imag_wrap_mask = (error_imag > torch.pi).detach().requires_grad_(False)
