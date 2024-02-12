@@ -35,7 +35,7 @@ if __name__ == "__main__":
     init_cuda()
     load_dotenv(override=True)
 
-    model_name = "dualdiffusion2d_1000_7"
+    model_name = "dualdiffusion2d_1000_10"
     num_samples = 1
     #device = "cuda"
     device = "cpu"
@@ -49,7 +49,8 @@ if __name__ == "__main__":
     print(f"Loading DualDiffusion model from '{model_path}' (dtype={model_dtype})...")
     pipeline = DualDiffusionPipeline.from_pretrained(model_path,
                                                      torch_dtype=model_dtype,
-                                                     load_latest_checkpoints=True)
+                                                     load_latest_checkpoints=True,
+                                                     device=device)
     model_params = pipeline.config["model_params"]
     crop_width = pipeline.format.get_sample_crop_width(model_params, length=length)
     vae = pipeline.vae.to(device)
@@ -59,15 +60,19 @@ if __name__ == "__main__":
     dataset_format = os.environ.get("DATASET_FORMAT", ".flac")
     dataset_raw_format = os.environ.get("DATASET_RAW_FORMAT", "int16")
     test_samples = np.random.choice(os.listdir(dataset_path), num_samples, replace=False)
-    #test_samples = ["Star Fox - 141 Training Mode.flac"]
-    #test_samples = ["Marvelous - Mou Hitotsu no Takarajima - 42 Forest Island.flac"] # good bass test
-    #test_samples = ["Mega Man X3 - 09 Blast Hornet.flac"]
 
+    #test_samples = ["Star Fox - 141 Training Mode.flac"]
+    #test_samples = ["Vortex - 10 Magmemo.flac"]  # good stereo phase test
+    test_samples = ["Marvelous - Mou Hitotsu no Takarajima - 42 Forest Island.flac"] # good bass test
+    #test_samples = ["Mega Man X3 - 09 Blast Hornet.flac"]
+    #test_samples = ["Tales of Phantasia - 205 As Time Goes On.flac"] # failure case
+    #test_samples = ["Kirby Super Star  [Kirby's Fun Pak] - 36 Mine Cart Riding.flac"] # success case
+    #test_samples = ["Street Hockey '95 - 03 Street Hockey Game 1.flac"]
+    
     print("Sample shape: ", pipeline.format.get_sample_shape(model_params, length=length))
     
     output_path = os.path.join(model_path, "output")
     os.makedirs(output_path, exist_ok=True)
-
     start_time = datetime.datetime.now()
 
     for filename in test_samples:
@@ -88,7 +93,7 @@ if __name__ == "__main__":
         output_sample_dict = pipeline.format.sample_to_raw(model_output.type(torch.float32), model_params, return_dict=True)
         output_raw_sample = output_sample_dict["raw_samples"]
         #output_sample_dict = pipeline.format.sample_to_raw(model_output.type(torch.float32), model_params, return_dict=True, original_samples_dict=input_sample_dict)
-        #output_raw_sample = output_sample_dict["raw_samples_orig_phase"]
+        #output_raw_sample = output_sample_dict["raw_samples_orig_abs"]
         output_sample = output_sample_dict["samples"]
 
         save_raw(latents, os.path.join(output_path,f"step_{last_global_step}_{filename.replace(file_ext, '_latents.raw')}"))
