@@ -50,10 +50,10 @@ class DualMultiscaleSpectralLoss:
 
     def __call__(self, sample, target, model_params):
 
-        target = target["raw_samples"]
+        target = target["raw_samples_train"]
         sample1 = sample["raw_samples_orig_phase"]
         sample2 = sample["raw_samples_orig_abs"]
-        sample3 = sample["raw_samples"]
+        sample3 = sample["raw_samples_train"]
         
         #save_raw(sample1, "./debug/sample1.raw")
         #save_raw(sample2, "./debug/sample2.raw")

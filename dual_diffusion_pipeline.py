@@ -171,12 +171,14 @@ class DualMCLTFormat:
 
         samples_mdct /= samples_mdct_abs_amax
         raw_samples = imdct(DualMCLTFormat.multichannel_transform(samples_mdct).permute(0, 1, 3, 2), window_degree=1).real.requires_grad_(False)
+        raw_samples_train = imdct((samples_mdct).permute(0, 1, 3, 2), window_degree=1).real.requires_grad_(False)
 
         if return_dict:
             samples_dict = {
                 "samples": samples,
                 "raw_samples": raw_samples,
-                "samples_wave": samples_mdct.real,
+                "raw_samples_train": raw_samples_train,
+                #"samples_wave": samples_mdct.real,
             }
             return samples_dict
         else:
@@ -190,17 +192,21 @@ class DualMCLTFormat:
 
         samples = samples.sigmoid()
         samples_abs, samples_phase1 = samples.chunk(2, dim=1)
+        samples_abs = (((1 + u) ** samples_abs - 1) / u).clip(min=noise_floor)
+        samples_phase = (samples_phase1 * torch.pi).cos()
+        raw_samples = imdct(DualMCLTFormat.multichannel_transform(samples_abs * samples_phase).permute(0, 1, 3, 2), window_degree=1).real
+        raw_samples_train = imdct((samples_abs * samples_phase).permute(0, 1, 3, 2), window_degree=1).real
 
-        # phase normalization, probably not needed
-        #samples_phase1 = samples_phase1 * 2 - 1
-        #samples_phase1 = samples_phase1 / samples_phase1.abs().amax(dim=(2), keepdim=True).clip(min=1e-5)
-        #samples_phase1 = (samples_phase1 + 1) / 2
+        if original_samples_dict is not None:
+            orig_samples_abs, orig_samples_phase1 = original_samples_dict["samples"].chunk(2, dim=1)
+            orig_samples_abs = ((1 + u) ** orig_samples_abs - 1) / u
+            orig_samples_phase = (orig_samples_phase1 * torch.pi).cos()
 
-        _samples_abs = (((1 + u) ** samples_abs - 1) / u).clip(min=noise_floor)
-        _samples_phase = (samples_phase1 * torch.pi).cos()
-        samples_wave = _samples_abs * _samples_phase
-        _samples_wave = DualMCLTFormat.multichannel_transform(samples_wave)
-        raw_samples = imdct(_samples_wave.permute(0, 1, 3, 2), window_degree=1).real
+            raw_samples_orig_phase = imdct((samples_abs * orig_samples_phase).permute(0, 1, 3, 2), window_degree=1).real
+            raw_samples_orig_abs = imdct((orig_samples_abs * samples_phase).permute(0, 1, 3, 2), window_degree=1).real
+        else:
+            raw_samples_orig_phase = None
+            raw_samples_orig_abs = None
 
         if not return_dict:         
             return raw_samples
@@ -208,7 +214,10 @@ class DualMCLTFormat:
             samples_dict = {
                 "samples": samples,
                 "raw_samples": raw_samples,
-                "samples_wave": samples_wave,
+                "raw_samples_train": raw_samples_train,
+                #"samples_wave": samples_wave,
+                "raw_samples_orig_phase": raw_samples_orig_phase,
+                "raw_samples_orig_abs": raw_samples_orig_abs,
             }
             return samples_dict
 
@@ -233,15 +242,20 @@ class DualMCLTFormat:
         target_fft  = torch.fft.rfft2(target_wave_unfolded * window,  norm="ortho")
 
         block_hz = torch.linspace(0, sample_rate/2, samples_fft.shape[2], device=samples_fft.device)
-        mel_density = get_mel_density(block_hz).view(1, 1,-1, 1, 1, 1).requires_grad_(False)
+        mel_density = get_mel_density(block_hz).view(1, 1,-1, 1, 1, 1).requires_grad_(False).square()
         mel_density /= mel_density.mean()
 
-        error_real = (samples_fft.abs().clip(min=noise_floor) / target_fft.abs().clip(min=noise_floor)).log()
+        samples_fft_abs = samples_fft.abs().clip(min=noise_floor)
+        target_fft_abs = target_fft.abs().clip(min=noise_floor)
+        error_real = (samples_fft_abs / target_fft_abs).log()
         real_loss = (error_real.abs() * mel_density).mean()
 
+        #target_fft_noise_floor = target_fft_abs.amin(dim=(-1,-2,-4), keepdim=True) * 1.1
+        #imag_loss_weight = mel_density * (target_fft_abs > target_fft_noise_floor)
         error_imag = (samples_fft.angle() - target_fft.angle()).abs()
         error_imag_wrap_mask = (error_imag > torch.pi).detach().requires_grad_(False)
         error_imag[error_imag_wrap_mask] = 2*torch.pi - error_imag[error_imag_wrap_mask]
+        #imag_loss = (error_imag * imag_loss_weight).mean()
         imag_loss = (error_imag * mel_density).mean()
 
         return real_loss, imag_loss
