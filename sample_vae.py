@@ -61,13 +61,13 @@ if __name__ == "__main__":
     dataset_raw_format = os.environ.get("DATASET_RAW_FORMAT", "int16")
     test_samples = np.random.choice(os.listdir(dataset_path), num_samples, replace=False)
 
-    #test_samples = ["Star Fox - 141 Training Mode.flac"]
-    #test_samples = ["Vortex - 10 Magmemo.flac"]  # good stereo phase test
-    test_samples = ["Marvelous - Mou Hitotsu no Takarajima - 42 Forest Island.flac"] # good bass test
-    #test_samples = ["Mega Man X3 - 09 Blast Hornet.flac"]
+    #test_samples = ["Star Fox - 141 Training Mode.flac"] # good bass test
+    #test_samples = ["Marvelous - Mou Hitotsu no Takarajima - 42 Forest Island.flac"] # good bass test
+    #test_samples = ["Vortex - 10 Magmemo.flac"]  # good stereo test
+    #test_samples = ["Mega Man X3 - 09 Blast Hornet.flac"] # messy mix and stereo test
+    #test_samples = ["Lennus II - Fuuin no Shito - 19 Holy Temple.flac"] # transient test
     #test_samples = ["Tales of Phantasia - 205 As Time Goes On.flac"] # failure case
     #test_samples = ["Kirby Super Star  [Kirby's Fun Pak] - 36 Mine Cart Riding.flac"] # success case
-    #test_samples = ["Street Hockey '95 - 03 Street Hockey Game 1.flac"]
     
     print("Sample shape: ", pipeline.format.get_sample_shape(model_params, length=length))
     
