@@ -880,8 +880,6 @@ def save_raw_img(x, img_path):
             cv2_img = np.concatenate((cv2_img, np.zeros((cv2_img.shape[0], cv2_img.shape[1], 1))), axis=2)
             cv2_img[..., 2] = cv2_img[..., 1]
             cv2_img[..., 1] = 0
-        elif cv2_img.shape[2] > 3:
-            raise ValueError(f"Unsupported number of channels in save_raw_img: {cv2_img.shape[2]}")
     elif x.ndim == 2:
         x = x.permute(1, 0).contiguous().numpy()
         cv2_img = (x * 255).astype(np.uint8)
