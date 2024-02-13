@@ -49,7 +49,7 @@ class UNetDualModel(ModelMixin, ConfigMixin):
         freq_shift: int = 0,
         flip_sin_to_cos: bool = True,
         block_out_channels: Tuple[int] = (128, 192, 320, 512),
-        layers_per_block: int = 2,
+        layers_per_block: Union[int, Tuple[int]] = 2,
         add_mid_attention: bool = True,
         layers_per_mid_block: int = 1,
         mid_block_scale_factor: float = 1,
@@ -133,6 +133,11 @@ class UNetDualModel(ModelMixin, ConfigMixin):
                     f"downsample_ratio must be int or a tuple of length 2. Got {downsample_ratio}."
                 )
         
+        if not isinstance(layers_per_block, int) and len(layers_per_block) != len(block_out_channels):
+            raise ValueError(
+                f"Must provide the same number of `layers_per_block` as `block_out_channels`. `layers_per_block`: {layers_per_block}. `block_out_channels`: {block_out_channels}."
+            )
+        
         if isinstance(conv_size, int):
             conv_class = nn.Conv1d
         else:
@@ -197,6 +202,8 @@ class UNetDualModel(ModelMixin, ConfigMixin):
             add_attention = (add_attention,) * len(block_out_channels)
         if isinstance(downsample_ratio, int) and (not isinstance(conv_size, int)):
             downsample_ratio = (downsample_ratio, downsample_ratio)
+        if isinstance(layers_per_block, int):
+            layers_per_block = (layers_per_block,) * len(block_out_channels)
 
         # down
         output_channel = block_out_channels[0]
@@ -215,9 +222,10 @@ class UNetDualModel(ModelMixin, ConfigMixin):
             _freq_embedding_dim = freq_embedding_dim[i]
             _time_embedding_dim = time_embedding_dim[i]
             _add_attention = add_attention[i]
+            _layers_per_block = layers_per_block[i]
 
             down_block = SeparableAttnDownBlock(
-                num_layers=layers_per_block,
+                num_layers=_layers_per_block,
                 in_channels=input_channel,
                 out_channels=output_channel,
                 temb_channels=time_embed_dim,
@@ -277,6 +285,7 @@ class UNetDualModel(ModelMixin, ConfigMixin):
         reversed_freq_embedding_dim = list(reversed(freq_embedding_dim))
         reversed_time_embedding_dim = list(reversed(time_embedding_dim))
         reversed_add_attention = list(reversed(add_attention))
+        reversed_layers_per_block = list(reversed(layers_per_block))
 
         # up
         reversed_block_out_channels = list(reversed(block_out_channels))
@@ -297,9 +306,10 @@ class UNetDualModel(ModelMixin, ConfigMixin):
             _freq_embedding_dim = reversed_freq_embedding_dim[i]
             _time_embedding_dim = reversed_time_embedding_dim[i]
             _add_attention = reversed_add_attention[i]
+            _layers_per_block = reversed_layers_per_block[i]
 
             up_block = SeparableAttnUpBlock(
-                num_layers=layers_per_block + 1,
+                num_layers=_layers_per_block + 1,
                 in_channels=input_channel,
                 out_channels=output_channel,
                 prev_output_channel=prev_output_channel,
