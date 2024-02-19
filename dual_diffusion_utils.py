@@ -457,24 +457,6 @@ def mels_to_hz(mels):
 def get_mel_density(hz):
     return 1127. / (700. + hz)
 
-def get_comp_pair(length=65536, n_freqs=1024, freq_similarity=0, amp_similarity=0, phase_similarity=0):
-
-    t = torch.linspace(0, length, length).view(-1, 1)
-
-    f1 = torch.rand(n_freqs).view(1, -1)
-    f2 = f1 * freq_similarity + (1-freq_similarity) * torch.rand(n_freqs).view(1, -1)
-
-    a1 = torch.rand(n_freqs).view(1, -1)
-    a2 = a1 * amp_similarity + (1-amp_similarity) * torch.rand(n_freqs).view(1, -1)
-
-    p1 = torch.rand(n_freqs).view(1, -1)
-    p2 = p1 * phase_similarity + (1-phase_similarity) * torch.rand(n_freqs).view(1, -1)
-
-    y1 = (torch.exp(2j * torch.pi * t * f1 + 2j*torch.pi * p1) * a1).sum(dim=-1)
-    y2 = (torch.exp(2j * torch.pi * t * f2 + 2j*torch.pi * p2) * a2).sum(dim=-1)
-
-    return y1.real, y2.real
-
 def stft2(x, block_width, overlap=2, window_fn="hann"):
 
     step = block_width // overlap
