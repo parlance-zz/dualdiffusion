@@ -20,9 +20,7 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
-import os
 from typing import Optional, Tuple, Union
-import math
 
 import numpy as np
 import torch
@@ -50,22 +48,18 @@ class DualMultiscaleSpectralLoss:
 
     def __call__(self, sample, target, model_params):
 
-        target = target["raw_samples_train"]
+        target = target["raw_samples"]
         sample1 = sample["raw_samples_orig_phase"]
         sample2 = sample["raw_samples_orig_abs"]
-        sample3 = sample["raw_samples_train"]
         
+        #save_raw(target, "./debug/target.raw")
         #save_raw(sample1, "./debug/sample1.raw")
         #save_raw(sample2, "./debug/sample2.raw")
-        #save_raw(target, "./debug/target.raw")
         #exit()
-        
-        if (sample1.shape != target.shape) or (sample2.shape != target.shape):
-            raise ValueError(f"sample.shape != target.shape. sample1.shape: {sample1.shape}. target.shape: {target.shape}.")
 
         noise_floor = model_params["noise_floor"]
         sample_rate = model_params["sample_rate"]
-        add_channelwise_fft = False #model_params["sample_raw_channels"] > 1
+        add_channelwise_fft = model_params["sample_raw_channels"] > 1
 
         loss_real = torch.zeros(1, device=target.device)
         loss_imag = torch.zeros(1, device=target.device)
@@ -77,55 +71,36 @@ class DualMultiscaleSpectralLoss:
             offset = np.random.randint(0, min(target.shape[-1] - block_width + 1, step))        
 
             with torch.no_grad():
-                target_fft = stft(target[:, :, offset:], block_width, window_fn=self.window_fn, step=step, add_channelwise_fft=add_channelwise_fft)[:, :, :, 1:]
-                target_fft_abs = target_fft.abs()
-                target_fft_abs = target_fft_abs.clip(min=noise_floor)
+                target_fft = stft(target[:, :, offset:],
+                                  block_width,
+                                  window_fn=self.window_fn,
+                                  step=step,
+                                  add_channelwise_fft=add_channelwise_fft)
+                target_fft_abs = target_fft.abs().clip(min=noise_floor).log().requires_grad_(False)
+                target_fft_angle = target_fft.angle().requires_grad_(False)
 
                 block_hz = torch.arange(1, target_fft.shape[-1]+1, device=target_fft.device) * (sample_rate/2 / target_fft.shape[-1])
-                mel_density = get_mel_density(block_hz).view(1, 1, 1,-1).requires_grad_(False)#.square()
-                mel_density /= mel_density.mean()
+                mel_density = get_mel_density(block_hz).view(1, 1, 1,-1)
+                target_phase_weight = ((target_fft_abs - target_fft_abs.amin(dim=3, keepdim=True)) * mel_density).requires_grad_(False)
 
-                target_fft_noise_floor = target_fft_abs.amin(dim=3, keepdim=True) * 1.1
-                target_phase_weight = (target_fft_abs > target_fft_noise_floor).requires_grad_(False) * mel_density
-                target_fft_angle = target_fft.angle()
+            sample_fft1_abs = stft(sample1[:, :, offset:],
+                                   block_width,
+                                   window_fn=self.window_fn,
+                                   step=step,
+                                   add_channelwise_fft=add_channelwise_fft).abs().clip(min=noise_floor).log()
 
-            sample_fft1 = stft(sample1[:, :, offset:], block_width, window_fn=self.window_fn, step=step, add_channelwise_fft=add_channelwise_fft)[:, :, :, 1:]
-            sample_fft_abs1 = sample_fft1.abs()
-            sample_fft_abs1 = sample_fft_abs1.clip(min=noise_floor)
+            sample_fft2_angle = stft(sample2[:, :, offset:],
+                                     block_width,
+                                     window_fn=self.window_fn,
+                                     step=step,
+                                     add_channelwise_fft=add_channelwise_fft).angle()
+            
+            loss_real = loss_real + (sample_fft1_abs - target_fft_abs).abs().mean()
 
-            sample_fft2 = stft(sample2[:, :, offset:], block_width, window_fn=self.window_fn, step=step, add_channelwise_fft=add_channelwise_fft)[:, :, :, 1:]
-            #sample_fft_abs2 = sample_fft2.abs()
-            #sample_fft_abs2 = sample_fft_abs2.clip(min=noise_floor)
-
-            sample_fft3 = stft(sample3[:, :, offset:], block_width, window_fn=self.window_fn, step=step, add_channelwise_fft=add_channelwise_fft)[:, :, :, 1:]
-            sample_fft_abs3 = sample_fft3.abs()
-            sample_fft_abs3 = sample_fft_abs3.clip(min=noise_floor)
-
-            error_real = (sample_fft_abs1 / target_fft_abs).log()
-            loss_real = loss_real + error_real.abs().mean()
-            #loss_real = loss_real + (error_real.abs() * mel_density).mean()
-
-            #error_real = (sample_fft_abs2 / target_fft_abs).log()
-            #loss_real = loss_real + error_real.abs().mean()
-
-            error_real = (sample_fft_abs3 / target_fft_abs).log()
-            loss_real = loss_real + error_real.abs().mean()
-            #loss_real = loss_real + (error_real.abs() * mel_density).mean()
-
-            error_imag = (sample_fft3.angle() - target_fft_angle).abs()
+            error_imag = (sample_fft2_angle - target_fft_angle).abs()
             error_imag_wrap_mask = (error_imag > torch.pi).detach().requires_grad_(False)
             error_imag[error_imag_wrap_mask] = 2*torch.pi - error_imag[error_imag_wrap_mask]
             loss_imag = loss_imag + (error_imag * target_phase_weight).mean()
-
-            error_imag = (sample_fft2.angle() - target_fft_angle).abs()
-            error_imag_wrap_mask = (error_imag > torch.pi).detach().requires_grad_(False)
-            error_imag[error_imag_wrap_mask] = 2*torch.pi - error_imag[error_imag_wrap_mask]
-            loss_imag = loss_imag + (error_imag * target_phase_weight).mean()
-
-            #error_imag = (sample_fft1.angle() - target_fft_angle).abs()
-            #error_imag_wrap_mask = (error_imag > torch.pi).detach().requires_grad_(False)
-            #error_imag[error_imag_wrap_mask] = 2*torch.pi - error_imag[error_imag_wrap_mask]
-            #loss_imag = loss_imag + (error_imag * target_phase_weight).mean()
 
         return loss_real * self.loss_scale, loss_imag * self.loss_scale
 
@@ -173,27 +148,6 @@ class DiagonalGaussianDistribution(object):
         logtwopi = np.log(2.0 * np.pi)
         return 0.5 * torch.sum(logtwopi + self.logvar + torch.pow(sample - self.mean, 2) / self.var, dim=dims)
 
-    def mode(self):
-        return self.mean
-
-class DiagonalDegenerateDistribution(object):
-    def __init__(self, parameters):
-        self.parameters = self.mean = parameters
-
-    def sample(self, generator: Optional[torch.Generator] = None) -> torch.FloatTensor: 
-        return self.mean
-
-    def kl(self):
-        
-        kl_reduction_dims = tuple(range(2, len(self.mean.shape)))
-        mean = self.mean.mean(dim=kl_reduction_dims, keepdim=True)
-        var = self.mean.var(dim=kl_reduction_dims, keepdim=True).clip(min=1e-10)
-
-        return 0.5 * (mean.square() + var - 1 - var.log()).mean()
-
-    def nll(self, sample, dims=[1, 2, 3]):
-        raise NotImplementedError()
-    
     def mode(self):
         return self.mean
 
@@ -378,13 +332,11 @@ class DecoderDual(nn.Module):
         conv_size = (3,3),
         freq_embedding_dim: Union[int, Tuple[int]] = 0,
         time_embedding_dim: Union[int, Tuple[int]] = 0,
-        use_noise_channel: bool = True,
         add_attention: Union[bool, Tuple[bool]] = True,
     ):
         super().__init__()
 
         self.layers_per_block = layers_per_block
-        self.use_noise_channel = use_noise_channel
 
         if isinstance(conv_size, int):
             conv_class = nn.Conv1d
@@ -476,7 +428,6 @@ class DecoderDual(nn.Module):
                 freq_embedding_dim=_freq_embedding_dim,
                 time_embedding_dim=_time_embedding_dim,
                 add_attention=_add_attention,
-                use_noise_channel=use_noise_channel,
                 use_skip_samples=False,
             )
 
@@ -569,7 +520,6 @@ class AutoencoderKLDual(ModelMixin, ConfigMixin):
         conv_size = (3,3),
         freq_embedding_dim: Union[int, Tuple[int]] = 256,
         time_embedding_dim: Union[int, Tuple[int]] = 256,
-        use_noise_channel: bool = True,
         add_attention: Union[bool, Tuple[bool]] = True,
         last_global_step: int = 0,
     ):
@@ -695,12 +645,10 @@ class AutoencoderKLDual(ModelMixin, ConfigMixin):
             conv_size = conv_size,
             freq_embedding_dim=freq_embedding_dim,
             time_embedding_dim=time_embedding_dim,
-            use_noise_channel=use_noise_channel,
             add_attention=add_attention,
         )
 
         self.quant_conv = conv_class(2 * latent_channels, 2 * latent_channels, 1)
-        #self.quant_conv = conv_class(latent_channels, latent_channels, 1)
         self.post_quant_conv = conv_class(latent_channels, latent_channels, 1)
 
         self.use_slicing = 0
@@ -767,7 +715,6 @@ class AutoencoderKLDual(ModelMixin, ConfigMixin):
 
         moments = self.quant_conv(h)
         posterior = DiagonalGaussianDistribution(moments)
-        #posterior = DiagonalDegenerateDistribution(moments)
 
         if not return_dict:
             return (posterior,)
@@ -859,7 +806,6 @@ class AutoencoderKLDual(ModelMixin, ConfigMixin):
 
         moments = torch.cat(result_rows, dim=2)
         posterior = DiagonalGaussianDistribution(moments)
-        #posterior = DiagonalDegenerateDistribution(moments)
 
         if not return_dict:
             return (posterior,)
