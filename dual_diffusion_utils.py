@@ -184,7 +184,6 @@ def imdct(x, window_fn="hann", window_degree=1):
 
     return raw_sample[..., N:-N] * (2 * N ** 0.5)
 
-"""
 def stft(x, block_width, window_fn="hann", step=None, add_channelwise_fft=False):
 
     if step is None:
@@ -213,8 +212,8 @@ def stft(x, block_width, window_fn="hann", step=None, add_channelwise_fft=False)
         return torch.fft.fft(x, norm="ortho", dim=-3)
     else:
         return x
-"""
 
+"""
 def stft(x, block_width, step=None, window_fn="hann", add_channelwise_fft=False):
 
     if step is None:
@@ -243,6 +242,7 @@ def stft(x, block_width, step=None, window_fn="hann", add_channelwise_fft=False)
         return torch.fft.fft(x, norm="ortho", dim=-3)
     else:
         return x
+"""
 
 def to_ulaw(x, u=255):
 
