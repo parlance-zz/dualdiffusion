@@ -197,6 +197,16 @@ def parse_args():
             "Number of subprocesses to use for data loading. 0 means that the data will be loaded in the main process."
         ),
     )
+    parser.add_argument(
+        "--dataset_name",
+        type=str,
+        default=None,
+        required=False,
+        help=(
+            "Specify a dataset name to load training data from the huggingface hub. If not specified the training data will be"
+            " loaded from the path specified in the DATASET_PATH environment variable."
+        ),
+    )
     parser.add_argument("--adam_beta1", type=float, default=0.9, help="The beta1 parameter for the Adam optimizer.")
     parser.add_argument("--adam_beta2", type=float, default=0.999, help="The beta2 parameter for the Adam optimizer.")
     parser.add_argument("--adam_weight_decay", type=float, default=1e-2, help="Weight decay to use.")
@@ -325,9 +335,11 @@ def parse_args():
     if args.train_data_format == ".raw" and args.train_data_raw_format is None:
         raise ValueError("DATASET_FORMAT is '.raw' and DATASET_RAW_SAMPLE_FORMAT environment variable is undefined.")
         
-    if not os.path.exists(args.train_data_dir):
+    if not os.path.exists(args.train_data_dir) and args.dataset_name is None:
         raise ValueError(f"Training data directory {args.train_data_dir} does not exist.")
     
+    args.hf_token = os.environ.get("HF_TOKEN", None)
+
     if args.validation_sample_dir is None:
         args.validation_sample_dir = args.train_data_dir
     else:
@@ -689,7 +701,9 @@ class DatasetTransformer(torch.nn.Module):
 
         return {"input": samples, "sample_paths": audio["path"]}
 
-def init_dataloader(train_data_dir,
+def init_dataloader(dataset_name,
+                    hf_token,
+                    train_data_dir,
                     cache_dir,
                     train_batch_size,
                     dataloader_num_workers,
@@ -710,11 +724,18 @@ def init_dataloader(train_data_dir,
     }
     dataset_transform = DatasetTransformer(dataset_transform_params)
 
+    if dataset_name is None:
+        dataset_name = "audiofolder"
+        data_files = {"train": os.path.join(train_data_dir, "**")}
+    else:
+        data_files = f"**{dataset_format}"
+
     dataset = load_dataset(
-        "audiofolder",
-        data_files={"train": os.path.join(train_data_dir, "**")},
+        dataset_name,
+        data_files=data_files,
         cache_dir=cache_dir,
         num_proc=dataloader_num_workers if dataloader_num_workers > 0 else None,
+        token=hf_token,
     ).cast_column("audio", Audio(decode=False))
 
     if max_train_samples is not None:
@@ -1194,7 +1215,9 @@ def main():
                                args.adam_epsilon,
                                module)
 
-    train_dataset, train_dataloader = init_dataloader(args.train_data_dir,
+    train_dataset, train_dataloader = init_dataloader(args.dataset_name,
+                                                      args.hf_token,
+                                                      args.train_data_dir,
                                                       args.cache_dir,
                                                       args.train_batch_size,
                                                       args.dataloader_num_workers,
