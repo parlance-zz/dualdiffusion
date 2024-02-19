@@ -435,7 +435,6 @@ class SeparableAttnUpBlock(nn.Module):
         time_embedding_dim=0,
         add_attention=True,
         upsample_ratio=(2,2),
-        use_noise_channel=False,
         use_skip_samples=True,
     ):
         super().__init__()
@@ -451,7 +450,6 @@ class SeparableAttnUpBlock(nn.Module):
         self.freq_embedding_dim = freq_embedding_dim
         self.time_embedding_dim = time_embedding_dim
         self.add_attention = add_attention
-        self.use_noise_channel = use_noise_channel
 
         for i in range(num_layers):
             if self.use_skip_samples:
@@ -530,11 +528,6 @@ class SeparableAttnUpBlock(nn.Module):
 
     def forward(self, hidden_states, res_hidden_states_tuple, temb=None, upsample_size=None):
         
-        if self.use_noise_channel:
-            noise_channel = hidden_states[:, 0].unsqueeze(1).sigmoid() * (-10)
-            noise_channel = torch.randn_like(noise_channel) * noise_channel.exp()
-            hidden_states = torch.cat((noise_channel, hidden_states[:, 1:]), dim=1)
-            
         if self.add_attention:
             attn_block_count = 0
             if self.pre_attention:
