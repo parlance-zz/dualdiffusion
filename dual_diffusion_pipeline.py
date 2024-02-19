@@ -74,7 +74,7 @@ class DualMCLTFormat:
         samples_mdct_abs_amax = samples_mdct_abs.amax(dim=(1,2,3), keepdim=True).clip(min=1e-5)
         samples_mdct_abs = (samples_mdct_abs / samples_mdct_abs_amax).clip(min=noise_floor)
         samples_abs_ln = samples_mdct_abs.log()
-        samples_qphase1 = samples_mdct.angle()
+        samples_qphase1 = samples_mdct.angle().abs()
         samples = torch.cat((samples_abs_ln, samples_qphase1), dim=1)
 
         samples_mdct /= samples_mdct_abs_amax
@@ -94,13 +94,13 @@ class DualMCLTFormat:
         
         samples_abs, samples_phase1 = samples.chunk(2, dim=1)
         samples_abs = samples_abs.exp()
-        samples_phase = (1j * samples_phase1).exp()
+        samples_phase = samples_phase1.cos()
         raw_samples = imdct(DualMCLTFormat.multichannel_transform(samples_abs * samples_phase).permute(0, 1, 3, 2), window_degree=1).real
 
         if original_samples_dict is not None:
             orig_samples_abs, orig_samples_phase1 = original_samples_dict["samples"].chunk(2, dim=1)
             orig_samples_abs = orig_samples_abs.exp()
-            orig_samples_phase = (1j * orig_samples_phase1).exp()
+            orig_samples_phase = orig_samples_phase1.cos()
 
             raw_samples_orig_phase = imdct(DualMCLTFormat.multichannel_transform(samples_abs * orig_samples_phase).permute(0, 1, 3, 2), window_degree=1).real
             raw_samples_orig_abs = imdct(DualMCLTFormat.multichannel_transform(orig_samples_abs * samples_phase).permute(0, 1, 3, 2), window_degree=1).real
