@@ -43,7 +43,8 @@ class DualMultiscaleSpectralLoss:
         self.block_widths = loss_params["block_widths"]
         self.block_overlap = loss_params["block_overlap"]
         self.window_fn = loss_params["window_fn"]
-
+        self.low_cutoff = loss_params["low_cutoff"]
+        
         self.loss_scale = 1 / len(self.block_widths)
 
     def __call__(self, sample, target, model_params):
@@ -60,7 +61,7 @@ class DualMultiscaleSpectralLoss:
         noise_floor = model_params["noise_floor"]
         sample_rate = model_params["sample_rate"]
         add_channelwise_fft = model_params["sample_raw_channels"] > 1
-
+        
         loss_real = torch.zeros(1, device=target.device)
         loss_imag = torch.zeros(1, device=target.device)
 
@@ -75,11 +76,11 @@ class DualMultiscaleSpectralLoss:
                                   block_width,
                                   window_fn=self.window_fn,
                                   step=step,
-                                  add_channelwise_fft=add_channelwise_fft)
+                                  add_channelwise_fft=add_channelwise_fft)[:, :, :, self.low_cutoff:]
                 target_fft_abs = target_fft.abs().clip(min=noise_floor).log().requires_grad_(False)
                 target_fft_angle = target_fft.angle().requires_grad_(False)
 
-                block_hz = torch.arange(1, target_fft.shape[-1]+1, device=target_fft.device) * (sample_rate/2 / target_fft.shape[-1])
+                block_hz = torch.linspace(self.low_cutoff / block_width * sample_rate, sample_rate/2, target_fft.shape[-1], device=target_fft.device)
                 mel_density = get_mel_density(block_hz).view(1, 1, 1,-1)
                 target_phase_weight = ((target_fft_abs - target_fft_abs.amin(dim=3, keepdim=True)) * mel_density).requires_grad_(False)
 
@@ -87,14 +88,14 @@ class DualMultiscaleSpectralLoss:
                                    block_width,
                                    window_fn=self.window_fn,
                                    step=step,
-                                   add_channelwise_fft=add_channelwise_fft).abs().clip(min=noise_floor).log()
+                                   add_channelwise_fft=add_channelwise_fft)[:, :, :, self.low_cutoff:].abs().clip(min=noise_floor).log()
 
             sample_fft2_angle = stft(sample2[:, :, offset:],
                                      block_width,
                                      window_fn=self.window_fn,
                                      step=step,
-                                     add_channelwise_fft=add_channelwise_fft).angle()
-            
+                                     add_channelwise_fft=add_channelwise_fft)[:, :, :, self.low_cutoff:].angle()
+
             loss_real = loss_real + (sample_fft1_abs - target_fft_abs).abs().mean()
 
             error_imag = (sample_fft2_angle - target_fft_angle).abs()
@@ -664,10 +665,7 @@ class AutoencoderKLDual(ModelMixin, ConfigMixin):
         self.tile_latent_min_size = int(sample_size / (2 ** (len(self.config.block_out_channels) - 1)))
         self.tile_overlap_factor = 0.25
 
-        self.mss_error_logvar_real = nn.Parameter(torch.zeros(1))
-        self.mss_error_logvar_imag = nn.Parameter(torch.zeros(1))
-        self.format_error_logvar_real = nn.Parameter(torch.zeros(1))
-        self.format_error_logvar_imag = nn.Parameter(torch.zeros(1))
+        self.recon_loss_logvar = nn.Parameter(torch.zeros(1))
             
     def _set_gradient_checkpointing(self, module, value=False):
         if isinstance(module, (EncoderDual, DecoderDual)):

@@ -761,40 +761,21 @@ def do_training_loop(args,
     if args.module == "vae":
 
         latent_shape = module.get_latent_shape(sample_shape)
-
-        format_real_loss_weight = model_params["format_real_loss_weight"]
-        format_imag_loss_weight = model_params["format_imag_loss_weight"]
-
-        mss_params = model_params.get("multiscale_spectral_loss", None)
-        if mss_params is not None:
-            multiscale_spectral_loss = DualMultiscaleSpectralLoss(mss_params)
-            mss_real_loss_weight = mss_params["real_loss_weight"]
-            mss_imag_loss_weight = mss_params["imag_loss_weight"]
-        else:
-            multiscale_spectral_loss = None
-            mss_real_loss_weight = 0.
-            mss_imag_loss_weight = 0.
+        multiscale_spectral_loss = DualMultiscaleSpectralLoss(model_params["multiscale_spectral_loss"])
 
         kl_loss_weight = model_params["kl_loss_weight"]
+        recon_loss_weight = model_params["recon_loss_weight"]
 
         logger.info("Training VAE model:")
-        logger.info(f"Format real loss weight: {format_real_loss_weight} - imag loss weight: {format_imag_loss_weight}")
-        logger.info(f"Multiscale spectral loss params: {dict_str(mss_params)}")
-        logger.info(f"Using KL loss weight of {kl_loss_weight}")
+        logger.info(f"Multiscale spectral loss params: {dict_str(model_params['multiscale_spectral_loss'])}")
+        logger.info(f"Using KL loss weight: {kl_loss_weight} - Recon loss weight: {recon_loss_weight}")
 
-        format_real_loss_weight = torch.tensor(format_real_loss_weight, device=accelerator.device, dtype=torch.float32)
-        format_imag_loss_weight = torch.tensor(format_imag_loss_weight, device=accelerator.device, dtype=torch.float32)
-        mss_real_loss_weight = torch.tensor(mss_real_loss_weight, device=accelerator.device, dtype=torch.float32)
-        mss_imag_loss_weight = torch.tensor(mss_imag_loss_weight, device=accelerator.device, dtype=torch.float32)
         kl_loss_weight = torch.tensor(kl_loss_weight, device=accelerator.device, dtype=torch.float32)
+        recon_loss_weight = torch.tensor(recon_loss_weight, device=accelerator.device, dtype=torch.float32)
 
         module_log_channels = [
-            "format_real_loss_weight",
-            "format_imag_loss_weight",
-            "format_real_loss",
-            "format_imag_loss",
-            "mss_real_loss_weight",
-            "mss_imag_loss_weight",
+            "kl_loss_weight",
+            "recon_loss_weight",
             "mss_real_loss",
             "mss_imag_loss",
             "kl_loss",
@@ -945,25 +926,13 @@ def do_training_loop(args,
                     latents_std = latents.std()
                     model_output = module.decode(latents, return_dict=False)[0]
                     recon_samples_dict = pipeline.format.sample_to_raw(model_output, model_params, return_dict=True, original_samples_dict=samples_dict)
-                    
-                    if format_real_loss_weight > 0 or format_imag_loss_weight > 0:
-                        format_real_loss, format_imag_loss = pipeline.format.get_loss(recon_samples_dict, samples_dict, model_params)
-                        format_real_nll_loss = (format_real_loss / module.format_error_logvar_real.exp() + module.format_error_logvar_real) * format_real_loss_weight
-                        format_imag_nll_loss = (format_imag_loss / module.format_error_logvar_imag.exp() + module.format_error_logvar_imag) * format_imag_loss_weight
-                    else:
-                        format_real_loss = format_imag_loss = format_real_nll_loss = format_imag_nll_loss = torch.zeros(1, device=latents.device)
 
-                    if multiscale_spectral_loss is not None and (mss_real_loss_weight > 0 or mss_imag_loss_weight > 0):
-                        mss_real_loss, mss_imag_loss = multiscale_spectral_loss(recon_samples_dict, samples_dict, model_params)
-                        mss_real_nll_loss = (mss_real_loss / module.mss_error_logvar_real.exp() + module.mss_error_logvar_real) * mss_real_loss_weight
-                        mss_imag_nll_loss = (mss_imag_loss / module.mss_error_logvar_imag.exp() + module.mss_error_logvar_imag) * mss_imag_loss_weight
-                        #format_imag_nll_loss = (format_imag_loss / module.format_error_logvar_imag.exp() + module.format_error_logvar_imag) * mss_imag_loss_weight / torch.pi
-                    else:
-                        mss_real_loss = mss_imag_loss = mss_real_nll_loss = mss_imag_nll_loss = torch.zeros(1, device=latents.device)
+                    mss_real_loss, mss_imag_loss = multiscale_spectral_loss(recon_samples_dict, samples_dict, model_params)
+                    mss_real_nll_loss = (mss_real_loss / module.recon_loss_logvar.exp() + module.recon_loss_logvar) * recon_loss_weight
+                    mss_imag_nll_loss = (mss_imag_loss / module.recon_loss_logvar.exp() + module.recon_loss_logvar) * recon_loss_weight
 
-                    recon_nll_loss = format_real_nll_loss + format_imag_nll_loss + mss_real_nll_loss + mss_imag_nll_loss
                     kl_loss = posterior.kl()
-                    loss = recon_nll_loss + kl_loss * kl_loss_weight
+                    loss = mss_real_nll_loss + mss_imag_nll_loss + kl_loss * kl_loss_weight
                 else:
                     raise ValueError(f"Unknown module {args.module}")
                 
