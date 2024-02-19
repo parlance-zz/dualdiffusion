@@ -29,7 +29,7 @@ from dual_diffusion_utils import dict_str
 
 load_dotenv(override=True)
 
-MODEL_NAME = "dualdiffusion2d_1000_13"
+MODEL_NAME = "dualdiffusion2d_1000_14"
 MODEL_SEED = 400
 
 MODEL_PARAMS = {
@@ -90,33 +90,35 @@ SCHEDULER_PARAMS = {
 }
 
 VAE_PARAMS = {
-    "latent_channels": 3,
+    "latent_channels": 4,
     "sample_size": (64, 2048),
     "act_fn": "silu",
     "conv_size": (3,3),
 
-    "block_out_channels": (32, 96, 288),
-    "layers_per_block": 3,
+    "block_out_channels": (32, 64, 128, 256),
+    "layers_per_block": 2,
 
     "layers_per_mid_block": 3,
     "add_mid_attention": True,
     #"add_mid_attention": False,
 
     #"norm_num_groups": 32,
-    #"norm_num_groups": (0, 0, 32, 32),
-    "norm_num_groups": (0, 0, 32),
+    "norm_num_groups": (0, 0, 32, 32),
+    #"norm_num_groups": (0, 0, 32),
 
     "downsample_type": "conv",
     "upsample_type": "conv_transpose",
     #"upsample_type": "conv",
     "downsample_ratio": (2,2),
 
-    "attention_num_heads": (8,8,8),
-    "separate_attn_dim_mid": (2,3,2),
+    "attention_num_heads": (8,8,8,8),
+    "separate_attn_dim_mid": (2,2,2),
     "double_attention": False,
     "pre_attention": False,
-    "add_attention": False,
-    #"add_attention": True,
+    #"add_attention": False,
+    "add_attention": True,
+    "separate_attn_dim_down": (3,3),
+    "separate_attn_dim_up": (3,3,3),
 
     "freq_embedding_dim": 0,
     "time_embedding_dim": 0,
