@@ -33,97 +33,7 @@ from diffusers.pipelines.pipeline_utils import DiffusionPipeline
 
 from unet_dual import UNetDualModel
 from autoencoder_kl_dual import AutoencoderKLDual
-from dual_diffusion_utils import compute_snr, mdct, imdct, save_raw, get_mel_density, MSPSD, get_hann_window
-
-class DualMSPSDFormat:
-
-    @staticmethod
-    def get_sample_crop_width(model_params):
-        return model_params["sample_raw_length"]
-    
-    @staticmethod
-    def get_num_channels(model_params):
-        mspsd_params = model_params["mspsd_params"]
-        num_scales = mspsd_params["high_scale"] - mspsd_params["low_scale"]
-        
-        in_channels =  model_params["sample_raw_channels"]
-        out_channels = model_params["sample_raw_channels"] * num_scales
-
-        return (in_channels, out_channels)
-
-    @staticmethod
-    @torch.no_grad()
-    def raw_to_sample(raw_samples, model_params, return_dict=False):
-
-        sample_rate = model_params["sample_rate"] 
-        mspsd_params = model_params["mspsd_params"]
-        mspsd = MSPSD(**mspsd_params, sample_rate=sample_rate)
-
-        psd = mspsd.get_sample_mspsd(raw_samples).requires_grad_(False)
-        #cepstrum = mspsd.mspsd_to_cepstrum(psd)
-        
-        samples = (raw_samples / raw_samples.std(dim=-1, keepdim=True)).unsqueeze(1).requires_grad_(False)
-
-        if return_dict:
-            samples_dict = {
-                #"samples": cepstrum.requires_grad_(False),
-                #"samples_psd": psd.requires_grad_(False),
-                #"samples": psd.requires_grad_(False),
-                "samples": samples,
-                "samples_psd": psd,
-            }
-            return samples_dict
-        else:
-            #return cepstrum.requires_grad_(False)
-            #return psd.requires_grad_(False)
-            return samples
-
-    @staticmethod
-    def sample_to_raw(samples, model_params, return_dict=False, num_iterations=400):
-        
-        sample_rate = model_params["sample_rate"]
-        mspsd_params = model_params["mspsd_params"]
-        #noise_floor = mspsd_params["noise_floor"]
-        mspsd = MSPSD(**mspsd_params, sample_rate=sample_rate)
-        #psd = mspsd.cepstrum_to_mspsd(samples)
-        #samples = samples.clip(min=np.log(noise_floor), max=0)#.sigmoid().clip(min=noise_floor).log()
-        #psd = samples
-        psd = mspsd.get_sample_mspsd(samples, separate_scale_channels=True)
-        
-        if not return_dict:
-            return mspsd.get_sample(psd, num_iterations=num_iterations)
-        else:
-            samples_dict = {
-                "samples": samples,
-                "samples_psd": psd,
-            }
-            return samples_dict
-
-    @staticmethod
-    def get_loss(sample, target, model_params):
-        
-        #sample_rate = model_params["sample_rate"]
-        #mspsd_params = model_params["mspsd_params"]
-        #mspsd = MSPSD(**mspsd_params, sample_rate=sample_rate)
-        
-        #sample = mspsd.get_mel_weighted_mspsd(sample["samples_psd"])
-        #target = mspsd.get_mel_weighted_mspsd(target["samples_psd"])
-        #sample = mspsd.get_mel_weighted_mspsd(sample["samples"])
-        #target = mspsd.get_mel_weighted_mspsd(target["samples"])
-        sample = sample["samples_psd"]
-        target = target["samples_psd"]        
-
-        loss_real = (sample - target).abs().mean()
-
-        loss_imag = torch.zeros_like(loss_real)
-        return loss_real, loss_imag
-    
-    @staticmethod
-    def get_sample_shape(model_params, bsz=1, length=1):
-        _, num_output_channels = DualMSPSDFormat.get_num_channels(model_params)
-        crop_width = DualMSPSDFormat.get_sample_crop_width(model_params)
-
-        return (bsz, num_output_channels, crop_width)
+from dual_diffusion_utils import compute_snr, mdct, imdct, save_raw
 
 class DualMCLTFormat:
 
@@ -137,7 +47,6 @@ class DualMCLTFormat:
     def get_num_channels(model_params):
         in_channels = model_params["sample_raw_channels"] * 2
         out_channels = model_params["sample_raw_channels"] * 2
-
         return (in_channels, out_channels)
 
     @staticmethod
@@ -154,7 +63,6 @@ class DualMCLTFormat:
     def raw_to_sample(raw_samples, model_params, return_dict=False):
         
         noise_floor = model_params["noise_floor"]
-        u = model_params["u"]
         block_width = model_params["num_chunks"] * 2
 
         samples_mdct = mdct(raw_samples, block_width, window_degree=1)[:, :, 1:-2, :]
@@ -165,20 +73,17 @@ class DualMCLTFormat:
         samples_mdct_abs = samples_mdct.abs()
         samples_mdct_abs_amax = samples_mdct_abs.amax(dim=(1,2,3), keepdim=True).clip(min=1e-5)
         samples_mdct_abs = (samples_mdct_abs / samples_mdct_abs_amax).clip(min=noise_floor)
-        samples_abs_ln = (samples_mdct_abs * u).log1p() / np.log1p(u)
-        samples_qphase1 = samples_mdct.angle().abs() / torch.pi
+        samples_abs_ln = samples_mdct_abs.log()
+        samples_qphase1 = samples_mdct.angle()
         samples = torch.cat((samples_abs_ln, samples_qphase1), dim=1)
 
         samples_mdct /= samples_mdct_abs_amax
         raw_samples = imdct(DualMCLTFormat.multichannel_transform(samples_mdct).permute(0, 1, 3, 2), window_degree=1).real.requires_grad_(False)
-        raw_samples_train = imdct((samples_mdct).permute(0, 1, 3, 2), window_degree=1).real.requires_grad_(False)
 
         if return_dict:
             samples_dict = {
                 "samples": samples,
                 "raw_samples": raw_samples,
-                "raw_samples_train": raw_samples_train,
-                #"samples_wave": samples_mdct.real,
             }
             return samples_dict
         else:
@@ -187,23 +92,18 @@ class DualMCLTFormat:
     @staticmethod
     def sample_to_raw(samples, model_params, return_dict=False, original_samples_dict=None):
         
-        u = model_params["u"]
-        noise_floor = model_params["noise_floor"]
-
-        samples = samples.sigmoid()
         samples_abs, samples_phase1 = samples.chunk(2, dim=1)
-        samples_abs = (((1 + u) ** samples_abs - 1) / u).clip(min=noise_floor)
-        samples_phase = (samples_phase1 * torch.pi).cos()
+        samples_abs = samples_abs.exp()
+        samples_phase = (1j * samples_phase1).exp()
         raw_samples = imdct(DualMCLTFormat.multichannel_transform(samples_abs * samples_phase).permute(0, 1, 3, 2), window_degree=1).real
-        raw_samples_train = imdct((samples_abs * samples_phase).permute(0, 1, 3, 2), window_degree=1).real
 
         if original_samples_dict is not None:
             orig_samples_abs, orig_samples_phase1 = original_samples_dict["samples"].chunk(2, dim=1)
-            orig_samples_abs = ((1 + u) ** orig_samples_abs - 1) / u
-            orig_samples_phase = (orig_samples_phase1 * torch.pi).cos()
+            orig_samples_abs = orig_samples_abs.exp()
+            orig_samples_phase = (1j * orig_samples_phase1).exp()
 
-            raw_samples_orig_phase = imdct((samples_abs * orig_samples_phase).permute(0, 1, 3, 2), window_degree=1).real
-            raw_samples_orig_abs = imdct((orig_samples_abs * samples_phase).permute(0, 1, 3, 2), window_degree=1).real
+            raw_samples_orig_phase = imdct(DualMCLTFormat.multichannel_transform(samples_abs * orig_samples_phase).permute(0, 1, 3, 2), window_degree=1).real
+            raw_samples_orig_abs = imdct(DualMCLTFormat.multichannel_transform(orig_samples_abs * samples_phase).permute(0, 1, 3, 2), window_degree=1).real
         else:
             raw_samples_orig_phase = None
             raw_samples_orig_abs = None
@@ -214,52 +114,11 @@ class DualMCLTFormat:
             samples_dict = {
                 "samples": samples,
                 "raw_samples": raw_samples,
-                "raw_samples_train": raw_samples_train,
-                #"samples_wave": samples_wave,
                 "raw_samples_orig_phase": raw_samples_orig_phase,
                 "raw_samples_orig_abs": raw_samples_orig_abs,
             }
             return samples_dict
 
-    @staticmethod
-    def get_loss(sample, target, model_params):
-        
-        sample_rate = model_params["sample_rate"]
-        noise_floor = model_params["noise_floor"]
-
-        samples_wave = sample["samples_wave"]
-        target_wave = target["samples_wave"]
-
-        block_size = (8, 8); stride = (2, 2)
-        window = get_hann_window(block_size[0], device=samples_wave.device).sqrt()
-        window = (window.view(1, -1) * window.view(-1, 1)).view(1, 1, block_size[0], block_size[1])
-
-        samples_wave = torch.nn.functional.pad(samples_wave, (block_size[0]-stride[0], block_size[1]-stride[1], block_size[0]-stride[0], block_size[1]-stride[1]))
-        target_wave  = torch.nn.functional.pad(target_wave,  (block_size[0]-stride[0], block_size[1]-stride[1], block_size[0]-stride[0], block_size[1]-stride[1]))
-        samples_wave_unfolded = samples_wave.unfold(2, block_size[0], stride[0]).unfold(3, block_size[1], stride[1])
-        target_wave_unfolded  =  target_wave.unfold(2, block_size[0], stride[0]).unfold(3, block_size[1], stride[1])
-        samples_fft = torch.fft.rfft2(samples_wave_unfolded * window, norm="ortho")
-        target_fft  = torch.fft.rfft2(target_wave_unfolded * window,  norm="ortho")
-
-        block_hz = torch.linspace(0, sample_rate/2, samples_fft.shape[2], device=samples_fft.device)
-        mel_density = get_mel_density(block_hz).view(1, 1,-1, 1, 1, 1).requires_grad_(False).square()
-        mel_density /= mel_density.mean()
-
-        samples_fft_abs = samples_fft.abs().clip(min=noise_floor)
-        target_fft_abs = target_fft.abs().clip(min=noise_floor)
-        error_real = (samples_fft_abs / target_fft_abs).log()
-        real_loss = (error_real.abs() * mel_density).mean()
-
-        #target_fft_noise_floor = target_fft_abs.amin(dim=(-1,-2,-4), keepdim=True) * 1.1
-        #imag_loss_weight = mel_density * (target_fft_abs > target_fft_noise_floor)
-        error_imag = (samples_fft.angle() - target_fft.angle()).abs()
-        error_imag_wrap_mask = (error_imag > torch.pi).detach().requires_grad_(False)
-        error_imag[error_imag_wrap_mask] = 2*torch.pi - error_imag[error_imag_wrap_mask]
-        #imag_loss = (error_imag * imag_loss_weight).mean()
-        imag_loss = (error_imag * mel_density).mean()
-
-        return real_loss, imag_loss
-    
     @staticmethod
     def get_sample_shape(model_params, bsz=1, length=0):
         _, num_output_channels = DualMCLTFormat.get_num_channels(model_params)
@@ -305,8 +164,6 @@ class DualDiffusionPipeline(DiffusionPipeline):
 
         if sample_format == "mclt":
             return DualMCLTFormat
-        elif sample_format == "mspsd":
-            return DualMSPSDFormat
         else:
             raise ValueError(f"Unknown sample format '{sample_format}'")
         
