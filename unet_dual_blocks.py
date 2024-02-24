@@ -28,7 +28,7 @@ import torch.nn.functional as F
 
 from diffusers.utils import logging
 
-from diffusers.models.attention import AdaGroupNorm
+from diffusers.models.normalization import AdaGroupNorm
 from diffusers.models.attention_processor import SpatialNorm
 
 from attention_processor_dual import SeparableAttention
