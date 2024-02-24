@@ -546,7 +546,7 @@ def save_raw_img(x, img_path):
     else:
         raise ValueError(f"Unsupported number of dimensions in save_raw_img: {x.ndim}")
 
-    cv2.imwrite(img_path, cv2.flip(cv2_img, 0))
+    cv2.imwrite(img_path, cv2_img)
 
 class ScaleNorm(nn.Module):
     def __init__(self, num_features, init_scale=1):
