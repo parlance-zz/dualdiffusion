@@ -581,9 +581,7 @@ def init_module_pipeline(pretrained_model_name_or_path, module_type, vae_encode_
 
         vae = getattr(pipeline, "vae", None)
         if vae is not None:
-            vae.requires_grad_(False)
             vae = vae.to(device).half()
-            vae.eval()
 
             if vae_encode_batch_size > 0:
                 vae.enable_slicing(vae_encode_batch_size)
@@ -802,6 +800,7 @@ def do_training_loop(args,
             "kl_loss",
             "latents_mean",
             "latents_std",
+            "point_similarity",
         ]
 
     elif args.module == "unet":
@@ -834,7 +833,7 @@ def do_training_loop(args,
     for epoch in range(first_epoch, args.num_train_epochs):
 
         torch.cuda.empty_cache()
-        module.train()
+        module.train().requires_grad_(True)
 
         train_loss = 0.
         grad_accum_steps = 0
@@ -860,7 +859,7 @@ def do_training_loop(args,
                 if args.module == "unet":
                     samples = pipeline.format.raw_to_sample(raw_samples, model_params)
                     if vae is not None:
-                        samples = vae.encode(samples.half(), return_dict=False)[0].sample().float()
+                        samples = vae.encode(samples.half(), return_dict=False)[0].mode().float()
 
                     noise = torch.randn_like(samples) * noise_scheduler.init_noise_sigma
                     if args.input_perturbation > 0:
@@ -948,6 +947,8 @@ def do_training_loop(args,
                     model_output = module.decode(latents, return_dict=False)[0]
                     recon_samples_dict = pipeline.format.sample_to_raw(model_output, model_params, return_dict=True, original_samples_dict=samples_dict)
 
+                    point_similarity = (samples_dict["raw_samples"] - recon_samples_dict["raw_samples"]).abs().mean()
+                    
                     mss_real_loss, mss_imag_loss = multiscale_spectral_loss(recon_samples_dict, samples_dict, model_params)
                     mss_real_nll_loss = (mss_real_loss / module.recon_loss_logvar.exp() + module.recon_loss_logvar) * recon_loss_weight
                     mss_imag_nll_loss = (mss_imag_loss / module.recon_loss_logvar.exp() + module.recon_loss_logvar) * recon_loss_weight
@@ -1049,7 +1050,7 @@ def do_training_loop(args,
             """
             if args.num_validation_samples > 0 and args.num_validation_epochs > 0:
                 if epoch % args.num_validation_epochs == 0:
-                    module.eval()
+                    module.eval().requires_grad_(False)
                     logger.info("Running validation... ")
     
                     try:
@@ -1073,7 +1074,7 @@ def do_training_loop(args,
                     except Exception as e:
                         logger.error(f"Error running validation: {e}")
 
-                    module.train()
+                    module.train().requires_grad_(True)
 
             if args.use_ema:
                 ema_module.restore(module.parameters())
