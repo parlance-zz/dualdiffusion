@@ -29,8 +29,9 @@ import torch.nn as nn
 from diffusers.configuration_utils import ConfigMixin, register_to_config
 from diffusers.utils.accelerate_utils import apply_forward_hook
 from diffusers.models.modeling_utils import ModelMixin
-from diffusers.models.vae import DecoderOutput
-from diffusers.models.autoencoder_kl import AutoencoderKLOutput
+
+from diffusers.models.modeling_outputs import AutoencoderKLOutput
+from diffusers.models.autoencoders.autoencoder_kl import DecoderOutput
 
 from unet_dual_blocks import SeparableAttnDownBlock, SeparableAttnUpBlock, SeparableMidBlock
 from dual_diffusion_utils import get_activation, stft, get_mel_density, save_raw
@@ -52,7 +53,7 @@ class DualMultiscaleSpectralLoss:
         target = target["raw_samples"]
         sample1 = sample["raw_samples_orig_phase"]
         sample2 = sample["raw_samples_orig_abs"]
-        #sample3 = sample["raw_samples"]
+        sample3 = sample["raw_samples"]
 
         #save_raw(target, "./debug/target.raw")
         #save_raw(sample1, "./debug/sample1.raw")
@@ -62,8 +63,9 @@ class DualMultiscaleSpectralLoss:
 
         noise_floor = model_params["noise_floor"]
         sample_rate = model_params["sample_rate"]
-        add_channelwise_fft = model_params["sample_raw_channels"] > 1
-        
+        use_mixed_mss = model_params["use_mixed_mss"]
+        stereo_separation_weight = model_params["stereo_separation_weight"]
+
         loss_real = torch.zeros(1, device=target.device)
         loss_imag = torch.zeros(1, device=target.device)
 
@@ -72,7 +74,12 @@ class DualMultiscaleSpectralLoss:
             block_width = min(block_width, target.shape[-1])
             step = max(block_width // self.block_overlap, 1)
             offset = np.random.randint(0, min(target.shape[-1] - block_width + 1, step))        
-
+            
+            if np.random.rand() < stereo_separation_weight:
+                add_channelwise_fft = model_params["sample_raw_channels"] > 1
+            else:
+                add_channelwise_fft = False
+            
             with torch.no_grad():
                 target_fft = stft(target[:, :, offset:],
                                   block_width,
@@ -86,38 +93,40 @@ class DualMultiscaleSpectralLoss:
                 mel_density = get_mel_density(block_hz).view(1, 1, 1,-1)
                 target_phase_weight = ((target_fft_abs - target_fft_abs.amin(dim=3, keepdim=True)) * mel_density).requires_grad_(False)
 
-            sample_fft1_abs = stft(sample1[:, :, offset:],
-                                   block_width,
-                                   window_fn=self.window_fn,
-                                   step=step,
-                                   add_channelwise_fft=add_channelwise_fft)[:, :, :, self.low_cutoff:].abs().clip(min=noise_floor).log()
+            if use_mixed_mss:
+                sample_fft1_abs = stft(sample1[:, :, offset:],
+                                    block_width,
+                                    window_fn=self.window_fn,
+                                    step=step,
+                                    add_channelwise_fft=add_channelwise_fft)[:, :, :, self.low_cutoff:].abs().clip(min=noise_floor).log()
 
-            sample_fft2_angle = stft(sample2[:, :, offset:],
-                                     block_width,
-                                     window_fn=self.window_fn,
-                                     step=step,
-                                     add_channelwise_fft=add_channelwise_fft)[:, :, :, self.low_cutoff:].angle()
+                sample_fft2_angle = stft(sample2[:, :, offset:],
+                                        block_width,
+                                        window_fn=self.window_fn,
+                                        step=step,
+                                        add_channelwise_fft=add_channelwise_fft)[:, :, :, self.low_cutoff:].angle()
 
-            #sample_fft3 = stft(sample3[:, :, offset:],
-            #                   block_width,
-            #                   window_fn=self.window_fn,
-            #                   step=step,
-            #                   add_channelwise_fft=add_channelwise_fft)[:, :, :, self.low_cutoff:]
-            #sample_fft3_abs = sample_fft3.abs().clip(min=noise_floor).log()
-            #sample_fft3_angle = sample_fft3.angle()
+                loss_real = loss_real + (sample_fft1_abs - target_fft_abs).abs().mean()
+
+                error_imag = (sample_fft2_angle - target_fft_angle).abs()
+                error_imag_wrap_mask = (error_imag > torch.pi).detach().requires_grad_(False)
+                error_imag[error_imag_wrap_mask] = 2*torch.pi - error_imag[error_imag_wrap_mask]
+                loss_imag = loss_imag + (error_imag * target_phase_weight).mean()
+                
+            sample_fft3 = stft(sample3[:, :, offset:],
+                               block_width,
+                               window_fn=self.window_fn,
+                               step=step,
+                               add_channelwise_fft=add_channelwise_fft)[:, :, :, self.low_cutoff:]
+            sample_fft3_abs = sample_fft3.abs().clip(min=noise_floor).log()
+            sample_fft3_angle = sample_fft3.angle()
             
-            loss_real = loss_real + (sample_fft1_abs - target_fft_abs).abs().mean()
-            #loss_real = loss_real + (sample_fft3_abs - target_fft_abs).abs().mean()
+            loss_real = loss_real + (sample_fft3_abs - target_fft_abs).abs().mean()
 
-            error_imag = (sample_fft2_angle - target_fft_angle).abs()
+            error_imag = (sample_fft3_angle - target_fft_angle).abs()
             error_imag_wrap_mask = (error_imag > torch.pi).detach().requires_grad_(False)
             error_imag[error_imag_wrap_mask] = 2*torch.pi - error_imag[error_imag_wrap_mask]
             loss_imag = loss_imag + (error_imag * target_phase_weight).mean()
-
-            #error_imag = (sample_fft3_angle - target_fft_angle).abs()
-            #error_imag_wrap_mask = (error_imag > torch.pi).detach().requires_grad_(False)
-            #error_imag[error_imag_wrap_mask] = 2*torch.pi - error_imag[error_imag_wrap_mask]
-            #loss_imag = loss_imag + (error_imag * target_phase_weight).mean()
 
         return loss_real * self.loss_scale, loss_imag * self.loss_scale
 

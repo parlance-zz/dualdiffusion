@@ -782,6 +782,7 @@ def do_training_loop(args,
         latent_shape = module.get_latent_shape(sample_shape)
         multiscale_spectral_loss = DualMultiscaleSpectralLoss(model_params["multiscale_spectral_loss"])
 
+        use_mixed_mss = model_params["use_mixed_mss"]
         kl_loss_weight = model_params["kl_loss_weight"]
         recon_loss_weight = model_params["recon_loss_weight"]
 
@@ -791,10 +792,12 @@ def do_training_loop(args,
 
         kl_loss_weight = torch.tensor(kl_loss_weight, device=accelerator.device, dtype=torch.float32)
         recon_loss_weight = torch.tensor(recon_loss_weight, device=accelerator.device, dtype=torch.float32)
+        stereo_separation_weight = torch.tensor(model_params["stereo_separation_weight"], device=accelerator.device, dtype=torch.float32)
 
         module_log_channels = [
             "kl_loss_weight",
             "recon_loss_weight",
+            "stereo_separation_weight",
             "mss_real_loss",
             "mss_imag_loss",
             "kl_loss",
@@ -945,7 +948,11 @@ def do_training_loop(args,
                     latents_mean = latents.mean()
                     latents_std = latents.std()
                     model_output = module.decode(latents, return_dict=False)[0]
-                    recon_samples_dict = pipeline.format.sample_to_raw(model_output, model_params, return_dict=True, original_samples_dict=samples_dict)
+
+                    if use_mixed_mss:
+                        recon_samples_dict = pipeline.format.sample_to_raw(model_output, model_params, return_dict=True, original_samples_dict=samples_dict)
+                    else:
+                        recon_samples_dict = pipeline.format.sample_to_raw(model_output, model_params, return_dict=True)
 
                     point_similarity = (samples_dict["raw_samples"] - recon_samples_dict["raw_samples"]).abs().mean()
                     

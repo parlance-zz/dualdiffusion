@@ -29,7 +29,7 @@ from dual_diffusion_utils import dict_str
 
 load_dotenv(override=True)
 
-MODEL_NAME = "dualdiffusion2d_1000_14"
+MODEL_NAME = "dualdiffusion2d_1000_20"
 MODEL_SEED = 400
 
 MODEL_PARAMS = {
@@ -39,7 +39,7 @@ MODEL_PARAMS = {
 
     # sample format params
     "sample_format": "mclt",
-    "sample_raw_length": 262144,
+    "sample_raw_length": 393216,
     "num_chunks": 256,
     "u": 8000,
     "noise_floor": 1e-5,
@@ -50,12 +50,16 @@ MODEL_PARAMS = {
 
     # vae unet training params
     "kl_loss_weight": 1e-5,
-    "recon_loss_weight": 0.03,
+    "recon_loss_weight": 0.015,
+    "stereo_separation_weight": 0.6,
+    "use_mixed_mss": False,
 
-    "multiscale_spectral_loss": {
+    "multiscale_spectral_loss": {    
         "low_cutoff": 2,
         "block_overlap": 8,
         "block_widths": [
+            128,
+            256,
             512,
             1024,
             2048,
@@ -64,9 +68,8 @@ MODEL_PARAMS = {
             16384,
             32768,
             65536,
-            131072,
         ],
-        "window_fn": "blackman_harris",
+        "window_fn": "hann",
     },
 }
 
@@ -90,20 +93,20 @@ SCHEDULER_PARAMS = {
 }
 
 VAE_PARAMS = {
-    "latent_channels": 4,
+    "latent_channels": 2,
     "sample_size": (64, 2048),
     "act_fn": "silu",
     "conv_size": (3,3),
 
-    "block_out_channels": (32, 64, 128, 256),
+    "block_out_channels": (64, 160, 320),
     "layers_per_block": 2,
 
     "layers_per_mid_block": 3,
     "add_mid_attention": True,
     #"add_mid_attention": False,
 
-    #"norm_num_groups": 32,
-    "norm_num_groups": (0, 0, 32, 32),
+    "norm_num_groups": 32,
+    #"norm_num_groups": (0, 0, 32),
     #"norm_num_groups": (0, 0, 32),
 
     "downsample_type": "conv",
@@ -111,14 +114,14 @@ VAE_PARAMS = {
     #"upsample_type": "conv",
     "downsample_ratio": (2,2),
 
-    "attention_num_heads": (8,8,8,8),
-    "separate_attn_dim_mid": (2,2,2),
+    "attention_num_heads": (8,8,8),
+    "separate_attn_dim_mid": (3,2,3),
     "double_attention": False,
     "pre_attention": False,
-    #"add_attention": False,
-    "add_attention": True,
-    "separate_attn_dim_down": (3,3),
-    "separate_attn_dim_up": (3,3,3),
+    "add_attention": False,
+    #"add_attention": True,
+    #"separate_attn_dim_down": (3,3),
+    #"separate_attn_dim_up": (3,3,3),
 
     "freq_embedding_dim": 0,
     "time_embedding_dim": 0,
