@@ -58,14 +58,16 @@ class DualMCLTFormat:
         else: # we would need to do a (ortho normalized) dct/idct over the channel dim here
             raise NotImplementedError("Multichannel transform not implemented for > 2 channels")
 
+    """
     @staticmethod
     def cos_angle_to_norm_angle(x):
-        return (x / torch.pi * 2 - 1).clip(min=-.9999, max=.9999).erfinv()
+        return (x / torch.pi * 2 - 1).clip(min=-.99999, max=.99999).erfinv()
     
     @staticmethod
     def norm_angle_to_cos_angle(x):
         return (x.erf() + 1) / 2 * torch.pi
-    
+    """
+
     @staticmethod
     @torch.no_grad()
     def raw_to_sample(raw_samples, model_params, return_dict=False):
@@ -82,8 +84,7 @@ class DualMCLTFormat:
         samples_mdct_abs_amax = samples_mdct_abs.amax(dim=(1,2,3), keepdim=True).clip(min=1e-5)
         samples_mdct_abs = (samples_mdct_abs / samples_mdct_abs_amax).clip(min=noise_floor)
         samples_abs_ln = samples_mdct_abs.log()
-        samples_qphase1 = DualMCLTFormat.cos_angle_to_norm_angle(samples_mdct.angle().abs())
-
+        samples_qphase1 = samples_mdct.angle().abs()
         samples = torch.cat((samples_abs_ln, samples_qphase1), dim=1)
 
         samples_mdct /= samples_mdct_abs_amax
@@ -103,14 +104,13 @@ class DualMCLTFormat:
         
         samples_abs, samples_phase1 = samples.chunk(2, dim=1)
         samples_abs = samples_abs.exp()
-        samples_phase = DualMCLTFormat.norm_angle_to_cos_angle(samples_phase1).cos()
-        
+        samples_phase = samples_phase1.cos()
         raw_samples = imdct(DualMCLTFormat.multichannel_transform(samples_abs * samples_phase).permute(0, 1, 3, 2), window_degree=1).real
 
         if original_samples_dict is not None:
             orig_samples_abs, orig_samples_phase1 = original_samples_dict["samples"].chunk(2, dim=1)
             orig_samples_abs = orig_samples_abs.exp()
-            orig_samples_phase = DualMCLTFormat.norm_angle_to_cos_angle(orig_samples_phase1).cos()
+            orig_samples_phase = orig_samples_phase1.cos()
 
             raw_samples_orig_phase = imdct(DualMCLTFormat.multichannel_transform(samples_abs * orig_samples_phase).permute(0, 1, 3, 2), window_degree=1).real
             raw_samples_orig_abs = imdct(DualMCLTFormat.multichannel_transform(orig_samples_abs * samples_phase).permute(0, 1, 3, 2), window_degree=1).real
@@ -201,7 +201,11 @@ class DualDiffusionPipeline(DiffusionPipeline):
     
     @staticmethod
     @torch.no_grad()
-    def from_pretrained(model_path, torch_dtype=torch.float32, device="cpu", load_latest_checkpoints=False):
+    def from_pretrained(model_path,
+                        torch_dtype=torch.float32,
+                        device="cpu",
+                        load_latest_checkpoints=False,
+                        requires_grad=False):
         
         with open(os.path.join(model_path, "model_index.json"), "r") as f:
             model_index = json.load(f)
@@ -213,7 +217,9 @@ class DualDiffusionPipeline(DiffusionPipeline):
             if len(vae_checkpoints) > 0:
                 vae_checkpoints = sorted(vae_checkpoints, key=lambda x: int(x.split("-")[1]))
                 vae_path = os.path.join(model_path, vae_checkpoints[-1], "vae")
-        vae = AutoencoderKLDual.from_pretrained(vae_path, torch_dtype=torch_dtype, device=device)
+        vae = AutoencoderKLDual.from_pretrained(vae_path,
+                                                torch_dtype=torch_dtype,
+                                                device=device).requires_grad_(requires_grad).train(requires_grad)
 
         unet_path = os.path.join(model_path, "unet")
         if load_latest_checkpoints:
@@ -221,7 +227,9 @@ class DualDiffusionPipeline(DiffusionPipeline):
             if len(unet_checkpoints) > 0:
                 unet_checkpoints = sorted(unet_checkpoints, key=lambda x: int(x.split("-")[1]))
                 unet_path = os.path.join(model_path, unet_checkpoints[-1], "unet")
-        unet = UNetDualModel.from_pretrained(unet_path, torch_dtype=torch_dtype, device=device)
+        unet = UNetDualModel.from_pretrained(unet_path,
+                                             torch_dtype=torch_dtype,
+                                             device=device).requires_grad_(requires_grad).train(requires_grad)
 
         scheduler_path = os.path.join(model_path, "scheduler")
         scheduler = DDIMScheduler.from_pretrained(scheduler_path, torch_dtype=torch_dtype, device=device)
