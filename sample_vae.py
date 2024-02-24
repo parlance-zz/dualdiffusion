@@ -29,20 +29,29 @@ import torch
 
 from dual_diffusion_pipeline import DualDiffusionPipeline
 from dual_diffusion_utils import init_cuda, save_audio, save_raw, load_raw, load_audio, save_raw_img
-
+        
 if __name__ == "__main__":
 
     init_cuda()
     load_dotenv(override=True)
+    #np.random.seed(0)
 
-    model_name = "dualdiffusion2d_1000_12"
+    model_name = "dualdiffusion2d_1000_20"
     num_samples = 1
-    #device = "cuda"
-    device = "cpu"
-    fp16 = False
-    #fp16 = True
+    device = "cuda"
+    #device = "cpu"
+    #fp16 = False
+    fp16 = True
     start = 0
-    length = 32000 * 32
+    length = 32000 * 45
+    #save_output = False
+    save_output = True
+    sample_latents = False
+    #sample_latents = True
+    normalize_latents = False
+    #normalize_latents = True
+    quantize_latents = 0
+    #quantize_latents = 6
 
     model_path = os.path.join(os.environ.get("MODEL_PATH", "./"), model_name)
     model_dtype = torch.float16 if fp16 else torch.float32
@@ -62,25 +71,28 @@ if __name__ == "__main__":
     test_samples = np.random.choice(os.listdir(dataset_path), num_samples, replace=False)
 
     #"""
-    #test_samples = []
-    #test_samples += ["Kyuuyaku Megami Tensei - 42 Satan.flac"] # problems with snare drum (not enough real weight)
+    test_samples = []
     #test_samples += ["Star Fox - 141 Training Mode.flac"] # good bass test
-    #test_samples += ["Marvelous - Mou Hitotsu no Takarajima - 42 Forest Island.flac"] # good bass test
+    #test_samples += ["Final Fantasy VI - 217 Mog.flac"] # good bass test
     #test_samples += ["Vortex - 10 Magmemo.flac"]  # good stereo test
     #test_samples += ["Mega Man X3 - 09 Blast Hornet.flac"] # messy mix and stereo test
     #test_samples += ["Sparkster - 06 Bird.flac"] # messy mix and thick electric guitars in stereo
     #test_samples += ["Lennus II - Fuuin no Shito - 19 Holy Temple.flac"] # transient test
-    #test_samples += ["Tales of Phantasia - 205 As Time Goes On.flac"] # failure case
+    test_samples += ["Donkey Kong Country 2 - Diddy's Kong Quest - 17 Stickerbrush Symphony.flac"]
     #test_samples += ["Kirby Super Star  [Kirby's Fun Pak] - 36 Mine Cart Riding.flac"] # success case
     #test_samples += ["Final Fantasy VI - 104 Locke.flac"] # this better sound good cuz its important
+    #test_samples += ["Kirby Super Star  [Kirby's Fun Pak] - 53 Heart of Nova.flac"]
+    #test_samples += ["Kirby Super Star  [Kirby's Fun Pak] - 41 Halberd ~ Nightmare Warship.flac"]
+    #test_samples += ["Pilotwings - 04 Light Plane.flac"]
     #"""
-
+    
     sample_shape = pipeline.format.get_sample_shape(model_params, length=length)
     print(f"Sample shape: {sample_shape}  Latent shape: {vae.get_latent_shape(sample_shape)}")
     
     output_path = os.path.join(model_path, "output")
     os.makedirs(output_path, exist_ok=True)
     start_time = datetime.datetime.now()
+    point_similarity = latents_mean = latents_std = 0
 
     for filename in test_samples:
         
@@ -94,27 +106,42 @@ if __name__ == "__main__":
 
         input_sample_dict = pipeline.format.raw_to_sample(input_raw_sample, model_params, return_dict=True)
         input_sample = input_sample_dict["samples"]
+
         posterior = vae.encode(input_sample.type(model_dtype), return_dict=False)[0]
-        latents = posterior.sample()
+        if sample_latents:
+            latents = posterior.sample()
+        else:
+            latents = posterior.mode()
+        if normalize_latents:
+            latents = (latents - latents.mean()) / latents.std()
+        if quantize_latents > 0:
+            latents = (latents * quantize_latents).round() / quantize_latents
         model_output = vae.decode(latents, return_dict=False)[0]
+
         output_sample_dict = pipeline.format.sample_to_raw(model_output.type(torch.float32), model_params, return_dict=True)
         output_raw_sample = output_sample_dict["raw_samples"]
-        #output_sample_dict = pipeline.format.sample_to_raw(model_output.type(torch.float32), model_params, return_dict=True, original_samples_dict=input_sample_dict)
-        #output_raw_sample = output_sample_dict["raw_samples_orig_phase"]
         output_sample = output_sample_dict["samples"]
 
-        save_raw(latents, os.path.join(output_path,f"step_{last_global_step}_{filename.replace(file_ext, '_latents.raw')}"))
-        save_raw(input_sample, os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_input_sample.raw')}"))
-        save_raw(output_sample, os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_sample.raw')}"))
-        save_raw(posterior.parameters, os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_posterior.raw')}"))
-        save_raw_img(latents, os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_latents.png')}"))
+        point_similarity += (output_raw_sample - input_sample_dict["raw_samples"]).abs().mean().item()
+        latents_mean += latents.mean().item()
+        latents_std += latents.std().item()
 
-        output_flac_file_path = os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_original.flac')}")
-        save_audio(input_sample_dict["raw_samples"].squeeze(0), model_params["sample_rate"], output_flac_file_path)
-        print(f"Saved flac output to {output_flac_file_path}")
+        if save_output:
+            save_raw(latents, os.path.join(output_path,f"step_{last_global_step}_{filename.replace(file_ext, '_latents.raw')}"))
+            save_raw(input_sample, os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_input_sample.raw')}"))
+            save_raw(output_sample, os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_sample.raw')}"))
+            save_raw(posterior.parameters, os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_posterior.raw')}"))
+            save_raw_img(latents, os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_latents.png')}"))
 
-        output_flac_file_path = os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_decoded.flac')}")
-        save_audio(output_raw_sample.squeeze(0), model_params["sample_rate"], output_flac_file_path)
-        print(f"Saved flac output to {output_flac_file_path}")
+            output_flac_file_path = os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_original.flac')}")
+            save_audio(input_sample_dict["raw_samples"].squeeze(0), model_params["sample_rate"], output_flac_file_path)
+            print(f"Saved flac output to {output_flac_file_path}")
+
+            output_flac_file_path = os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_decoded.flac')}")
+            save_audio(output_raw_sample.squeeze(0), model_params["sample_rate"], output_flac_file_path)
+            print(f"Saved flac output to {output_flac_file_path}")
 
     print(f"Finished in: {datetime.datetime.now() - start_time}")
+    print(f"Point similarity: {point_similarity / len(test_samples)}")
+    print(f"Latents mean: {latents_mean / len(test_samples)}")
+    print(f"Latents std: {latents_std / len(test_samples)}")
