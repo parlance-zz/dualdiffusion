@@ -58,6 +58,8 @@ MODEL_PARAMS = {
         "low_cutoff": 2,
         "block_overlap": 8,
         "block_widths": [
+            32,
+            64,
             128,
             256,
             512,
