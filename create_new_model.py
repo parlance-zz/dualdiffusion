@@ -51,7 +51,7 @@ MODEL_PARAMS = {
     # vae unet training params
     "kl_loss_weight": 1e-5,
     "recon_loss_weight": 0.015,
-    "stereo_separation_weight": 0.6,
+    "stereo_separation_weight": 0.3,
     "use_mixed_mss": False,
 
     "multiscale_spectral_loss": {    
