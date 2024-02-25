@@ -350,7 +350,7 @@ class UNetDualModel(ModelMixin, ConfigMixin):
             conv_out_padding = tuple(dim // 2 for dim in conv_out_kernel_size)
         self.conv_out = conv_class(block_out_channels[0], out_channels, kernel_size=conv_out_kernel_size, padding=conv_out_padding)
 
-        self.timestep_error_logvar = nn.Parameter(torch.zeros(self.num_diffusion_timesteps))
+        #self.timestep_error_logvar = nn.Parameter(torch.zeros(self.num_diffusion_timesteps))
 
     def forward(
         self,
