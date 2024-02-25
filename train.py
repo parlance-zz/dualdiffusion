@@ -677,6 +677,8 @@ class DatasetTransformer(torch.nn.Module):
     def __call__(self, examples):
 
         samples = []
+        paths = []
+
         for audio in examples["audio"]:
                     
             input_audio = audio["bytes"] or audio["path"]
@@ -693,8 +695,9 @@ class DatasetTransformer(torch.nn.Module):
                                     count=self.sample_crop_width)
 
             samples.append(sample)
+            paths.append(audio["path"])
 
-        return {"input": samples, "sample_paths": audio["path"]}
+        return {"input": samples, "sample_paths": paths}
 
 def init_dataloader(dataset_name,
                     hf_token,
