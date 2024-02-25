@@ -92,6 +92,7 @@ class DualMultiscaleSpectralLoss:
                 block_hz = torch.linspace(self.low_cutoff / block_width * sample_rate, sample_rate/2, target_fft.shape[-1], device=target_fft.device)
                 mel_density = get_mel_density(block_hz).view(1, 1, 1,-1)
                 target_phase_weight = ((target_fft_abs - target_fft_abs.amin(dim=3, keepdim=True)) * mel_density).requires_grad_(False)
+                #target_phase_weight = ((target_fft_abs - np.log(noise_floor)) * mel_density).requires_grad_(False)
 
             if use_mixed_mss:
                 sample_fft1_abs = stft(sample1[:, :, offset:],
