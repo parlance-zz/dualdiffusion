@@ -51,7 +51,7 @@ from diffusers.utils import deprecate, is_tensorboard_available
 from unet_dual import UNetDualModel
 from autoencoder_kl_dual import AutoencoderKLDual, DualMultiscaleSpectralLoss
 from dual_diffusion_pipeline import DualDiffusionPipeline
-from dual_diffusion_utils import init_cuda, compute_snr, load_audio, save_audio, load_raw, save_raw, dict_str
+from dual_diffusion_utils import init_cuda, compute_snr, load_audio, save_audio, load_raw, save_raw, dict_str, get_mel_density
 
 
 logger = get_logger(__name__, log_level="INFO")
@@ -916,7 +916,12 @@ def do_training_loop(args,
                     model_output = module(model_input, timesteps).sample
 
                     if snr_gamma is None:
-                        loss = F.mse_loss(model_output.float(), target.float(), reduction="mean")
+                        loss = F.mse_loss(model_output.float(), target.float(), reduction="none")
+
+                        hz = torch.linspace(0, model_params["sample_rate"]/2, target.shape[-2], device=target.device)
+                        mel_density = get_mel_density(hz).view(1, 1,-1, 1).requires_grad_(False); mel_density /= mel_density.mean()
+                        loss = (loss * mel_density).mean()
+
                         #timestep_error_logvar = getattr(module, "timestep_error_logvar", None)
                         #if timestep_error_logvar is None:
                         #    loss = F.mse_loss(model_output.float(), target.float(), reduction="mean")
@@ -945,6 +950,11 @@ def do_training_loop(args,
                         )
 
                         loss = F.mse_loss(model_output.float(), target.float(), reduction="none")
+                        
+                        hz = torch.linspace(0, model_params["sample_rate"]/2, target.shape[-2], device=target.device)
+                        mel_density = get_mel_density(hz).view(1, 1,-1, 1).requires_grad_(False); mel_density /= mel_density.mean()
+                        loss = loss * mel_density
+                        
                         loss = loss.mean(dim=list(range(1, len(loss.shape)))) * mse_loss_weights
                         loss = loss.mean()
 
