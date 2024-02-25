@@ -807,31 +807,32 @@ def do_training_loop(args,
 
         logger.info("Training UNet model:")
 
+        noise_scheduler = pipeline.scheduler
+        module_log_channels = []
+
         if vae is not None:
             latent_shape = vae.get_latent_shape(sample_shape)
             latent_mean = model_params["latent_mean"]
             latent_std = model_params["latent_std"]
 
-        if args.snr_gamma is not None:
-            logger.info(f"Using min-SNR loss weighting - SNR gamma ({args.snr_gamma})")
+        snr_gamma = model_params["snr_gamma"]
+        if snr_gamma is not None:
+            logger.info(f"Using min-SNR loss weighting - SNR gamma ({snr_gamma})")
             if noise_scheduler.config.prediction_type == "v_prediction":
-                logger.info(f"SNR gamma ({args.snr_gamma}) is set with v_prediction objective, using SNR offset +1")
+                logger.info(f"SNR gamma ({snr_gamma}) is set with v_prediction objective, using SNR offset +1")
                 snr_offset = 1.
-                args.snr_gamma += 1. # also offset snr_gamma so the value has the same effect/meaning as non-v-pred objective
+                #snr_gamma += 1. # also offset snr_gamma so the value has the same effect/meaning as non-v-pred objective
             else:
                 snr_offset = 0.
 
         input_perturbation = model_params["input_perturbation"]   
         if input_perturbation > 0:
             logger.info(f"Using input perturbation of {input_perturbation}")
-        
-        noise_scheduler = pipeline.scheduler
-        module_log_channels = []
 
     logger.info(f"Sample shape: {sample_shape}")
     if latent_shape is not None:
         logger.info(f"Latent shape: {latent_shape}")
-
+        
 
     for epoch in range(first_epoch, args.num_train_epochs):
 
@@ -911,7 +912,7 @@ def do_training_loop(args,
                     
                     model_output = module(model_input, timesteps).sample
 
-                    if args.snr_gamma is None:
+                    if snr_gamma is None:
                         loss = F.mse_loss(model_output.float(), target.float(), reduction="mean")
                         #timestep_error_logvar = getattr(module, "timestep_error_logvar", None)
                         #if timestep_error_logvar is None:
@@ -937,7 +938,7 @@ def do_training_loop(args,
                                 snr = snr.clamp(min=1e-10)
 
                         mse_loss_weights = (
-                            torch.stack([snr, args.snr_gamma * torch.ones_like(timesteps)], dim=1).min(dim=1)[0] / snr
+                            torch.stack([snr, snr_gamma * torch.ones_like(timesteps)], dim=1).min(dim=1)[0] / snr
                         )
 
                         loss = F.mse_loss(model_output.float(), target.float(), reduction="none")
