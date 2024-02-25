@@ -33,7 +33,7 @@ from diffusers.pipelines.pipeline_utils import DiffusionPipeline
 
 from unet_dual import UNetDualModel
 from autoencoder_kl_dual import AutoencoderKLDual
-from dual_diffusion_utils import compute_snr, mdct, imdct, save_raw
+from dual_diffusion_utils import compute_snr, mdct, imdct, save_raw, save_raw_img
 
 class DualMCLTFormat:
 
@@ -326,16 +326,17 @@ class DualDiffusionPipeline(DiffusionPipeline):
         if debug_path is not None:
             print("Sample std: ", sample.std(dim=(1,2,3)).item())
             print("Sample mean: ", sample.mean(dim=(1,2,3)).item())
-            save_raw(sample, os.path.join(debug_path, "debug_sample.raw"))
+            save_raw(sample, os.path.join(debug_path, "debug_latents.raw"))
         
         if getattr(self, "vae", None) is not None:
-            sample = sample - sample.mean(dim=(1,2,3), keepdim=True)
-            sample = sample / sample.std(dim=(1,2,3), keepdim=True).clip(min=1e-8)
+            #sample = sample - sample.mean(dim=(1,2,3), keepdim=True)
+            #sample = sample / sample.std(dim=(1,2,3), keepdim=True).clip(min=1e-8)
+            sample = sample * model_params["latent_std"] + model_params["latent_mean"]
+            save_raw_img(sample, os.path.join(debug_path, "debug_latents.png"))
             sample = self.vae.decode(sample).sample
             save_raw(sample, os.path.join(debug_path, "debug_decoded_sample.raw"))
 
         raw_sample = self.format.sample_to_raw(sample.float(), model_params)
-        raw_sample /= raw_sample.std(dim=(1,2), keepdim=True).clip(min=1e-8)
         if loops > 0: raw_sample = raw_sample.repeat(2, loops+1)
         return raw_sample
     
