@@ -60,9 +60,6 @@ logger = get_logger(__name__, log_level="INFO")
 def parse_args():
     parser = argparse.ArgumentParser(description="DualDiffusion training script.")
     parser.add_argument(
-        "--input_perturbation", type=float, default=0, help="The scale of input perturbation. Recommended 0.1."
-    )
-    parser.add_argument(
         "--pretrained_model_name_or_path",
         type=str,
         default=None,
@@ -812,6 +809,8 @@ def do_training_loop(args,
 
         if vae is not None:
             latent_shape = vae.get_latent_shape(sample_shape)
+            latent_mean = model_params["latent_mean"]
+            latent_std = model_params["latent_std"]
 
         if args.snr_gamma is not None:
             logger.info(f"Using min-SNR loss weighting - SNR gamma ({args.snr_gamma})")
@@ -821,9 +820,10 @@ def do_training_loop(args,
                 args.snr_gamma += 1. # also offset snr_gamma so the value has the same effect/meaning as non-v-pred objective
             else:
                 snr_offset = 0.
-                
-        if args.input_perturbation > 0:
-            logger.info(f"Using input perturbation of {args.input_perturbation}")
+
+        input_perturbation = model_params["input_perturbation"]   
+        if input_perturbation > 0:
+            logger.info(f"Using input perturbation of {input_perturbation}")
         
         noise_scheduler = pipeline.scheduler
         module_log_channels = []
@@ -862,12 +862,13 @@ def do_training_loop(args,
                 if args.module == "unet":
                     samples = pipeline.format.raw_to_sample(raw_samples, model_params)
                     if vae is not None:
-                        samples = vae.encode(samples.half(), return_dict=False)[0].mode().float()
+                        samples = (vae.encode(samples.half(), return_dict=False)[0].mode().float() - latent_mean) / latent_std
 
                     noise = torch.randn_like(samples) * noise_scheduler.init_noise_sigma
-                    if args.input_perturbation > 0:
-                        new_noise = noise + args.input_perturbation * torch.randn_like(noise)
+                    if input_perturbation > 0:
+                        new_noise = noise + input_perturbation * torch.randn_like(noise)
 
+                    """
                     if not debug_written:
                         logger.info(f"Samples mean: {samples.mean(dim=(1,2,3))} - Samples std: {samples.std(dim=(1,2,3))}")
                         logger.info(f"Samples shape: {samples.shape}")
@@ -888,10 +889,11 @@ def do_training_loop(args,
 
                         debug_written = True
                         torch.cuda.empty_cache()
+                    """
 
                     timesteps = torch.randint(0, noise_scheduler.config.num_train_timesteps, (samples.shape[0],), device=samples.device).long()
 
-                    if args.input_perturbation > 0:
+                    if input_perturbation > 0:
                         model_input = noise_scheduler.add_noise(samples, new_noise, timesteps)
                     else:
                         model_input = noise_scheduler.add_noise(samples, noise, timesteps)
@@ -910,14 +912,16 @@ def do_training_loop(args,
                     model_output = module(model_input, timesteps).sample
 
                     if args.snr_gamma is None:
-                        timestep_error_logvar = getattr(module, "timestep_error_logvar", None)
-                        if timestep_error_logvar is None:
-                            loss = F.mse_loss(model_output.float(), target.float(), reduction="mean")
-                        else:
-                            loss = F.mse_loss(model_output.float(), target.float(), reduction="none")
-                            loss = loss.mean(dim=tuple(range(1, len(loss.shape))), keepdim=True)
-                            max_loss = loss.amax().detach().clip(min=1e-10)
-                            loss = (loss / max_loss + max_loss.log()).mean()
+                        loss = F.mse_loss(model_output.float(), target.float(), reduction="mean")
+                        #timestep_error_logvar = getattr(module, "timestep_error_logvar", None)
+                        #if timestep_error_logvar is None:
+                        #    loss = F.mse_loss(model_output.float(), target.float(), reduction="mean")
+                        #else:
+                        #    loss = F.mse_loss(model_output.float(), target.float(), reduction="none")
+                        #    loss = loss.mean(dim=tuple(range(1, len(loss.shape))), keepdim=True)
+                        #    max_loss = loss.amax().detach().clip(min=1e-10)
+                        #    loss = (loss / max_loss + max_loss.log()).mean()
+
                             #timestep_error_logvar = timestep_error_logvar[timesteps].view(-1, *((loss.ndim-1) * (1,))).amax()
                             #loss = (loss / timestep_error_logvar.exp() + timestep_error_logvar).mean() 
                     else:
