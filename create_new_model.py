@@ -39,10 +39,13 @@ MODEL_PARAMS = {
 
     # sample format params
     "sample_format": "mclt",
-    "sample_raw_length": 393216,
+    #"sample_raw_length": 393216, # vae training sample length
+    "sample_raw_length": 720896,
     "num_chunks": 256,
     "u": 8000,
     "noise_floor": 1e-5,
+    "latent_mean": 0.06646625906229019,
+    "latent_std": 0.899676513671875,
 
     # diffusion unet training params
     "input_perturbation": 0.1,
@@ -51,7 +54,7 @@ MODEL_PARAMS = {
     # vae unet training params
     "kl_loss_weight": 1e-5,
     "recon_loss_weight": 0.015,
-    "stereo_separation_weight": 0.3,
+    "stereo_separation_weight": 0.5,
     "use_mixed_mss": False,
 
     "multiscale_spectral_loss": {    
@@ -70,6 +73,7 @@ MODEL_PARAMS = {
             16384,
             32768,
             65536,
+            131072,
         ],
         "window_fn": "hann",
     },
@@ -138,31 +142,33 @@ UNET_PARAMS = {
     "conv_size": (3,3),
 
     #"attention_num_heads": 4,
-    "attention_num_heads": (8,8,8),
+    "attention_num_heads": (8,8,16,16),
 
-    "separate_attn_dim_mid": (0,),
+    "separate_attn_dim_mid": (0,0,),
     "add_mid_attention": True,
     "layers_per_mid_block": 1,
     #"mid_block_bottleneck_channels": 32,
 
     "add_attention": True,
-    #"double_attention": True,
-    "double_attention": False,
-    #"pre_attention": True,
+    #"double_attention": False,
+    "double_attention": True,
     "pre_attention": False,
+    #"pre_attention": True,
     
+    "separate_attn_dim_down": (2,3,2,3),
     #"separate_attn_dim_down": (2,3,),
-    "separate_attn_dim_down": (0,0),
+    #"separate_attn_dim_down": (0,0),
     
+    "separate_attn_dim_up": (3,2,3,2,3,2),
     #"separate_attn_dim_up": (3,2,3,),
-    "separate_attn_dim_up": (0,0,0),
+    #"separate_attn_dim_up": (0,0,0),
     
     #"freq_embedding_dim": 256,
     #"time_embedding_dim": 256,
     #"freq_embedding_dim": (512, 0, 0, 0,),
     #"time_embedding_dim": 0,
-    "freq_embedding_dim": 256,
-    "time_embedding_dim": 1024,
+    "freq_embedding_dim": 512,
+    "time_embedding_dim": 0,
 
     #"downsample_type": "resnet",
     #"upsample_type": "resnet",
@@ -177,7 +183,7 @@ UNET_PARAMS = {
     "layers_per_block": 2,
 
     #"block_out_channels": (256, 384, 640, 1024), # 320
-    "block_out_channels": (256, 416, 672), # 330
+    "block_out_channels": (96, 192, 384, 768), # 330
 }
 
 
