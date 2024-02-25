@@ -36,7 +36,7 @@ if __name__ == "__main__":
     init_cuda()
     load_dotenv(override=True)
 
-    model_name = "dualdiffusion2d_1000_1"
+    model_name = "dualdiffusion2d_1000_20"
 
     num_samples = 1
     batch_size = 1
@@ -46,7 +46,7 @@ if __name__ == "__main__":
     #scheduler = "kdpm2_a"
     #scheduler = "euler_a"
     #scheduler = "dpms++_sde"
-    steps = 250
+    steps = 50
     loops = 0
     fp16 = False
     #fp16 = True
@@ -61,6 +61,7 @@ if __name__ == "__main__":
     print(f"Loading DualDiffusion model from '{model_path}' (dtype={model_dtype})...")
     pipeline = DualDiffusionPipeline.from_pretrained(model_path,
                                                      torch_dtype=model_dtype,
+                                                     #device=device, # this doesn't work for some fucking reason????
                                                      load_latest_checkpoints=True).to(device)
     last_global_step = pipeline.unet.config["last_global_step"]
 
@@ -82,7 +83,7 @@ if __name__ == "__main__":
         print(f"Time taken: {time.time()-start}")
 
         output_flac_file_path = os.path.join(output_path, f"step_{last_global_step}_{scheduler}{steps}_s{seed}.flac")
-        save_audio(output, pipeline.config["model_params"]["sample_rate"], output_flac_file_path)
+        save_audio(output.squeeze(0), pipeline.config["model_params"]["sample_rate"], output_flac_file_path)
         print(f"Saved flac output to {output_flac_file_path}")
 
         seed += 1
