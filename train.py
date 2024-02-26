@@ -757,6 +757,28 @@ def init_dataloader(dataset_name,
 
     return train_dataset, train_dataloader
 
+def get_unet_timesteps_and_weight(noise_scheduler, total_batch_size, snr_gamma, snr_offset, device="cpu"):
+
+    batch_timesteps = torch.randint(0, noise_scheduler.num_train_timesteps,(total_batch_size,), device=device).long()
+
+    if snr_gamma is not None:
+        batch_snr = compute_snr(noise_scheduler, batch_timesteps) + snr_offset
+
+        if noise_scheduler.config.prediction_type != "v_prediction":
+            # clamp required when using zero terminal SNR rescaling to avoid division by zero
+            # not needed when using v-prediction because of the +1 snr offset
+            if noise_scheduler.config.rescale_betas_zero_snr or (noise_scheduler.config.beta_schedule == "trained_betas"):
+                batch_snr = batch_snr.clamp(min=1e-10)
+
+        batch_mse_loss_weights = (
+            torch.stack([batch_snr, snr_gamma * torch.ones_like(batch_timesteps)], dim=1).min(dim=1)[0] / batch_snr
+        )
+        
+        return batch_timesteps, batch_mse_loss_weights
+    else:
+        return batch_timesteps, None
+
+
 def do_training_loop(args,
                      accelerator,
                      module,
@@ -857,6 +879,12 @@ def do_training_loop(args,
                 if step % args.gradient_accumulation_steps == 0:
                     progress_bar.update(1)
                 continue
+            
+            # this breaks reproducible training but is worth it to get more value out of the min-snr weighting with smaller batches
+            if args.module == "unet" and grad_accum_steps == 0:
+                batch_timesteps, batch_mse_loss_weights = get_unet_timesteps_and_weight(noise_scheduler,
+                                                                                        args.train_batch_size * args.gradient_accumulation_steps,
+                                                                                        snr_gamma, snr_offset, device=accelerator.device)
 
             with accelerator.accumulate(module):
 
@@ -898,7 +926,8 @@ def do_training_loop(args,
                         torch.cuda.empty_cache()
                     """
 
-                    timesteps = torch.randint(0, noise_scheduler.config.num_train_timesteps, (samples.shape[0],), device=samples.device).long()
+                    #timesteps = torch.randint(0, noise_scheduler.config.num_train_timesteps, (samples.shape[0],), device=samples.device).long()
+                    timesteps = batch_timesteps[grad_accum_steps * args.train_batch_size:(grad_accum_steps+1) * args.train_batch_size]
 
                     if input_perturbation > 0:
                         model_input = noise_scheduler.add_noise(samples, new_noise, timesteps)
@@ -935,31 +964,16 @@ def do_training_loop(args,
                         #    loss = (loss / max_loss + max_loss.log()).mean()
 
                             #timestep_error_logvar = timestep_error_logvar[timesteps].view(-1, *((loss.ndim-1) * (1,))).amax()
-                            #loss = (loss / timestep_error_logvar.exp() + timestep_error_logvar).mean() 
-                    else:
-                        # Compute loss-weights as per Section 3.4 of https://arxiv.org/abs/2303.09556.
-                        # Since we predict the noise instead of x_0, the original formulation is slightly changed.
-                        # This is discussed in Section 4.2 of the same paper.
-                        snr = compute_snr(noise_scheduler, timesteps) + snr_offset
-
-                        if noise_scheduler.config.prediction_type != "v_prediction":
-                            # clamp required when using zero terminal SNR rescaling to avoid division by zero
-                            # not needed when using v-prediction because of the +1 snr offset
-                            if noise_scheduler.config.rescale_betas_zero_snr or (noise_scheduler.config.beta_schedule == "trained_betas"):
-                                snr = snr.clamp(min=1e-10)
-
-                        mse_loss_weights = (
-                            torch.stack([snr, snr_gamma * torch.ones_like(timesteps)], dim=1).min(dim=1)[0] / snr
-                        )
-
-                        loss = F.mse_loss(model_output.float(), target.float(), reduction="none")
+                            #loss = (loss / timestep_error_logvar.exp() + timestep_error_logvar).mean()
                         
+                    else: # min-snr weighting
+                        mse_loss_weights = batch_mse_loss_weights[grad_accum_steps * args.train_batch_size:(grad_accum_steps+1) * args.train_batch_size]
+
                         hz = torch.linspace(0, model_params["sample_rate"]/2, target.shape[-2], device=target.device)
                         mel_density = get_mel_density(hz).view(1, 1,-1, 1).requires_grad_(False); mel_density /= mel_density.mean()
-                        loss = loss * mel_density
-                        
-                        loss = loss.mean(dim=list(range(1, len(loss.shape)))) * mse_loss_weights
-                        loss = loss.mean()
+
+                        loss = F.mse_loss(model_output.float(), target.float(), reduction="none") * mel_density
+                        loss = (loss.mean(dim=list(range(1, len(loss.shape)))) * mse_loss_weights).mean()
 
                 elif args.module == "vae":
 
