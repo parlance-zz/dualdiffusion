@@ -41,12 +41,15 @@ if __name__ == "__main__":
     num_samples = 1
     batch_size = 1
     length = 0 #32000 * 25
-    scheduler = "dpms++"
+    #scheduler = "dpms++"
     #scheduler = "ddim"
     #scheduler = "kdpm2_a"
     #scheduler = "euler_a"
-    #scheduler = "dpms++_sde"
-    steps = 50
+    scheduler = "dpms++_sde"
+    beta_schedule = beta_start = beta_end = None
+    #beta_schedule = "linear"; beta_start = 0.0001; beta_end = 0.02
+    #beta_schedule = "squaredcos_cap_v2"; beta_start = beta_end = None
+    steps = 500
     loops = 0
     fp16 = False
     #fp16 = True
@@ -54,7 +57,7 @@ if __name__ == "__main__":
     #device = "cpu"
     
     seed = np.random.randint(10000, 99999-num_samples)
-    #seed = 69767
+    #seed = 21094
 
     model_dtype = torch.float16 if fp16 else torch.float32
     model_path = os.path.join(os.environ.get("MODEL_PATH", "./"), model_name)
@@ -79,7 +82,10 @@ if __name__ == "__main__":
                           seed=seed,
                           loops=loops,
                           batch_size=batch_size,
-                          length=length)
+                          length=length,
+                          beta_schedule=beta_schedule,
+                          beta_start=beta_start,
+                          beta_end=beta_end)
         print(f"Time taken: {time.time()-start}")
 
         output_flac_file_path = os.path.join(output_path, f"step_{last_global_step}_{scheduler}{steps}_s{seed}.flac")

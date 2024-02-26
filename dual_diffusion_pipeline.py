@@ -245,6 +245,9 @@ class DualDiffusionPipeline(DiffusionPipeline):
         loops: int = 0,
         batch_size: int = 1,
         length: int = 0,
+        beta_schedule: str = None,
+        beta_start: float = None,
+        beta_end: float = None,
     ):
         if (steps <= 0) or (steps > 1000):
             raise ValueError(f"Steps must be between 1 and 1000, got {steps}")
@@ -255,37 +258,28 @@ class DualDiffusionPipeline(DiffusionPipeline):
 
         self.set_tiling_mode(loops > 0)
 
-        prediction_type = self.scheduler.config["prediction_type"]
-        beta_schedule = self.scheduler.config["beta_schedule"]
-        if beta_schedule == "trained_betas":
-            trained_betas = self.scheduler.config["trained_betas"]
-        else:
-            trained_betas = None
-        beta_schedule = "linear"
+        scheduler_args = {
+            "prediction_type": self.scheduler.config["prediction_type"],
+            "beta_schedule": beta_schedule or self.scheduler.config["beta_schedule"],
+            "trained_betas": self.scheduler.config["trained_betas"],
+            "beta_start": beta_start or self.scheduler.config["beta_start"],
+            "beta_end": beta_end or self.scheduler.config["beta_end"],
+        }
+        print(scheduler_args)
 
         scheduler = scheduler.lower().strip()
         if scheduler == "ddim":
-            noise_scheduler = self.scheduler
+            noise_scheduler = DDIMScheduler(**scheduler_args)
         elif scheduler == "dpms++":
-            noise_scheduler = DPMSolverMultistepScheduler(prediction_type=prediction_type,
-                                                          solver_order=3,
-                                                          beta_schedule=beta_schedule,
-                                                          trained_betas=trained_betas)
+            noise_scheduler = DPMSolverMultistepScheduler(**scheduler_args, solver_order=3)
         elif scheduler == "kdpm2_a":
-            noise_scheduler = KDPM2AncestralDiscreteScheduler(prediction_type=prediction_type,
-                                                              beta_schedule=beta_schedule,
-                                                              trained_betas=trained_betas)
+            noise_scheduler = KDPM2AncestralDiscreteScheduler(**scheduler_args)
         elif scheduler == "euler_a":
-            noise_scheduler = EulerAncestralDiscreteScheduler(prediction_type=prediction_type,
-                                                              beta_schedule=beta_schedule,
-                                                              trained_betas=trained_betas)
+            noise_scheduler = EulerAncestralDiscreteScheduler(**scheduler_args)
         elif scheduler == "dpms++_sde":
             if self.unet.dtype != torch.float32:
                 raise ValueError("dpms++_sde scheduler requires float32 precision")
-            
-            noise_scheduler = DPMSolverSDEScheduler(prediction_type=prediction_type,
-                                                    beta_schedule=beta_schedule,
-                                                    trained_betas=trained_betas)
+            noise_scheduler = DPMSolverSDEScheduler(**scheduler_args)
         else:
             raise ValueError(f"Unknown scheduler '{scheduler}'")
         noise_scheduler.set_timesteps(steps)
