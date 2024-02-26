@@ -33,7 +33,7 @@ from diffusers.pipelines.pipeline_utils import DiffusionPipeline
 
 from unet_dual import UNetDualModel
 from autoencoder_kl_dual import AutoencoderKLDual
-from dual_diffusion_utils import compute_snr, mdct, imdct, save_raw, save_raw_img
+from dual_diffusion_utils import compute_snr, mdct, imdct, save_raw, save_raw_img, dict_str
 
 class DualMCLTFormat:
 
@@ -264,14 +264,14 @@ class DualDiffusionPipeline(DiffusionPipeline):
             "trained_betas": self.scheduler.config["trained_betas"],
             "beta_start": beta_start or self.scheduler.config["beta_start"],
             "beta_end": beta_end or self.scheduler.config["beta_end"],
+            "rescale_betas_zero_snr": self.scheduler.config["rescale_betas_zero_snr"],
         }
-        print(scheduler_args)
-
         scheduler = scheduler.lower().strip()
         if scheduler == "ddim":
-            noise_scheduler = DDIMScheduler(**scheduler_args)
+            noise_scheduler = DDIMScheduler(**scheduler_args, clip_sample_range=10)
         elif scheduler == "dpms++":
-            noise_scheduler = DPMSolverMultistepScheduler(**scheduler_args, solver_order=3)
+            scheduler_args.pop("rescale_betas_zero_snr")
+            noise_scheduler = DPMSolverMultistepScheduler(**scheduler_args,solver_order=3)
         elif scheduler == "kdpm2_a":
             noise_scheduler = KDPM2AncestralDiscreteScheduler(**scheduler_args)
         elif scheduler == "euler_a":
@@ -279,9 +279,11 @@ class DualDiffusionPipeline(DiffusionPipeline):
         elif scheduler == "dpms++_sde":
             if self.unet.dtype != torch.float32:
                 raise ValueError("dpms++_sde scheduler requires float32 precision")
+            scheduler_args.pop("rescale_betas_zero_snr")
             noise_scheduler = DPMSolverSDEScheduler(**scheduler_args)
         else:
             raise ValueError(f"Unknown scheduler '{scheduler}'")
+        
         noise_scheduler.set_timesteps(steps)
         timesteps = noise_scheduler.timesteps
 
@@ -298,8 +300,9 @@ class DualDiffusionPipeline(DiffusionPipeline):
             sample_shape = self.vae.get_latent_shape(sample_shape)
         print(f"Sample shape: {sample_shape}")
 
-        sample = torch.randn(sample_shape, device=self.device, dtype=self.unet.dtype, generator=generator)
-        sample *= noise_scheduler.init_noise_sigma
+        sample = torch.randn(sample_shape, device=self.device,
+                             dtype=self.unet.dtype,
+                             generator=generator) * noise_scheduler.init_noise_sigma
 
         for _, t in enumerate(self.progress_bar(timesteps)):
             
