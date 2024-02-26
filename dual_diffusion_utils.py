@@ -39,6 +39,7 @@ def init_cuda():
         exit(1)
     else:
         torch.backends.cuda.matmul.allow_tf32 = True
+        torch.backends.cudnn.allow_tf32 = True
         torch.backends.cuda.cufft_plan_cache[0].max_size = 250 # stupid cufft memory leak
 
 def dict_str(d, indent=4):
