@@ -273,6 +273,7 @@ class DualDiffusionPipeline(DiffusionPipeline):
             scheduler_args.pop("rescale_betas_zero_snr")
             noise_scheduler = DPMSolverMultistepScheduler(**scheduler_args,solver_order=3)
         elif scheduler == "kdpm2_a":
+            scheduler_args.pop("rescale_betas_zero_snr")
             noise_scheduler = KDPM2AncestralDiscreteScheduler(**scheduler_args)
         elif scheduler == "euler_a":
             noise_scheduler = EulerAncestralDiscreteScheduler(**scheduler_args)
