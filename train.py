@@ -759,7 +759,7 @@ def init_dataloader(dataset_name,
 
 def get_unet_timesteps_and_weight(noise_scheduler, total_batch_size, snr_gamma, snr_offset, device="cpu"):
 
-    batch_timesteps = torch.randint(0, noise_scheduler.num_train_timesteps,(total_batch_size,), device=device).long()
+    batch_timesteps = torch.randint(0, noise_scheduler.config.num_train_timesteps,(total_batch_size,), device=device).long()
 
     if snr_gamma is not None:
         batch_snr = compute_snr(noise_scheduler, batch_timesteps) + snr_offset
@@ -773,7 +773,7 @@ def get_unet_timesteps_and_weight(noise_scheduler, total_batch_size, snr_gamma, 
         batch_mse_loss_weights = (
             torch.stack([batch_snr, snr_gamma * torch.ones_like(batch_timesteps)], dim=1).min(dim=1)[0] / batch_snr
         )
-        
+
         return batch_timesteps, batch_mse_loss_weights
     else:
         return batch_timesteps, None
@@ -841,18 +841,21 @@ def do_training_loop(args,
             latent_std = model_params["latent_std"]
 
         snr_gamma = model_params["snr_gamma"]
+        snr_offset = 0
         if snr_gamma is not None:
             logger.info(f"Using min-SNR loss weighting - SNR gamma ({snr_gamma})")
             if noise_scheduler.config.prediction_type == "v_prediction":
                 logger.info(f"SNR gamma ({snr_gamma}) is set with v_prediction objective, using SNR offset +1")
-                snr_offset = 1.
-                #snr_gamma += 1. # also offset snr_gamma so the value has the same effect/meaning as non-v-pred objective
-            else:
-                snr_offset = 0.
+                snr_offset = 1
+                #snr_gamma += 1 # also offset snr_gamma so the value has the same effect/meaning as non-v-pred objective
+        else:
+            logger.info("min-SNR weighting is disabled")
 
         input_perturbation = model_params["input_perturbation"]   
         if input_perturbation > 0:
             logger.info(f"Using input perturbation of {input_perturbation}")
+        else:
+            logger.info("Input perturbation is disabled")
 
     logger.info(f"Sample shape: {sample_shape}")
     if latent_shape is not None:
