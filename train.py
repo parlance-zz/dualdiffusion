@@ -526,6 +526,7 @@ def load_checkpoint(checkpoint,
                     optimizer,
                     lr_scheduler,
                     learning_rate,
+                    adam_weight_decay,
                     gradient_accumulation_steps,
                     num_update_steps_per_epoch):
 
@@ -560,6 +561,15 @@ def load_checkpoint(checkpoint,
         if updated_learn_rate:
             lr_scheduler.scheduler.base_lrs = [learning_rate]
             logger.info(f"Using updated learning rate: {learning_rate}")
+
+        # update weight decay in case we've changed it
+        updated_weight_decay = False
+        for g in optimizer.param_groups:
+            if g["weight_decay"] != adam_weight_decay:
+                g["weight_decay"] = adam_weight_decay
+                updated_weight_decay = True
+        if updated_weight_decay:
+            logger.info(f"Using updated adam weight decay: {adam_weight_decay}")
 
     if global_step > 0:
         resume_global_step = global_step * gradient_accumulation_steps
@@ -757,11 +767,16 @@ def init_dataloader(dataset_name,
 
     return train_dataset, train_dataloader
 
-def get_unet_timesteps_and_weight(noise_scheduler, total_batch_size, snr_gamma, snr_offset, device="cpu"):
+def get_unet_timesteps_and_weight(noise_scheduler, total_batch_size, snr_gamma, device="cpu"):
 
-    batch_timesteps = torch.randint(0, noise_scheduler.config.num_train_timesteps,(total_batch_size,), device=device).long()
+    #batch_timesteps = torch.randint(0, noise_scheduler.config.num_train_timesteps,(total_batch_size,), device=device).long()
+    # spreads out the samples in each batch as much as possible over all timesteps
+    timesteps_per_sample = (noise_scheduler.config.num_train_timesteps-1) / total_batch_size
+    batch_timesteps = torch.arange(0, total_batch_size, device=device).float()
+    batch_timesteps = ((batch_timesteps + torch.rand_like(batch_timesteps)) * timesteps_per_sample).round().long()
 
     if snr_gamma is not None:
+        snr_offset = 1 if noise_scheduler.config.prediction_type == "v_prediction" else 0
         batch_snr = compute_snr(noise_scheduler, batch_timesteps) + snr_offset
 
         if noise_scheduler.config.prediction_type != "v_prediction":
@@ -841,12 +856,10 @@ def do_training_loop(args,
             latent_std = model_params["latent_std"]
 
         snr_gamma = model_params["snr_gamma"]
-        snr_offset = 0
         if snr_gamma is not None:
             logger.info(f"Using min-SNR loss weighting - SNR gamma ({snr_gamma})")
             if noise_scheduler.config.prediction_type == "v_prediction":
                 logger.info(f"SNR gamma ({snr_gamma}) is set with v_prediction objective, using SNR offset +1")
-                snr_offset = 1
                 #snr_gamma += 1 # also offset snr_gamma so the value has the same effect/meaning as non-v-pred objective
         else:
             logger.info("min-SNR weighting is disabled")
@@ -887,7 +900,7 @@ def do_training_loop(args,
             if args.module == "unet" and grad_accum_steps == 0:
                 batch_timesteps, batch_mse_loss_weights = get_unet_timesteps_and_weight(noise_scheduler,
                                                                                         args.train_batch_size * args.gradient_accumulation_steps,
-                                                                                        snr_gamma, snr_offset, device=accelerator.device)
+                                                                                        snr_gamma, device=accelerator.device)
 
             with accelerator.accumulate(module):
 
@@ -1312,6 +1325,7 @@ def main():
                                                             optimizer,
                                                             lr_scheduler,
                                                             args.learning_rate,
+                                                            args.adam_weight_decay,
                                                             args.gradient_accumulation_steps,
                                                             num_update_steps_per_epoch)
     
