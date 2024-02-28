@@ -374,7 +374,7 @@ def parse_args():
 
     return args
 
-def init_logging(logging_dir, module_type, report_to):
+def init_logging(accelerator, logging_dir, module_type, report_to):
     
     log_path = os.path.join(logging_dir, f"train_{module_type}.log")
     logging.basicConfig(
@@ -392,30 +392,31 @@ def init_logging(logging_dir, module_type, report_to):
     datasets.utils.logging.set_verbosity_warning()
     diffusers.utils.logging.set_verbosity_info()
 
-    if report_to == "tensorboard":
-        if not is_tensorboard_available():
-            raise ImportError("Make sure to install tensorboard if you want to use it for logging during training.")
-        port = int(os.environ.get("TENSORBOARD_HTTP_PORT", 6006))
-        tensorboard_args = [
-            "tensorboard",
-            "--logdir",
-            logging_dir,
-            "--bind_all",
-            "--port",
-            str(port),
-            "--samples_per_plugin",
-            "scalars=2000",
-        ]
-        tensorboard_monitor_process = subprocess.Popen(tensorboard_args)
+    if accelerator.is_main_process:
+        if report_to == "tensorboard":
+            if not is_tensorboard_available():
+                raise ImportError("Make sure to install tensorboard if you want to use it for logging during training.")
+            port = int(os.environ.get("TENSORBOARD_HTTP_PORT", 6006))
+            tensorboard_args = [
+                "tensorboard",
+                "--logdir",
+                logging_dir,
+                "--bind_all",
+                "--port",
+                str(port),
+                "--samples_per_plugin",
+                "scalars=2000",
+            ]
+            tensorboard_monitor_process = subprocess.Popen(tensorboard_args)
 
-        def cleanup_process():
-            try:
-                tensorboard_monitor_process.terminate()
-            except Exception:
-                logger.warn("Failed to terminate tensorboard process")
-                pass
+            def cleanup_process():
+                try:
+                    tensorboard_monitor_process.terminate()
+                except Exception:
+                    logger.warn("Failed to terminate tensorboard process")
+                    pass
 
-        atexit.register(cleanup_process)
+            atexit.register(cleanup_process)
 
 def init_accelerator(project_dir,
                      grad_accumulation_steps,
@@ -442,12 +443,13 @@ def init_accelerator(project_dir,
 def init_accelerator_loadsave_hooks(accelerator, module_type, module_class, ema_module):
 
     def save_model_hook(models, weights, output_dir):
-        if ema_module is not None:
-            ema_module.save_pretrained(os.path.join(output_dir, f"{module_type}_ema"))
+        if accelerator.is_main_process:
+            if ema_module is not None:
+                ema_module.save_pretrained(os.path.join(output_dir, f"{module_type}_ema"))
 
-        for model in models:
-            model.save_pretrained(os.path.join(output_dir, module_type))
-            weights.pop() # make sure to pop weight so that corresponding model is not saved again
+            for model in models:
+                model.save_pretrained(os.path.join(output_dir, module_type))
+                weights.pop() # make sure to pop weight so that corresponding model is not saved again
 
     def load_model_hook(models, input_dir):
         if ema_module is not None:
@@ -709,7 +711,8 @@ class DatasetTransformer(torch.nn.Module):
 
         return {"input": samples, "sample_paths": paths}
 
-def init_dataloader(dataset_name,
+def init_dataloader(accelerator,
+                    dataset_name,
                     hf_token,
                     train_data_dir,
                     cache_dir,
@@ -746,9 +749,10 @@ def init_dataloader(dataset_name,
         token=hf_token,
     ).cast_column("audio", Audio(decode=False))
 
-    if max_train_samples is not None:
-        dataset["train"] = dataset["train"].select(range(max_train_samples))
-    train_dataset = dataset["train"].with_transform(dataset_transform)
+    with accelerator.main_process_first():
+        if max_train_samples is not None:
+            dataset["train"] = dataset["train"].select(range(max_train_samples))
+        train_dataset = dataset["train"].with_transform(dataset_transform)
 
     train_dataloader = torch.utils.data.DataLoader(
         train_dataset,
@@ -1225,7 +1229,7 @@ def main():
                                    args.report_to,
                                    args.tracker_project_name)
     
-    init_logging(args.logging_dir, args.module, args.report_to)
+    init_logging(accelerator, args.logging_dir, args.module, args.report_to)
 
     if args.seed is not None:
         set_seed(args.seed)
@@ -1274,7 +1278,8 @@ def main():
                                args.adam_epsilon,
                                module)
 
-    train_dataset, train_dataloader = init_dataloader(args.dataset_name,
+    train_dataset, train_dataloader = init_dataloader(accelerator,
+                                                      args.dataset_name,
                                                       args.hf_token,
                                                       args.train_data_dir,
                                                       args.cache_dir,
