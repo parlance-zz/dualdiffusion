@@ -335,7 +335,7 @@ class DualDiffusionPipeline(DiffusionPipeline):
             save_raw(sample, os.path.join(debug_path, "debug_decoded_sample.raw"))
 
         raw_sample = self.format.sample_to_raw(sample.float(), model_params)
-        if loops > 0: raw_sample = raw_sample.repeat(2, loops+1)
+        if loops > 0: raw_sample = raw_sample.repeat(1, 1, loops+1)
         return raw_sample
     
     @torch.no_grad()
