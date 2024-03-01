@@ -867,6 +867,10 @@ def do_training_loop(args,
         module_log_channels = []
 
         if vae is not None:
+            if vae.config.last_global_step == 0:
+                logger.error("VAE model has not been trained, aborting...")
+                exit(1)
+
             latent_shape = vae.get_latent_shape(sample_shape)
             latent_mean = model_params["latent_mean"]
             latent_std = model_params["latent_std"]
