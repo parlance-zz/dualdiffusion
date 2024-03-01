@@ -878,9 +878,6 @@ def do_training_loop(args,
         snr_gamma = model_params["snr_gamma"]
         if snr_gamma is not None:
             logger.info(f"Using min-SNR loss weighting - SNR gamma ({snr_gamma})")
-            if noise_scheduler.config.prediction_type == "v_prediction":
-                logger.info(f"SNR gamma ({snr_gamma}) is set with v_prediction objective, using SNR offset +1")
-                #snr_gamma += 1 # also offset snr_gamma so the value has the same effect/meaning as non-v-pred objective
         else:
             logger.info("min-SNR weighting is disabled")
 
@@ -1041,11 +1038,11 @@ def do_training_loop(args,
                 
                 # Gather the losses across all processes for logging (if we use distributed training).
                 grad_accum_steps += 1
-                avg_loss = accelerator.gather(loss.repeat(args.train_batch_size)).mean()
+                avg_loss = accelerator.gather(loss).mean()
                 train_loss += avg_loss.item()
                 for channel in module_log_channels:
-                    avg = accelerator.gather(locals()[channel].repeat(args.train_batch_size)).mean()
-                    module_logs[channel] = module_logs[channel] + avg.item()
+                    avg = accelerator.gather(locals()[channel]).mean()
+                    module_logs[channel] += avg.item()
 
                 # Backpropagate
                 accelerator.backward(loss)
@@ -1321,7 +1318,7 @@ def main():
                                                       pipeline.config["model_params"]["sample_rate"],
                                                       pipeline.format.get_sample_crop_width(pipeline.config["model_params"]))
 
-    num_update_steps_per_epoch = math.floor(len(train_dataloader) / args.gradient_accumulation_steps / accelerator.num_processes)
+    num_update_steps_per_epoch = math.ceil(len(train_dataloader) / args.gradient_accumulation_steps / accelerator.num_processes)
     max_train_steps = args.num_train_epochs * num_update_steps_per_epoch
 
     if args.checkpointing_steps is None: args.checkpointing_steps = num_update_steps_per_epoch
