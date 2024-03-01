@@ -156,6 +156,12 @@ def parse_args():
         help="SNR weighting gamma to be used if rebalancing the loss. Recommended value is 5.0. "
         "More details here: https://arxiv.org/abs/2303.09556.",
     )
+    parser.add_argument(
+        "--num_timestep_loss_buckets",
+        type=int,
+        default=10,
+        help=("When training a unet/diffusion module un-weighted loss for groups of timesteps can be logged separately. Set to 0 to disable."),
+    )
     #parser.add_argument(
     #    "--pitch_augmentation_range",
     #    type=float,
@@ -435,8 +441,6 @@ def init_accelerator(project_dir,
 
     if accelerator.is_main_process:
         accelerator.init_trackers(tracker_project_name)
-        
-    logger.info(accelerator.state, main_process_only=False)
 
     return accelerator
 
@@ -675,7 +679,6 @@ def init_lr_scheduler(lr_schedule, optimizer, lr_warmup_steps, max_train_steps, 
         num_warmup_steps=lr_warmup_steps * num_processes,
         num_training_steps=max_train_steps * num_processes,
     )
-    logging.info(f"Using learning rate schedule {lr_schedule} with warmup steps {lr_warmup_steps}")
     return lr_scheduler
 
 class DatasetTransformer(torch.nn.Module):
@@ -762,6 +765,7 @@ def init_dataloader(accelerator,
         pin_memory=True,
         persistent_workers=True if dataloader_num_workers > 0 else False,
         prefetch_factor=prefetch_factor if dataloader_num_workers > 0 else None,
+        drop_last=True,
     )
 
     logger.info(f"Using training data from {train_data_dir} with {len(train_dataset)} samples and batch size {train_batch_size}")
@@ -773,7 +777,6 @@ def init_dataloader(accelerator,
 
 def get_unet_timesteps_and_weight(noise_scheduler, total_batch_size, snr_gamma, device="cpu"):
 
-    #batch_timesteps = torch.randint(0, noise_scheduler.config.num_train_timesteps,(total_batch_size,), device=device).long()
     # spreads out the samples in each batch as much as possible over all timesteps
     timesteps_per_sample = (noise_scheduler.config.num_train_timesteps-1) / total_batch_size
     batch_timesteps = torch.arange(0, total_batch_size, device=device).float()
@@ -781,22 +784,22 @@ def get_unet_timesteps_and_weight(noise_scheduler, total_batch_size, snr_gamma, 
 
     if snr_gamma is not None:
         snr_offset = 1 if noise_scheduler.config.prediction_type == "v_prediction" else 0
-        batch_snr = compute_snr(noise_scheduler, batch_timesteps) + snr_offset
+        batch_snr = compute_snr(noise_scheduler, batch_timesteps)
 
-        if noise_scheduler.config.prediction_type != "v_prediction":
-            # clamp required when using zero terminal SNR rescaling to avoid division by zero
-            # not needed when using v-prediction because of the +1 snr offset
+        # clamp required when using zero terminal SNR rescaling to avoid division by zero
+        # not needed when using v-prediction because of the +1 snr offset
+        if noise_scheduler.config.prediction_type != "v_prediction":     
             if noise_scheduler.config.rescale_betas_zero_snr or (noise_scheduler.config.beta_schedule == "trained_betas"):
                 batch_snr = batch_snr.clamp(min=1e-10)
 
         batch_mse_loss_weights = (
-            torch.stack([batch_snr, snr_gamma * torch.ones_like(batch_timesteps)], dim=1).min(dim=1)[0] / batch_snr
+            torch.stack([batch_snr, snr_gamma * torch.ones_like(batch_timesteps)], dim=1).min(dim=1)[0] / (batch_snr + snr_offset)
         )
-
+        batch_mse_loss_weights /= batch_mse_loss_weights.mean() # normalize the average weight to keep the overall
+                                                                # loss magnitude consistent with non-snr weighted loss
         return batch_timesteps, batch_mse_loss_weights
     else:
         return batch_timesteps, None
-
 
 def do_training_loop(args,
                      accelerator,
@@ -848,8 +851,17 @@ def do_training_loop(args,
         ]
 
     elif args.module == "unet":
-
         logger.info("Training UNet model:")
+
+        if args.num_timestep_loss_buckets > 0:
+            logger.info(f"Using {args.num_timestep_loss_buckets} timestep loss buckets")
+
+            timestep_loss_buckets = torch.zeros(args.num_timestep_loss_buckets,
+                                                device="cpu", dtype=torch.float32)
+            timestep_loss_bucket_counts = torch.zeros(args.num_timestep_loss_buckets,
+                                                    device="cpu", dtype=torch.float32)
+        else:
+            logger.info("Timestep loss buckets are disabled")
 
         noise_scheduler = pipeline.scheduler
         module_log_channels = []
@@ -902,9 +914,17 @@ def do_training_loop(args,
             
             # this breaks reproducible training but is worth it to get more value out of the min-snr weighting with smaller batches
             if args.module == "unet" and grad_accum_steps == 0:
+                total_batch_size = args.train_batch_size * accelerator.num_processes * args.gradient_accumulation_steps
                 batch_timesteps, batch_mse_loss_weights = get_unet_timesteps_and_weight(noise_scheduler,
-                                                                                        args.train_batch_size * args.gradient_accumulation_steps,
+                                                                                        total_batch_size,
                                                                                         snr_gamma, device=accelerator.device)
+                batch_timesteps = accelerator.gather(batch_timesteps.unsqueeze(0))[0]
+                if batch_mse_loss_weights is not None:
+                    batch_mse_loss_weights = accelerator.gather(batch_mse_loss_weights.unsqueeze(0))[0]
+
+                if args.num_timestep_loss_buckets > 0:
+                    timestep_loss_buckets.zero_()
+                    timestep_loss_bucket_counts.zero_()
 
             with accelerator.accumulate(module):
 
@@ -946,8 +966,8 @@ def do_training_loop(args,
                         torch.cuda.empty_cache()
                     """
 
-                    #timesteps = torch.randint(0, noise_scheduler.config.num_train_timesteps, (samples.shape[0],), device=samples.device).long()
-                    timesteps = batch_timesteps[grad_accum_steps * args.train_batch_size:(grad_accum_steps+1) * args.train_batch_size]
+                    process_batch_timesteps = batch_timesteps[accelerator.local_process_index::accelerator.num_processes]
+                    timesteps = process_batch_timesteps[grad_accum_steps * args.train_batch_size:(grad_accum_steps+1) * args.train_batch_size]
 
                     if input_perturbation > 0:
                         model_input = noise_scheduler.add_noise(samples, new_noise, timesteps)
@@ -968,34 +988,28 @@ def do_training_loop(args,
                     model_output = module(model_input, timesteps).sample
 
                     if snr_gamma is None:
-                        #loss = F.mse_loss(model_output.float(), target.float(), reduction="none")
-                        loss = F.mse_loss(model_output.float(), target.float(), reduction="mean")
-
-                        #hz = torch.linspace(0, model_params["sample_rate"]/2, target.shape[-2], device=target.device)
-                        #mel_density = get_mel_density(hz).view(1, 1,-1, 1).requires_grad_(False); mel_density /= mel_density.mean()
-                        #loss = (loss * mel_density).mean()
-
-                        #timestep_error_logvar = getattr(module, "timestep_error_logvar", None)
-                        #if timestep_error_logvar is None:
-                        #    loss = F.mse_loss(model_output.float(), target.float(), reduction="mean")
-                        #else:
-                        #    loss = F.mse_loss(model_output.float(), target.float(), reduction="none")
-                        #    loss = loss.mean(dim=tuple(range(1, len(loss.shape))), keepdim=True)
-                        #    max_loss = loss.amax().detach().clip(min=1e-10)
-                        #    loss = (loss / max_loss + max_loss.log()).mean()
-
-                            #timestep_error_logvar = timestep_error_logvar[timesteps].view(-1, *((loss.ndim-1) * (1,))).amax()
-                            #loss = (loss / timestep_error_logvar.exp() + timestep_error_logvar).mean()
+                        loss = F.mse_loss(model_output.float(), target.float(), reduction="none")
+                        timestep_loss = loss.mean(dim=list(range(1, len(loss.shape))))
+                        loss = timestep_loss.mean()
                         
                     else: # min-snr weighting
-                        mse_loss_weights = batch_mse_loss_weights[grad_accum_steps * args.train_batch_size:(grad_accum_steps+1) * args.train_batch_size]
+                        process_batch_mse_loss_weights = batch_mse_loss_weights[accelerator.local_process_index::accelerator.num_processes]
+                        mse_loss_weights = process_batch_mse_loss_weights[grad_accum_steps * args.train_batch_size:(grad_accum_steps+1) * args.train_batch_size]
 
                         #hz = torch.linspace(0, model_params["sample_rate"]/2, target.shape[-2], device=target.device)
                         #mel_density = get_mel_density(hz).view(1, 1,-1, 1).requires_grad_(False); mel_density /= mel_density.mean()
 
-                        loss = F.mse_loss(model_output.float(), target.float(), reduction="none")# * mel_density
-                        loss = (loss.mean(dim=list(range(1, len(loss.shape)))) * mse_loss_weights).mean()
+                        loss = F.mse_loss(model_output.float(), target.float(), reduction="none") # * mel_density
+                        timestep_loss = loss.mean(dim=list(range(1, len(loss.shape))))
+                        loss = (timestep_loss * mse_loss_weights).mean()
 
+                    if args.num_timestep_loss_buckets > 0:
+                        all_timesteps = accelerator.gather(timesteps)
+                        all_timestep_loss = accelerator.gather(timestep_loss).cpu()
+                        target_buckets = (all_timesteps / noise_scheduler.config.num_train_timesteps * timestep_loss_buckets.shape[0]).long().cpu()
+                        timestep_loss_buckets.index_add_(0, target_buckets, all_timestep_loss)
+                        timestep_loss_bucket_counts.index_add_(0, target_buckets, torch.ones_like(all_timestep_loss))
+                    
                 elif args.module == "vae":
 
                     samples_dict = pipeline.format.raw_to_sample(raw_samples, model_params, return_dict=True)
@@ -1059,6 +1073,13 @@ def do_training_loop(args,
                 if args.use_ema:
                     ema_module.step(module.parameters())
                     logs["ema_decay"] = ema_module.cur_decay_value    
+
+                if args.module == "unet" and args.num_timestep_loss_buckets > 0:
+                    for i in range(timestep_loss_buckets.shape[0]):
+                        if timestep_loss_bucket_counts[i].item() > 0:
+                            bucket_timestep_min = int(i / timestep_loss_buckets.shape[0] * noise_scheduler.config.num_train_timesteps)
+                            bucket_timestep_max = int((i+1) / timestep_loss_buckets.shape[0] * noise_scheduler.config.num_train_timesteps)
+                            logs[f"unet/timestep_loss_{bucket_timestep_min}-{bucket_timestep_max}"] = (timestep_loss_buckets[i] / timestep_loss_bucket_counts[i]).item()
 
                 accelerator.log(logs, step=global_step)
                 progress_bar.set_postfix(**logs)
@@ -1232,6 +1253,9 @@ def main():
     
     init_logging(accelerator, args.logging_dir, args.module, args.report_to)
 
+    logger.info(accelerator.state, main_process_only=False, in_order=True)
+    accelerator.wait_for_everyone()
+
     if args.seed is not None:
         set_seed(args.seed)
         logger.info(f"Using random seed {args.seed}")
@@ -1293,7 +1317,7 @@ def main():
                                                       pipeline.config["model_params"]["sample_rate"],
                                                       pipeline.format.get_sample_crop_width(pipeline.config["model_params"]))
 
-    num_update_steps_per_epoch = math.ceil(len(train_dataloader) / args.gradient_accumulation_steps)
+    num_update_steps_per_epoch = math.floor(len(train_dataloader) / args.gradient_accumulation_steps / accelerator.num_processes)
     max_train_steps = args.num_train_epochs * num_update_steps_per_epoch
 
     if args.checkpointing_steps is None: args.checkpointing_steps = num_update_steps_per_epoch
@@ -1304,13 +1328,12 @@ def main():
                                      args.lr_warmup_steps,
                                      max_train_steps,
                                      accelerator.num_processes)
+    
+    logger.info(f"Using learning rate schedule {args.lr_scheduler} with warmup steps {args.lr_warmup_steps}", main_process_only=True)
 
     module, optimizer, train_dataloader, lr_scheduler = accelerator.prepare(
         module, optimizer, train_dataloader, lr_scheduler
     )
-
-    # supposedly the the number of samples in the dataloader could be changed by the accelerator
-    #assert(num_update_steps_per_epoch == (math.ceil(len(train_dataloader) / args.gradient_accumulation_steps)))
 
     # Train!
     total_batch_size = args.train_batch_size * accelerator.num_processes * args.gradient_accumulation_steps
