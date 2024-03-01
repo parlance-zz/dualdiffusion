@@ -1005,8 +1005,8 @@ def do_training_loop(args,
                         loss = (timestep_loss * mse_loss_weights).mean()
 
                     if args.num_timestep_loss_buckets > 0:
-                        all_timesteps = accelerator.gather(timesteps)
-                        all_timestep_loss = accelerator.gather(timestep_loss).cpu()
+                        all_timesteps = accelerator.gather(timesteps.detach())
+                        all_timestep_loss = accelerator.gather(timestep_loss.detach()).cpu()
                         target_buckets = (all_timesteps / noise_scheduler.config.num_train_timesteps * timestep_loss_buckets.shape[0]).long().cpu()
                         timestep_loss_buckets.index_add_(0, target_buckets, all_timestep_loss)
                         timestep_loss_bucket_counts.index_add_(0, target_buckets, torch.ones_like(all_timestep_loss))
@@ -1318,7 +1318,8 @@ def main():
                                                       pipeline.config["model_params"]["sample_rate"],
                                                       pipeline.format.get_sample_crop_width(pipeline.config["model_params"]))
 
-    num_update_steps_per_epoch = math.ceil(len(train_dataloader) / args.gradient_accumulation_steps / accelerator.num_processes)
+    num_update_steps_per_epoch = math.floor(len(train_dataloader) / accelerator.num_processes)
+    num_update_steps_per_epoch = math.ceil(num_update_steps_per_epoch / args.gradient_accumulation_steps)
     max_train_steps = args.num_train_epochs * num_update_steps_per_epoch
 
     if args.checkpointing_steps is None: args.checkpointing_steps = num_update_steps_per_epoch
