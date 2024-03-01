@@ -795,8 +795,7 @@ def get_unet_timesteps_and_weight(noise_scheduler, total_batch_size, snr_gamma, 
         batch_mse_loss_weights = (
             torch.stack([batch_snr, snr_gamma * torch.ones_like(batch_timesteps)], dim=1).min(dim=1)[0] / (batch_snr + snr_offset)
         )
-        batch_mse_loss_weights /= batch_mse_loss_weights.mean() # normalize the average weight to keep the overall
-                                                                # loss magnitude consistent with non-snr weighted loss
+
         return batch_timesteps, batch_mse_loss_weights
     else:
         return batch_timesteps, None
@@ -1005,9 +1004,9 @@ def do_training_loop(args,
                         loss = (timestep_loss * mse_loss_weights).mean()
 
                     if args.num_timestep_loss_buckets > 0:
-                        all_timesteps = accelerator.gather(timesteps.detach())
+                        all_timesteps = accelerator.gather(timesteps.detach()).cpu()
                         all_timestep_loss = accelerator.gather(timestep_loss.detach()).cpu()
-                        target_buckets = (all_timesteps / noise_scheduler.config.num_train_timesteps * timestep_loss_buckets.shape[0]).long().cpu()
+                        target_buckets = (all_timesteps / noise_scheduler.config.num_train_timesteps * timestep_loss_buckets.shape[0]).long()
                         timestep_loss_buckets.index_add_(0, target_buckets, all_timestep_loss)
                         timestep_loss_bucket_counts.index_add_(0, target_buckets, torch.ones_like(all_timestep_loss))
                     
@@ -1065,12 +1064,14 @@ def do_training_loop(args,
                 progress_bar.update(1)
                 global_step += 1
 
-                logs = {"loss": train_loss / grad_accum_steps,
-                        "lr": lr_scheduler.get_last_lr()[0],
-                        "step": global_step,
-                        "grad_norm": grad_norm}
-                for channel in module_log_channels:
-                    logs[f"{args.module}/{channel}"] = module_logs[channel] / grad_accum_steps
+                if grad_accum_steps >= args.gradient_accumulation_steps: # don't log incomplete batches
+                    logs = {"loss": train_loss / grad_accum_steps,
+                            "lr": lr_scheduler.get_last_lr()[0],
+                            "step": global_step,
+                            "grad_norm": grad_norm}
+                    for channel in module_log_channels:
+                        logs[f"{args.module}/{channel}"] = module_logs[channel] / grad_accum_steps
+
                 if args.use_ema:
                     ema_module.step(module.parameters())
                     logs["ema_decay"] = ema_module.cur_decay_value    
