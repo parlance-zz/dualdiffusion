@@ -889,6 +889,7 @@ def do_training_loop(args,
     logger.info(f"Sample shape: {sample_shape}")
     if latent_shape is not None:
         logger.info(f"Latent shape: {latent_shape}")
+        logger.info(f"Latent mean: {latent_mean} - Latent std: {latent_std}")
 
 
     for epoch in range(first_epoch, args.num_train_epochs):
