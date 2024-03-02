@@ -33,7 +33,7 @@ from diffusers.pipelines.pipeline_utils import DiffusionPipeline
 
 from unet_dual import UNetDualModel
 from autoencoder_kl_dual import AutoencoderKLDual
-from dual_diffusion_utils import compute_snr, mdct, imdct, save_raw, save_raw_img, dict_str
+from dual_diffusion_utils import compute_snr, mdct, imdct, save_raw, save_raw_img, dict_str, get_mel_density
 
 class DualMCLTFormat:
 
@@ -327,9 +327,12 @@ class DualDiffusionPipeline(DiffusionPipeline):
             save_raw(sample, os.path.join(debug_path, "debug_latents.raw"))
         
         if getattr(self, "vae", None) is not None:
-            #sample = sample - sample.mean(dim=(1,2,3), keepdim=True)
-            #sample = sample / sample.std(dim=(1,2,3), keepdim=True).clip(min=1e-8)
+            #sample -= sample.mean(dim=(1,2,3), keepdim=True)
+            #sample /= sample.std(dim=(1,2,3), keepdim=True).clip(min=1e-8)
             sample = sample * model_params["latent_std"] + model_params["latent_mean"]
+            hz = torch.linspace(0, model_params["sample_rate"]/2, sample.shape[-2], device=sample.device)
+            sample /= get_mel_density(hz).view(1, 1,-1, 1).requires_grad_(False)
+
             save_raw_img(sample, os.path.join(debug_path, "debug_latents.png"))
             sample = self.vae.decode(sample).sample
             save_raw(sample, os.path.join(debug_path, "debug_decoded_sample.raw"))
