@@ -934,14 +934,17 @@ def do_training_loop(args,
 
                 if args.module == "unet":
                     samples = pipeline.format.raw_to_sample(raw_samples, model_params)
-
-                    hz = torch.linspace(0, model_params["sample_rate"]/2, samples.shape[-2], device=samples.device)
-                    mel_density = get_mel_density(hz).view(1, 1,-1, 1).requires_grad_(False)
                 
                     if vae is not None:
                         samples = vae.encode(samples.half(), return_dict=False)[0].mode().float()
-                        samples = (samples * mel_density - latent_mean) / latent_std
 
+                    if vae is not None or input_perturbation > 0:
+                        hz = torch.linspace(0, model_params["sample_rate"]/2, samples.shape[-2], device=samples.device)
+                        mel_density = get_mel_density(hz).view(1, 1,-1, 1).requires_grad_(False)
+                    
+                    if vae is not None:
+                        samples = (samples * mel_density - latent_mean) / latent_std
+                    
                     noise = torch.randn_like(samples) * noise_scheduler.init_noise_sigma
                     if input_perturbation > 0:
                         new_noise = noise + input_perturbation * torch.randn_like(noise) * mel_density
