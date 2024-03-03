@@ -934,17 +934,17 @@ def do_training_loop(args,
 
                 if args.module == "unet":
                     samples = pipeline.format.raw_to_sample(raw_samples, model_params)
-                    if vae is not None:
-                        #samples = (vae.encode(samples.half(), return_dict=False)[0].mode().float() - latent_mean) / latent_std
 
+                    hz = torch.linspace(0, model_params["sample_rate"]/2, samples.shape[-2], device=samples.device)
+                    mel_density = get_mel_density(hz).view(1, 1,-1, 1).requires_grad_(False)
+                
+                    if vae is not None:
                         samples = vae.encode(samples.half(), return_dict=False)[0].mode().float()
-                        hz = torch.linspace(0, model_params["sample_rate"]/2, samples.shape[-2], device=samples.device)
-                        samples *= get_mel_density(hz).view(1, 1,-1, 1).requires_grad_(False)
-                        samples = (samples - latent_mean) / latent_std
+                        samples = (samples * mel_density - latent_mean) / latent_std
 
                     noise = torch.randn_like(samples) * noise_scheduler.init_noise_sigma
                     if input_perturbation > 0:
-                        new_noise = noise + input_perturbation * torch.randn_like(noise)
+                        new_noise = noise + input_perturbation * torch.randn_like(noise) * mel_density
 
                     """
                     if not debug_written:
@@ -999,10 +999,7 @@ def do_training_loop(args,
                         process_batch_mse_loss_weights = batch_mse_loss_weights[accelerator.local_process_index::accelerator.num_processes]
                         mse_loss_weights = process_batch_mse_loss_weights[grad_accum_steps * args.train_batch_size:(grad_accum_steps+1) * args.train_batch_size]
 
-                        #hz = torch.linspace(0, model_params["sample_rate"]/2, target.shape[-2], device=target.device)
-                        #mel_density = get_mel_density(hz).view(1, 1,-1, 1).requires_grad_(False); mel_density /= mel_density.mean()
-
-                        loss = F.mse_loss(model_output.float(), target.float(), reduction="none") # * mel_density
+                        loss = F.mse_loss(model_output.float(), target.float(), reduction="none")
                         timestep_loss = loss.mean(dim=list(range(1, len(loss.shape))))
                         loss = (timestep_loss * mse_loss_weights).mean()
 
