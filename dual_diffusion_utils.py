@@ -334,7 +334,7 @@ def save_raw(tensor, output_path):
         tensor = tensor.complex64()
     tensor.detach().resolve_conj().cpu().numpy().tofile(output_path)
 
-def load_raw(input_path, dtype="int16", num_channels=1, start=0, count=-1):
+def load_raw(input_path, dtype="int16", num_channels=1, start=0, count=-1, device="cpu"):
 
     np_dtype = STR_DTYPE_TO_NUMPY_DTYPE.get(dtype, None)
     if np_dtype is None:
@@ -364,7 +364,7 @@ def load_raw(input_path, dtype="int16", num_channels=1, start=0, count=-1):
         tensor = torch.from_numpy(np.fromfile(input_path, dtype=np_dtype, count=count * num_channels, offset=offset))
     else:
         tensor = torch.from_numpy(np.frombuffer(input_path, dtype=np_dtype, count=count * num_channels, offset=offset))
-    return (tensor / STR_DTYPE_MAX_VALUE[dtype]).view(-1, num_channels).permute(1, 0)
+    return (tensor / STR_DTYPE_MAX_VALUE[dtype]).view(-1, num_channels).permute(1, 0).to(device)
 
 def normalize_lufs(raw_samples, sample_rate, target_lufs=-16.):
     
@@ -398,7 +398,7 @@ def save_audio(raw_samples, sample_rate, output_path, target_lufs=-16.):
     
     torchaudio.save(output_path, raw_samples.cpu(), sample_rate, bits_per_sample=16)
 
-def load_audio(input_path, start=0, count=-1, return_sample_rate=False):
+def load_audio(input_path, start=0, count=-1, return_sample_rate=False, device="cpu"):
 
     if isinstance(input_path, bytes):
         input_path = BytesIO(input_path)
@@ -422,9 +422,9 @@ def load_audio(input_path, start=0, count=-1, return_sample_rate=False):
         tensor = tensor[..., :count] # for whatever reason torchaudio will return more samples than requested
 
     if return_sample_rate:
-        return tensor, sample_rate
+        return tensor.to(device), sample_rate
     else:
-        return tensor
+        return tensor.to(device)
     
 def save_sample_img(sample, img_path, include_phase=False):
     
@@ -524,13 +524,23 @@ def istft2(x, block_width, overlap=2, window_fn="none"):
 
     return y
 
-def save_raw_img(x, img_path):
+def quantize_tensor(x, levels):
+    min_val = x.amin()
+    max_val = x.amax()
+    range_val = max_val - min_val
+    step = range_val / (levels - 1)
+    quantized = ((x - min_val) / step).round().clamp(0, levels - 1) * step + min_val
+    return quantized
+
+def save_raw_img(x, img_path, allow_inversion=False):
     
     x = x.detach().resolve_conj().cpu()
     x -= x.amin(dim=(x.ndim-1, x.ndim-2), keepdim=True)
-    x /= x.amax(dim=(x.ndim-1, x.ndim-2), keepdim=True)
-    invert_channel_mask = ((x.mean(dim=(x.ndim-1, x.ndim-2), keepdim=True) > 0.5) * torch.ones_like(x)) > 0.5
-    x[invert_channel_mask] = 1 - x[invert_channel_mask]
+    x /= x.amax(dim=(x.ndim-1, x.ndim-2), keepdim=True).clip(min=1e-16)
+
+    if allow_inversion:
+        invert_channel_mask = ((x.mean(dim=(x.ndim-1, x.ndim-2), keepdim=True) > 0.5) * torch.ones_like(x)) > 0.5
+        x[invert_channel_mask] = 1 - x[invert_channel_mask]
 
     if (x.ndim >= 3) and (x.ndim <=4):
         if x.ndim == 4: x = x.squeeze(0)
