@@ -29,7 +29,7 @@ from dual_diffusion_utils import dict_str
 
 load_dotenv(override=True)
 
-MODEL_NAME = "dualdiffusion2d_1000_20"
+MODEL_NAME = "dualdiffusion2d_2000_1"
 MODEL_SEED = 400
 
 MODEL_PARAMS = {
@@ -38,14 +38,11 @@ MODEL_PARAMS = {
     "sample_rate": int(os.environ.get("DATASET_SAMPLE_RATE")),
 
     # sample format params
-    "sample_format": "mclt",
-    #"sample_raw_length": 393216, # vae training sample length
-    "sample_raw_length": 720896,
-    "num_chunks": 256,
-    "u": 8000,
-    "noise_floor": 1e-5,
-    "latent_mean": 0.06646625906229019,
-    "latent_std": 0.899676513671875,
+    "sample_format": "spectrogram",
+    "sample_raw_length": 32000*10,
+    "noise_floor": 2e-5,
+    "latent_mean": 0,
+    "latent_std": 0,
 
     # diffusion unet training params
     "input_perturbation": 0.1,
@@ -54,28 +51,47 @@ MODEL_PARAMS = {
     # vae unet training params
     "kl_loss_weight": 1e-5,
     "recon_loss_weight": 0.015,
-    "stereo_separation_weight": 0.5,
-    "use_mixed_mss": False,
 
-    "multiscale_spectral_loss": {    
-        "low_cutoff": 2,
-        "block_overlap": 8,
+    "spectrogram_params": {
+        "abs_exponent": 0.25,
+
+        # FFT parameters
+        "step_size_ms": 8,
+
+        # hann ** 40 window settings
+        "window_duration_ms": 200,
+        "padded_duration_ms": 200,
+        "window_exponent": 32,
+        "window_periodic": True,
+
+        # hann ** 0.5 window settings
+        #"window_exponent": 0.5,
+        #"window_duration_ms": 30,
+        #"padded_duration_ms": 200,
+
+        # mel scale params
+        "num_frequencies": 256,
+        "min_frequency": 20,
+        "max_frequency": 16000,
+        "mel_scale_type": "htk",
+
+        # phase recovery params
+        "num_griffin_lim_iters": 400,
+        "num_dm_iters": 0,
+        "fgla_momentum": 0.99,
+        "dm_beta": 1,
+        "stereo_coherence": 0.67,
+    },
+
+    "loss_params": {
+        "stereo_separation_weight": 0.5,
+        "block_overlap": 4,
         "block_widths": [
-            32,
-            64,
-            128,
-            256,
-            512,
-            1024,
-            2048,
-            4096,
-            8192,
-            16384,
-            32768,
-            65536,
-            131072,
+            2,
+            4,
+            8,
+            16,
         ],
-        "window_fn": "hann",
     },
 }
 
@@ -98,18 +114,19 @@ SCHEDULER_PARAMS = {
     #"rescale_betas_zero_snr": False,
 }
 
+format = DualDiffusionPipeline.get_sample_format(MODEL_PARAMS)
+
 VAE_PARAMS = {
     "latent_channels": 2,
-    "sample_size": (64, 2048),
     "act_fn": "silu",
     "conv_size": (3,3),
 
-    "block_out_channels": (64, 160, 320),
+    "block_out_channels": (64, 128, 256, 512),
     "layers_per_block": 2,
 
     "layers_per_mid_block": 3,
-    "add_mid_attention": True,
-    #"add_mid_attention": False,
+    #"add_mid_attention": True,
+    "add_mid_attention": False,
 
     "norm_num_groups": 32,
     #"norm_num_groups": (0, 0, 32),
@@ -120,8 +137,8 @@ VAE_PARAMS = {
     #"upsample_type": "conv",
     "downsample_ratio": (2,2),
 
-    "attention_num_heads": (8,8,8),
-    "separate_attn_dim_mid": (3,2,3),
+    "attention_num_heads": (8,8,8,8),
+    "separate_attn_dim_mid": (3,2,3,2),
     "double_attention": False,
     "pre_attention": False,
     "add_attention": False,
@@ -132,8 +149,8 @@ VAE_PARAMS = {
     "freq_embedding_dim": 0,
     "time_embedding_dim": 0,
 
-    "in_channels": DualDiffusionPipeline.get_sample_format(MODEL_PARAMS).get_num_channels(MODEL_PARAMS)[0],
-    "out_channels": DualDiffusionPipeline.get_sample_format(MODEL_PARAMS).get_num_channels(MODEL_PARAMS)[1],
+    "in_channels": format.get_num_channels()[0],
+    "out_channels": format.get_num_channels()[1],
 }
 
 UNET_PARAMS = {
@@ -142,7 +159,7 @@ UNET_PARAMS = {
     "conv_size": (3,3),
 
     #"attention_num_heads": 4,
-    "attention_num_heads": (8,8,16,16),
+    "attention_num_heads": (8,8,8,8),
 
     "separate_attn_dim_mid": (0,0,),
     "add_mid_attention": True,
@@ -173,7 +190,8 @@ UNET_PARAMS = {
     #"downsample_type": "resnet",
     #"upsample_type": "resnet",
     "downsample_type": "conv",
-    "upsample_type": "conv",
+    #"upsample_type": "conv",
+    "upsample_type": "conv_transpose",
 
     "norm_num_groups": 32,
     #"norm_num_groups": (32, 64, 128, 128,),
@@ -182,8 +200,7 @@ UNET_PARAMS = {
     #"layers_per_block": 1,
     "layers_per_block": 2,
 
-    #"block_out_channels": (256, 384, 640, 1024), # 320
-    "block_out_channels": (96, 192, 384, 768), # 330
+    "block_out_channels": (32, 64, 128, 256), 
 }
 
 
@@ -201,8 +218,8 @@ if __name__ == "__main__":
         print("VAE Params:")
         print(dict_str(VAE_PARAMS))
     else:
-        UNET_PARAMS["in_channels"]  = DualDiffusionPipeline.get_sample_format(MODEL_PARAMS).get_num_channels(MODEL_PARAMS)[0]
-        UNET_PARAMS["out_channels"] = DualDiffusionPipeline.get_sample_format(MODEL_PARAMS).get_num_channels(MODEL_PARAMS)[1]
+        UNET_PARAMS["in_channels"]  = format.get_num_channels()[0]
+        UNET_PARAMS["out_channels"] = format.get_num_channels()[1]
     
     print("UNET Params:")
     print(dict_str(UNET_PARAMS))
