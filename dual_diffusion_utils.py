@@ -377,14 +377,15 @@ def normalize_lufs(raw_samples, sample_rate, target_lufs=-16., max_clip=0.15):
     elif raw_samples.ndim == 2:
         raw_samples = raw_samples.view(1, raw_samples.shape[0], -1)
 
+    raw_samples /= raw_samples.abs().amax(dim=tuple(range(1, len(raw_samples.shape))), keepdim=True).clip(min=1e-16)
     current_lufs = AF.loudness(raw_samples, sample_rate)
     gain = 10. ** ((target_lufs - current_lufs) / 20.0)
     gain = gain.view((*gain.shape,) + (1,) * (raw_samples.ndim - gain.ndim))
 
-    normalized_raw_samples = (raw_samples * gain).view(original_shape)
+    normalized_raw_samples = raw_samples * gain
     normalized_raw_samples /= normalized_raw_samples.abs().amax(dim=tuple(range(1, len(normalized_raw_samples.shape))), keepdim=True).clip(min=1+max_clip)
 
-    return torch.nan_to_num(normalized_raw_samples, nan=0, posinf=0, neginf=0)
+    return normalized_raw_samples.view(original_shape)
 
 def save_audio(raw_samples, sample_rate, output_path, target_lufs=-16.):
     
