@@ -174,6 +174,7 @@ class DualSpectrogramFormat:
     @torch.no_grad()
     def sample_to_raw(self, samples, return_dict=False):
         
+        samples = samples.ReLU()
         raw_samples = self.spectrogram_converter.spectrogram_to_audio(samples)
 
         if not return_dict:         
