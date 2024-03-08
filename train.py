@@ -49,7 +49,8 @@ from diffusers.training_utils import EMAModel
 from diffusers.utils import deprecate, is_tensorboard_available
 
 from unet_dual import UNetDualModel
-from autoencoder_kl_dual import AutoencoderKLDual, DualMultiscaleSpectralLoss
+from autoencoder_kl_dual import AutoencoderKLDual
+from loss import DualMultiscaleSpectralLoss
 from dual_diffusion_pipeline import DualDiffusionPipeline
 from dual_diffusion_utils import init_cuda, compute_snr, load_audio, save_audio, load_raw, save_raw, dict_str, get_mel_density
 
@@ -817,32 +818,27 @@ def do_training_loop(args,
                      
     debug_written = False
     model_params = pipeline.config["model_params"]
-    sample_shape = pipeline.format.get_sample_shape(model_params, bsz=args.train_batch_size)
+    sample_shape = pipeline.format.get_sample_shape(bsz=args.train_batch_size)
     latent_shape = None
 
     if args.module == "vae":
 
         latent_shape = module.get_latent_shape(sample_shape)
-        multiscale_spectral_loss = DualMultiscaleSpectralLoss(model_params["multiscale_spectral_loss"])
-
-        use_mixed_mss = model_params["use_mixed_mss"]
         kl_loss_weight = model_params["kl_loss_weight"]
         recon_loss_weight = model_params["recon_loss_weight"]
 
         logger.info("Training VAE model:")
-        logger.info(f"Multiscale spectral loss params: {dict_str(model_params['multiscale_spectral_loss'])}")
+        logger.info(f"Loss params: {dict_str(model_params['loss_params'])}")
         logger.info(f"Using KL loss weight: {kl_loss_weight} - Recon loss weight: {recon_loss_weight}")
 
         kl_loss_weight = torch.tensor(kl_loss_weight, device=accelerator.device, dtype=torch.float32)
         recon_loss_weight = torch.tensor(recon_loss_weight, device=accelerator.device, dtype=torch.float32)
-        stereo_separation_weight = torch.tensor(model_params["stereo_separation_weight"], device=accelerator.device, dtype=torch.float32)
 
         module_log_channels = [
             "kl_loss_weight",
             "recon_loss_weight",
-            "stereo_separation_weight",
-            "mss_real_loss",
-            "mss_imag_loss",
+            "real_loss",
+            "imag_loss",
             "kl_loss",
             "latents_mean",
             "latents_std",
@@ -933,7 +929,7 @@ def do_training_loop(args,
                 raw_sample_paths = batch["sample_paths"]
 
                 if args.module == "unet":
-                    samples = pipeline.format.raw_to_sample(raw_samples, model_params)
+                    samples = pipeline.format.raw_to_sample(raw_samples)
                 
                     if vae is not None:
                         samples = vae.encode(samples.half(), return_dict=False)[0].mode().float()
@@ -1015,26 +1011,22 @@ def do_training_loop(args,
                     
                 elif args.module == "vae":
 
-                    samples_dict = pipeline.format.raw_to_sample(raw_samples, model_params, return_dict=True)
+                    samples_dict = pipeline.format.raw_to_sample(raw_samples, return_dict=True)
                     posterior = module.encode(samples_dict["samples"], return_dict=False)[0]
                     latents = posterior.sample()
                     latents_mean = latents.mean()
                     latents_std = latents.std()
                     model_output = module.decode(latents, return_dict=False)[0]
 
-                    if use_mixed_mss:
-                        recon_samples_dict = pipeline.format.sample_to_raw(model_output, model_params, return_dict=True, original_samples_dict=samples_dict)
-                    else:
-                        recon_samples_dict = pipeline.format.sample_to_raw(model_output, model_params, return_dict=True)
-
-                    point_similarity = (samples_dict["raw_samples"] - recon_samples_dict["raw_samples"]).abs().mean()
+                    recon_samples_dict = pipeline.format.sample_to_raw(model_output, return_dict=True)
+                    point_similarity = (samples_dict["samples"] - recon_samples_dict["samples"]).abs().mean()
                     
-                    mss_real_loss, mss_imag_loss = multiscale_spectral_loss(recon_samples_dict, samples_dict, model_params)
-                    mss_real_nll_loss = (mss_real_loss / module.recon_loss_logvar.exp() + module.recon_loss_logvar) * recon_loss_weight
-                    mss_imag_nll_loss = (mss_imag_loss / module.recon_loss_logvar.exp() + module.recon_loss_logvar) * recon_loss_weight
+                    real_loss, imag_loss = pipeline.format.get_loss(recon_samples_dict, samples_dict)
+                    real_nll_loss = (real_loss / module.recon_loss_logvar.exp() + module.recon_loss_logvar) * recon_loss_weight
+                    imag_nll_loss = (imag_loss / module.recon_loss_logvar.exp() + module.recon_loss_logvar) * recon_loss_weight
 
                     kl_loss = posterior.kl()
-                    loss = mss_real_nll_loss + mss_imag_nll_loss + kl_loss * kl_loss_weight
+                    loss = real_nll_loss + imag_nll_loss + kl_loss * kl_loss_weight
                 else:
                     raise ValueError(f"Unknown module {args.module}")
                 
@@ -1320,7 +1312,7 @@ def main():
                                                       args.train_data_raw_format,
                                                       args.train_data_num_channels,
                                                       pipeline.config["model_params"]["sample_rate"],
-                                                      pipeline.format.get_sample_crop_width(pipeline.config["model_params"]))
+                                                      pipeline.format.get_sample_crop_width())
 
     num_update_steps_per_epoch = math.floor(len(train_dataloader) / accelerator.num_processes)
     num_update_steps_per_epoch = math.ceil(num_update_steps_per_epoch / args.gradient_accumulation_steps)

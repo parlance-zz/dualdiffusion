@@ -35,11 +35,13 @@ from unet_dual import UNetDualModel
 from autoencoder_kl_dual import AutoencoderKLDual
 from spectrogram import SpectrogramParams, SpectrogramConverter
 from dual_diffusion_utils import compute_snr, mdct, imdct, save_raw, save_raw_img
+from loss import DualMultiscaleSpectralLoss, DualMultiscaleSpectralLoss2D
 
 class DualMCLTFormat:
 
     def __init__(self, model_params):
         self.model_params = model_params
+        self.loss = DualMultiscaleSpectralLoss(model_params["loss_params"])
 
     def get_sample_crop_width(self, length=0):
         block_width = self.model_params["num_chunks"] * 2
@@ -128,6 +130,9 @@ class DualMCLTFormat:
             }
             return samples_dict
 
+    def get_loss(self, sample, target):
+        return self.loss(sample, target, self.model_params)
+
     def get_sample_shape(self, bsz=1, length=0):
         _, num_output_channels = self.get_num_channels()
 
@@ -146,6 +151,7 @@ class DualSpectrogramFormat:
                                                     **model_params["spectrogram_params"])
         
         self.spectrogram_converter = SpectrogramConverter(self.spectrogram_params)
+        self.loss = DualMultiscaleSpectralLoss2D(model_params["loss_params"])
 
     def get_sample_crop_width(self, length=0):
         if length <= 0: length = self.model_params["sample_raw_length"]
@@ -186,6 +192,9 @@ class DualSpectrogramFormat:
             }
             return samples_dict
 
+    def get_loss(self, sample, target):
+        return self.loss(sample, target, self.model_params)
+    
     def get_sample_shape(self, bsz=1, length=0):
         _, num_output_channels = self.get_num_channels()
         crop_width = self.get_sample_crop_width(length=length)
