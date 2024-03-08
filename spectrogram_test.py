@@ -31,7 +31,7 @@ if __name__ == "__main__":
 
     spectrogram_params = SpectrogramParams(sample_rate=dataset_sample_rate,
                                            stereo=dataset_num_channels == 2)
-    spectrogram_converter = SpectrogramConverter(spectrogram_params, device=device)
+    spectrogram_converter = SpectrogramConverter(spectrogram_params).to(device)
     crop_width = spectrogram_converter.get_crop_width(audio_len)
 
     print("Sample filename: ", sample_filename)

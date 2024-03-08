@@ -278,20 +278,19 @@ class PhaseRecovery(torch.nn.Module):
 
         return wave
 
-class SpectrogramConverter:
+class SpectrogramConverter(torch.nn.Module):
 
     @staticmethod
     def hann_power_window(window_length, periodic=True, *, dtype=None, layout=torch.strided, device=None, requires_grad=False, exponent=1):
         return torch.hann_window(window_length, periodic=periodic, dtype=dtype, layout=layout, device=device, requires_grad=requires_grad) ** exponent
 
-    def __init__(self, params: SpectrogramParams, device="cpu"):
+    def __init__(self, params: SpectrogramParams):
+        super(SpectrogramConverter, self).__init__()
         self.p = params
-        self.device = device
         
         window_args = {
             "exponent": params.window_exponent,
             "periodic": params.window_periodic,
-            "device": device,
         }
 
         self.spectrogram_func = torchaudio.transforms.Spectrogram(
@@ -306,7 +305,7 @@ class SpectrogramConverter:
             center=True,
             pad_mode="reflect",
             onesided=True,
-        ).to(self.device)
+        )
 
         self.inverse_spectrogram_func = PhaseRecovery(
             n_fft=params.n_fft,
@@ -322,7 +321,7 @@ class SpectrogramConverter:
             rand_init=True,
             stereo=params.stereo,
             stereo_coherence=params.stereo_coherence
-        ).to(self.device)
+        )
 
         self.mel_scaler = torchaudio.transforms.MelScale(
             n_mels=params.num_frequencies,
@@ -332,7 +331,7 @@ class SpectrogramConverter:
             n_stft=params.n_fft // 2 + 1,
             norm=params.mel_scale_norm,
             mel_scale=params.mel_scale_type,
-        ).to(self.device)
+        )
 
         self.inverse_mel_scaler = torchaudio.transforms.InverseMelScale(
             n_stft=params.n_fft // 2 + 1,
@@ -342,7 +341,7 @@ class SpectrogramConverter:
             f_max=params.max_frequency,
             norm=params.mel_scale_norm,
             mel_scale=params.mel_scale_type,
-        ).to(self.device)
+        )
 
     def get_spectrogram_shape(self, audio_shape: torch.Size) -> torch.Size:
         num_frames = 1 + (audio_shape[-1] + self.p.n_fft - self.p.win_length) // self.p.hop_length
@@ -355,11 +354,13 @@ class SpectrogramConverter:
     def get_crop_width(self, audio_len: int) -> int:
         spectrogram_len = self.get_spectrogram_shape(torch.Size((1, audio_len)))[-1] // 64 * 64
         return self.get_audio_shape(torch.Size((1, spectrogram_len)))[-1]
-    
+
+    @torch.no_grad()    
     def audio_to_spectrogram(self, audio: torch.Tensor) -> torch.Tensor:
         spectrogram_complex = self.spectrogram_func(audio)
         return self.mel_scaler(spectrogram_complex.abs()) ** self.p.abs_exponent
 
+    @torch.no_grad()
     def spectrogram_to_audio(self, spectrogram: torch.Tensor) -> torch.Tensor:
         amplitudes_linear = self.inverse_mel_scaler(spectrogram ** (1 / self.p.abs_exponent))
         return self.inverse_spectrogram_func(amplitudes_linear)
