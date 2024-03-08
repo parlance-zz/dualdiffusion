@@ -367,7 +367,7 @@ def load_raw(input_path, dtype="int16", num_channels=1, start=0, count=-1, devic
     return (tensor / STR_DTYPE_MAX_VALUE[dtype]).view(-1, num_channels).permute(1, 0).to(device)
 
 @torch.no_grad()
-def normalize_lufs(raw_samples, sample_rate, target_lufs=-16.):
+def normalize_lufs(raw_samples, sample_rate, target_lufs=-16., max_clip=0.15):
     
     original_shape = raw_samples.shape
     raw_samples = torch.nan_to_num(raw_samples, nan=0, posinf=0, neginf=0)
@@ -382,7 +382,7 @@ def normalize_lufs(raw_samples, sample_rate, target_lufs=-16.):
     gain = gain.view((*gain.shape,) + (1,) * (raw_samples.ndim - gain.ndim))
 
     normalized_raw_samples = (raw_samples * gain).view(original_shape)
-    normalized_raw_samples /= normalized_raw_samples.abs().amax(dim=tuple(range(1, len(normalized_raw_samples.shape))), keepdim=True).clip(min=1)
+    normalized_raw_samples /= normalized_raw_samples.abs().amax(dim=tuple(range(1, len(normalized_raw_samples.shape))), keepdim=True).clip(min=1+max_clip)
 
     return torch.nan_to_num(normalized_raw_samples, nan=0, posinf=0, neginf=0)
 
