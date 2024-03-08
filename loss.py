@@ -22,6 +22,7 @@
 # SOFTWARE.
 
 import torch
+import torch.nn.functional as F
 import numpy as np
 
 from dual_diffusion_utils import stft, get_mel_density
@@ -118,5 +119,62 @@ class DualMultiscaleSpectralLoss:
             error_imag_wrap_mask = (error_imag > torch.pi).detach().requires_grad_(False)
             error_imag[error_imag_wrap_mask] = 2*torch.pi - error_imag[error_imag_wrap_mask]
             loss_imag = loss_imag + (error_imag * target_phase_weight).mean()
+
+        return loss_real * self.loss_scale, loss_imag * self.loss_scale
+
+class DualMultiscaleSpectralLoss2D:
+
+    @torch.no_grad()
+    def __init__(self, loss_params):
+    
+        self.block_widths = loss_params["block_widths"]
+        self.block_overlap = loss_params["block_overlap"]
+        self.stereo_separation_weight = loss_params["stereo_separation_weight"]
+        self.loss_scale = 1 / len(self.block_widths)
+
+    def stft2d(self, x, block_width, step, midside_transform, window):
+
+        x = F.pad(x, (block_width//2, block_width//2))
+        x = x.unfold(2, block_width, step).unfold(3, block_width, step)
+
+        x = torch.fft.rfft2(x * window, norm="ortho")
+
+        if midside_transform:
+            x = torch.stack((x[:, 0] + x[:, 1]) / (2**0.5),
+                            (x[:, 0] - x[:, 1]) / (2**0.5), dim=1)
+        return x
+            
+    def __call__(self, sample, target, model_params):
+
+        target = target["samples"]
+        sample = sample["samples"]
+
+        loss_real = torch.zeros(1, device=target.device)
+        loss_imag = torch.zeros(1, device=target.device)
+
+        for block_width in self.block_widths:
+            
+            block_width = min(block_width, target.shape[-1], target.shape[-2])
+            step = max(block_width // self.block_overlap, 1)            
+            midside_transform = (model_params["sample_raw_channels"] > 1) and (np.random.rand() < self.stereo_separation_weight)
+
+            with torch.no_grad():
+                window = torch.hann_window(block_width, False, device=target.device)
+                window = window.view(1, 1,-1, 1) * window.view(1, 1, 1,-1)
+
+                target_fft = self.stft2d(target, block_width, step, midside_transform, window).requires_grad_(False)
+                target_fft_abs = target_fft.abs()
+                target_fft_angle = target_fft.angle()
+
+            sample_fft = self.stft2d(sample, block_width, step, midside_transform, window)
+            sample_fft_abs = sample_fft.abs()
+            sample_fft_angle = sample_fft.angle()
+            
+            loss_real = loss_real + (sample_fft_abs - target_fft_abs).abs().mean()
+
+            error_imag = (sample_fft_angle - target_fft_angle).abs()
+            error_imag_wrap_mask = (error_imag > torch.pi).detach().requires_grad_(False)
+            error_imag[error_imag_wrap_mask] = 2*torch.pi - error_imag[error_imag_wrap_mask]
+            loss_imag = loss_imag + (error_imag * target_fft_abs).mean()
 
         return loss_real * self.loss_scale, loss_imag * self.loss_scale
