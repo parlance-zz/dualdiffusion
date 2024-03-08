@@ -148,7 +148,7 @@ def parse_args():
         ),
     )
     parser.add_argument(
-        "--lr_warmup_steps", type=int, default=500, help="Number of steps for the warmup in the lr scheduler."
+        "--lr_warmup_steps", type=int, default=1000, help="Number of steps for the warmup in the lr scheduler."
     )
     parser.add_argument(
         "--snr_gamma",
@@ -816,7 +816,6 @@ def do_training_loop(args,
                      max_train_steps,
                      train_dataloader):
                      
-    debug_written = False
     model_params = pipeline.config["model_params"]
     sample_shape = pipeline.format.get_sample_shape(bsz=args.train_batch_size)
     latent_shape = None
@@ -933,40 +932,11 @@ def do_training_loop(args,
                 
                     if vae is not None:
                         samples = vae.encode(samples.half(), return_dict=False)[0].mode().float()
-
-                    if vae is not None or input_perturbation > 0:
-                        hz = torch.linspace(0, model_params["sample_rate"]/2, samples.shape[-2], device=samples.device)
-                        mel_density = get_mel_density(hz).view(1, 1,-1, 1).requires_grad_(False)
-                    
-                    if vae is not None:
-                        samples = (samples * mel_density - latent_mean) / latent_std
+                        samples = (samples - latent_mean) / latent_std
                     
                     noise = torch.randn_like(samples) * noise_scheduler.init_noise_sigma
                     if input_perturbation > 0:
-                        new_noise = noise + input_perturbation * torch.randn_like(noise) * mel_density
-
-                    """
-                    if not debug_written:
-                        logger.info(f"Samples mean: {samples.mean(dim=(1,2,3))} - Samples std: {samples.std(dim=(1,2,3))}")
-                        logger.info(f"Samples shape: {samples.shape}")
-
-                        debug_path = os.environ.get("DEBUG_PATH", None)
-                        if debug_path is not None:
-                            os.makedirs(debug_path, exist_ok=True)
-
-                            samples.detach().cpu().numpy().tofile(os.path.join(debug_path, "debug_train_samples.raw"))
-                            raw_samples.detach().cpu().numpy().tofile(os.path.join(debug_path, "debug_train_raw_samples.raw"))
-
-                            if vae is None:
-                                pipeline.format.sample_to_raw(samples.detach(), model_params).real.cpu().numpy().tofile(os.path.join(debug_path, "debug_train_reconstructed_raw_samples.raw"))
-                            else:
-                                recon_samples = vae.decode(samples.detach().half()).sample.float()
-                                recon_samples = pipeline.format.sample_to_raw(recon_samples, model_params).real
-                                recon_samples.detach().cpu().numpy().tofile(os.path.join(debug_path, "debug_train_reconstructed_raw_samples.raw"))
-
-                        debug_written = True
-                        torch.cuda.empty_cache()
-                    """
+                        new_noise = noise + input_perturbation * torch.randn_like(noise)
 
                     process_batch_timesteps = batch_timesteps[accelerator.local_process_index::accelerator.num_processes]
                     timesteps = process_batch_timesteps[grad_accum_steps * args.train_batch_size:(grad_accum_steps+1) * args.train_batch_size]
