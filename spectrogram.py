@@ -364,3 +364,6 @@ class SpectrogramConverter(torch.nn.Module):
     def spectrogram_to_audio(self, spectrogram: torch.Tensor) -> torch.Tensor:
         amplitudes_linear = self.inverse_mel_scaler(spectrogram ** (1 / self.p.abs_exponent))
         return self.inverse_spectrogram_func(amplitudes_linear)
+    
+    def half(self): # prevent casting to fp16
+        return self
