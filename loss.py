@@ -25,7 +25,7 @@ import torch
 import torch.nn.functional as F
 import numpy as np
 
-from dual_diffusion_utils import stft, get_mel_density
+from dual_diffusion_utils import stft, get_mel_density, save_raw_img
 
 class DualMultiscaleSpectralLoss:
 
@@ -140,8 +140,8 @@ class DualMultiscaleSpectralLoss2D:
         x = torch.fft.rfft2(x * window, norm="ortho")
 
         if midside_transform:
-            x = torch.stack((x[:, 0] + x[:, 1]) / (2**0.5),
-                            (x[:, 0] - x[:, 1]) / (2**0.5), dim=1)
+            x = torch.stack(((x[:, 0] + x[:, 1]) / (2**0.5),
+                             (x[:, 0] - x[:, 1]) / (2**0.5)), dim=1)
         return x
             
     def __call__(self, sample, target, model_params):
@@ -152,6 +152,10 @@ class DualMultiscaleSpectralLoss2D:
         loss_real = torch.zeros(1, device=target.device)
         loss_imag = torch.zeros(1, device=target.device)
 
+        #save_raw_img(target[0], "./debug/target.png")
+        #save_raw_img(sample[0], "./debug/sample.png")
+        #exit()
+
         for block_width in self.block_widths:
             
             block_width = min(block_width, target.shape[-1], target.shape[-2])
@@ -159,7 +163,7 @@ class DualMultiscaleSpectralLoss2D:
             midside_transform = (model_params["sample_raw_channels"] > 1) and (np.random.rand() < self.stereo_separation_weight)
 
             with torch.no_grad():
-                window = torch.hann_window(block_width, False, device=target.device)
+                window = torch.hann_window(block_width, False, device=target.device)**0.5
                 window = window.view(1, 1,-1, 1) * window.view(1, 1, 1,-1)
 
                 target_fft = self.stft2d(target, block_width, step, midside_transform, window).requires_grad_(False)
