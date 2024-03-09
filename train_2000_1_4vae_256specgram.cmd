@@ -6,7 +6,7 @@ accelerate launch^
  --module="vae"^
  --train_batch_size=2^
  --num_train_epochs=5000^
- --gradient_accumulation_steps=4^
+ --gradient_accumulation_steps=8^
  --learning_rate=1e-4^
  --seed=400^
  --lr_scheduler="constant_with_warmup"^
