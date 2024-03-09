@@ -613,6 +613,8 @@ def init_module_pipeline(pretrained_model_name_or_path, module_type, vae_encode_
     else:
         raise ValueError(f"Unknown module {module_type}")
     
+    pipeline.format = pipeline.format.to(device)
+
     logger.info(f"Training module class: {module_class.__name__}")
     return pipeline, module, module_class, vae
 
@@ -884,7 +886,8 @@ def do_training_loop(args,
     logger.info(f"Sample shape: {sample_shape}")
     if latent_shape is not None:
         logger.info(f"Latent shape: {latent_shape}")
-        logger.info(f"Latent mean: {latent_mean} - Latent std: {latent_std}")
+        if args.module == "unet":
+            logger.info(f"Latent mean: {latent_mean} - Latent std: {latent_std}")
 
 
     for epoch in range(first_epoch, args.num_train_epochs):
@@ -988,7 +991,7 @@ def do_training_loop(args,
                     latents_std = latents.std()
                     model_output = module.decode(latents, return_dict=False)[0]
 
-                    recon_samples_dict = pipeline.format.sample_to_raw(model_output, return_dict=True)
+                    recon_samples_dict = pipeline.format.sample_to_raw(model_output, return_dict=True, decode=False)
                     point_similarity = (samples_dict["samples"] - recon_samples_dict["samples"]).abs().mean()
                     
                     real_loss, imag_loss = pipeline.format.get_loss(recon_samples_dict, samples_dict)
