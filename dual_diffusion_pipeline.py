@@ -37,9 +37,11 @@ from spectrogram import SpectrogramParams, SpectrogramConverter
 from dual_diffusion_utils import compute_snr, mdct, imdct, save_raw, save_raw_img
 from loss import DualMultiscaleSpectralLoss, DualMultiscaleSpectralLoss2D
 
-class DualMCLTFormat:
+class DualMCLTFormat(torch.nn.Module):
 
     def __init__(self, model_params):
+        super(DualMCLTFormat, self).__init__()
+
         self.model_params = model_params
         self.loss = DualMultiscaleSpectralLoss(model_params["loss_params"])
 
@@ -142,9 +144,11 @@ class DualMCLTFormat:
 
         return (bsz, num_output_channels, num_chunks, chunk_len,)
 
-class DualSpectrogramFormat:
+class DualSpectrogramFormat(torch.nn.Module):
 
     def __init__(self, model_params):
+        super(DualSpectrogramFormat, self).__init__()
+
         self.model_params = model_params
         self.spectrogram_params = SpectrogramParams(sample_rate=model_params["sample_rate"],
                                                     stereo=model_params["sample_raw_channels"] == 2,
@@ -177,11 +181,12 @@ class DualSpectrogramFormat:
         else:
             return samples
 
-    @torch.no_grad()
-    def sample_to_raw(self, samples, return_dict=False):
+    def sample_to_raw(self, samples, return_dict=False, decode=True):
         
-        samples = samples.ReLU()
-        raw_samples = self.spectrogram_converter.spectrogram_to_audio(samples)
+        if decode:
+            raw_samples = self.spectrogram_converter.spectrogram_to_audio(samples.clip(min=0))
+        else:
+            raw_samples = None
 
         if not return_dict:         
             return raw_samples
@@ -198,7 +203,7 @@ class DualSpectrogramFormat:
     def get_sample_shape(self, bsz=1, length=0):
         _, num_output_channels = self.get_num_channels()
         crop_width = self.get_sample_crop_width(length=length)
-        audio_shape = torch.Size(bsz, num_output_channels, crop_width)
+        audio_shape = torch.Size((bsz, num_output_channels, crop_width))
         
         spectrogram_shape = self.spectrogram_converter.get_spectrogram_shape(audio_shape)
         return tuple(spectrogram_shape)
