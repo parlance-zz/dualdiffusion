@@ -36,7 +36,7 @@ if __name__ == "__main__":
     load_dotenv(override=True)
     #np.random.seed(0)
 
-    model_name = "dualdiffusion2d_1000_21"
+    model_name = "dualdiffusion2d_2000_1"
     num_samples = 1
     device = "cuda"
     #device = "cpu"
@@ -63,7 +63,7 @@ if __name__ == "__main__":
                                                      device=device)
     model_params = pipeline.config["model_params"]
     crop_width = pipeline.format.get_sample_crop_width(length=length)
-    vae = pipeline.vae.to(device)
+    vae = pipeline.vae.to(device); pipeline.format = pipeline.format.to(device)
     last_global_step = vae.config["last_global_step"]
 
     dataset_path = os.environ.get("DATASET_PATH", "./dataset/samples")
