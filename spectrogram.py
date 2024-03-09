@@ -83,7 +83,8 @@ def _get_complex_dtype(real_dtype: torch.dtype):
     if real_dtype == torch.half:
         return torch.complex32
     raise ValueError(f"Unexpected dtype {real_dtype}")
-   
+
+@torch.no_grad()
 def difference_map(
     specgram: Tensor,
     window: Tensor,
@@ -142,6 +143,7 @@ def difference_map(
 
     return angles.reshape(shape)
 
+@torch.no_grad()
 def griffinlim(
     specgram: Tensor,
     window: Tensor,
@@ -220,6 +222,7 @@ class PhaseRecovery(torch.nn.Module):
 
     __constants__ = ["n_fft", "n_iter", "win_length", "hop_length", "length", "momentum", "rand_init", "beta", "stereo", "stereo_coherence"]
 
+    @torch.no_grad()
     def __init__(
         self,
         n_fft: int = 400,
@@ -255,6 +258,7 @@ class PhaseRecovery(torch.nn.Module):
         self.stereo = stereo
         self.stereo_coherence = stereo_coherence
 
+    @torch.no_grad()
     def forward(self, specgram: Tensor) -> Tensor:
 
         if self.n_dm_iter > 0:
