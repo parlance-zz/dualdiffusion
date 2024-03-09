@@ -39,7 +39,7 @@ MODEL_PARAMS = {
 
     # sample format params
     "sample_format": "spectrogram",
-    "sample_raw_length": 32000*10,
+    "sample_raw_length": 32000*12,
     "noise_floor": 2e-5,
     "latent_mean": 0,
     "latent_std": 0,
@@ -49,8 +49,8 @@ MODEL_PARAMS = {
     "snr_gamma": 5,
 
     # vae unet training params
-    "kl_loss_weight": 1e-5,
-    "recon_loss_weight": 0.015,
+    "kl_loss_weight": 1e-4,
+    "recon_loss_weight": 0.25,
 
     "spectrogram_params": {
         "abs_exponent": 0.25,
