@@ -25,7 +25,7 @@ import torch
 import torch.nn.functional as F
 import numpy as np
 
-from dual_diffusion_utils import stft, get_mel_density, save_raw_img
+from dual_diffusion_utils import stft, get_mel_density
 
 class DualMultiscaleSpectralLoss:
 
@@ -133,11 +133,11 @@ class DualMultiscaleSpectralLoss2D:
         self.loss_scale = 1 / len(self.block_widths)
 
     def stft2d(self, x, block_width, step, midside_transform, window):
-
+        
         x = F.pad(x, (block_width//2, block_width//2))
         x = x.unfold(2, block_width, step).unfold(3, block_width, step)
 
-        x = torch.fft.rfft2(x * window, norm="ortho")
+        x = torch.fft.rfft2(x * window, norm="backward")
 
         if midside_transform:
             x = torch.stack(((x[:, 0] + x[:, 1]) / (2**0.5),
@@ -152,10 +152,6 @@ class DualMultiscaleSpectralLoss2D:
         loss_real = torch.zeros(1, device=target.device)
         loss_imag = torch.zeros(1, device=target.device)
 
-        #save_raw_img(target[0], "./debug/target.png")
-        #save_raw_img(sample[0], "./debug/sample.png")
-        #exit()
-
         for block_width in self.block_widths:
             
             block_width = min(block_width, target.shape[-1], target.shape[-2])
@@ -163,12 +159,14 @@ class DualMultiscaleSpectralLoss2D:
             midside_transform = (model_params["sample_raw_channels"] > 1) and (np.random.rand() < self.stereo_separation_weight)
 
             with torch.no_grad():
-                window = torch.hann_window(block_width, False, device=target.device)**0.5
-                window = window.view(1, 1,-1, 1) * window.view(1, 1, 1,-1)
+                window = (torch.arange(0.5, block_width + 0.5, device=target.device) * (torch.pi / block_width)).sin()
+                window = (window.view(1, 1,-1, 1) * window.view(1, 1, 1,-1)).requires_grad_(False)
 
-                target_fft = self.stft2d(target, block_width, step, midside_transform, window).requires_grad_(False)
-                target_fft_abs = target_fft.abs()
-                target_fft_angle = target_fft.angle()
+                target_fft = self.stft2d(target, block_width, step, midside_transform, window)
+                target_fft_abs = target_fft.abs().requires_grad_(False)
+                target_fft_angle = target_fft.angle().requires_grad_(False)
+
+                loss_imag_weight = (target_fft_abs / torch.pi).requires_grad_(False)
 
             sample_fft = self.stft2d(sample, block_width, step, midside_transform, window)
             sample_fft_abs = sample_fft.abs()
@@ -179,6 +177,6 @@ class DualMultiscaleSpectralLoss2D:
             error_imag = (sample_fft_angle - target_fft_angle).abs()
             error_imag_wrap_mask = (error_imag > torch.pi).detach().requires_grad_(False)
             error_imag[error_imag_wrap_mask] = 2*torch.pi - error_imag[error_imag_wrap_mask]
-            loss_imag = loss_imag + (error_imag * target_fft_abs).mean()
-
+            loss_imag = loss_imag + (error_imag * loss_imag_weight).mean()
+            
         return loss_real * self.loss_scale, loss_imag * self.loss_scale
