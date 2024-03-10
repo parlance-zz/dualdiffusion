@@ -36,18 +36,18 @@ if __name__ == "__main__":
     load_dotenv(override=True)
     #np.random.seed(0)
 
-    model_name = "dualdiffusion2d_2000_1"
+    model_name = "dualdiffusion2d_2000_2"
     num_samples = 1
     device = "cuda"
     #device = "cpu"
     #fp16 = False
     fp16 = True
     start = 0
-    length = 720896
+    length = 32000 * 20
     #save_output = False
     save_output = True
-    sample_latents = False
-    #sample_latents = True
+    #sample_latents = False
+    sample_latents = True
     #normalize_latents = False
     normalize_latents = False
     quantize_latents = 0
@@ -72,19 +72,20 @@ if __name__ == "__main__":
     test_samples = np.random.choice(os.listdir(dataset_path), num_samples, replace=False)
 
     #"""
-    #test_samples = []
-    #test_samples += ["Star Fox - 141 Training Mode.flac"] # good bass test
-    #test_samples += ["Final Fantasy VI - 217 Mog.flac"] # good bass test
+    test_samples = []
+    test_samples += ["Star Fox - 141 Training Mode.flac"] # good bass test
+    test_samples += ["Final Fantasy VI - 217 Mog.flac"] # good bass test
     #test_samples += ["Vortex - 10 Magmemo.flac"]  # good stereo test
-    #test_samples += ["Mega Man X3 - 09 Blast Hornet.flac"] # messy mix and stereo test
+    test_samples += ["Mega Man X3 - 09 Blast Hornet.flac"] # messy mix and stereo test
     #test_samples += ["Sparkster - 06 Bird.flac"] # messy mix and thick electric guitars in stereo
     #test_samples += ["Lennus II - Fuuin no Shito - 19 Holy Temple.flac"] # transient test
     #test_samples += ["Donkey Kong Country 2 - Diddy's Kong Quest - 17 Stickerbrush Symphony.flac"]
     #test_samples += ["Kirby Super Star  [Kirby's Fun Pak] - 36 Mine Cart Riding.flac"] # success case
     #test_samples += ["Final Fantasy VI - 104 Locke.flac"] # this better sound good cuz its important
-    #test_samples += ["Kirby Super Star  [Kirby's Fun Pak] - 53 Heart of Nova.flac"]
-    #test_samples += ["Kirby Super Star  [Kirby's Fun Pak] - 41 Halberd ~ Nightmare Warship.flac"]
-    #test_samples += ["Pilotwings - 04 Light Plane.flac"]
+    test_samples += ["Kirby Super Star  [Kirby's Fun Pak] - 53 Heart of Nova.flac"]
+    test_samples += ["Kirby Super Star  [Kirby's Fun Pak] - 41 Halberd ~ Nightmare Warship.flac"]
+    test_samples += ["Pilotwings - 04 Light Plane.flac"]
+    test_samples += ["Front Mission - 23 Arena.flac"]
     #"""
     
     sample_shape = pipeline.format.get_sample_shape(length=length)
