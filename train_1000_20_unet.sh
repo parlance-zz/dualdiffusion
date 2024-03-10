@@ -11,7 +11,6 @@ accelerate launch \
   --learning_rate=1e-4 \
   --seed=400 \
   --lr_scheduler="constant_with_warmup" \
-  --max_grad_norm=1 \
   --num_validation_samples=0
 
 # --use_ema
