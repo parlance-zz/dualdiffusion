@@ -29,7 +29,7 @@ from dual_diffusion_utils import dict_str
 
 load_dotenv(override=True)
 
-MODEL_NAME = "dualdiffusion2d_2000_1"
+MODEL_NAME = "dualdiffusion2d_2000_2"
 MODEL_SEED = 400
 
 MODEL_PARAMS = {
@@ -49,8 +49,8 @@ MODEL_PARAMS = {
     "snr_gamma": 5,
 
     # vae unet training params
-    "kl_loss_weight": 1e-4,
-    "recon_loss_weight": 0.25,
+    "kl_loss_weight": 3e-4,
+    "recon_loss_weight": 0.05,
 
     "spectrogram_params": {
         "abs_exponent": 0.25,
@@ -87,10 +87,10 @@ MODEL_PARAMS = {
         "stereo_separation_weight": 0.5,
         "block_overlap": 4,
         "block_widths": [
-            2,
             4,
             8,
             16,
+            32,
         ],
     },
 }
@@ -117,7 +117,7 @@ SCHEDULER_PARAMS = {
 format = DualDiffusionPipeline.get_sample_format(MODEL_PARAMS)
 
 VAE_PARAMS = {
-    "latent_channels": 2,
+    "latent_channels": 4,
     "act_fn": "silu",
     "conv_size": (3,3),
 
