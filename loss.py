@@ -166,7 +166,7 @@ class DualMultiscaleSpectralLoss2D:
                 target_fft_abs = target_fft.abs().requires_grad_(False)
                 target_fft_angle = target_fft.angle().requires_grad_(False)
 
-                loss_imag_weight = (target_fft_abs / torch.pi).requires_grad_(False)
+                loss_imag_weight = (target_fft_abs * (2 / torch.pi)).requires_grad_(False)
 
             sample_fft = self.stft2d(sample, block_width, step, midside_transform, window)
             sample_fft_abs = sample_fft.abs()
