@@ -1003,7 +1003,10 @@ def do_training_loop(args,
                     imag_nll_loss = (imag_loss / module.recon_loss_logvar.exp() + module.recon_loss_logvar) * recon_loss_weight
 
                     kl_loss = posterior.kl()
-                    channel_kl_loss = (latents.mean(dim=(2,3)).square() + latents.std(dim=(2,3)) - 1).mean()
+
+                    latents_channel_mean = latents.mean(dim=(2,3)).square()
+                    latents_channel_std = latents.std(dim=(2,3)).clip(min=1e-5)
+                    channel_kl_loss = (latents_channel_mean.square() + latents_channel_std - 1 - latents_channel_std.log()).mean()
                     loss = real_nll_loss + imag_nll_loss + kl_loss * kl_loss_weight + channel_kl_loss * channel_kl_loss_weight
                 else:
                     raise ValueError(f"Unknown module {args.module}")
