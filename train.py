@@ -1004,7 +1004,7 @@ def do_training_loop(args,
 
                     kl_loss = posterior.kl()
 
-                    latents_channel_mean = latents.mean(dim=(2,3)).square()
+                    latents_channel_mean = latents.mean(dim=(2,3))
                     latents_channel_std = latents.std(dim=(2,3)).clip(min=1e-5)
                     channel_kl_loss = (latents_channel_mean.square() + latents_channel_std - 1 - latents_channel_std.log()).mean()
                     loss = real_nll_loss + imag_nll_loss + kl_loss * kl_loss_weight + channel_kl_loss * channel_kl_loss_weight
