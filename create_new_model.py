@@ -50,6 +50,7 @@ MODEL_PARAMS = {
 
     # vae unet training params
     "kl_loss_weight": 3e-4,
+    "channel_kl_loss_weight": 3e-4,
     "recon_loss_weight": 0.05,
 
     "spectrogram_params": {

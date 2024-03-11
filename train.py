@@ -826,21 +826,25 @@ def do_training_loop(args,
 
         latent_shape = module.get_latent_shape(sample_shape)
         kl_loss_weight = model_params["kl_loss_weight"]
+        channel_kl_loss_weight = model_params["channel_kl_loss_weight"]
         recon_loss_weight = model_params["recon_loss_weight"]
 
         logger.info("Training VAE model:")
         logger.info(f"Loss params: {dict_str(model_params['loss_params'])}")
-        logger.info(f"Using KL loss weight: {kl_loss_weight} - Recon loss weight: {recon_loss_weight}")
+        logger.info(f"Using KL loss weight: {kl_loss_weight} - Recon loss weight: {recon_loss_weight} - Channel KL loss weight: {channel_kl_loss_weight}")
 
         kl_loss_weight = torch.tensor(kl_loss_weight, device=accelerator.device, dtype=torch.float32)
+        channel_kl_loss_weight = torch.tensor(channel_kl_loss_weight, device=accelerator.device, dtype=torch.float32)
         recon_loss_weight = torch.tensor(recon_loss_weight, device=accelerator.device, dtype=torch.float32)
 
         module_log_channels = [
             "kl_loss_weight",
+            "channel_kl_loss_weight",
             "recon_loss_weight",
             "real_loss",
             "imag_loss",
             "kl_loss",
+            "channel_kl_loss",
             "latents_mean",
             "latents_std",
             "point_similarity",
@@ -999,7 +1003,8 @@ def do_training_loop(args,
                     imag_nll_loss = (imag_loss / module.recon_loss_logvar.exp() + module.recon_loss_logvar) * recon_loss_weight
 
                     kl_loss = posterior.kl()
-                    loss = real_nll_loss + imag_nll_loss + kl_loss * kl_loss_weight
+                    channel_kl_loss = (latents.mean(dim=(2,3)).square() + latents.std(dim=(2,3)) - 1).mean()
+                    loss = real_nll_loss + imag_nll_loss + kl_loss * kl_loss_weight + channel_kl_loss * channel_kl_loss_weight
                 else:
                     raise ValueError(f"Unknown module {args.module}")
                 
