@@ -831,7 +831,7 @@ def do_training_loop(args,
 
         logger.info("Training VAE model:")
         logger.info(f"Loss params: {dict_str(model_params['loss_params'])}")
-        logger.info(f"Using KL loss weight: {kl_loss_weight} - Recon loss weight: {recon_loss_weight} - Channel KL loss weight: {channel_kl_loss_weight}")
+        logger.info(f"Using KL loss weight: {kl_loss_weight} - Channel KL loss weight: {channel_kl_loss_weight} - Recon loss weight: {recon_loss_weight}")
 
         kl_loss_weight = torch.tensor(kl_loss_weight, device=accelerator.device, dtype=torch.float32)
         channel_kl_loss_weight = torch.tensor(channel_kl_loss_weight, device=accelerator.device, dtype=torch.float32)
