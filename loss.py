@@ -143,7 +143,8 @@ class DualMultiscaleSpectralLoss2D:
             
     def stft2d(self, x, block_width, step, midside_transform, window):
         
-        x = F.pad(x, (block_width//2, block_width//2))
+        padding = block_width // 2
+        x = F.pad(x, (padding, padding, padding, padding), mode="reflect")
         x = x.unfold(2, block_width, step).unfold(3, block_width, step)
 
         x = torch.fft.rfft2(x * window, norm="backward")
