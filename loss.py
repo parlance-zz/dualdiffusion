@@ -131,7 +131,16 @@ class DualMultiscaleSpectralLoss2D:
         self.block_overlap = loss_params["block_overlap"]
         self.stereo_separation_weight = loss_params["stereo_separation_weight"]
         self.loss_scale = 1 / len(self.block_widths)
+    
+    def _flat_top_window(self, x):
+        return 0.21557895 - 0.41663158 * torch.cos(x) + 0.277263158 * torch.cos(2*x) - 0.083578947 * torch.cos(3*x) + 0.006947368 * torch.cos(4*x)
 
+    def get_flat_top_window_2d(self, block_width, device):
+
+        wx = torch.linspace(-torch.pi, torch.pi, block_width, device=device).square()
+        wr = (wx.view(1, 1,-1, 1) + wx.view(1, 1, 1,-1)).sqrt()
+        return (self._flat_top_window(wr + torch.pi) * (wr < torch.pi).float()).requires_grad_(False)
+            
     def stft2d(self, x, block_width, step, midside_transform, window):
         
         x = F.pad(x, (block_width//2, block_width//2))
@@ -159,14 +168,13 @@ class DualMultiscaleSpectralLoss2D:
             midside_transform = (model_params["sample_raw_channels"] > 1) and (np.random.rand() < self.stereo_separation_weight)
 
             with torch.no_grad():
-                window = (torch.arange(0.5, block_width + 0.5, device=target.device) * (torch.pi / block_width)).sin()
-                window = (window.view(1, 1,-1, 1) * window.view(1, 1, 1,-1)).requires_grad_(False)
+                window = self.get_flat_top_window_2d(block_width, target.device)
 
                 target_fft = self.stft2d(target, block_width, step, midside_transform, window)
                 target_fft_abs = target_fft.abs().requires_grad_(False)
                 target_fft_angle = target_fft.angle().requires_grad_(False)
-
-                loss_imag_weight = (target_fft_abs / torch.pi).requires_grad_(False)
+                
+                loss_imag_weight = (target_fft_abs / (2*torch.pi)).requires_grad_(False)
 
             sample_fft = self.stft2d(sample, block_width, step, midside_transform, window)
             sample_fft_abs = sample_fft.abs()
