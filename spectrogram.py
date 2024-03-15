@@ -50,6 +50,7 @@ class SpectrogramParams:
     #padded_duration_ms: int = 200
 
     # mel scale params
+    use_mel_scale: bool = True
     num_frequencies: int = 256
     min_frequency: int = 20
     max_frequency: int = 16000
@@ -349,25 +350,28 @@ class SpectrogramConverter(torch.nn.Module):
             stereo_coherence=params.stereo_coherence
         )
 
-        self.mel_scaler = torchaudio.transforms.MelScale(
-            n_mels=params.num_frequencies,
-            sample_rate=params.sample_rate,
-            f_min=params.min_frequency,
-            f_max=params.max_frequency,
-            n_stft=params.n_fft // 2 + 1,
-            norm=params.mel_scale_norm,
-            mel_scale=params.mel_scale_type,
-        )
+        if params.use_mel_scale:
+            self.mel_scaler = torchaudio.transforms.MelScale(
+                n_mels=params.num_frequencies,
+                sample_rate=params.sample_rate,
+                f_min=params.min_frequency,
+                f_max=params.max_frequency,
+                n_stft=params.n_fft // 2 + 1,
+                norm=params.mel_scale_norm,
+                mel_scale=params.mel_scale_type,
+            )
 
-        self.inverse_mel_scaler = torchaudio.transforms.InverseMelScale(
-            n_stft=params.n_fft // 2 + 1,
-            n_mels=params.num_frequencies,
-            sample_rate=params.sample_rate,
-            f_min=params.min_frequency,
-            f_max=params.max_frequency,
-            norm=params.mel_scale_norm,
-            mel_scale=params.mel_scale_type,
-        )
+            self.inverse_mel_scaler = torchaudio.transforms.InverseMelScale(
+                n_stft=params.n_fft // 2 + 1,
+                n_mels=params.num_frequencies,
+                sample_rate=params.sample_rate,
+                f_min=params.min_frequency,
+                f_max=params.max_frequency,
+                norm=params.mel_scale_norm,
+                mel_scale=params.mel_scale_type,
+            )
+        else:
+            self.mel_scaler = self.inverse_mel_scaler = torch.nn.Identity()
 
     def get_spectrogram_shape(self, audio_shape: torch.Size) -> torch.Size:
         num_frames = 1 + (audio_shape[-1] + self.p.n_fft - self.p.win_length) // self.p.hop_length

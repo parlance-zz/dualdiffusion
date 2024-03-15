@@ -35,9 +35,10 @@ if __name__ == "__main__":
     init_cuda()
     load_dotenv(override=True)
 
-    audio_len = 65536*17
+    audio_len = 32000 * 25
     quantize_level = 0 #16
     noise_level = 0 #0.08
+    use_mel_scale = False
     device = "cuda"
 
     dataset_path = os.environ.get("DATASET_PATH", "./dataset/samples")
@@ -50,9 +51,11 @@ if __name__ == "__main__":
     #sample_filename = "Mario no Super Picross - 109 Mario Puzzle 3.flac"
     #sample_filename = "Mega Man X3 - 09 Blast Hornet.flac"
     #sample_filename = "Vortex - 10 Magmemo.flac"
+    sample_filename = "Ganbare Goemon 4 - Kirakira Douchuu - Boku ga Dancer ni Natta Riyuu - 61 Planet Impact Dam.flac"
 
     spectrogram_params = SpectrogramParams(sample_rate=dataset_sample_rate,
-                                           stereo=dataset_num_channels == 2)
+                                           stereo=dataset_num_channels == 2,
+                                           use_mel_scale=use_mel_scale)
     spectrogram_converter = SpectrogramConverter(spectrogram_params).to(device)
     crop_width = spectrogram_converter.get_crop_width(audio_len)
 
@@ -90,6 +93,7 @@ if __name__ == "__main__":
     print(f"win_length: {win_length}, hop_length: {hop_length}")
     save_raw(spectrogram_converter.spectrogram_func.window, "./debug/window.raw")
 
-    save_raw(spectrogram_converter.mel_scaler.fb.permute(1, 0), "./debug/mel_scaler_filters.raw")
-    coverage = spectrogram_converter.mel_scaler.fb.mean(dim=1); coverage /= coverage.amax()
-    save_raw(coverage, "./debug/mel_scaler_filter_coverage.raw")
+    if use_mel_scale:
+        save_raw(spectrogram_converter.mel_scaler.fb.permute(1, 0), "./debug/mel_scaler_filters.raw")
+        coverage = spectrogram_converter.mel_scaler.fb.mean(dim=1); coverage /= coverage.amax()
+        save_raw(coverage, "./debug/mel_scaler_filter_coverage.raw")
