@@ -828,14 +828,17 @@ def do_training_loop(args,
         kl_loss_weight = model_params["kl_loss_weight"]
         channel_kl_loss_weight = model_params["channel_kl_loss_weight"]
         recon_loss_weight = model_params["recon_loss_weight"]
+        point_loss_weight = model_params["point_loss_weight"]
 
         logger.info("Training VAE model:")
         logger.info(f"Loss params: {dict_str(model_params['loss_params'])}")
-        logger.info(f"Using KL loss weight: {kl_loss_weight} - Channel KL loss weight: {channel_kl_loss_weight} - Recon loss weight: {recon_loss_weight}")
+        logger.info(f"Using KL loss weight: {kl_loss_weight} - Channel KL loss weight: {channel_kl_loss_weight}")
+        logger.info(f"Recon loss weight: {recon_loss_weight} - Point loss weight: {point_loss_weight}")
 
         kl_loss_weight = torch.tensor(kl_loss_weight, device=accelerator.device, dtype=torch.float32)
         channel_kl_loss_weight = torch.tensor(channel_kl_loss_weight, device=accelerator.device, dtype=torch.float32)
         recon_loss_weight = torch.tensor(recon_loss_weight, device=accelerator.device, dtype=torch.float32)
+        point_loss_weight = torch.tensor(point_loss_weight, device=accelerator.device, dtype=torch.float32)
 
         module_log_channels = [
             "kl_loss_weight",
@@ -848,6 +851,7 @@ def do_training_loop(args,
             "latents_mean",
             "latents_std",
             "point_similarity",
+            "point_loss_weight",
         ]
 
     elif args.module == "unet":
@@ -1008,7 +1012,7 @@ def do_training_loop(args,
                     latents_channel_std = latents.std(dim=(2,3)).clip(min=1e-5)
                     channel_kl_loss = (latents_channel_mean.square() + latents_channel_std - 1 - latents_channel_std.log()).mean()
                     
-                    loss = real_nll_loss + imag_nll_loss + kl_loss * kl_loss_weight + channel_kl_loss * channel_kl_loss_weight
+                    loss = real_nll_loss + imag_nll_loss + kl_loss * kl_loss_weight + channel_kl_loss * channel_kl_loss_weight + point_similarity * point_loss_weight
                 else:
                     raise ValueError(f"Unknown module {args.module}")
                 
