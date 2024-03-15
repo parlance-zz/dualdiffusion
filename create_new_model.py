@@ -85,13 +85,12 @@ MODEL_PARAMS = {
     },
 
     "loss_params": {
-        "stereo_separation_weight": 0.5,
         "block_overlap": 4,
         "block_widths": [
-            4,
             8,
             16,
             32,
+            64,
         ],
     },
 }

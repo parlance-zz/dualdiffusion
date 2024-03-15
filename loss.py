@@ -166,7 +166,7 @@ class DualMultiscaleSpectralLoss2D:
             
             block_width = min(block_width, target.shape[-1], target.shape[-2])
             step = max(block_width // self.block_overlap, 1)            
-            midside_transform = (model_params["sample_raw_channels"] > 1) and (np.random.rand() < self.stereo_separation_weight)
+            midside_transform = model_params["sample_raw_channels"] > 1
 
             with torch.no_grad():
                 window = self.get_flat_top_window_2d(block_width, target.device)
