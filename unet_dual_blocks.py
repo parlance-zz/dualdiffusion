@@ -608,7 +608,7 @@ class SeparableMidBlock(nn.Module):
         
         if self.add_attention:
             attn_block_count = 0
-            for _ in range(num_layers):
+            for _ in range(num_layers+int(self.pre_attention)):
                 _channels = in_channels
                 input_channels = _channels
                 for _ in range(2 if double_attention else 1):
@@ -654,13 +654,18 @@ class SeparableMidBlock(nn.Module):
         hidden_states = self.resnets[0](hidden_states, temb)
         resnets = self.resnets[1:]
 
+        if self.pre_attention:
+            for _ in range(2 if self.double_attention else 1):
+                hidden_states = self.attentions[attn_block_count](hidden_states)
+                attn_block_count += 1
+                
         for resnet in resnets:
 
+            hidden_states = resnet(hidden_states, temb)
+            
             if self.add_attention:
                 for _ in range(2 if self.double_attention else 1):
                     hidden_states = self.attentions[attn_block_count](hidden_states)
                     attn_block_count += 1
-
-            hidden_states = resnet(hidden_states, temb)
-            
+                    
         return hidden_states
