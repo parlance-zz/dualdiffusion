@@ -35,10 +35,10 @@ if __name__ == "__main__":
     init_cuda()
     load_dotenv(override=True)
 
-    audio_len = 32000 * 25
+    audio_len = 32000 * 60
     quantize_level = 0 #16
     noise_level = 0 #0.08
-    use_mel_scale = False
+    use_mel_scale = True#False
     device = "cuda"
 
     dataset_path = os.environ.get("DATASET_PATH", "./dataset/samples")
@@ -51,7 +51,13 @@ if __name__ == "__main__":
     #sample_filename = "Mario no Super Picross - 109 Mario Puzzle 3.flac"
     #sample_filename = "Mega Man X3 - 09 Blast Hornet.flac"
     #sample_filename = "Vortex - 10 Magmemo.flac"
-    sample_filename = "Ganbare Goemon 4 - Kirakira Douchuu - Boku ga Dancer ni Natta Riyuu - 61 Planet Impact Dam.flac"
+    #sample_filename = "Ganbare Goemon 4 - Kirakira Douchuu - Boku ga Dancer ni Natta Riyuu - 61 Planet Impact Dam.flac"
+    #sample_filename = "Bahamut Lagoon - 09 Materaito.flac"
+    #sample_filename = "Kirby Super Star  [Kirby's Fun Pak] - 36 Mine Cart Riding.flac"
+    #sample_filename = "Pilotwings - 04 Light Plane.flac"
+    #sample_filename = "Terranigma - 36 Call at a Port.flac"
+    #sample_filename = "Great Battle Gaiden 2, The - Matsuri da Wasshoi - 31 Epilogue to the Story (part 1).flac"
+    sample_filename = "Kirby Super Star  [Kirby's Fun Pak] - 41 Halberd ~ Nightmare Warship.flac"
 
     spectrogram_params = SpectrogramParams(sample_rate=dataset_sample_rate,
                                            stereo=dataset_num_channels == 2,
