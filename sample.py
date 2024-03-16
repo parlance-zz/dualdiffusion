@@ -36,36 +36,38 @@ if __name__ == "__main__":
     init_cuda()
     load_dotenv(override=True)
 
-    model_name = "dualdiffusion2d_1000_20"
+    model_name = "dualdiffusion2d_2000_2"
 
-    num_samples = 1
+    num_samples = 2
     batch_size = 1
-    length = 0 #32000 * 25
+    length = 0
+    #length = 30 * 32000
     #scheduler = "dpms++"
     #scheduler = "ddim"
     #scheduler = "kdpm2_a"
-    #scheduler = "euler_a"
-    scheduler = "dpms++_sde"
+    scheduler = "euler_a"
+    #scheduler = "dpms++_sde"
     beta_schedule = beta_start = beta_end = None
+    #beta_schedule = "scaled_linear"; beta_start = 0.00085; beta_end = 0.012
     #beta_schedule = "linear"; beta_start = 0.0001; beta_end = 0.02
     #beta_schedule = "squaredcos_cap_v2"; beta_start = beta_end = None
-    steps = 500
-    loops = 0
-    fp16 = False
-    #fp16 = True
-    device = "cuda"
-    #device = "cpu"
+    steps = 250
+    loops = 0 #1
+    fp16 = False #True
+    device = "cuda" #"cpu"
     
     seed = np.random.randint(10000, 99999-num_samples)
-    #seed = 21094
+    #seed = 90040
 
     model_dtype = torch.float16 if fp16 else torch.float32
-    model_path = os.path.join(os.environ.get("MODEL_PATH", "./"), model_name)
+    #model_path = os.path.join(os.environ.get("MODEL_PATH", "./"), model_name)
+    model_path = "Z:/dualdiffusion/models/dualdiffusion2d_2000_2"
     print(f"Loading DualDiffusion model from '{model_path}' (dtype={model_dtype})...")
     pipeline = DualDiffusionPipeline.from_pretrained(model_path,
                                                      torch_dtype=model_dtype,
                                                      #device=device, # this doesn't work for some fucking reason????
                                                      load_latest_checkpoints=True).to(device)
+    pipeline.format = pipeline.format.to(device); pipeline.vae = pipeline.vae.to(device)
     last_global_step = pipeline.unet.config["last_global_step"]
 
     output_path = os.path.join(model_path, "output")

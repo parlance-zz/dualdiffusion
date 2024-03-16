@@ -37,24 +37,20 @@ if __name__ == "__main__":
     #np.random.seed(0)
 
     model_name = "dualdiffusion2d_2000_2"
-    num_samples = 1
-    device = "cuda"
-    #device = "cpu"
-    #fp16 = False
-    fp16 = True
+    num_samples = 4000
+    device = "cuda" #"cpu"
+    fp16 = True #False
     start = 0
-    length = 32000 * 20
-    #save_output = False
-    save_output = True
-    #sample_latents = False
-    sample_latents = True
-    #normalize_latents = False
+    length = 32000 * 30
+    save_output = False #True
+    sample_latents = False#True
     normalize_latents = False
-    quantize_latents = 0
-    #quantize_latents = 6
-    add_latent_noise = 0
+    random_latents = False #True
+    quantize_latents = 0 #8
+    add_latent_noise = 0 #0.1
 
-    model_path = os.path.join(os.environ.get("MODEL_PATH", "./"), model_name)
+    #model_path = os.path.join(os.environ.get("MODEL_PATH", "./"), model_name)
+    model_path = "Z:/dualdiffusion/models/dualdiffusion2d_2000_2"
     model_dtype = torch.float16 if fp16 else torch.float32
     print(f"Loading DualDiffusion model from '{model_path}' (dtype={model_dtype})...")
     pipeline = DualDiffusionPipeline.from_pretrained(model_path,
@@ -72,20 +68,26 @@ if __name__ == "__main__":
     test_samples = np.random.choice(os.listdir(dataset_path), num_samples, replace=False)
 
     #"""
-    test_samples = []
-    test_samples += ["Star Fox - 141 Training Mode.flac"] # good bass test
-    test_samples += ["Final Fantasy VI - 217 Mog.flac"] # good bass test
+    #test_samples = []
+    #test_samples += ["Star Fox - 141 Training Mode.flac"] # good bass test
+    #test_samples += ["Final Fantasy VI - 217 Mog.flac"] # good bass test
     #test_samples += ["Vortex - 10 Magmemo.flac"]  # good stereo test
-    test_samples += ["Mega Man X3 - 09 Blast Hornet.flac"] # messy mix and stereo test
+    #test_samples += ["Mega Man X3 - 09 Blast Hornet.flac"] # messy mix and stereo test
     #test_samples += ["Sparkster - 06 Bird.flac"] # messy mix and thick electric guitars in stereo
     #test_samples += ["Lennus II - Fuuin no Shito - 19 Holy Temple.flac"] # transient test
     #test_samples += ["Donkey Kong Country 2 - Diddy's Kong Quest - 17 Stickerbrush Symphony.flac"]
     #test_samples += ["Kirby Super Star  [Kirby's Fun Pak] - 36 Mine Cart Riding.flac"] # success case
     #test_samples += ["Final Fantasy VI - 104 Locke.flac"] # this better sound good cuz its important
-    test_samples += ["Kirby Super Star  [Kirby's Fun Pak] - 53 Heart of Nova.flac"]
-    test_samples += ["Kirby Super Star  [Kirby's Fun Pak] - 41 Halberd ~ Nightmare Warship.flac"]
-    test_samples += ["Pilotwings - 04 Light Plane.flac"]
-    test_samples += ["Front Mission - 23 Arena.flac"]
+    #test_samples += ["Kirby Super Star  [Kirby's Fun Pak] - 53 Heart of Nova.flac"]
+    #test_samples += ["Kirby Super Star  [Kirby's Fun Pak] - 41 Halberd ~ Nightmare Warship.flac"]
+    #test_samples += ["Pilotwings - 04 Light Plane.flac"]
+    #test_samples += ["Front Mission - 23 Arena.flac"]
+    #test_samples += ["Final Fantasy - Mystic Quest  [Mystic Quest Legend] - 07 Battle 1.flac"]
+    #test_samples += ["EarthBound - 087 Save the Miners!.flac"] # fast snare drum problems
+    #test_samples += ["Contra III - The Alien Wars - 05 Neo Kobe Steel Factory.flac"] # fast snare drum problems
+    #test_samples += ["Bahamut Lagoon - 09 Materaito.flac"] # reverb and snare test
+    #test_samples += ["U.N. Squadron - 11 The Minks.flac"]
+    #test_samples += ["Shin Megami Tensei II - 01 Title Demo.flac"]
     #"""
     
     sample_shape = pipeline.format.get_sample_shape(length=length)
@@ -114,13 +116,15 @@ if __name__ == "__main__":
             latents = posterior.sample()
         else:
             latents = posterior.mode()
-        if normalize_latents:
-            latents = (latents - latents.mean()) / latents.std()
-            latents = latents * model_params["latent_std"] + model_params["latent_mean"]
-        if quantize_latents > 0:
-            latents = quantize_tensor(latents, quantize_latents)
         if add_latent_noise > 0:
             latents += torch.randn_like(latents) * add_latent_noise * latents.std()
+        if quantize_latents > 0:
+            latents = quantize_tensor(latents, quantize_latents)
+        if normalize_latents:
+            latents = (latents - latents.mean()) / latents.std()
+            #latents = latents * model_params["latent_std"] + model_params["latent_mean"]
+        if random_latents:
+            latents = torch.randn_like(latents)
         model_output = vae.decode(latents, return_dict=False)[0]
 
         output_sample_dict = pipeline.format.sample_to_raw(model_output.type(torch.float32), return_dict=True)
