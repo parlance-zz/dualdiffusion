@@ -39,10 +39,10 @@ MODEL_PARAMS = {
 
     # sample format params
     "sample_format": "spectrogram",
-    "sample_raw_length": 32000*12,
+    "sample_raw_length": 32000*30,
     "noise_floor": 2e-5,
     "latent_mean": 0,
-    "latent_std": 0,
+    "latent_std": 1,
 
     # diffusion unet training params
     "input_perturbation": 0.1,
@@ -85,7 +85,8 @@ MODEL_PARAMS = {
     },
 
     "loss_params": {
-        "block_overlap": 4,
+        "stereo_separation_weight": 0.5,
+        "block_overlap": 8,
         "block_widths": [
             8,
             16,
@@ -161,7 +162,7 @@ UNET_PARAMS = {
     #"attention_num_heads": 4,
     "attention_num_heads": (8,8,8,8),
 
-    "separate_attn_dim_mid": (0,0,),
+    "separate_attn_dim_mid": (0,0,0,0),
     "add_mid_attention": True,
     "layers_per_mid_block": 1,
     #"mid_block_bottleneck_channels": 32,
@@ -169,14 +170,14 @@ UNET_PARAMS = {
     "add_attention": True,
     #"double_attention": False,
     "double_attention": True,
-    "pre_attention": False,
+    "pre_attention": True,
     #"pre_attention": True,
     
-    "separate_attn_dim_down": (2,3,2,3),
+    "separate_attn_dim_down": (2,3,2,3,2,3),
     #"separate_attn_dim_down": (2,3,),
     #"separate_attn_dim_down": (0,0),
     
-    "separate_attn_dim_up": (3,2,3,2,3,2),
+    "separate_attn_dim_up": (3,2,3,2,3,2,3,2),
     #"separate_attn_dim_up": (3,2,3,),
     #"separate_attn_dim_up": (0,0,0),
     
@@ -184,7 +185,7 @@ UNET_PARAMS = {
     #"time_embedding_dim": 256,
     #"freq_embedding_dim": (512, 0, 0, 0,),
     #"time_embedding_dim": 0,
-    "freq_embedding_dim": 512,
+    "freq_embedding_dim": 0,
     "time_embedding_dim": 0,
 
     #"downsample_type": "resnet",
@@ -200,7 +201,7 @@ UNET_PARAMS = {
     #"layers_per_block": 1,
     "layers_per_block": 2,
 
-    "block_out_channels": (32, 64, 128, 256), 
+    "block_out_channels": (128, 256, 512, 512), 
 }
 
 
