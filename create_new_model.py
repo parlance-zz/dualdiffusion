@@ -29,7 +29,7 @@ from dual_diffusion_utils import dict_str
 
 load_dotenv(override=True)
 
-MODEL_NAME = "dualdiffusion2d_2000_2"
+MODEL_NAME = "dualdiffusion2d_2000_3"
 MODEL_SEED = 400
 
 MODEL_PARAMS = {
@@ -45,8 +45,9 @@ MODEL_PARAMS = {
     "latent_std": 1,
 
     # diffusion unet training params
-    "input_perturbation": 0.1,
-    "snr_gamma": 5,
+    "input_perturbation": 0,
+    "timestep_ln_center": 0,
+    "timestep_ln_scale": 1,
 
     # vae unet training params
     "kl_loss_weight": 3e-4,
@@ -86,6 +87,7 @@ MODEL_PARAMS = {
 
     "loss_params": {
         "stereo_separation_weight": 0.5,
+        "imag_loss_weight": 0,
         "block_overlap": 8,
         "block_widths": [
             8,
@@ -94,25 +96,6 @@ MODEL_PARAMS = {
             64,
         ],
     },
-}
-
-SCHEDULER_PARAMS = {
-    #"prediction_type": "sample",
-    #"prediction_type": "epsilon",
-    "prediction_type": "v_prediction",
-
-    "beta_schedule": "scaled_linear",
-    "beta_start": 0.00085,
-    "beta_end": 0.012,
-
-    #"beta_schedule": "linear", 
-    #"beta_start" : 0.0001,
-    #"beta_end" : 0.02,
-
-    #"beta_schedule": "squaredcos_cap_v2",
-
-    "rescale_betas_zero_snr": True,
-    #"rescale_betas_zero_snr": False,
 }
 
 format = DualDiffusionPipeline.get_sample_format(MODEL_PARAMS)
@@ -224,8 +207,6 @@ if __name__ == "__main__":
     
     print("UNET Params:")
     print(dict_str(UNET_PARAMS))
-    print("Scheduler Params:")
-    print(dict_str(SCHEDULER_PARAMS))
     print("")
     
     NEW_MODEL_PATH = os.path.join(os.environ.get("MODEL_PATH"), MODEL_NAME)
@@ -234,6 +215,6 @@ if __name__ == "__main__":
         print(f"Warning: Output folder already exists '{NEW_MODEL_PATH}'")
         if input("Overwrite existing model? (y/n): ").lower() not in ["y","yes"]: exit()
     
-    pipeline = DualDiffusionPipeline.create_new(MODEL_PARAMS, UNET_PARAMS, SCHEDULER_PARAMS, vae_params=VAE_PARAMS)
+    pipeline = DualDiffusionPipeline.create_new(MODEL_PARAMS, UNET_PARAMS, vae_params=VAE_PARAMS)
     pipeline.save_pretrained(NEW_MODEL_PATH, safe_serialization=True)
     print(f"Created new DualDiffusion model with config at '{NEW_MODEL_PATH}'")

@@ -36,32 +36,22 @@ if __name__ == "__main__":
     init_cuda()
     load_dotenv(override=True)
 
-    model_name = "dualdiffusion2d_2000_2"
+    model_name = "dualdiffusion2d_2000_3"
 
-    num_samples = 2
+    num_samples = 5
     batch_size = 1
     length = 0
     #length = 30 * 32000
-    #scheduler = "dpms++"
-    #scheduler = "ddim"
-    #scheduler = "kdpm2_a"
-    scheduler = "euler_a"
-    #scheduler = "dpms++_sde"
-    beta_schedule = beta_start = beta_end = None
-    #beta_schedule = "scaled_linear"; beta_start = 0.00085; beta_end = 0.012
-    #beta_schedule = "linear"; beta_start = 0.0001; beta_end = 0.02
-    #beta_schedule = "squaredcos_cap_v2"; beta_start = beta_end = None
-    steps = 250
+    steps = 100
     loops = 0 #1
     fp16 = False #True
     device = "cuda" #"cpu"
     
     seed = np.random.randint(10000, 99999-num_samples)
-    #seed = 90040
+    #seed = 1000
 
     model_dtype = torch.float16 if fp16 else torch.float32
-    #model_path = os.path.join(os.environ.get("MODEL_PATH", "./"), model_name)
-    model_path = "Z:/dualdiffusion/models/dualdiffusion2d_2000_2"
+    model_path = os.path.join(os.environ.get("MODEL_PATH", "./"), model_name)
     print(f"Loading DualDiffusion model from '{model_path}' (dtype={model_dtype})...")
     pipeline = DualDiffusionPipeline.from_pretrained(model_path,
                                                      torch_dtype=model_dtype,
@@ -80,17 +70,13 @@ if __name__ == "__main__":
 
         start = time.time()
         output = pipeline(steps=steps,
-                          scheduler=scheduler,
                           seed=seed,
                           loops=loops,
                           batch_size=batch_size,
-                          length=length,
-                          beta_schedule=beta_schedule,
-                          beta_start=beta_start,
-                          beta_end=beta_end)
+                          length=length)
         print(f"Time taken: {time.time()-start}")
 
-        output_flac_file_path = os.path.join(output_path, f"step_{last_global_step}_{scheduler}{steps}_s{seed}.flac")
+        output_flac_file_path = os.path.join(output_path, f"step_{last_global_step}_{steps}_s{seed}.flac")
         save_audio(output.squeeze(0), pipeline.config["model_params"]["sample_rate"], output_flac_file_path)
         print(f"Saved flac output to {output_flac_file_path}")
 

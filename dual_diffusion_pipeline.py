@@ -27,14 +27,12 @@ import json
 import numpy as np
 import torch
 
-from diffusers.schedulers import DPMSolverMultistepScheduler, DDIMScheduler, DPMSolverSDEScheduler
-from diffusers.schedulers import EulerAncestralDiscreteScheduler, KDPM2AncestralDiscreteScheduler
 from diffusers.pipelines.pipeline_utils import DiffusionPipeline
 
 from unet_dual import UNetDualModel
 from autoencoder_kl_dual import AutoencoderKLDual
 from spectrogram import SpectrogramParams, SpectrogramConverter
-from dual_diffusion_utils import compute_snr, mdct, imdct, save_raw, save_raw_img
+from dual_diffusion_utils import mdct, imdct, save_raw, save_raw_img
 from loss import DualMultiscaleSpectralLoss, DualMultiscaleSpectralLoss2D
 
 class DualMCLTFormat(torch.nn.Module):
@@ -214,7 +212,6 @@ class DualDiffusionPipeline(DiffusionPipeline):
     def __init__(
         self,
         unet: UNetDualModel,
-        scheduler: DDIMScheduler,
         vae: AutoencoderKLDual, 
         model_params: dict = None,
     ):
@@ -222,7 +219,6 @@ class DualDiffusionPipeline(DiffusionPipeline):
 
         modules = {
             "unet": unet,
-            "scheduler": scheduler,
             "vae": vae,
         }
         self.register_modules(**modules)
@@ -250,25 +246,16 @@ class DualDiffusionPipeline(DiffusionPipeline):
         
     @staticmethod
     @torch.no_grad()
-    def create_new(model_params, unet_params, scheduler_params, vae_params=None):
+    def create_new(model_params, unet_params, vae_params=None):
         
-        if scheduler_params["beta_schedule"] == "trained_betas":
-            raise NotImplementedError()
-        scheduler = DDIMScheduler(clip_sample_range=10., **scheduler_params)
-        
-        snr = compute_snr(scheduler, scheduler.timesteps)
-        debug_path = os.environ.get("DEBUG_PATH", None)
-        if debug_path is not None:
-            save_raw(snr.log(), os.path.join(debug_path, "debug_schedule_ln_snr.raw"))
-
-        unet = UNetDualModel(**unet_params, num_diffusion_timesteps=scheduler.config.num_train_timesteps)
+        unet = UNetDualModel(**unet_params)
 
         if vae_params is not None:
             vae = AutoencoderKLDual(**vae_params)
         else:
             vae = None
 
-        return DualDiffusionPipeline(unet, scheduler, vae, model_params=model_params)
+        return DualDiffusionPipeline(unet, vae, model_params=model_params)
     
     @staticmethod
     @torch.no_grad()
@@ -301,27 +288,20 @@ class DualDiffusionPipeline(DiffusionPipeline):
         unet = UNetDualModel.from_pretrained(unet_path,
                                              torch_dtype=torch_dtype,
                                              device=device).requires_grad_(requires_grad).train(requires_grad)
-
-        scheduler_path = os.path.join(model_path, "scheduler")
-        scheduler = DDIMScheduler.from_pretrained(scheduler_path, torch_dtype=torch_dtype, device=device)
         
-        return DualDiffusionPipeline(unet, scheduler, vae, model_params=model_params)
+        return DualDiffusionPipeline(unet, vae, model_params=model_params)
         
     @torch.no_grad()
     def __call__(
         self,
         steps: int = 100,
-        scheduler="dpms++",
         seed: Union[int, torch.Generator]=None,
         loops: int = 0,
         batch_size: int = 1,
         length: int = 0,
-        beta_schedule: str = None,
-        beta_start: float = None,
-        beta_end: float = None,
     ):
-        if (steps <= 0) or (steps > 1000):
-            raise ValueError(f"Steps must be between 1 and 1000, got {steps}")
+        if steps <= 0:
+            raise ValueError(f"Steps must be > 0, got {steps}")
         if loops < 0:
             raise ValueError(f"Loops must be greater than or equal to 0, got {loops}")
         if length < 0:
@@ -329,35 +309,7 @@ class DualDiffusionPipeline(DiffusionPipeline):
 
         self.set_tiling_mode(loops > 0)
 
-        scheduler_args = {
-            "prediction_type": self.scheduler.config["prediction_type"],
-            "beta_schedule": beta_schedule or self.scheduler.config["beta_schedule"],
-            "trained_betas": self.scheduler.config["trained_betas"],
-            "beta_start": beta_start or self.scheduler.config["beta_start"],
-            "beta_end": beta_end or self.scheduler.config["beta_end"],
-            "rescale_betas_zero_snr": self.scheduler.config["rescale_betas_zero_snr"],
-        }
-        scheduler = scheduler.lower().strip()
-        if scheduler == "ddim":
-            noise_scheduler = DDIMScheduler(**scheduler_args, clip_sample_range=10)
-        elif scheduler == "dpms++":
-            scheduler_args.pop("rescale_betas_zero_snr")
-            noise_scheduler = DPMSolverMultistepScheduler(**scheduler_args,solver_order=3)
-        elif scheduler == "kdpm2_a":
-            scheduler_args.pop("rescale_betas_zero_snr")
-            noise_scheduler = KDPM2AncestralDiscreteScheduler(**scheduler_args)
-        elif scheduler == "euler_a":
-            noise_scheduler = EulerAncestralDiscreteScheduler(**scheduler_args)
-        elif scheduler == "dpms++_sde":
-            if self.unet.dtype != torch.float32:
-                raise ValueError("dpms++_sde scheduler requires float32 precision")
-            scheduler_args.pop("rescale_betas_zero_snr")
-            noise_scheduler = DPMSolverSDEScheduler(**scheduler_args)
-        else:
-            raise ValueError(f"Unknown scheduler '{scheduler}'")
-        
-        noise_scheduler.set_timesteps(steps)
-        timesteps = noise_scheduler.timesteps
+        timesteps = [(1. - i / steps) * 999. for i in range(steps)]
 
         if isinstance(seed, int):
             if seed == 0: seed = np.random.randint(100000,999999)
@@ -374,22 +326,14 @@ class DualDiffusionPipeline(DiffusionPipeline):
 
         sample = torch.randn(sample_shape, device=self.device,
                              dtype=self.unet.dtype,
-                             generator=generator) * noise_scheduler.init_noise_sigma
+                             generator=generator)
 
         for _, t in enumerate(self.progress_bar(timesteps)):
             
-            model_input = sample
-            model_input = noise_scheduler.scale_model_input(model_input, t)
-            model_output = self.unet(model_input, t).sample
+            timestep = torch.ones(batch_size, device=self.device, dtype=self.unet.dtype) * t
+            model_output = self.unet(sample, timestep).sample
 
-            scheduler_args = {
-                "model_output": model_output,
-                "timestep": t,
-                "sample": sample,
-            }
-            if scheduler != "dpms++_sde":
-                scheduler_args["generator"] = generator
-            sample = noise_scheduler.step(**scheduler_args)["prev_sample"]
+            sample += model_output / steps
 
         debug_path = os.environ.get("DEBUG_PATH", None)
         if debug_path is not None:
