@@ -904,10 +904,12 @@ def do_training_loop(args,
                     samples = pipeline.format.raw_to_sample(raw_samples)
                 
                     if vae is not None:
-                        samples = vae.encode(samples.half(), return_dict=False)[0].mode().float()
-                        #vae_encoded = vae.encode(samples.half(), return_dict=False)[0]
-                        #samples = vae_encoded.mode().float()
+                        vae_encoded = vae.encode(samples.half(), return_dict=False)[0]
+                        loss_weight = (0.01 / vae_encoded.var).clip(min=1e-5).detach().requires_grad_(False)
+                        samples = vae_encoded.mode().float()
                         samples = (samples - latent_mean) / latent_std
+                    else:
+                        loss_weight = 1.
                     
                     noise = torch.randn_like(samples)
                     if input_perturbation > 0:
@@ -924,7 +926,7 @@ def do_training_loop(args,
                     model_output = module(model_input, timesteps).sample
 
                     target = samples - noise
-                    loss = F.mse_loss(model_output.float(), target.float(), reduction="none") #/ (vae_encoded.var / vae_encoded.var.mean().clip(min=1e-5))
+                    loss = F.mse_loss(model_output.float(), target.float(), reduction="none") * loss_weight
                     timestep_loss = loss.mean(dim=list(range(1, len(loss.shape))))
                     loss = timestep_loss.mean()
 
