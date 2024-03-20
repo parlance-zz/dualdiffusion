@@ -51,7 +51,7 @@ from diffusers.utils import deprecate, is_tensorboard_available
 from unet_dual import UNetDualModel
 from autoencoder_kl_dual import AutoencoderKLDual
 from dual_diffusion_pipeline import DualDiffusionPipeline
-from dual_diffusion_utils import init_cuda, compute_snr, load_audio, save_audio, load_raw, save_raw, dict_str, get_mel_density
+from dual_diffusion_utils import init_cuda, compute_snr, load_audio, save_audio, load_raw, save_raw, dict_str, get_mel_density, normalize_lufs
 
 
 logger = get_logger(__name__, log_level="INFO")
@@ -905,11 +905,11 @@ def do_training_loop(args,
                 
                     if vae is not None:
                         vae_encoded = vae.encode(samples.half(), return_dict=False)[0]
-                        loss_weight = (0.01 / vae_encoded.var).clip(min=1e-5).detach().requires_grad_(False)
+                        #loss_weight = (0.01 / vae_encoded.var).clip(min=1e-5).detach().requires_grad_(False)
                         samples = vae_encoded.mode().float()
                         samples = (samples - latent_mean) / latent_std
-                    else:
-                        loss_weight = 1.
+                    #else:
+                    #    loss_weight = 1.
                     
                     noise = torch.randn_like(samples)
                     if input_perturbation > 0:
@@ -926,7 +926,7 @@ def do_training_loop(args,
                     model_output = module(model_input, timesteps).sample
 
                     target = samples - noise
-                    loss = F.mse_loss(model_output.float(), target.float(), reduction="none") * loss_weight
+                    loss = F.mse_loss(model_output.float(), target.float(), reduction="none")# * loss_weight
                     timestep_loss = loss.mean(dim=list(range(1, len(loss.shape))))
                     loss = timestep_loss.mean()
 
@@ -1112,7 +1112,7 @@ def log_validation_unet(pipeline, args, accelerator, global_step):
         generator = torch.Generator(device=accelerator.device).manual_seed(seed)
         with torch.autocast("cuda"):
             sample = pipeline(steps=args.num_validation_steps,
-                              seed=generator).cpu()
+                              seed=generator).cpu().squeeze(0)
             sample_filename = f"step_{global_step}_{args.num_validation_steps}_s{seed}.flac"
             samples.append((sample, sample_filename))
 
@@ -1125,6 +1125,7 @@ def log_validation_unet(pipeline, args, accelerator, global_step):
     for tracker in accelerator.trackers:
         if tracker.name == "tensorboard":
             for sample, sample_filename in samples:
+                sample = normalize_lufs(sample.mean(dim=0), sample_rate).clip(min=-1, max=1)
                 tracker.writer.add_audio(os.path.splitext(sample_filename)[0],
                                          sample,
                                          global_step,
@@ -1250,7 +1251,7 @@ def main():
     num_update_steps_per_epoch = math.ceil(num_update_steps_per_epoch / args.gradient_accumulation_steps)
     max_train_steps = args.num_train_epochs * num_update_steps_per_epoch
 
-    if args.checkpointing_steps is None: args.checkpointing_steps = num_update_steps_per_epoch
+    if args.checkpointing_steps is None: args.checkpointing_steps = num_update_steps_per_epoch*3
     logger.info(f"Saving checkpoints every {args.checkpointing_steps} steps")
     
     lr_scheduler = init_lr_scheduler(args.lr_scheduler,
