@@ -29,7 +29,7 @@ from dual_diffusion_utils import dict_str
 
 load_dotenv(override=True)
 
-MODEL_NAME = "dualdiffusion2d_2000_3"
+MODEL_NAME = "dualdiffusion2d_2000_5"
 MODEL_SEED = 400
 
 MODEL_PARAMS = {
@@ -39,7 +39,7 @@ MODEL_PARAMS = {
 
     # sample format params
     "sample_format": "spectrogram",
-    "sample_raw_length": 32000*30,
+    "sample_raw_length": 32000*45,
     "noise_floor": 2e-5,
     "latent_mean": 0,
     "latent_std": 1,
@@ -143,24 +143,24 @@ UNET_PARAMS = {
     "conv_size": (3,3),
 
     #"attention_num_heads": 4,
-    "attention_num_heads": (8,8,8,8),
+    "attention_num_heads": (8,8,16,16),
 
-    "separate_attn_dim_mid": (0,0,0,0),
+    "separate_attn_dim_mid": (0,),
     "add_mid_attention": True,
     "layers_per_mid_block": 1,
     #"mid_block_bottleneck_channels": 32,
 
     "add_attention": True,
-    #"double_attention": False,
-    "double_attention": True,
-    "pre_attention": True,
+    "double_attention": False,
+    #"double_attention": True,
     #"pre_attention": True,
+    "pre_attention": False,
     
-    "separate_attn_dim_down": (2,3,2,3,2,3),
+    "separate_attn_dim_down": (2,3),
     #"separate_attn_dim_down": (2,3,),
     #"separate_attn_dim_down": (0,0),
     
-    "separate_attn_dim_up": (3,2,3,2,3,2,3,2),
+    "separate_attn_dim_up": (3,2,0),
     #"separate_attn_dim_up": (3,2,3,),
     #"separate_attn_dim_up": (0,0,0),
     
@@ -184,7 +184,7 @@ UNET_PARAMS = {
     #"layers_per_block": 1,
     "layers_per_block": 2,
 
-    "block_out_channels": (128, 256, 512, 512), 
+    "block_out_channels": (320, 640, 1024, 1024), 
 }
 
 
