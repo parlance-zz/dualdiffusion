@@ -328,7 +328,7 @@ def save_raw(tensor, output_path):
     if not os.path.exists(directory):
         os.makedirs(directory)
 
-    if tensor.dtype == torch.float16:
+    if tensor.dtype == torch.float16 or tensor.dtype == torch.bfloat16:
         tensor = tensor.float()
     elif tensor.dtype == torch.complex32:
         tensor = tensor.complex64()
@@ -538,7 +538,7 @@ def quantize_tensor(x, levels):
 
 def save_raw_img(x, img_path, allow_inversion=False):
     
-    x = x.detach().resolve_conj().cpu()
+    x = x.detach().float().resolve_conj().cpu()
     x -= x.amin(dim=(x.ndim-1, x.ndim-2), keepdim=True)
     x /= x.amax(dim=(x.ndim-1, x.ndim-2), keepdim=True).clip(min=1e-16)
 
