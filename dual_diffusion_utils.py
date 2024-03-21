@@ -389,7 +389,7 @@ def normalize_lufs(raw_samples, sample_rate, target_lufs=-16., max_clip=0.15):
 
 def save_audio(raw_samples, sample_rate, output_path, target_lufs=-16.):
     
-    raw_samples = raw_samples.detach().real
+    raw_samples = raw_samples.detach().real.float()
     if raw_samples.ndim == 1:
         raw_samples = raw_samples.view(1, -1)
 
