@@ -818,6 +818,7 @@ def do_training_loop(args,
             "channel_kl_loss",
             "latents_mean",
             "latents_std",
+            "latents_logvar",
             "point_similarity",
             "point_loss_weight",
         ]
@@ -944,6 +945,7 @@ def do_training_loop(args,
                     latents = posterior.sample()
                     latents_mean = latents.mean()
                     latents_std = latents.std()
+                    latents_logvar = module.encoder.latents_logvar.detach()
                     model_output = module.decode(latents, return_dict=False)[0]
 
                     recon_samples_dict = pipeline.format.sample_to_raw(model_output, return_dict=True, decode=False)
