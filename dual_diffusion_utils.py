@@ -61,7 +61,19 @@ def get_activation(act_fn):
         return torch.sinc
     else:
         raise ValueError(f"Unsupported activation function: {act_fn}")
-    
+
+def slerp(start, end, t):
+
+    reduction_dims = tuple(range(1, start.ndim)) if start.ndim > 1 else (0,)
+
+    start_norm = start / start.square().sum(dim=reduction_dims, keepdim=True).sqrt()
+    end_norm = end / end.square().sum(dim=reduction_dims, keepdim=True).sqrt()
+
+    omega = torch.acos((start_norm * end_norm).sum(dim=reduction_dims, keepdim=True))
+    so = torch.sin(omega)
+
+    return (torch.sin((1 - t) * omega) / so) * start + (torch.sin(t * omega) / so) * end
+
 def compute_snr(noise_scheduler, timesteps):
     """
     Computes SNR as per
