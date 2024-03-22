@@ -32,7 +32,7 @@ from diffusers.pipelines.pipeline_utils import DiffusionPipeline
 from unet_dual import UNetDualModel
 from autoencoder_kl_dual import AutoencoderKLDual
 from spectrogram import SpectrogramParams, SpectrogramConverter
-from dual_diffusion_utils import mdct, imdct, save_raw, save_raw_img
+from dual_diffusion_utils import mdct, imdct, save_raw, save_raw_img, slerp
 from loss import DualMultiscaleSpectralLoss, DualMultiscaleSpectralLoss2D
 
 class DualMCLTFormat(torch.nn.Module):
@@ -328,12 +328,18 @@ class DualDiffusionPipeline(DiffusionPipeline):
                              dtype=self.unet.dtype,
                              generator=generator)
 
+        alpha = 1
+
         for _, t in enumerate(self.progress_bar(timesteps)):
             
             timestep = torch.ones(batch_size, device=self.device, dtype=self.unet.dtype) * t
             model_output = self.unet(sample, timestep).sample
 
-            sample += model_output / steps
+            #sample += model_output / steps
+            target = sample + model_output
+            t = (1 / steps) / alpha
+            alpha -= 1 / steps
+            sample = slerp(sample, target, t)
 
         debug_path = os.environ.get("DEBUG_PATH", None)
         if debug_path is not None:

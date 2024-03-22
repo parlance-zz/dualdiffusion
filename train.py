@@ -51,7 +51,7 @@ from diffusers.utils import deprecate, is_tensorboard_available
 from unet_dual import UNetDualModel
 from autoencoder_kl_dual import AutoencoderKLDual
 from dual_diffusion_pipeline import DualDiffusionPipeline
-from dual_diffusion_utils import init_cuda, compute_snr, load_audio, save_audio, load_raw, save_raw, dict_str, get_mel_density, normalize_lufs
+from dual_diffusion_utils import init_cuda, load_audio, save_audio, load_raw, save_raw, dict_str, normalize_lufs, slerp
 
 
 logger = get_logger(__name__, log_level="INFO")
@@ -906,11 +906,8 @@ def do_training_loop(args,
                 
                     if vae is not None:
                         vae_encoded = vae.encode(samples.half(), return_dict=False)[0]
-                        #loss_weight = (0.01 / vae_encoded.var).clip(min=1e-5).detach().requires_grad_(False)
-                        samples = vae_encoded.mode().float()
-                        samples = (samples - latent_mean) / latent_std
-                    #else:
-                    #    loss_weight = 1.
+                        samples = (vae_encoded.sample().float() - latent_mean) / latent_std
+                        target = (vae_encoded.mode().float() - latent_mean) / latent_std
                     
                     noise = torch.randn_like(samples)
                     if input_perturbation > 0:
@@ -919,15 +916,18 @@ def do_training_loop(args,
                     process_batch_timesteps = batch_timesteps[accelerator.local_process_index::accelerator.num_processes]
                     timesteps = process_batch_timesteps[grad_accum_steps * args.train_batch_size:(grad_accum_steps+1) * args.train_batch_size]
 
+                    normalized_timesteps = (timesteps / 999.).view(-1, 1, 1, 1)
                     if input_perturbation > 0:
-                        model_input = torch.lerp(samples, new_noise, (timesteps / 999.).view(-1, 1, 1, 1))
+                        #model_input = torch.lerp(samples, new_noise, normalized_timesteps)
+                        model_input = slerp(samples, new_noise, normalized_timesteps)
                     else:
-                        model_input = torch.lerp(samples, noise, (timesteps / 999.).view(-1, 1, 1, 1))
-                                    
+                        #model_input = torch.lerp(samples, noise, normalized_timesteps)
+                        model_input = slerp(samples, noise, normalized_timesteps)
+                    
                     model_output = module(model_input, timesteps).sample
 
-                    target = samples - noise
-                    loss = F.mse_loss(model_output.float(), target.float(), reduction="none")# * loss_weight
+                    target = target - noise
+                    loss = F.mse_loss(model_output.float(), target.float(), reduction="none")
                     timestep_loss = loss.mean(dim=list(range(1, len(loss.shape))))
                     loss = timestep_loss.mean()
 
