@@ -148,7 +148,7 @@ class DualMultiscaleSpectralLoss2D:
         x = F.pad(x, (padding, padding, padding, padding), mode="reflect")
         x = x.unfold(2, block_width, step).unfold(3, block_width, step)
 
-        x = torch.fft.rfft2(x * window, norm="backward")
+        x = torch.fft.rfft2(x * window, norm="ortho")
 
         if midside_transform:
             x = torch.stack((x[:, 0] + x[:, 1],
