@@ -29,7 +29,7 @@ from dual_diffusion_utils import dict_str
 
 load_dotenv(override=True)
 
-MODEL_NAME = "dualdiffusion2d_2000_5"
+MODEL_NAME = "dualdiffusion2d_2000_6"
 MODEL_SEED = 400
 
 MODEL_PARAMS = {
@@ -50,9 +50,9 @@ MODEL_PARAMS = {
     "timestep_ln_scale": 1,
 
     # vae unet training params
-    "kl_loss_weight": 3e-4,
-    "channel_kl_loss_weight": 3e-4,
-    "recon_loss_weight": 0.05,
+    "kl_loss_weight": 1e-3,
+    "channel_kl_loss_weight": 1e-2,
+    "recon_loss_weight": 0.1,
 
     "spectrogram_params": {
         "abs_exponent": 0.25,
@@ -105,7 +105,7 @@ VAE_PARAMS = {
     "act_fn": "silu",
     "conv_size": (3,3),
 
-    "block_out_channels": (64, 128, 256, 512),
+    "block_out_channels": (128, 256, 512, 512),
     "layers_per_block": 2,
 
     "layers_per_mid_block": 3,

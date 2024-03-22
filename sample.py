@@ -36,19 +36,19 @@ if __name__ == "__main__":
     init_cuda()
     load_dotenv(override=True)
 
-    model_name = "dualdiffusion2d_2000_5"
+    model_name = "dualdiffusion2d_2000_6"
 
-    num_samples = 4
+    num_samples = 5
     batch_size = 1
     length = 0
     #length = 30 * 32000
-    steps = 25
+    steps = 250
     loops = 0 #1
     fp16 = False #True
     device = "cuda" #"cpu"
     
     seed = np.random.randint(10000, 99999-num_samples)
-    #seed = 1000
+    #seed = 400
 
     model_dtype = torch.bfloat16 if fp16 else torch.float32
     model_path = os.path.join(os.environ.get("MODEL_PATH", "./"), model_name)

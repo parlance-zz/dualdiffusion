@@ -36,21 +36,20 @@ if __name__ == "__main__":
     load_dotenv(override=True)
     #np.random.seed(0)
 
-    model_name = "dualdiffusion2d_2000_2"
-    num_samples = 4000
+    model_name = "dualdiffusion2d_2000_6"
+    num_samples = 1
     device = "cuda" #"cpu"
     fp16 = True #False
     start = 0
-    length = 32000 * 30
-    save_output = False #True
-    sample_latents = False#True
+    length = 32000 * 45
+    save_output = True
+    sample_latents = True
     normalize_latents = False
     random_latents = False #True
     quantize_latents = 0 #8
     add_latent_noise = 0 #0.1
 
-    #model_path = os.path.join(os.environ.get("MODEL_PATH", "./"), model_name)
-    model_path = "Z:/dualdiffusion/models/dualdiffusion2d_2000_2"
+    model_path = os.path.join(os.environ.get("MODEL_PATH", "./"), model_name)
     model_dtype = torch.float16 if fp16 else torch.float32
     print(f"Loading DualDiffusion model from '{model_path}' (dtype={model_dtype})...")
     pipeline = DualDiffusionPipeline.from_pretrained(model_path,
