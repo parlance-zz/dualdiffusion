@@ -333,7 +333,7 @@ class DualDiffusionPipeline(DiffusionPipeline):
         for _, t in enumerate(self.progress_bar(timesteps)):
             
             timestep = torch.ones(batch_size, device=self.device, dtype=self.unet.dtype) * t
-            model_output = self.unet(sample, timestep).sample
+            model_output = self.unet(sample, timestep).sample / (0.5 ** 0.5)
 
             #sample += model_output / steps
             target = sample + model_output

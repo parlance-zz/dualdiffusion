@@ -926,7 +926,7 @@ def do_training_loop(args,
                     
                     model_output = module(model_input, timesteps).sample
 
-                    target = target - noise
+                    target = (target - noise) * (0.5 ** 0.5)
                     loss = F.mse_loss(model_output.float(), target.float(), reduction="none")
                     timestep_loss = loss.mean(dim=list(range(1, len(loss.shape))))
                     loss = timestep_loss.mean()
