@@ -83,6 +83,49 @@ class DiagonalGaussianDistribution(object):
     def mode(self):
         return self.mean
 
+class DiagonalGaussianDistributionUniVar(object):
+    def __init__(self, parameters, logvar, deterministic=False):
+        self.parameters = parameters
+        self.mean = parameters
+        self.logvar = torch.clamp(logvar, -30.0, 20.0)
+        self.deterministic = deterministic
+        self.std = torch.exp(0.5 * self.logvar)
+        self.var = torch.exp(self.logvar)
+        if self.deterministic:
+            self.var = self.std = torch.zeros_like(
+                self.mean, device=self.parameters.device, dtype=self.parameters.dtype
+            )
+
+    def sample(self, generator: Optional[torch.Generator] = None) -> torch.FloatTensor: 
+        noise = torch.randn(self.mean.shape, generator=generator, device=self.parameters.device, dtype=self.parameters.dtype)
+        return self.mean + self.std * noise
+
+    def kl(self, other=None):
+        if self.deterministic:
+            return torch.Tensor([0.0])
+        else:
+            reduction_dims = tuple(range(0, len(self.mean.shape)))
+            if other is None:
+                return 0.5 * torch.mean(torch.pow(self.mean, 2) + self.var - 1.0 - self.logvar, dim=reduction_dims)
+            else:
+                return 0.5 * torch.mean(
+                    torch.pow(self.mean - other.mean, 2) / other.var
+                    + self.var / other.var
+                    - 1.0
+                    - self.logvar
+                    + other.logvar,
+                    dim=reduction_dims,
+                )
+
+    def nll(self, sample, dims=[1, 2, 3]):
+        if self.deterministic:
+            return torch.Tensor([0.0])
+        logtwopi = np.log(2.0 * np.pi)
+        return 0.5 * torch.sum(logtwopi + self.logvar + torch.pow(sample - self.mean, 2) / self.var, dim=dims)
+
+    def mode(self):
+        return self.mean
+
 class EncoderDual(nn.Module):
     def __init__(
         self,
@@ -202,6 +245,8 @@ class EncoderDual(nn.Module):
 
         conv_out_channels = 2 * out_channels if double_z else out_channels
         self.conv_out = conv_class(block_out_channels[-1], conv_out_channels, conv_size, padding=conv_padding)
+
+        self.latents_logvar = nn.Parameter(torch.zeros(1))
 
         self.gradient_checkpointing = False
 
@@ -535,8 +580,8 @@ class AutoencoderKLDual(ModelMixin, ConfigMixin):
             in_channels=in_channels,
             out_channels=latent_channels,
             act_fn=act_fn,
-            double_z=True,
-            #double_z=False,
+            #double_z=True,
+            double_z=False,
             block_out_channels=block_out_channels,
             layers_per_block=layers_per_block,
             layers_per_mid_block=layers_per_mid_block,
@@ -580,7 +625,8 @@ class AutoencoderKLDual(ModelMixin, ConfigMixin):
             add_attention=add_attention,
         )
 
-        self.quant_conv = conv_class(2 * latent_channels, 2 * latent_channels, 1)
+        #self.quant_conv = conv_class(2 * latent_channels, 2 * latent_channels, 1) #double_z=True
+        self.quant_conv = conv_class(latent_channels, latent_channels, 1) #double_z=False
         self.post_quant_conv = conv_class(latent_channels, latent_channels, 1)
 
         self.use_slicing = 0
@@ -643,7 +689,8 @@ class AutoencoderKLDual(ModelMixin, ConfigMixin):
             h = self.encoder(x)
 
         moments = self.quant_conv(h)
-        posterior = DiagonalGaussianDistribution(moments)
+        #posterior = DiagonalGaussianDistribution(moments)
+        posterior = DiagonalGaussianDistributionUniVar(moments, self.encoder.latents_logvar)
 
         if not return_dict:
             return (posterior,)
@@ -734,7 +781,8 @@ class AutoencoderKLDual(ModelMixin, ConfigMixin):
             result_rows.append(torch.cat(result_row, dim=3))
 
         moments = torch.cat(result_rows, dim=2)
-        posterior = DiagonalGaussianDistribution(moments)
+        #posterior = DiagonalGaussianDistribution(moments)
+        posterior = DiagonalGaussianDistributionUniVar(moments, self.encoder.latents_logvar)
 
         if not return_dict:
             return (posterior,)
