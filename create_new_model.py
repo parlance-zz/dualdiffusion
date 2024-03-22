@@ -50,6 +50,7 @@ MODEL_PARAMS = {
     "timestep_ln_scale": 1,
 
     # vae unet training params
+    "point_loss_weight": 0,
     "kl_loss_weight": 1e-3,
     "channel_kl_loss_weight": 1e-2,
     "recon_loss_weight": 0.1,
