@@ -39,7 +39,7 @@ MODEL_PARAMS = {
 
     # sample format params
     "sample_format": "spectrogram",
-    "sample_raw_length": 32000*45,
+    "sample_raw_length": 32000*15,
     "noise_floor": 2e-5,
     "latent_mean": 0,
     "latent_std": 1,
@@ -50,9 +50,9 @@ MODEL_PARAMS = {
     "timestep_ln_scale": 1,
 
     # vae unet training params
-    "point_loss_weight": 0,
-    "kl_loss_weight": 1e-3,
-    "channel_kl_loss_weight": 1e-2,
+    "point_loss_weight": 0.01,
+    "kl_loss_weight": 1e-4,
+    "channel_kl_loss_weight": 1e-4,
     "recon_loss_weight": 0.1,
 
     "spectrogram_params": {
@@ -88,7 +88,7 @@ MODEL_PARAMS = {
 
     "loss_params": {
         "stereo_separation_weight": 0.5,
-        "imag_loss_weight": 0,
+        "imag_loss_weight": 0.3,
         "block_overlap": 8,
         "block_widths": [
             8,
@@ -106,7 +106,7 @@ VAE_PARAMS = {
     "act_fn": "silu",
     "conv_size": (3,3),
 
-    "block_out_channels": (128, 256, 512, 512),
+    "block_out_channels": (96, 192, 384, 512),
     "layers_per_block": 2,
 
     "layers_per_mid_block": 3,
