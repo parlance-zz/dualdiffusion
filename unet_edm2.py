@@ -268,7 +268,7 @@ class UNet(ModelMixin, ConfigMixin):
 
         self.label_balance = label_balance
         self.concat_balance = concat_balance
-        #self.out_gain = torch.nn.Parameter(torch.zeros([])) # not needed with geodesic flow
+        self.out_gain = torch.nn.Parameter(torch.zeros([]))
 
         # Embedding.
         self.emb_fourier = MPFourier(cnoise)
@@ -341,9 +341,7 @@ class UNet(ModelMixin, ConfigMixin):
             if 'layer' in name:
                 x = mp_cat(x, skips.pop(), t=self.concat_balance)
             x = block(x, emb, format)
-
-        #x = self.conv_out(x, gain=self.out_gain) # gain no longer needed with geodesic flow
-        x = self.conv_out(x)                      # objective / output is guaranteed to have unit variance
+        x = self.conv_out(x, gain=self.out_gain)
 
         # Training uncertainty, if requested.
         if return_logvar:
