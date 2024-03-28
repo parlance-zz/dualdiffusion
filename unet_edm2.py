@@ -11,6 +11,9 @@
 import numpy as np
 import torch
 
+from diffusers.configuration_utils import ConfigMixin, register_to_config
+from diffusers.models.modeling_utils import ModelMixin
+
 #----------------------------------------------------------------------------
 # Normalize given tensor to unit magnitude with respect to the given
 # dimensions. Default = all dimensions except the first.
@@ -21,13 +24,6 @@ def normalize(x, dim=None, eps=1e-4):
     norm = torch.linalg.vector_norm(x, dim=dim, keepdim=True, dtype=torch.float32)
     norm = torch.add(eps, norm, alpha=np.sqrt(norm.numel() / x.numel()))
     return x / norm.to(x.dtype)
-
-def normalize2(x, y, dim=None, eps=1e-4):
-    if dim is None:
-        dim = list(range(1, x.ndim))
-    norm = (x.float().square().sum(dim=dim, keepdim=True) + y.float().square().sum(dim=dim, keepdim=True)).sqrt()
-    norm = torch.add(eps, norm, alpha=np.sqrt(norm.numel() / (x.numel() + y.numel())))
-    return x / norm.to(x.dtype), y / norm.to(y.dtype)
 
 #----------------------------------------------------------------------------
 # Upsample or downsample the given tensor with the given filter,
@@ -42,7 +38,7 @@ def resample(x, f=[1,1], mode='keep'):
     f = f / f.sum()
     f = np.outer(f, f)[np.newaxis, np.newaxis, :, :]
     #f = misc.const_like(x, f)
-    f = torch.full_like(x, f)
+    f = torch.tensor(f, device=x.device, dtype=x.dtype)
     c = x.shape[1]
     if mode == 'down':
         return torch.nn.functional.conv2d(x, f.tile([c, 1, 1, 1]), groups=c, stride=2, padding=(pad,))
@@ -75,6 +71,7 @@ def mp_cat(a, b, dim=1, t=0.5):
 #----------------------------------------------------------------------------
 # Magnitude-preserving Fourier features (Equation 75).
 
+#"""
 class MPFourier(torch.nn.Module):
     def __init__(self, num_channels, bandwidth=1):
         super().__init__()
@@ -83,11 +80,25 @@ class MPFourier(torch.nn.Module):
 
     def forward(self, x):
         y = x.to(torch.float32)
+        #y = (x.to(torch.float32) * torch.pi).cos()
         y = y.ger(self.freqs.to(torch.float32))
         y = y + self.phases.to(torch.float32)
         y = y.cos() * np.sqrt(2)
         return y.to(x.dtype)
+#"""
 
+"""
+class MPFourier(torch.nn.Module):
+    def __init__(self, num_channels, bandwidth=1):
+        super().__init__()
+        self.register_buffer('freqs', torch.pi * (torch.arange(num_channels) + 0.5))
+
+    def forward(self, x):
+        y = (x.to(torch.float32) * torch.pi).cos()
+        y = y.ger(self.freqs.to(torch.float32))
+        y = y.cos() * np.sqrt(2)
+        return y.to(x.dtype)
+""" 
 #----------------------------------------------------------------------------
 # Magnitude-preserving convolution or fully-connected layer (Equation 47)
 # with force weight normalization (Equation 66).
@@ -95,6 +106,7 @@ class MPFourier(torch.nn.Module):
 class MPConv(torch.nn.Module):
     def __init__(self, in_channels, out_channels, kernel):
         super().__init__()
+        self.in_channels = in_channels
         self.out_channels = out_channels
         self.weight = torch.nn.Parameter(torch.randn(out_channels, in_channels, *kernel))
 
@@ -109,12 +121,14 @@ class MPConv(torch.nn.Module):
         if w.ndim == 2:
             return x @ w.t()
         assert w.ndim == 4
+        
         return torch.nn.functional.conv2d(x, w, padding=(w.shape[-1]//2,))
 
 #----------------------------------------------------------------------------
 # U-Net encoder/decoder block with optional self-attention (Figure 21).
 
 class Block(torch.nn.Module):
+
     def __init__(self,
         in_channels,                    # Number of input channels.
         out_channels,                   # Number of output channels.
@@ -135,7 +149,7 @@ class Block(torch.nn.Module):
         if attention:
             if (out_channels % channels_per_head != 0) or ((out_channels + pos_channels) % channels_per_head != 0):
                 raise ValueError(f'Number of output channels {out_channels} must be divisible by the number of channels per head {channels_per_head}.')
-        
+
         self.out_channels = out_channels
         self.pos_channels = pos_channels
         self.flavor = flavor
@@ -166,6 +180,7 @@ class Block(torch.nn.Module):
     def forward(self, x, emb, format):
         # Main branch.
         x = resample(x, f=self.resample_filter, mode=self.resample_mode)
+
         if self.flavor == 'enc':
             if self.conv_skip is not None:
                 x = self.conv_skip(x)
@@ -199,10 +214,12 @@ class Block(torch.nn.Module):
             else:
                 qk = x
 
-            qk = self.attn_qk(qk).reshape(qk.shape[0], self.num_heads, -1, 2, y.shape[2] * y.shape[3])
+            qk = self.attn_qk(qk)
+            qk = qk.reshape(qk.shape[0], self.num_heads, -1, 2, y.shape[2] * y.shape[3])
             q, k = normalize(qk, dim=2).unbind(3)
 
-            v = self.attn_v(x).reshape(v.shape[0], self.num_heads, -1, y.shape[2] * y.shape[3])
+            v = self.attn_v(x)
+            v = v.reshape(v.shape[0], self.num_heads, -1, y.shape[2] * y.shape[3])
             v = normalize(v, dim=2)
 
             y = torch.nn.functional.scaled_dot_product_attention(q.transpose(-1, -2),
@@ -219,11 +236,14 @@ class Block(torch.nn.Module):
 #----------------------------------------------------------------------------
 # EDM2 U-Net model (Figure 21).
 
-class UNet(torch.nn.Module):
+class UNet(ModelMixin, ConfigMixin):
+
+    @register_to_config
     def __init__(self,
         in_channels = 4,                    # Number of input channels.
         out_channels = 4,                   # Number of output channels.
         pos_channels = 0,                   # Number of positional embedding channels for attention.
+        channels_per_head = 64,             # Number of channels per attention head.
         label_dim = 0,                      # Class label dimensionality. 0 = unconditional.
         model_channels       = 192,         # Base multiplier for the number of channels.
         channel_mult         = [1,2,3,4],   # Per-resolution multipliers for the number of channels.
@@ -233,9 +253,11 @@ class UNet(torch.nn.Module):
         attn_levels          = [0,1,2,3],   # List of resolutions with self-attention.
         label_balance        = 0.5,         # Balance between noise embedding (0) and class embedding (1).
         concat_balance       = 0.5,         # Balance between skip connections (0) and main path (1).
-        **block_kwargs,                     # Arguments for Block.
+        #**block_kwargs,                     # Arguments for Block.
     ):
         super().__init__()
+
+        block_kwargs = {"channels_per_head": channels_per_head}
 
         cblock = [int(model_channels * x) for x in channel_mult]
         cnoise = int(model_channels * channel_mult_noise) if channel_mult_noise is not None else cblock[0]
@@ -290,6 +312,10 @@ class UNet(torch.nn.Module):
         self.conv_out = MPConv(cout, out_channels, kernel=[3,3])
 
     def forward(self, x, noise_labels, class_labels, format):
+
+        if not torch.is_tensor(noise_labels):
+            noise_labels = torch.tensor([noise_labels], device=x.device)
+    
         # Embedding.
         emb = self.emb_noise(self.emb_fourier(noise_labels))
         if self.emb_label is not None:
@@ -306,7 +332,7 @@ class UNet(torch.nn.Module):
 
         # Decoder.
         for name, block in self.dec.items():
-            if 'block' in name:
+            if 'layer' in name:
                 x = mp_cat(x, skips.pop(), t=self.concat_balance)
             x = block(x, emb, format)
         x = self.conv_out(x, gain=self.out_gain)
@@ -315,6 +341,7 @@ class UNet(torch.nn.Module):
 #----------------------------------------------------------------------------
 # Preconditioning and uncertainty estimation.
 
+"""
 class Precond(torch.nn.Module):
     def __init__(self,
         img_resolution,         # Image resolution.
@@ -357,5 +384,5 @@ class Precond(torch.nn.Module):
             logvar = self.logvar_linear(self.logvar_fourier(c_noise)).reshape(-1, 1, 1, 1)
             return D_x, logvar # u(sigma) in Equation 21
         return D_x
-
+"""
 #----------------------------------------------------------------------------
