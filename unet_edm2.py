@@ -221,10 +221,10 @@ class Block(torch.nn.Module):
 
 class UNet(torch.nn.Module):
     def __init__(self,
-        in_channels,                        # Number of input channels.
-        out_channels,                       # Number of output channels.
-        pos_channels,                       # Number of positional embedding channels for attention.
-        label_dim,                          # Class label dimensionality. 0 = unconditional.
+        in_channels = 4,                    # Number of input channels.
+        out_channels = 4,                   # Number of output channels.
+        pos_channels = 0,                   # Number of positional embedding channels for attention.
+        label_dim = 0,                      # Class label dimensionality. 0 = unconditional.
         model_channels       = 192,         # Base multiplier for the number of channels.
         channel_mult         = [1,2,3,4],   # Per-resolution multipliers for the number of channels.
         channel_mult_noise   = None,        # Multiplier for noise embedding dimensionality. None = select based on channel_mult.
