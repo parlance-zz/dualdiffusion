@@ -148,7 +148,7 @@ class DualMultiscaleSpectralLoss2D:
         x = F.pad(x, (padding, padding, padding, padding), mode="reflect")
         x = x.unfold(2, block_width, step).unfold(3, block_width, step)
 
-        x = torch.fft.rfft2(x * window, norm="ortho")
+        x = torch.fft.rfft2(x * window, norm="backward")
 
         if midside_transform:
             x = torch.stack((x[:, 0] + x[:, 1],
@@ -162,6 +162,8 @@ class DualMultiscaleSpectralLoss2D:
 
         loss_real = torch.zeros(1, device=target.device)
         loss_imag = torch.zeros(1, device=target.device)
+
+        loss_scale = self.loss_scale / target.numel() / (self.block_overlap ** 2 / 4) / self.block_widths[-1] * 2.5
 
         for block_width in self.block_widths:
             
@@ -182,12 +184,12 @@ class DualMultiscaleSpectralLoss2D:
             sample_fft = self.stft2d(sample, block_width, step, midside_transform, window)
             sample_fft_abs = sample_fft.abs()
             
-            loss_real = loss_real + (sample_fft_abs - target_fft_abs).abs().mean()
+            loss_real = loss_real + (sample_fft_abs - target_fft_abs).abs().sum()
 
             if self.imag_loss_weight > 0:
                 error_imag = (sample_fft.angle() - target_fft_angle).abs()
                 error_imag_wrap_mask = (error_imag > torch.pi).detach().requires_grad_(False)
                 error_imag[error_imag_wrap_mask] = 2*torch.pi - error_imag[error_imag_wrap_mask]
-                loss_imag = loss_imag + (error_imag * loss_imag_weight).mean()
+                loss_imag = loss_imag + (error_imag * loss_imag_weight).sum()
             
-        return loss_real * self.loss_scale, loss_imag * self.loss_scale
+        return loss_real * loss_scale, loss_imag * loss_scale
