@@ -243,6 +243,7 @@ class UNet(ModelMixin, ConfigMixin):
         in_channels = 4,                    # Number of input channels.
         out_channels = 4,                   # Number of output channels.
         pos_channels = 0,                   # Number of positional embedding channels for attention.
+        logvar_channels = 128,              # Small network for training uncertainty estimation.
         channels_per_head = 64,             # Number of channels per attention head.
         label_dim = 0,                      # Class label dimensionality. 0 = unconditional.
         model_channels       = 192,         # Base multiplier for the number of channels.
@@ -253,7 +254,8 @@ class UNet(ModelMixin, ConfigMixin):
         attn_levels          = [0,1,2,3],   # List of resolutions with self-attention.
         label_balance        = 0.5,         # Balance between noise embedding (0) and class embedding (1).
         concat_balance       = 0.5,         # Balance between skip connections (0) and main path (1).
-        #**block_kwargs,                     # Arguments for Block.
+        #**block_kwargs,                    # Arguments for Block.
+        last_global_step = 0,               # Only used to track training progress in config.
     ):
         super().__init__()
 
@@ -266,12 +268,16 @@ class UNet(ModelMixin, ConfigMixin):
 
         self.label_balance = label_balance
         self.concat_balance = concat_balance
-        self.out_gain = torch.nn.Parameter(torch.zeros([]))
+        #self.out_gain = torch.nn.Parameter(torch.zeros([])) # not needed with geodesic flow
 
         # Embedding.
         self.emb_fourier = MPFourier(cnoise)
         self.emb_noise = MPConv(cnoise, cemb, kernel=[])
         self.emb_label = MPConv(label_dim, cemb, kernel=[]) if label_dim != 0 else None
+
+        # Training uncertainty estimation.
+        self.logvar_fourier = MPFourier(logvar_channels)
+        self.logvar_linear = MPConv(logvar_channels, 1, kernel=[])
 
         # Encoder.
         self.enc = torch.nn.ModuleDict()
@@ -311,7 +317,7 @@ class UNet(ModelMixin, ConfigMixin):
                                                              flavor='dec', attention=(level in attn_levels), **block_kwargs)
         self.conv_out = MPConv(cout, out_channels, kernel=[3,3])
 
-    def forward(self, x, noise_labels, class_labels, format):
+    def forward(self, x, noise_labels, class_labels, format, return_logvar=False):
 
         if not torch.is_tensor(noise_labels):
             noise_labels = torch.tensor([noise_labels], device=x.device)
@@ -335,7 +341,15 @@ class UNet(ModelMixin, ConfigMixin):
             if 'layer' in name:
                 x = mp_cat(x, skips.pop(), t=self.concat_balance)
             x = block(x, emb, format)
-        x = self.conv_out(x, gain=self.out_gain)
+
+        #x = self.conv_out(x, gain=self.out_gain) # gain no longer needed with geodesic flow
+        x = self.conv_out(x)                      # objective / output is guaranteed to have unit variance
+
+        # Training uncertainty, if requested.
+        if return_logvar:
+            logvar = self.logvar_linear(self.logvar_fourier(noise_labels)).reshape(-1, 1, 1, 1)
+            return x, logvar
+        
         return x
 
 #----------------------------------------------------------------------------

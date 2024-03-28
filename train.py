@@ -936,19 +936,14 @@ def do_training_loop(args,
                     normalized_timesteps = (timesteps / 999.).view(-1, 1, 1, 1)
                     model_input = slerp(samples, noise, normalized_timesteps).detach()
                     #model_output = module(model_input, timesteps).sample
-                    model_output = module(model_input, timesteps/999., None, pipeline.format)
+                    model_output, error_logvar = module(model_input, timesteps/999., None, pipeline.format, return_logvar=True)
 
                     target = slerp(samples, noise, normalized_timesteps - 1).detach() # geodesic flow with v pred
                     loss = F.mse_loss(model_output.float(), target.float(), reduction="none")
                     #loss = slerp_loss(model_output.float(), target.float()) / 14.5
                     timestep_loss = loss.mean(dim=list(range(1, len(loss.shape))))
 
-                    #min_snr_gamma = 5
-                    #snr = ((1-normalized_timesteps.clip(min=1e-10)).clip(min=1e-10) * torch.pi/2).tan()
-                    #mse_loss_weight = torch.stack([snr, min_snr_gamma * torch.ones_like(snr)], dim=1).min(dim=1)[0] / snr.clip(min=1e-10)
-                    #mse_loss_weight = 1/(1+snr)
-                    mse_loss_weight = 1
-                    loss = (timestep_loss * mse_loss_weight).mean()
+                    loss = (timestep_loss / error_logvar.exp() + error_logvar).mean()
 
                     if args.num_timestep_loss_buckets > 0:
                         all_timesteps = accelerator.gather(timesteps.detach()).cpu()
