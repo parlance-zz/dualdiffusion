@@ -155,6 +155,9 @@ class DualSpectrogramFormat(torch.nn.Module):
         self.spectrogram_converter = SpectrogramConverter(self.spectrogram_params)
         self.loss = DualMultiscaleSpectralLoss2D(model_params["loss_params"])
 
+        self.mels_min = DualSpectrogramFormat._hz_to_mel(self.spectrogram_params.min_frequency)
+        self.mels_max = DualSpectrogramFormat._hz_to_mel(self.spectrogram_params.max_frequency)
+
     def get_sample_crop_width(self, length=0):
         if length <= 0: length = self.model_params["sample_raw_length"]
         return self.spectrogram_converter.get_crop_width(length)
@@ -205,6 +208,32 @@ class DualSpectrogramFormat(torch.nn.Module):
         
         spectrogram_shape = self.spectrogram_converter.get_spectrogram_shape(audio_shape)
         return tuple(spectrogram_shape)
+
+    @staticmethod    
+    def _hz_to_mel(freq, mel_scale="htk"):
+        if mel_scale != "htk":
+            raise NotImplementedError("Only HTK mel scale is supported")
+        return 2595. * np.log10(1. + (freq / 700.))
+        
+    @staticmethod
+    def _mel_to_hz(mels, mel_scale="htk"):
+        if mel_scale != "htk":
+            raise NotImplementedError("Only HTK mel scale is supported")
+        return 700. * (10. ** (mels / 2595.) - 1.)
+
+    @torch.no_grad()
+    def get_positional_embedding(self, x, n_channels, mode="linear"):
+
+        mels = torch.linspace(self.mels_min, self.mels_max, x.shape[2] + 2, device=x.device)[1:-1]
+        ln_freqs = DualSpectrogramFormat._mel_to_hz(mels, mel_scale="").log2()
+
+        if mode == "linear":
+            emb = ln_freqs.view(1, 1,-1, 1).repeat(x.shape[0], 1, -1, x.shape[3])
+            return ((emb - emb.mean()) / emb.std()).requires_grad_(False)
+        elif mode == "fourier":
+            pass
+        else:
+            raise ValueError(f"Unknown mode '{mode}'")
 
 class DualDiffusionPipeline(DiffusionPipeline):
 
@@ -299,6 +328,7 @@ class DualDiffusionPipeline(DiffusionPipeline):
         loops: int = 0,
         batch_size: int = 1,
         length: int = 0,
+        perturbation: float = 0.05
     ):
         if steps <= 0:
             raise ValueError(f"Steps must be > 0, got {steps}")
@@ -308,8 +338,6 @@ class DualDiffusionPipeline(DiffusionPipeline):
             raise ValueError(f"Length must be greater than or equal to 0, got {length}")
 
         self.set_tiling_mode(loops > 0)
-
-        timesteps = [(1. - i / steps) * 999. for i in range(steps)]
 
         if isinstance(seed, int):
             if seed == 0: seed = np.random.randint(100000,999999)
@@ -327,19 +355,57 @@ class DualDiffusionPipeline(DiffusionPipeline):
         sample = torch.randn(sample_shape, device=self.device,
                              dtype=self.unet.dtype,
                              generator=generator)
+        sample -= sample.mean(dim=(1,2,3), keepdim=True)
+        sample /= sample.square().mean(dim=(1,2,3), keepdim=True).sqrt()
 
-        alpha = 1
+        """
+        from dual_diffusion_utils import load_audio
+        crop_width = self.format.get_sample_crop_width(length=length)
+        test_sample = load_audio("./dataset/samples_hq/Contra III - The Alien Wars - 05 Neo Kobe Steel Factory.flac", start=0, count=crop_width)
+        test_sample = self.format.raw_to_sample(test_sample.unsqueeze(0).to(self.device))
+        latents = self.vae.encode(test_sample.type(self.unet.dtype), return_dict=False)[0].mode()
+        latents -= latents.mean()
+        latents /= latents.std()
 
-        for _, t in enumerate(self.progress_bar(timesteps)):
+        sample = slerp(sample, latents, 0.125)
+        sample -= sample.mean(dim=(1,2,3), keepdim=True)
+        sample /= sample.square().mean(dim=(1,2,3), keepdim=True).sqrt()
+        """
+
+        #v_schedule = (torch.linspace(0.5/steps, 1-0.5/steps, steps) * torch.pi).sin()# **2
+        v_schedule = torch.ones(steps)
+        use_midpoint_integration = True#False
+
+        v_schedule /= v_schedule.sum()
+        t_schedule = (1 - v_schedule.cumsum(dim=0) + v_schedule[0]).tolist()
+        v_schedule = v_schedule.tolist()
+
+        #t_schedule = t_schedule[int(steps/8+0.5):]
+        #v_schedule = v_schedule[int(steps/8+0.5):]
+
+        for i, t in enumerate(self.progress_bar(t_schedule)):
             
-            timestep = torch.ones(batch_size, device=self.device, dtype=self.unet.dtype) * t
-            model_output = self.unet(sample, timestep).sample / (0.5 ** 0.5)
+            model_output = self.unet(sample, t * 999.).sample
 
-            #sample += model_output / steps
-            target = sample + model_output
-            t = (1 / steps) / alpha
-            alpha -= 1 / steps
-            sample = slerp(sample, target, t)
+            if use_midpoint_integration: # geodesic flow with v pred and midpoint euler integration
+
+                sample_m = slerp(sample, model_output, v_schedule[i]/2)
+                sample_m -= sample_m.mean(dim=(1,2,3), keepdim=True)
+                sample_m /= sample_m.square().mean(dim=(1,2,3), keepdim=True).sqrt()
+                
+                model_output = self.unet(sample_m, (t - v_schedule[i]/2) * 999.).sample
+
+            sample = slerp(sample, model_output, v_schedule[i])
+            sample -= sample.mean(dim=(1,2,3), keepdim=True)
+            sample /= sample.square().mean(dim=(1,2,3), keepdim=True).sqrt()
+
+            continue
+            perturb = torch.randn_like(sample)
+            perturb -= perturb.mean(dim=(1,2,3), keepdim=True)
+            perturb /= perturb.square().mean(dim=(1,2,3), keepdim=True).sqrt()
+            sample = slerp(sample, perturb, v_schedule[i])
+            sample -= sample.mean(dim=(1,2,3), keepdim=True)
+            sample /= sample.square().mean(dim=(1,2,3), keepdim=True).sqrt()
 
         debug_path = os.environ.get("DEBUG_PATH", None)
         if debug_path is not None:
