@@ -74,6 +74,19 @@ def slerp(start, end, t):
 
     return (torch.sin((1 - t) * omega) / so) * start + (torch.sin(t * omega) / so) * end
 
+def slerp_loss(start, end):
+
+    reduction_dims = tuple(range(1, start.ndim)) if start.ndim > 1 else (0,)
+
+    start_len = start.square().sum(dim=reduction_dims, keepdim=True).sqrt()
+    start_norm = start / start_len
+    end_len = end.square().sum(dim=reduction_dims, keepdim=True).sqrt()
+    end_norm = end / end_len
+
+    omega = torch.acos((start_norm * end_norm).sum(dim=reduction_dims, keepdim=True))
+
+    return (omega * end_len).square() + (start_len - end_len).square()
+
 def compute_snr(noise_scheduler, timesteps):
     """
     Computes SNR as per
