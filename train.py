@@ -51,7 +51,7 @@ from diffusers.utils import deprecate, is_tensorboard_available
 from unet_dual import UNetDualModel
 from autoencoder_kl_dual import AutoencoderKLDual
 from dual_diffusion_pipeline import DualDiffusionPipeline
-from dual_diffusion_utils import init_cuda, load_audio, save_audio, load_raw, save_raw, dict_str, normalize_lufs, slerp
+from dual_diffusion_utils import init_cuda, load_audio, save_audio, load_raw, save_raw, dict_str, normalize_lufs, slerp, slerp_loss
 
 
 logger = get_logger(__name__, log_level="INFO")
@@ -889,8 +889,23 @@ def do_training_loop(args,
             if args.module == "unet" and grad_accum_steps == 0:
                 total_batch_size = args.train_batch_size * accelerator.num_processes * args.gradient_accumulation_steps
 
-                batch_timesteps = torch.randn(total_batch_size, device=accelerator.device) * timestep_ln_scale + timestep_ln_center
-                batch_timesteps = torch.sigmoid(batch_timesteps) * 999.
+                # logit normal timestep sampling
+                #batch_timesteps = torch.randn(total_batch_size, device=accelerator.device) * timestep_ln_scale + timestep_ln_center
+                #batch_timesteps = torch.sigmoid(batch_timesteps) * 999.
+
+                # uniform timestep sampling
+                #batch_timesteps = torch.rand(total_batch_size, device=accelerator.device) * 999.
+
+                # acos static timestep sampling
+                batch_timesteps = (torch.arange(total_batch_size, device=accelerator.device)+0.5) / total_batch_size
+                batch_timesteps += (torch.rand(1, device=accelerator.device) - 0.5) / total_batch_size
+                batch_timesteps = ((1 - 2*batch_timesteps).acos() * (999. / torch.pi)).clip(min=0, max=999.)
+                
+                #batch_timesteps = torch.erfinv(batch_timesteps * 2 - 1).sigmoid() * 999.
+                #batch_timesteps = batch_timesteps.clip(min=0, max=1) * 999.
+
+                # sync timesteps across all ranks / processes
+                batch_timesteps = accelerator.gather(batch_timesteps.unsqueeze(0))[0]
 
                 if args.num_timestep_loss_buckets > 0:
                     timestep_loss_buckets.zero_()
@@ -905,31 +920,32 @@ def do_training_loop(args,
                     samples = pipeline.format.raw_to_sample(raw_samples)
                 
                     if vae is not None:
-                        vae_encoded = vae.encode(samples.half(), return_dict=False)[0]
-                        samples = (vae_encoded.sample().float() - latent_mean) / latent_std
-                        target = (vae_encoded.mode().float() - latent_mean) / latent_std
+                        samples = vae.encode(samples.half(), return_dict=False)[0].mode().detach().float()
+                        samples -= samples.mean(dim=(1,2,3), keepdim=True)
+                        samples /= samples.std(dim=(1,2,3), keepdim=True)
                     
-                    noise = torch.randn_like(samples)
-                    if input_perturbation > 0:
-                        new_noise = noise + input_perturbation * torch.randn_like(noise)
+                    noise = torch.randn_like(samples).requires_grad_(False)
+                    noise -= noise.mean(dim=(1,2,3), keepdim=True)
+                    noise /= noise.std(dim=(1,2,3), keepdim=True)
 
                     process_batch_timesteps = batch_timesteps[accelerator.local_process_index::accelerator.num_processes]
                     timesteps = process_batch_timesteps[grad_accum_steps * args.train_batch_size:(grad_accum_steps+1) * args.train_batch_size]
-
-                    normalized_timesteps = (timesteps / 999.).view(-1, 1, 1, 1)
-                    if input_perturbation > 0:
-                        #model_input = torch.lerp(samples, new_noise, normalized_timesteps)
-                        model_input = slerp(samples, new_noise, normalized_timesteps)
-                    else:
-                        #model_input = torch.lerp(samples, noise, normalized_timesteps)
-                        model_input = slerp(samples, noise, normalized_timesteps)
                     
+                    normalized_timesteps = (timesteps / 999.).view(-1, 1, 1, 1)
+                    model_input = slerp(samples, noise, normalized_timesteps).detach()
                     model_output = module(model_input, timesteps).sample
 
-                    target = (target - noise) * (0.5 ** 0.5)
-                    loss = F.mse_loss(model_output.float(), target.float(), reduction="none")
+                    target = slerp(samples, noise, normalized_timesteps - 1).detach() # geodesic flow with v pred
+                    loss = F.mse_loss(model_output.float(), target.float(), reduction="none") / 4
+                    #loss = slerp_loss(model_output.float(), target.float()) / 14.5
                     timestep_loss = loss.mean(dim=list(range(1, len(loss.shape))))
-                    loss = timestep_loss.mean()
+
+                    #min_snr_gamma = 5
+                    #snr = ((1-normalized_timesteps.clip(min=1e-10)).clip(min=1e-10) * torch.pi/2).tan()
+                    #mse_loss_weight = torch.stack([snr, min_snr_gamma * torch.ones_like(snr)], dim=1).min(dim=1)[0] / snr.clip(min=1e-10)
+                    #mse_loss_weight = 1/(1+snr)
+                    mse_loss_weight = 1
+                    loss = (timestep_loss * mse_loss_weight).mean()
 
                     if args.num_timestep_loss_buckets > 0:
                         all_timesteps = accelerator.gather(timesteps.detach()).cpu()
