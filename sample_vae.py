@@ -36,15 +36,15 @@ if __name__ == "__main__":
     load_dotenv(override=True)
     #np.random.seed(0)
 
-    model_name = "dualdiffusion2d_2000_6"
+    model_name = "dualdiffusion2d_3000_4"
     num_samples = 1
     device = "cuda" #"cpu"
     fp16 = True #False
     start = 0
     length = 32000 * 45
     save_output = True
-    sample_latents = True
-    normalize_latents = False
+    sample_latents = False#True
+    normalize_latents = True
     random_latents = False #True
     quantize_latents = 0 #8
     add_latent_noise = 0 #0.1
@@ -115,10 +115,10 @@ if __name__ == "__main__":
             latents = posterior.sample()
         else:
             latents = posterior.mode()
-        if add_latent_noise > 0:
-            latents += torch.randn_like(latents) * add_latent_noise * latents.std()
         if quantize_latents > 0:
             latents = quantize_tensor(latents, quantize_latents)
+        if add_latent_noise > 0:
+            latents += torch.randn_like(latents) * add_latent_noise * latents.std()
         if normalize_latents:
             latents = (latents - latents.mean()) / latents.std()
             #latents = latents * model_params["latent_std"] + model_params["latent_mean"]
