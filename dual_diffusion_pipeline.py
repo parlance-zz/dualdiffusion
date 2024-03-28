@@ -225,13 +225,13 @@ class DualSpectrogramFormat(torch.nn.Module):
     def get_positional_embedding(self, x, n_channels, mode="linear"):
 
         mels = torch.linspace(self.mels_min, self.mels_max, x.shape[2] + 2, device=x.device)[1:-1]
-        ln_freqs = DualSpectrogramFormat._mel_to_hz(mels, mel_scale="").log2()
+        ln_freqs = DualSpectrogramFormat._mel_to_hz(mels, mel_scale=self.spectrogram_params.mel_scale_type).log2()
 
         if mode == "linear":
             emb = ln_freqs.view(1, 1,-1, 1).repeat(x.shape[0], 1, -1, x.shape[3])
             return ((emb - emb.mean()) / emb.std()).requires_grad_(False)
         elif mode == "fourier":
-            pass
+            raise NotImplementedError("Fourier positional embeddings not implemented")
         else:
             raise ValueError(f"Unknown mode '{mode}'")
 
