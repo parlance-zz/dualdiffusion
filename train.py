@@ -48,7 +48,8 @@ from diffusers.optimization import get_scheduler
 from diffusers.training_utils import EMAModel
 from diffusers.utils import deprecate, is_tensorboard_available
 
-from unet_dual import UNetDualModel
+#from unet_dual import UNetDualModel
+from unet_edm2 import UNet
 from autoencoder_kl_dual import AutoencoderKLDual
 from dual_diffusion_pipeline import DualDiffusionPipeline
 from dual_diffusion_utils import init_cuda, load_audio, save_audio, load_raw, save_raw, dict_str, normalize_lufs, slerp, slerp_loss
@@ -147,7 +148,7 @@ def parse_args():
         ),
     )
     parser.add_argument(
-        "--lr_warmup_steps", type=int, default=5000, help="Number of steps for the warmup in the lr scheduler."
+        "--lr_warmup_steps", type=int, default=500, help="Number of steps for the warmup in the lr scheduler."
     )
     parser.add_argument(
         "--snr_gamma",
@@ -584,7 +585,8 @@ def init_module_pipeline(pretrained_model_name_or_path, module_type, vae_encode_
     module = getattr(pipeline, module_type)
 
     if module_type == "unet":
-        module_class = UNetDualModel
+        #module_class = UNetDualModel
+        module_class = UNet
 
         vae = getattr(pipeline, "vae", None)
         if vae is not None:
@@ -900,7 +902,7 @@ def do_training_loop(args,
                 batch_timesteps = (torch.arange(total_batch_size, device=accelerator.device)+0.5) / total_batch_size
                 batch_timesteps += (torch.rand(1, device=accelerator.device) - 0.5) / total_batch_size
                 batch_timesteps = ((1 - 2*batch_timesteps).acos() * (999. / torch.pi)).clip(min=0, max=999.)
-                
+
                 #batch_timesteps = torch.erfinv(batch_timesteps * 2 - 1).sigmoid() * 999.
                 #batch_timesteps = batch_timesteps.clip(min=0, max=1) * 999.
 
@@ -933,10 +935,11 @@ def do_training_loop(args,
                     
                     normalized_timesteps = (timesteps / 999.).view(-1, 1, 1, 1)
                     model_input = slerp(samples, noise, normalized_timesteps).detach()
-                    model_output = module(model_input, timesteps).sample
+                    #model_output = module(model_input, timesteps).sample
+                    model_output = module(model_input, timesteps/999., None, pipeline.format)
 
                     target = slerp(samples, noise, normalized_timesteps - 1).detach() # geodesic flow with v pred
-                    loss = F.mse_loss(model_output.float(), target.float(), reduction="none") / 4
+                    loss = F.mse_loss(model_output.float(), target.float(), reduction="none")
                     #loss = slerp_loss(model_output.float(), target.float()) / 14.5
                     timestep_loss = loss.mean(dim=list(range(1, len(loss.shape))))
 
@@ -1109,8 +1112,8 @@ def do_training_loop(args,
 
                     module.train().requires_grad_(True)
 
-            if args.use_ema:
-                ema_module.restore(module.parameters())
+            #if args.use_ema:
+            #    ema_module.restore(module.parameters())
             
     accelerator.end_training()
 

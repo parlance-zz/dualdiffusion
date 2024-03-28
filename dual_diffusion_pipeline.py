@@ -29,7 +29,8 @@ import torch
 
 from diffusers.pipelines.pipeline_utils import DiffusionPipeline
 
-from unet_dual import UNetDualModel
+#from unet_dual import UNetDualModel
+from unet_edm2 import UNet
 from autoencoder_kl_dual import AutoencoderKLDual
 from spectrogram import SpectrogramParams, SpectrogramConverter
 from dual_diffusion_utils import mdct, imdct, save_raw, save_raw_img, slerp
@@ -221,15 +222,15 @@ class DualSpectrogramFormat(torch.nn.Module):
             raise NotImplementedError("Only HTK mel scale is supported")
         return 700. * (10. ** (mels / 2595.) - 1.)
 
-    @torch.no_grad()
+    #@torch.no_grad()
     def get_positional_embedding(self, x, n_channels, mode="linear"):
 
         mels = torch.linspace(self.mels_min, self.mels_max, x.shape[2] + 2, device=x.device)[1:-1]
         ln_freqs = DualSpectrogramFormat._mel_to_hz(mels, mel_scale=self.spectrogram_params.mel_scale_type).log2()
 
         if mode == "linear":
-            emb = ln_freqs.view(1, 1,-1, 1).repeat(x.shape[0], 1, -1, x.shape[3])
-            return ((emb - emb.mean()) / emb.std()).requires_grad_(False)
+            emb = ln_freqs.view(1, 1,-1, 1).repeat(x.shape[0], 1, 1, x.shape[3])
+            return ((emb - emb.mean()) / emb.std())#.requires_grad_(False)
         elif mode == "fourier":
             raise NotImplementedError("Fourier positional embeddings not implemented")
         else:
@@ -240,7 +241,8 @@ class DualDiffusionPipeline(DiffusionPipeline):
     @torch.no_grad()
     def __init__(
         self,
-        unet: UNetDualModel,
+        #unet: UNetDualModel,
+        unet: UNet,
         vae: AutoencoderKLDual, 
         model_params: dict = None,
     ):
@@ -277,7 +279,8 @@ class DualDiffusionPipeline(DiffusionPipeline):
     @torch.no_grad()
     def create_new(model_params, unet_params, vae_params=None):
         
-        unet = UNetDualModel(**unet_params)
+        #unet = UNetDualModel(**unet_params)
+        unet = UNet(**unet_params)
 
         if vae_params is not None:
             vae = AutoencoderKLDual(**vae_params)
@@ -314,9 +317,10 @@ class DualDiffusionPipeline(DiffusionPipeline):
             if len(unet_checkpoints) > 0:
                 unet_checkpoints = sorted(unet_checkpoints, key=lambda x: int(x.split("-")[1]))
                 unet_path = os.path.join(model_path, unet_checkpoints[-1], "unet")
-        unet = UNetDualModel.from_pretrained(unet_path,
-                                             torch_dtype=torch_dtype,
-                                             device=device).requires_grad_(requires_grad).train(requires_grad)
+        #unet = UNetDualModel.from_pretrained(unet_path,
+        unet = UNet.from_pretrained(unet_path,
+                                    torch_dtype=torch_dtype,
+                                    device=device).requires_grad_(requires_grad).train(requires_grad)
         
         return DualDiffusionPipeline(unet, vae, model_params=model_params)
         
@@ -385,7 +389,8 @@ class DualDiffusionPipeline(DiffusionPipeline):
 
         for i, t in enumerate(self.progress_bar(t_schedule)):
             
-            model_output = self.unet(sample, t * 999.).sample
+            #model_output = self.unet(sample, t * 999.).sample
+            model_output = self.unet(sample, t, None, self.format)
 
             if use_midpoint_integration: # geodesic flow with v pred and midpoint euler integration
 
@@ -393,7 +398,8 @@ class DualDiffusionPipeline(DiffusionPipeline):
                 sample_m -= sample_m.mean(dim=(1,2,3), keepdim=True)
                 sample_m /= sample_m.square().mean(dim=(1,2,3), keepdim=True).sqrt()
                 
-                model_output = self.unet(sample_m, (t - v_schedule[i]/2) * 999.).sample
+                #model_output = self.unet(sample_m, (t - v_schedule[i]/2) * 999.).sample
+                model_output = self.unet(sample_m, t - v_schedule[i]/2, None, self.format)
 
             sample = slerp(sample, model_output, v_schedule[i])
             sample -= sample.mean(dim=(1,2,3), keepdim=True)

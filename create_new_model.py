@@ -29,8 +29,8 @@ from dual_diffusion_utils import dict_str
 
 load_dotenv(override=True)
 
-MODEL_NAME = "dualdiffusion2d_2000_6"
-MODEL_SEED = 400
+MODEL_NAME = "edm2_100_1"
+MODEL_SEED = 2000
 
 MODEL_PARAMS = {
     # dataset format params
@@ -39,13 +39,13 @@ MODEL_PARAMS = {
 
     # sample format params
     "sample_format": "spectrogram",
-    "sample_raw_length": 32000*15,
+    "sample_raw_length": 32000*45,
     "noise_floor": 2e-5,
     "latent_mean": 0,
     "latent_std": 1,
 
     # diffusion unet training params
-    "input_perturbation": 0,
+    "input_perturbation": 0.1,
     "timestep_ln_center": 0,
     "timestep_ln_scale": 1,
 
@@ -138,13 +138,14 @@ VAE_PARAMS = {
     "out_channels": format.get_num_channels()[1],
 }
 
+"""
 UNET_PARAMS = {
     "dropout": 0.,
     "act_fn": "silu",
     "conv_size": (3,3),
 
     #"attention_num_heads": 4,
-    "attention_num_heads": (8,8,16,16),
+    "attention_num_heads": (8,8,8,8),
 
     "separate_attn_dim_mid": (0,),
     "add_mid_attention": True,
@@ -161,7 +162,7 @@ UNET_PARAMS = {
     #"separate_attn_dim_down": (2,3,),
     #"separate_attn_dim_down": (0,0),
     
-    "separate_attn_dim_up": (3,2,0),
+    "separate_attn_dim_up": (3,2,3),
     #"separate_attn_dim_up": (3,2,3,),
     #"separate_attn_dim_up": (0,0,0),
     
@@ -175,8 +176,8 @@ UNET_PARAMS = {
     #"downsample_type": "resnet",
     #"upsample_type": "resnet",
     "downsample_type": "conv",
-    #"upsample_type": "conv",
-    "upsample_type": "conv_transpose",
+    "upsample_type": "conv",
+    #"upsample_type": "conv_transpose",
 
     "norm_num_groups": 32,
     #"norm_num_groups": (32, 64, 128, 128,),
@@ -185,9 +186,23 @@ UNET_PARAMS = {
     #"layers_per_block": 1,
     "layers_per_block": 2,
 
-    "block_out_channels": (320, 640, 1024, 1024), 
+    "block_out_channels": (256, 512, 1024, 1024), 
 }
+"""
 
+UNET_PARAMS = {
+    "pos_channels": 0,           # Number of positional embedding channels for attention.
+    "label_dim": 0,              # Class label dimensionality. 0 = unconditional.
+    "model_channels": 256,       # Base multiplier for the number of channels.
+    "channels_per_head": 64,
+    "channel_mult": [1,2,3,4],   # Per-resolution multipliers for the number of channels.
+    "channel_mult_noise": None,  # Multiplier for noise embedding dimensionality. None = select based on channel_mult.
+    "channel_mult_emb": None,    # Multiplier for final embedding dimensionality. None = select based on channel_mult.
+    "num_layers_per_block": 3,   # Number of residual blocks per resolution.
+    "attn_levels": [2,3],        # List of resolutions with self-attention.
+    "label_balance": 0.5,        # Balance between noise embedding (0) and class embedding (1).
+    "concat_balance": 0.5,       # Balance between skip connections (0) and main path (1).
+}
 
 if __name__ == "__main__":
 
