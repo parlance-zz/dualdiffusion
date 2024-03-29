@@ -676,8 +676,11 @@ def init_optimizer(use_8bit_adam,
 
 def init_lr_scheduler(lr_schedule, optimizer, lr_warmup_steps, max_train_steps, num_processes):
 
+    lr_warmup_steps *= num_processes
+    max_train_steps *= num_processes
+
     if lr_schedule == "edm2":
-        
+
         def edm2_lr_lambda(current_step: int):
             if current_step < lr_warmup_steps:
                 return 1.
@@ -689,8 +692,8 @@ def init_lr_scheduler(lr_schedule, optimizer, lr_warmup_steps, max_train_steps, 
     return get_scheduler(
         lr_schedule,
         optimizer=optimizer,
-        num_warmup_steps=lr_warmup_steps * num_processes,
-        num_training_steps=max_train_steps * num_processes,
+        num_warmup_steps=lr_warmup_steps,
+        num_training_steps=max_train_steps,
     )
 
 class DatasetTransformer(torch.nn.Module):
