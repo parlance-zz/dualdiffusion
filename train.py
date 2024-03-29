@@ -37,6 +37,7 @@ import torch
 import torch.nn.functional as F
 import torch.utils.checkpoint
 import torchaudio
+from torch.optim.lr_scheduler import LambdaLR
 from accelerate import Accelerator
 from accelerate.logging import get_logger
 from accelerate.utils import ProjectConfiguration, set_seed
@@ -144,7 +145,7 @@ def parse_args():
         default="constant",
         help=(
             'The scheduler type to use. Choose between ["linear", "cosine", "cosine_with_restarts", "polynomial",'
-            ' "constant", "constant_with_warmup"]'
+            ' "constant", "constant_with_warmup", "edm2"] If using edm2 lr_warmup_steps is instead used as the beginning of decay (25k default)'
         ),
     )
     parser.add_argument(
@@ -372,6 +373,9 @@ def parse_args():
 
     if args.tracker_project_name is None:
         args.tracker_project_name = os.path.basename(args.output_dir)
+
+    if args.lr_scheduler == "edm2" and args.lr_warmup_steps == 500:
+        args.lr_warmup_steps = 25000
 
     return args
 
@@ -671,13 +675,23 @@ def init_optimizer(use_8bit_adam,
     return optimizer
 
 def init_lr_scheduler(lr_schedule, optimizer, lr_warmup_steps, max_train_steps, num_processes):
-    lr_scheduler = get_scheduler(
+
+    if lr_schedule == "edm2":
+        
+        def edm2_lr_lambda(current_step: int):
+            if current_step < lr_warmup_steps:
+                return 1.
+            else:
+                return (lr_warmup_steps / current_step) ** 0.5
+            
+        return LambdaLR(optimizer, edm2_lr_lambda)
+
+    return get_scheduler(
         lr_schedule,
         optimizer=optimizer,
         num_warmup_steps=lr_warmup_steps * num_processes,
         num_training_steps=max_train_steps * num_processes,
     )
-    return lr_scheduler
 
 class DatasetTransformer(torch.nn.Module):
 
