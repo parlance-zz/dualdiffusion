@@ -365,32 +365,39 @@ class DualDiffusionPipeline(DiffusionPipeline):
         """
         from dual_diffusion_utils import load_audio
         crop_width = self.format.get_sample_crop_width(length=length)
-        test_sample = load_audio("./dataset/samples_hq/Contra III - The Alien Wars - 05 Neo Kobe Steel Factory.flac", start=0, count=crop_width)
+        dataset_path = os.environ.get("DATASET_PATH", "./dataset/samples_hq")
+        img2img_input_path = np.random.choice(os.listdir(dataset_path), 1, replace=False)[0]
+        img2img_input_path = "Final Fantasy - Mystic Quest  [Mystic Quest Legend] - 07 Battle 1.flac"
+        test_sample = load_audio(os.path.join(dataset_path, img2img_input_path), start=0, count=crop_width)
         test_sample = self.format.raw_to_sample(test_sample.unsqueeze(0).to(self.device))
         latents = self.vae.encode(test_sample.type(self.unet.dtype), return_dict=False)[0].mode()
         latents -= latents.mean()
         latents /= latents.std()
 
-        sample = slerp(sample, latents, 0.125)
+        img2img_strength = 0.85#2
+        sample = slerp(sample, latents, 1 - img2img_strength)
         sample -= sample.mean(dim=(1,2,3), keepdim=True)
         sample /= sample.square().mean(dim=(1,2,3), keepdim=True).sqrt()
+        print(img2img_input_path)
         """
 
         #v_schedule = (torch.linspace(0.5/steps, 1-0.5/steps, steps) * torch.pi).sin()# **2
         v_schedule = torch.ones(steps)
-        use_midpoint_integration = True#False
+        use_midpoint_integration = True
 
         v_schedule /= v_schedule.sum()
         t_schedule = (1 - v_schedule.cumsum(dim=0) + v_schedule[0]).tolist()
         v_schedule = v_schedule.tolist()
 
-        #t_schedule = t_schedule[int(steps/8+0.5):]
-        #v_schedule = v_schedule[int(steps/8+0.5):]
+        #t_schedule = t_schedule[int(steps*(1-img2img_strength)+0.5):]
+        #v_schedule = v_schedule[int(steps*(1-img2img_strength)+0.5):]
 
         for i, t in enumerate(self.progress_bar(t_schedule)):
             
-            #model_output = self.unet(sample, t * 999.).sample
-            model_output = self.unet(sample, t, None, self.format)
+            model_output, logvar = self.unet(sample, t, None, self.format, return_logvar=True)
+            model_output += torch.randn_like(model_output) * (logvar/2).exp()
+            model_output -= model_output.mean(dim=(1,2,3), keepdim=True)
+            model_output /= model_output.square().mean(dim=(1,2,3), keepdim=True).sqrt()
 
             if use_midpoint_integration: # geodesic flow with v pred and midpoint euler integration
 
@@ -398,18 +405,12 @@ class DualDiffusionPipeline(DiffusionPipeline):
                 sample_m -= sample_m.mean(dim=(1,2,3), keepdim=True)
                 sample_m /= sample_m.square().mean(dim=(1,2,3), keepdim=True).sqrt()
                 
-                #model_output = self.unet(sample_m, (t - v_schedule[i]/2) * 999.).sample
-                model_output = self.unet(sample_m, t - v_schedule[i]/2, None, self.format)
+                model_output, logvar = self.unet(sample_m, t - v_schedule[i]/2, None, self.format, return_logvar=True)
+                model_output += torch.randn_like(model_output) * (logvar/2).exp()
+                model_output -= model_output.mean(dim=(1,2,3), keepdim=True)
+                model_output /= model_output.square().mean(dim=(1,2,3), keepdim=True).sqrt()
 
             sample = slerp(sample, model_output, v_schedule[i])
-            sample -= sample.mean(dim=(1,2,3), keepdim=True)
-            sample /= sample.square().mean(dim=(1,2,3), keepdim=True).sqrt()
-
-            continue
-            perturb = torch.randn_like(sample)
-            perturb -= perturb.mean(dim=(1,2,3), keepdim=True)
-            perturb /= perturb.square().mean(dim=(1,2,3), keepdim=True).sqrt()
-            sample = slerp(sample, perturb, v_schedule[i])
             sample -= sample.mean(dim=(1,2,3), keepdim=True)
             sample /= sample.square().mean(dim=(1,2,3), keepdim=True).sqrt()
 
