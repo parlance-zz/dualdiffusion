@@ -332,7 +332,8 @@ class DualDiffusionPipeline(DiffusionPipeline):
         loops: int = 0,
         batch_size: int = 1,
         length: int = 0,
-        perturbation: float = 0.05
+        use_midpoint_integration: bool = True,
+        use_perturbation: bool = True,
     ):
         if steps <= 0:
             raise ValueError(f"Steps must be > 0, got {steps}")
@@ -383,7 +384,6 @@ class DualDiffusionPipeline(DiffusionPipeline):
 
         #v_schedule = (torch.linspace(0.5/steps, 1-0.5/steps, steps) * torch.pi).sin()# **2
         v_schedule = torch.ones(steps)
-        use_midpoint_integration = True
 
         v_schedule /= v_schedule.sum()
         t_schedule = (1 - v_schedule.cumsum(dim=0) + v_schedule[0]).tolist()
@@ -395,9 +395,10 @@ class DualDiffusionPipeline(DiffusionPipeline):
         for i, t in enumerate(self.progress_bar(t_schedule)):
             
             model_output, logvar = self.unet(sample, t, None, self.format, return_logvar=True)
-            model_output += torch.randn_like(model_output) * (logvar/2).exp()
-            model_output -= model_output.mean(dim=(1,2,3), keepdim=True)
-            model_output /= model_output.square().mean(dim=(1,2,3), keepdim=True).sqrt()
+            if use_perturbation:
+                model_output += torch.randn_like(model_output) * (logvar/2).exp()
+                model_output -= model_output.mean(dim=(1,2,3), keepdim=True)
+                model_output /= model_output.square().mean(dim=(1,2,3), keepdim=True).sqrt()
 
             if use_midpoint_integration: # geodesic flow with v pred and midpoint euler integration
 
@@ -406,9 +407,10 @@ class DualDiffusionPipeline(DiffusionPipeline):
                 sample_m /= sample_m.square().mean(dim=(1,2,3), keepdim=True).sqrt()
                 
                 model_output, logvar = self.unet(sample_m, t - v_schedule[i]/2, None, self.format, return_logvar=True)
-                model_output += torch.randn_like(model_output) * (logvar/2).exp()
-                model_output -= model_output.mean(dim=(1,2,3), keepdim=True)
-                model_output /= model_output.square().mean(dim=(1,2,3), keepdim=True).sqrt()
+                if use_perturbation:
+                    model_output += torch.randn_like(model_output) * (logvar/2).exp()
+                    model_output -= model_output.mean(dim=(1,2,3), keepdim=True)
+                    model_output /= model_output.square().mean(dim=(1,2,3), keepdim=True).sqrt()
 
             sample = slerp(sample, model_output, v_schedule[i])
             sample -= sample.mean(dim=(1,2,3), keepdim=True)
