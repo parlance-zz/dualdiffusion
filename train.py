@@ -918,10 +918,10 @@ def do_training_loop(args,
                 # acos static timestep sampling
                 batch_timesteps = (torch.arange(total_batch_size, device=accelerator.device)+0.5) / total_batch_size
                 batch_timesteps += (torch.rand(1, device=accelerator.device) - 0.5) / total_batch_size
-                batch_timesteps = ((1 - 2*batch_timesteps).acos() * (999. / torch.pi)).clip(min=0, max=999.)
+                #batch_timesteps = ((1 - 2*batch_timesteps).acos() * (999. / torch.pi)).clip(min=0, max=999.)
 
                 #batch_timesteps = torch.erfinv(batch_timesteps * 2 - 1).sigmoid() * 999.
-                #batch_timesteps = batch_timesteps.clip(min=0, max=1) * 999.
+                batch_timesteps = batch_timesteps.clip(min=0, max=1) * 999.
 
                 # sync timesteps across all ranks / processes
                 batch_timesteps = accelerator.gather(batch_timesteps.unsqueeze(0))[0]
