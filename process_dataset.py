@@ -24,7 +24,6 @@ import os
 import subprocess
 from dotenv import load_dotenv
 
-from huggingface_hub import HfApi
 import torchaudio
 
 def decode_source_file(input_file, sample_num):
@@ -129,8 +128,3 @@ if __name__ == "__main__":
         os.makedirs(OUTPUT_SAMPLE_DIR, exist_ok=True)
 
     decode_source_to_samples()
-    
-    # push to huggingface hub
-    #api = HfApi()
-    #api.upload_folder(folder_path=OUTPUT_SAMPLE_DIR, repo_id="parlance/spc_audio", repo_type="dataset", 
-    #                  multi_commits=True, multi_commits_verbose=True)
