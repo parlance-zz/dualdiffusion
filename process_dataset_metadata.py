@@ -223,6 +223,7 @@ def organize_dataset(): # organize samples into directories of 10,000 samples ea
         new_file = os.path.join(directory, os.path.basename(file))
 
         if file != new_file:
+            print(f"{file} -> {new_file}")
             os.rename(file, new_file)
     
     for i in range(1, num_directories+1):
