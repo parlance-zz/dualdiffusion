@@ -79,13 +79,13 @@ def slerp_loss(start, end):
     reduction_dims = tuple(range(1, start.ndim)) if start.ndim > 1 else (0,)
 
     start_len = start.square().sum(dim=reduction_dims, keepdim=True).sqrt()
-    start_norm = start / start_len
+    start_norm = start / start_len.detach()
     end_len = end.square().sum(dim=reduction_dims, keepdim=True).sqrt()
-    end_norm = end / end_len
+    end_norm = end / end_len.detach()
 
     omega = torch.acos((start_norm * end_norm).sum(dim=reduction_dims, keepdim=True))
 
-    return (omega * end_len).square() + (start_len - end_len).square()
+    return omega.square() / (2/3 * torch.pi**2)
 
 def compute_snr(noise_scheduler, timesteps):
     """
