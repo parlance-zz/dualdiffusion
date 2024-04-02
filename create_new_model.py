@@ -29,7 +29,7 @@ from dual_diffusion_utils import dict_str
 
 load_dotenv(override=True)
 
-MODEL_NAME = "edm2_100_1"
+MODEL_NAME = "edm2_100_2"
 MODEL_SEED = 2000
 
 MODEL_PARAMS = {
@@ -192,8 +192,9 @@ UNET_PARAMS = {
 
 UNET_PARAMS = {
     "pos_channels": 0,           # Number of positional embedding channels for attention.
-    "label_dim": 0,              # Class label dimensionality. 0 = unconditional.
-    "model_channels": 256,       # Base multiplier for the number of channels.
+    "label_dim": 2048,           # Class label dimensionality. 0 = unconditional.
+    "label_dropout": 0.1,        # Dropout rate for the class embedding.
+    "model_channels": 192,       # Base multiplier for the number of channels.
     "channels_per_head": 64,
     "channel_mult": [1,2,3,4],   # Per-resolution multipliers for the number of channels.
     "channel_mult_noise": None,  # Multiplier for noise embedding dimensionality. None = select based on channel_mult.

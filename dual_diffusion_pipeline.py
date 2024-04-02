@@ -332,6 +332,8 @@ class DualDiffusionPipeline(DiffusionPipeline):
         loops: int = 0,
         batch_size: int = 1,
         length: int = 0,
+        game_ids = None,
+        cfg_scale: float = 5.,
         use_midpoint_integration: bool = True,
         use_perturbation: bool = True,
     ):
@@ -341,6 +343,9 @@ class DualDiffusionPipeline(DiffusionPipeline):
             raise ValueError(f"Loops must be greater than or equal to 0, got {loops}")
         if length < 0:
             raise ValueError(f"Length must be greater than or equal to 0, got {length}")
+
+        #assert(cfg_scale >= 1)
+        #cfg_scale = 1 - 1/cfg_scale
 
         self.set_tiling_mode(loops > 0)
 
@@ -389,12 +394,22 @@ class DualDiffusionPipeline(DiffusionPipeline):
         t_schedule = (1 - v_schedule.cumsum(dim=0) + v_schedule[0]).tolist()
         v_schedule = v_schedule.tolist()
 
+        if game_ids is not None:
+            labels = torch.tensor(game_ids, device=self.device, dtype=torch.long)
+            assert labels.shape[0] == batch_size
+        else:
+            labels = torch.randint(0, self.unet.label_dim, (batch_size,), device=self.device, generator=generator)
+
         #t_schedule = t_schedule[int(steps*(1-img2img_strength)+0.5):]
         #v_schedule = v_schedule[int(steps*(1-img2img_strength)+0.5):]
 
         for i, t in enumerate(self.progress_bar(t_schedule)):
             
-            model_output, logvar = self.unet(sample, t, None, self.format, return_logvar=True)
+            model_output, logvar = self.unet(sample, t, labels, self.format, return_logvar=True)
+            u_model_output, u_logvar = self.unet(sample, t, None, self.format, return_logvar=True)
+            model_output = slerp(u_model_output, model_output, cfg_scale)
+            logvar = torch.lerp(u_logvar, logvar, cfg_scale)
+
             if use_perturbation:
                 model_output += torch.randn_like(model_output) * (logvar/2).exp()
                 model_output -= model_output.mean(dim=(1,2,3), keepdim=True)
@@ -406,7 +421,11 @@ class DualDiffusionPipeline(DiffusionPipeline):
                 sample_m -= sample_m.mean(dim=(1,2,3), keepdim=True)
                 sample_m /= sample_m.square().mean(dim=(1,2,3), keepdim=True).sqrt()
                 
-                model_output, logvar = self.unet(sample_m, t - v_schedule[i]/2, None, self.format, return_logvar=True)
+                model_output, logvar = self.unet(sample_m, t - v_schedule[i]/2, labels, self.format, return_logvar=True)
+                u_model_output, u_logvar = self.unet(sample_m, t - v_schedule[i]/2, None, self.format, return_logvar=True)
+                model_output = slerp(u_model_output, model_output, cfg_scale)
+                logvar = torch.lerp(u_logvar, logvar, cfg_scale)
+                
                 if use_perturbation:
                     model_output += torch.randn_like(model_output) * (logvar/2).exp()
                     model_output -= model_output.mean(dim=(1,2,3), keepdim=True)

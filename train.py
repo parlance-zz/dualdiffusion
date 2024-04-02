@@ -32,7 +32,6 @@ from typing import Any
 from dotenv import load_dotenv
 
 import datasets
-import numpy as np
 import torch
 import torch.nn.functional as F
 import torch.utils.checkpoint
@@ -46,11 +45,11 @@ from tqdm.auto import tqdm
 
 import diffusers
 from diffusers.optimization import get_scheduler
-from diffusers.training_utils import EMAModel
 from diffusers.utils import deprecate, is_tensorboard_available
 
 #from unet_dual import UNetDualModel
 from unet_edm2 import UNet
+from unet_edm2_ema import PowerFunctionEMA
 from autoencoder_kl_dual import AutoencoderKLDual
 from dual_diffusion_pipeline import DualDiffusionPipeline
 from dual_diffusion_utils import init_cuda, load_audio, save_audio, load_raw, save_raw, dict_str, normalize_lufs, slerp, slerp_loss
@@ -121,7 +120,7 @@ def parse_args():
         default=0,
         help="If set, use this batch size for VAE encoding when training diffusion UNet module. Defaults to train_batch_size."
     )
-    parser.add_argument("--num_train_epochs", type=int, default=100)
+    parser.add_argument("--num_train_epochs", type=int, default=250)
     parser.add_argument(
         "--gradient_accumulation_steps",
         type=int,
@@ -459,7 +458,7 @@ def init_accelerator_loadsave_hooks(accelerator, module_type, module_class, ema_
             if not os.path.exists(os.path.join(input_dir, f"{module_type}_ema")):
                 logger.info("EMA model in checkpoint not found, using new ema model")
             else:
-                load_model = EMAModel.from_pretrained(os.path.join(input_dir, f"{module_type}_ema"), module_class)
+                load_model = PowerFunctionEMA.from_pretrained(os.path.join(input_dir, f"{module_type}_ema"), module_class)
                 ema_module.load_state_dict(load_model.state_dict())
                 ema_module.to(accelerator.device)
                 del load_model
@@ -630,13 +629,13 @@ def init_ema_module(pretrained_model_name_or_path,
     ema_module = module_class.from_pretrained(
         pretrained_model_name_or_path, subfolder=module_type, revision=revision
     )
-    ema_module = EMAModel(ema_module.parameters(),
-                        model_cls=module_class,
-                        model_config=ema_module.config,
-                        min_decay=ema_min_decay,
-                        decay=ema_max_decay,
-                        inv_gamma=ema_inv_gamma,
-                        power=ema_power).to(device)
+    ema_module = PowerFunctionEMA(ema_module.parameters(),
+                                  model_cls=module_class,
+                                  model_config=ema_module.config,
+                                  min_decay=ema_min_decay,
+                                  decay=ema_max_decay,
+                                  inv_gamma=ema_inv_gamma,
+                                  power=ema_power).to(device)
 
     logger.info(f"Using EMA model with max decay: {ema_max_decay} min decay: {ema_min_decay} inv gamma: {ema_inv_gamma} power: {ema_power}")
 
@@ -708,26 +707,38 @@ class DatasetTransformer(torch.nn.Module):
 
         samples = []
         paths = []
+        game_ids = []
+        author_ids = []
 
-        for audio in examples["audio"]:
-                    
-            input_audio = audio["bytes"] or audio["path"]
+        num_examples = len(next(iter(examples.values())))
+        examples = [{key: examples[key][i] for key in examples} for i in range(num_examples)]
+        #num_train_samples = len(examples)
+        #from dual_diffusion_utils import dict_str
+        #print(dict_str(str(examples)))
+        #exit(1)
+
+        #for audio in examples["audio"]:
+        for train_sample in examples:
+            
+            file_path = train_sample["file_name"]
 
             if self.dataset_format == ".raw":
-                sample = load_raw(input_audio,
+                sample = load_raw(file_path,
                                   dtype=self.dataset_raw_format,
                                   num_channels=self.dataset_num_channels,
                                   start=-1,
                                   count=self.sample_crop_width)    
             else:
-                sample = load_audio(input_audio,
+                sample = load_audio(file_path,
                                     start=-1,
                                     count=self.sample_crop_width)
-
+            
             samples.append(sample)
-            paths.append(audio["path"])
+            paths.append(file_path)
+            game_ids.append(train_sample["game_id"])
+            #author_ids.append(train_sample["author_id"])
 
-        return {"input": samples, "sample_paths": paths}
+        return {"input": samples, "sample_paths": paths, "game_ids": game_ids} #, "author_ids": author_ids}
 
 def init_dataloader(accelerator,
                     dataset_name,
@@ -744,6 +755,31 @@ def init_dataloader(accelerator,
                     sample_crop_width,
                     prefetch_factor=4):
 
+    if dataset_name is None:
+        dataset_name = train_data_dir
+    else:
+        train_data_dir = cache_dir
+        #data_dir = train_data_dir
+        #data_files = {"train": os.path.join(train_data_dir, "**")}
+    #else:
+    #    data_files = f"**{dataset_format}"
+        #data_dir = None
+
+    def add_absolute_path(example):
+        relative_path = example['file_name']
+        absolute_path = os.path.join(train_data_dir, relative_path)
+        example['file_name'] = absolute_path
+        return example
+    
+    dataset = load_dataset(
+        dataset_name,
+        #data_dir=data_dir,
+        split="train",
+        cache_dir=cache_dir,
+        num_proc=dataloader_num_workers if dataloader_num_workers > 0 else None,
+        token=hf_token,
+    ).map(add_absolute_path)#.cast_column("file_name", Audio(decode=False))
+
     dataset_transform_params = {
         "format": dataset_format,
         "raw_format": dataset_raw_format,
@@ -753,24 +789,12 @@ def init_dataloader(accelerator,
     }
     dataset_transform = DatasetTransformer(dataset_transform_params)
 
-    if dataset_name is None:
-        dataset_name = "audiofolder"
-        data_files = {"train": os.path.join(train_data_dir, "**")}
-    else:
-        data_files = f"**{dataset_format}"
-
-    dataset = load_dataset(
-        dataset_name,
-        data_files=data_files,
-        cache_dir=cache_dir,
-        num_proc=dataloader_num_workers if dataloader_num_workers > 0 else None,
-        token=hf_token,
-    ).cast_column("audio", Audio(decode=False))
-
     with accelerator.main_process_first():
         if max_train_samples is not None:
-            dataset["train"] = dataset["train"].select(range(max_train_samples))
-        train_dataset = dataset["train"].with_transform(dataset_transform)
+            #dataset["train"] = dataset["train"].select(range(max_train_samples))
+            dataset = dataset.select(range(max_train_samples))
+        #train_dataset = dataset["train"].with_transform(dataset_transform)
+        train_dataset = dataset.with_transform(dataset_transform)
 
     train_dataloader = torch.utils.data.DataLoader(
         train_dataset,
@@ -868,13 +892,15 @@ def do_training_loop(args,
 
         timestep_ln_center = model_params["timestep_ln_center"]
         timestep_ln_scale = model_params["timestep_ln_scale"]
-        logger.info(f"Sampling timesteps using logistic normal distribution - center: {timestep_ln_center} - scale: {timestep_ln_scale}")
+        #logger.info(f"Sampling timesteps using logistic normal distribution - center: {timestep_ln_center} - scale: {timestep_ln_scale}")
 
         input_perturbation = model_params["input_perturbation"]   
         if input_perturbation > 0:
             logger.info(f"Using input perturbation of {input_perturbation}")
         else:
             logger.info("Input perturbation is disabled")
+
+        logger.info(f"Conditioning dropout: {module.label_dropout}")
 
     logger.info(f"Sample shape: {sample_shape}")
     if latent_shape is not None:
@@ -918,6 +944,7 @@ def do_training_loop(args,
                 # acos static timestep sampling
                 batch_timesteps = (torch.arange(total_batch_size, device=accelerator.device)+0.5) / total_batch_size
                 batch_timesteps += (torch.rand(1, device=accelerator.device) - 0.5) / total_batch_size
+                #batch_timesteps += ((torch.rand(1, device=accelerator.device)*2 - 1).acos() / torch.pi -0.5) / total_batch_size
                 #batch_timesteps = ((1 - 2*batch_timesteps).acos() * (999. / torch.pi)).clip(min=0, max=999.)
 
                 #batch_timesteps = torch.erfinv(batch_timesteps * 2 - 1).sigmoid() * 999.
@@ -934,6 +961,8 @@ def do_training_loop(args,
 
                 raw_samples = batch["input"]
                 raw_sample_paths = batch["sample_paths"]
+                sample_game_ids = batch["game_ids"]
+                #sample_author_ids = batch["author_ids"]
 
                 if args.module == "unet":
                     samples = pipeline.format.raw_to_sample(raw_samples)
@@ -953,14 +982,18 @@ def do_training_loop(args,
                     normalized_timesteps = (timesteps / 999.).view(-1, 1, 1, 1)
                     model_input = slerp(samples, noise, normalized_timesteps).detach()
                     #model_output = module(model_input, timesteps).sample
-                    model_output, error_logvar = module(model_input, timesteps/999., None, pipeline.format, return_logvar=True)
+                    model_output, error_logvar = module(model_input, timesteps/999., sample_game_ids, pipeline.format, return_logvar=True)
 
                     target = slerp(samples, noise, normalized_timesteps - 1).detach() # geodesic flow with v pred
                     loss = F.mse_loss(model_output.float(), target.float(), reduction="none")
                     #loss = slerp_loss(model_output.float(), target.float()) / 14.5
                     timestep_loss = loss.mean(dim=list(range(1, len(loss.shape))))
 
-                    loss = (timestep_loss / error_logvar.exp() + error_logvar).mean()
+                    #loss_weight = (normalized_timesteps * torch.pi).sin() * (torch.pi / 2)
+                    #loss_weight = ((1-normalized_timesteps) * (torch.pi/2)).cos() * (torch.pi / 2)
+                    loss_weight = 1
+                    loss = ((timestep_loss / error_logvar.exp() + error_logvar) * loss_weight).mean()
+                    #loss = (timestep_loss / error_logvar.exp() + error_logvar).mean()
 
                     if args.num_timestep_loss_buckets > 0:
                         all_timesteps = accelerator.gather(timesteps.detach()).cpu()
