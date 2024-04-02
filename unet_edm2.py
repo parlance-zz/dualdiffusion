@@ -71,34 +71,26 @@ def mp_cat(a, b, dim=1, t=0.5):
 #----------------------------------------------------------------------------
 # Magnitude-preserving Fourier features (Equation 75).
 
-#"""
 class MPFourier(torch.nn.Module):
-    def __init__(self, num_channels, bandwidth=1):
+    def __init__(self, num_channels, bandwidth=1, eps=1e-2):
         super().__init__()
-        self.register_buffer('freqs', 2 * np.pi * torch.randn(num_channels) * bandwidth)
-        self.register_buffer('phases', 2 * np.pi * torch.rand(num_channels))
+        #self.register_buffer('freqs', 2 * np.pi * torch.randn(num_channels) * bandwidth)
+        #self.register_buffer('phases', 2 * np.pi * torch.rand(num_channels))
+
+        # smoother inner product space with less overlap
+        self.register_buffer('freqs', torch.pi * torch.linspace(-1+eps, 1-eps, num_channels).erfinv() * bandwidth)
+        self.register_buffer('phases', torch.pi/2 * (torch.arange(num_channels) % 2 == 0).float())
+
+        self.eps = eps
 
     def forward(self, x):
-        y = x.to(torch.float32)
-        #y = (x.to(torch.float32) * torch.pi).cos()
+        #y = x.to(torch.float32)
+        y = (x.float().clip(min=self.eps, max=1-self.eps) * torch.pi/2).tan().log() # rescale the timestep (0..1) to geodesic log-snr
         y = y.ger(self.freqs.to(torch.float32))
         y = y + self.phases.to(torch.float32)
         y = y.cos() * np.sqrt(2)
         return y.to(x.dtype)
-#"""
 
-"""
-class MPFourier(torch.nn.Module):
-    def __init__(self, num_channels, bandwidth=1):
-        super().__init__()
-        self.register_buffer('freqs', torch.pi * (torch.arange(num_channels) + 0.5))
-
-    def forward(self, x):
-        y = (x.to(torch.float32) * torch.pi).cos()
-        y = y.ger(self.freqs.to(torch.float32))
-        y = y.cos() * np.sqrt(2)
-        return y.to(x.dtype)
-""" 
 #----------------------------------------------------------------------------
 # Magnitude-preserving convolution or fully-connected layer (Equation 47)
 # with force weight normalization (Equation 66).
@@ -246,6 +238,7 @@ class UNet(ModelMixin, ConfigMixin):
         logvar_channels = 128,              # Small network for training uncertainty estimation.
         channels_per_head = 64,             # Number of channels per attention head.
         label_dim = 0,                      # Class label dimensionality. 0 = unconditional.
+        label_dropout = 0.1,                # Dropout probability for class labels. 
         model_channels       = 192,         # Base multiplier for the number of channels.
         channel_mult         = [1,2,3,4],   # Per-resolution multipliers for the number of channels.
         channel_mult_noise   = None,        # Multiplier for noise embedding dimensionality. None = select based on channel_mult.
@@ -262,10 +255,12 @@ class UNet(ModelMixin, ConfigMixin):
         block_kwargs = {"channels_per_head": channels_per_head}
 
         cblock = [int(model_channels * x) for x in channel_mult]
-        cnoise = int(model_channels * channel_mult_noise) if channel_mult_noise is not None else cblock[0]
+        cnoise = int(model_channels * channel_mult_noise) if channel_mult_noise is not None else max(cblock)#cblock[0]
         cemb = int(model_channels * channel_mult_emb) if channel_mult_emb is not None else max(cblock)
         cpos = pos_channels
 
+        self.label_dim = label_dim
+        self.label_dropout = label_dropout
         self.label_balance = label_balance
         self.concat_balance = concat_balance
         self.out_gain = torch.nn.Parameter(torch.zeros([]))
@@ -325,6 +320,13 @@ class UNet(ModelMixin, ConfigMixin):
         # Embedding.
         emb = self.emb_noise(self.emb_fourier(noise_labels))
         if self.emb_label is not None:
+            if class_labels is not None:
+                class_labels = torch.nn.functional.one_hot(class_labels, num_classes=self.label_dim).float()
+                if self.training and self.label_dropout != 0:
+                    class_labels = torch.nn.functional.dropout(class_labels, p=self.label_dropout)
+            else:
+                class_labels = torch.zeros([1, self.label_dim], device=x.device, dtype=self.dtype)
+
             emb = mp_sum(emb, self.emb_label(class_labels * np.sqrt(class_labels.shape[1])), t=self.label_balance)
         emb = mp_silu(emb)
 
