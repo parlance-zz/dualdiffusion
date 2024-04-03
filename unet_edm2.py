@@ -72,7 +72,7 @@ def mp_cat(a, b, dim=1, t=0.5):
 # Magnitude-preserving Fourier features (Equation 75).
 
 class MPFourier(torch.nn.Module):
-    def __init__(self, num_channels, bandwidth=1, eps=1e-2):
+    def __init__(self, num_channels, bandwidth=1, eps=1e-3):
         super().__init__()
         #self.register_buffer('freqs', 2 * np.pi * torch.randn(num_channels) * bandwidth)
         #self.register_buffer('phases', 2 * np.pi * torch.rand(num_channels))
@@ -235,7 +235,7 @@ class UNet(ModelMixin, ConfigMixin):
         in_channels = 4,                    # Number of input channels.
         out_channels = 4,                   # Number of output channels.
         pos_channels = 0,                   # Number of positional embedding channels for attention.
-        logvar_channels = 128,              # Small network for training uncertainty estimation.
+        logvar_channels = None,             # Small network for training uncertainty estimation.
         channels_per_head = 64,             # Number of channels per attention head.
         label_dim = 0,                      # Class label dimensionality. 0 = unconditional.
         label_dropout = 0.1,                # Dropout probability for class labels. 
@@ -244,7 +244,7 @@ class UNet(ModelMixin, ConfigMixin):
         channel_mult_noise   = None,        # Multiplier for noise embedding dimensionality. None = select based on channel_mult.
         channel_mult_emb     = None,        # Multiplier for final embedding dimensionality. None = select based on channel_mult.
         num_layers_per_block = 3,           # Number of residual blocks per resolution.
-        attn_levels          = [0,1,2,3],   # List of resolutions with self-attention.
+        attn_levels          = [2,3],       # List of resolutions with self-attention.
         label_balance        = 0.5,         # Balance between noise embedding (0) and class embedding (1).
         concat_balance       = 0.5,         # Balance between skip connections (0) and main path (1).
         #**block_kwargs,                    # Arguments for Block.
@@ -257,7 +257,9 @@ class UNet(ModelMixin, ConfigMixin):
         cblock = [int(model_channels * x) for x in channel_mult]
         cnoise = int(model_channels * channel_mult_noise) if channel_mult_noise is not None else max(cblock)#cblock[0]
         cemb = int(model_channels * channel_mult_emb) if channel_mult_emb is not None else max(cblock)
+        clogvar = logvar_channels if logvar_channels is not None else max(cblock)
         cpos = pos_channels
+        label_dim = label_dim + 1 # 1 extra dim for the unconditional class
 
         self.label_dim = label_dim
         self.label_dropout = label_dropout
@@ -271,8 +273,8 @@ class UNet(ModelMixin, ConfigMixin):
         self.emb_label = MPConv(label_dim, cemb, kernel=[]) if label_dim != 0 else None
 
         # Training uncertainty estimation.
-        self.logvar_fourier = MPFourier(logvar_channels)
-        self.logvar_linear = MPConv(logvar_channels, 1, kernel=[])
+        self.logvar_fourier = MPFourier(clogvar)
+        self.logvar_linear = MPConv(clogvar, 1, kernel=[])
 
         # Encoder.
         self.enc = torch.nn.ModuleDict()
@@ -315,8 +317,8 @@ class UNet(ModelMixin, ConfigMixin):
     def forward(self, x, noise_labels, class_labels, format, return_logvar=False):
 
         if not torch.is_tensor(noise_labels):
-            noise_labels = torch.tensor([noise_labels], device=x.device)
-    
+            noise_labels = torch.tensor([noise_labels], device=x.device, dtype=torch.float32)
+
         # Embedding.
         emb = self.emb_noise(self.emb_fourier(noise_labels))
         if self.emb_label is not None:
@@ -326,6 +328,7 @@ class UNet(ModelMixin, ConfigMixin):
                     class_labels = torch.nn.functional.dropout(class_labels, p=self.label_dropout)
             else:
                 class_labels = torch.zeros([1, self.label_dim], device=x.device, dtype=self.dtype)
+            class_labels[:, -1] = (1 - class_labels[:, :-1].sum(dim=1)).clip(min=0)
 
             emb = mp_sum(emb, self.emb_label(class_labels * np.sqrt(class_labels.shape[1])), t=self.label_balance)
         emb = mp_silu(emb)
