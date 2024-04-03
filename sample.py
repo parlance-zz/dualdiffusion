@@ -36,25 +36,34 @@ if __name__ == "__main__":
     init_cuda()
     load_dotenv(override=True)
 
-    model_name = "edm2_100_2"
+    model_name = "edm2_100_3"
 
     num_samples = 1
     batch_size = 1
     length = 0
     #length = 30 * 32000
     steps = 50
-    cfg_scale = 5
-    game_ids = [787]
+    cfg_scale = 4.5#4.5#1.5
+    #game_ids = [787] #x
+    game_ids = [788] #x2
+    #game_ids = [213] #chrono trigger
+    #game_ids = [230] #contra
+    #game_ids = [1303] #super mario world
+    #game_ids = [1302] #super mario rpg
+    #game_ids = [1305] #super metroid
+    #game_ids = [1078] #secret of mana
+    #game_ids = [944] #pilotwings
     loops = 0 #1
     fp16 = False #True
-    device = "cuda" #"cpu"
-    use_midpoint_integration = True#True
-    use_perturbation = True
+    device = "cuda"
+    use_midpoint_integration = False#True
+    use_perturbation = False#True
 
     seed = np.random.randint(10000, 99999-num_samples)
     #seed = 2000
-    #seed = 43820
-    seed = 21308
+    seed = 43820
+    #seed = 21308
+    #seed = 53958 # good seed for x2
 
     model_dtype = torch.bfloat16 if fp16 else torch.float32
     model_path = os.path.join(os.environ.get("MODEL_PATH", "./"), model_name)
@@ -72,13 +81,15 @@ if __name__ == "__main__":
     start_time = datetime.datetime.now()
 
     """
+    device = "cuda"
+    pipeline.unet.emb_fourier = pipeline.unet.emb_fourier.to(device)
     #pipeline.unet.emb_fourier.thing()
-    t = torch.tensor([1/50], device="cuda")
+    t = torch.tensor([0.99], device=device)
     #mid = pipeline.unet.emb_noise(pipeline.unet.emb_fourier(t))
     mid = pipeline.unet.emb_fourier(t)
-    results = torch.zeros(25, device="cuda")
+    results = torch.zeros(25, device=device)
     for i in range(25):
-        t = torch.tensor([i / (25 - 1)], device="cuda")
+        t = torch.tensor([i / (25 - 1)], device=device)
         #e = pipeline.unet.emb_noise(pipeline.unet.emb_fourier(t))
         e = pipeline.unet.emb_fourier(t)
         results[i] = (e*mid).sum()
@@ -103,7 +114,7 @@ if __name__ == "__main__":
                           use_perturbation=use_perturbation)
         print(f"Time taken: {time.time()-start}")
 
-        output_flac_file_path = os.path.join(output_path, f"step_{last_global_step}_{steps}_cfg{cfg_scale}_s{seed}.flac")
+        output_flac_file_path = os.path.join(output_path, f"step_{last_global_step}_{steps}_cfg{cfg_scale}_g{game_ids[0]}_s{seed}.flac")
         save_audio(output.squeeze(0), pipeline.config["model_params"]["sample_rate"], output_flac_file_path)
         print(f"Saved flac output to {output_flac_file_path}")
 
