@@ -344,9 +344,6 @@ class DualDiffusionPipeline(DiffusionPipeline):
         if length < 0:
             raise ValueError(f"Length must be greater than or equal to 0, got {length}")
 
-        #assert(cfg_scale >= 1)
-        #cfg_scale = 1 - 1/cfg_scale
-
         self.set_tiling_mode(loops > 0)
 
         if isinstance(seed, int):
@@ -403,12 +400,22 @@ class DualDiffusionPipeline(DiffusionPipeline):
         #t_schedule = t_schedule[int(steps*(1-img2img_strength)+0.5):]
         #v_schedule = v_schedule[int(steps*(1-img2img_strength)+0.5):]
 
+        target_vae_std = (self.vae.encoder.latents_logvar / 2).exp().item()
+        target_sample_std = (1 - target_vae_std**2) ** 0.5
+        target_snr = target_sample_std / target_vae_std
+        min_snr = model_params.get("min_snr", 3e-9)
+        min_timestep = 1 - np.arctan(target_snr) / (np.pi/2)
+        max_timestep = 1 - np.arctan(min_snr) / (np.pi/2)
+        assert(max_timestep > min_timestep)
+
+        t_schedule = [min_timestep + (max_timestep - min_timestep) * t for t in t_schedule]
+        v_schedule = [v * (max_timestep - min_timestep) for v in v_schedule]
+
         for i, t in enumerate(self.progress_bar(t_schedule)):
             
             model_output, logvar = self.unet(sample, t, labels, self.format, return_logvar=True)
-            u_model_output, u_logvar = self.unet(sample, t, None, self.format, return_logvar=True)
+            u_model_output = self.unet(sample, t, None, self.format)
             model_output = slerp(u_model_output, model_output, cfg_scale)
-            logvar = torch.lerp(u_logvar, logvar, cfg_scale)
 
             if use_perturbation:
                 model_output += torch.randn_like(model_output) * (logvar/2).exp()
@@ -422,9 +429,8 @@ class DualDiffusionPipeline(DiffusionPipeline):
                 sample_m /= sample_m.square().mean(dim=(1,2,3), keepdim=True).sqrt()
                 
                 model_output, logvar = self.unet(sample_m, t - v_schedule[i]/2, labels, self.format, return_logvar=True)
-                u_model_output, u_logvar = self.unet(sample_m, t - v_schedule[i]/2, None, self.format, return_logvar=True)
+                u_model_output = self.unet(sample_m, t - v_schedule[i]/2, None, self.format)
                 model_output = slerp(u_model_output, model_output, cfg_scale)
-                logvar = torch.lerp(u_logvar, logvar, cfg_scale)
                 
                 if use_perturbation:
                     model_output += torch.randn_like(model_output) * (logvar/2).exp()

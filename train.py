@@ -31,6 +31,7 @@ from glob import glob
 from typing import Any
 from dotenv import load_dotenv
 
+import numpy as np
 import datasets
 import torch
 import torch.nn.functional as F
@@ -753,7 +754,7 @@ def init_dataloader(accelerator,
                     dataset_num_channels,
                     sample_rate,
                     sample_crop_width,
-                    prefetch_factor=4):
+                    prefetch_factor=1):
 
     if dataset_name is None:
         dataset_name = train_data_dir
@@ -890,15 +891,29 @@ def do_training_loop(args,
             latent_mean = model_params["latent_mean"]
             latent_std = model_params["latent_std"]
 
-        timestep_ln_center = model_params["timestep_ln_center"]
-        timestep_ln_scale = model_params["timestep_ln_scale"]
-        #logger.info(f"Sampling timesteps using logistic normal distribution - center: {timestep_ln_center} - scale: {timestep_ln_scale}")
-
-        input_perturbation = model_params["input_perturbation"]   
-        if input_perturbation > 0:
-            logger.info(f"Using input perturbation of {input_perturbation}")
+            target_vae_std = (vae.encoder.latents_logvar / 2).exp().item()
+            target_sample_std = (1 - target_vae_std**2) ** 0.5
+            target_snr = target_sample_std / target_vae_std
         else:
-            logger.info("Input perturbation is disabled")
+            target_snr = model_params.get("target_snr", 3e-5)
+
+        min_snr = model_params.get("min_snr", 3e-9)
+        min_timestep = 1 - np.arctan(target_snr) / (np.pi/2)
+        max_timestep = 1 - np.arctan(min_snr) / (np.pi/2)
+        assert(max_timestep > min_timestep)
+
+        logger.info(f"Max SNR: {target_snr} - Min SNR: {min_snr}")
+        logger.info(f"Max timestep: {max_timestep} - Min timestep: {min_timestep}")
+
+        #timestep_ln_center = model_params["timestep_ln_center"]
+        #timestep_ln_scale = model_params["timestep_ln_scale"]
+        #logger.info(f"Sampling timesteps using logistic normal distribution - center: {timestep_ln_center} - scale: {timestep_ln_scale}")
+    
+        #input_perturbation = model_params["input_perturbation"]   
+        #if input_perturbation > 0:
+        #    logger.info(f"Using input perturbation of {input_perturbation}")
+        #else:
+        #    logger.info("Input perturbation is disabled")
 
         logger.info(f"Conditioning dropout: {module.label_dropout}")
 
@@ -942,17 +957,20 @@ def do_training_loop(args,
                 #batch_timesteps = torch.rand(total_batch_size, device=accelerator.device) * 999.
 
                 # acos static timestep sampling
+
+
                 batch_timesteps = (torch.arange(total_batch_size, device=accelerator.device)+0.5) / total_batch_size
                 batch_timesteps += (torch.rand(1, device=accelerator.device) - 0.5) / total_batch_size
                 #batch_timesteps += ((torch.rand(1, device=accelerator.device)*2 - 1).acos() / torch.pi -0.5) / total_batch_size
-                #batch_timesteps = ((1 - 2*batch_timesteps).acos() * (999. / torch.pi)).clip(min=0, max=999.)
+                #batch_timesteps = ((1 - 2*batch_timesteps).acos() / torch.pi).clip(min=0, max=1)
+                batch_timesteps = (batch_timesteps * (max_timestep - min_timestep) + min_timestep).clip(min=min_timestep, max=max_timestep)
 
                 #batch_timesteps = torch.erfinv(batch_timesteps * 2 - 1).sigmoid() * 999.
-                batch_timesteps = batch_timesteps.clip(min=0, max=1) * 999.
+                #batch_timesteps = batch_timesteps.clip(min=0, max=1) * 999.
 
                 # sync timesteps across all ranks / processes
                 batch_timesteps = accelerator.gather(batch_timesteps.unsqueeze(0))[0]
-
+                
                 if args.num_timestep_loss_buckets > 0:
                     timestep_loss_buckets.zero_()
                     timestep_loss_bucket_counts.zero_()
@@ -978,27 +996,22 @@ def do_training_loop(args,
 
                     process_batch_timesteps = batch_timesteps[accelerator.local_process_index::accelerator.num_processes]
                     timesteps = process_batch_timesteps[grad_accum_steps * args.train_batch_size:(grad_accum_steps+1) * args.train_batch_size]
-                    
-                    normalized_timesteps = (timesteps / 999.).view(-1, 1, 1, 1)
-                    model_input = slerp(samples, noise, normalized_timesteps).detach()
-                    #model_output = module(model_input, timesteps).sample
-                    model_output, error_logvar = module(model_input, timesteps/999., sample_game_ids, pipeline.format, return_logvar=True)
+                    timestep_snr = ((1 - timesteps) * (torch.pi/2)).tan()
 
-                    target = slerp(samples, noise, normalized_timesteps - 1).detach() # geodesic flow with v pred
+                    model_input = slerp(samples, noise, timesteps).detach()
+                    model_output, error_logvar = module(model_input, timesteps, sample_game_ids, pipeline.format, return_logvar=True)
+
+                    target = slerp(samples, noise, timesteps - 1).detach() # geodesic flow with v pred
                     loss = F.mse_loss(model_output.float(), target.float(), reduction="none")
                     #loss = slerp_loss(model_output.float(), target.float()) / 14.5
                     timestep_loss = loss.mean(dim=list(range(1, len(loss.shape))))
 
-                    #loss_weight = (normalized_timesteps * torch.pi).sin() * (torch.pi / 2)
-                    #loss_weight = ((1-normalized_timesteps) * (torch.pi/2)).cos() * (torch.pi / 2)
-                    loss_weight = 1
-                    loss = ((timestep_loss / error_logvar.exp() + error_logvar) * loss_weight).mean()
-                    #loss = (timestep_loss / error_logvar.exp() + error_logvar).mean()
+                    loss = ((timestep_loss / error_logvar.exp() + error_logvar) * timestep_snr).mean()
 
                     if args.num_timestep_loss_buckets > 0:
                         all_timesteps = accelerator.gather(timesteps.detach()).cpu()
                         all_timestep_loss = accelerator.gather(timestep_loss.detach()).cpu()
-                        target_buckets = (all_timesteps / 1000. * timestep_loss_buckets.shape[0]).long()
+                        target_buckets = (all_timesteps * timestep_loss_buckets.shape[0]).long().clip(max=timestep_loss_buckets.shape[0]-1)
                         timestep_loss_buckets.index_add_(0, target_buckets, all_timestep_loss)
                         timestep_loss_bucket_counts.index_add_(0, target_buckets, torch.ones_like(all_timestep_loss))
                     
