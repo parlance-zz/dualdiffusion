@@ -65,6 +65,8 @@ def get_activation(act_fn):
 def slerp(start, end, t):
 
     reduction_dims = tuple(range(1, start.ndim)) if start.ndim > 1 else (0,)
+    if t.ndim < start.ndim:
+        t = t.view(*t.shape, *((1,) * (start.ndim - t.ndim)))
 
     start_norm = start / start.square().sum(dim=reduction_dims, keepdim=True).sqrt()
     end_norm = end / end.square().sum(dim=reduction_dims, keepdim=True).sqrt()
