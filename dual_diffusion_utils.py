@@ -64,9 +64,12 @@ def get_activation(act_fn):
 
 def slerp(start, end, t):
 
-    reduction_dims = tuple(range(1, start.ndim)) if start.ndim > 1 else (0,)
+    if not torch.is_tensor(t):
+        t = torch.tensor(t, device=start.device, dtype=start.dtype)
     if t.ndim < start.ndim:
         t = t.view(*t.shape, *((1,) * (start.ndim - t.ndim)))
+
+    reduction_dims = tuple(range(1, start.ndim)) if start.ndim > 1 else (0,)
 
     start_norm = start / start.square().sum(dim=reduction_dims, keepdim=True).sqrt()
     end_norm = end / end.square().sum(dim=reduction_dims, keepdim=True).sqrt()
