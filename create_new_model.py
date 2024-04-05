@@ -29,7 +29,7 @@ from dual_diffusion_utils import dict_str
 
 load_dotenv(override=True)
 
-MODEL_NAME = "edm2_100_3"
+MODEL_NAME = "edm2_100_5"
 MODEL_SEED = 2000
 
 MODEL_PARAMS = {

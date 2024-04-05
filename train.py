@@ -891,19 +891,22 @@ def do_training_loop(args,
             latent_mean = model_params["latent_mean"]
             latent_std = model_params["latent_std"]
 
-            target_vae_std = (vae.encoder.latents_logvar / 2).exp().item()
-            target_sample_std = (1 - target_vae_std**2) ** 0.5
-            target_snr = target_sample_std / target_vae_std
+            target_vae_noise_std = (vae.encoder.latents_logvar / 2).exp().item()
+            target_vae_sample_std = (1 - target_vae_noise_std**2) ** 0.5
+            target_snr = target_vae_sample_std / target_vae_noise_std
         else:
-            target_snr = model_params.get("target_snr", 3e-5)
+            target_snr = model_params.get("target_snr", 5)
 
-        min_snr = model_params.get("min_snr", 3e-9)
-        min_timestep = 1 - np.arctan(target_snr) / (np.pi/2)
-        max_timestep = 1 - np.arctan(min_snr) / (np.pi/2)
-        assert(max_timestep > min_timestep)
+        timescale = np.arctan(target_snr) / (np.pi/2)
 
-        logger.info(f"Max SNR: {target_snr} - Min SNR: {min_snr}")
-        logger.info(f"Max timestep: {max_timestep} - Min timestep: {min_timestep}")
+        #min_snr = model_params.get("min_snr", 3e-9)
+        #min_timestep = 1 - np.arctan(target_snr) / (np.pi/2)
+        #max_timestep = 1 - np.arctan(min_snr) / (np.pi/2)
+        #assert(max_timestep > min_timestep)
+
+        logger.info(f"Target SNR: {target_snr} - Timescale: {timescale}")
+        #logger.info(f"Max SNR: {target_snr} - Min SNR: {min_snr}")
+        #logger.info(f"Max timestep: {max_timestep} - Min timestep: {min_timestep}")
 
         #timestep_ln_center = model_params["timestep_ln_center"]
         #timestep_ln_scale = model_params["timestep_ln_scale"]
@@ -962,8 +965,9 @@ def do_training_loop(args,
                 batch_timesteps = (torch.arange(total_batch_size, device=accelerator.device)+0.5) / total_batch_size
                 batch_timesteps += (torch.rand(1, device=accelerator.device) - 0.5) / total_batch_size
                 #batch_timesteps += ((torch.rand(1, device=accelerator.device)*2 - 1).acos() / torch.pi -0.5) / total_batch_size
+
                 #batch_timesteps = ((1 - 2*batch_timesteps).acos() / torch.pi).clip(min=0, max=1)
-                batch_timesteps = (batch_timesteps * (max_timestep - min_timestep) + min_timestep).clip(min=min_timestep, max=max_timestep)
+                #batch_timesteps = batch_timesteps * 0.5 + ((1 - 2*batch_timesteps).acos() / torch.pi).clip(min=0, max=1) * 0.5
 
                 #batch_timesteps = torch.erfinv(batch_timesteps * 2 - 1).sigmoid() * 999.
                 #batch_timesteps = batch_timesteps.clip(min=0, max=1) * 999.
@@ -996,17 +1000,22 @@ def do_training_loop(args,
 
                     process_batch_timesteps = batch_timesteps[accelerator.local_process_index::accelerator.num_processes]
                     timesteps = process_batch_timesteps[grad_accum_steps * args.train_batch_size:(grad_accum_steps+1) * args.train_batch_size]
-                    timestep_snr = ((1 - timesteps) * (torch.pi/2)).tan()
+                    #timestep_snr = ((1 - timesteps) * (torch.pi/2)).tan()
 
-                    model_input = slerp(samples, noise, timesteps).detach()
-                    model_output, error_logvar = module(model_input, timesteps, sample_game_ids, pipeline.format, return_logvar=True)
+                    #model_input = slerp(samples, noise, timesteps).detach()
+                    model_input = slerp(samples, noise, timesteps * timescale + (1 - timescale)).detach()
+                    model_output, error_logvar = module(model_input, timesteps * (timescale * torch.pi/2), sample_game_ids, pipeline.format, return_logvar=True)
 
-                    target = slerp(samples, noise, timesteps - 1).detach() # geodesic flow with v pred
+                    #target = slerp(samples, noise, timesteps - 1).detach() # geodesic flow with v pred
+                    target = slerp(samples, noise, timesteps - timescale).detach() # geodesic flow with v pred
                     loss = F.mse_loss(model_output.float(), target.float(), reduction="none")
                     #loss = slerp_loss(model_output.float(), target.float()) / 14.5
                     timestep_loss = loss.mean(dim=list(range(1, len(loss.shape))))
 
-                    loss = ((timestep_loss / error_logvar.exp() + error_logvar) * timestep_snr).mean()
+                    #loss_weight = timestep_snr.clip(max=target_snr).sqrt()# / timestep_snr.clip(min=1e-10)
+                    #loss_weight = (timesteps * torch.pi).sin()
+                    loss_weight = 1
+                    loss = ((timestep_loss / error_logvar.exp() + error_logvar) * loss_weight).mean()
 
                     if args.num_timestep_loss_buckets > 0:
                         all_timesteps = accelerator.gather(timesteps.detach()).cpu()

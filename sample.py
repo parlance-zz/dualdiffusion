@@ -36,34 +36,44 @@ if __name__ == "__main__":
     init_cuda()
     load_dotenv(override=True)
 
-    model_name = "edm2_100_3"
+    model_name = "edm2_100_5"
 
     num_samples = 1
     batch_size = 1
     length = 0
     #length = 30 * 32000
-    steps = 50
-    cfg_scale = 4.5#4.5#1.5
+    steps = 150
+    cfg_scale = 3#7#4.5#1.5
     #game_ids = [787] #x
-    game_ids = [788] #x2
+    #game_ids += [788] #x2
+    #game_ids += [789] #x3
     #game_ids = [213] #chrono trigger
-    #game_ids = [230] #contra
-    #game_ids = [1303] #super mario world
+    #game_ids += [230] #contra
+    #game_ids += [1303] #super mario world
     #game_ids = [1302] #super mario rpg
     #game_ids = [1305] #super metroid
-    #game_ids = [1078] #secret of mana
-    #game_ids = [944] #pilotwings
+    #game_ids += [1078] #secret of mana
+    #game_ids += [944] #pilotwings
+    #game_ids += [384] #final fantasy mystic quest
+    #game_ids += [386] #final fantasy 5
+    #game_ids += [387] #final fantasy 6
+    #game_ids = [366] #f-zero
+    game_ids = [1473] #un squadron
+    #game_ids = [107] #Battletoads & Double Dragon
+    #game_ids += [108] #Battletoads in Battlemaniacs
+    #game_ids = [np.random.randint(0, 1612)]
     loops = 0 #1
     fp16 = False #True
     device = "cuda"
-    use_midpoint_integration = False#True
-    use_perturbation = False#True
+    use_midpoint_integration = True#True
+    use_perturbation = True#True
 
     seed = np.random.randint(10000, 99999-num_samples)
-    #seed = 2000
-    seed = 43820
+    seed = 2000
+    #seed = 43820
     #seed = 21308
     #seed = 53958 # good seed for x2
+    #seed = 2000
 
     model_dtype = torch.bfloat16 if fp16 else torch.float32
     model_path = os.path.join(os.environ.get("MODEL_PATH", "./"), model_name)
@@ -79,25 +89,6 @@ if __name__ == "__main__":
     os.makedirs(output_path, exist_ok=True)
 
     start_time = datetime.datetime.now()
-
-    """
-    device = "cuda"
-    pipeline.unet.emb_fourier = pipeline.unet.emb_fourier.to(device)
-    #pipeline.unet.emb_fourier.thing()
-    t = torch.tensor([0.99], device=device)
-    #mid = pipeline.unet.emb_noise(pipeline.unet.emb_fourier(t))
-    mid = pipeline.unet.emb_fourier(t)
-    results = torch.zeros(25, device=device)
-    for i in range(25):
-        t = torch.tensor([i / (25 - 1)], device=device)
-        #e = pipeline.unet.emb_noise(pipeline.unet.emb_fourier(t))
-        e = pipeline.unet.emb_fourier(t)
-        results[i] = (e*mid).sum()
-    from dual_diffusion_utils import save_raw
-    results /= results.amax()
-    save_raw(results, "./debug/results.raw")
-    exit()
-    """
 
     for i in range(num_samples):
         print(f"Generating sample {i+1}/{num_samples}...")

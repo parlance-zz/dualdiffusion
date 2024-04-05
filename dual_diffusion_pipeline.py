@@ -369,15 +369,33 @@ class DualDiffusionPipeline(DiffusionPipeline):
         from dual_diffusion_utils import load_audio
         crop_width = self.format.get_sample_crop_width(length=length)
         dataset_path = os.environ.get("DATASET_PATH", "./dataset/samples_hq")
-        img2img_input_path = np.random.choice(os.listdir(dataset_path), 1, replace=False)[0]
-        img2img_input_path = "Final Fantasy - Mystic Quest  [Mystic Quest Legend] - 07 Battle 1.flac"
+        #img2img_input_path = np.random.choice(os.listdir(dataset_path), 1, replace=False)[0]
+        #img2img_input_path = "1/Final Fantasy - Mystic Quest  [Mystic Quest Legend] - 07 Battle 1.flac"
+        #img2img_input_path = "1/Final Fantasy VI - 104 Locke.flac"
+        #img2img_input_path = "2/Mega Man X - 14 Spark Mandrill.flac"
+        #img2img_input_path = "1/Final Fantasy V - 203 Battle with Gilgamesh.flac"
+        #img2img_input_path = "2/Secret of Mana - 23 Eternal Recurrence.flac"
+        #img2img_input_path = "1/Final Fantasy VI - 104 Locke.flac"
+        #img2img_input_path = "2/U.N. Squadron - 04 Front Line Base.flac"
+        #img2img_input_path = "2/Super Mario RPG - The Legend of the Seven Stars - 217 Weapons Factory.flac"
+        #img2img_input_path = "2/Super Mario RPG - The Legend of the Seven Stars - 135 Welcome to Booster Tower.flac"
+        #img2img_input_path = "2/Super Mario RPG - The Legend of the Seven Stars - 128 Beware the Forest's Mushrooms.flac"
+        #img2img_input_path = "2/Mega Man X3 - 07 Neon Tiger.flac"
+        #img2img_input_path = "2/Mega Man X2 - 23 Absolute Zero.flac"
+        #img2img_input_path = "2/Super Mario All-Stars - 102 Overworld.flac"
+        img2img_input_path = "2/Mega Man X2 - 15 Dust Devil.flac"
+        #img2img_input_path = "2/Mega Man X2 - 09 Panzer des Drachens.flac"
+        #img2img_input_path = "2/Mega Man X2 - 11 Volcano's Fury.flac"
+        #img2img_input_path = "2/Mario Paint - 09 Creative Exercise.flac"
+        #img2img_input_path = "1/Contra III - The Alien Wars - 05 Neo Kobe Steel Factory.flac"
+        
         test_sample = load_audio(os.path.join(dataset_path, img2img_input_path), start=0, count=crop_width)
         test_sample = self.format.raw_to_sample(test_sample.unsqueeze(0).to(self.device))
         latents = self.vae.encode(test_sample.type(self.unet.dtype), return_dict=False)[0].mode()
         latents -= latents.mean()
         latents /= latents.std()
 
-        img2img_strength = 0.85#2
+        img2img_strength = 0.8#0.85#2
         sample = slerp(sample, latents, 1 - img2img_strength)
         sample -= sample.mean(dim=(1,2,3), keepdim=True)
         sample /= sample.square().mean(dim=(1,2,3), keepdim=True).sqrt()
@@ -393,32 +411,31 @@ class DualDiffusionPipeline(DiffusionPipeline):
 
         if game_ids is not None:
             labels = torch.tensor(game_ids, device=self.device, dtype=torch.long)
-            assert labels.shape[0] == batch_size
+            #assert labels.shape[0] == batch_size
         else:
             labels = torch.randint(0, self.unet.label_dim, (batch_size,), device=self.device, generator=generator)
 
         #t_schedule = t_schedule[int(steps*(1-img2img_strength)+0.5):]
         #v_schedule = v_schedule[int(steps*(1-img2img_strength)+0.5):]
 
-        target_vae_std = (self.vae.encoder.latents_logvar / 2).exp().item()
-        target_sample_std = (1 - target_vae_std**2) ** 0.5
-        target_snr = target_sample_std / target_vae_std
-        min_snr = model_params.get("min_snr", 3e-9)
-        min_timestep = 1 - np.arctan(target_snr) / (np.pi/2)
-        max_timestep = 1 - np.arctan(min_snr) / (np.pi/2)
-        assert(max_timestep > min_timestep)
+        target_vae_noise_std = (self.vae.encoder.latents_logvar / 2).exp().item()
+        target_vae_sample_std = (1 - target_vae_noise_std**2) ** 0.5
+        target_snr = target_vae_sample_std / target_vae_noise_std
+        timescale = np.arctan(target_snr) / (np.pi/2)
 
-        t_schedule = [min_timestep + (max_timestep - min_timestep) * t for t in t_schedule]
-        v_schedule = [v * (max_timestep - min_timestep) for v in v_schedule]
+        nose_weight = 2/2
+
+        #t_schedule = [min_timestep + (max_timestep - min_timestep) * t for t in t_schedule]
+        #v_schedule = [v * (max_timestep - min_timestep) for v in v_schedule]
 
         for i, t in enumerate(self.progress_bar(t_schedule)):
             
-            model_output, logvar = self.unet(sample, t, labels, self.format, return_logvar=True)
-            u_model_output = self.unet(sample, t, None, self.format)
+            model_output, logvar = self.unet(sample, t * (timescale * torch.pi/2), labels, self.format, return_logvar=True)
+            u_model_output = self.unet(sample, t * (timescale * torch.pi/2), None, self.format)
             model_output = slerp(u_model_output, model_output, cfg_scale)
 
             if use_perturbation:
-                model_output += torch.randn_like(model_output) * (logvar/2).exp()
+                model_output += torch.randn_like(model_output) * (logvar * nose_weight).exp()
                 model_output -= model_output.mean(dim=(1,2,3), keepdim=True)
                 model_output /= model_output.square().mean(dim=(1,2,3), keepdim=True).sqrt()
 
@@ -428,12 +445,12 @@ class DualDiffusionPipeline(DiffusionPipeline):
                 sample_m -= sample_m.mean(dim=(1,2,3), keepdim=True)
                 sample_m /= sample_m.square().mean(dim=(1,2,3), keepdim=True).sqrt()
                 
-                model_output, logvar = self.unet(sample_m, t - v_schedule[i]/2, labels, self.format, return_logvar=True)
-                u_model_output = self.unet(sample_m, t - v_schedule[i]/2, None, self.format)
+                model_output, logvar = self.unet(sample_m, (t - v_schedule[i]/2) * (timescale * torch.pi/2), labels, self.format, return_logvar=True)
+                u_model_output = self.unet(sample_m, (t - v_schedule[i]/2) * (timescale * torch.pi/2), None, self.format)
                 model_output = slerp(u_model_output, model_output, cfg_scale)
                 
                 if use_perturbation:
-                    model_output += torch.randn_like(model_output) * (logvar/2).exp()
+                    model_output += torch.randn_like(model_output) * (logvar * nose_weight).exp()
                     model_output -= model_output.mean(dim=(1,2,3), keepdim=True)
                     model_output /= model_output.square().mean(dim=(1,2,3), keepdim=True).sqrt()
 
