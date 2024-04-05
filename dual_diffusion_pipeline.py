@@ -423,7 +423,7 @@ class DualDiffusionPipeline(DiffusionPipeline):
         target_snr = target_vae_sample_std / target_vae_noise_std
         timescale = np.arctan(target_snr) / (np.pi/2)
 
-        nose_weight = 2/2
+        noise_weight = 2/2
 
         #t_schedule = [min_timestep + (max_timestep - min_timestep) * t for t in t_schedule]
         #v_schedule = [v * (max_timestep - min_timestep) for v in v_schedule]
@@ -435,7 +435,7 @@ class DualDiffusionPipeline(DiffusionPipeline):
             model_output = slerp(u_model_output, model_output, cfg_scale)
 
             if use_perturbation:
-                model_output += torch.randn_like(model_output) * (logvar * nose_weight).exp()
+                model_output += torch.randn_like(model_output) * (logvar * noise_weight).exp()
                 model_output -= model_output.mean(dim=(1,2,3), keepdim=True)
                 model_output /= model_output.square().mean(dim=(1,2,3), keepdim=True).sqrt()
 
@@ -450,7 +450,7 @@ class DualDiffusionPipeline(DiffusionPipeline):
                 model_output = slerp(u_model_output, model_output, cfg_scale)
                 
                 if use_perturbation:
-                    model_output += torch.randn_like(model_output) * (logvar * nose_weight).exp()
+                    model_output += torch.randn_like(model_output) * (logvar * noise_weight).exp()
                     model_output -= model_output.mean(dim=(1,2,3), keepdim=True)
                     model_output /= model_output.square().mean(dim=(1,2,3), keepdim=True).sqrt()
 
