@@ -72,7 +72,7 @@ def mp_cat(a, b, dim=1, t=0.5):
 # Magnitude-preserving Fourier features (Equation 75).
 
 class MPFourier(torch.nn.Module):
-    def __init__(self, num_channels, bandwidth=1, eps=1e-3):
+    def __init__(self, num_channels, bandwidth=1, eps=1e-2):
         super().__init__()
         #self.register_buffer('freqs', 2 * np.pi * torch.randn(num_channels) * bandwidth)
         #self.register_buffer('phases', 2 * np.pi * torch.rand(num_channels))
@@ -84,8 +84,8 @@ class MPFourier(torch.nn.Module):
         self.eps = eps
 
     def forward(self, x):
-        #y = x.to(torch.float32)
-        y = (x.float().clip(min=self.eps, max=1-self.eps) * torch.pi/2).tan().log() # rescale the timestep (0..1) to geodesic log-snr
+        y = x.to(torch.float32)
+        #y = (x.float().clip(min=self.eps, max=1-self.eps) * torch.pi/2 * 0.8263).tan().log() # rescale the timestep (0..1) to 90 degree geodesic log-snr
         y = y.ger(self.freqs.to(torch.float32))
         y = y + self.phases.to(torch.float32)
         y = y.cos() * np.sqrt(2)
@@ -235,7 +235,6 @@ class UNet(ModelMixin, ConfigMixin):
         in_channels = 4,                    # Number of input channels.
         out_channels = 4,                   # Number of output channels.
         pos_channels = 0,                   # Number of positional embedding channels for attention.
-        logvar_channels = None,             # Small network for training uncertainty estimation.
         channels_per_head = 64,             # Number of channels per attention head.
         label_dim = 0,                      # Class label dimensionality. 0 = unconditional.
         label_dropout = 0.1,                # Dropout probability for class labels. 
@@ -257,7 +256,7 @@ class UNet(ModelMixin, ConfigMixin):
         cblock = [int(model_channels * x) for x in channel_mult]
         cnoise = int(model_channels * channel_mult_noise) if channel_mult_noise is not None else max(cblock)#cblock[0]
         cemb = int(model_channels * channel_mult_emb) if channel_mult_emb is not None else max(cblock)
-        clogvar = logvar_channels if logvar_channels is not None else max(cblock)
+        clogvar = cnoise
         cpos = pos_channels
         label_dim = label_dim + 1 # 1 extra dim for the unconditional class
 
@@ -328,7 +327,12 @@ class UNet(ModelMixin, ConfigMixin):
                     class_labels = torch.nn.functional.dropout(class_labels, p=self.label_dropout)
             else:
                 class_labels = torch.zeros([1, self.label_dim], device=x.device, dtype=self.dtype)
-            class_labels[:, -1] = (1 - class_labels[:, :-1].sum(dim=1)).clip(min=0)
+            class_labels[:, -1] = (1 - class_labels[:, :-1].square().sum(dim=1).clip(max=1)).sqrt()
+
+            if class_labels.shape[0] != emb.shape[0]:
+                assert(self.training == False)
+                class_labels = class_labels.sum(dim=0, keepdim=True)
+                class_labels /= class_labels.square().sum().sqrt()
 
             emb = mp_sum(emb, self.emb_label(class_labels * np.sqrt(class_labels.shape[1])), t=self.label_balance)
         emb = mp_silu(emb)
@@ -403,3 +407,18 @@ class Precond(torch.nn.Module):
         return D_x
 """
 #----------------------------------------------------------------------------
+
+if __name__ == "__main__": # fourier embedding inner product test
+
+    from dual_diffusion_utils import save_raw, save_raw_img
+
+    steps = 25
+    cnoise = 192*4
+
+    emb_fourier = MPFourier(cnoise)
+    t = torch.linspace(0, 1, steps) * (0.8236786557085517 * torch.pi/2)
+    emb = emb_fourier(t)
+
+    inner_products = (emb.view(1, steps, cnoise) * emb.view(steps, 1, cnoise)).sum(dim=2)
+    save_raw(inner_products / inner_products.amax(), "./debug/fourier_inner_products.raw")
+    save_raw_img(inner_products, "./debug/fourier_inner_products.png")
