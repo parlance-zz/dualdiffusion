@@ -334,8 +334,9 @@ class DualDiffusionPipeline(DiffusionPipeline):
         length: int = 0,
         game_ids = None,
         cfg_scale: float = 5.,
-        use_midpoint_integration: bool = True,
-        input_perturbation: float = 0.36,
+        v_scale: float = 1.,
+        use_midpoint_integration: bool = False,
+        input_perturbation: float = 0.,
     ):
         if steps <= 0:
             raise ValueError(f"Steps must be > 0, got {steps}")
@@ -365,7 +366,7 @@ class DualDiffusionPipeline(DiffusionPipeline):
         sample -= sample.mean(dim=(1,2,3), keepdim=True)
         sample /= sample.square().mean(dim=(1,2,3), keepdim=True).sqrt()
 
-        #"""
+        """
         from dual_diffusion_utils import load_audio
         crop_width = self.format.get_sample_crop_width(length=length)
         dataset_path = os.environ.get("DATASET_PATH", "./dataset/samples_hq")
@@ -379,15 +380,17 @@ class DualDiffusionPipeline(DiffusionPipeline):
         #img2img_input_path = "2/U.N. Squadron - 04 Front Line Base.flac"
         #img2img_input_path = "2/Super Mario RPG - The Legend of the Seven Stars - 217 Weapons Factory.flac"
         #img2img_input_path = "2/Super Mario RPG - The Legend of the Seven Stars - 135 Welcome to Booster Tower.flac"
-        img2img_input_path = "2/Super Mario RPG - The Legend of the Seven Stars - 128 Beware the Forest's Mushrooms.flac"
+        #img2img_input_path = "2/Super Mario RPG - The Legend of the Seven Stars - 128 Beware the Forest's Mushrooms.flac"
         #img2img_input_path = "2/Mega Man X3 - 07 Neon Tiger.flac"
         #img2img_input_path = "2/Mega Man X2 - 23 Absolute Zero.flac"
         #img2img_input_path = "2/Super Mario All-Stars - 102 Overworld.flac"
         #img2img_input_path = "2/Mega Man X2 - 15 Dust Devil.flac"
-        #img2img_input_path = "2/Mega Man X2 - 09 Panzer des Drachens.flac"
+        img2img_input_path = "2/Mega Man X2 - 09 Panzer des Drachens.flac"
         #img2img_input_path = "2/Mega Man X2 - 11 Volcano's Fury.flac"
         #img2img_input_path = "2/Mario Paint - 09 Creative Exercise.flac"
         #img2img_input_path = "1/Contra III - The Alien Wars - 05 Neo Kobe Steel Factory.flac"
+        #img2img_input_path = "2/Spindizzy Worlds - 06 Level Music 4.flac"
+        #img2img_input_path = "1/Legend of Zelda, The - A Link to the Past - 04a Time of the Falling Rain.flac"
         
         test_sample = load_audio(os.path.join(dataset_path, img2img_input_path), start=0, count=crop_width)
         test_sample = self.format.raw_to_sample(test_sample.unsqueeze(0).to(self.device))
@@ -395,12 +398,12 @@ class DualDiffusionPipeline(DiffusionPipeline):
         latents -= latents.mean()
         latents /= latents.std()
 
-        img2img_strength = 0.84#0.85#2
+        img2img_strength = 0.79#0.85#2
         sample = slerp(sample, latents, 1 - img2img_strength)
         sample -= sample.mean(dim=(1,2,3), keepdim=True)
         sample /= sample.square().mean(dim=(1,2,3), keepdim=True).sqrt()
         print(img2img_input_path)
-        #"""
+        """
 
         #v_schedule = (torch.linspace(0.5/steps, 1-0.5/steps, steps) * torch.pi).sin()# **2
         v_schedule = torch.ones(steps)
@@ -415,8 +418,8 @@ class DualDiffusionPipeline(DiffusionPipeline):
         else:
             labels = torch.randint(0, self.unet.label_dim, (batch_size,), device=self.device, generator=generator)
 
-        t_schedule = t_schedule[int(steps*(1-img2img_strength)+0.5):]
-        v_schedule = v_schedule[int(steps*(1-img2img_strength)+0.5):]
+        #t_schedule = t_schedule[int(steps*(1-img2img_strength)+0.5):]
+        #v_schedule = v_schedule[int(steps*(1-img2img_strength)+0.5):]
 
         target_vae_noise_std = (self.vae.encoder.latents_logvar / 2).exp().item()
         target_vae_sample_std = (1 - target_vae_noise_std**2) ** 0.5
@@ -426,15 +429,18 @@ class DualDiffusionPipeline(DiffusionPipeline):
         #t_schedule = [min_timestep + (max_timestep - min_timestep) * t for t in t_schedule]
         #v_schedule = [v * (max_timestep - min_timestep) for v in v_schedule]
 
+        v_schedule = [v * v_scale for v in v_schedule]
+        noise_perturbation_scale = input_perturbation #* max(cfg_scale - 2, 1)
+
         for i, t in enumerate(self.progress_bar(t_schedule)):
             
             sample = sample.to(self.unet.dtype)
             model_output, logvar = self.unet(sample, t * (timescale * torch.pi/2), labels, self.format, return_logvar=True)
             u_model_output = self.unet(sample, t * (timescale * torch.pi/2), None, self.format)
-            model_output = slerp(u_model_output.float(), model_output.float(), cfg_scale)
+            model_output = slerp(u_model_output.float(), model_output.float(), cfg_scale)# * np.cos(torch.pi*t))#(np.tan(t * (timescale * torch.pi/2)) / target_snr)**2)
 
             if input_perturbation != 0:
-                model_output += torch.randn_like(model_output) * (logvar.float() * input_perturbation).exp()
+                model_output += torch.randn_like(model_output) * (logvar.float() / 2).exp() * noise_perturbation_scale
                 model_output -= model_output.mean(dim=(1,2,3), keepdim=True)
                 model_output /= model_output.square().mean(dim=(1,2,3), keepdim=True).sqrt()
 
@@ -450,7 +456,7 @@ class DualDiffusionPipeline(DiffusionPipeline):
                 model_output = slerp(u_model_output.float(), model_output.float(), cfg_scale)
                 
                 if input_perturbation != 0:
-                    model_output += torch.randn_like(model_output) * (logvar.float() * input_perturbation).exp()
+                    model_output += torch.randn_like(model_output) * (logvar.float() / 2).exp() * noise_perturbation_scale
                     model_output -= model_output.mean(dim=(1,2,3), keepdim=True)
                     model_output /= model_output.square().mean(dim=(1,2,3), keepdim=True).sqrt()
 
