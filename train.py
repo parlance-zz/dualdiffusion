@@ -747,14 +747,14 @@ def init_dataloader(accelerator,
                     train_data_dir,
                     cache_dir,
                     train_batch_size,
+                    gradient_accumulation_steps,
                     dataloader_num_workers,
                     max_train_samples,
                     dataset_format,
                     dataset_raw_format,
                     dataset_num_channels,
                     sample_rate,
-                    sample_crop_width,
-                    prefetch_factor=1):
+                    sample_crop_width):
 
     if dataset_name is None:
         dataset_name = train_data_dir
@@ -804,13 +804,13 @@ def init_dataloader(accelerator,
         num_workers=dataloader_num_workers,
         pin_memory=True,
         persistent_workers=True if dataloader_num_workers > 0 else False,
-        prefetch_factor=prefetch_factor if dataloader_num_workers > 0 else None,
+        prefetch_factor=gradient_accumulation_steps if dataloader_num_workers > 0 else None,
         drop_last=True,
     )
 
     logger.info(f"Using training data from {train_data_dir} with {len(train_dataset)} samples and batch size {train_batch_size}")
     if dataloader_num_workers > 0:
-        logger.info(f"Using dataloader with {dataloader_num_workers} workers - prefetch factor: {prefetch_factor}")
+        logger.info(f"Using dataloader with {dataloader_num_workers} workers - prefetch factor: {gradient_accumulation_steps}")
     logger.info(f"Dataset transform params: {dict_str(dataset_transform_params)}")
 
     return train_dataset, train_dataloader
@@ -918,6 +918,8 @@ def do_training_loop(args,
         #else:
         #    logger.info("Input perturbation is disabled")
 
+        #module.normalize_weights()
+
         logger.info(f"Conditioning dropout: {module.label_dropout}")
 
     logger.info(f"Sample shape: {sample_shape}")
@@ -929,7 +931,7 @@ def do_training_loop(args,
 
     for epoch in range(first_epoch, args.num_train_epochs):
 
-        torch.cuda.empty_cache()
+        #torch.cuda.empty_cache()
         module.train().requires_grad_(True)
 
         train_loss = 0.
@@ -982,9 +984,9 @@ def do_training_loop(args,
             with accelerator.accumulate(module):
 
                 raw_samples = batch["input"]
-                raw_sample_paths = batch["sample_paths"]
                 sample_game_ids = batch["game_ids"]
                 #sample_author_ids = batch["author_ids"]
+                raw_sample_paths = batch["sample_paths"]
 
                 if args.module == "unet":
                     samples = pipeline.format.raw_to_sample(raw_samples)
@@ -1007,7 +1009,7 @@ def do_training_loop(args,
                     model_output, error_logvar = module(model_input, timesteps * (timescale * torch.pi/2), sample_game_ids, pipeline.format, return_logvar=True)
 
                     #target = slerp(samples, noise, timesteps - 1).detach() # geodesic flow with v pred
-                    target = slerp(samples, noise, timesteps - timescale).detach() # geodesic flow with v pred
+                    target = slerp(samples, noise, timesteps - timescale).detach() # geodesic flow with target snr scaled v pred
                     loss = F.mse_loss(model_output.float(), target.float(), reduction="none")
                     #loss = slerp_loss(model_output.float(), target.float()) / 14.5
                     timestep_loss = loss.mean(dim=list(range(1, len(loss.shape))))
@@ -1053,10 +1055,10 @@ def do_training_loop(args,
                 
                 # Gather the losses across all processes for logging (if we use distributed training).
                 grad_accum_steps += 1
-                avg_loss = accelerator.gather(loss).mean()
+                avg_loss = accelerator.gather(loss.detach()).mean()
                 train_loss += avg_loss.item()
                 for channel in module_log_channels:
-                    avg = accelerator.gather(locals()[channel]).mean()
+                    avg = accelerator.gather(locals()[channel].detach()).mean()
                     module_logs[channel] += avg.item()
 
                 # Backpropagate
@@ -1077,6 +1079,9 @@ def do_training_loop(args,
 
             # Checks if the accelerator has performed an optimization step behind the scenes
             if accelerator.sync_gradients:
+                
+                #if args.module == "unet":
+                #    module.normalize_weights()
 
                 progress_bar.update(1)
                 global_step += 1
@@ -1129,15 +1134,6 @@ def do_training_loop(args,
         accelerator.wait_for_everyone()
         if accelerator.is_main_process:
             
-            """
-            if args.module == "unet":
-                timestep_error_logvar = getattr(pipeline.unet, "timestep_error_logvar", None)
-                if timestep_error_logvar is not None:
-                    debug_path = os.environ.get("DEBUG_PATH", None)
-                    if debug_path is not None:
-                        save_raw(timestep_error_logvar, os.path.join(debug_path, f"timestep_error_logvar_{global_step}.raw"))
-            """
-
             # full model saving disabled for now, not really necessary now that checkpoints are saved with config and safetensors
             """
             if checkpoint_saved_this_epoch == True:
@@ -1327,6 +1323,7 @@ def main():
                                                       args.train_data_dir,
                                                       args.cache_dir,
                                                       args.train_batch_size,
+                                                      args.gradient_accumulation_steps,
                                                       args.dataloader_num_workers,
                                                       args.max_train_samples,
                                                       args.train_data_format,
