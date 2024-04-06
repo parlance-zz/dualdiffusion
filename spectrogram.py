@@ -28,7 +28,7 @@ import torch
 import torchaudio
 from torch import Tensor
 
-@dataclass(frozen=True)
+@dataclass()#frozen=True)
 class SpectrogramParams:
 
     stereo: bool = True
@@ -260,7 +260,9 @@ class PhaseRecovery(torch.nn.Module):
         self.stereo_coherence = stereo_coherence
 
     @torch.no_grad()
-    def forward(self, specgram: Tensor) -> Tensor:
+    def forward(self, specgram: Tensor, n_fgla_iter=None) -> Tensor:
+
+        n_fgla_iter = n_fgla_iter or self.n_fgla_iter
 
         if self.n_dm_iter > 0:
             wave = difference_map(
@@ -284,7 +286,7 @@ class PhaseRecovery(torch.nn.Module):
                 self.n_fft,
                 self.hop_length,
                 self.win_length,
-                self.n_fgla_iter,
+                n_fgla_iter,
                 self.momentum,
                 self.length,
                 self.rand_init,
@@ -393,7 +395,7 @@ class SpectrogramConverter(torch.nn.Module):
     @torch.no_grad()
     def spectrogram_to_audio(self, spectrogram: torch.Tensor) -> torch.Tensor:
         amplitudes_linear = self.inverse_mel_scaler(spectrogram ** (1 / self.p.abs_exponent))
-        return self.inverse_spectrogram_func(amplitudes_linear)
+        return self.inverse_spectrogram_func(amplitudes_linear, n_fgla_iter=self.p.num_griffin_lim_iters)
     
     def half(self): # prevent casting to fp16
         return self
