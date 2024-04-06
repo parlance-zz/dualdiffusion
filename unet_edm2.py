@@ -316,17 +316,17 @@ class UNet(ModelMixin, ConfigMixin):
     def forward(self, x, noise_labels, class_labels, format, return_logvar=False):
 
         if not torch.is_tensor(noise_labels):
-            noise_labels = torch.tensor([noise_labels], device=x.device, dtype=torch.float32)
-
+            noise_labels = torch.tensor([noise_labels], device=x.device, dtype=x.dtype)
+        
         # Embedding.
         emb = self.emb_noise(self.emb_fourier(noise_labels))
         if self.emb_label is not None:
             if class_labels is not None:
-                class_labels = torch.nn.functional.one_hot(class_labels, num_classes=self.label_dim).float()
+                class_labels = torch.nn.functional.one_hot(class_labels, num_classes=self.label_dim).to(x.dtype)
                 if self.training and self.label_dropout != 0:
                     class_labels = torch.nn.functional.dropout(class_labels, p=self.label_dropout)
             else:
-                class_labels = torch.zeros([1, self.label_dim], device=x.device, dtype=self.dtype)
+                class_labels = torch.zeros([1, self.label_dim], device=x.device, dtype=x.dtype)
             class_labels[:, -1] = (1 - class_labels[:, :-1].square().sum(dim=1).clip(max=1)).sqrt()
 
             if class_labels.shape[0] != emb.shape[0]:

@@ -225,7 +225,7 @@ class DualSpectrogramFormat(torch.nn.Module):
     #@torch.no_grad()
     def get_positional_embedding(self, x, n_channels, mode="linear"):
 
-        mels = torch.linspace(self.mels_min, self.mels_max, x.shape[2] + 2, device=x.device)[1:-1]
+        mels = torch.linspace(self.mels_min, self.mels_max, x.shape[2] + 2, device=x.device, dtype=x.dtype)[1:-1]
         ln_freqs = DualSpectrogramFormat._mel_to_hz(mels, mel_scale=self.spectrogram_params.mel_scale_type).log2()
 
         if mode == "linear":
@@ -335,7 +335,7 @@ class DualDiffusionPipeline(DiffusionPipeline):
         game_ids = None,
         cfg_scale: float = 5.,
         use_midpoint_integration: bool = True,
-        use_perturbation: bool = True,
+        input_perturbation: float = 0.36,
     ):
         if steps <= 0:
             raise ValueError(f"Steps must be > 0, got {steps}")
@@ -365,7 +365,7 @@ class DualDiffusionPipeline(DiffusionPipeline):
         sample -= sample.mean(dim=(1,2,3), keepdim=True)
         sample /= sample.square().mean(dim=(1,2,3), keepdim=True).sqrt()
 
-        """
+        #"""
         from dual_diffusion_utils import load_audio
         crop_width = self.format.get_sample_crop_width(length=length)
         dataset_path = os.environ.get("DATASET_PATH", "./dataset/samples_hq")
@@ -379,11 +379,11 @@ class DualDiffusionPipeline(DiffusionPipeline):
         #img2img_input_path = "2/U.N. Squadron - 04 Front Line Base.flac"
         #img2img_input_path = "2/Super Mario RPG - The Legend of the Seven Stars - 217 Weapons Factory.flac"
         #img2img_input_path = "2/Super Mario RPG - The Legend of the Seven Stars - 135 Welcome to Booster Tower.flac"
-        #img2img_input_path = "2/Super Mario RPG - The Legend of the Seven Stars - 128 Beware the Forest's Mushrooms.flac"
+        img2img_input_path = "2/Super Mario RPG - The Legend of the Seven Stars - 128 Beware the Forest's Mushrooms.flac"
         #img2img_input_path = "2/Mega Man X3 - 07 Neon Tiger.flac"
         #img2img_input_path = "2/Mega Man X2 - 23 Absolute Zero.flac"
         #img2img_input_path = "2/Super Mario All-Stars - 102 Overworld.flac"
-        img2img_input_path = "2/Mega Man X2 - 15 Dust Devil.flac"
+        #img2img_input_path = "2/Mega Man X2 - 15 Dust Devil.flac"
         #img2img_input_path = "2/Mega Man X2 - 09 Panzer des Drachens.flac"
         #img2img_input_path = "2/Mega Man X2 - 11 Volcano's Fury.flac"
         #img2img_input_path = "2/Mario Paint - 09 Creative Exercise.flac"
@@ -395,12 +395,12 @@ class DualDiffusionPipeline(DiffusionPipeline):
         latents -= latents.mean()
         latents /= latents.std()
 
-        img2img_strength = 0.8#0.85#2
+        img2img_strength = 0.84#0.85#2
         sample = slerp(sample, latents, 1 - img2img_strength)
         sample -= sample.mean(dim=(1,2,3), keepdim=True)
         sample /= sample.square().mean(dim=(1,2,3), keepdim=True).sqrt()
         print(img2img_input_path)
-        """
+        #"""
 
         #v_schedule = (torch.linspace(0.5/steps, 1-0.5/steps, steps) * torch.pi).sin()# **2
         v_schedule = torch.ones(steps)
@@ -415,61 +415,61 @@ class DualDiffusionPipeline(DiffusionPipeline):
         else:
             labels = torch.randint(0, self.unet.label_dim, (batch_size,), device=self.device, generator=generator)
 
-        #t_schedule = t_schedule[int(steps*(1-img2img_strength)+0.5):]
-        #v_schedule = v_schedule[int(steps*(1-img2img_strength)+0.5):]
+        t_schedule = t_schedule[int(steps*(1-img2img_strength)+0.5):]
+        v_schedule = v_schedule[int(steps*(1-img2img_strength)+0.5):]
 
         target_vae_noise_std = (self.vae.encoder.latents_logvar / 2).exp().item()
         target_vae_sample_std = (1 - target_vae_noise_std**2) ** 0.5
         target_snr = target_vae_sample_std / target_vae_noise_std
         timescale = np.arctan(target_snr) / (np.pi/2)
 
-        noise_weight = 2/2
-
         #t_schedule = [min_timestep + (max_timestep - min_timestep) * t for t in t_schedule]
         #v_schedule = [v * (max_timestep - min_timestep) for v in v_schedule]
 
         for i, t in enumerate(self.progress_bar(t_schedule)):
             
+            sample = sample.to(self.unet.dtype)
             model_output, logvar = self.unet(sample, t * (timescale * torch.pi/2), labels, self.format, return_logvar=True)
             u_model_output = self.unet(sample, t * (timescale * torch.pi/2), None, self.format)
-            model_output = slerp(u_model_output, model_output, cfg_scale)
+            model_output = slerp(u_model_output.float(), model_output.float(), cfg_scale)
 
-            if use_perturbation:
-                model_output += torch.randn_like(model_output) * (logvar * noise_weight).exp()
+            if input_perturbation != 0:
+                model_output += torch.randn_like(model_output) * (logvar.float() * input_perturbation).exp()
                 model_output -= model_output.mean(dim=(1,2,3), keepdim=True)
                 model_output /= model_output.square().mean(dim=(1,2,3), keepdim=True).sqrt()
 
             if use_midpoint_integration: # geodesic flow with v pred and midpoint euler integration
 
-                sample_m = slerp(sample, model_output, v_schedule[i]/2)
+                sample_m = slerp(sample.float(), model_output, v_schedule[i]/2)
                 sample_m -= sample_m.mean(dim=(1,2,3), keepdim=True)
                 sample_m /= sample_m.square().mean(dim=(1,2,3), keepdim=True).sqrt()
                 
+                sample_m = sample_m.to(self.unet.dtype)
                 model_output, logvar = self.unet(sample_m, (t - v_schedule[i]/2) * (timescale * torch.pi/2), labels, self.format, return_logvar=True)
                 u_model_output = self.unet(sample_m, (t - v_schedule[i]/2) * (timescale * torch.pi/2), None, self.format)
-                model_output = slerp(u_model_output, model_output, cfg_scale)
+                model_output = slerp(u_model_output.float(), model_output.float(), cfg_scale)
                 
-                if use_perturbation:
-                    model_output += torch.randn_like(model_output) * (logvar * noise_weight).exp()
+                if input_perturbation != 0:
+                    model_output += torch.randn_like(model_output) * (logvar.float() * input_perturbation).exp()
                     model_output -= model_output.mean(dim=(1,2,3), keepdim=True)
                     model_output /= model_output.square().mean(dim=(1,2,3), keepdim=True).sqrt()
 
-            sample = slerp(sample, model_output, v_schedule[i])
+            sample = slerp(sample.float(), model_output, v_schedule[i])
             sample -= sample.mean(dim=(1,2,3), keepdim=True)
             sample /= sample.square().mean(dim=(1,2,3), keepdim=True).sqrt()
 
         debug_path = os.environ.get("DEBUG_PATH", None)
         if debug_path is not None:
-            print("Sample std: ", sample.std(dim=(1,2,3)).item())
-            print("Sample mean: ", sample.mean(dim=(1,2,3)).item())
+            print("Sample std: ", sample.std(dim=(1,2,3)))
+            print("Sample mean: ", sample.mean(dim=(1,2,3)))
             save_raw(sample, os.path.join(debug_path, "debug_latents.raw"))
         
         if getattr(self, "vae", None) is not None:
             sample = sample * model_params["latent_std"] + model_params["latent_mean"]
-            save_raw_img(sample, os.path.join(debug_path, "debug_latents.png"))
-            sample = self.vae.decode(sample).sample
+            save_raw_img(sample[0], os.path.join(debug_path, "debug_latents.png"))
+            sample = self.vae.decode(sample.to(self.vae.dtype)).sample.float()
             save_raw(sample, os.path.join(debug_path, "debug_decoded_sample.raw"))
-            save_raw_img(sample, os.path.join(debug_path, "debug_decoded_sample.png"))
+            save_raw_img(sample[0], os.path.join(debug_path, "debug_decoded_sample.png"))
 
         raw_sample = self.format.sample_to_raw(sample.float())
         if loops > 0: raw_sample = raw_sample.repeat(1, 1, loops+1)
