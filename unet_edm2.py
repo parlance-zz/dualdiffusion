@@ -113,8 +113,23 @@ class MPConv(torch.nn.Module):
         if w.ndim == 2:
             return x @ w.t()
         assert w.ndim == 4
-        
         return torch.nn.functional.conv2d(x, w, padding=(w.shape[-1]//2,))
+
+    """
+    def forward(self, x, gain=1):
+
+        w = self.weight * (gain / np.sqrt(self.weight[0].numel()))
+        if w.ndim == 2:
+            return x @ w.t()
+        assert w.ndim == 4
+
+        return torch.nn.functional.conv2d(x, w, padding=(w.shape[-1]//2,))
+
+    def normalize_weights(self):
+        w = self.weight.to(torch.float32)
+        with torch.no_grad():
+            self.weight.copy_(normalize(w))
+    """
 
 #----------------------------------------------------------------------------
 # U-Net encoder/decoder block with optional self-attention (Figure 21).
@@ -358,6 +373,13 @@ class UNet(ModelMixin, ConfigMixin):
             return x, logvar
         
         return x
+    
+    """
+    def normalize_weights(self):
+        for module in self.modules():
+            if isinstance(module, MPConv):
+                module.normalize_weights()
+    """
 
 #----------------------------------------------------------------------------
 # Preconditioning and uncertainty estimation.
