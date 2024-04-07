@@ -30,6 +30,7 @@ import atexit
 from glob import glob
 from typing import Any
 from dotenv import load_dotenv
+import json
 
 import numpy as np
 import datasets
@@ -709,16 +710,11 @@ class DatasetTransformer(torch.nn.Module):
         samples = []
         paths = []
         game_ids = []
-        author_ids = []
+        #author_ids = []
 
         num_examples = len(next(iter(examples.values())))
         examples = [{key: examples[key][i] for key in examples} for i in range(num_examples)]
-        #num_train_samples = len(examples)
-        #from dual_diffusion_utils import dict_str
-        #print(dict_str(str(examples)))
-        #exit(1)
 
-        #for audio in examples["audio"]:
         for train_sample in examples:
             
             file_path = train_sample["file_name"]
@@ -758,29 +754,37 @@ def init_dataloader(accelerator,
 
     if dataset_name is None:
         dataset_name = train_data_dir
-    else:
-        train_data_dir = cache_dir
-        #data_dir = train_data_dir
-        #data_files = {"train": os.path.join(train_data_dir, "**")}
-    #else:
-    #    data_files = f"**{dataset_format}"
-        #data_dir = None
-
-    def add_absolute_path(example):
-        relative_path = example['file_name']
-        absolute_path = os.path.join(train_data_dir, relative_path)
-        example['file_name'] = absolute_path
-        return example
     
     dataset = load_dataset(
         dataset_name,
-        #data_dir=data_dir,
         split="train",
         cache_dir=cache_dir,
         num_proc=dataloader_num_workers if dataloader_num_workers > 0 else None,
         token=hf_token,
-    ).map(add_absolute_path)#.cast_column("file_name", Audio(decode=False))
+    )
 
+    if dataset_name is not None:
+
+        filename_mapping = {}
+        cache_files = os.listdir(os.path.join(cache_dir, "downloads"))
+
+        for file in cache_files:
+            if os.path.splitext(file)[1].lower() == ".json":
+                cache_file_dict = json.load(open(os.path.join(cache_dir, "downloads", file)))
+                cache_file = cache_file_dict["url"].split("@", 1)[1].split("/", 1)[1]
+                filename_mapping[cache_file] = os.path.join(cache_dir, "downloads", os.path.splitext(file)[0])
+
+        dataset = dataset.map(lambda x: {**x, "file_name": filename_mapping[x["file_name"]]})
+    else:
+
+        def add_absolute_path(example):
+            relative_path = example['file_name']
+            absolute_path = os.path.join(train_data_dir, relative_path)
+            example['file_name'] = absolute_path
+            return example
+        
+        dataset = dataset.map(add_absolute_path)#.cast_column("file_name", Audio(decode=False))
+        
     dataset_transform_params = {
         "format": dataset_format,
         "raw_format": dataset_raw_format,
@@ -792,9 +796,7 @@ def init_dataloader(accelerator,
 
     with accelerator.main_process_first():
         if max_train_samples is not None:
-            #dataset["train"] = dataset["train"].select(range(max_train_samples))
             dataset = dataset.select(range(max_train_samples))
-        #train_dataset = dataset["train"].with_transform(dataset_transform)
         train_dataset = dataset.with_transform(dataset_transform)
 
     train_dataloader = torch.utils.data.DataLoader(
@@ -804,7 +806,7 @@ def init_dataloader(accelerator,
         num_workers=dataloader_num_workers,
         pin_memory=True,
         persistent_workers=True if dataloader_num_workers > 0 else False,
-        prefetch_factor=gradient_accumulation_steps if dataloader_num_workers > 0 else None,
+        prefetch_factor=2 if dataloader_num_workers > 0 else None,
         drop_last=True,
     )
 
