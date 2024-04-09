@@ -74,6 +74,7 @@ def mp_cat(a, b, dim=1, t=0.5):
 class MPFourier(torch.nn.Module):
     def __init__(self, num_channels, bandwidth=1, eps=1e-2):
         super().__init__()
+
         #self.register_buffer('freqs', 2 * np.pi * torch.randn(num_channels) * bandwidth)
         #self.register_buffer('phases', 2 * np.pi * torch.rand(num_channels))
 
@@ -85,7 +86,6 @@ class MPFourier(torch.nn.Module):
 
     def forward(self, x):
         y = x.to(torch.float32)
-        #y = (x.float().clip(min=self.eps, max=1-self.eps) * torch.pi/2 * 0.8263).tan().log() # rescale the timestep (0..1) to 90 degree geodesic log-snr
         y = y.ger(self.freqs.to(torch.float32))
         y = y + self.phases.to(torch.float32)
         y = y.cos() * np.sqrt(2)
@@ -253,6 +253,7 @@ class UNet(ModelMixin, ConfigMixin):
         channels_per_head = 64,             # Number of channels per attention head.
         label_dim = 0,                      # Class label dimensionality. 0 = unconditional.
         label_dropout = 0.1,                # Dropout probability for class labels. 
+        dropout = 0,                        # Dropout probability.
         model_channels       = 192,         # Base multiplier for the number of channels.
         channel_mult         = [1,2,3,4],   # Per-resolution multipliers for the number of channels.
         channel_mult_noise   = None,        # Multiplier for noise embedding dimensionality. None = select based on channel_mult.
@@ -266,18 +267,19 @@ class UNet(ModelMixin, ConfigMixin):
     ):
         super().__init__()
 
-        block_kwargs = {"channels_per_head": channels_per_head}
+        block_kwargs = {"channels_per_head": channels_per_head, "dropout": dropout}
 
         cblock = [int(model_channels * x) for x in channel_mult]
         cnoise = int(model_channels * channel_mult_noise) if channel_mult_noise is not None else max(cblock)#cblock[0]
         cemb = int(model_channels * channel_mult_emb) if channel_mult_emb is not None else max(cblock)
         clogvar = cnoise
         cpos = pos_channels
-        label_dim = label_dim + 1 # 1 extra dim for the unconditional class
+        label_dim = label_dim# + 1 # 1 extra dim for the unconditional class
 
         self.label_dim = label_dim
         self.label_dropout = label_dropout
         self.label_balance = label_balance
+        self.dropout = dropout
         self.concat_balance = concat_balance
         self.out_gain = torch.nn.Parameter(torch.zeros([]))
 
@@ -332,7 +334,9 @@ class UNet(ModelMixin, ConfigMixin):
 
         if not torch.is_tensor(noise_labels):
             noise_labels = torch.tensor([noise_labels], device=x.device, dtype=x.dtype)
-        
+        else:
+            noise_labels = noise_labels.to(x.dtype)
+
         # Embedding.
         emb = self.emb_noise(self.emb_fourier(noise_labels))
         if self.emb_label is not None:
@@ -342,14 +346,17 @@ class UNet(ModelMixin, ConfigMixin):
                     class_labels = torch.nn.functional.dropout(class_labels, p=self.label_dropout)
             else:
                 class_labels = torch.zeros([1, self.label_dim], device=x.device, dtype=x.dtype)
-            class_labels[:, -1] = (1 - class_labels[:, :-1].square().sum(dim=1).clip(max=1)).sqrt()
+
+            #class_labels[:, -1] = 1 - class_labels[:, :-1].sum(dim=1).clip(max=1)
 
             if class_labels.shape[0] != emb.shape[0]:
                 assert(self.training == False)
                 class_labels = class_labels.sum(dim=0, keepdim=True)
-                class_labels /= class_labels.square().sum().sqrt()
+            
+            #emb = mp_sum(emb, self.emb_label(class_labels * np.sqrt(class_labels.shape[1])), t=self.label_balance)     
+            emb = mp_sum(emb, self.emb_label(normalize(class_labels)), t=self.label_balance)
+            #print(torch.linalg.norm(self.emb_label(normalize(class_labels))))
 
-            emb = mp_sum(emb, self.emb_label(class_labels * np.sqrt(class_labels.shape[1])), t=self.label_balance)
         emb = mp_silu(emb)
 
         # Encoder.
