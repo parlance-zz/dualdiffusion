@@ -294,7 +294,7 @@ class UNet(ModelMixin, ConfigMixin):
 
         # Encoder.
         self.enc = torch.nn.ModuleDict()
-        cout = in_channels + 2 # 1 const channel, 1 positional channel
+        cout = in_channels + 3 # 1 const channel, 2 positional channels
         for level, channels in enumerate(cblock):
             
             if level == 0:
@@ -330,7 +330,7 @@ class UNet(ModelMixin, ConfigMixin):
                                                              flavor='dec', attention=(level in attn_levels), **block_kwargs)
         self.conv_out = MPConv(cout, out_channels, kernel=[3,3])
 
-    def forward(self, x, noise_labels, class_labels, format, return_logvar=False):
+    def forward(self, x, noise_labels, class_labels, t_ranges, format, return_logvar=False):
 
         if not torch.is_tensor(noise_labels):
             noise_labels = torch.tensor([noise_labels], device=x.device, dtype=x.dtype)
@@ -361,7 +361,7 @@ class UNet(ModelMixin, ConfigMixin):
 
         # Encoder.
         x = torch.cat((x, torch.ones_like(x[:, :1]),
-                       format.get_positional_embedding(x, 1, mode="linear")), dim=1)
+                       format.get_positional_embedding(x, t_ranges)), dim=1)
         skips = []
         for name, block in self.enc.items():
             x = block(x) if 'conv' in name else block(x, emb, format)
