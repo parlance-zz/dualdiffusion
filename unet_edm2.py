@@ -448,6 +448,8 @@ if __name__ == "__main__": # fourier embedding inner product test
     from dotenv import load_dotenv
     import os
 
+    load_dotenv(override=True)
+    
     steps = 120
     cnoise = 192*4
 
