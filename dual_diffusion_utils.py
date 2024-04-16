@@ -574,7 +574,7 @@ def quantize_tensor(x, levels):
     quantized = ((x - min_val) / step).round().clamp(0, levels - 1) * step + min_val
     return quantized
 
-def save_raw_img(x, img_path, allow_inversion=False):
+def save_raw_img(x, img_path, allow_inversion=False, allow_colormap=True):
     
     x = x.detach().float().resolve_conj().cpu()
     x -= x.amin(dim=(x.ndim-1, x.ndim-2), keepdim=True)
@@ -595,7 +595,8 @@ def save_raw_img(x, img_path, allow_inversion=False):
     elif x.ndim == 2:
         x = x.permute(1, 0).contiguous().numpy()
         cv2_img = (x * 255).astype(np.uint8)
-        cv2_img = cv2.applyColorMap(cv2_img, cv2.COLORMAP_JET)
+        if allow_colormap:
+            cv2_img = cv2.applyColorMap(cv2_img, cv2.COLORMAP_JET)
     else:
         raise ValueError(f"Unsupported number of dimensions in save_raw_img: {x.ndim}")
 
