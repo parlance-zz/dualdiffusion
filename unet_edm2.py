@@ -72,7 +72,7 @@ def mp_cat(a, b, dim=1, t=0.5):
 # Magnitude-preserving Fourier features (Equation 75).
 
 class MPFourier(torch.nn.Module):
-    def __init__(self, num_channels, bandwidth=1, eps=1e-2):
+    def __init__(self, num_channels, bandwidth=torch.pi/2, eps=1e-3):
         super().__init__()
 
         #self.register_buffer('freqs', 2 * np.pi * torch.randn(num_channels) * bandwidth)
@@ -86,7 +86,7 @@ class MPFourier(torch.nn.Module):
         self.eps = eps
 
     def forward(self, x):
-        y = x.to(torch.float32) * torch.pi
+        y = x.to(torch.float32)
         y = y.ger(self.freqs.to(torch.float32))
         y = y + self.phases.to(torch.float32)
         y = y.cos() * np.sqrt(2)
@@ -445,14 +445,19 @@ class Precond(torch.nn.Module):
 if __name__ == "__main__": # fourier embedding inner product test
 
     from dual_diffusion_utils import save_raw, save_raw_img
+    from dotenv import load_dotenv
+    import os
 
-    steps = 25
+    steps = 120
     cnoise = 192*4
 
     emb_fourier = MPFourier(cnoise)
-    t = torch.linspace(0, 1, steps) * (0.8236786557085517 * torch.pi/2)
+    t = torch.linspace(1, 0, steps)# * (0.8236786557085517 * torch.pi/2), bandwidth=1, eps=1e-2
     emb = emb_fourier(t)
 
     inner_products = (emb.view(1, steps, cnoise) * emb.view(steps, 1, cnoise)).sum(dim=2)
-    save_raw(inner_products / inner_products.amax(), "./debug/fourier_inner_products.raw")
-    save_raw_img(inner_products, "./debug/fourier_inner_products.png")
+
+    debug_path = os.environ.get("DEBUG_PATH", None)
+    if debug_path is not None:    
+        save_raw(inner_products / inner_products.amax(), os.path.join(debug_path, "fourier_inner_products.raw"))
+        save_raw_img(inner_products, os.path.join(debug_path, "fourier_inner_products.png"))
