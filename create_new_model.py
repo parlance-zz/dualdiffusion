@@ -29,7 +29,7 @@ from dual_diffusion_utils import dict_str
 
 load_dotenv(override=True)
 
-MODEL_NAME = "edm2_100_5"
+MODEL_NAME = "edm2_100_12"
 MODEL_SEED = 2000
 
 MODEL_PARAMS = {
@@ -43,6 +43,7 @@ MODEL_PARAMS = {
     "noise_floor": 2e-5,
     "latent_mean": 0,
     "latent_std": 1,
+    "t_scale": 3.5714285714, # scales the linear positional embedding for absolute time range within each sample
 
     # diffusion unet training params
     "input_perturbation": 0.1,
@@ -192,10 +193,11 @@ UNET_PARAMS = {
 
 UNET_PARAMS = {
     "pos_channels": 0,           # Number of positional embedding channels for attention.
-    "label_dim": 2048,           # Class label dimensionality. 0 = unconditional.
+    "label_dim": 1612,           # Class label dimensionality. 0 = unconditional.
     "label_dropout": 0.1,        # Dropout rate for the class embedding.
+    "dropout": 0,                # Dropout rate for model blocks
     "model_channels": 192,       # Base multiplier for the number of channels.
-    "channels_per_head": 64,
+    "channels_per_head": 64,     # Number of channels per attention head for blocks using self-attention
     "channel_mult": [1,2,3,4],   # Per-resolution multipliers for the number of channels.
     "channel_mult_noise": None,  # Multiplier for noise embedding dimensionality. None = select based on channel_mult.
     "channel_mult_emb": None,    # Multiplier for final embedding dimensionality. None = select based on channel_mult.
