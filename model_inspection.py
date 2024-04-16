@@ -32,15 +32,12 @@ if __name__ == "__main__":
 
     load_dotenv(override=True)
 
-    model_name = "dualdiffusion2d_330_v8_256embed_3_noskip"
-    #module_name_filter = ["*attentions*group_norm_*.weight"]
-    #module_name_filter = ["*attentions*group_norm_embedding.weight"]
-    #module_name_filter = ["*resnets*conv*.weight"]
-    module_name_filter = ["*"]
+    model_name = "edm2_100_12"
+    module_name_filter = ["*emb_label*"]
 
     model_path = os.path.join(os.environ.get("MODEL_PATH", "./"), model_name)
     print(f"Loading DualDiffusion model from '{model_path}'...")
-    pipeline = DualDiffusionPipeline.from_pretrained(model_path, torch_dtype=torch.float32)
+    pipeline = DualDiffusionPipeline.from_pretrained(model_path, torch_dtype=torch.float32, load_latest_checkpoints=True)
     sample_rate = pipeline.config["model_params"]["sample_rate"]
 
     debug_weights_path = os.path.join(os.environ.get("DEBUG_PATH", "./"), "debug_model_weights.raw")
@@ -59,7 +56,9 @@ if __name__ == "__main__":
             
             if not any([fnmatch.fnmatch(name, filter) for filter in module_name_filter]):
                 continue
-
+            
+            print(param.shape)
+            param = param.transpose(-1,-2)
             param_mean = param.mean().item()
             param_std = param.std().item()
             param_numel = param.numel()
