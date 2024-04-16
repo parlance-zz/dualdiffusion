@@ -362,7 +362,7 @@ def save_raw(tensor, output_path):
         tensor = tensor.complex64()
     tensor.detach().resolve_conj().cpu().numpy().tofile(output_path)
 
-def load_raw(input_path, dtype="int16", num_channels=1, start=0, count=-1, device="cpu"):
+def load_raw(input_path, dtype="int16", num_channels=1, start=0, count=-1, device="cpu", return_start=False):
 
     np_dtype = STR_DTYPE_TO_NUMPY_DTYPE.get(dtype, None)
     if np_dtype is None:
@@ -392,7 +392,12 @@ def load_raw(input_path, dtype="int16", num_channels=1, start=0, count=-1, devic
         tensor = torch.from_numpy(np.fromfile(input_path, dtype=np_dtype, count=count * num_channels, offset=offset))
     else:
         tensor = torch.from_numpy(np.frombuffer(input_path, dtype=np_dtype, count=count * num_channels, offset=offset))
-    return (tensor / STR_DTYPE_MAX_VALUE[dtype]).view(-1, num_channels).permute(1, 0).to(device)
+    tensor = (tensor / STR_DTYPE_MAX_VALUE[dtype]).view(-1, num_channels).permute(1, 0).to(device)
+
+    if return_start:
+        return tensor, start
+    else:
+        return tensor
 
 @torch.no_grad()
 def normalize_lufs(raw_samples, sample_rate, target_lufs=-16., max_clip=0.15):
@@ -430,7 +435,7 @@ def save_audio(raw_samples, sample_rate, output_path, target_lufs=-16.):
     
     torchaudio.save(output_path, raw_samples.cpu(), sample_rate, bits_per_sample=16)
 
-def load_audio(input_path, start=0, count=-1, return_sample_rate=False, device="cpu"):
+def load_audio(input_path, start=0, count=-1, return_sample_rate=False, device="cpu", return_start=False):
 
     if isinstance(input_path, bytes):
         input_path = BytesIO(input_path)
@@ -453,10 +458,15 @@ def load_audio(input_path, start=0, count=-1, return_sample_rate=False, device="
     if count >= 0:
         tensor = tensor[..., :count] # for whatever reason torchaudio will return more samples than requested
 
+    return_vals = (tensor.to(device),)
     if return_sample_rate:
-        return tensor.to(device), sample_rate
+        return_vals += (sample_rate,)
+    if return_start:
+        return_vals += (start,)
+    if len(return_vals) == 1:
+        return return_vals[0]
     else:
-        return tensor.to(device)
+        return return_vals
     
 def save_sample_img(sample, img_path, include_phase=False):
     
