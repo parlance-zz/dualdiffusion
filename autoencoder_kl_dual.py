@@ -884,3 +884,9 @@ class AutoencoderKLDual(ModelMixin, ConfigMixin):
             latent_shape = (sample_shape[0], vae_latent_channels, sample_shape[2] // vae_downsample_ratio ** (vae_num_blocks-1))
         
         return latent_shape
+    
+    def get_target_snr(self):
+        target_vae_noise_std = (self.encoder.latents_logvar / 2).exp().item()
+        target_vae_sample_std = (1 - target_vae_noise_std**2) ** 0.5
+        return target_vae_sample_std / target_vae_noise_std
+        
