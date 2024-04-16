@@ -82,10 +82,11 @@ class MPFourier(torch.nn.Module):
         self.register_buffer('freqs', torch.pi * torch.linspace(-1+eps, 1-eps, num_channels).erfinv() * bandwidth)
         self.register_buffer('phases', torch.pi/2 * (torch.arange(num_channels) % 2 == 0).float())
 
+        self.bandwidth = bandwidth
         self.eps = eps
 
     def forward(self, x):
-        y = x.to(torch.float32)
+        y = x.to(torch.float32) * torch.pi
         y = y.ger(self.freqs.to(torch.float32))
         y = y + self.phases.to(torch.float32)
         y = y.cos() * np.sqrt(2)
@@ -197,8 +198,14 @@ class Block(torch.nn.Module):
         y = self.conv_res0(mp_silu(x))
         c = self.emb_linear(emb, gain=self.emb_gain) + 1
         y = mp_silu(y * c.unsqueeze(2).unsqueeze(3).to(y.dtype))
-        if self.training and self.dropout != 0:
-            y = torch.nn.functional.dropout(y, p=self.dropout)
+        #if self.training and self.dropout != 0:
+        #    y = torch.nn.functional.dropout(y, p=self.dropout)
+        if self.dropout != 0: # magnitude preserving fix for dropout
+            if self.training:
+                y = torch.nn.functional.dropout(y, p=self.dropout)
+            else:
+                y *= 1 - self.dropout
+
         y = self.conv_res1(y)
 
         # Connect the branches.
@@ -274,7 +281,7 @@ class UNet(ModelMixin, ConfigMixin):
         cemb = int(model_channels * channel_mult_emb) if channel_mult_emb is not None else max(cblock)
         clogvar = cnoise
         cpos = pos_channels
-        label_dim = label_dim# + 1 # 1 extra dim for the unconditional class
+        label_dim = label_dim + 1 # 1 extra dim for the unconditional class
 
         self.label_dim = label_dim
         self.label_dropout = label_dropout
@@ -346,8 +353,7 @@ class UNet(ModelMixin, ConfigMixin):
                     class_labels = torch.nn.functional.dropout(class_labels, p=self.label_dropout)
             else:
                 class_labels = torch.zeros([1, self.label_dim], device=x.device, dtype=x.dtype)
-
-            #class_labels[:, -1] = 1 - class_labels[:, :-1].sum(dim=1).clip(max=1)
+            class_labels[:, -1] = 1 - class_labels[:, :-1].sum(dim=1).clip(max=1) # unconditional class
 
             if class_labels.shape[0] != emb.shape[0]:
                 assert(self.training == False)
@@ -355,7 +361,6 @@ class UNet(ModelMixin, ConfigMixin):
             
             #emb = mp_sum(emb, self.emb_label(class_labels * np.sqrt(class_labels.shape[1])), t=self.label_balance)     
             emb = mp_sum(emb, self.emb_label(normalize(class_labels)), t=self.label_balance)
-            #print(torch.linalg.norm(self.emb_label(normalize(class_labels))))
 
         emb = mp_silu(emb)
 
