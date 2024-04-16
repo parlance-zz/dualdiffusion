@@ -54,7 +54,7 @@ from unet_edm2 import UNet
 from unet_edm2_ema import PowerFunctionEMA
 from autoencoder_kl_dual import AutoencoderKLDual
 from dual_diffusion_pipeline import DualDiffusionPipeline
-from dual_diffusion_utils import init_cuda, load_audio, save_audio, load_raw, save_raw, dict_str, normalize_lufs, slerp, slerp_loss
+from dual_diffusion_utils import init_cuda, load_audio, save_audio, load_raw, save_raw, dict_str, normalize_lufs
 
 
 logger = get_logger(__name__, log_level="INFO")
@@ -704,12 +704,18 @@ class DatasetTransformer(torch.nn.Module):
         self.dataset_raw_format = dataset_transform_params["raw_format"]
         self.dataset_num_channels = dataset_transform_params["num_channels"]
         self.sample_crop_width = dataset_transform_params["crop_width"]
+        self.sample_rate = dataset_transform_params["sample_rate"]
+        self.t_scale = dataset_transform_params["t_scale"]
+    
+    def get_t(self, t):
+        return t / self.sample_crop_width * self.t_scale - self.t_scale/2
     
     def __call__(self, examples):
 
         samples = []
         paths = []
         game_ids = []
+        t_ranges = []
         #author_ids = []
 
         num_examples = len(next(iter(examples.values())))
@@ -718,24 +724,44 @@ class DatasetTransformer(torch.nn.Module):
         for train_sample in examples:
             
             file_path = train_sample["file_name"]
+            game_id = train_sample["game_id"]
+            #author_id = train_sample["author_id"]
 
             if self.dataset_format == ".raw":
-                sample = load_raw(file_path,
-                                  dtype=self.dataset_raw_format,
-                                  num_channels=self.dataset_num_channels,
-                                  start=-1,
-                                  count=self.sample_crop_width)    
+                sample, t_offset = load_raw(file_path,
+                                            dtype=self.dataset_raw_format,
+                                            num_channels=self.dataset_num_channels,
+                                            start=-1,
+                                            count=self.sample_crop_width,
+                                            return_start=True)
             else:
-                sample = load_audio(file_path,
-                                    start=-1,
-                                    count=self.sample_crop_width)
+                sample, t_offset = load_audio(file_path,
+                                              start=-1,
+                                              count=self.sample_crop_width,
+                                              return_start=True)
             
+            if self.t_scale is not None:
+                t_range = torch.tensor([self.get_t(t_offset), self.get_t(t_offset + self.sample_crop_width)])
+
             samples.append(sample)
             paths.append(file_path)
-            game_ids.append(train_sample["game_id"])
-            #author_ids.append(train_sample["author_id"])
+            game_ids.append(game_id)
+            #author_ids.append(author_id)
 
-        return {"input": samples, "sample_paths": paths, "game_ids": game_ids} #, "author_ids": author_ids}
+            if self.t_scale is not None:
+                t_ranges.append(t_range)
+        
+        batch_data = {
+            "input": samples,
+            "sample_paths": paths,
+            "game_ids": game_ids,
+            #"author_ids": author_ids}
+        }
+
+        if self.t_scale is not None:
+            batch_data["t_ranges"] = t_ranges
+
+        return batch_data
 
 def init_dataloader(accelerator,
                     dataset_name,
@@ -752,11 +778,8 @@ def init_dataloader(accelerator,
                     sample_rate,
                     sample_crop_width):
 
-    if dataset_name is None:
-        dataset_name = train_data_dir
-    
     dataset = load_dataset(
-        dataset_name,
+        dataset_name or train_data_dir,
         split="train",
         cache_dir=cache_dir,
         num_proc=dataloader_num_workers if dataloader_num_workers > 0 else None,
@@ -893,36 +916,23 @@ def do_training_loop(args,
             latent_mean = model_params["latent_mean"]
             latent_std = model_params["latent_std"]
 
-            target_vae_noise_std = (vae.encoder.latents_logvar / 2).exp().item()
-            target_vae_sample_std = (1 - target_vae_noise_std**2) ** 0.5
-            target_snr = target_vae_sample_std / target_vae_noise_std
+            target_snr = vae.get_target_snr()
         else:
-            target_snr = model_params.get("target_snr", 5)
+            target_snr = model_params.get("target_snr", 1e4)
 
-        timescale = np.arctan(target_snr) / (np.pi/2)
-
-        #min_snr = model_params.get("min_snr", 3e-9)
-        #min_timestep = 1 - np.arctan(target_snr) / (np.pi/2)
-        #max_timestep = 1 - np.arctan(min_snr) / (np.pi/2)
-        #assert(max_timestep > min_timestep)
-
-        logger.info(f"Target SNR: {target_snr} - Timescale: {timescale}")
-        #logger.info(f"Max SNR: {target_snr} - Min SNR: {min_snr}")
-        #logger.info(f"Max timestep: {max_timestep} - Min timestep: {min_timestep}")
-
-        #timestep_ln_center = model_params["timestep_ln_center"]
-        #timestep_ln_scale = model_params["timestep_ln_scale"]
-        #logger.info(f"Sampling timesteps using logistic normal distribution - center: {timestep_ln_center} - scale: {timestep_ln_scale}")
+        logger.info(f"Target SNR: {target_snr}")
     
-        #input_perturbation = model_params["input_perturbation"]   
-        #if input_perturbation > 0:
-        #    logger.info(f"Using input perturbation of {input_perturbation}")
-        #else:
-        #    logger.info("Input perturbation is disabled")
+        """
+        input_perturbation = model_params["input_perturbation"]
+        if input_perturbation > 0:
+            logger.info(f"Using input perturbation of {input_perturbation}")
+        else:
+            logger.info("Input perturbation is disabled")
+        """
 
         #module.normalize_weights()
 
-        logger.info(f"Conditioning dropout: {module.label_dropout}")
+        logger.info(f"Dropout: {module.dropout} Conditioning dropout: {module.label_dropout}")
 
     logger.info(f"Sample shape: {sample_shape}")
     if latent_shape is not None:
@@ -933,7 +943,6 @@ def do_training_loop(args,
 
     for epoch in range(first_epoch, args.num_train_epochs):
 
-        #torch.cuda.empty_cache()
         module.train().requires_grad_(True)
 
         train_loss = 0.
@@ -952,29 +961,13 @@ def do_training_loop(args,
                     progress_bar.update(1)
                 continue
             
-            # this breaks reproducible training but is worth it to get more value out of the min-snr weighting with smaller batches
             if args.module == "unet" and grad_accum_steps == 0:
                 total_batch_size = args.train_batch_size * accelerator.num_processes * args.gradient_accumulation_steps
 
-                # logit normal timestep sampling
-                #batch_timesteps = torch.randn(total_batch_size, device=accelerator.device) * timestep_ln_scale + timestep_ln_center
-                #batch_timesteps = torch.sigmoid(batch_timesteps) * 999.
-
-                # uniform timestep sampling
-                #batch_timesteps = torch.rand(total_batch_size, device=accelerator.device) * 999.
-
-                # acos static timestep sampling
-
-
+                # instead of randomly sampling each timestep, distribute the batch evenly across timesteps
+                # and add a random offset for continuous uniform coverage
                 batch_timesteps = (torch.arange(total_batch_size, device=accelerator.device)+0.5) / total_batch_size
                 batch_timesteps += (torch.rand(1, device=accelerator.device) - 0.5) / total_batch_size
-                #batch_timesteps += ((torch.rand(1, device=accelerator.device)*2 - 1).acos() / torch.pi -0.5) / total_batch_size
-
-                #batch_timesteps = ((1 - 2*batch_timesteps).acos() / torch.pi).clip(min=0, max=1)
-                #batch_timesteps = batch_timesteps * 0.5 + ((1 - 2*batch_timesteps).acos() / torch.pi).clip(min=0, max=1) * 0.5
-
-                #batch_timesteps = torch.erfinv(batch_timesteps * 2 - 1).sigmoid() * 999.
-                #batch_timesteps = batch_timesteps.clip(min=0, max=1) * 999.
 
                 # sync timesteps across all ranks / processes
                 batch_timesteps = accelerator.gather(batch_timesteps.unsqueeze(0))[0]
@@ -987,6 +980,12 @@ def do_training_loop(args,
 
                 raw_samples = batch["input"]
                 sample_game_ids = batch["game_ids"]
+                
+                if model_params["t_scale"] is not None:
+                    sample_t_ranges = batch["t_ranges"]
+                else:
+                    sample_t_ranges = None
+
                 #sample_author_ids = batch["author_ids"]
                 raw_sample_paths = batch["sample_paths"]
 
@@ -995,31 +994,26 @@ def do_training_loop(args,
                 
                     if vae is not None:
                         samples = vae.encode(samples.half(), return_dict=False)[0].mode().detach().float()
-                        samples -= samples.mean(dim=(1,2,3), keepdim=True)
-                        samples /= samples.std(dim=(1,2,3), keepdim=True)
                     
                     noise = torch.randn_like(samples).requires_grad_(False)
-                    noise -= noise.mean(dim=(1,2,3), keepdim=True)
-                    noise /= noise.std(dim=(1,2,3), keepdim=True)
 
                     process_batch_timesteps = batch_timesteps[accelerator.local_process_index::accelerator.num_processes]
                     timesteps = process_batch_timesteps[grad_accum_steps * args.train_batch_size:(grad_accum_steps+1) * args.train_batch_size]
-                    #timestep_snr = ((1 - timesteps) * (torch.pi/2)).tan()
 
-                    #model_input = slerp(samples, noise, timesteps).detach()
-                    model_input = slerp(samples, noise, timesteps * timescale + (1 - timescale)).detach()
-                    model_output, error_logvar = module(model_input, timesteps * (timescale * torch.pi/2), sample_game_ids, pipeline.format, return_logvar=True)
+                    model_input = pipeline.geodesic_flow.add_noise(samples, noise, timesteps).detach()
+                    model_output, error_logvar = module(model_input,
+                                                        timesteps,
+                                                        sample_game_ids,
+                                                        sample_t_ranges,
+                                                        pipeline.format,
+                                                        return_logvar=True)
 
-                    #target = slerp(samples, noise, timesteps - 1).detach() # geodesic flow with v pred
-                    target = slerp(samples, noise, timesteps - timescale).detach() # geodesic flow with target snr scaled v pred
+                    target = pipeline.geodesic_flow.get_objective(samples, noise, timesteps).detach()
+                    
                     loss = F.mse_loss(model_output.float(), target.float(), reduction="none")
-                    #loss = slerp_loss(model_output.float(), target.float()) / 14.5
                     timestep_loss = loss.mean(dim=list(range(1, len(loss.shape))))
-
-                    #loss_weight = timestep_snr.clip(max=target_snr).sqrt()# / timestep_snr.clip(min=1e-10)
-                    #loss_weight = (timesteps * torch.pi).sin()
-                    loss_weight = 1
-                    loss = ((timestep_loss / error_logvar.exp() + error_logvar) * loss_weight).mean()
+                    loss = (timestep_loss / error_logvar.exp() + error_logvar).mean()
+                    #loss = timestep_loss.mean()
 
                     if args.num_timestep_loss_buckets > 0:
                         all_timesteps = accelerator.gather(timesteps.detach()).cpu()
