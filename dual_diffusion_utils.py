@@ -62,34 +62,6 @@ def get_activation(act_fn):
     else:
         raise ValueError(f"Unsupported activation function: {act_fn}")
 
-def slerp(start, end, t):
-
-    if torch.is_tensor(t) and t.ndim < start.ndim:
-        t = t.view(*t.shape, *((1,) * (start.ndim - t.ndim)))
-
-    reduction_dims = tuple(range(1, start.ndim)) if start.ndim > 1 else (0,)
-
-    start_norm = start / start.square().sum(dim=reduction_dims, keepdim=True).sqrt()
-    end_norm = end / end.square().sum(dim=reduction_dims, keepdim=True).sqrt()
-
-    omega = torch.acos((start_norm * end_norm).sum(dim=reduction_dims, keepdim=True))
-    so = torch.sin(omega)
-
-    return (torch.sin((1 - t) * omega) / so) * start + (torch.sin(t * omega) / so) * end
-
-def slerp_loss(start, end):
-
-    reduction_dims = tuple(range(1, start.ndim)) if start.ndim > 1 else (0,)
-
-    start_len = start.square().sum(dim=reduction_dims, keepdim=True).sqrt()
-    start_norm = start / start_len.detach()
-    end_len = end.square().sum(dim=reduction_dims, keepdim=True).sqrt()
-    end_norm = end / end_len.detach()
-
-    omega = torch.acos((start_norm * end_norm).sum(dim=reduction_dims, keepdim=True))
-
-    return omega.square() / (2/3 * torch.pi**2)
-
 def compute_snr(noise_scheduler, timesteps):
     """
     Computes SNR as per
