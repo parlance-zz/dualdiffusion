@@ -776,7 +776,8 @@ def init_dataloader(accelerator,
                     dataset_raw_format,
                     dataset_num_channels,
                     sample_rate,
-                    sample_crop_width):
+                    sample_crop_width,
+                    t_scale):
 
     dataset = load_dataset(
         dataset_name or train_data_dir,
@@ -814,6 +815,7 @@ def init_dataloader(accelerator,
         "num_channels": dataset_num_channels,
         "sample_rate": sample_rate,
         "crop_width": sample_crop_width,
+        "t_scale": t_scale,
     }
     dataset_transform = DatasetTransformer(dataset_transform_params)
 
@@ -913,9 +915,6 @@ def do_training_loop(args,
                 exit(1)
 
             latent_shape = vae.get_latent_shape(sample_shape)
-            latent_mean = model_params["latent_mean"]
-            latent_std = model_params["latent_std"]
-
             target_snr = vae.get_target_snr()
         else:
             target_snr = model_params.get("target_snr", 1e4)
@@ -937,8 +936,6 @@ def do_training_loop(args,
     logger.info(f"Sample shape: {sample_shape}")
     if latent_shape is not None:
         logger.info(f"Latent shape: {latent_shape}")
-        if args.module == "unet":
-            logger.info(f"Latent mean: {latent_mean} - Latent std: {latent_std}")
 
 
     for epoch in range(first_epoch, args.num_train_epochs):
@@ -1326,7 +1323,8 @@ def main():
                                                       args.train_data_raw_format,
                                                       args.train_data_num_channels,
                                                       pipeline.config["model_params"]["sample_rate"],
-                                                      pipeline.format.get_sample_crop_width())
+                                                      pipeline.format.get_sample_crop_width(),
+                                                      pipeline.config["model_params"]["t_scale"])
 
     num_update_steps_per_epoch = math.floor(len(train_dataloader) / accelerator.num_processes)
     num_update_steps_per_epoch = math.ceil(num_update_steps_per_epoch / args.gradient_accumulation_steps)
