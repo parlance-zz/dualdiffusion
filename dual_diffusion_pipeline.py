@@ -278,7 +278,9 @@ class DualDiffusionPipeline(DiffusionPipeline):
         else:
             target_snr = model_params.get("target_snr", 1e4)
 
-        self.geodesic_flow = GeodesicFlow(target_snr)
+        self.geodesic_flow = GeodesicFlow(target_snr,
+                                          model_params["diffusion_schedule"],
+                                          model_params["diffusion_objective"])
 
     @staticmethod
     @torch.no_grad()
