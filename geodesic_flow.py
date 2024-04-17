@@ -37,12 +37,14 @@ def normalize(x, zero_mean=False, dtype=torch.float64):
 class GeodesicFlow:
 
     def __init__(self, target_snr):
-
-        self.target_snr = target_snr # 3.5177683092482117
+ 
         if target_snr is None:
             self.time_scale = 1
         else:
+            target_snr = max(target_snr, 1e-10)
             self.time_scale = np.arccos(4*np.arctan(1/target_snr)/torch.pi - 1) / torch.pi # 0.72412583
+
+        self.target_snr = target_snr # 3.5177683092482117
 
         return
     
