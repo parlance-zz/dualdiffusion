@@ -36,7 +36,7 @@ def normalize(x, zero_mean=False, dtype=torch.float64):
 
 class GeodesicFlow:
 
-    def __init__(self, target_snr, schedule="cos", objective="v_pred"):
+    def __init__(self, target_snr, schedule="linear", objective="v_pred"):
  
         if target_snr is None:
             target_snr = float("inf")
@@ -51,11 +51,14 @@ class GeodesicFlow:
             time_scale = np.arccos(4*np.arctan(1/target_snr)/torch.pi - 1) / torch.pi # 0.72412583
             def theta_fn(timesteps):
                 return (1 - ((1-timesteps) * torch.pi * time_scale).cos()) / 2 * (torch.pi/2)
-
         elif schedule == "linear":
-            time_scale = np.arctan(self.target_snr) / (np.pi/2) # 0.8236786557085517
+            time_scale = np.arctan(target_snr) / (np.pi/2) # 0.8236786557085517
             def theta_fn(timesteps):
                 return (1 - timesteps) * time_scale * (torch.pi/2)
+        elif schedule == "acos":
+            time_scale = (1 - np.cos(2*np.arctan(target_snr))) / 2 # ~0.925
+            def theta_fn(timesteps):
+                return np.arccos(1 - 2*(1-timesteps) * time_scale)/2
         else:
             raise ValueError(f"Invalid schedule: {schedule}")
         
@@ -64,7 +67,7 @@ class GeodesicFlow:
                 return slerp(noise, sample, self.get_timestep_theta(timesteps) / (torch.pi/2) + 1)
         elif objective == "rectified_flow":
             def objective_fn(sample, noise, timesteps):
-                return slerp(noise, sample, -0.5)
+                return slerp(noise, sample, 1.5)
         else:
             raise ValueError(f"Invalid objective: {objective}")
             
@@ -134,7 +137,7 @@ if __name__ == "__main__":
     load_dotenv(override=True)
 
     target_snr = 3.5177683092482117
-    flow = GeodesicFlow(target_snr, schedule="linear")
+    flow = GeodesicFlow(target_snr, schedule="acos")
 
     timesteps = torch.linspace(1, 0, 120+1, dtype=torch.float64)[:-1]
 
