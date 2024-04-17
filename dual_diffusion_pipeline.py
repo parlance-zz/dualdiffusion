@@ -274,11 +274,11 @@ class DualDiffusionPipeline(DiffusionPipeline):
         self.format = DualDiffusionPipeline.get_sample_format(model_params)
 
         if vae is not None:
-            self.config["model_params"]["target_snr"] = model_params.get("target_snr", vae.get_target_snr())
+            target_snr = vae.get_target_snr()
         else:
-            self.config["model_params"]["target_snr"] = model_params.get("target_snr", 1e4)
+            target_snr = model_params.get("target_snr", 1e4)
 
-        self.geodesic_flow = GeodesicFlow(self.config["model_params"]["target_snr"])
+        self.geodesic_flow = GeodesicFlow(target_snr)
 
     @staticmethod
     @torch.no_grad()
