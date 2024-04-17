@@ -29,7 +29,7 @@ from dual_diffusion_utils import dict_str
 
 load_dotenv(override=True)
 
-MODEL_NAME = "edm2_100_12"
+MODEL_NAME = "edm2_100_13"
 MODEL_SEED = 2000
 
 MODEL_PARAMS = {
@@ -42,6 +42,10 @@ MODEL_PARAMS = {
     "sample_raw_length": 32000*45,
     "noise_floor": 2e-5,
     "t_scale": 3.5714285714, # scales the linear positional embedding for absolute time range within each sample
+
+    # diffusion schedule params
+    "diffusion_schedule": "linear",
+    "diffusion_objective": "rectified_flow",
 
     # diffusion unet training params
     "input_perturbation": 0,
