@@ -53,18 +53,22 @@ if __name__ == "__main__":
 
     #game_ids = [787] #x
     #game_ids = [788] #x2
-    game_ids = [789] #x3
+    #game_ids = [789] #x3
     #game_ids = [213] #chrono trigger
     #game_ids = [230] #contra
     #game_ids += [249] #cybernator
+    #game_ids = [290] #dkc
+    #game_ids = [291] #dkc2
+    #game_ids = [292] #dkc3
     #game_ids = [1303] #super mario world
     #game_ids += [1302] #super mario rpg
     #game_ids = [1305] #super metroid
     #game_ids = [1078] #secret of mana
     #game_ids = [944] #pilotwings
     #game_ids = [384] #final fantasy mystic quest
+    #game_ids += [385] #final fantasy 4
     #game_ids = [386] #final fantasy 5
-    #game_ids = [387] #final fantasy 6
+    game_ids = [387] #final fantasy 6
     #game_ids = [366] #f-zero
     #game_ids = [1473] #un squadron
     #game_ids = [107] #Battletoads & Double Dragon
@@ -79,13 +83,11 @@ if __name__ == "__main__":
     #game_ids += [1299] #mario 2
     #game_ids += [1300] #mario 3
     #game_ids = [1130] #sim city
-    #game_ids = [290] #dkc
-    #game_ids = [291] #dkc2
-    #game_ids += [292] #dkc3
     #game_ids += [1099] #gundam wing endless duel
     #game_ids = [1488] #umihara kawase
     #game_ids += [669] #kirby's dream course
     #game_ids += [73] #bahamut lagoon
+    #game_ids = [1505] #vortex
     #game_ids = [np.random.randint(0, 1612)]
 
     img2img_strength = 0
