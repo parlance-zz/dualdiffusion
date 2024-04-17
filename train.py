@@ -919,7 +919,7 @@ def do_training_loop(args,
         else:
             target_snr = model_params.get("target_snr", 1e4)
 
-        logger.info(f"Target SNR: {target_snr}")
+        logger.info(f"Target SNR: {target_snr:{8}f} Schedule: {model_params['diffusion_schedule']} Objective: {model_params['diffusion_objective']}")
     
         """
         input_perturbation = model_params["input_perturbation"]
