@@ -416,10 +416,14 @@ class DualDiffusionPipeline(DiffusionPipeline):
 
         noise_perturbation_scale = input_perturbation
         cfg_model_output = torch.ones_like(sample)
+        s_integral = 0
 
         self.set_progress_bar_config(disable=True)
         for i, t in enumerate(self.progress_bar(t_schedule)):
             
+            #t = max(1 - measured_time, 0)
+            #t = debug_d_list[-1].mean().item()/.83 if i > 0 else 1
+
             model_input = sample.to(self.unet.dtype)
             model_output = self.unet(model_input, t, labels, t_ranges, self.format)
             u_model_output = self.unet(model_input, t, None, t_ranges, self.format)
@@ -452,13 +456,20 @@ class DualDiffusionPipeline(DiffusionPipeline):
             debug_d_list.append(get_cos_angle(initial_noise, sample) / (torch.pi/2))
             debug_s_list.append(cfg_model_output.std(dim=(1,2,3)))
             debug_o_list.append(cfg_model_output)
+            s_integral += debug_s_list[-1].mean().item() * (torch.pi/2) / steps
+
             print(f"step: {i:>{3}}/{steps:>{3}}",
                   f"v:{debug_v_list[-1][0].item():{8}f}",
                   f"a:{debug_a_list[-1][0].item():{8}f}",
                   f"d:{debug_d_list[-1][0].item():{8}f}",
-                  f"s:{debug_s_list[-1][0].item():{8}f}")
+                  f"s:{debug_s_list[-1][0].item():{8}f}"
+                  f" s_int:{s_integral:{8}f}")
 
+            #v_scale *= debug_v_list[-1].mean().clip(min=0.5, max=1.5).item()
+            
             sample = self.geodesic_flow.reverse_step(sample, cfg_model_output, v_scale/steps)
+            #next_t = t_schedule[i+1] if i+1 < len(t_schedule) else 0
+            #sample = self.geodesic_flow.reverse_step_fixed(sample, cfg_model_output, v_scale, t, next_t)
             sample = normalize(sample, zero_mean=True)
 
             save_raw_img(sample[0], os.path.join(debug_path, f"debug_sample_{i:03}.png"))
