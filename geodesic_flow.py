@@ -116,6 +116,7 @@ if __name__ == "__main__":
 
     timestep_normalized_theta = flow.get_timestep_theta(timesteps) / (torch.pi/2)
     timestep_snr = flow.get_timestep_snr(timesteps)
+    timestep_noise_std = timestep_snr.atan().cos()
     timestep_normalized_velocity = timestep_normalized_theta[1:] - timestep_normalized_theta[:-1]
 
     print("min_timestep_normalized_theta:", min_timestep_normalized_theta)
@@ -129,5 +130,6 @@ if __name__ == "__main__":
 
         save_raw(timestep_normalized_theta, os.path.join(debug_path, "timestep_normalized_theta.raw"))
         save_raw(timestep_snr, os.path.join(debug_path, "timestep_snr.raw"))
+        save_raw(timestep_noise_std, os.path.join(debug_path, "timestep_noise_std.raw"))
         save_raw(timestep_snr.clip(min=1e-10).log(), os.path.join(debug_path, "timestep_ln_snr.raw"))
         save_raw(timestep_normalized_velocity, os.path.join(debug_path, "timestep_normalized_velocity.raw"))
