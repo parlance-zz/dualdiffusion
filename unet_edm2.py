@@ -185,7 +185,7 @@ class Block(torch.nn.Module):
             self.attn_v = None
             self.attn_proj = None
 
-    def forward(self, x, emb, format):
+    def forward(self, x, emb, format, t_ranges):
         # Main branch.
         x = resample(x, f=self.resample_filter, mode=self.resample_mode)
 
@@ -223,8 +223,9 @@ class Block(torch.nn.Module):
             #y = self.attn_proj(y.reshape(*x.shape))
             #x = mp_sum(x, y, t=self.attn_balance)
 
+            # faster self-attention with torch sdp, qk separated for positional embedding
             if self.pos_channels > 0:
-                qk = torch.cat((x, format.get_positional_embedding(x, self.pos_channels, mode="fourier")), dim=1)
+                qk = torch.cat((x, format.get_positional_embedding(x, t_ranges, mode="fourier", num_fourier_channels=self.pos_channels)), dim=1)
             else:
                 qk = x
 
@@ -366,17 +367,17 @@ class UNet(ModelMixin, ConfigMixin):
 
         # Encoder.
         x = torch.cat((x, torch.ones_like(x[:, :1]),
-                       format.get_positional_embedding(x, t_ranges)), dim=1)
+                       format.get_positional_embedding(x, t_ranges, mode="linear")), dim=1)
         skips = []
         for name, block in self.enc.items():
-            x = block(x) if 'conv' in name else block(x, emb, format)
+            x = block(x) if 'conv' in name else block(x, emb, format, t_ranges)
             skips.append(x)
 
         # Decoder.
         for name, block in self.dec.items():
             if 'layer' in name:
                 x = mp_cat(x, skips.pop(), t=self.concat_balance)
-            x = block(x, emb, format)
+            x = block(x, emb, format, t_ranges)
         x = self.conv_out(x, gain=self.out_gain)
 
         # Training uncertainty, if requested.
