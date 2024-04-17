@@ -362,6 +362,8 @@ class DualDiffusionPipeline(DiffusionPipeline):
         if length < 0:
             raise ValueError(f"Length must be greater than or equal to 0, got {length}")
 
+        debug_path = os.environ.get("DEBUG_PATH", None)
+        
         self.set_tiling_mode(loops > 0)
 
         if isinstance(seed, int):
@@ -415,6 +417,7 @@ class DualDiffusionPipeline(DiffusionPipeline):
         noise_perturbation_scale = input_perturbation
         cfg_model_output = torch.ones_like(sample)
 
+        self.set_progress_bar_config(disable=True)
         for i, t in enumerate(self.progress_bar(t_schedule)):
             
             model_input = sample.to(self.unet.dtype)
@@ -449,10 +452,18 @@ class DualDiffusionPipeline(DiffusionPipeline):
             debug_d_list.append(get_cos_angle(initial_noise, sample) / (torch.pi/2))
             debug_s_list.append(cfg_model_output.std(dim=(1,2,3)))
             debug_o_list.append(cfg_model_output)
-    
+            print(f"step: {i:>{3}}/{steps:>{3}}",
+                  f"v:{debug_v_list[-1][0].item():{8}f}",
+                  f"a:{debug_a_list[-1][0].item():{8}f}",
+                  f"d:{debug_d_list[-1][0].item():{8}f}",
+                  f"s:{debug_s_list[-1][0].item():{8}f}")
+
             sample = self.geodesic_flow.reverse_step(sample, cfg_model_output, v_scale/steps)
             sample = normalize(sample, zero_mean=True)
 
+            save_raw_img(sample[0], os.path.join(debug_path, f"debug_sample_{i:03}.png"))
+            save_raw_img(normalize(cfg_model_output[0], zero_mean=True), os.path.join(debug_path, f"debug_output_{i:03}.png"))
+                        
         sample = sample.float()
 
         v_measured = torch.stack(debug_v_list, dim=0)
@@ -464,19 +475,18 @@ class DualDiffusionPipeline(DiffusionPipeline):
         print(f"Average v_measured: {v_measured.mean()}")
         print(f"Average a_measured: {a_measured.mean()}")
         print(f"Average s_measured: {s_measured.mean()}")
-        print(f"Final distance: ", get_cos_angle(initial_noise, sample) / (torch.pi/2))
+        print(f"Final distance: ", get_cos_angle(initial_noise, sample)[0].item() / (torch.pi/2))
 
-        debug_path = os.environ.get("DEBUG_PATH", None)
         if debug_path is not None:
             save_raw(sample, os.path.join(debug_path, "debug_sampled_latents.raw"))
             save_raw_img(sample[0], os.path.join(debug_path, "debug_sampled_latents.png"))
 
-            save_raw(torch.stack(v_measured, dim=1), os.path.join(debug_path, "debug_v_measured.raw"))
-            save_raw(torch.stack(a_measured, dim=1), os.path.join(debug_path, "debug_a_measured.raw"))
-            save_raw(torch.stack(d_measured, dim=1), os.path.join(debug_path, "debug_d_measured.raw"))
-            save_raw(torch.stack(s_measured, dim=1), os.path.join(debug_path, "debug_s_measured.raw"))
+            save_raw(v_measured, os.path.join(debug_path, "debug_v_measured.raw"))
+            save_raw(a_measured, os.path.join(debug_path, "debug_a_measured.raw"))
+            save_raw(d_measured, os.path.join(debug_path, "debug_d_measured.raw"))
+            save_raw(s_measured, os.path.join(debug_path, "debug_s_measured.raw"))
 
-            model_outputs = torch.stack(o_measured, dim=0).view(steps, batch_size, -1)
+            model_outputs = o_measured.view(steps, batch_size, -1)
             inner_products = (model_outputs.unsqueeze(0) * model_outputs.unsqueeze(1)).sum(dim=-1).permute(2, 0, 1)
             save_raw_img(inner_products[0], os.path.join(debug_path, "debug_o_inner_products.png"))
             
