@@ -33,7 +33,8 @@ from diffusers.pipelines.pipeline_utils import DiffusionPipeline
 from unet_edm2 import UNet
 from autoencoder_kl_dual import AutoencoderKLDual
 from spectrogram import SpectrogramParams, SpectrogramConverter
-from dual_diffusion_utils import mdct, imdct, save_raw, save_raw_img, slerp
+from dual_diffusion_utils import mdct, imdct, save_raw, save_raw_img
+from geodesic_flow import GeodesicFlow, normalize, slerp, get_cos_angle
 from loss import DualMultiscaleSpectralLoss, DualMultiscaleSpectralLoss2D
 
 class DualMCLTFormat(torch.nn.Module):
@@ -223,14 +224,24 @@ class DualSpectrogramFormat(torch.nn.Module):
         return 700. * (10. ** (mels / 2595.) - 1.)
 
     #@torch.no_grad()
-    def get_positional_embedding(self, x, n_channels, mode="linear"):
+    def get_positional_embedding(self, x, t_ranges, mode="linear", num_fourier_channels=0):
 
-        mels = torch.linspace(self.mels_min, self.mels_max, x.shape[2] + 2, device=x.device, dtype=x.dtype)[1:-1]
+        mels = torch.linspace(self.mels_min, self.mels_max, x.shape[2] + 2, device=x.device)[1:-1]
         ln_freqs = DualSpectrogramFormat._mel_to_hz(mels, mel_scale=self.spectrogram_params.mel_scale_type).log2()
 
         if mode == "linear":
-            emb = ln_freqs.view(1, 1,-1, 1).repeat(x.shape[0], 1, 1, x.shape[3])
-            return ((emb - emb.mean()) / emb.std())#.requires_grad_(False)
+            emb_freq = ln_freqs.view(1, 1,-1, 1).repeat(x.shape[0], 1, 1, x.shape[3])
+            emb_freq = (emb_freq - emb_freq.mean()) / emb_freq.std()
+
+            if t_ranges is not None:
+                t = torch.linspace(0, 1, x.shape[3], device=x.device).view(-1, 1)
+                t = ((1 - t) * t_ranges[:, 0] + t * t_ranges[:, 1]).permute(1, 0).view(x.shape[0], 1, 1, x.shape[3])
+                emb_time = t.repeat(1, 1, x.shape[2], 1)
+
+                return torch.cat((emb_freq, emb_time), dim=1).to(x.dtype)
+            else:
+                return emb_freq.to(x.dtype)
+
         elif mode == "fourier":
             raise NotImplementedError("Fourier positional embeddings not implemented")
         else:
@@ -260,8 +271,14 @@ class DualDiffusionPipeline(DiffusionPipeline):
             model_params = self.config["model_params"]
             
         self.tiling_mode = False
-
         self.format = DualDiffusionPipeline.get_sample_format(model_params)
+
+        if vae is not None:
+            self.config["model_params"]["target_snr"] = model_params.get("target_snr", vae.get_target_snr())
+        else:
+            self.config["model_params"]["target_snr"] = model_params.get("target_snr", 1e4)
+
+        self.geodesic_flow = GeodesicFlow(self.config["model_params"]["target_snr"])
 
     @staticmethod
     @torch.no_grad()
@@ -279,7 +296,6 @@ class DualDiffusionPipeline(DiffusionPipeline):
     @torch.no_grad()
     def create_new(model_params, unet_params, vae_params=None):
         
-        #unet = UNetDualModel(**unet_params)
         unet = UNet(**unet_params)
 
         if vae_params is not None:
@@ -317,7 +333,6 @@ class DualDiffusionPipeline(DiffusionPipeline):
             if len(unet_checkpoints) > 0:
                 unet_checkpoints = sorted(unet_checkpoints, key=lambda x: int(x.split("-")[1]))
                 unet_path = os.path.join(model_path, unet_checkpoints[-1], "unet")
-        #unet = UNetDualModel.from_pretrained(unet_path,
         unet = UNet.from_pretrained(unet_path,
                                     torch_dtype=torch_dtype,
                                     device=device).requires_grad_(requires_grad).train(requires_grad)
@@ -336,7 +351,9 @@ class DualDiffusionPipeline(DiffusionPipeline):
         cfg_scale: float = 5.,
         v_scale: float = 1.,
         use_midpoint_integration: bool = False,
-        input_perturbation: float = 0.,
+        input_perturbation: float = 0,
+        img2img_strength: float = 0.8,
+        img2img_input: torch.Tensor = None,
     ):
         if steps <= 0:
             raise ValueError(f"Steps must be > 0, got {steps}")
@@ -360,57 +377,18 @@ class DualDiffusionPipeline(DiffusionPipeline):
             sample_shape = self.vae.get_latent_shape(sample_shape)
         print(f"Sample shape: {sample_shape}")
 
-        sample = torch.randn(sample_shape, device=self.device,
-                             dtype=self.unet.dtype,
-                             generator=generator)
-        sample -= sample.mean(dim=(1,2,3), keepdim=True)
-        sample /= sample.square().mean(dim=(1,2,3), keepdim=True).sqrt()
+        sample = torch.randn(sample_shape, device=self.device, generator=generator)
+        sample = normalize(sample, zero_mean=True)
 
-        """
-        from dual_diffusion_utils import load_audio
-        crop_width = self.format.get_sample_crop_width(length=length)
-        dataset_path = os.environ.get("DATASET_PATH", "./dataset/samples_hq")
-        #img2img_input_path = np.random.choice(os.listdir(dataset_path), 1, replace=False)[0]
-        #img2img_input_path = "1/Final Fantasy - Mystic Quest  [Mystic Quest Legend] - 07 Battle 1.flac"
-        #img2img_input_path = "1/Final Fantasy VI - 104 Locke.flac"
-        #img2img_input_path = "2/Mega Man X - 14 Spark Mandrill.flac"
-        #img2img_input_path = "1/Final Fantasy V - 203 Battle with Gilgamesh.flac"
-        #img2img_input_path = "2/Secret of Mana - 23 Eternal Recurrence.flac"
-        #img2img_input_path = "1/Final Fantasy VI - 104 Locke.flac"
-        #img2img_input_path = "2/U.N. Squadron - 04 Front Line Base.flac"
-        #img2img_input_path = "2/Super Mario RPG - The Legend of the Seven Stars - 217 Weapons Factory.flac"
-        #img2img_input_path = "2/Super Mario RPG - The Legend of the Seven Stars - 135 Welcome to Booster Tower.flac"
-        #img2img_input_path = "2/Super Mario RPG - The Legend of the Seven Stars - 128 Beware the Forest's Mushrooms.flac"
-        #img2img_input_path = "2/Mega Man X3 - 07 Neon Tiger.flac"
-        #img2img_input_path = "2/Mega Man X2 - 23 Absolute Zero.flac"
-        #img2img_input_path = "2/Super Mario All-Stars - 102 Overworld.flac"
-        #img2img_input_path = "2/Mega Man X2 - 15 Dust Devil.flac"
-        img2img_input_path = "2/Mega Man X2 - 09 Panzer des Drachens.flac"
-        #img2img_input_path = "2/Mega Man X2 - 11 Volcano's Fury.flac"
-        #img2img_input_path = "2/Mario Paint - 09 Creative Exercise.flac"
-        #img2img_input_path = "1/Contra III - The Alien Wars - 05 Neo Kobe Steel Factory.flac"
-        #img2img_input_path = "2/Spindizzy Worlds - 06 Level Music 4.flac"
-        #img2img_input_path = "1/Legend of Zelda, The - A Link to the Past - 04a Time of the Falling Rain.flac"
-        
-        test_sample = load_audio(os.path.join(dataset_path, img2img_input_path), start=0, count=crop_width)
-        test_sample = self.format.raw_to_sample(test_sample.unsqueeze(0).to(self.device))
-        latents = self.vae.encode(test_sample.type(self.unet.dtype), return_dict=False)[0].mode()
-        latents -= latents.mean()
-        latents /= latents.std()
+        if img2img_input is not None:
+            latents = self.vae.encode(img2img_input.type(self.unet.dtype), return_dict=False)[0].mode()
+            latents = normalize(latents, zero_mean=True)
+            sample = self.geodesic_flow.add_noise(sample, latents, img2img_strength)
+            start_timestep = img2img_strength
+        else:
+            start_timestep = 1
 
-        img2img_strength = 0.79#0.85#2
-        sample = slerp(sample, latents, 1 - img2img_strength)
-        sample -= sample.mean(dim=(1,2,3), keepdim=True)
-        sample /= sample.square().mean(dim=(1,2,3), keepdim=True).sqrt()
-        print(img2img_input_path)
-        """
-
-        #v_schedule = (torch.linspace(0.5/steps, 1-0.5/steps, steps) * torch.pi).sin()# **2
-        v_schedule = torch.ones(steps)
-
-        v_schedule /= v_schedule.sum()
-        t_schedule = (1 - v_schedule.cumsum(dim=0) + v_schedule[0]).tolist()
-        v_schedule = v_schedule.tolist()
+        initial_noise = sample.clone()
 
         if game_ids is not None:
             labels = torch.tensor(game_ids, device=self.device, dtype=torch.long)
@@ -418,34 +396,40 @@ class DualDiffusionPipeline(DiffusionPipeline):
         else:
             labels = torch.randint(0, self.unet.label_dim, (batch_size,), device=self.device, generator=generator)
 
-        #t_schedule = t_schedule[int(steps*(1-img2img_strength)+0.5):]
-        #v_schedule = v_schedule[int(steps*(1-img2img_strength)+0.5):]
+        if model_params["t_scale"] is None:
+            t_ranges = None
+        else:
+            t_scale = model_params["t_scale"]
+            t_ranges = torch.zeros((batch_size, 2), device=self.device)
+            t_ranges[:, 1] = 1
+            t_ranges = t_ranges * t_scale - t_scale/2
 
-        target_vae_noise_std = (self.vae.encoder.latents_logvar / 2).exp().item()
-        target_vae_sample_std = (1 - target_vae_noise_std**2) ** 0.5
-        target_snr = target_vae_sample_std / target_vae_noise_std
-        timescale = np.arctan(target_snr) / (np.pi/2)
+        t_schedule = torch.linspace(start_timestep, 0, steps+1)[:-1].tolist()
 
-        #t_schedule = [min_timestep + (max_timestep - min_timestep) * t for t in t_schedule]
-        #v_schedule = [v * (max_timestep - min_timestep) for v in v_schedule]
+        debug_v_list = []
+        debug_a_list = []
+        debug_d_list = []
+        debug_s_list = []
+        debug_o_list = []
 
-        v_schedule = [v * v_scale for v in v_schedule]
-        noise_perturbation_scale = input_perturbation #* max(cfg_scale - 2, 1)
+        noise_perturbation_scale = input_perturbation
+        cfg_model_output = torch.ones_like(sample)
 
         for i, t in enumerate(self.progress_bar(t_schedule)):
             
-            sample = sample.to(self.unet.dtype)
-            model_output, logvar = self.unet(sample, t * (timescale * torch.pi/2), labels, self.format, return_logvar=True)
-            u_model_output = self.unet(sample, t * (timescale * torch.pi/2), None, self.format)
-            model_output = slerp(u_model_output.float(), model_output.float(), cfg_scale)# * np.cos(torch.pi*t))#(np.tan(t * (timescale * torch.pi/2)) / target_snr)**2)
+            model_input = sample.to(self.unet.dtype)
+            model_output = self.unet(model_input, t, labels, t_ranges, self.format)
+            u_model_output = self.unet(model_input, t, None, t_ranges, self.format)
+
+            last_cfg_model_output = cfg_model_output
+            cfg_model_output = slerp(u_model_output, model_output, cfg_scale)
 
             if input_perturbation != 0:
-                model_output += torch.randn_like(model_output) * (logvar.float() / 2).exp() * noise_perturbation_scale
-                model_output -= model_output.mean(dim=(1,2,3), keepdim=True)
-                model_output /= model_output.square().mean(dim=(1,2,3), keepdim=True).sqrt()
+                raise NotImplementedError("Input perturbation not implemented")
 
             if use_midpoint_integration: # geodesic flow with v pred and midpoint euler integration
-
+                
+                raise NotImplementedError("Midpoint integration not implemented")
                 sample_m = slerp(sample.float(), model_output, v_schedule[i]/2)
                 sample_m -= sample_m.mean(dim=(1,2,3), keepdim=True)
                 sample_m /= sample_m.square().mean(dim=(1,2,3), keepdim=True).sqrt()
@@ -460,24 +444,50 @@ class DualDiffusionPipeline(DiffusionPipeline):
                     model_output -= model_output.mean(dim=(1,2,3), keepdim=True)
                     model_output /= model_output.square().mean(dim=(1,2,3), keepdim=True).sqrt()
 
-            sample = slerp(sample.float(), model_output, v_schedule[i])
-            sample -= sample.mean(dim=(1,2,3), keepdim=True)
-            sample /= sample.square().mean(dim=(1,2,3), keepdim=True).sqrt()
+            debug_v_list.append(get_cos_angle(sample, cfg_model_output) / (torch.pi/2))
+            debug_a_list.append(get_cos_angle(cfg_model_output, last_cfg_model_output) / (torch.pi/2))
+            debug_d_list.append(get_cos_angle(initial_noise, sample) / (torch.pi/2))
+            debug_s_list.append(cfg_model_output.std(dim=(1,2,3)))
+            debug_o_list.append(cfg_model_output)
+    
+            sample = self.geodesic_flow.reverse_step(sample, cfg_model_output, v_scale/steps)
+            sample = normalize(sample, zero_mean=True)
+
+        sample = sample.float()
+
+        v_measured = torch.stack(debug_v_list, dim=0)
+        a_measured = torch.stack(debug_a_list, dim=0)
+        d_measured = torch.stack(debug_d_list, dim=0)
+        s_measured = torch.stack(debug_s_list, dim=0)
+        o_measured = torch.stack(debug_o_list, dim=0)
+
+        print(f"Average v_measured: {v_measured.mean()}")
+        print(f"Average a_measured: {a_measured.mean()}")
+        print(f"Average s_measured: {s_measured.mean()}")
+        print(f"Final distance: ", get_cos_angle(initial_noise, sample) / (torch.pi/2))
 
         debug_path = os.environ.get("DEBUG_PATH", None)
         if debug_path is not None:
-            print("Sample std: ", sample.std(dim=(1,2,3)))
-            print("Sample mean: ", sample.mean(dim=(1,2,3)))
-            save_raw(sample, os.path.join(debug_path, "debug_latents.raw"))
-        
+            save_raw(sample, os.path.join(debug_path, "debug_sampled_latents.raw"))
+            save_raw_img(sample[0], os.path.join(debug_path, "debug_sampled_latents.png"))
+
+            save_raw(torch.stack(v_measured, dim=1), os.path.join(debug_path, "debug_v_measured.raw"))
+            save_raw(torch.stack(a_measured, dim=1), os.path.join(debug_path, "debug_a_measured.raw"))
+            save_raw(torch.stack(d_measured, dim=1), os.path.join(debug_path, "debug_d_measured.raw"))
+            save_raw(torch.stack(s_measured, dim=1), os.path.join(debug_path, "debug_s_measured.raw"))
+
+            model_outputs = torch.stack(o_measured, dim=0).view(steps, batch_size, -1)
+            inner_products = (model_outputs.unsqueeze(0) * model_outputs.unsqueeze(1)).sum(dim=-1).permute(2, 0, 1)
+            save_raw_img(inner_products[0], os.path.join(debug_path, "debug_o_inner_products.png"))
+            
         if getattr(self, "vae", None) is not None:
-            sample = sample * model_params["latent_std"] + model_params["latent_mean"]
-            save_raw_img(sample[0], os.path.join(debug_path, "debug_latents.png"))
             sample = self.vae.decode(sample.to(self.vae.dtype)).sample.float()
+        
+        if debug_path is not None:
             save_raw(sample, os.path.join(debug_path, "debug_decoded_sample.raw"))
             save_raw_img(sample[0], os.path.join(debug_path, "debug_decoded_sample.png"))
 
-        raw_sample = self.format.sample_to_raw(sample.float())
+        raw_sample = self.format.sample_to_raw(sample)
         if loops > 0: raw_sample = raw_sample.repeat(1, 1, loops+1)
         return raw_sample
     
