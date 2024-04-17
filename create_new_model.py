@@ -41,14 +41,10 @@ MODEL_PARAMS = {
     "sample_format": "spectrogram",
     "sample_raw_length": 32000*45,
     "noise_floor": 2e-5,
-    "latent_mean": 0,
-    "latent_std": 1,
     "t_scale": 3.5714285714, # scales the linear positional embedding for absolute time range within each sample
 
     # diffusion unet training params
-    "input_perturbation": 0.1,
-    "timestep_ln_center": 0,
-    "timestep_ln_scale": 1,
+    "input_perturbation": 0,
 
     # vae unet training params
     "point_loss_weight": 0.01,
