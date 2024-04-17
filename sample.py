@@ -36,14 +36,14 @@ if __name__ == "__main__":
     init_cuda()
     load_dotenv(override=True)
 
-    model_name = "edm2_100_5"
+    model_name = "edm2_100_12"
 
     num_samples = 1
     batch_size = 1
     length = 0 #30 * 32000
     steps = 120
-    cfg_scale = 4.
-    v_scale = 1 #1.3
+    cfg_scale = 4.5
+    v_scale = 1. #1.3
     loops = 0 #1
     use_midpoint_integration = False#True
     input_perturbation = 0
@@ -56,7 +56,7 @@ if __name__ == "__main__":
     #game_ids = [789] #x3
     #game_ids = [213] #chrono trigger
     #game_ids = [230] #contra
-    #game_ids += [249] #cybernator
+    #game_ids = [249] #cybernator
     #game_ids = [290] #dkc
     #game_ids = [291] #dkc2
     #game_ids = [292] #dkc3
@@ -67,8 +67,8 @@ if __name__ == "__main__":
     #game_ids = [944] #pilotwings
     #game_ids = [384] #final fantasy mystic quest
     #game_ids += [385] #final fantasy 4
-    #game_ids = [386] #final fantasy 5
-    game_ids = [387] #final fantasy 6
+    game_ids = [386] #final fantasy 5
+    #game_ids = [387] #final fantasy 6
     #game_ids = [366] #f-zero
     #game_ids = [1473] #un squadron
     #game_ids = [107] #Battletoads & Double Dragon
@@ -134,6 +134,8 @@ if __name__ == "__main__":
         crop_width = pipeline.format.get_sample_crop_width(length=length)
         dataset_path = os.environ.get("DATASET_PATH", "./dataset/samples_hq")
         input_audio = load_audio(os.path.join(dataset_path, img2img_input_path), start=0, count=crop_width)
+    else:
+        input_audio = None
 
     output_path = os.path.join(model_path, "output")
     os.makedirs(output_path, exist_ok=True)
