@@ -344,7 +344,7 @@ class DualDiffusionPipeline(DiffusionPipeline):
     @torch.no_grad()
     def __call__(
         self,
-        steps: int = 100,
+        steps: int = 120,
         seed: Union[int, torch.Generator]=None,
         loops: int = 0,
         batch_size: int = 1,
@@ -353,7 +353,7 @@ class DualDiffusionPipeline(DiffusionPipeline):
         cfg_scale: float = 5.,
         v_scale: float = 1.,
         use_midpoint_integration: bool = False,
-        input_perturbation: float = 0,
+        input_perturbation: float = 0.5,
         img2img_strength: float = 0.8,
         img2img_input: torch.Tensor = None,
     ):
@@ -385,9 +385,9 @@ class DualDiffusionPipeline(DiffusionPipeline):
         sample = normalize(sample, zero_mean=True)
 
         if img2img_input is not None:
-            latents = self.vae.encode(img2img_input.type(self.unet.dtype), return_dict=False)[0].mode()
-            latents = normalize(latents, zero_mean=True)
-            sample = self.geodesic_flow.add_noise(sample, latents, img2img_strength)
+            img2img_sample = self.format.raw_to_sample(img2img_input.unsqueeze(0).to(self.device).float())
+            latents = self.vae.encode(img2img_sample.type(self.unet.dtype), return_dict=False)[0].mode()
+            sample = self.geodesic_flow.add_noise(latents, sample, torch.tensor([img2img_strength], device=sample.device, dtype=sample.dtype))
             start_timestep = img2img_strength
         else:
             start_timestep = 1
@@ -416,15 +416,10 @@ class DualDiffusionPipeline(DiffusionPipeline):
         debug_s_list = []
         debug_o_list = []
 
-        noise_perturbation_scale = input_perturbation
-        cfg_model_output = torch.ones_like(sample)
-        s_integral = 0
+        cfg_model_output = torch.rand_like(sample)
 
         self.set_progress_bar_config(disable=True)
         for i, t in enumerate(self.progress_bar(t_schedule)):
-            
-            #t = max(1 - measured_time, 0)
-            #t = debug_d_list[-1].mean().item()/.83 if i > 0 else 1
 
             model_input = sample.to(self.unet.dtype)
             model_output = self.unet(model_input, t, labels, t_ranges, self.format)
@@ -433,11 +428,7 @@ class DualDiffusionPipeline(DiffusionPipeline):
             last_cfg_model_output = cfg_model_output
             cfg_model_output = slerp(u_model_output, model_output, cfg_scale)
 
-            if input_perturbation != 0:
-                raise NotImplementedError("Input perturbation not implemented")
-
-            if use_midpoint_integration: # geodesic flow with v pred and midpoint euler integration
-                
+            if use_midpoint_integration:            
                 raise NotImplementedError("Midpoint integration not implemented")
                 sample_m = slerp(sample.float(), model_output, v_schedule[i]/2)
                 sample_m -= sample_m.mean(dim=(1,2,3), keepdim=True)
@@ -447,32 +438,21 @@ class DualDiffusionPipeline(DiffusionPipeline):
                 model_output, logvar = self.unet(sample_m, (t - v_schedule[i]/2) * (timescale * torch.pi/2), labels, self.format, return_logvar=True)
                 u_model_output = self.unet(sample_m, (t - v_schedule[i]/2) * (timescale * torch.pi/2), None, self.format)
                 model_output = slerp(u_model_output.float(), model_output.float(), cfg_scale)
-                
-                if input_perturbation != 0:
-                    model_output += torch.randn_like(model_output) * (logvar.float() / 2).exp() * noise_perturbation_scale
-                    model_output -= model_output.mean(dim=(1,2,3), keepdim=True)
-                    model_output /= model_output.square().mean(dim=(1,2,3), keepdim=True).sqrt()
 
             debug_v_list.append(get_cos_angle(sample, cfg_model_output) / (torch.pi/2))
             debug_a_list.append(get_cos_angle(cfg_model_output, last_cfg_model_output) / (torch.pi/2))
             debug_d_list.append(get_cos_angle(initial_noise, sample) / (torch.pi/2))
             debug_s_list.append(cfg_model_output.std(dim=(1,2,3)))
             debug_o_list.append(cfg_model_output)
-            s_integral += debug_s_list[-1].mean().item() * (torch.pi/2) / steps
 
             print(f"step: {i:>{3}}/{steps:>{3}}",
                   f"v:{debug_v_list[-1][0].item():{8}f}",
                   f"a:{debug_a_list[-1][0].item():{8}f}",
                   f"d:{debug_d_list[-1][0].item():{8}f}",
-                  f"s:{debug_s_list[-1][0].item():{8}f}"
-                  f" s_int:{s_integral:{8}f}")
-
-            #v_scale *= debug_v_list[-1].mean().clip(min=0.5, max=1.5).item()
+                  f"s:{debug_s_list[-1][0].item():{8}f}")
             
-            sample = self.geodesic_flow.reverse_step(sample, cfg_model_output, v_scale/steps)
-            #next_t = t_schedule[i+1] if i+1 < len(t_schedule) else 0
-            #sample = self.geodesic_flow.reverse_step_fixed(sample, cfg_model_output, v_scale, t, next_t)
-            sample = normalize(sample, zero_mean=True)
+            next_t = t_schedule[i+1] if i+1 < len(t_schedule) else 0
+            sample = self.geodesic_flow.reverse_step(sample, cfg_model_output, v_scale, input_perturbation, t, next_t)
 
             save_raw_img(sample[0], os.path.join(debug_path, f"debug_sample_{i:03}.png"))
             save_raw_img(normalize(cfg_model_output[0], zero_mean=True), os.path.join(debug_path, f"debug_output_{i:03}.png"))
