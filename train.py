@@ -971,11 +971,9 @@ def do_training_loop(args,
                 # sync timesteps across all ranks / processes
                 batch_timesteps = accelerator.gather(batch_timesteps.unsqueeze(0))[0]
                 
-                """
                 if args.num_timestep_loss_buckets > 0:
                     timestep_loss_buckets.zero_()
                     timestep_loss_bucket_counts.zero_()
-                """
 
             with accelerator.accumulate(module):
 
