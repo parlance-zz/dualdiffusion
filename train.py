@@ -900,12 +900,10 @@ def do_training_loop(args,
         if args.num_timestep_loss_buckets > 0:
             logger.info(f"Using {args.num_timestep_loss_buckets} timestep loss buckets")
 
-            """
             timestep_loss_buckets = torch.zeros(args.num_timestep_loss_buckets,
                                                 device="cpu", dtype=torch.float32)
             timestep_loss_bucket_counts = torch.zeros(args.num_timestep_loss_buckets,
                                                     device="cpu", dtype=torch.float32)
-            """
         else:
             logger.info("Timestep loss buckets are disabled")
 
@@ -968,7 +966,7 @@ def do_training_loop(args,
                 batch_timesteps = (torch.arange(total_batch_size, device=accelerator.device)+0.5) / total_batch_size
                 batch_timesteps += (torch.rand(1, device=accelerator.device) - 0.5) / total_batch_size
 
-                batch_timesteps = ((1 - batch_timesteps * 2).acos() / torch.pi).clip(min=0, max=1)
+                #batch_timesteps = ((1 - batch_timesteps * 2).acos() / torch.pi).clip(min=0, max=1) # acos timestep sample warping
 
                 # sync timesteps across all ranks / processes
                 batch_timesteps = accelerator.gather(batch_timesteps.unsqueeze(0))[0]
@@ -1016,14 +1014,12 @@ def do_training_loop(args,
                     timestep_loss = loss.mean(dim=list(range(1, len(loss.shape))))
                     loss = (timestep_loss / error_logvar.exp() + error_logvar).mean()
 
-                    """
                     if args.num_timestep_loss_buckets > 0:
                         all_timesteps = accelerator.gather(timesteps.detach()).cpu()
                         all_timestep_loss = accelerator.gather(timestep_loss.detach()).cpu()
                         target_buckets = (all_timesteps * timestep_loss_buckets.shape[0]).long().clip(max=timestep_loss_buckets.shape[0]-1)
                         timestep_loss_buckets.index_add_(0, target_buckets, all_timestep_loss)
                         timestep_loss_bucket_counts.index_add_(0, target_buckets, torch.ones_like(all_timestep_loss))
-                    """
                     
                 elif args.module == "vae":
 
@@ -1098,7 +1094,7 @@ def do_training_loop(args,
                     logs["ema_decay"] = ema_module.cur_decay_value    
 
                 if args.module == "unet" and args.num_timestep_loss_buckets > 0:
-                    """
+
                     for i in range(timestep_loss_buckets.shape[0]):
                         if timestep_loss_bucket_counts[i].item() > 0:
                             bucket_timestep_min = int(i / timestep_loss_buckets.shape[0] * 1000.)
@@ -1112,11 +1108,12 @@ def do_training_loop(args,
                     #if tensorboard_tracker is not None:
                     #    tensorboard_tracker.add_histogram("unet/timestep_loss", timestep_error, global_step=global_step)
                     #else:
-                    
+
                     for i in range(args.num_timestep_loss_buckets):
                         bucket_timestep_min = int(i / args.num_timestep_loss_buckets * 1000.)
                         bucket_timestep_max = int((i+1) / args.num_timestep_loss_buckets * 1000.)
                         logs[f"unet/timestep_loss_{bucket_timestep_min}-{bucket_timestep_max}"] = timestep_error[i].item()
+                    """
 
                 accelerator.log(logs, step=global_step)
                 progress_bar.set_postfix(**logs)
