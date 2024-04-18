@@ -388,6 +388,9 @@ class UNet(ModelMixin, ConfigMixin):
         
         return x
     
+    def get_timestep_logvar(self, noise_labels):
+        return self.logvar_linear(self.logvar_fourier(noise_labels))
+    
     """
     def normalize_weights(self):
         for module in self.modules():
