@@ -78,7 +78,7 @@ class GeodesicFlow:
     @torch.no_grad()
     def get_timestep_theta(self, timesteps):
         original_dtype = timesteps.dtype
-        return self.theta_fn(timesteps).to(original_dtype)
+        return self.theta_fn(timesteps.to(torch.float64)).to(original_dtype)
 
     @torch.no_grad()
     def get_timestep_snr(self, timesteps):
