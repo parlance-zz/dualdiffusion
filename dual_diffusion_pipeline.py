@@ -276,7 +276,7 @@ class DualDiffusionPipeline(DiffusionPipeline):
         if vae is not None:
             target_snr = vae.get_target_snr()
         else:
-            target_snr = model_params.get("target_snr", 1e4)
+            target_snr = model_params.get("target_snr", None)
 
         self.geodesic_flow = GeodesicFlow(target_snr,
                                           model_params["diffusion_schedule"],
