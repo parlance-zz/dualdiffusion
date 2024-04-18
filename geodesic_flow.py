@@ -99,31 +99,27 @@ class GeodesicFlow:
 
         objective = self.objective_fn(sample, noise, timesteps)
         return normalize(objective, zero_mean=True).to(original_dtype)
-    
-    def reverse_step(self, sample, model_output, v_scale): # if sampling over n steps, v_scale = 1/n
-        
-        original_dtype = sample.dtype
-        output_v_scale = model_output.std(dim=(1,2,3), keepdim=True) * (torch.pi/2) * v_scale
 
-        sample = normalize(sample, zero_mean=True)
-        model_output = normalize(model_output, zero_mean=True)
-        
-        denoised_sample = slerp(sample, model_output, output_v_scale)
-        return normalize(denoised_sample, zero_mean=True).to(original_dtype)
-
-    def reverse_step_fixed(self, sample, model_output, v_scale, t, next_t):
+    def reverse_step(self, sample, model_output, v_scale, p_scale, t, next_t):
         
         if not torch.is_tensor(t):
             t = torch.tensor(t, dtype=torch.float64, device=sample.device)
         if not torch.is_tensor(next_t):
             next_t = torch.tensor(next_t, dtype=torch.float64, device=sample.device)
 
+        if p_scale > 0:
+            output_std = model_output.std(dim=(1,2,3), keepdim=True)
+            model_output += (1 - output_std.square()).sqrt() * torch.randn_like(model_output) * p_scale
+        
         original_dtype = sample.dtype
         output_v_scale = (self.get_timestep_theta(next_t) - self.get_timestep_theta(t)) / (torch.pi/2)
 
         sample = normalize(sample, zero_mean=True)
         model_output = normalize(model_output, zero_mean=True)
         
+        if self.objective == "rectified_flow":
+            v_scale = v_scale / (get_cos_angle(sample, model_output) / (torch.pi/2))
+
         denoised_sample = slerp(sample, model_output, v_scale * output_v_scale)
         return normalize(denoised_sample, zero_mean=True).to(original_dtype)
 
