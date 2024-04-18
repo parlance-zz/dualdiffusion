@@ -36,6 +36,7 @@ def normalize(x, zero_mean=False, dtype=torch.float64):
 
 class GeodesicFlow:
 
+    @torch.no_grad()
     def __init__(self, target_snr, schedule="linear", objective="v_pred"):
  
         if target_snr is None:
@@ -74,14 +75,17 @@ class GeodesicFlow:
         self.theta_fn = theta_fn
         self.objective_fn = objective_fn
     
+    @torch.no_grad()
     def get_timestep_theta(self, timesteps):
         original_dtype = timesteps.dtype
         return self.theta_fn(timesteps).to(original_dtype)
 
+    @torch.no_grad()
     def get_timestep_snr(self, timesteps):
         original_dtype = timesteps.dtype
         return self.get_timestep_theta(timesteps.to(torch.float64)).tan().to(original_dtype)
 
+    @torch.no_grad()
     def add_noise(self, sample, noise, timesteps):
 
         original_dtype = sample.dtype
@@ -91,6 +95,7 @@ class GeodesicFlow:
         noised_sample = slerp(noise, sample, self.get_timestep_theta(timesteps) / (torch.pi/2))
         return normalize(noised_sample, zero_mean=True).to(original_dtype)
     
+    @torch.no_grad()
     def get_objective(self, sample, noise, timesteps):
         
         original_dtype = sample.dtype
@@ -100,6 +105,7 @@ class GeodesicFlow:
         objective = self.objective_fn(sample, noise, timesteps)
         return normalize(objective, zero_mean=True).to(original_dtype)
 
+    @torch.no_grad()
     def reverse_step(self, sample, model_output, v_scale, p_scale, t, next_t):
         
         if not torch.is_tensor(t):
@@ -108,11 +114,11 @@ class GeodesicFlow:
             next_t = torch.tensor(next_t, dtype=torch.float64, device=sample.device)
 
         if p_scale > 0:
-            output_std = model_output.std(dim=(1,2,3), keepdim=True)
-            model_output += (1 - output_std.square()).sqrt() * torch.randn_like(model_output) * p_scale
+            output_var = model_output.var(dim=(1,2,3), keepdim=True)
+            model_output += (1 - output_var).sqrt() * torch.randn_like(model_output) * p_scale
         
         original_dtype = sample.dtype
-        output_v_scale = (self.get_timestep_theta(next_t) - self.get_timestep_theta(t)) / (torch.pi/2)
+        v_scale = (self.get_timestep_theta(next_t) - self.get_timestep_theta(t)) / (torch.pi/2) * v_scale
 
         sample = normalize(sample, zero_mean=True)
         model_output = normalize(model_output, zero_mean=True)
@@ -120,7 +126,7 @@ class GeodesicFlow:
         if self.objective == "rectified_flow":
             v_scale = v_scale / (get_cos_angle(sample, model_output) / (torch.pi/2))
 
-        denoised_sample = slerp(sample, model_output, v_scale * output_v_scale)
+        denoised_sample = slerp(sample, model_output, v_scale)
         return normalize(denoised_sample, zero_mean=True).to(original_dtype)
 
 
