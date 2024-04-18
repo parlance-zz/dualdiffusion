@@ -987,11 +987,10 @@ def do_training_loop(args,
                 raw_sample_paths = batch["sample_paths"]
 
                 if args.module == "unet":
+
                     samples = pipeline.format.raw_to_sample(raw_samples)
-                
                     if vae is not None:
                         samples = vae.encode(samples.half(), return_dict=False)[0].mode().detach().float()
-                    
                     noise = torch.randn_like(samples).requires_grad_(False)
 
                     process_batch_timesteps = batch_timesteps[accelerator.local_process_index::accelerator.num_processes]
@@ -1010,7 +1009,6 @@ def do_training_loop(args,
                     loss = F.mse_loss(model_output.float(), target.float(), reduction="none")
                     timestep_loss = loss.mean(dim=list(range(1, len(loss.shape))))
                     loss = (timestep_loss / error_logvar.exp() + error_logvar).mean()
-                    #loss = timestep_loss.mean()
 
                     if args.num_timestep_loss_buckets > 0:
                         all_timesteps = accelerator.gather(timesteps.detach()).cpu()
