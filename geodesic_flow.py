@@ -59,7 +59,7 @@ class GeodesicFlow:
         elif schedule == "acos":
             time_scale = (1 - np.cos(2*np.arctan(target_snr))) / 2 # ~0.925
             def theta_fn(timesteps):
-                return np.arccos(1 - 2*(1-timesteps) * time_scale)/2
+                return (1 - 2*(1-timesteps) * time_scale).acos()/2
         else:
             raise ValueError(f"Invalid schedule: {schedule}")
         
@@ -165,5 +165,5 @@ if __name__ == "__main__":
         save_raw(timestep_normalized_theta, os.path.join(debug_path, "timestep_normalized_theta.raw"))
         save_raw(timestep_snr, os.path.join(debug_path, "timestep_snr.raw"))
         save_raw(timestep_noise_std, os.path.join(debug_path, "timestep_noise_std.raw"))
-        save_raw(timestep_snr.clip(min=1e-10).log(), os.path.join(debug_path, "timestep_ln_snr.raw"))
+        save_raw(timestep_snr.clip(min=timestep_snr[1:].amin()).log(), os.path.join(debug_path, "timestep_ln_snr.raw"))
         save_raw(timestep_normalized_velocity, os.path.join(debug_path, "timestep_normalized_velocity.raw"))
