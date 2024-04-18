@@ -79,6 +79,7 @@ class MPFourier(torch.nn.Module):
         #self.register_buffer('phases', 2 * np.pi * torch.rand(num_channels))
 
         # smoother inner product space with less overlap
+        #self.register_buffer('freqs', torch.linspace(-1, 1, num_channels).acos())
         self.register_buffer('freqs', torch.pi * torch.linspace(-1+eps, 1-eps, num_channels).erfinv() * bandwidth)
         self.register_buffer('phases', torch.pi/2 * (torch.arange(num_channels) % 2 == 0).float())
 
