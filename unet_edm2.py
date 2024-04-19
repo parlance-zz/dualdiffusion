@@ -72,7 +72,7 @@ def mp_cat(a, b, dim=1, t=0.5):
 # Magnitude-preserving Fourier features (Equation 75).
 
 class MPFourier(torch.nn.Module):
-    def __init__(self, num_channels, bandwidth=1, eps=1e-3, mode="linear"):
+    def __init__(self, num_channels, bandwidth=1, eps=1e-3, mode="gaussian"):
         super().__init__()
 
         #self.register_buffer('freqs', 2 * np.pi * torch.randn(num_channels) * bandwidth)
@@ -82,7 +82,7 @@ class MPFourier(torch.nn.Module):
         if mode == "acos":
             self.register_buffer('freqs', torch.linspace(-1, 1, num_channels).acos())
         elif mode == "gaussian":
-            self.register_buffer('freqs', torch.pi * torch.linspace(-1+eps, 1-eps, num_channels).erfinv() * bandwidth)
+            self.register_buffer('freqs', torch.pi * torch.linspace(0, 1-eps, num_channels).erfinv() * bandwidth)
         elif mode == "linear":            
             self.register_buffer('freqs', torch.pi * torch.linspace(0, 1-1/num_channels, num_channels))
         else:
@@ -405,58 +405,10 @@ class UNet(ModelMixin, ConfigMixin):
                 module.normalize_weights()
     """
 
-#----------------------------------------------------------------------------
-# Preconditioning and uncertainty estimation.
-
-"""
-class Precond(torch.nn.Module):
-    def __init__(self,
-        img_resolution,         # Image resolution.
-        img_channels,           # Image channels.
-        label_dim,              # Class label dimensionality. 0 = unconditional.
-        use_fp16        = True, # Run the model at FP16 precision?
-        sigma_data      = 0.5,  # Expected standard deviation of the training data.
-        logvar_channels = 128,  # Intermediate dimensionality for uncertainty estimation.
-        **unet_kwargs,          # Keyword arguments for UNet.
-    ):
-        super().__init__()
-        self.img_resolution = img_resolution
-        self.img_channels = img_channels
-        self.label_dim = label_dim
-        self.use_fp16 = use_fp16
-        self.sigma_data = sigma_data
-        self.unet = UNet(img_resolution=img_resolution, img_channels=img_channels, label_dim=label_dim, **unet_kwargs)
-        self.logvar_fourier = MPFourier(logvar_channels)
-        self.logvar_linear = MPConv(logvar_channels, 1, kernel=[])
-
-    def forward(self, x, sigma, class_labels=None, force_fp32=False, return_logvar=False, **unet_kwargs):
-        x = x.to(torch.float32)
-        sigma = sigma.to(torch.float32).reshape(-1, 1, 1, 1)
-        class_labels = None if self.label_dim == 0 else torch.zeros([1, self.label_dim], device=x.device) if class_labels is None else class_labels.to(torch.float32).reshape(-1, self.label_dim)
-        dtype = torch.float16 if (self.use_fp16 and not force_fp32 and x.device.type == 'cuda') else torch.float32
-
-        # Preconditioning weights.
-        c_skip = self.sigma_data ** 2 / (sigma ** 2 + self.sigma_data ** 2)
-        c_out = sigma * self.sigma_data / (sigma ** 2 + self.sigma_data ** 2).sqrt()
-        c_in = 1 / (self.sigma_data ** 2 + sigma ** 2).sqrt()
-        c_noise = sigma.flatten().log() / 4
-
-        # Run the model.
-        x_in = (c_in * x).to(dtype)
-        F_x = self.unet(x_in, c_noise, class_labels, **unet_kwargs)
-        D_x = c_skip * x + c_out * F_x.to(torch.float32)
-
-        # Estimate uncertainty if requested.
-        if return_logvar:
-            logvar = self.logvar_linear(self.logvar_fourier(c_noise)).reshape(-1, 1, 1, 1)
-            return D_x, logvar # u(sigma) in Equation 21
-        return D_x
-"""
-#----------------------------------------------------------------------------
-
 if __name__ == "__main__": # fourier embedding inner product test
 
     from dual_diffusion_utils import save_raw, save_raw_img
+    from geodesic_flow import GeodesicFlow
     from dotenv import load_dotenv
     import os
 
@@ -464,11 +416,14 @@ if __name__ == "__main__": # fourier embedding inner product test
     
     steps = 120
     cnoise = 192*4
+    target_snr = 3.5177683092482117
+    schedule = "linear"
 
     emb_fourier = MPFourier(cnoise)
-    t = torch.linspace(1, 0, steps)
-
-    #emb_fourier = MPFourier(cnoise, bandwidth=1, eps=1e-2, mode="gaussian")
+    flow = GeodesicFlow(target_snr, schedule=schedule)
+    t = flow.get_timestep_sigma(torch.linspace(1, 0, steps))
+    
+    #emb_fourier = MPFourier(cnoise, bandwidth=1, eps=1e-2, mode="gaussian") # edm_200_2
     #t = torch.linspace(0.8236786557085517 * torch.pi/2, 0, steps)
 
     emb = emb_fourier(t)
