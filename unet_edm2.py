@@ -72,15 +72,22 @@ def mp_cat(a, b, dim=1, t=0.5):
 # Magnitude-preserving Fourier features (Equation 75).
 
 class MPFourier(torch.nn.Module):
-    def __init__(self, num_channels, bandwidth=torch.pi/2, eps=1e-3):
+    def __init__(self, num_channels, bandwidth=1, eps=1e-3, mode="linear"):
         super().__init__()
 
         #self.register_buffer('freqs', 2 * np.pi * torch.randn(num_channels) * bandwidth)
         #self.register_buffer('phases', 2 * np.pi * torch.rand(num_channels))
 
         # smoother inner product space with less overlap
-        #self.register_buffer('freqs', torch.linspace(-1, 1, num_channels).acos())
-        self.register_buffer('freqs', torch.pi * torch.linspace(-1+eps, 1-eps, num_channels).erfinv() * bandwidth)
+        if mode == "acos":
+            self.register_buffer('freqs', torch.linspace(-1, 1, num_channels).acos())
+        elif mode == "gaussian":
+            self.register_buffer('freqs', torch.pi * torch.linspace(-1+eps, 1-eps, num_channels).erfinv() * bandwidth)
+        elif mode == "linear":            
+            self.register_buffer('freqs', torch.pi * torch.linspace(0, 1-1/num_channels, num_channels))
+        else:
+            raise ValueError(f"Invalid mode: {mode}")
+        
         self.register_buffer('phases', torch.pi/2 * (torch.arange(num_channels) % 2 == 0).float())
 
         self.bandwidth = bandwidth
@@ -459,9 +466,12 @@ if __name__ == "__main__": # fourier embedding inner product test
     cnoise = 192*4
 
     emb_fourier = MPFourier(cnoise)
-    t = torch.linspace(1, 0, steps)# * (0.8236786557085517 * torch.pi/2), bandwidth=1, eps=1e-2
-    emb = emb_fourier(t)
+    t = torch.linspace(1, 0, steps)
 
+    #emb_fourier = MPFourier(cnoise, bandwidth=1, eps=1e-2, mode="gaussian")
+    #t = torch.linspace(0.8236786557085517 * torch.pi/2, 0, steps)
+
+    emb = emb_fourier(t)
     inner_products = (emb.view(1, steps, cnoise) * emb.view(steps, 1, cnoise)).sum(dim=2)
 
     debug_path = os.environ.get("DEBUG_PATH", None)
