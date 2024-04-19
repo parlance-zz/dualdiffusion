@@ -966,10 +966,10 @@ def do_training_loop(args,
                 batch_timesteps = (torch.arange(total_batch_size, device=accelerator.device)+0.5) / total_batch_size
                 batch_timesteps += (torch.rand(1, device=accelerator.device) - 0.5) / total_batch_size
 
-                # slightly bias the sampled timesteps away from pure noise
-                min_timestep_normalized_theta = pipeline.geodesic_flow.get_timestep_theta(torch.tensor(0.)).item() / (torch.pi/2)
-                batch_timestep_normalized_thetas = pipeline.geodesic_flow.get_timestep_theta(batch_timesteps) / (torch.pi/2)
-                batch_timesteps = 1 - ((1 - 2*batch_timestep_normalized_thetas).acos() / np.arccos(1 - 2*min_timestep_normalized_theta)).clip(min=0, max=1)
+                # slightly bias the sampled timesteps away from pure noise, apparently even this small bias is bad
+                #min_timestep_normalized_theta = pipeline.geodesic_flow.get_timestep_theta(torch.tensor(0.)).item() / (torch.pi/2)
+                #batch_timestep_normalized_thetas = pipeline.geodesic_flow.get_timestep_theta(batch_timesteps) / (torch.pi/2)
+                #batch_timesteps = 1 - ((1 - 2*batch_timestep_normalized_thetas).acos() / np.arccos(1 - 2*min_timestep_normalized_theta)).clip(min=0, max=1)
 
                 # sync timesteps across all ranks / processes
                 batch_timesteps = accelerator.gather(batch_timesteps.unsqueeze(0))[0]
