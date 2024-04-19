@@ -115,7 +115,7 @@ class GeodesicFlow:
 
         if p_scale > 0:
             output_var = model_output.var(dim=(1,2,3), keepdim=True)
-            model_output = model_output + (1 - output_var).sqrt() * torch.randn_like(model_output) * p_scale
+            model_output = model_output + (1 - output_var.clip(max=1)).sqrt() * torch.randn_like(model_output) * p_scale
         
         original_dtype = sample.dtype
         v_scale = (self.get_timestep_theta(next_t) - self.get_timestep_theta(t)) / (torch.pi/2) * v_scale
