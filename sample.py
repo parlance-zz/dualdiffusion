@@ -36,17 +36,17 @@ if __name__ == "__main__":
     init_cuda()
     load_dotenv(override=True)
 
-    model_name = "edm2_100_12"
+    model_name = "edm2_100_13"
 
     num_samples = 1
     batch_size = 1
     length = 0 #30 * 32000
     steps = 120
-    cfg_scale = 4.5
-    v_scale = 1. #1.3
+    cfg_scale = 4
+    v_scale = 1.#0.92 #1.3
     loops = 0 #1
     use_midpoint_integration = False#True
-    input_perturbation = 0
+    input_perturbation = 1
     fgla_iterations = 200 #400
     fp16 = True
     device = "cuda"
@@ -55,8 +55,8 @@ if __name__ == "__main__":
     #game_ids = [788] #x2
     #game_ids = [789] #x3
     #game_ids = [213] #chrono trigger
-    #game_ids = [230] #contra
-    #game_ids = [249] #cybernator
+    #game_ids += [230] #contra
+    #game_ids += [249] #cybernator
     #game_ids = [290] #dkc
     #game_ids = [291] #dkc2
     #game_ids = [292] #dkc3
@@ -65,10 +65,10 @@ if __name__ == "__main__":
     #game_ids = [1305] #super metroid
     #game_ids = [1078] #secret of mana
     #game_ids = [944] #pilotwings
-    #game_ids = [384] #final fantasy mystic quest
-    #game_ids += [385] #final fantasy 4
-    game_ids = [386] #final fantasy 5
-    #game_ids = [387] #final fantasy 6
+    game_ids = [384] #final fantasy mystic quest
+    game_ids += [385] #final fantasy 4
+    game_ids += [386] #final fantasy 5
+    game_ids += [387] #final fantasy 6
     #game_ids = [366] #f-zero
     #game_ids = [1473] #un squadron
     #game_ids = [107] #Battletoads & Double Dragon
@@ -76,7 +76,7 @@ if __name__ == "__main__":
     #game_ids = [1494] #uniracers
     #game_ids += [1180] #spindizzy worlds
     #game_ids = [705] #zelda
-    #game_ids += [1081] #seiken densetsu 3
+    #game_ids = [1081] #seiken densetsu 3
     #game_ids = [1187] #star fox
     #game_ids = [1409] #turtles in time
     #game_ids = [1298] #mario 1
@@ -90,7 +90,7 @@ if __name__ == "__main__":
     #game_ids = [1505] #vortex
     #game_ids = [np.random.randint(0, 1612)]
 
-    img2img_strength = 0
+    img2img_strength = 0.8
     img2img_input_path = None
     #img2img_input_path = "1/Final Fantasy - Mystic Quest  [Mystic Quest Legend] - 07 Battle 1.flac"
     #img2img_input_path = "1/Final Fantasy VI - 104 Locke.flac"
@@ -119,6 +119,8 @@ if __name__ == "__main__":
     #seed = 97092 # good seed for gundam + x3 (4batch)
     #seed = 48146 # good seed for turtles in time (4batch)
     #seed = 74296 # good seed for contra + gundam wing (4batch), or umihara kawase (4batch)
+    #seed = 56198
+    seed = 83359
 
     model_dtype = torch.bfloat16 if fp16 else torch.float32
     model_path = os.path.join(os.environ.get("MODEL_PATH", "./"), model_name)
@@ -160,7 +162,7 @@ if __name__ == "__main__":
                           img2img_input=input_audio)
         print(f"Time taken: {time.time()-start}")
 
-        output_path = os.path.join(output_path, f"step_{last_global_step}_{steps}_cfg{cfg_scale}_v{v_scale}_g{game_ids[0]}_s{seed}")
+        output_path = os.path.join(output_path, f"step_{last_global_step}_{steps}_cfg{cfg_scale}_v{v_scale}_p{input_perturbation}_g{game_ids[0]}_s{seed}")
         for i, sample in enumerate(output.unbind(0)):
             output_flac_file_path = f"{output_path}_b{i}.flac"
             save_audio(sample, pipeline.config["model_params"]["sample_rate"], output_flac_file_path)
