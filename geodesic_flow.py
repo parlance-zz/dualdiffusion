@@ -92,6 +92,12 @@ class GeodesicFlow:
         return timestep_snr.clip(min=eps).log().to(original_dtype)
     
     @torch.no_grad()
+    def get_timestep_sigma(self, timesteps, eps=1e-4): # non-relative noise std if signal std == 1
+        original_dtype = timesteps.dtype
+        timestep_theta = self.get_timestep_theta(timesteps.to(torch.float64))
+        return timestep_theta.cos() / timestep_theta.sin().clip(min=eps).to(original_dtype)
+    
+    @torch.no_grad()
     def add_noise(self, sample, noise, timesteps):
 
         original_dtype = sample.dtype
