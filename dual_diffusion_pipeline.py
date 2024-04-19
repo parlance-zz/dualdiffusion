@@ -420,10 +420,12 @@ class DualDiffusionPipeline(DiffusionPipeline):
 
         self.set_progress_bar_config(disable=True)
         for i, t in enumerate(self.progress_bar(t_schedule)):
-
+            
+            timestep_tensor = torch.tensor([t], device=self.device, dtype=sample.dtype)
+            model_input_timestep = self.geodesic_flow.get_timestep_sigma(timestep_tensor)
             model_input = sample.to(self.unet.dtype)
-            model_output = self.unet(model_input, t, labels, t_ranges, self.format)
-            u_model_output = self.unet(model_input, t, None, t_ranges, self.format)
+            model_output = self.unet(model_input, model_input_timestep, labels, t_ranges, self.format)
+            u_model_output = self.unet(model_input, model_input_timestep, None, t_ranges, self.format)
 
             last_cfg_model_output = cfg_model_output
             cfg_model_output = slerp(u_model_output, model_output, cfg_scale)

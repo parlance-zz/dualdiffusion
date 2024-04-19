@@ -967,9 +967,9 @@ def do_training_loop(args,
                 batch_timesteps += (torch.rand(1, device=accelerator.device) - 0.5) / total_batch_size
 
                 # slightly bias the sampled timesteps away from pure noise, apparently even this small bias is bad
-                #min_timestep_normalized_theta = pipeline.geodesic_flow.get_timestep_theta(torch.tensor(0.)).item() / (torch.pi/2)
-                #batch_timestep_normalized_thetas = pipeline.geodesic_flow.get_timestep_theta(batch_timesteps) / (torch.pi/2)
-                #batch_timesteps = 1 - ((1 - 2*batch_timestep_normalized_thetas).acos() / np.arccos(1 - 2*min_timestep_normalized_theta)).clip(min=0, max=1)
+                min_timestep_normalized_theta = pipeline.geodesic_flow.get_timestep_theta(torch.tensor(0.)).item() / (torch.pi/2)
+                batch_timestep_normalized_thetas = pipeline.geodesic_flow.get_timestep_theta(batch_timesteps) / (torch.pi/2)
+                batch_timesteps = 1 - ((1 - 2*batch_timestep_normalized_thetas).acos() / np.arccos(1 - 2*min_timestep_normalized_theta)).clip(min=0, max=1)
 
                 # sync timesteps across all ranks / processes
                 batch_timesteps = accelerator.gather(batch_timesteps.unsqueeze(0))[0]
@@ -1001,9 +1001,10 @@ def do_training_loop(args,
                     process_batch_timesteps = batch_timesteps[accelerator.local_process_index::accelerator.num_processes]
                     timesteps = process_batch_timesteps[grad_accum_steps * args.train_batch_size:(grad_accum_steps+1) * args.train_batch_size]
 
+                    model_input_timesteps = pipeline.geodesic_flow.get_timestep_sigma(timesteps)
                     model_input = pipeline.geodesic_flow.add_noise(samples, noise, timesteps).detach()
                     model_output, error_logvar = module(model_input,
-                                                        timesteps,
+                                                        model_input_timesteps,
                                                         sample_game_ids,
                                                         sample_t_ranges,
                                                         pipeline.format,
