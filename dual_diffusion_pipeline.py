@@ -479,6 +479,8 @@ class DualDiffusionPipeline(DiffusionPipeline):
             save_raw(d_measured, os.path.join(debug_path, "debug_d_measured.raw"))
             save_raw(s_measured, os.path.join(debug_path, "debug_s_measured.raw"))
 
+            if batch_size > 1: # this takes an ungodly amount of vram so only compute for the first sample
+                o_measured = o_measured[:, 0:1]
             model_outputs = o_measured.view(steps, batch_size, -1)
             inner_products = (model_outputs.unsqueeze(0) * model_outputs.unsqueeze(1)).sum(dim=-1).permute(2, 0, 1)
             save_raw_img(inner_products[0], os.path.join(debug_path, "debug_o_inner_products.png"))
