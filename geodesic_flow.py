@@ -65,10 +65,11 @@ class GeodesicFlow:
         
         if objective == "v_pred":
             def objective_fn(sample, noise, timesteps):
-                return slerp(noise, sample, self.get_timestep_theta(timesteps) / (torch.pi/2) + 1)
+                return slerp(noise, sample, self.get_timestep_theta(timesteps) / (torch.pi/2) + 1/(get_cos_angle(noise, sample) / (torch.pi/2)))
         elif objective == "rectified_flow":
+            bias = (np.arctan(target_snr) / (np.pi/2) - 1) / 2
             def objective_fn(sample, noise, timesteps):
-                return slerp(noise, sample, 1.5)
+                return slerp(noise, sample, 1.5 / (get_cos_angle(noise, sample) / (torch.pi/2)) + bias)
         else:
             raise ValueError(f"Invalid objective: {objective}")
             
@@ -92,10 +93,16 @@ class GeodesicFlow:
         return timestep_snr.clip(min=eps).log().to(original_dtype)
     
     @torch.no_grad()
-    def get_timestep_sigma(self, timesteps, eps=1e-2): # non-relative noise std if signal std == 1
+    def get_timestep_sigma(self, timesteps, eps=1e-3): # non-relative noise std if signal std == 1
         original_dtype = timesteps.dtype
         timestep_theta = self.get_timestep_theta(timesteps.to(torch.float64)).clip(min=eps)
         return timestep_theta.cos() / timestep_theta.sin().to(original_dtype)
+    
+    @torch.no_grad()
+    def get_timestep_noise_label(self, timesteps):
+        original_dtype = timesteps.dtype
+        timestep_theta = self.get_timestep_theta(timesteps.to(torch.float64)) / (torch.pi/2)
+        return timestep_theta.to(original_dtype)
     
     @torch.no_grad()
     def add_noise(self, sample, noise, timesteps):
@@ -104,7 +111,8 @@ class GeodesicFlow:
         sample = normalize(sample, zero_mean=True)
         noise = normalize(noise, zero_mean=True)
 
-        noised_sample = slerp(noise, sample, self.get_timestep_theta(timesteps) / (torch.pi/2))
+        theta = self.get_timestep_theta(timesteps) / get_cos_angle(sample, noise)
+        noised_sample = slerp(noise, sample, theta)
         return normalize(noised_sample, zero_mean=True).to(original_dtype)
     
     @torch.no_grad()
@@ -120,6 +128,8 @@ class GeodesicFlow:
     @torch.no_grad()
     def reverse_step(self, sample, model_output, v_scale, p_scale, t, next_t):
         
+        original_dtype = sample.dtype
+
         if not torch.is_tensor(t):
             t = torch.tensor(t, dtype=torch.float64, device=sample.device)
         if not torch.is_tensor(next_t):
@@ -129,14 +139,9 @@ class GeodesicFlow:
             output_var = model_output.var(dim=(1,2,3), keepdim=True)
             model_output = model_output + (1 - output_var.clip(max=1)).sqrt() * torch.randn_like(model_output) * p_scale
         
-        original_dtype = sample.dtype
-        v_scale = (self.get_timestep_theta(next_t) - self.get_timestep_theta(t)) / (torch.pi/2) * v_scale
-
         sample = normalize(sample, zero_mean=True)
         model_output = normalize(model_output, zero_mean=True)
-        
-        if self.objective == "rectified_flow":
-            v_scale = v_scale / (get_cos_angle(sample, model_output) / (torch.pi/2))
+        v_scale = v_scale * (self.get_timestep_theta(next_t) - self.get_timestep_theta(t)) / get_cos_angle(sample, model_output)
 
         denoised_sample = slerp(sample, model_output, v_scale)
         return normalize(denoised_sample, zero_mean=True).to(original_dtype)
@@ -151,7 +156,7 @@ if __name__ == "__main__":
     load_dotenv(override=True)
 
     target_snr = 3.5177683092482117
-    flow = GeodesicFlow(target_snr, schedule="acos")
+    flow = GeodesicFlow(target_snr, schedule="linear", objective="v_pred")
 
     timesteps = torch.linspace(1, 0, 120+1, dtype=torch.float64)[:-1]
 
@@ -164,6 +169,14 @@ if __name__ == "__main__":
     timestep_snr = flow.get_timestep_snr(timesteps)
     timestep_noise_std = timestep_snr.atan().cos()
     timestep_normalized_velocity = timestep_normalized_theta[1:] - timestep_normalized_theta[:-1]
+
+    sample = torch.randn(1, 4, 256, 256)
+    noise = torch.randn_like(sample)
+    noised_sample = flow.add_noise(sample, noise, timesteps)
+    objective = flow.get_objective(sample, noise, timesteps)
+    print("input * objective normalized cos angles:")
+    print(get_cos_angle(noised_sample, objective) / (torch.pi/2))
+    print("")
 
     print("min_timestep_normalized_theta:", min_timestep_normalized_theta)
     print("min_timestep_snr:", min_timestep_snr)
