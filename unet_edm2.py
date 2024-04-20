@@ -414,8 +414,8 @@ if __name__ == "__main__": # fourier embedding inner product test
 
     load_dotenv(override=True)
     
-    steps = 120
-    cnoise = 192*4
+    steps = 240
+    cnoise = 192*16
     target_snr = 3.5177683092482117
     schedule = "linear"
 
@@ -433,3 +433,6 @@ if __name__ == "__main__": # fourier embedding inner product test
     if debug_path is not None:    
         save_raw(inner_products / inner_products.amax(), os.path.join(debug_path, "fourier_inner_products.raw"))
         save_raw_img(inner_products, os.path.join(debug_path, "fourier_inner_products.png"))
+
+        coverage = inner_products.sum(dim=0)
+        save_raw(coverage / coverage.amax(), os.path.join(debug_path, "fourier_inner_products_coverage.raw"))
