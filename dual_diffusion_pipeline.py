@@ -454,7 +454,9 @@ class DualDiffusionPipeline(DiffusionPipeline):
                   f"s:{debug_s_list[-1][0].item():{8}f}")
             
             next_t = t_schedule[i+1] if i+1 < len(t_schedule) else 0
-            sample = self.geodesic_flow.reverse_step(sample, cfg_model_output, v_scale, input_perturbation, t, next_t)
+            sample = self.geodesic_flow.reverse_step(sample, cfg_model_output,
+                                                     v_scale, input_perturbation,
+                                                     t, next_t, generator=generator)
 
             save_raw_img(sample[0], os.path.join(debug_path, f"debug_sample_{i:03}.png"))
             save_raw_img(normalize(cfg_model_output[0], zero_mean=True), os.path.join(debug_path, f"debug_output_{i:03}.png"))
