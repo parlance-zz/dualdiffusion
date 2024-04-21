@@ -137,7 +137,8 @@ class GeodesicFlow:
 
         if p_scale > 0:
             output_var = model_output.var(dim=(1,2,3), keepdim=True)
-            model_output = model_output + (1 - output_var.clip(max=1)).sqrt() * torch.randn_like(model_output, generator=generator) * p_scale
+            perturbation = torch.empty_like(model_output).normal_(generator=generator)
+            model_output = model_output + (1 - output_var.clip(max=1)).sqrt() * perturbation * p_scale
         
         sample = normalize(sample, zero_mean=True)
         model_output = normalize(model_output, zero_mean=True)
