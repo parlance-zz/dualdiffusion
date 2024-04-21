@@ -418,13 +418,11 @@ if __name__ == "__main__": # fourier embedding inner product test
     cnoise = 192*16
     target_snr = 3.5177683092482117
     schedule = "linear"
+    mpfourier_mode = "gaussian"
 
-    emb_fourier = MPFourier(cnoise)
+    emb_fourier = MPFourier(cnoise, mode=mpfourier_mode)
     flow = GeodesicFlow(target_snr, schedule=schedule)
-    t = flow.get_timestep_sigma(torch.linspace(1, 0, steps))
-    
-    #emb_fourier = MPFourier(cnoise, bandwidth=1, eps=1e-2, mode="gaussian") # edm_200_2
-    #t = torch.linspace(0.8236786557085517 * torch.pi/2, 0, steps)
+    t = flow.get_timestep_noise_label(torch.linspace(1, 0, steps))
 
     emb = emb_fourier(t)
     inner_products = (emb.view(1, steps, cnoise) * emb.view(steps, 1, cnoise)).sum(dim=2)
