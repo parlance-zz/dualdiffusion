@@ -55,6 +55,7 @@ from unet_edm2_ema import PowerFunctionEMA
 from autoencoder_kl_dual import AutoencoderKLDual
 from dual_diffusion_pipeline import DualDiffusionPipeline
 from dual_diffusion_utils import init_cuda, load_audio, save_audio, load_raw, save_raw, dict_str, normalize_lufs
+from geodesic_flow import normalize
 
 
 logger = get_logger(__name__, log_level="INFO")
@@ -1003,7 +1004,9 @@ def do_training_loop(args,
                     samples = pipeline.format.raw_to_sample(raw_samples)
                     if vae is not None:
                         samples = vae.encode(samples.half(), return_dict=False)[0].mode().detach().float()
+                        samples = normalize(samples, zero_mean=True).float()
                     noise = torch.randn_like(samples).requires_grad_(False)
+                    noise = normalize(noise, zero_mean=True).float()
 
                     process_batch_timesteps = batch_timesteps[accelerator.local_process_index::accelerator.num_processes]
                     timesteps = process_batch_timesteps[grad_accum_steps * args.train_batch_size:(grad_accum_steps+1) * args.train_batch_size]
