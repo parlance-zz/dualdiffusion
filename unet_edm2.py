@@ -72,9 +72,12 @@ def mp_cat(a, b, dim=1, t=0.5):
 # Magnitude-preserving Fourier features (Equation 75).
 
 class MPFourier(torch.nn.Module):
-    def __init__(self, num_channels, bandwidth=1, eps=1e-3, mode="gaussian"):
+    def __init__(self, num_channels, bandwidth=None, eps=1e-3, mode="gaussian"):
         super().__init__()
 
+        if bandwidth is None:
+            bandwidth = np.log(num_channels)
+        
         #self.register_buffer('freqs', 2 * np.pi * torch.randn(num_channels) * bandwidth)
         #self.register_buffer('phases', 2 * np.pi * torch.rand(num_channels))
 
