@@ -105,8 +105,8 @@ class GeodesicFlow:
     @torch.no_grad()
     def get_timestep_noise_label(self, timesteps):
         original_dtype = timesteps.dtype
-        timestep_theta = self.get_timestep_theta(timesteps.to(torch.float64)) / (torch.pi/2)
-        return timestep_theta.to(original_dtype)
+        timestep_theta = self.get_timestep_theta(timesteps.to(torch.float64))
+        return timestep_theta.cos().log().to(original_dtype)
     
     @torch.no_grad()
     def add_noise(self, sample, noise, timesteps):
@@ -161,9 +161,14 @@ if __name__ == "__main__":
     load_dotenv(override=True)
 
     target_snr = 3.5177683092482117
-    flow = GeodesicFlow(target_snr, schedule="linear", objective="scaled_v_pred")
+    schedule = "linear"
+    objective = "scaled_v_pred"
+    num_steps = 200
+    
+    print("target_snr:", target_snr, "schedule:", schedule, "objective:", objective, "num_steps:", num_steps)
 
-    timesteps = torch.linspace(1, 0, 120+1, dtype=torch.float64)[:-1]
+    flow = GeodesicFlow(target_snr, schedule="linear", objective="scaled_v_pred")
+    timesteps = torch.linspace(1, 0, 200+1, dtype=torch.float64)[:-1]
 
     min_timestep_normalized_theta = flow.get_timestep_theta(timesteps.amin()) / (torch.pi/2)
     min_timestep_snr = flow.get_timestep_snr(timesteps.amin())
