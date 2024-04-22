@@ -920,7 +920,13 @@ def do_training_loop(args,
             target_snr = model_params.get("target_snr", 1e4)
 
         logger.info(f"Target SNR: {target_snr:{8}f} Schedule: {model_params['diffusion_schedule']} Objective: {model_params['diffusion_objective']}")
-    
+
+        use_snr_loss_weighting = model_params["use_snr_loss_weighting"]
+        logger.info(f"Using SNR loss weighting: {use_snr_loss_weighting}")
+
+        use_acos_timestep_sampling = model_params["use_acos_timestep_sampling"]
+        logger.info(f"Using acos timestep sampling: {use_acos_timestep_sampling}")
+
         """
         input_perturbation = model_params["input_perturbation"]
         if input_perturbation > 0:
@@ -967,9 +973,10 @@ def do_training_loop(args,
                 batch_timesteps += (torch.rand(1, device=accelerator.device) - 0.5) / total_batch_size
 
                 # slightly bias the sampled timesteps away from pure noise, apparently even this small bias is bad
-                #min_timestep_normalized_theta = pipeline.geodesic_flow.get_timestep_theta(torch.tensor(0.)).item() / (torch.pi/2)
-                #batch_timestep_normalized_thetas = pipeline.geodesic_flow.get_timestep_theta(batch_timesteps) / (torch.pi/2)
-                #batch_timesteps = 1 - ((1 - 2*batch_timestep_normalized_thetas).acos() / np.arccos(1 - 2*min_timestep_normalized_theta)).clip(min=0, max=1)
+                if use_acos_timestep_sampling:
+                    min_timestep_normalized_theta = pipeline.geodesic_flow.get_timestep_theta(torch.tensor(0.)).item() / (torch.pi/2)
+                    batch_timestep_normalized_thetas = pipeline.geodesic_flow.get_timestep_theta(batch_timesteps) / (torch.pi/2)
+                    batch_timesteps = 1 - ((1 - 2*batch_timestep_normalized_thetas).acos() / np.arccos(1 - 2*min_timestep_normalized_theta)).clip(min=0, max=1)
 
                 # sync timesteps across all ranks / processes
                 batch_timesteps = accelerator.gather(batch_timesteps.unsqueeze(0))[0]
@@ -1014,7 +1021,12 @@ def do_training_loop(args,
                     
                     loss = F.mse_loss(model_output.float(), target.float(), reduction="none")
                     timestep_loss = loss.mean(dim=list(range(1, len(loss.shape))))
-                    loss = (timestep_loss / error_logvar.exp() + error_logvar).mean()
+
+                    if use_snr_loss_weighting:
+                        loss_weight = pipeline.geodesic_flow.get_timestep_snr(timesteps)
+                    else:
+                        loss_weight = 1.
+                    loss = ((timestep_loss / error_logvar.exp() + error_logvar) * loss_weight).mean()
 
                     if args.num_timestep_loss_buckets > 0:
                         all_timesteps = accelerator.gather(timesteps.detach()).cpu()
