@@ -70,6 +70,10 @@ class GeodesicFlow:
             bias = (np.arctan(target_snr) / (np.pi/2) - 1) / 2
             def objective_fn(sample, noise, timesteps):
                 return slerp(noise, sample, 1.5 / (get_cos_angle(noise, sample) / (torch.pi/2)) + bias)
+        elif objective == "scaled_v_pred":
+            scale = np.arctan(target_snr) / (np.pi/2) # 0.8236786557085517
+            def objective_fn(sample, noise, timesteps):
+                return slerp(noise, sample, self.get_timestep_theta(timesteps) / (torch.pi/2) + scale/(get_cos_angle(noise, sample) / (torch.pi/2)))
         else:
             raise ValueError(f"Invalid objective: {objective}")
             
@@ -157,7 +161,7 @@ if __name__ == "__main__":
     load_dotenv(override=True)
 
     target_snr = 3.5177683092482117
-    flow = GeodesicFlow(target_snr, schedule="linear", objective="v_pred")
+    flow = GeodesicFlow(target_snr, schedule="linear", objective="scaled_v_pred")
 
     timesteps = torch.linspace(1, 0, 120+1, dtype=torch.float64)[:-1]
 
