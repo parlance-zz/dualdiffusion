@@ -183,8 +183,8 @@ if __name__ == "__main__":
     timestep_noise_std = timestep_snr.atan().cos()
     timestep_normalized_velocity = timestep_normalized_theta[1:] - timestep_normalized_theta[:-1]
 
-    sample = torch.randn(1, 4, 256, 256)
-    noise = torch.randn_like(sample)
+    sample = normalize(torch.randn(1, 4, 256, 256))
+    noise = normalize(torch.randn_like(sample))
     noised_sample = flow.add_noise(sample, noise, timesteps)
     objective = flow.get_objective(sample, noise, timesteps)
     print("input * objective normalized cos angles:")

@@ -1004,9 +1004,9 @@ def do_training_loop(args,
                     samples = pipeline.format.raw_to_sample(raw_samples)
                     if vae is not None:
                         samples = vae.encode(samples.half(), return_dict=False)[0].mode().detach().float()
-                        samples = normalize(samples, zero_mean=True).float()
+                        samples = normalize(samples).float()
                     noise = torch.randn_like(samples).requires_grad_(False)
-                    noise = normalize(noise, zero_mean=True).float()
+                    noise = normalize(noise).float()
 
                     process_batch_timesteps = batch_timesteps[accelerator.local_process_index::accelerator.num_processes]
                     timesteps = process_batch_timesteps[grad_accum_steps * args.train_batch_size:(grad_accum_steps+1) * args.train_batch_size]
