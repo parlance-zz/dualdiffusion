@@ -382,7 +382,8 @@ class DualDiffusionPipeline(DiffusionPipeline):
         print(f"Sample shape: {sample_shape}")
 
         sample = torch.randn(sample_shape, device=self.device, generator=generator)
-        sample = normalize(sample, zero_mean=True)
+        #sample = normalize(sample, zero_mean=True)
+        sample = normalize(sample)
 
         if img2img_input is not None:
             img2img_sample = self.format.raw_to_sample(img2img_input.unsqueeze(0).to(self.device).float())
@@ -459,7 +460,7 @@ class DualDiffusionPipeline(DiffusionPipeline):
                                                      t, next_t, generator=generator)
 
             save_raw_img(sample[0], os.path.join(debug_path, f"debug_sample_{i:03}.png"))
-            save_raw_img(normalize(cfg_model_output[0], zero_mean=True), os.path.join(debug_path, f"debug_output_{i:03}.png"))
+            save_raw_img(cfg_model_output[0], os.path.join(debug_path, f"debug_output_{i:03}.png"))
                         
         sample = sample.float()
 

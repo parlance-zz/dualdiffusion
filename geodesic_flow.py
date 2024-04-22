@@ -112,22 +112,24 @@ class GeodesicFlow:
     def add_noise(self, sample, noise, timesteps):
 
         original_dtype = sample.dtype
-        sample = normalize(sample, zero_mean=True)
-        noise = normalize(noise, zero_mean=True)
+        #sample = normalize(sample, zero_mean=True)
+        #noise = normalize(noise, zero_mean=True)
 
         theta = self.get_timestep_theta(timesteps) / get_cos_angle(sample, noise)
         noised_sample = slerp(noise, sample, theta)
-        return normalize(noised_sample, zero_mean=True).to(original_dtype)
+        #return normalize(noised_sample, zero_mean=True).to(original_dtype)
+        return normalize(noised_sample).to(original_dtype)
     
     @torch.no_grad()
     def get_objective(self, sample, noise, timesteps):
         
         original_dtype = sample.dtype
-        sample = normalize(sample, zero_mean=True)
-        noise = normalize(noise, zero_mean=True)
+        #sample = normalize(sample, zero_mean=True)
+        #noise = normalize(noise, zero_mean=True)
 
         objective = self.objective_fn(sample, noise, timesteps)
-        return normalize(objective, zero_mean=True).to(original_dtype)
+        #return normalize(objective, zero_mean=True).to(original_dtype)
+        return normalize(objective).to(original_dtype)
 
     @torch.no_grad()
     def reverse_step(self, sample, model_output, v_scale, p_scale, t, next_t, generator=None):
@@ -144,12 +146,13 @@ class GeodesicFlow:
             perturbation = torch.empty_like(model_output).normal_(generator=generator)
             model_output = model_output + (1 - output_var.clip(max=1)).sqrt() * perturbation * p_scale
         
-        sample = normalize(sample, zero_mean=True)
-        model_output = normalize(model_output, zero_mean=True)
+        #sample = normalize(sample, zero_mean=True)
+        #model_output = normalize(model_output, zero_mean=True)
         v_scale = v_scale * (self.get_timestep_theta(next_t) - self.get_timestep_theta(t)) / get_cos_angle(sample, model_output)
 
         denoised_sample = slerp(sample, model_output, v_scale)
-        return normalize(denoised_sample, zero_mean=True).to(original_dtype)
+        #return normalize(denoised_sample, zero_mean=True).to(original_dtype)
+        return normalize(denoised_sample).to(original_dtype)
 
 
 if __name__ == "__main__":
