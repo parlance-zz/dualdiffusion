@@ -110,25 +110,15 @@ class GeodesicFlow:
     
     @torch.no_grad()
     def add_noise(self, sample, noise, timesteps):
-
         original_dtype = sample.dtype
-        #sample = normalize(sample, zero_mean=True)
-        #noise = normalize(noise, zero_mean=True)
-
         theta = self.get_timestep_theta(timesteps) / get_cos_angle(sample, noise)
         noised_sample = slerp(noise, sample, theta)
-        #return normalize(noised_sample, zero_mean=True).to(original_dtype)
         return normalize(noised_sample).to(original_dtype)
     
     @torch.no_grad()
     def get_objective(self, sample, noise, timesteps):
-        
         original_dtype = sample.dtype
-        #sample = normalize(sample, zero_mean=True)
-        #noise = normalize(noise, zero_mean=True)
-
         objective = self.objective_fn(sample, noise, timesteps)
-        #return normalize(objective, zero_mean=True).to(original_dtype)
         return normalize(objective).to(original_dtype)
 
     @torch.no_grad()
@@ -142,16 +132,14 @@ class GeodesicFlow:
             next_t = torch.tensor(next_t, dtype=torch.float64, device=sample.device)
 
         if p_scale > 0:
-            output_var = model_output.var(dim=(1,2,3), keepdim=True)
+            model_output = model_output.to(torch.float64)
+            output_len = model_output.square().mean(dim=(1,2,3), keepdim=True)
             perturbation = torch.empty_like(model_output).normal_(generator=generator)
-            model_output = model_output + (1 - output_var.clip(max=1)).sqrt() * perturbation * p_scale
+            model_output = model_output + (1 - output_len.clip(max=1)).sqrt() * perturbation * p_scale
         
-        #sample = normalize(sample, zero_mean=True)
-        #model_output = normalize(model_output, zero_mean=True)
         v_scale = v_scale * (self.get_timestep_theta(next_t) - self.get_timestep_theta(t)) / get_cos_angle(sample, model_output)
 
         denoised_sample = slerp(sample, model_output, v_scale)
-        #return normalize(denoised_sample, zero_mean=True).to(original_dtype)
         return normalize(denoised_sample).to(original_dtype)
 
 
