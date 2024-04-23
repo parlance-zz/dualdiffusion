@@ -414,6 +414,7 @@ class DualDiffusionPipeline(DiffusionPipeline):
         debug_a_list = []
         debug_d_list = []
         debug_s_list = []
+        debug_m_list = []
         debug_o_list = []
 
         cfg_model_output = torch.rand_like(sample)
@@ -444,14 +445,16 @@ class DualDiffusionPipeline(DiffusionPipeline):
             debug_v_list.append(get_cos_angle(sample, cfg_model_output) / (torch.pi/2))
             debug_a_list.append(get_cos_angle(cfg_model_output, last_cfg_model_output) / (torch.pi/2))
             debug_d_list.append(get_cos_angle(initial_noise, sample) / (torch.pi/2))
-            debug_s_list.append(cfg_model_output.std(dim=(1,2,3)))
+            debug_s_list.append(cfg_model_output.square().mean(dim=(1,2,3)).sqrt())
+            debug_m_list.append(cfg_model_output.mean(dim=(1,2,3)))
             debug_o_list.append(cfg_model_output)
 
             print(f"step: {i:>{3}}/{steps:>{3}}",
                   f"v:{debug_v_list[-1][0].item():{8}f}",
                   f"a:{debug_a_list[-1][0].item():{8}f}",
                   f"d:{debug_d_list[-1][0].item():{8}f}",
-                  f"s:{debug_s_list[-1][0].item():{8}f}")
+                  f"s:{debug_s_list[-1][0].item():{8}f}",
+                  f"m:{debug_m_list[-1][0].item():{8}f}")
             
             next_t = t_schedule[i+1] if i+1 < len(t_schedule) else 0
             sample = self.geodesic_flow.reverse_step(sample, cfg_model_output,
@@ -464,15 +467,17 @@ class DualDiffusionPipeline(DiffusionPipeline):
         sample = sample.float()
 
         v_measured = torch.stack(debug_v_list, dim=0)
-        a_measured = torch.stack(debug_a_list, dim=0)
+        a_measured = torch.stack(debug_a_list, dim=0); a_measured[0] = a_measured[1] # first value is irrelevant
         d_measured = torch.stack(debug_d_list, dim=0)
         s_measured = torch.stack(debug_s_list, dim=0)
+        m_measured = torch.stack(debug_m_list, dim=0)
         o_measured = torch.stack(debug_o_list, dim=0)
 
         print(f"Average v_measured: {v_measured.mean()}")
         print(f"Average a_measured: {a_measured.mean()}")
         print(f"Average s_measured: {s_measured.mean()}")
-        print(f"Final distance: ", get_cos_angle(initial_noise, sample)[0].item() / (torch.pi/2))
+        print(f"Average m_measured: {m_measured.mean()}")
+        print(f"Final distance: ", get_cos_angle(initial_noise, sample)[0].item() / (torch.pi/2), "  Final mean:", m_measured[-1, 0].item())
 
         if debug_path is not None:
             save_raw(sample, os.path.join(debug_path, "debug_sampled_latents.raw"))
@@ -482,6 +487,7 @@ class DualDiffusionPipeline(DiffusionPipeline):
             save_raw(a_measured, os.path.join(debug_path, "debug_a_measured.raw"))
             save_raw(d_measured, os.path.join(debug_path, "debug_d_measured.raw"))
             save_raw(s_measured, os.path.join(debug_path, "debug_s_measured.raw"))
+            save_raw(m_measured, os.path.join(debug_path, "debug_m_measured.raw"))
 
             model_outputs = o_measured[:, 0:1].view(steps, -1)
             inner_products = torch.einsum('ijk,ilk->ijl', model_outputs.unsqueeze(0), model_outputs.unsqueeze(1)).permute(2, 0, 1)
