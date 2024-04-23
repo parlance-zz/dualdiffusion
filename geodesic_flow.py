@@ -37,7 +37,7 @@ def normalize(x, zero_mean=False, dtype=torch.float64):
 class GeodesicFlow:
 
     @torch.no_grad()
-    def __init__(self, target_snr, schedule="linear", objective="v_pred"):
+    def __init__(self, target_snr, schedule="linear", objective="scaled_v_pred"):
  
         if target_snr is None:
             target_snr = float("inf")
@@ -48,11 +48,11 @@ class GeodesicFlow:
         self.schedule = schedule
         self.objective = objective
 
-        if schedule == "cos":
+        if schedule == "cos": # this means the _angle_ is a cosine function of the timestep (truncated to target_snr)
             time_scale = np.arccos(4*np.arctan(1/target_snr)/torch.pi - 1) / torch.pi # 0.72412583
             def theta_fn(timesteps):
                 return (1 - ((1-timesteps) * torch.pi * time_scale).cos()) / 2 * (torch.pi/2)
-        elif schedule == "linear":
+        elif schedule == "linear": # this means _angular_ linear (similar to variance preserving cosine schedules, but truncated to target_snr)
             time_scale = np.arctan(target_snr) / (np.pi/2) # 0.8236786557085517
             def theta_fn(timesteps):
                 return (1 - timesteps) * time_scale * (torch.pi/2)
@@ -62,15 +62,21 @@ class GeodesicFlow:
                 return (1 - 2*(1-timesteps) * time_scale).acos()/2
         else:
             raise ValueError(f"Invalid schedule: {schedule}")
-        
-        if objective == "v_pred":
+
+        if objective == "epsilon": # classic noise prediction
             def objective_fn(sample, noise, timesteps):
+                return -noise
+        elif objective == "sample": # classic x0 prediction
+            def objective_fn(sample, noise, timesteps): 
+                return sample
+        elif objective == "v_pred": # classic v-pred
+            def objective_fn(sample, noise, timesteps): 
                 return slerp(noise, sample, self.get_timestep_theta(timesteps) / (torch.pi/2) + 1/(get_cos_angle(noise, sample) / (torch.pi/2)))
-        elif objective == "rectified_flow":
+        elif objective == "rectified_flow": # equivalent to variance preserving sample - noise
             bias = (np.arctan(target_snr) / (np.pi/2) - 1) / 2
             def objective_fn(sample, noise, timesteps):
                 return slerp(noise, sample, 1.5 / (get_cos_angle(noise, sample) / (torch.pi/2)) + bias)
-        elif objective == "scaled_v_pred":
+        elif objective == "scaled_v_pred": # v-pred with objective scaled to a specific target_snr
             scale = np.arctan(target_snr) / (np.pi/2) # 0.8236786557085517
             def objective_fn(sample, noise, timesteps):
                 return slerp(noise, sample, self.get_timestep_theta(timesteps) / (torch.pi/2) + scale/(get_cos_angle(noise, sample) / (torch.pi/2)))
@@ -81,12 +87,12 @@ class GeodesicFlow:
         self.objective_fn = objective_fn
     
     @torch.no_grad()
-    def get_timestep_theta(self, timesteps):
+    def get_timestep_theta(self, timesteps): # theta is the timestep as an angle between 0 (no signal) and pi/2 (no noise)
         original_dtype = timesteps.dtype
         return self.theta_fn(timesteps.to(torch.float64)).to(original_dtype)
 
     @torch.no_grad()
-    def get_timestep_snr(self, timesteps):
+    def get_timestep_snr(self, timesteps): # snr for a timestep angle is just tan(theta)
         original_dtype = timesteps.dtype
         return self.get_timestep_theta(timesteps.to(torch.float64)).tan().to(original_dtype)
 
@@ -103,10 +109,10 @@ class GeodesicFlow:
         return timestep_theta.cos() / timestep_theta.sin().to(original_dtype)
     
     @torch.no_grad()
-    def get_timestep_noise_label(self, timesteps):
+    def get_timestep_noise_label(self, timesteps): # allocates resolution over timesteps proportional to timestep snr
         original_dtype = timesteps.dtype
         timestep_theta = self.get_timestep_theta(timesteps.to(torch.float64))
-        return timestep_theta.cos().log().to(original_dtype)
+        return timestep_theta.cos().log().to(original_dtype) # integral of tan(theta)
     
     @torch.no_grad()
     def add_noise(self, sample, noise, timesteps):
@@ -131,7 +137,7 @@ class GeodesicFlow:
         if not torch.is_tensor(next_t):
             next_t = torch.tensor(next_t, dtype=torch.float64, device=sample.device)
 
-        if p_scale > 0:
+        if p_scale > 0: # interpret the model output as a gaussian distribution with an implicit variance given by 1 - |output|^2
             model_output = model_output.to(torch.float64)
             output_len = model_output.square().mean(dim=(1,2,3), keepdim=True)
             perturbation = torch.empty_like(model_output).normal_(generator=generator)
@@ -143,7 +149,7 @@ class GeodesicFlow:
         return normalize(denoised_sample).to(original_dtype)
 
 
-if __name__ == "__main__":
+if __name__ == "__main__": # small test with some debug output for target_snr / schedule / objective
 
     from dual_diffusion_utils import save_raw
     from dotenv import load_dotenv
