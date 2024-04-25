@@ -151,7 +151,7 @@ class GeodesicFlow:
 
 if __name__ == "__main__": # small test with some debug output for target_snr / schedule / objective
 
-    from dual_diffusion_utils import save_raw
+    from dual_diffusion_utils import save_raw, get_fractal_noise2d
     from dotenv import load_dotenv
     import os
 
@@ -161,11 +161,16 @@ if __name__ == "__main__": # small test with some debug output for target_snr / 
     schedule = "linear"
     objective = "scaled_v_pred"
     num_steps = 200
+    noise_degree = 0
     
     print("target_snr:", target_snr, "schedule:", schedule, "objective:", objective, "num_steps:", num_steps)
 
     flow = GeodesicFlow(target_snr, schedule="linear", objective="scaled_v_pred")
     timesteps = torch.linspace(1, 0, 200+1, dtype=torch.float64)[:-1]
+    if noise_degree == 0:
+        noise_fn = torch.randn
+    else:
+        noise_fn = lambda shape, **kwargs: get_fractal_noise2d(shape, **kwargs)
 
     min_timestep_normalized_theta = flow.get_timestep_theta(timesteps.amin()) / (torch.pi/2)
     min_timestep_snr = flow.get_timestep_snr(timesteps.amin())
@@ -177,8 +182,8 @@ if __name__ == "__main__": # small test with some debug output for target_snr / 
     timestep_noise_std = timestep_snr.atan().cos()
     timestep_normalized_velocity = timestep_normalized_theta[1:] - timestep_normalized_theta[:-1]
 
-    sample = normalize(torch.randn(1, 4, 256, 256))
-    noise = normalize(torch.randn_like(sample))
+    sample = normalize(noise_fn(1, 4, 256, 256))
+    noise = normalize(noise_fn(sample.shape))
     noised_sample = flow.add_noise(sample, noise, timesteps)
     objective = flow.get_objective(sample, noise, timesteps)
     print("input * objective normalized cos angles:")
