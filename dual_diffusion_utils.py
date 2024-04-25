@@ -84,6 +84,21 @@ def compute_snr(noise_scheduler, timesteps):
     snr = (alpha / sigma) ** 2
     return snr
 
+def get_fractal_noise2d(shape, device="cpu", generator=None, degree=1):
+    
+    noise_shape = shape[:-2] + (shape[-2]*2, shape[-1]*2)
+    noise_complex = torch.randn(noise_shape, device=device, dtype=torch.complex64)
+
+    linspace_x = (torch.arange(0, noise_complex.shape[-2], device=device) - noise_complex.shape[-2]//2).square() / noise_complex.shape[-2]**2
+    linspace_y = (torch.arange(0, noise_complex.shape[-1], device=device) - noise_complex.shape[-1]//2).square() / noise_complex.shape[-1]**2
+    linspace = (linspace_x.view(-1, 1) + linspace_y.view(1, -1)).pow(-degree/2)
+    linspace[noise_complex.shape[-2]//2, noise_complex.shape[-1]//2] = 0
+    linspace = linspace.view((1,)*(len(shape)-2) + (noise_complex.shape[-2], noise_complex.shape[-1]))
+    linspace = torch.roll(linspace, shifts=(linspace.shape[-2]//2, linspace.shape[-1]//2), dims=(-2, -1))
+
+    pink_noise = torch.fft.ifft2(noise_complex * linspace, norm="ortho").real[..., :shape[-2], :shape[-1]]
+    return (pink_noise / pink_noise.std(dim=(-2, -1), keepdim=True)).detach().requires_grad_(False)
+
 def get_hann_window(window_len, device="cpu"):
     n = torch.arange(window_len, device=device) / window_len
     return (0.5 - 0.5 * torch.cos(2 * torch.pi * n)).requires_grad_(False)
@@ -548,7 +563,7 @@ def quantize_tensor(x, levels):
 
 def save_raw_img(x, img_path, allow_inversion=False, allow_colormap=True):
     
-    x = x.detach().float().resolve_conj().cpu()
+    x = x.clone().detach().float().resolve_conj().cpu()
     x -= x.amin(dim=(x.ndim-1, x.ndim-2), keepdim=True)
     x /= x.amax(dim=(x.ndim-1, x.ndim-2), keepdim=True).clip(min=1e-16)
 
@@ -586,7 +601,22 @@ class ScaleNorm(nn.Module):
         view_shape = (1, -1,) + (1,) * (x.ndim - 2)
         return x * F.softplus(self.scale).view(view_shape)
 
-if __name__ == "__main__":
+if __name__ == "__main__": # fractal noise test
 
     init_cuda()
     load_dotenv(override=True)
+
+    noise_test_iter = 5
+    noise_test_dim = (696, 32)
+    noise_test_degree = 2/(1+5**0.5) #0.5
+
+    debug_path = os.environ.get("DEBUG_PATH", None)
+    if debug_path is not None:
+        debug_path = os.path.join(debug_path, "noise_test")
+
+        for i in range(noise_test_iter):
+            noise = get_fractal_noise2d(noise_test_dim, degree=noise_test_degree)
+            save_raw_img(noise, os.path.join(debug_path, "fractal_noise{i}.png"), allow_colormap=False)
+
+        noise_fft = torch.fft.fft2(noise, norm="ortho").abs().clip(min=4e-2).log()
+        save_raw_img(noise_fft, os.path.join(debug_path, "fractal_noise_ln_psd.png"))
