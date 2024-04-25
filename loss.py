@@ -128,8 +128,7 @@ class DualMultiscaleSpectralLoss2D:
     
         self.block_widths = loss_params["block_widths"]
         self.block_overlap = loss_params["block_overlap"]
-        self.imag_loss_weight = loss_params["imag_loss_weight"]
-        self.loss_scale = 1 / len(self.block_widths)
+        self.loss_scale = 4e-3
     
     def _flat_top_window(self, x):
         return 0.21557895 - 0.41663158 * torch.cos(x) + 0.277263158 * torch.cos(2*x) - 0.083578947 * torch.cos(3*x) + 0.006947368 * torch.cos(4*x)
@@ -161,10 +160,9 @@ class DualMultiscaleSpectralLoss2D:
         target = target["samples"]
         sample = sample["samples"]
 
-        loss_real = torch.zeros(1, device=target.device)
-        loss_imag = torch.zeros(1, device=target.device)
-
-        loss_scale = self.loss_scale / target.numel() / (self.block_overlap ** 2 / 4) / self.block_widths[-1] * 2.5
+        loss_real = torch.zeros(1, device=target.device, dtype=torch.float64)
+        loss_imag = torch.zeros(1, device=target.device, dtype=torch.float64)
+        loss_scale = self.loss_scale / target.numel()
 
         for block_width in self.block_widths:
             
@@ -177,19 +175,17 @@ class DualMultiscaleSpectralLoss2D:
                 target_fft = self.stft2d(target, block_width, step, window)
                 target_fft_abs = target_fft.abs().requires_grad_(False)
 
-                if self.imag_loss_weight > 0:
-                    target_fft_angle = target_fft.angle().requires_grad_(False)
-                    loss_imag_weight = (target_fft_abs * self.imag_loss_weight).requires_grad_(False)
+                target_fft_angle = target_fft.angle().requires_grad_(False)
+                loss_imag_weight = target_fft_abs.requires_grad_(False)
 
             sample_fft = self.stft2d(sample, block_width, step, window)
             sample_fft_abs = sample_fft.abs()
             
-            loss_real = loss_real + (sample_fft_abs - target_fft_abs).abs().sum()
+            loss_real = loss_real + (sample_fft_abs - target_fft_abs).abs().type(torch.float64).sum()
 
-            if self.imag_loss_weight > 0:
-                error_imag = (sample_fft.angle() - target_fft_angle).abs()
-                error_imag_wrap_mask = (error_imag > torch.pi).detach().requires_grad_(False)
-                error_imag[error_imag_wrap_mask] = 2*torch.pi - error_imag[error_imag_wrap_mask]
-                loss_imag = loss_imag + (error_imag * loss_imag_weight).sum()
-            
-        return loss_real * loss_scale, loss_imag * loss_scale
+            error_imag = (sample_fft.angle() - target_fft_angle).abs()
+            error_imag_wrap_mask = (error_imag > torch.pi).detach().requires_grad_(False)
+            error_imag[error_imag_wrap_mask] = 2*torch.pi - error_imag[error_imag_wrap_mask]
+            loss_imag = loss_imag + (error_imag * loss_imag_weight).type(torch.float64).sum()
+        
+        return (loss_real * loss_scale).float(), (loss_imag * loss_scale).float()
