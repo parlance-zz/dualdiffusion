@@ -32,8 +32,9 @@ from diffusers.pipelines.pipeline_utils import DiffusionPipeline
 #from unet_dual import UNetDualModel
 from unet_edm2 import UNet
 from autoencoder_kl_dual import AutoencoderKLDual
+from autoencoder_kl_edm2 import AutoencoderKL_EDM2
 from spectrogram import SpectrogramParams, SpectrogramConverter
-from dual_diffusion_utils import mdct, imdct, save_raw, save_raw_img
+from dual_diffusion_utils import mdct, imdct, save_raw, save_raw_img, get_fractal_noise2d
 from geodesic_flow import GeodesicFlow, normalize, slerp, get_cos_angle
 from loss import DualMultiscaleSpectralLoss, DualMultiscaleSpectralLoss2D
 
@@ -250,13 +251,7 @@ class DualSpectrogramFormat(torch.nn.Module):
 class DualDiffusionPipeline(DiffusionPipeline):
 
     @torch.no_grad()
-    def __init__(
-        self,
-        #unet: UNetDualModel,
-        unet: UNet,
-        vae: AutoencoderKLDual, 
-        model_params: dict = None,
-    ):
+    def __init__(self, unet, vae, model_params=None):
         super().__init__()
 
         modules = {
@@ -281,6 +276,12 @@ class DualDiffusionPipeline(DiffusionPipeline):
         self.geodesic_flow = GeodesicFlow(target_snr,
                                           model_params["diffusion_schedule"],
                                           model_params["diffusion_objective"])
+        
+        self.noise_degree = model_params.get("noise_degree", 0)
+        if self.noise_degree == 0:
+            self.noise_fn = torch.randn
+        else:
+            self.noise_fn = lambda shape, **kwargs: get_fractal_noise2d(shape, degree=self.noise_degree)
 
     @staticmethod
     @torch.no_grad()
@@ -300,8 +301,16 @@ class DualDiffusionPipeline(DiffusionPipeline):
         
         unet = UNet(**unet_params)
 
+        vae_class = model_params.get("vae_class", None)
+        if vae_class is None or vae_class == "AutoencoderKLDual":
+            vae_class = AutoencoderKLDual
+        elif vae_class == "AutoencoderKL_EDM2":
+            vae_class = AutoencoderKL_EDM2
+        else:
+            raise ValueError(f"Unknown vae class '{vae_class}'")
+        
         if vae_params is not None:
-            vae = AutoencoderKLDual(**vae_params)
+            vae = vae_class(**vae_params)
         else:
             vae = None
 
@@ -381,24 +390,24 @@ class DualDiffusionPipeline(DiffusionPipeline):
             sample_shape = self.vae.get_latent_shape(sample_shape)
         print(f"Sample shape: {sample_shape}")
 
-        sample = torch.randn(sample_shape, device=self.device, generator=generator)
+        sample = self.noise_fn(sample_shape, device=self.device, generator=generator)
         sample = normalize(sample)
-
-        if img2img_input is not None:
-            img2img_sample = self.format.raw_to_sample(img2img_input.unsqueeze(0).to(self.device).float())
-            latents = self.vae.encode(img2img_sample.type(self.unet.dtype), return_dict=False)[0].mode()
-            sample = self.geodesic_flow.add_noise(latents, sample, torch.tensor([img2img_strength], device=sample.device, dtype=sample.dtype))
-            start_timestep = img2img_strength
-        else:
-            start_timestep = 1
-
-        initial_noise = sample.clone()
 
         if game_ids is not None:
             labels = torch.tensor(game_ids, device=self.device, dtype=torch.long)
             #assert labels.shape[0] == batch_size
         else:
             labels = torch.randint(0, self.unet.label_dim, (batch_size,), device=self.device, generator=generator)
+
+        if img2img_input is not None:
+            img2img_sample = self.format.raw_to_sample(img2img_input.unsqueeze(0).to(self.device).float())
+            latents = self.vae.encode(img2img_sample.type(self.unet.dtype), labels).mode()
+            sample = self.geodesic_flow.add_noise(latents, sample, torch.tensor([img2img_strength], device=sample.device, dtype=sample.dtype))
+            start_timestep = img2img_strength
+        else:
+            start_timestep = 1
+
+        initial_noise = sample.clone()
 
         if model_params["t_scale"] is None:
             t_ranges = None
@@ -494,7 +503,7 @@ class DualDiffusionPipeline(DiffusionPipeline):
             save_raw_img(inner_products[0], os.path.join(debug_path, "debug_o_inner_products.png"))
             
         if getattr(self, "vae", None) is not None:
-            sample = self.vae.decode(sample.to(self.vae.dtype)).sample.float()
+            sample = self.vae.decode(sample.to(self.vae.dtype), labels).float()
         
         if debug_path is not None:
             save_raw(sample, os.path.join(debug_path, "debug_decoded_sample.raw"))
