@@ -181,7 +181,7 @@ class Block(torch.nn.Module):
         self.clip_act = clip_act
         self.emb_gain = torch.nn.Parameter(torch.zeros([]))
         self.conv_res0 = MPConv(out_channels if flavor == 'enc' else in_channels, out_channels, kernel=[3,3])
-        self.emb_linear = MPConv(emb_channels, out_channels, kernel=[])
+        self.emb_linear = MPConv(emb_channels, out_channels, kernel=[]) if emb_channels != 0 else None
         self.conv_res1 = MPConv(out_channels, out_channels, kernel=[3,3])
         self.conv_skip = MPConv(in_channels, out_channels, kernel=[1,1]) if in_channels != out_channels else None
 
@@ -207,8 +207,9 @@ class Block(torch.nn.Module):
 
         # Residual branch.
         y = self.conv_res0(mp_silu(x))
-        c = self.emb_linear(emb, gain=self.emb_gain) + 1
-        y = mp_silu(y * c.unsqueeze(2).unsqueeze(3).to(y.dtype))
+        if self.emb_linear is not None:
+            c = self.emb_linear(emb, gain=self.emb_gain) + 1
+            y = mp_silu(y * c.unsqueeze(2).unsqueeze(3).to(y.dtype))
         #if self.training and self.dropout != 0:
         #    y = torch.nn.functional.dropout(y, p=self.dropout)
         if self.dropout != 0: # magnitude preserving fix for dropout
