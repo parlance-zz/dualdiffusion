@@ -861,6 +861,6 @@ class AutoencoderKLDual(ModelMixin, ConfigMixin):
         target_vae_sample_std = (1 - target_vae_noise_std**2) ** 0.5
         return target_vae_sample_std / target_vae_noise_std
     
-    def get_recon_logvar(self):
+    def get_recon_loss_logvar(self):
         return self.recon_loss_logvar
         
