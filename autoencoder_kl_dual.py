@@ -96,8 +96,8 @@ class DiagonalGaussianDistributionUniVar(object):
                 self.mean, device=self.parameters.device, dtype=self.parameters.dtype
             )
 
-    def sample(self, generator: Optional[torch.Generator] = None) -> torch.FloatTensor: 
-        noise = torch.randn(self.mean.shape, generator=generator, device=self.parameters.device, dtype=self.parameters.dtype)
+    def sample(self, noise_fn, **kwargs) -> torch.FloatTensor: 
+        noise = noise_fn(self.mean.shape, device=self.parameters.device, dtype=self.parameters.dtype, **kwargs)
         return self.mean + self.std * noise
 
     def kl(self, other=None):
@@ -678,9 +678,9 @@ class AutoencoderKLDual(ModelMixin, ConfigMixin):
         self.use_slicing = 0
 
     @apply_forward_hook
-    def encode(self, x: torch.FloatTensor, return_dict: bool = True) -> AutoencoderKLOutput:
+    def encode(self, x: torch.FloatTensor, class_labels):
         if self.use_tiling and (x.shape[-1] > self.tile_sample_min_size or x.shape[-2] > self.tile_sample_min_size):
-            return self.tiled_encode(x, return_dict=return_dict)
+            return self.tiled_encode(x)
 
         if self.use_slicing > 0 and x.shape[0] > 1:
             encoded_slices = [self.encoder(x_slice) for x_slice in x.split(self.use_slicing)]
@@ -689,38 +689,24 @@ class AutoencoderKLDual(ModelMixin, ConfigMixin):
             h = self.encoder(x)
 
         moments = self.quant_conv(h)
-        #posterior = DiagonalGaussianDistribution(moments)
-        posterior = DiagonalGaussianDistributionUniVar(moments, self.encoder.latents_logvar)
+        return DiagonalGaussianDistributionUniVar(moments, self.encoder.latents_logvar)
 
-        if not return_dict:
-            return (posterior,)
-
-        return AutoencoderKLOutput(latent_dist=posterior)
-
-    def _decode(self, z: torch.FloatTensor, return_dict: bool = True) -> Union[DecoderOutput, torch.FloatTensor]:
+    def _decode(self, z: torch.FloatTensor):
         if self.use_tiling and (z.shape[-1] > self.tile_latent_min_size or z.shape[-2] > self.tile_latent_min_size):
-            return self.tiled_decode(z, return_dict=return_dict)
+            return self.tiled_decode(z)
 
         z = self.post_quant_conv(z)
-        dec = self.decoder(z)
-
-        if not return_dict:
-            return (dec,)
-
-        return DecoderOutput(sample=dec)
+        return self.decoder(z)
 
     @apply_forward_hook
-    def decode(self, z: torch.FloatTensor, return_dict: bool = True) -> Union[DecoderOutput, torch.FloatTensor]:
+    def decode(self, z: torch.FloatTensor, class_labels):
         if self.use_slicing and z.shape[0] > 1:
-            decoded_slices = [self._decode(z_slice).sample for z_slice in z.split(1)]
+            decoded_slices = [self._decode(z_slice) for z_slice in z.split(1)]
             decoded = torch.cat(decoded_slices)
         else:
-            decoded = self._decode(z).sample
+            decoded = self._decode(z)
 
-        if not return_dict:
-            return (decoded,)
-
-        return DecoderOutput(sample=decoded)
+        return decoded
 
     def blend_v(self, a, b, blend_extent):
         blend_extent = min(a.shape[2], b.shape[2], blend_extent)
@@ -734,7 +720,7 @@ class AutoencoderKLDual(ModelMixin, ConfigMixin):
             b[:, :, :, x] = a[:, :, :, -blend_extent + x] * (1 - x / blend_extent) + b[:, :, :, x] * (x / blend_extent)
         return b
 
-    def tiled_encode(self, x: torch.FloatTensor, return_dict: bool = True) -> AutoencoderKLOutput:
+    def tiled_encode(self, x: torch.FloatTensor):
         r"""Encode a batch of images using a tiled encoder.
 
         When this option is enabled, the VAE will split the input tensor into tiles to compute encoding in several
@@ -781,15 +767,9 @@ class AutoencoderKLDual(ModelMixin, ConfigMixin):
             result_rows.append(torch.cat(result_row, dim=3))
 
         moments = torch.cat(result_rows, dim=2)
-        #posterior = DiagonalGaussianDistribution(moments)
-        posterior = DiagonalGaussianDistributionUniVar(moments, self.encoder.latents_logvar)
+        return DiagonalGaussianDistributionUniVar(moments, self.encoder.latents_logvar)
 
-        if not return_dict:
-            return (posterior,)
-
-        return AutoencoderKLOutput(latent_dist=posterior)
-
-    def tiled_decode(self, z: torch.FloatTensor, return_dict: bool = True) -> Union[DecoderOutput, torch.FloatTensor]:
+    def tiled_decode(self, z: torch.FloatTensor):
         r"""
         Decode a batch of images using a tiled decoder.
 
@@ -831,19 +811,15 @@ class AutoencoderKLDual(ModelMixin, ConfigMixin):
                 result_row.append(tile[:, :, :row_limit, :row_limit])
             result_rows.append(torch.cat(result_row, dim=3))
 
-        dec = torch.cat(result_rows, dim=2)
-        if not return_dict:
-            return (dec,)
-
-        return DecoderOutput(sample=dec)
+        return torch.cat(result_rows, dim=2)
 
     def forward(
         self,
         sample: torch.FloatTensor,
+        class_labels,
         sample_posterior: bool = False,
-        return_dict: bool = True,
         generator: Optional[torch.Generator] = None,
-    ) -> Union[DecoderOutput, torch.FloatTensor]:
+    ):
         r"""
         Args:
             sample (`torch.FloatTensor`): Input sample.
@@ -858,12 +834,7 @@ class AutoencoderKLDual(ModelMixin, ConfigMixin):
             z = posterior.sample(generator=generator)
         else:
             z = posterior.mode()
-        dec = self.decode(z).sample
-
-        if not return_dict:
-            return (dec,)
-
-        return DecoderOutput(sample=dec)
+        return self.decode(z)
 
     def get_latent_shape(self, sample_shape):
         vae_latent_channels = self.config.latent_channels
@@ -889,4 +860,7 @@ class AutoencoderKLDual(ModelMixin, ConfigMixin):
         target_vae_noise_std = (self.encoder.latents_logvar / 2).exp().item()
         target_vae_sample_std = (1 - target_vae_noise_std**2) ** 0.5
         return target_vae_sample_std / target_vae_noise_std
+    
+    def get_recon_logvar(self):
+        return self.recon_loss_logvar
         
