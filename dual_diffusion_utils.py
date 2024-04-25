@@ -84,13 +84,13 @@ def compute_snr(noise_scheduler, timesteps):
     snr = (alpha / sigma) ** 2
     return snr
 
-def get_fractal_noise2d(shape, device="cpu", generator=None, degree=1):
+def get_fractal_noise2d(shape, degree=1, **kwargs):
     
     noise_shape = shape[:-2] + (shape[-2]*2, shape[-1]*2)
-    noise_complex = torch.randn(noise_shape, device=device, dtype=torch.complex64)
+    noise_complex = torch.randn(noise_shape, **kwargs)
 
-    linspace_x = (torch.arange(0, noise_complex.shape[-2], device=device) - noise_complex.shape[-2]//2).square() / noise_complex.shape[-2]**2
-    linspace_y = (torch.arange(0, noise_complex.shape[-1], device=device) - noise_complex.shape[-1]//2).square() / noise_complex.shape[-1]**2
+    linspace_x = (torch.arange(0, noise_complex.shape[-2], device=noise_complex.device) - noise_complex.shape[-2]//2).square() / noise_complex.shape[-2]**2
+    linspace_y = (torch.arange(0, noise_complex.shape[-1], device=noise_complex.device) - noise_complex.shape[-1]//2).square() / noise_complex.shape[-1]**2
     linspace = (linspace_x.view(-1, 1) + linspace_y.view(1, -1)).pow(-degree/2)
     linspace[noise_complex.shape[-2]//2, noise_complex.shape[-1]//2] = 0
     linspace = linspace.view((1,)*(len(shape)-2) + (noise_complex.shape[-2], noise_complex.shape[-1]))
