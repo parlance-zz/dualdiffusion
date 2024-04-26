@@ -587,6 +587,7 @@ def save_raw_img(x, img_path, allow_inversion=False, allow_colormap=True):
     else:
         raise ValueError(f"Unsupported number of dimensions in save_raw_img: {x.ndim}")
 
+    os.makedirs(os.path.dirname(img_path), exist_ok=True)
     cv2.imwrite(img_path, cv2.flip(cv2_img, 0))
 
 class ScaleNorm(nn.Module):
@@ -608,15 +609,16 @@ if __name__ == "__main__": # fractal noise test
 
     noise_test_iter = 5
     noise_test_dim = (696, 32)
-    noise_test_degree = 2/(1+5**0.5) #0.5
+    noise_test_degree = 1 #2/(1+5**0.5) #0.5
 
     debug_path = os.environ.get("DEBUG_PATH", None)
     if debug_path is not None:
         debug_path = os.path.join(debug_path, "noise_test")
-
+        
         for i in range(noise_test_iter):
             noise = get_fractal_noise2d(noise_test_dim, degree=noise_test_degree)
-            save_raw_img(noise, os.path.join(debug_path, "fractal_noise{i}.png"), allow_colormap=False)
+            save_raw_img(noise, os.path.join(debug_path, f"fractal_noise{i}.png"), allow_colormap=False)
+            print(os.path.join(debug_path, f"fractal_noise{i}.png"))
 
         noise_fft = torch.fft.fft2(noise, norm="ortho").abs().clip(min=4e-2).log()
         save_raw_img(noise_fft, os.path.join(debug_path, "fractal_noise_ln_psd.png"))
