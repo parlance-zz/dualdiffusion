@@ -56,7 +56,7 @@ class AutoencoderKL_EDM2(ModelMixin, ConfigMixin):
         in_channels = 2,                    # Number of input channels.
         out_channels = 2,                   # Number of output channels.
         latent_channels = 4,                # Number of channels in latent space.
-        target_snr = 1.732,                 # The learned latent noise variance will not exceed this snr
+        target_snr = 1.732,                 # The learned latent snr will not exceed this snr
         channels_per_head = 64,             # Number of channels per attention head.
         label_dim = 0,                      # Class label dimensionality. 0 = unconditional.
         dropout = 0,                        # Dropout probability.
@@ -84,11 +84,15 @@ class AutoencoderKL_EDM2(ModelMixin, ConfigMixin):
         self.dropout = dropout
         self.target_snr = target_snr
         self.num_blocks = len(channel_mult)
-        self.latents_out_gain = torch.nn.Parameter(torch.zeros([]))
-        self.out_gain = torch.nn.Parameter(torch.zeros([]))
 
+        target_noise_std = (1 / (self.target_snr**2 + 1))**0.5
+        target_sample_std = (1 - target_noise_std**2)**0.5
+        self.latents_out_gain = torch.nn.Parameter(torch.tensor(target_sample_std))
+        self.out_gain = torch.nn.Parameter(torch.ones([]))
+        
         # Embedding.
-        self.emb_label = MPConv(label_dim, cemb, kernel=[]) if label_dim != 0 else None
+        self.encoder_emb_label = MPConv(label_dim, cemb, kernel=[]) if label_dim != 0 else None
+        self.decoder_emb_label = MPConv(label_dim, cemb, kernel=[]) if label_dim != 0 else None
 
         # Training uncertainty estimation.
         self.recon_loss_logvar = torch.nn.Parameter(torch.zeros(1))
@@ -134,9 +138,9 @@ class AutoencoderKL_EDM2(ModelMixin, ConfigMixin):
                                                              flavor='dec', attention=(level in attn_levels), **block_kwargs)
         self.conv_out = MPConv(cout, out_channels, kernel=[3,3])
 
-    def get_embedding(self, class_labels, batch_size):
+    def get_embedding(self, emb_label, class_labels, batch_size):
 
-        if self.emb_label is not None:
+        if emb_label is not None:
             if class_labels is not None:
                 class_labels = torch.nn.functional.one_hot(class_labels, num_classes=self.label_dim).to(self.dtype)
             else:
@@ -146,23 +150,24 @@ class AutoencoderKL_EDM2(ModelMixin, ConfigMixin):
                 assert(self.training == False)
                 class_labels = class_labels.sum(dim=0, keepdim=True)
                 
-            return mp_silu(self.emb_label(normalize(class_labels)))
+            return mp_silu(emb_label(normalize(class_labels)))
         else:
             return None
 
     def encode(self, x, class_labels):
 
-        emb = self.get_embedding(class_labels, x.shape[0])
+        emb = self.get_embedding(self.encoder_emb_label, class_labels, x.shape[0])
         x = torch.cat((x, torch.ones_like(x[:, :1])), dim=1)
         for name, block in self.enc.items():
             x = block(x) if 'conv' in name else block(x, emb, None, None)
 
         latents = self.conv_latents_out(mp_silu(x), gain=self.latents_out_gain)
-        return IsotropicGaussianDistribution(latents, self.latents_logvar)
+        noise_logvar = torch.tensor(np.log(1 / (self.target_snr**2 + 1)), device=x.device, dtype=x.dtype)
+        return IsotropicGaussianDistribution(latents, noise_logvar)
     
     def decode(self, x, class_labels):
         
-        emb = self.get_embedding(class_labels, x.shape[0])
+        emb = self.get_embedding(self.decoder_emb_label, class_labels, x.shape[0])
         x = mp_silu(self.conv_latents_in(x))
         for _, block in self.dec.items():
             x = block(x, emb, None, None)
@@ -173,9 +178,10 @@ class AutoencoderKL_EDM2(ModelMixin, ConfigMixin):
         return self.recon_loss_logvar
     
     def get_target_snr(self):
-        target_vae_noise_std = (self.latents_logvar / 2).exp().item()
-        target_vae_sample_std = (1 - target_vae_noise_std**2) ** 0.5
-        return target_vae_sample_std / target_vae_noise_std
+        #target_vae_noise_std = (self.latents_logvar / 2).exp().item()
+        #target_vae_sample_std = (1 - target_vae_noise_std**2) ** 0.5
+        #return target_vae_sample_std / target_vae_noise_std
+        return self.target_snr
     
     def get_latent_shape(self, sample_shape):
         if len(sample_shape) == 4:
