@@ -52,7 +52,6 @@ from diffusers.utils import deprecate, is_tensorboard_available
 #from unet_dual import UNetDualModel
 from unet_edm2 import UNet
 from unet_edm2_ema import PowerFunctionEMA
-from autoencoder_kl_dual import AutoencoderKLDual
 from dual_diffusion_pipeline import DualDiffusionPipeline
 from dual_diffusion_utils import init_cuda, load_audio, save_audio, load_raw, save_raw, dict_str, normalize_lufs
 from geodesic_flow import normalize
@@ -591,7 +590,6 @@ def init_module_pipeline(pretrained_model_name_or_path, module_type, vae_encode_
     module = getattr(pipeline, module_type)
 
     if module_type == "unet":
-        #module_class = UNetDualModel
         module_class = UNet
 
         vae = getattr(pipeline, "vae", None)
@@ -606,7 +604,7 @@ def init_module_pipeline(pretrained_model_name_or_path, module_type, vae_encode_
             logger.info(f"Training diffusion model without VAE")
 
     elif module_type == "vae":
-        module_class = AutoencoderKLDual
+        module_class = DualDiffusionPipeline.get_vae_class(pipeline.config["model_params"])
 
         vae = None
         if getattr(pipeline, "unet", None) is not None:
@@ -865,33 +863,33 @@ def do_training_loop(args,
     if args.module == "vae":
 
         latent_shape = module.get_latent_shape(sample_shape)
-        kl_loss_weight = model_params["kl_loss_weight"]
-        channel_kl_loss_weight = model_params["channel_kl_loss_weight"]
-        recon_loss_weight = model_params["recon_loss_weight"]
-        point_loss_weight = model_params["point_loss_weight"]
+        channel_kl_loss_weight = model_params["vae_loss_params"]["channel_kl_loss_weight"]
+        recon_loss_weight = model_params["vae_loss_params"]["recon_loss_weight"]
+        point_loss_weight = model_params["vae_loss_params"]["point_loss_weight"]
+        imag_loss_weight = model_params["vae_loss_params"]["imag_loss_weight"]
 
         logger.info("Training VAE model:")
-        logger.info(f"Loss params: {dict_str(model_params['loss_params'])}")
-        logger.info(f"Using KL loss weight: {kl_loss_weight} - Channel KL loss weight: {channel_kl_loss_weight}")
-        logger.info(f"Recon loss weight: {recon_loss_weight} - Point loss weight: {point_loss_weight}")
+        logger.info(f"VAE Loss params: {dict_str(model_params['vae_loss_params'])}")
+        logger.info(f"Channel KL loss weight: {channel_kl_loss_weight}")
+        logger.info(f"Recon loss weight: {recon_loss_weight} - Point loss weight: {point_loss_weight} - Imag loss weight: {imag_loss_weight}")
 
-        kl_loss_weight = torch.tensor(kl_loss_weight, device=accelerator.device, dtype=torch.float32)
         channel_kl_loss_weight = torch.tensor(channel_kl_loss_weight, device=accelerator.device, dtype=torch.float32)
         recon_loss_weight = torch.tensor(recon_loss_weight, device=accelerator.device, dtype=torch.float32)
         point_loss_weight = torch.tensor(point_loss_weight, device=accelerator.device, dtype=torch.float32)
+        imag_loss_weight = torch.tensor(imag_loss_weight, device=accelerator.device, dtype=torch.float32)
 
         module_log_channels = [
-            "kl_loss_weight",
             "channel_kl_loss_weight",
             "recon_loss_weight",
+            "imag_loss_weight",
             "real_loss",
             "imag_loss",
-            "kl_loss",
+            #"kl_loss",
             "channel_kl_loss",
             "latents_mean",
             "latents_std",
-            "latents_logvar",
-            "point_similarity",
+            "latents_snr",
+            "point_similarity_loss",
             "point_loss_weight",
         ]
 
@@ -939,6 +937,9 @@ def do_training_loop(args,
         #module.normalize_weights()
 
         logger.info(f"Dropout: {module.dropout} Conditioning dropout: {module.label_dropout}")
+
+    noise_degree = "normal" if model_params.get("noise_degree", 0) == 0 else f"fractal - degree: {model_params['noise_degree']}"
+    logger.info(f"Noise type: {noise_degree}")
 
     logger.info(f"Sample shape: {sample_shape}")
     if latent_shape is not None:
@@ -1005,7 +1006,7 @@ def do_training_loop(args,
                     if vae is not None:
                         samples = vae.encode(samples.half(), return_dict=False)[0].mode().detach().float()
                         samples = normalize(samples).float()
-                    noise = torch.randn_like(samples).requires_grad_(False)
+                    noise = pipeline.noise_fn(samples.shape, device=samples.device)
                     noise = normalize(noise).float()
 
                     process_batch_timesteps = batch_timesteps[accelerator.local_process_index::accelerator.num_processes]
@@ -1041,27 +1042,31 @@ def do_training_loop(args,
                 elif args.module == "vae":
 
                     samples_dict = pipeline.format.raw_to_sample(raw_samples, return_dict=True)
-                    posterior = module.encode(samples_dict["samples"], return_dict=False)[0]
-                    latents = posterior.sample()
+                    posterior = module.encode(samples_dict["samples"], sample_game_ids)
+                    latents = posterior.sample(pipeline.noise_fn)
                     latents_mean = latents.mean()
                     latents_std = latents.std()
-                    latents_logvar = module.encoder.latents_logvar.detach()
-                    model_output = module.decode(latents, return_dict=False)[0]
+
+                    target_noise_std = (1 / (module.get_target_snr()**2 + 1))**0.5
+                    measured_sample_std = (latents_std**2 - target_noise_std**2).clip(min=0)**0.5
+                    latents_snr = measured_sample_std / target_noise_std
+                    model_output = module.decode(latents, sample_game_ids)
 
                     recon_samples_dict = pipeline.format.sample_to_raw(model_output, return_dict=True, decode=False)
-                    point_similarity = (samples_dict["samples"] - recon_samples_dict["samples"]).abs().mean()
+                    point_similarity_loss = (samples_dict["samples"] - recon_samples_dict["samples"]).abs().mean()
                     
+                    recon_loss_logvar = module.get_recon_loss_logvar()
                     real_loss, imag_loss = pipeline.format.get_loss(recon_samples_dict, samples_dict)
-                    real_nll_loss = (real_loss / module.recon_loss_logvar.exp() + module.recon_loss_logvar) * recon_loss_weight
-                    imag_nll_loss = (imag_loss / module.recon_loss_logvar.exp() + module.recon_loss_logvar) * recon_loss_weight
+                    real_nll_loss = (real_loss / recon_loss_logvar.exp() + recon_loss_logvar) * recon_loss_weight
+                    imag_nll_loss = (imag_loss / recon_loss_logvar.exp() + recon_loss_logvar) * (recon_loss_weight * imag_loss_weight)
 
-                    kl_loss = posterior.kl()
+                    #kl_loss = posterior.kl()
 
                     latents_channel_mean = latents.mean(dim=(2,3))
-                    latents_channel_var = latents.std(dim=(2,3)).clip(min=1e-5).square()
+                    latents_channel_var = latents.var(dim=(2,3)).clip(min=1e-5)
                     channel_kl_loss = (latents_channel_mean.square() + latents_channel_var - 1 - latents_channel_var.log()).mean()
                     
-                    loss = real_nll_loss + imag_nll_loss + kl_loss * kl_loss_weight + channel_kl_loss * channel_kl_loss_weight + point_similarity * point_loss_weight
+                    loss = real_nll_loss + imag_nll_loss + channel_kl_loss * channel_kl_loss_weight + point_similarity_loss * point_loss_weight
                 else:
                     raise ValueError(f"Unknown module {args.module}")
                 
@@ -1104,7 +1109,11 @@ def do_training_loop(args,
                             "step": global_step,
                             "grad_norm": grad_norm}
                     for channel in module_log_channels:
-                        logs[f"{args.module}/{channel}"] = module_logs[channel] / grad_accum_steps
+                        if "loss_weight" in channel:
+                            channel_name = f"{args.module}_loss_weight/{channel}"
+                        else:
+                            channel_name = f"{args.module}/{channel}"
+                        logs[channel_name] = module_logs[channel] / grad_accum_steps
 
                 if args.use_ema:
                     ema_module.step(module.parameters())
