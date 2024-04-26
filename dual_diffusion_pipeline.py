@@ -44,7 +44,7 @@ class DualMCLTFormat(torch.nn.Module):
         super(DualMCLTFormat, self).__init__()
 
         self.model_params = model_params
-        self.loss = DualMultiscaleSpectralLoss(model_params["loss_params"])
+        self.loss = DualMultiscaleSpectralLoss(model_params["vae_loss_params"])
 
     def get_sample_crop_width(self, length=0):
         block_width = self.model_params["num_chunks"] * 2
@@ -156,7 +156,7 @@ class DualSpectrogramFormat(torch.nn.Module):
                                                     **model_params["spectrogram_params"])
         
         self.spectrogram_converter = SpectrogramConverter(self.spectrogram_params)
-        self.loss = DualMultiscaleSpectralLoss2D(model_params["loss_params"])
+        self.loss = DualMultiscaleSpectralLoss2D(model_params["vae_loss_params"])
 
         self.mels_min = DualSpectrogramFormat._hz_to_mel(self.spectrogram_params.min_frequency)
         self.mels_max = DualSpectrogramFormat._hz_to_mel(self.spectrogram_params.max_frequency)
@@ -281,7 +281,7 @@ class DualDiffusionPipeline(DiffusionPipeline):
         if self.noise_degree == 0:
             self.noise_fn = torch.randn
         else:
-            self.noise_fn = lambda shape, **kwargs: get_fractal_noise2d(shape, degree=self.noise_degree)
+            self.noise_fn = lambda shape, **kwargs: get_fractal_noise2d(shape, degree=self.noise_degree, **kwargs)
 
     @staticmethod
     @torch.no_grad()
@@ -294,21 +294,25 @@ class DualDiffusionPipeline(DiffusionPipeline):
             return DualSpectrogramFormat(model_params)
         else:
             raise ValueError(f"Unknown sample format '{sample_format}'")
-        
+    
+    @staticmethod
+    @torch.no_grad()
+    def get_vae_class(model_params):
+        vae_class = model_params.get("vae_class", None)
+        if vae_class is None or vae_class == "AutoencoderKLDual":
+            return AutoencoderKLDual
+        elif vae_class == "AutoencoderKL_EDM2":
+            return AutoencoderKL_EDM2
+        else:
+            raise ValueError(f"Unknown vae class '{vae_class}'")
+
     @staticmethod
     @torch.no_grad()
     def create_new(model_params, unet_params, vae_params=None):
         
         unet = UNet(**unet_params)
 
-        vae_class = model_params.get("vae_class", None)
-        if vae_class is None or vae_class == "AutoencoderKLDual":
-            vae_class = AutoencoderKLDual
-        elif vae_class == "AutoencoderKL_EDM2":
-            vae_class = AutoencoderKL_EDM2
-        else:
-            raise ValueError(f"Unknown vae class '{vae_class}'")
-        
+        vae_class = DualDiffusionPipeline.get_vae_class(model_params)
         if vae_params is not None:
             vae = vae_class(**vae_params)
         else:
@@ -328,15 +332,16 @@ class DualDiffusionPipeline(DiffusionPipeline):
             model_index = json.load(f)
         model_params = model_index["model_params"]
 
+        vae_class = DualDiffusionPipeline.get_vae_class(model_params)
         vae_path = os.path.join(model_path, "vae")
         if load_latest_checkpoints:
             vae_checkpoints = [f for f in os.listdir(model_path) if os.path.isdir(os.path.join(model_path, f)) and f.startswith("vae_checkpoint")]
             if len(vae_checkpoints) > 0:
                 vae_checkpoints = sorted(vae_checkpoints, key=lambda x: int(x.split("-")[1]))
                 vae_path = os.path.join(model_path, vae_checkpoints[-1], "vae")
-        vae = AutoencoderKLDual.from_pretrained(vae_path,
-                                                torch_dtype=torch_dtype,
-                                                device=device).requires_grad_(requires_grad).train(requires_grad)
+        vae = vae_class.from_pretrained(vae_path,
+                                        torch_dtype=torch_dtype,
+                                        device=device).requires_grad_(requires_grad).train(requires_grad)
 
         unet_path = os.path.join(model_path, "unet")
         if load_latest_checkpoints:
