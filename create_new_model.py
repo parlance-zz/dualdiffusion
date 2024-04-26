@@ -29,7 +29,7 @@ from dual_diffusion_utils import dict_str
 
 load_dotenv(override=True)
 
-MODEL_NAME = "edm2_100_13"
+MODEL_NAME = "edm2_vae_test"
 MODEL_SEED = 2000
 
 MODEL_PARAMS = {
@@ -39,22 +39,20 @@ MODEL_PARAMS = {
 
     # sample format params
     "sample_format": "spectrogram",
-    "sample_raw_length": 32000*45,
+    "sample_raw_length": 32000*8,#32000*45,
     "noise_floor": 2e-5,
-    "t_scale": 3.5714285714, # scales the linear positional embedding for absolute time range within each sample
-
+    "t_scale": 3.5714285714, # scales the linear positional embedding for absolute time range within each sample, None disables t_range conditioning
+    "noise_degree": 1,#0.5,#0.6180339887498948, # set to 0 for standard gaussian
+    "vae_class": "AutoencoderKL_EDM2",
+    
     # diffusion schedule params
     "diffusion_schedule": "linear",
-    "diffusion_objective": "rectified_flow",
+    "diffusion_objective": "v_pred",
 
     # diffusion unet training params
     "input_perturbation": 0,
-
-    # vae unet training params
-    "point_loss_weight": 0.01,
-    "kl_loss_weight": 1e-4,
-    "channel_kl_loss_weight": 1e-4,
-    "recon_loss_weight": 0.1,
+    "use_snr_loss_weighting": False,
+    "use_acos_timestep_sampling": False,
 
     "spectrogram_params": {
         "abs_exponent": 0.25,
@@ -87,21 +85,25 @@ MODEL_PARAMS = {
         "stereo_coherence": 0.67,
     },
 
-    "loss_params": {
-        "stereo_separation_weight": 0.5,
-        "imag_loss_weight": 0.3,
+    # vae unet training params
+    "vae_loss_params": {
+        "point_loss_weight": 0.1,#0.,
+        "channel_kl_loss_weight": 8e-3, #0.006,
+        "recon_loss_weight": 0.1, #0.02,
+        "imag_loss_weight": 0.1, #0.025,
         "block_overlap": 8,
         "block_widths": [
             8,
             16,
             32,
-            64,
+            64
         ],
     },
 }
 
 format = DualDiffusionPipeline.get_sample_format(MODEL_PARAMS)
 
+"""
 VAE_PARAMS = {
     "latent_channels": 4,
     "act_fn": "silu",
@@ -138,58 +140,21 @@ VAE_PARAMS = {
     "in_channels": format.get_num_channels()[0],
     "out_channels": format.get_num_channels()[1],
 }
-
 """
-UNET_PARAMS = {
-    "dropout": 0.,
-    "act_fn": "silu",
-    "conv_size": (3,3),
 
-    #"attention_num_heads": 4,
-    "attention_num_heads": (8,8,8,8),
-
-    "separate_attn_dim_mid": (0,),
-    "add_mid_attention": True,
-    "layers_per_mid_block": 1,
-    #"mid_block_bottleneck_channels": 32,
-
-    "add_attention": True,
-    "double_attention": False,
-    #"double_attention": True,
-    #"pre_attention": True,
-    "pre_attention": False,
-    
-    "separate_attn_dim_down": (2,3),
-    #"separate_attn_dim_down": (2,3,),
-    #"separate_attn_dim_down": (0,0),
-    
-    "separate_attn_dim_up": (3,2,3),
-    #"separate_attn_dim_up": (3,2,3,),
-    #"separate_attn_dim_up": (0,0,0),
-    
-    #"freq_embedding_dim": 256,
-    #"time_embedding_dim": 256,
-    #"freq_embedding_dim": (512, 0, 0, 0,),
-    #"time_embedding_dim": 0,
-    "freq_embedding_dim": 0,
-    "time_embedding_dim": 0,
-
-    #"downsample_type": "resnet",
-    #"upsample_type": "resnet",
-    "downsample_type": "conv",
-    "upsample_type": "conv",
-    #"upsample_type": "conv_transpose",
-
-    "norm_num_groups": 32,
-    #"norm_num_groups": (32, 64, 128, 128,),
-    #"norm_num_groups": -4,
-
-    #"layers_per_block": 1,
-    "layers_per_block": 2,
-
-    "block_out_channels": (256, 512, 1024, 1024), 
+VAE_PARAMS = {
+    "latent_channels": 4,        # Number of channels in latent space.
+    "target_snr": 1,#1.732,      # The learned latent snr will not exceed this snr
+    "label_dim": 1612,           # Class label dimensionality. 0 = unconditional.
+    "dropout": 0,                # Dropout rate for model blocks
+    "model_channels": 64,        # Base multiplier for the number of channels.
+    "channels_per_head": 64,     # Number of channels per attention head for blocks using self-attention
+    "channel_mult": [1,2,3,5],   # Per-resolution multipliers for the number of channels.
+    "channel_mult_emb": None,    # Multiplier for final embedding dimensionality. None = select based on channel_mult.
+    "num_layers_per_block": 3,   # Number of residual blocks per resolution.
+    "attn_levels": [],           # List of resolutions with self-attention.
+    "midblock_decoder_attn": False, # Whether to use attention in the first layer of the decoder.
 }
-"""
 
 UNET_PARAMS = {
     "pos_channels": 0,           # Number of positional embedding channels for attention.
