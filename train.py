@@ -806,7 +806,7 @@ def init_dataloader(accelerator,
             example['file_name'] = absolute_path
             return example
         
-        dataset = dataset.map(add_absolute_path)#.cast_column("file_name", Audio(decode=False))
+        dataset = dataset.map(add_absolute_path)
         
     dataset_transform_params = {
         "format": dataset_format,
