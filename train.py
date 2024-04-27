@@ -594,7 +594,7 @@ def init_module_pipeline(pretrained_model_name_or_path, module_type, vae_encode_
 
         vae = getattr(pipeline, "vae", None)
         if vae is not None:
-            vae = vae.to(device).half()
+            vae = vae.to(device).to(torch.bfloat16)
 
             if vae_encode_batch_size > 0:
                 vae.enable_slicing(vae_encode_batch_size)
@@ -1004,7 +1004,7 @@ def do_training_loop(args,
 
                     samples = pipeline.format.raw_to_sample(raw_samples)
                     if vae is not None:
-                        samples = vae.encode(samples.half(), return_dict=False)[0].mode().detach().float()
+                        samples = vae.encode(samples.to(torch.bfloat16), sample_game_ids).mode().detach().float()
                         samples = normalize(samples).float()
                     noise = pipeline.noise_fn(samples.shape, device=samples.device)
                     noise = normalize(noise).float()
