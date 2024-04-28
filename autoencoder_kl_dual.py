@@ -863,4 +863,7 @@ class AutoencoderKLDual(ModelMixin, ConfigMixin):
     
     def get_recon_loss_logvar(self):
         return self.recon_loss_logvar
+    
+    def normalize_weights(self):
+        return
         

@@ -29,6 +29,7 @@ def normalize(x, dim=None, eps=1e-4):
 # Upsample or downsample the given tensor with the given filter,
 # or keep it as is.
 
+"""
 def resample(x, f=[1,1], mode='keep'):
     if mode == 'keep':
         return x
@@ -44,6 +45,15 @@ def resample(x, f=[1,1], mode='keep'):
         return torch.nn.functional.conv2d(x, f.tile([c, 1, 1, 1]), groups=c, stride=2, padding=(pad,))
     assert mode == 'up'
     return torch.nn.functional.conv_transpose2d(x, (f * 4).tile([c, 1, 1, 1]), groups=c, stride=2, padding=(pad,))
+"""
+
+def resample(x, mode="keep"):
+    if mode == "keep":
+        return x
+    elif mode == 'down':
+        return torch.nn.functional.avg_pool2d(x, 2)
+    elif mode == 'up':
+        return torch.nn.functional.upsample(x, scale_factor=2, mode="nearest")
 
 #----------------------------------------------------------------------------
 # Magnitude-preserving SiLU (Equation 81).
@@ -114,6 +124,7 @@ class MPConv(torch.nn.Module):
         self.out_channels = out_channels
         self.weight = torch.nn.Parameter(torch.randn(out_channels, in_channels, *kernel))
 
+    """
     def forward(self, x, gain=1):
         w = self.weight.to(torch.float32)
         if self.training:
@@ -126,8 +137,8 @@ class MPConv(torch.nn.Module):
             return x @ w.t()
         assert w.ndim == 4
         return torch.nn.functional.conv2d(x, w, padding=(w.shape[-1]//2,))
-
     """
+
     def forward(self, x, gain=1):
 
         w = self.weight * (gain / np.sqrt(self.weight[0].numel()))
@@ -137,11 +148,10 @@ class MPConv(torch.nn.Module):
 
         return torch.nn.functional.conv2d(x, w, padding=(w.shape[-1]//2,))
 
+    @torch.no_grad()
     def normalize_weights(self):
-        w = self.weight.to(torch.float32)
-        with torch.no_grad():
-            self.weight.copy_(normalize(w))
-    """
+        assert self.training
+        self.weight.copy_(normalize(self.weight))
 
 #----------------------------------------------------------------------------
 # U-Net encoder/decoder block with optional self-attention (Figure 21).
@@ -155,7 +165,7 @@ class Block(torch.nn.Module):
         pos_channels,                   # Number of positional embedding channels.
         flavor              = 'enc',    # Flavor: 'enc' or 'dec'.
         resample_mode       = 'keep',   # Resampling: 'keep', 'up', or 'down'.
-        resample_filter     = [1,1],    # Resampling filter.
+        #resample_filter     = [1,1],    # Resampling filter.
         attention           = False,    # Include self-attention?
         channels_per_head   = 64,       # Number of channels per attention head.
         dropout             = 0,        # Dropout probability.
@@ -172,7 +182,7 @@ class Block(torch.nn.Module):
         self.out_channels = out_channels
         self.pos_channels = pos_channels
         self.flavor = flavor
-        self.resample_filter = resample_filter
+        #self.resample_filter = resample_filter
         self.resample_mode = resample_mode
         self.num_heads = out_channels // channels_per_head if attention else 0
         self.dropout = dropout
@@ -198,7 +208,8 @@ class Block(torch.nn.Module):
 
     def forward(self, x, emb, format, t_ranges):
         # Main branch.
-        x = resample(x, f=self.resample_filter, mode=self.resample_mode)
+        #x = resample(x, f=self.resample_filter, mode=self.resample_mode)
+        x = resample(x, mode=self.resample_mode)
 
         if self.flavor == 'enc':
             if self.conv_skip is not None:
@@ -402,12 +413,11 @@ class UNet(ModelMixin, ConfigMixin):
     def get_timestep_logvar(self, noise_labels):
         return self.logvar_linear(self.logvar_fourier(noise_labels))
     
-    """
+    @torch.no_grad()
     def normalize_weights(self):
         for module in self.modules():
             if isinstance(module, MPConv):
                 module.normalize_weights()
-    """
 
 if __name__ == "__main__": # fourier embedding inner product test
 

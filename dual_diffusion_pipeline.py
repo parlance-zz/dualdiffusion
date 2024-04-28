@@ -311,10 +311,12 @@ class DualDiffusionPipeline(DiffusionPipeline):
     def create_new(model_params, unet_params, vae_params=None):
         
         unet = UNet(**unet_params)
-
+        unet.normalize_weights()
+        
         vae_class = DualDiffusionPipeline.get_vae_class(model_params)
         if vae_params is not None:
             vae = vae_class(**vae_params)
+            vae.normalize_weights()
         else:
             vae = None
 

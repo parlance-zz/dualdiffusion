@@ -934,8 +934,6 @@ def do_training_loop(args,
             logger.info("Input perturbation is disabled")
         """
 
-        #module.normalize_weights()
-
         logger.info(f"Dropout: {module.dropout} Conditioning dropout: {module.label_dropout}")
 
     noise_degree = "normal" if model_params.get("noise_degree", 0) == 0 else f"fractal - degree: {model_params['noise_degree']}"
@@ -945,6 +943,7 @@ def do_training_loop(args,
     if latent_shape is not None:
         logger.info(f"Latent shape: {latent_shape}")
 
+    module.normalize_weights()
 
     for epoch in range(first_epoch, args.num_train_epochs):
 
@@ -1096,9 +1095,7 @@ def do_training_loop(args,
 
             # Checks if the accelerator has performed an optimization step behind the scenes
             if accelerator.sync_gradients:
-                
-                #if args.module == "unet":
-                #    module.normalize_weights()
+                module.normalize_weights()
 
                 progress_bar.update(1)
                 global_step += 1

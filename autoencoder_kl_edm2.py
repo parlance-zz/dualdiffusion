@@ -192,9 +192,8 @@ class AutoencoderKL_EDM2(ModelMixin, ConfigMixin):
         else:
             raise ValueError(f"Invalid sample shape: {sample_shape}")
     
-    """
+    @torch.no_grad()
     def normalize_weights(self):
         for module in self.modules():
             if isinstance(module, MPConv):
                 module.normalize_weights()
-    """
