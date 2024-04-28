@@ -51,7 +51,7 @@ def resample(x, mode="keep"):
     if mode == "keep":
         return x
     elif mode == 'down':
-        return torch.nn.functional.avg_pool2d(x, 2)
+        return torch.nn.functional.avg_pool2d(x, 2) * 2 # without this * 2 this layer isn't magnitude preserving
     elif mode == 'up':
         return torch.nn.functional.interpolate(x, scale_factor=2, mode="nearest")
 
