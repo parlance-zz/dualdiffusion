@@ -53,7 +53,7 @@ def resample(x, mode="keep"):
     elif mode == 'down':
         return torch.nn.functional.avg_pool2d(x, 2)
     elif mode == 'up':
-        return torch.nn.functional.upsample(x, scale_factor=2, mode="nearest")
+        return torch.nn.functional.interpolate(x, scale_factor=2, mode="nearest")
 
 #----------------------------------------------------------------------------
 # Magnitude-preserving SiLU (Equation 81).
