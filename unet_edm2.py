@@ -150,7 +150,6 @@ class MPConv(torch.nn.Module):
 
     @torch.no_grad()
     def normalize_weights(self):
-        assert self.training
         self.weight.copy_(normalize(self.weight))
 
 #----------------------------------------------------------------------------
