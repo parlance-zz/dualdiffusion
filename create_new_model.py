@@ -50,9 +50,12 @@ MODEL_PARAMS = {
     "diffusion_objective": "v_pred",
 
     # diffusion unet training params
-    "input_perturbation": 0,
-    "use_snr_loss_weighting": False,
-    "use_acos_timestep_sampling": False,
+    "unet_training_params": {
+        "input_perturbation": 0,
+        "use_snr_loss_weighting": False,
+        "use_acos_timestep_sampling": False,
+        "reflow_probability": 0,
+    },
 
     "spectrogram_params": {
         "abs_exponent": 0.25,
@@ -85,8 +88,8 @@ MODEL_PARAMS = {
         "stereo_coherence": 0.67,
     },
 
-    # vae unet training params
-    "vae_loss_params": {
+    # vae training params
+    "vae_training_params": {
         "point_loss_weight": 0.1,#0.,
         "channel_kl_loss_weight": 1e-2, #0.006,
         "recon_loss_weight": 0.1, #0.02,
@@ -147,7 +150,7 @@ VAE_PARAMS = {
     "target_snr": 1.7320508,     # The learned latent snr will not exceed this snr
     "label_dim": 1612,           # Class label dimensionality. 0 = unconditional.
     "dropout": 0,                # Dropout rate for model blocks
-    "model_channels": 96,        # Base multiplier for the number of channels.
+    "model_channels": 64,        # Base multiplier for the number of channels.
     "channels_per_head": 64,     # Number of channels per attention head for blocks using self-attention
     "channel_mult": [1,2,3,5],   # Per-resolution multipliers for the number of channels.
     "channel_mult_emb": None,    # Multiplier for final embedding dimensionality. None = select based on channel_mult.

@@ -863,13 +863,13 @@ def do_training_loop(args,
     if args.module == "vae":
 
         latent_shape = module.get_latent_shape(sample_shape)
-        channel_kl_loss_weight = model_params["vae_loss_params"]["channel_kl_loss_weight"]
-        recon_loss_weight = model_params["vae_loss_params"]["recon_loss_weight"]
-        point_loss_weight = model_params["vae_loss_params"]["point_loss_weight"]
-        imag_loss_weight = model_params["vae_loss_params"]["imag_loss_weight"]
+        channel_kl_loss_weight = model_params["vae_training_params"]["channel_kl_loss_weight"]
+        recon_loss_weight = model_params["vae_training_params"]["recon_loss_weight"]
+        point_loss_weight = model_params["vae_training_params"]["point_loss_weight"]
+        imag_loss_weight = model_params["vae_training_params"]["imag_loss_weight"]
 
         logger.info("Training VAE model:")
-        logger.info(f"VAE Loss params: {dict_str(model_params['vae_loss_params'])}")
+        logger.info(f"VAE Training params: {dict_str(model_params['vae_training_params'])}")
         logger.info(f"Channel KL loss weight: {channel_kl_loss_weight}")
         logger.info(f"Recon loss weight: {recon_loss_weight} - Point loss weight: {point_loss_weight} - Imag loss weight: {imag_loss_weight}")
 
@@ -884,7 +884,6 @@ def do_training_loop(args,
             "imag_loss_weight",
             "real_loss",
             "imag_loss",
-            #"kl_loss",
             "channel_kl_loss",
             "latents_mean",
             "latents_std",
@@ -920,19 +919,22 @@ def do_training_loop(args,
 
         logger.info(f"Target SNR: {target_snr:{8}f} Schedule: {model_params['diffusion_schedule']} Objective: {model_params['diffusion_objective']}")
 
-        use_snr_loss_weighting = model_params["use_snr_loss_weighting"]
+        use_snr_loss_weighting = model_params["unet_training_params"]["use_snr_loss_weighting"]
         logger.info(f"Using SNR loss weighting: {use_snr_loss_weighting}")
-
-        use_acos_timestep_sampling = model_params["use_acos_timestep_sampling"]
+        use_acos_timestep_sampling = model_params["unet_training_params"]["use_acos_timestep_sampling"]
         logger.info(f"Using acos timestep sampling: {use_acos_timestep_sampling}")
 
-        """
-        input_perturbation = model_params["input_perturbation"]
+        input_perturbation = model_params["unet_training_params"]["input_perturbation"]
         if input_perturbation > 0:
             logger.info(f"Using input perturbation of {input_perturbation}")
         else:
             logger.info("Input perturbation is disabled")
-        """
+
+        reflow_probability = model_params["unet_training_params"]["reflow_probability"]
+        if reflow_probability > 0:
+            logger.info(f"Using reflow probability of {reflow_probability}")
+        else:
+            logger.info("Reflow is disabled")
 
         logger.info(f"Dropout: {module.dropout} Conditioning dropout: {module.label_dropout}")
 
@@ -1000,19 +1002,33 @@ def do_training_loop(args,
                 raw_sample_paths = batch["sample_paths"]
 
                 if args.module == "unet":
-
+                    
                     samples = pipeline.format.raw_to_sample(raw_samples)
                     if vae is not None:
                         samples = vae.encode(samples.to(torch.bfloat16), sample_game_ids).mode().detach().float()
                         samples = normalize(samples).float()
-                    noise = pipeline.noise_fn(samples.shape, device=samples.device)
+
+                    if reflow_probability > 0: 
+                        noises = []
+                        for sample_path in raw_sample_paths:
+                            generator = torch.Generator(device=accelerator.device)
+                            generator.manual_seed(hash(sample_path) + global_step % max(int(1/reflow_probability), 1))
+                            noises.append((1,) + pipeline.noise_fn(samples.shape[1:], device=samples.device, generator=generator))
+                        noise = torch.cat(noises)
+                    else:
+                        noise = pipeline.noise_fn(samples.shape, device=samples.device)
                     noise = normalize(noise).float()
 
+                    if input_perturbation > 0:
+                        input_noise = normalize(noise + pipeline.noise_fn(samples.shape, device=samples.device) * input_perturbation).float()
+                    else:
+                        input_noise = noise
+                    
                     process_batch_timesteps = batch_timesteps[accelerator.local_process_index::accelerator.num_processes]
                     timesteps = process_batch_timesteps[grad_accum_steps * args.train_batch_size:(grad_accum_steps+1) * args.train_batch_size]
 
                     model_input_noise_labels = pipeline.geodesic_flow.get_timestep_noise_label(timesteps)
-                    model_input = pipeline.geodesic_flow.add_noise(samples, noise, timesteps).detach()
+                    model_input = pipeline.geodesic_flow.add_noise(samples, input_noise, timesteps).detach()
                     model_output, error_logvar = module(model_input,
                                                         model_input_noise_labels,
                                                         sample_game_ids,
@@ -1059,11 +1075,6 @@ def do_training_loop(args,
                     real_nll_loss = (real_loss / recon_loss_logvar.exp() + recon_loss_logvar) * recon_loss_weight
                     imag_nll_loss = (imag_loss / recon_loss_logvar.exp() + recon_loss_logvar) * (recon_loss_weight * imag_loss_weight)
 
-                    #kl_loss = posterior.kl()
-
-                    #latents_channel_mean = latents.mean(dim=(2,3))
-                    #latents_channel_var = latents.var(dim=(2,3)).clip(min=1e-5)
-                    #channel_kl_loss = (latents_channel_mean.square() + latents_channel_var - 1 - latents_channel_var.log()).mean()
                     latents_square_norm = (torch.linalg.vector_norm(latents, dim=(1,2,3), dtype=torch.float32) / latents[0].numel()**0.5).square()
                     channel_kl_loss = (latents_square_norm - 1 - latents_square_norm.log()).mean()
                     

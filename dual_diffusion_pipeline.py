@@ -44,7 +44,7 @@ class DualMCLTFormat(torch.nn.Module):
         super(DualMCLTFormat, self).__init__()
 
         self.model_params = model_params
-        self.loss = DualMultiscaleSpectralLoss(model_params["vae_loss_params"])
+        self.loss = DualMultiscaleSpectralLoss(model_params["vae_training_params"])
 
     def get_sample_crop_width(self, length=0):
         block_width = self.model_params["num_chunks"] * 2
@@ -156,7 +156,7 @@ class DualSpectrogramFormat(torch.nn.Module):
                                                     **model_params["spectrogram_params"])
         
         self.spectrogram_converter = SpectrogramConverter(self.spectrogram_params)
-        self.loss = DualMultiscaleSpectralLoss2D(model_params["vae_loss_params"])
+        self.loss = DualMultiscaleSpectralLoss2D(model_params["vae_training_params"])
 
         self.mels_min = DualSpectrogramFormat._hz_to_mel(self.spectrogram_params.min_frequency)
         self.mels_max = DualSpectrogramFormat._hz_to_mel(self.spectrogram_params.max_frequency)
