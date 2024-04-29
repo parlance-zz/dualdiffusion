@@ -143,7 +143,7 @@ class GeodesicFlow:
             perturbation = torch.empty_like(model_output).normal_(generator=generator)
             model_output = model_output + (1 - output_len.clip(max=1)).sqrt() * perturbation * p_scale
         
-        if objective == "v_pred":
+        if self.objective == "v_pred":
             v_scale = v_scale * (self.get_timestep_theta(next_t) - self.get_timestep_theta(t)) / (torch.pi/2)
         else:
             v_scale = v_scale * (self.get_timestep_theta(next_t) - self.get_timestep_theta(t)) / get_cos_angle(sample, model_output)
