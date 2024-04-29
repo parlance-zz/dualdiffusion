@@ -930,12 +930,6 @@ def do_training_loop(args,
         else:
             logger.info("Input perturbation is disabled")
 
-        reflow_probability = model_params["unet_training_params"]["reflow_probability"]
-        if reflow_probability > 0:
-            logger.info(f"Using reflow probability of {reflow_probability}")
-        else:
-            logger.info("Reflow is disabled")
-
         logger.info(f"Dropout: {module.dropout} Conditioning dropout: {module.label_dropout}")
 
     noise_degree = "normal" if model_params.get("noise_degree", 0) == 0 else f"fractal - degree: {model_params['noise_degree']}"
@@ -1007,17 +1001,7 @@ def do_training_loop(args,
                     if vae is not None:
                         samples = vae.encode(samples.to(torch.bfloat16), sample_game_ids).mode().detach().float()
                         samples = normalize(samples).float()
-
-                    if reflow_probability > 0: 
-                        noises = []
-                        for sample_path in raw_sample_paths:
-                            generator = torch.Generator(device=accelerator.device)
-                            generator.manual_seed(hash(sample_path) + global_step % max(int(1/reflow_probability), 1))
-                            noises.append((1,) + pipeline.noise_fn(samples.shape[1:], device=samples.device, generator=generator))
-                        noise = torch.cat(noises)
-                    else:
-                        noise = pipeline.noise_fn(samples.shape, device=samples.device)
-                    noise = normalize(noise).float()
+                    noise = normalize(pipeline.noise_fn(samples.shape, device=samples.device)).float()
 
                     if input_perturbation > 0:
                         input_noise = normalize(noise + pipeline.noise_fn(samples.shape, device=samples.device) * input_perturbation).float()
