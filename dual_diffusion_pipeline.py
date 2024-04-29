@@ -356,7 +356,13 @@ class DualDiffusionPipeline(DiffusionPipeline):
                                     device=device).requires_grad_(requires_grad).train(requires_grad)
         
         return DualDiffusionPipeline(unet, vae, model_params=model_params)
-        
+
+    # not sure why this is needed, DiffusionPipeline doesn't consider format to be a module, but it is
+    def to(self, *args, **kwargs):
+        super().to(*args, **kwargs)
+        self.format = self.format.to(*args, **kwargs)
+        return self
+    
     @torch.no_grad()
     def __call__(
         self,
