@@ -304,7 +304,6 @@ class UNet(ModelMixin, ConfigMixin):
         cemb = int(model_channels * channel_mult_emb) if channel_mult_emb is not None else max(cblock)
         clogvar = cnoise
         cpos = pos_channels
-        label_dim = label_dim + 1 # 1 extra dim for the unconditional class
 
         self.label_dim = label_dim
         self.label_dropout = label_dropout
@@ -317,6 +316,7 @@ class UNet(ModelMixin, ConfigMixin):
         self.emb_fourier = MPFourier(cnoise)
         self.emb_noise = MPConv(cnoise, cemb, kernel=[])
         self.emb_label = MPConv(label_dim, cemb, kernel=[]) if label_dim != 0 else None
+        self.emb_label_unconditional = MPConv(1, cemb, kernel=[]) if label_dim != 0 else None
 
         # Training uncertainty estimation.
         self.logvar_fourier = MPFourier(clogvar)
@@ -360,31 +360,23 @@ class UNet(ModelMixin, ConfigMixin):
                                                              flavor='dec', attention=(level in attn_levels), **block_kwargs)
         self.conv_out = MPConv(cout, out_channels, kernel=[3,3])
 
-    def forward(self, x, noise_labels, class_labels, t_ranges, format, return_logvar=False):
-
-        if not torch.is_tensor(noise_labels):
-            noise_labels = torch.tensor([noise_labels], device=x.device, dtype=x.dtype)
-        else:
-            noise_labels = noise_labels.to(x.dtype)
+    def forward(self, x, noise_labels, class_embeddings, t_ranges, format, return_logvar=False):
 
         # Embedding.
         emb = self.emb_noise(self.emb_fourier(noise_labels))
-        if self.emb_label is not None:
-            if class_labels is not None:
-                class_labels = torch.nn.functional.one_hot(class_labels, num_classes=self.label_dim).to(x.dtype)
+        if self.label_dim != 0:
+            if class_embeddings is None or (self.training and self.label_dropout != 0):
+                unconditional_embedding = self.emb_label_unconditional(torch.ones(1, device=class_embeddings.device, dtype=class_embeddings.dtype))
+            if class_embeddings is not None:
                 if self.training and self.label_dropout != 0:
-                    class_labels = torch.nn.functional.dropout(class_labels, p=self.label_dropout)
+                    conditioning_mask = torch.nn.functional.dropout(torch.ones(class_embeddings.shape[0],
+                                                                                device=class_embeddings.device,
+                                                                                dtype=class_embeddings.dtype),
+                                                                                p=self.label_dropout)
+                    class_embeddings = class_embeddings * conditioning_mask + unconditional_embedding * (1 - conditioning_mask)
             else:
-                class_labels = torch.zeros([1, self.label_dim], device=x.device, dtype=x.dtype)
-            class_labels[:, -1] = 1 - class_labels[:, :-1].sum(dim=1).clip(max=1) # unconditional class
-
-            if class_labels.shape[0] != emb.shape[0]:
-                assert(self.training == False)
-                class_labels = class_labels.sum(dim=0, keepdim=True)
-            
-            #emb = mp_sum(emb, self.emb_label(class_labels * np.sqrt(class_labels.shape[1])), t=self.label_balance)     
-            emb = mp_sum(emb, self.emb_label(normalize(class_labels)), t=self.label_balance)
-
+                class_embeddings = unconditional_embedding 
+            emb = mp_sum(emb, class_embeddings, t=self.label_balance)
         emb = mp_silu(emb)
 
         # Encoder.
@@ -409,6 +401,9 @@ class UNet(ModelMixin, ConfigMixin):
         
         return x
     
+    def get_class_embeddings(self, class_labels):
+        return self.emb_label(normalize(class_labels).to(self.dtype))
+
     def get_timestep_logvar(self, noise_labels):
         return self.logvar_linear(self.logvar_fourier(noise_labels))
     

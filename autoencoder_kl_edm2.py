@@ -76,7 +76,6 @@ class AutoencoderKL_EDM2(ModelMixin, ConfigMixin):
         cblock = [int(model_channels * x) for x in channel_mult]
         if label_dim != 0:
             cemb = int(model_channels * channel_mult_emb) if channel_mult_emb is not None else max(cblock)
-            label_dim = label_dim + 1 # 1 extra dim for the unconditional class
         else:
             cemb = 0
 
@@ -91,8 +90,7 @@ class AutoencoderKL_EDM2(ModelMixin, ConfigMixin):
         self.out_gain = torch.nn.Parameter(torch.ones([]))
         
         # Embedding.
-        self.encoder_emb_label = MPConv(label_dim, cemb, kernel=[]) if label_dim != 0 else None
-        self.decoder_emb_label = MPConv(label_dim, cemb, kernel=[]) if label_dim != 0 else None
+        self.emb_label = MPConv(label_dim, cemb, kernel=[]) if label_dim != 0 else None
 
         # Training uncertainty estimation.
         self.recon_loss_logvar = torch.nn.Parameter(torch.zeros(1))
@@ -138,39 +136,24 @@ class AutoencoderKL_EDM2(ModelMixin, ConfigMixin):
                                                              flavor='dec', attention=(level in attn_levels), **block_kwargs)
         self.conv_out = MPConv(cout, out_channels, kernel=[3,3])
 
-    def get_embedding(self, emb_label, class_labels, batch_size):
+    def get_class_embeddings(self, class_labels):
+        return mp_silu(self.emb_label(normalize(class_labels).to(self.dtype)))
 
-        if emb_label is not None:
-            if class_labels is not None:
-                class_labels = torch.nn.functional.one_hot(class_labels, num_classes=self.label_dim).to(self.dtype)
-            else:
-                class_labels = torch.zeros([1, self.label_dim], device=self.device, dtype=self.dtype)
+    def encode(self, x, class_embeddings):
 
-            if class_labels.shape[0] != batch_size:
-                assert(self.training == False)
-                class_labels = class_labels.sum(dim=0, keepdim=True)
-                
-            return mp_silu(emb_label(normalize(class_labels)))
-        else:
-            return None
-
-    def encode(self, x, class_labels):
-
-        emb = self.get_embedding(self.encoder_emb_label, class_labels, x.shape[0])
         x = torch.cat((x, torch.ones_like(x[:, :1])), dim=1)
         for name, block in self.enc.items():
-            x = block(x) if 'conv' in name else block(x, emb, None, None)
+            x = block(x) if 'conv' in name else block(x, class_embeddings, None, None)
 
         latents = self.conv_latents_out(mp_silu(x), gain=self.latents_out_gain)
         noise_logvar = torch.tensor(np.log(1 / (self.target_snr**2 + 1)), device=x.device, dtype=x.dtype)
         return IsotropicGaussianDistribution(latents, noise_logvar)
     
-    def decode(self, x, class_labels):
+    def decode(self, x, class_embeddings):
         
-        emb = self.get_embedding(self.decoder_emb_label, class_labels, x.shape[0])
         x = mp_silu(self.conv_latents_in(x))
         for _, block in self.dec.items():
-            x = block(x, emb, None, None)
+            x = block(x, class_embeddings, None, None)
 
         return self.conv_out(x, gain=self.out_gain)
     
@@ -178,9 +161,6 @@ class AutoencoderKL_EDM2(ModelMixin, ConfigMixin):
         return self.recon_loss_logvar
     
     def get_target_snr(self):
-        #target_vae_noise_std = (self.latents_logvar / 2).exp().item()
-        #target_vae_sample_std = (1 - target_vae_noise_std**2) ** 0.5
-        #return target_vae_sample_std / target_vae_noise_std
         return self.target_snr
     
     def get_latent_shape(self, sample_shape):
