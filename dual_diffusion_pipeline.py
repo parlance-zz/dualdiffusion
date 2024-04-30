@@ -265,7 +265,6 @@ class DualDiffusionPipeline(DiffusionPipeline):
         else:
             model_params = self.config["model_params"]
             
-        self.tiling_mode = False
         self.format = DualDiffusionPipeline.get_sample_format(model_params)
 
         if vae is not None:
@@ -355,20 +354,33 @@ class DualDiffusionPipeline(DiffusionPipeline):
                                     torch_dtype=torch_dtype,
                                     device=device).requires_grad_(requires_grad).train(requires_grad)
         
-        return DualDiffusionPipeline(unet, vae, model_params=model_params)
+        return DualDiffusionPipeline(unet, vae, model_params=model_params).to(device=device)
 
     # not sure why this is needed, DiffusionPipeline doesn't consider format to be a module, but it is
+    @torch.no_grad()
     def to(self, *args, **kwargs):
         super().to(*args, **kwargs)
         self.format = self.format.to(*args, **kwargs)
         return self
     
     @torch.no_grad()
+    def get_class_labels(self, labels):
+        if isinstance(labels, torch.Tensor):
+            return torch.nn.functional.one_hot(labels, num_classes=self.unet.label_dim).to(device=self.device)
+        elif isinstance(labels, list):
+            class_labels = torch.zeros((1, self.unet.label_dim))
+            return class_labels.index_fill_(1, torch.tensor(labels, device=self.device, dtype=torch.long), 1).to(device=self.device)
+        elif isinstance(labels, dict):
+            class_ids, weights = torch.tensor(list(labels.keys()), dtype=torch.long), torch.tensor(list(labels.values()))
+            return torch.zeros((1, self.unet.label_dim)).index_fill_(1, class_ids, weights).to(device=self.device)
+        else:
+            raise ValueError(f"Unknown labels dtype '{type(labels)}'")
+
+    @torch.no_grad()
     def __call__(
         self,
         steps: int = 120,
         seed: Union[int, torch.Generator]=None,
-        loops: int = 0,
         batch_size: int = 1,
         length: int = 0,
         game_ids = None,
@@ -381,40 +393,32 @@ class DualDiffusionPipeline(DiffusionPipeline):
     ):
         if steps <= 0:
             raise ValueError(f"Steps must be > 0, got {steps}")
-        if loops < 0:
-            raise ValueError(f"Loops must be greater than or equal to 0, got {loops}")
         if length < 0:
             raise ValueError(f"Length must be greater than or equal to 0, got {length}")
-
-        debug_path = os.environ.get("DEBUG_PATH", None)
         
-        self.set_tiling_mode(loops > 0)
-
         if isinstance(seed, int):
-            if seed == 0: seed = np.random.randint(100000,999999)
+            if seed == 0: seed = np.random.randint(100000, 999999)
             generator = torch.Generator(device=self.device).manual_seed(seed)
         elif isinstance(seed, torch.Generator):
             generator = seed
 
+        debug_path = os.environ.get("DEBUG_PATH", None)
         model_params = self.config["model_params"]
         
         sample_shape = self.format.get_sample_shape(bsz=batch_size, length=length)
         if getattr(self, "vae", None) is not None:    
             sample_shape = self.vae.get_latent_shape(sample_shape)
         print(f"Sample shape: {sample_shape}")
+        sample = normalize(self.noise_fn(sample_shape, device=self.device, generator=generator))
 
-        sample = self.noise_fn(sample_shape, device=self.device, generator=generator)
-        sample = normalize(sample)
-
-        if game_ids is not None:
-            labels = torch.tensor(game_ids, device=self.device, dtype=torch.long)
-            #assert labels.shape[0] == batch_size
-        else:
-            labels = torch.randint(0, self.unet.label_dim, (batch_size,), device=self.device, generator=generator)
+        game_ids = game_ids or torch.randint(0, self.unet.label_dim, 1, device=self.device, generator=generator)
+        class_labels = self.get_class_labels(game_ids)
+        vae_class_embeddings = self.vae.get_class_embeddings(class_labels)
+        unet_class_embeddings = self.unet.get_class_embeddings(class_labels)
 
         if img2img_input is not None:
             img2img_sample = self.format.raw_to_sample(img2img_input.unsqueeze(0).to(self.device).float())
-            latents = self.vae.encode(img2img_sample.type(self.unet.dtype), labels).mode()
+            latents = self.vae.encode(img2img_sample.type(self.unet.dtype), vae_class_embeddings).mode()
             sample = self.geodesic_flow.add_noise(latents, sample, torch.tensor([img2img_strength], device=sample.device, dtype=sample.dtype))
             start_timestep = img2img_strength
         else:
@@ -445,9 +449,9 @@ class DualDiffusionPipeline(DiffusionPipeline):
         for i, t in enumerate(self.progress_bar(t_schedule)):
             
             timestep_tensor = torch.tensor([t], device=self.device, dtype=sample.dtype)
-            model_input_noise_labels = self.geodesic_flow.get_timestep_noise_label(timestep_tensor)
+            model_input_noise_labels = self.geodesic_flow.get_timestep_noise_label(timestep_tensor).to(self.unet.dtype)
             model_input = sample.to(self.unet.dtype)
-            model_output = self.unet(model_input, model_input_noise_labels, labels, t_ranges, self.format)
+            model_output = self.unet(model_input, model_input_noise_labels, unet_class_embeddings, t_ranges, self.format)
             u_model_output = self.unet(model_input, model_input_noise_labels, None, t_ranges, self.format)
 
             last_cfg_model_output = cfg_model_output
@@ -455,14 +459,6 @@ class DualDiffusionPipeline(DiffusionPipeline):
 
             if use_midpoint_integration:            
                 raise NotImplementedError("Midpoint integration not implemented")
-                sample_m = slerp(sample.float(), model_output, v_schedule[i]/2)
-                sample_m -= sample_m.mean(dim=(1,2,3), keepdim=True)
-                sample_m /= sample_m.square().mean(dim=(1,2,3), keepdim=True).sqrt()
-                
-                sample_m = sample_m.to(self.unet.dtype)
-                model_output, logvar = self.unet(sample_m, (t - v_schedule[i]/2) * (timescale * torch.pi/2), labels, self.format, return_logvar=True)
-                u_model_output = self.unet(sample_m, (t - v_schedule[i]/2) * (timescale * torch.pi/2), None, self.format)
-                model_output = slerp(u_model_output.float(), model_output.float(), cfg_scale)
 
             debug_v_list.append(get_cos_angle(sample, cfg_model_output) / (torch.pi/2))
             debug_a_list.append(get_cos_angle(cfg_model_output, last_cfg_model_output) / (torch.pi/2))
@@ -516,68 +512,10 @@ class DualDiffusionPipeline(DiffusionPipeline):
             save_raw_img(inner_products[0], os.path.join(debug_path, "debug_o_inner_products.png"))
             
         if getattr(self, "vae", None) is not None:
-            sample = self.vae.decode(sample.to(self.vae.dtype), labels).float()
+            sample = self.vae.decode(sample.to(self.vae.dtype), vae_class_embeddings).float()
         
         if debug_path is not None:
             save_raw(sample, os.path.join(debug_path, "debug_decoded_sample.raw"))
             save_raw_img(sample[0], os.path.join(debug_path, "debug_decoded_sample.png"))
 
-        raw_sample = self.format.sample_to_raw(sample)
-        if loops > 0: raw_sample = raw_sample.repeat(1, 1, loops+1)
-        return raw_sample
-    
-    @torch.no_grad()
-    def set_module_tiling(self, module):
-        F, _pair = torch.nn.functional, torch.nn.modules.utils._pair
-
-        padding_modeX = "circular"
-        padding_modeY = "constant"
-
-        rprt = module._reversed_padding_repeated_twice
-        paddingX = (rprt[0], rprt[1], 0, 0)
-        paddingY = (0, 0, rprt[2], rprt[3])
-
-        def _conv_forward(self, input, weight, bias):
-            padded = F.pad(input, paddingX, mode=padding_modeX)
-            padded = F.pad(padded, paddingY, mode=padding_modeY)
-            return F.conv2d(
-                padded, weight, bias, self.stride, _pair(0), self.dilation, self.groups
-            )
-
-        module._conv_forward = _conv_forward.__get__(module)
-
-    @torch.no_grad()
-    def remove_module_tiling(self, module):
-        try:
-            del module._conv_forward
-        except AttributeError:
-            pass
-
-    @torch.no_grad()
-    def set_tiling_mode(self, tiling: bool):
-
-        if self.tiling_mode == tiling:
-            return
-        
-        modules = [self.unet]
-        if getattr(self, "vae", None) is not None:
-            modules.append(self.vae)
-            
-        modules = filter(lambda module: isinstance(module, torch.nn.Module), modules)
-
-        for module in modules:
-            for submodule in module.modules():
-                if isinstance(submodule, torch.nn.Conv2d | torch.nn.ConvTranspose2d | torch.nn.Conv1d | torch.nn.ConvTranspose1d):
-
-                    if isinstance(submodule, torch.nn.ConvTranspose2d | torch.nn.ConvTranspose1d):
-                        continue
-                        raise NotImplementedError(
-                            "Assymetric tiling doesn't support this module"
-                        )
-
-                    if tiling is False:
-                        self.remove_module_tiling(submodule)
-                    else:
-                        self.set_module_tiling(submodule)
-
-        self.tiling_mode = tiling
+        return self.format.sample_to_raw(sample)
