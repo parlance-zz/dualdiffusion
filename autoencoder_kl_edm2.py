@@ -137,7 +137,7 @@ class AutoencoderKL_EDM2(ModelMixin, ConfigMixin):
         self.conv_out = MPConv(cout, out_channels, kernel=[3,3])
 
     def get_class_embeddings(self, class_labels):
-        return mp_silu(self.emb_label(normalize(class_labels).to(self.dtype)))
+        return mp_silu(self.emb_label(normalize(class_labels).to(device=self.device, dtype=self.dtype)))
 
     def encode(self, x, class_embeddings):
 
