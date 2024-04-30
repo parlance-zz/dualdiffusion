@@ -1041,7 +1041,9 @@ def do_training_loop(args,
                 elif args.module == "vae":
 
                     samples_dict = pipeline.format.raw_to_sample(raw_samples, return_dict=True)
-                    posterior = module.encode(samples_dict["samples"], sample_game_ids)
+                    vae_class_embeddings = module.get_class_embeddings(pipeline.get_class_labels(sample_game_ids))
+                    
+                    posterior = module.encode(samples_dict["samples"], vae_class_embeddings)
                     latents = posterior.sample(pipeline.noise_fn)
                     latents_mean = latents.mean()
                     latents_std = latents.std()
@@ -1049,7 +1051,7 @@ def do_training_loop(args,
                     target_noise_std = (1 / (module.get_target_snr()**2 + 1))**0.5
                     measured_sample_std = (latents_std**2 - target_noise_std**2).clip(min=0)**0.5
                     latents_snr = measured_sample_std / target_noise_std
-                    model_output = module.decode(latents, sample_game_ids)
+                    model_output = module.decode(latents, vae_class_embeddings)
 
                     recon_samples_dict = pipeline.format.sample_to_raw(model_output, return_dict=True, decode=False)
                     point_similarity_loss = (samples_dict["samples"] - recon_samples_dict["samples"]).abs().mean()
