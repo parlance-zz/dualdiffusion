@@ -29,7 +29,7 @@ from dual_diffusion_utils import dict_str
 
 load_dotenv(override=True)
 
-MODEL_NAME = "edm2_vae_test2"
+MODEL_NAME = "edm2_vae_test5"
 MODEL_SEED = 2000
 
 MODEL_PARAMS = {
@@ -39,10 +39,10 @@ MODEL_PARAMS = {
 
     # sample format params
     "sample_format": "spectrogram",
-    "sample_raw_length": 32000*8,#32000*45,
+    "sample_raw_length": 32000*12,#32000*45,
     "noise_floor": 2e-5,
     "t_scale": 3.5714285714, # scales the linear positional embedding for absolute time range within each sample, None disables t_range conditioning
-    "noise_degree": 1, #0.6180339887498948, # set to 0 for standard gaussian
+    "noise_degree": 0, #0.6180339887498948, # set to 0 for standard gaussian
     "vae_class": "AutoencoderKL_EDM2",
     
     # diffusion schedule params
@@ -54,7 +54,6 @@ MODEL_PARAMS = {
         "input_perturbation": 0,
         "use_snr_loss_weighting": False,
         "use_acos_timestep_sampling": False,
-        "reflow_probability": 0,
     },
 
     "spectrogram_params": {
@@ -91,7 +90,7 @@ MODEL_PARAMS = {
     # vae training params
     "vae_training_params": {
         "point_loss_weight": 0.1,#0.,
-        "channel_kl_loss_weight": 1e-2, #0.006,
+        "channel_kl_loss_weight": 1., #0.006,
         "recon_loss_weight": 0.1, #0.02,
         "imag_loss_weight": 0.1, #0.025,
         "block_overlap": 8,
@@ -106,51 +105,12 @@ MODEL_PARAMS = {
 
 format = DualDiffusionPipeline.get_sample_format(MODEL_PARAMS)
 
-"""
-VAE_PARAMS = {
-    "latent_channels": 4,
-    "act_fn": "silu",
-    "conv_size": (3,3),
-
-    "block_out_channels": (96, 192, 384, 512),
-    "layers_per_block": 2,
-
-    "layers_per_mid_block": 3,
-    #"add_mid_attention": True,
-    "add_mid_attention": False,
-
-    "norm_num_groups": 32,
-    #"norm_num_groups": (0, 0, 32),
-    #"norm_num_groups": (0, 0, 32),
-
-    "downsample_type": "conv",
-    "upsample_type": "conv_transpose",
-    #"upsample_type": "conv",
-    "downsample_ratio": (2,2),
-
-    "attention_num_heads": (8,8,8,8),
-    "separate_attn_dim_mid": (3,2,3,2),
-    "double_attention": False,
-    "pre_attention": False,
-    "add_attention": False,
-    #"add_attention": True,
-    #"separate_attn_dim_down": (3,3),
-    #"separate_attn_dim_up": (3,3,3),
-
-    "freq_embedding_dim": 0,
-    "time_embedding_dim": 0,
-
-    "in_channels": format.get_num_channels()[0],
-    "out_channels": format.get_num_channels()[1],
-}
-"""
-
 VAE_PARAMS = {
     "latent_channels": 4,        # Number of channels in latent space.
     "target_snr": 1.7320508,     # The learned latent snr will not exceed this snr
     "label_dim": 1612,           # Class label dimensionality. 0 = unconditional.
     "dropout": 0,                # Dropout rate for model blocks
-    "model_channels": 64,        # Base multiplier for the number of channels.
+    "model_channels": 96,        # Base multiplier for the number of channels.
     "channels_per_head": 64,     # Number of channels per attention head for blocks using self-attention
     "channel_mult": [1,2,3,5],   # Per-resolution multipliers for the number of channels.
     "channel_mult_emb": None,    # Multiplier for final embedding dimensionality. None = select based on channel_mult.
@@ -163,7 +123,7 @@ UNET_PARAMS = {
     "pos_channels": 0,           # Number of positional embedding channels for attention.
     "label_dim": 1612,           # Class label dimensionality. 0 = unconditional.
     "label_dropout": 0.1,        # Dropout rate for the class embedding.
-    "dropout": 0,                # Dropout rate for model blocks
+    "dropout": 0.1,                # Dropout rate for model blocks
     "model_channels": 192,       # Base multiplier for the number of channels.
     "channels_per_head": 64,     # Number of channels per attention head for blocks using self-attention
     "channel_mult": [1,2,3,4],   # Per-resolution multipliers for the number of channels.
