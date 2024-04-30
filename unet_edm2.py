@@ -402,7 +402,7 @@ class UNet(ModelMixin, ConfigMixin):
         return x
     
     def get_class_embeddings(self, class_labels):
-        return self.emb_label(normalize(class_labels).to(self.dtype))
+        return self.emb_label(normalize(class_labels).to(device=self.device, dtype=self.dtype))
 
     def get_timestep_logvar(self, noise_labels):
         return self.logvar_linear(self.logvar_fourier(noise_labels))
