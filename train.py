@@ -122,7 +122,7 @@ def parse_args():
         default=0,
         help="If set, use this batch size for VAE encoding when training diffusion UNet module. Defaults to train_batch_size."
     )
-    parser.add_argument("--num_train_epochs", type=int, default=250)
+    parser.add_argument("--num_train_epochs", type=int, default=1000)
     parser.add_argument(
         "--gradient_accumulation_steps",
         type=int,
@@ -137,7 +137,7 @@ def parse_args():
     parser.add_argument(
         "--learning_rate",
         type=float,
-        default=1e-4,
+        default=1e-3,
         help="Initial learning rate (after the potential warmup period) to use.",
     )
     parser.add_argument(
@@ -177,9 +177,6 @@ def parse_args():
     #    default=0, #0.167,
     #    help="Modulate the tempo of the sample by a random amount within this range (value of 1 is double/half speed)  - Currently unused",
     #)
-    parser.add_argument(
-        "--use_8bit_adam", action="store_true", help="Whether or not to use 8-bit Adam from bitsandbytes."
-    )
     parser.add_argument("--use_ema", action="store_true", help="Whether to use EMA model.")
     parser.add_argument("--ema_inv_gamma", type=float, default=1.0, help="The inverse gamma value for the EMA decay.")
     parser.add_argument("--ema_power", type=float, default=2 / 3, help="The power value for the EMA decay.")
@@ -214,8 +211,7 @@ def parse_args():
         ),
     )
     parser.add_argument("--adam_beta1", type=float, default=0.9, help="The beta1 parameter for the Adam optimizer.")
-    parser.add_argument("--adam_beta2", type=float, default=0.999, help="The beta2 parameter for the Adam optimizer.")
-    parser.add_argument("--adam_weight_decay", type=float, default=1e-2, help="Weight decay to use.")
+    parser.add_argument("--adam_beta2", type=float, default=0.99, help="The beta2 parameter for the Adam optimizer.")
     parser.add_argument("--adam_epsilon", type=float, default=1e-08, help="Epsilon value for the Adam optimizer")
     parser.add_argument("--max_grad_norm", default=1., type=float, help="Max gradient norm.")
     parser.add_argument(
@@ -532,7 +528,6 @@ def load_checkpoint(checkpoint,
                     optimizer,
                     lr_scheduler,
                     learning_rate,
-                    adam_weight_decay,
                     gradient_accumulation_steps,
                     num_update_steps_per_epoch):
 
@@ -568,15 +563,6 @@ def load_checkpoint(checkpoint,
             lr_scheduler.scheduler.base_lrs = [learning_rate]
             logger.info(f"Using updated learning rate: {learning_rate}")
 
-        # update weight decay in case we've changed it
-        updated_weight_decay = False
-        for g in optimizer.param_groups:
-            if g["weight_decay"] != adam_weight_decay:
-                g["weight_decay"] = adam_weight_decay
-                updated_weight_decay = True
-        if updated_weight_decay:
-            logger.info(f"Using updated adam weight decay: {adam_weight_decay}")
-
     if global_step > 0:
         resume_global_step = global_step * gradient_accumulation_steps
         first_epoch = global_step // num_update_steps_per_epoch
@@ -597,7 +583,8 @@ def init_module_pipeline(pretrained_model_name_or_path, module_type, vae_encode_
             vae = vae.to(device).to(torch.bfloat16)
 
             if vae_encode_batch_size > 0:
-                vae.enable_slicing(vae_encode_batch_size)
+                #vae.enable_slicing(vae_encode_batch_size)
+                raise NotImplementedError("Slicing not yet implemented for EDM2 VAE")
 
             logger.info(f"Training diffusion model with VAE")
         else:
@@ -642,35 +629,25 @@ def init_ema_module(pretrained_model_name_or_path,
 
     return ema_module
     
-def init_optimizer(use_8bit_adam,
-                   learning_rate,
+def init_optimizer(learning_rate,
                    adam_beta1,
                    adam_beta2,
-                   adam_weight_decay,
                    adam_epsilon,
                    module):
     
-    if use_8bit_adam:
-        try:
-            import bitsandbytes as bnb # type: ignore
-        except ImportError:
-            raise ImportError(
-                "Please install bitsandbytes to use 8-bit Adam. You can do so by running `pip install bitsandbytes`"
-            )
-        optimizer_cls = bnb.optim.AdamW8bit
-    else:
-        optimizer_cls = torch.optim.AdamW
+    optimizer_cls = torch.optim.AdamW
+    #optimizer_cls = torch.optim.Adam
     
     optimizer = optimizer_cls(
         module.parameters(),
         lr=learning_rate,
         betas=(adam_beta1, adam_beta2),
-        weight_decay=adam_weight_decay,
+        weight_decay=0,
         eps=adam_epsilon,
     )
 
     logger.info(f"Using optimiser {optimizer_cls.__name__} with learning rate {learning_rate}")
-    logger.info(f"AdamW beta1: {adam_beta1} beta2: {adam_beta2} eps: {adam_epsilon} weight_decay: {adam_weight_decay}")
+    logger.info(f"AdamW beta1: {adam_beta1} beta2: {adam_beta2} eps: {adam_epsilon}")
 
     return optimizer
 
@@ -892,6 +869,10 @@ def do_training_loop(args,
             "point_loss_weight",
         ]
 
+        target_snr = module.get_target_snr()
+        target_noise_std = (1 / (target_snr**2 + 1))**0.5
+        logger.info(f"VAE Target SNR: {target_snr:{8}f}")
+
     elif args.module == "unet":
         logger.info("Training UNet model:")
 
@@ -1043,15 +1024,18 @@ def do_training_loop(args,
                     samples_dict = pipeline.format.raw_to_sample(raw_samples, return_dict=True)
                     vae_class_embeddings = module.get_class_embeddings(pipeline.get_class_labels(sample_game_ids))
                     
-                    posterior = module.encode(samples_dict["samples"], vae_class_embeddings)
+                    posterior = module.encode(samples_dict["samples"],
+                                              vae_class_embeddings,
+                                              pipeline.format)
                     latents = posterior.sample(pipeline.noise_fn)
                     latents_mean = latents.mean()
                     latents_std = latents.std()
 
-                    target_noise_std = (1 / (module.get_target_snr()**2 + 1))**0.5
                     measured_sample_std = (latents_std**2 - target_noise_std**2).clip(min=0)**0.5
                     latents_snr = measured_sample_std / target_noise_std
-                    model_output = module.decode(latents, vae_class_embeddings)
+                    model_output = module.decode(latents,
+                                                 vae_class_embeddings,
+                                                 pipeline.format)
 
                     recon_samples_dict = pipeline.format.sample_to_raw(model_output, return_dict=True, decode=False)
                     point_similarity_loss = (samples_dict["samples"] - recon_samples_dict["samples"]).abs().mean()
@@ -1341,11 +1325,9 @@ def main():
     else:
         logger.info("Gradient checkpointing disabled")
 
-    optimizer = init_optimizer(args.use_8bit_adam,
-                               args.learning_rate,
+    optimizer = init_optimizer(args.learning_rate,
                                args.adam_beta1,
                                args.adam_beta2,
-                               args.adam_weight_decay,
                                args.adam_epsilon,
                                module)
 
@@ -1403,7 +1385,6 @@ def main():
                                                             optimizer,
                                                             lr_scheduler,
                                                             args.learning_rate,
-                                                            args.adam_weight_decay,
                                                             args.gradient_accumulation_steps,
                                                             num_update_steps_per_epoch)
     
