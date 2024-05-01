@@ -61,7 +61,7 @@ class AutoencoderKL_EDM2(ModelMixin, ConfigMixin):
         label_dim = 0,                      # Class label dimensionality. 0 = unconditional.
         dropout = 0,                        # Dropout probability.
         model_channels       = 64,          # Base multiplier for the number of channels.
-        channel_mult         = [1,2,3,4],   # Per-resolution multipliers for the number of channels.
+        channel_mult         = [1,2,3,5],   # Per-resolution multipliers for the number of channels.
         channel_mult_emb     = None,        # Multiplier for final embedding dimensionality. None = select based on channel_mult.
         num_layers_per_block = 3,           # Number of residual blocks per resolution.
         attn_levels          = [],          # List of resolutions with self-attention.
@@ -145,7 +145,7 @@ class AutoencoderKL_EDM2(ModelMixin, ConfigMixin):
         for name, block in self.enc.items():
             x = block(x) if 'conv' in name else block(x, class_embeddings, None, None)
 
-        latents = self.conv_latents_out(mp_silu(x), gain=self.latents_out_gain)
+        latents = self.conv_latents_out(x, gain=self.latents_out_gain)
         noise_logvar = torch.tensor(np.log(1 / (self.target_snr**2 + 1)), device=x.device, dtype=x.dtype)
         return IsotropicGaussianDistribution(latents, noise_logvar)
     
