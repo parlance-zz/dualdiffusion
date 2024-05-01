@@ -56,7 +56,7 @@ class AutoencoderKL_EDM2(ModelMixin, ConfigMixin):
         in_channels = 2,                    # Number of input channels.
         out_channels = 2,                   # Number of output channels.
         latent_channels = 4,                # Number of channels in latent space.
-        target_snr = 1.732,                 # The learned latent snr will not exceed this snr
+        target_snr = 2.,                    # The learned latent snr will not exceed this snr
         channels_per_head = 64,             # Number of channels per attention head.
         label_dim = 0,                      # Class label dimensionality. 0 = unconditional.
         dropout = 0,                        # Dropout probability.
@@ -98,7 +98,7 @@ class AutoencoderKL_EDM2(ModelMixin, ConfigMixin):
         
         # Encoder.
         self.enc = torch.nn.ModuleDict()
-        cout = in_channels + 1 # 1 extra const channel
+        cout = in_channels + 2 # 1 extra const channel, 1 pos embedding channel
         for level, channels in enumerate(cblock):
             
             if level == 0:
@@ -115,7 +115,7 @@ class AutoencoderKL_EDM2(ModelMixin, ConfigMixin):
                                                              flavor='enc', attention=(level in attn_levels), **block_kwargs)
 
         self.conv_latents_out = MPConv(cout, latent_channels, kernel=[3,3])
-        self.conv_latents_in = MPConv(latent_channels, cout, kernel=[3,3])
+        self.conv_latents_in = MPConv(latent_channels + 2, cout, kernel=[3,3]) # 1 extra const channel, 1 pos embedding channel
 
         # Decoder.
         self.dec = torch.nn.ModuleDict()
@@ -139,9 +139,10 @@ class AutoencoderKL_EDM2(ModelMixin, ConfigMixin):
     def get_class_embeddings(self, class_labels):
         return mp_silu(self.emb_label(normalize(class_labels).to(device=self.device, dtype=self.dtype)))
 
-    def encode(self, x, class_embeddings):
+    def encode(self, x, class_embeddings, format):
 
-        x = torch.cat((x, torch.ones_like(x[:, :1])), dim=1)
+        x = torch.cat((x, torch.ones_like(x[:, :1]),
+                       format.get_positional_embedding(x, None, mode="linear")), dim=1)
         for name, block in self.enc.items():
             x = block(x) if 'conv' in name else block(x, class_embeddings, None, None)
 
@@ -149,9 +150,11 @@ class AutoencoderKL_EDM2(ModelMixin, ConfigMixin):
         noise_logvar = torch.tensor(np.log(1 / (self.target_snr**2 + 1)), device=x.device, dtype=x.dtype)
         return IsotropicGaussianDistribution(latents, noise_logvar)
     
-    def decode(self, x, class_embeddings):
+    def decode(self, x, class_embeddings, format):
         
-        x = mp_silu(self.conv_latents_in(x))
+        x = torch.cat((x, torch.ones_like(x[:, :1]),
+                       format.get_positional_embedding(x, None, mode="linear")), dim=1)
+        x = self.conv_latents_in(x)
         for _, block in self.dec.items():
             x = block(x, class_embeddings, None, None)
 
