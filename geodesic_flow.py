@@ -60,9 +60,13 @@ class GeodesicFlow:
             time_scale = (1 - np.cos(2*np.arctan(target_snr))) / 2 # ~0.925
             def theta_fn(timesteps):
                 return (1 - 2*(1-timesteps) * time_scale).acos()/2
-        elif schedule == "atan":
+        elif schedule == "atan": # (linear snr)
             def theta_fn(timesteps):
                 return ((1 - timesteps) * target_snr).atan()
+        elif schedule == "linear_information": # linearizes the information content (ln(1 + snr))
+            time_scale = np.log1p(target_snr)
+            def theta_fn(timesteps):
+                return (((1 - timesteps) * time_scale).exp() - 1).atan()
         else:
             raise ValueError(f"Invalid schedule: {schedule}")
 
