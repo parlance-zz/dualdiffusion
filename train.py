@@ -1046,7 +1046,8 @@ def do_training_loop(args,
                     imag_nll_loss = (imag_loss / recon_loss_logvar.exp() + recon_loss_logvar) * (recon_loss_weight * imag_loss_weight)
 
                     latents_square_norm = (torch.linalg.vector_norm(latents, dim=(1,2,3), dtype=torch.float32) / latents[0].numel()**0.5).square()
-                    channel_kl_loss = (latents_square_norm - 1 - latents_square_norm.log()).mean()
+                    latents_batch_mean = latents.mean(dim=(1,2,3))
+                    channel_kl_loss = (latents_batch_mean.square() + latents_square_norm - 1 - latents_square_norm.log()).mean()
                     
                     loss = real_nll_loss + imag_nll_loss + channel_kl_loss * channel_kl_loss_weight + point_similarity_loss * point_loss_weight
                 else:
