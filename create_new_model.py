@@ -29,7 +29,7 @@ from dual_diffusion_utils import dict_str
 
 load_dotenv(override=True)
 
-MODEL_NAME = "edm2_vae_test5"
+MODEL_NAME = "edm2_vae_test6"
 MODEL_SEED = 2000
 
 MODEL_PARAMS = {
@@ -39,7 +39,7 @@ MODEL_PARAMS = {
 
     # sample format params
     "sample_format": "spectrogram",
-    "sample_raw_length": 32000*12,#32000*45,
+    "sample_raw_length": 112000,#32000*45,
     "noise_floor": 2e-5,
     "t_scale": 3.5714285714, # scales the linear positional embedding for absolute time range within each sample, None disables t_range conditioning
     "noise_degree": 0, #0.6180339887498948, # set to 0 for standard gaussian
@@ -89,10 +89,10 @@ MODEL_PARAMS = {
 
     # vae training params
     "vae_training_params": {
-        "point_loss_weight": 0.1,#0.,
-        "channel_kl_loss_weight": 1., #0.006,
-        "recon_loss_weight": 0.1, #0.02,
-        "imag_loss_weight": 0.1, #0.025,
+        "point_loss_weight": 0,
+        "channel_kl_loss_weight": 1.,
+        "recon_loss_weight": 0.5,
+        "imag_loss_weight": 1.,
         "block_overlap": 8,
         "block_widths": [
             8,
@@ -107,7 +107,7 @@ format = DualDiffusionPipeline.get_sample_format(MODEL_PARAMS)
 
 VAE_PARAMS = {
     "latent_channels": 4,        # Number of channels in latent space.
-    "target_snr": 1.7320508,     # The learned latent snr will not exceed this snr
+    "target_snr": 2.,            # The learned latent snr will not exceed this snr
     "label_dim": 1612,           # Class label dimensionality. 0 = unconditional.
     "dropout": 0,                # Dropout rate for model blocks
     "model_channels": 96,        # Base multiplier for the number of channels.
