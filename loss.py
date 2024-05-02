@@ -181,10 +181,13 @@ class DualMultiscaleSpectralLoss2D:
                 wavelength = 1 / ((blockfreq_y.square().view(-1, 1) + blockfreq_x.square().view(1, -1)).sqrt() + 1)
                 loss_imag_weight = (wavelength.view((1,)*4 + wavelength.shape) * target_fft_abs / torch.pi).requires_grad_(False)
 
+                real_loss_weight = 1 / wavelength * wavelength.amin()
+
             sample_fft = self.stft2d(sample, block_width, step, window)
             sample_fft_abs = sample_fft.abs()
             
-            loss_real = loss_real + (sample_fft_abs - target_fft_abs).abs().type(torch.float64).sum()
+            #loss_real = loss_real + (sample_fft_abs - target_fft_abs).abs().type(torch.float64).sum()
+            loss_real = loss_real + ((sample_fft_abs - target_fft_abs).abs() * real_loss_weight).type(torch.float64).sum()
 
             error_imag = (sample_fft.angle() - target_fft_angle).abs()
             error_imag_wrap_mask = (error_imag > torch.pi).detach().requires_grad_(False)
