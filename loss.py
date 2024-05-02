@@ -133,12 +133,15 @@ class DualMultiscaleSpectralLoss2D:
     def _flat_top_window(self, x):
         return 0.21557895 - 0.41663158 * torch.cos(x) + 0.277263158 * torch.cos(2*x) - 0.083578947 * torch.cos(3*x) + 0.006947368 * torch.cos(4*x)
 
-    def get_flat_top_window_2d(self, block_width, device):
-
+    def get_flat_top_window_2d_radial(self, block_width, device):
         wx = torch.linspace(-torch.pi, torch.pi, block_width, device=device).square()
         wr = (wx.view(1, 1,-1, 1) + wx.view(1, 1, 1,-1)).sqrt()
         return (self._flat_top_window(wr + torch.pi) * (wr < torch.pi).float()).requires_grad_(False)
-            
+
+    def get_flat_top_window_2d(self, block_width, device):
+        wx = torch.linspace(0, 2*torch.pi, block_width, device=device)
+        return self._flat_top_window(wx.view(1, 1,-1, 1)) * self._flat_top_window(wx.view(1, 1, 1,-1)).requires_grad_(False)
+    
     def stft2d(self, x, block_width, step, window):
         
         padding = block_width // 2
@@ -186,7 +189,6 @@ class DualMultiscaleSpectralLoss2D:
             sample_fft = self.stft2d(sample, block_width, step, window)
             sample_fft_abs = sample_fft.abs()
             
-            #loss_real = loss_real + (sample_fft_abs - target_fft_abs).abs().type(torch.float64).sum()
             loss_real = loss_real + ((sample_fft_abs - target_fft_abs).abs() * real_loss_weight).type(torch.float64).sum()
 
             error_imag = (sample_fft.angle() - target_fft_angle).abs()
@@ -195,3 +197,20 @@ class DualMultiscaleSpectralLoss2D:
             loss_imag = loss_imag + (error_imag * loss_imag_weight).type(torch.float64).sum()
         
         return (loss_real * loss_scale).float(), (loss_imag * loss_scale).float()
+
+if __name__ == "__main__":
+
+    from dual_diffusion_utils import save_raw_img, save_raw
+    from dotenv import load_dotenv
+    import os
+
+    load_dotenv(override=True)
+    debug_path = os.environ.get("DEBUG_PATH", None)
+    if debug_path is not None:
+        debug_path = os.path.join(debug_path, "loss")
+
+    loss_params = { "block_widths": [8, 16, 32, 64], "block_overlap": 8}
+    loss = DualMultiscaleSpectralLoss2D(loss_params)
+
+    window = loss.get_flat_top_window_2d_2(64, "cpu")
+    save_raw_img(window, os.path.join(debug_path, "window.png"))
