@@ -112,10 +112,8 @@ class GeodesicFlow:
         return timestep_theta.cos() / timestep_theta.sin().to(original_dtype)
     
     @torch.no_grad()
-    def get_timestep_noise_label(self, timesteps): # allocates resolution over timesteps proportional to timestep snr
-        original_dtype = timesteps.dtype
-        timestep_theta = self.get_timestep_theta(timesteps.to(torch.float64))
-        return timestep_theta.cos().log().to(original_dtype) # integral of tan(theta)
+    def get_timestep_noise_label(self, timesteps):
+        return timesteps
     
     @torch.no_grad()
     def add_noise(self, sample, noise, timesteps):
@@ -163,7 +161,7 @@ if __name__ == "__main__": # small test with some debug output for target_snr / 
 
     load_dotenv(override=True)
 
-    target_snr = 3.5177683092482117
+    target_snr = 7.937253933193772
     schedule = "atan"
     objective = "v_pred"
     num_steps = 200
