@@ -129,27 +129,23 @@ class DualMultiscaleSpectralLoss2D:
         self.block_widths = loss_params["block_widths"]
         self.block_overlap = loss_params["block_overlap"]
         self.loss_scale = 4e-3
-    
+
     def _flat_top_window(self, x):
         return 0.21557895 - 0.41663158 * torch.cos(x) + 0.277263158 * torch.cos(2*x) - 0.083578947 * torch.cos(3*x) + 0.006947368 * torch.cos(4*x)
 
-    def get_flat_top_window_2d_radial(self, block_width, device):
-        wx = torch.linspace(-torch.pi, torch.pi, block_width, device=device).square()
-        wr = (wx.view(1, 1,-1, 1) + wx.view(1, 1, 1,-1)).sqrt()
-        return (self._flat_top_window(wr + torch.pi) * (wr < torch.pi).float()).requires_grad_(False)
-
     def get_flat_top_window_2d(self, block_width, device):
-        wx = torch.linspace(0, 2*torch.pi, block_width, device=device)
-        return self._flat_top_window(wx.view(1, 1,-1, 1)) * self._flat_top_window(wx.view(1, 1, 1,-1)).requires_grad_(False)
+        wy = torch.linspace(0, 2*torch.pi, block_width, device=device)
+        wx = torch.linspace(0, 2*torch.pi, block_width//2, device=device)
+        return self._flat_top_window(wy.view(1, 1,-1, 1)) * self._flat_top_window(wx.view(1, 1, 1,-1)).requires_grad_(False)
     
-    def stft2d(self, x, block_width, step, window, dim_order):
+    def stft2d(self, x, block_width, step, window):
         
         padding = block_width // 2
-        x = F.pad(x, (padding, padding, padding, padding), mode="reflect")
-        x = x.unfold(2, block_width, step).unfold(3, block_width, step)
+        x = F.pad(x, (padding//2, padding//2, padding, padding), mode="reflect")
+        x = x.unfold(2, block_width, step).unfold(3, block_width//2, max(step//2, 1))
 
-        x = torch.fft.rfft2(x * window, dim=dim_order, norm="backward")
-
+        x = torch.fft.rfft2(x * window, norm="backward")
+        
         if x.shape[1] == 2:
             x = torch.stack((x[:, 0] + x[:, 1],
                              x[:, 0] - x[:, 1]), dim=1)
@@ -157,7 +153,8 @@ class DualMultiscaleSpectralLoss2D:
             x = torch.fft.fft(x, dim=1, norm="backward")
 
         return x
-            
+    
+    @torch.compile(fullgraph=True)
     def __call__(self, sample, target, model_params):
 
         target = target["samples"]
@@ -171,38 +168,36 @@ class DualMultiscaleSpectralLoss2D:
             
             block_width = min(block_width, target.shape[-1], target.shape[-2])
             step = max(block_width // self.block_overlap, 1)            
-            rfft2_dim_order = (-2, -1) if np.random.randint(0, 2) == 0 else (-1, -2)
 
             with torch.no_grad():
+                
                 window = self.get_flat_top_window_2d(block_width, target.device)
-                blockfreq_y = torch.fft.fftfreq(block_width, 1/block_width, device=target.device)
-                blockfreq_x = torch.arange(block_width//2 + 1, device=target.device)
-                if rfft2_dim_order[0] == -1:
-                    blockfreq_y, blockfreq_x = blockfreq_x, blockfreq_y
-                wavelength = 1 / ((blockfreq_y.square().view(-1, 1) + blockfreq_x.square().view(1, -1)).sqrt() + 1)
 
-                target_fft = self.stft2d(target, block_width, step, window, rfft2_dim_order)
+                blockfreq_y = torch.fft.fftfreq(block_width, 1/block_width, device=target.device)
+                blockfreq_x = torch.arange(block_width//4 + 1, device=target.device)
+                wavelength = 1 / ((blockfreq_y.square().view(-1, 1) + blockfreq_x.square().view(1, -1)).sqrt() + 1)
+                real_loss_weight = (1 / wavelength * wavelength.amin()).requires_grad_(False)
+                
+                target_fft = self.stft2d(target, block_width, step, window)
                 target_fft_abs = target_fft.abs().requires_grad_(False)
                 target_fft_angle = target_fft.angle().requires_grad_(False)
+                loss_imag_weight = (wavelength.view((1,)*4 + wavelength.shape) / torch.pi).requires_grad_(False) * target_fft_abs
 
-                loss_imag_weight = (wavelength.view((1,)*4 + wavelength.shape) * target_fft_abs / torch.pi).requires_grad_(False)
-                real_loss_weight = (1 / wavelength * wavelength.amin()).requires_grad_(False)
-
-            sample_fft = self.stft2d(sample, block_width, step, window, rfft2_dim_order)
+            sample_fft = self.stft2d(sample, block_width, step, window)
             sample_fft_abs = sample_fft.abs()
             
             loss_real = loss_real + ((sample_fft_abs - target_fft_abs).abs() * real_loss_weight).type(torch.float64).sum()
 
             error_imag = (sample_fft.angle() - target_fft_angle).abs()
             error_imag_wrap_mask = (error_imag > torch.pi).detach().requires_grad_(False)
-            error_imag[error_imag_wrap_mask] = 2*torch.pi - error_imag[error_imag_wrap_mask]
+            error_imag = torch.where(error_imag_wrap_mask, 2*torch.pi - error_imag, error_imag)
             loss_imag = loss_imag + (error_imag * loss_imag_weight).type(torch.float64).sum()
         
         return (loss_real * loss_scale).float(), (loss_imag * loss_scale).float()
 
 if __name__ == "__main__":
 
-    from dual_diffusion_utils import save_raw_img, save_raw
+    from dual_diffusion_utils import save_raw_img
     from dotenv import load_dotenv
     import os
 
@@ -211,8 +206,6 @@ if __name__ == "__main__":
     if debug_path is not None:
         debug_path = os.path.join(debug_path, "loss")
 
-    loss_params = { "block_widths": [8, 16, 32, 64], "block_overlap": 8}
+    loss_params = { "block_widths": [16, 32, 64, 128], "block_overlap": 8}
     loss = DualMultiscaleSpectralLoss2D(loss_params)
-
-    window = loss.get_flat_top_window_2d_2(64, "cpu")
-    save_raw_img(window, os.path.join(debug_path, "window.png"))
+    save_raw_img(loss.windows[2], os.path.join(debug_path, "window.png"))
