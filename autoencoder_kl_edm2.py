@@ -139,6 +139,7 @@ class AutoencoderKL_EDM2(ModelMixin, ConfigMixin):
     def get_class_embeddings(self, class_labels):
         return mp_silu(self.emb_label(normalize(class_labels).to(device=self.device, dtype=self.dtype)))
 
+    @torch.compile(fullgraph=True)
     def encode(self, x, class_embeddings, format):
 
         x = torch.cat((x, torch.ones_like(x[:, :1]),
@@ -150,6 +151,7 @@ class AutoencoderKL_EDM2(ModelMixin, ConfigMixin):
         noise_logvar = torch.tensor(np.log(1 / (self.target_snr**2 + 1)), device=x.device, dtype=x.dtype)
         return IsotropicGaussianDistribution(latents, noise_logvar)
     
+    @torch.compile(fullgraph=True)
     def decode(self, x, class_embeddings, format):
         
         x = torch.cat((x, torch.ones_like(x[:, :1]),
