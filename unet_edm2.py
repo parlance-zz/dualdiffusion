@@ -82,6 +82,9 @@ def mp_cat(a, b, dim=1, t=0.5):
 # Magnitude-preserving Fourier features (Equation 75).
 
 class MPFourier(torch.nn.Module):
+
+    __constants__ = ["bandwidth", "eps"]
+
     def __init__(self, num_channels, bandwidth=None, eps=1e-3, mode="gaussian"):
         super().__init__()
 
@@ -118,11 +121,15 @@ class MPFourier(torch.nn.Module):
 # with force weight normalization (Equation 66).
 
 class MPConv(torch.nn.Module):
+
+    __constants__ = ["in_channels", "out_channels", "weight_gain"]
+
     def __init__(self, in_channels, out_channels, kernel):
         super().__init__()
         self.in_channels = in_channels
         self.out_channels = out_channels
         self.weight = torch.nn.Parameter(torch.randn(out_channels, in_channels, *kernel))
+        self.weight_gain = np.sqrt(self.weight[0].numel())
 
     """
     def forward(self, x, gain=1):
@@ -141,7 +148,7 @@ class MPConv(torch.nn.Module):
 
     def forward(self, x, gain=1):
 
-        w = self.weight * (gain / np.sqrt(self.weight[0].numel()))
+        w = self.weight * (gain / self.weight_gain)
         if w.ndim == 2:
             return x @ w.t()
         assert w.ndim == 4
@@ -156,6 +163,8 @@ class MPConv(torch.nn.Module):
 # U-Net encoder/decoder block with optional self-attention (Figure 21).
 
 class Block(torch.nn.Module):
+
+    __constants__ = ["out_channels", "pos_channels", "flavor", "resample_mode", "num_heads", "dropout", "res_balance", "attn_balance", "clip_act"]
 
     def __init__(self,
         in_channels,                    # Number of input channels.
@@ -274,6 +283,8 @@ class Block(torch.nn.Module):
 # EDM2 U-Net model (Figure 21).
 
 class UNet(ModelMixin, ConfigMixin):
+
+    __constants__ = ["label_dim", "label_dropout", "label_balance", "dropout", "concat_balance"]
 
     @register_to_config
     def __init__(self,

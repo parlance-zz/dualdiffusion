@@ -51,6 +51,8 @@ class IsotropicGaussianDistribution(object):
     
 class AutoencoderKL_EDM2(ModelMixin, ConfigMixin):
 
+    __constants__ = ["label_dim", "dropout", "target_snr", "num_blocks"]
+
     @register_to_config
     def __init__(self,
         in_channels = 2,                    # Number of input channels.
