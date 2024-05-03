@@ -63,10 +63,6 @@ class GeodesicFlow:
         elif schedule == "atan": # (linear snr)
             def theta_fn(timesteps):
                 return ((1 - timesteps) * target_snr).atan()
-        elif schedule == "linear_information": # linearizes the information content (ln(1 + snr))
-            time_scale = np.log1p(target_snr)
-            def theta_fn(timesteps):
-                return (((1 - timesteps) * time_scale).exp() - 1).atan()
         else:
             raise ValueError(f"Invalid schedule: {schedule}")
 
@@ -168,14 +164,14 @@ if __name__ == "__main__": # small test with some debug output for target_snr / 
     load_dotenv(override=True)
 
     target_snr = 3.5177683092482117
-    schedule = "linear"
-    objective = "scaled_v_pred"
+    schedule = "atan"
+    objective = "v_pred"
     num_steps = 200
     noise_degree = 0
     
     print("target_snr:", target_snr, "schedule:", schedule, "objective:", objective, "num_steps:", num_steps)
 
-    flow = GeodesicFlow(target_snr, schedule="linear", objective="scaled_v_pred")
+    flow = GeodesicFlow(target_snr, schedule=schedule, objective=objective)
     timesteps = torch.linspace(1, 0, 200+1, dtype=torch.float64)[:-1]
     if noise_degree == 0:
         noise_fn = torch.randn
