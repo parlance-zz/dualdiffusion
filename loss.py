@@ -142,13 +142,13 @@ class DualMultiscaleSpectralLoss2D:
         wx = torch.linspace(0, 2*torch.pi, block_width, device=device)
         return self._flat_top_window(wx.view(1, 1,-1, 1)) * self._flat_top_window(wx.view(1, 1, 1,-1)).requires_grad_(False)
     
-    def stft2d(self, x, block_width, step, window):
+    def stft2d(self, x, block_width, step, window, dim_order):
         
         padding = block_width // 2
         x = F.pad(x, (padding, padding, padding, padding), mode="reflect")
         x = x.unfold(2, block_width, step).unfold(3, block_width, step)
 
-        x = torch.fft.rfft2(x * window, norm="backward")
+        x = torch.fft.rfft2(x * window, dim=dim_order, norm="backward")
 
         if x.shape[1] == 2:
             x = torch.stack((x[:, 0] + x[:, 1],
@@ -171,22 +171,24 @@ class DualMultiscaleSpectralLoss2D:
             
             block_width = min(block_width, target.shape[-1], target.shape[-2])
             step = max(block_width // self.block_overlap, 1)            
+            rfft2_dim_order = (-2, -1) if np.random.randint(0, 2) == 0 else (-1, -2)
 
             with torch.no_grad():
                 window = self.get_flat_top_window_2d(block_width, target.device)
-
-                target_fft = self.stft2d(target, block_width, step, window)
-                target_fft_abs = target_fft.abs().requires_grad_(False)
-
-                target_fft_angle = target_fft.angle().requires_grad_(False)
-                blockfreq_y = torch.fft.fftfreq(block_width, 1/block_width, device=target_fft_abs.device)
-                blockfreq_x = torch.arange(block_width//2 + 1, device=target_fft_abs.device)
+                blockfreq_y = torch.fft.fftfreq(block_width, 1/block_width, device=target.device)
+                blockfreq_x = torch.arange(block_width//2 + 1, device=target.device)
+                if rfft2_dim_order[0] == -1:
+                    blockfreq_y, blockfreq_x = blockfreq_x, blockfreq_y
                 wavelength = 1 / ((blockfreq_y.square().view(-1, 1) + blockfreq_x.square().view(1, -1)).sqrt() + 1)
+
+                target_fft = self.stft2d(target, block_width, step, window, rfft2_dim_order)
+                target_fft_abs = target_fft.abs().requires_grad_(False)
+                target_fft_angle = target_fft.angle().requires_grad_(False)
+
                 loss_imag_weight = (wavelength.view((1,)*4 + wavelength.shape) * target_fft_abs / torch.pi).requires_grad_(False)
+                real_loss_weight = (1 / wavelength * wavelength.amin()).requires_grad_(False)
 
-                real_loss_weight = 1 / wavelength * wavelength.amin()
-
-            sample_fft = self.stft2d(sample, block_width, step, window)
+            sample_fft = self.stft2d(sample, block_width, step, window, rfft2_dim_order)
             sample_fft_abs = sample_fft.abs()
             
             loss_real = loss_real + ((sample_fft_abs - target_fft_abs).abs() * real_loss_weight).type(torch.float64).sum()
