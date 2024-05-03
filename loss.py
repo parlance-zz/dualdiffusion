@@ -123,6 +123,8 @@ class DualMultiscaleSpectralLoss:
 
 class DualMultiscaleSpectralLoss2D:
 
+    __constants__ = ["loss_scale", "block_overlap", "block_widths"]
+
     @torch.no_grad()
     def __init__(self, loss_params):
     
@@ -134,15 +136,14 @@ class DualMultiscaleSpectralLoss2D:
         return 0.21557895 - 0.41663158 * torch.cos(x) + 0.277263158 * torch.cos(2*x) - 0.083578947 * torch.cos(3*x) + 0.006947368 * torch.cos(4*x)
 
     def get_flat_top_window_2d(self, block_width, device):
-        wy = torch.linspace(0, 2*torch.pi, block_width, device=device)
-        wx = torch.linspace(0, 2*torch.pi, block_width//2, device=device)
-        return self._flat_top_window(wy.view(1, 1,-1, 1)) * self._flat_top_window(wx.view(1, 1, 1,-1)).requires_grad_(False)
+        wx = torch.linspace(0, 2*torch.pi, block_width, device=device)
+        return self._flat_top_window(wx.view(1, 1,-1, 1)) * self._flat_top_window(wx.view(1, 1, 1,-1)).requires_grad_(False)
     
     def stft2d(self, x, block_width, step, window):
         
         padding = block_width // 2
-        x = F.pad(x, (padding//2, padding//2, padding, padding), mode="reflect")
-        x = x.unfold(2, block_width, step).unfold(3, block_width//2, max(step//2, 1))
+        x = F.pad(x, (padding, padding, padding, padding), mode="reflect")
+        x = x.unfold(2, block_width, step).unfold(3, block_width, step)
 
         x = torch.fft.rfft2(x * window, norm="backward")
         
@@ -174,7 +175,7 @@ class DualMultiscaleSpectralLoss2D:
                 window = self.get_flat_top_window_2d(block_width, target.device)
 
                 blockfreq_y = torch.fft.fftfreq(block_width, 1/block_width, device=target.device)
-                blockfreq_x = torch.arange(block_width//4 + 1, device=target.device)
+                blockfreq_x = torch.arange(block_width//2 + 1, device=target.device)
                 wavelength = 1 / ((blockfreq_y.square().view(-1, 1) + blockfreq_x.square().view(1, -1)).sqrt() + 1)
                 real_loss_weight = (1 / wavelength * wavelength.amin()).requires_grad_(False)
                 
