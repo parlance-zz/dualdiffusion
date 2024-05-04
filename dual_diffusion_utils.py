@@ -570,11 +570,13 @@ def quantize_tensor(x, levels):
     quantized = ((x - min_val) / step).round().clamp(0, levels - 1) * step + min_val
     return quantized
 
-def save_raw_img(x, img_path, allow_inversion=False, allow_colormap=True):
+def save_raw_img(x, img_path, allow_inversion=False, allow_colormap=True, allow_rescaling=True):
     
-    x = x.clone().detach().float().resolve_conj().cpu()
-    x -= x.amin(dim=(x.ndim-1, x.ndim-2), keepdim=True)
-    x /= x.amax(dim=(x.ndim-1, x.ndim-2), keepdim=True).clip(min=1e-16)
+    x = x.clone().detach().real.float().resolve_conj().cpu()
+
+    if allow_rescaling:
+        x -= x.amin(dim=(x.ndim-1, x.ndim-2), keepdim=True)
+        x /= x.amax(dim=(x.ndim-1, x.ndim-2), keepdim=True).clip(min=1e-16)
 
     if allow_inversion:
         invert_channel_mask = ((x.mean(dim=(x.ndim-1, x.ndim-2), keepdim=True) > 0.5) * torch.ones_like(x)) > 0.5
