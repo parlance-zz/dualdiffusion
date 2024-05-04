@@ -366,6 +366,7 @@ class DualDiffusionPipeline(DiffusionPipeline):
     @torch.no_grad()
     def get_class_labels(self, labels):
         if isinstance(labels, torch.Tensor):
+            if labels.ndim == 0: labels = labels.unsqueeze(0)
             return torch.nn.functional.one_hot(labels, num_classes=self.unet.label_dim).to(device=self.device, dtype=torch.float32)
         elif isinstance(labels, list):
             class_labels = torch.zeros((1, self.unet.label_dim))
