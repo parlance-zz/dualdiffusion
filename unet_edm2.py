@@ -14,6 +14,8 @@ import torch
 from diffusers.configuration_utils import ConfigMixin, register_to_config
 from diffusers.models.modeling_utils import ModelMixin
 
+from dual_diffusion_utils import torch_compile
+
 #----------------------------------------------------------------------------
 # Normalize given tensor to unit magnitude with respect to the given
 # dimensions. Default = all dimensions except the first.
@@ -371,6 +373,7 @@ class UNet(ModelMixin, ConfigMixin):
                                                              flavor='dec', attention=(level in attn_levels), **block_kwargs)
         self.conv_out = MPConv(cout, out_channels, kernel=[3,3])
 
+    @torch_compile(fullgraph=True)
     def forward(self, x, noise_labels, class_embeddings, t_ranges, format, return_logvar=False):
 
         # Embedding.

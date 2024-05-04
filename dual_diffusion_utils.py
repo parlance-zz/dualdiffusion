@@ -21,6 +21,7 @@
 # SOFTWARE.
 
 import os
+import platform
 from io import BytesIO
 from json import dumps
 
@@ -41,6 +42,14 @@ def init_cuda():
         torch.backends.cuda.matmul.allow_tf32 = True
         torch.backends.cudnn.allow_tf32 = True
         torch.backends.cuda.cufft_plan_cache[0].max_size = 250 # stupid cufft memory leak
+
+def torch_compile(*args, **kwargs):
+    def wrapper(func):
+        if platform.system() == "Linux":
+            return torch.compile(func, *args, **kwargs)
+        else:
+            return func
+    return wrapper
 
 def dict_str(d, indent=4):
     if d is None: return "None"
