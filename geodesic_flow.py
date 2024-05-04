@@ -63,6 +63,10 @@ class GeodesicFlow:
         elif schedule == "atan": # (linear snr)
             def theta_fn(timesteps):
                 return ((1 - timesteps) * target_snr).atan()
+        elif schedule == "edm2":
+            time_scale = target_snr * (target_snr + (target_snr**2 + 1) ** 0.5)
+            def theta_fn(timesteps):
+                return (1 / (time_scale * (timesteps - 1) - 1) + 1).asin()
         else:
             raise ValueError(f"Invalid schedule: {schedule}")
 
@@ -161,8 +165,8 @@ if __name__ == "__main__": # small test with some debug output for target_snr / 
 
     load_dotenv(override=True)
 
-    target_snr = 7.937253933193772
-    schedule = "atan"
+    target_snr = 16
+    schedule = "edm2"
     objective = "v_pred"
     num_steps = 200
     noise_degree = 0
