@@ -570,12 +570,13 @@ def quantize_tensor(x, levels):
     quantized = ((x - min_val) / step).round().clamp(0, levels - 1) * step + min_val
     return quantized
 
-def save_raw_img(x, img_path, allow_inversion=False, allow_colormap=True, allow_rescaling=True):
+def save_raw_img(x, img_path, allow_inversion=False, allow_colormap=True, allow_recenter=True, allow_rescaling=True):
     
     x = x.clone().detach().real.float().resolve_conj().cpu()
 
-    if allow_rescaling:
+    if allow_recenter:
         x -= x.amin(dim=(x.ndim-1, x.ndim-2), keepdim=True)
+    if allow_rescaling:
         x /= x.amax(dim=(x.ndim-1, x.ndim-2), keepdim=True).clip(min=1e-16)
 
     if allow_inversion:
