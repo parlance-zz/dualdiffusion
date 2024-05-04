@@ -36,30 +36,34 @@ if __name__ == "__main__":
     load_dotenv(override=True)
     #np.random.seed(0)
 
-    model_name = "dualdiffusion2d_3000_4"
+    os.environ["MODEL_PATH"] = "Z:/dualdiffusion/models"; model_name = "edm2_vae_test6"
+    #model_name = "edm2_vae_test5"
+    
     num_samples = 1
     device = "cuda" #"cpu"
-    fp16 = True #False
+    fp16 = True
     start = 0
     length = 32000 * 45
+    fgla_iterations = 300 #400
     save_output = True
-    sample_latents = False#True
-    normalize_latents = True
+    sample_latents = True
+    normalize_latents = False #True
     random_latents = False #True
     quantize_latents = 0 #8
     add_latent_noise = 0 #0.1
 
     model_path = os.path.join(os.environ.get("MODEL_PATH", "./"), model_name)
-    model_dtype = torch.float16 if fp16 else torch.float32
+    model_dtype = torch.bfloat16 if fp16 else torch.float32
     print(f"Loading DualDiffusion model from '{model_path}' (dtype={model_dtype})...")
     pipeline = DualDiffusionPipeline.from_pretrained(model_path,
                                                      torch_dtype=model_dtype,
                                                      load_latest_checkpoints=True,
                                                      device=device)
+    pipeline.format.spectrogram_params.num_griffin_lim_iters = fgla_iterations
     model_params = pipeline.config["model_params"]
     crop_width = pipeline.format.get_sample_crop_width(length=length)
-    vae = pipeline.vae.to(device); pipeline.format = pipeline.format.to(device)
-    last_global_step = vae.config["last_global_step"]
+    noise_floor = model_params["noise_floor"]
+    last_global_step = pipeline.vae.config["last_global_step"]
 
     dataset_path = os.environ.get("DATASET_PATH", "./dataset/samples")
     dataset_format = os.environ.get("DATASET_FORMAT", ".flac")
@@ -67,38 +71,42 @@ if __name__ == "__main__":
     test_samples = np.random.choice(os.listdir(dataset_path), num_samples, replace=False)
 
     #"""
-    #test_samples = []
-    #test_samples += ["Star Fox - 141 Training Mode.flac"] # good bass test
-    #test_samples += ["Final Fantasy VI - 217 Mog.flac"] # good bass test
-    #test_samples += ["Vortex - 10 Magmemo.flac"]  # good stereo test
-    #test_samples += ["Mega Man X3 - 09 Blast Hornet.flac"] # messy mix and stereo test
-    #test_samples += ["Sparkster - 06 Bird.flac"] # messy mix and thick electric guitars in stereo
-    #test_samples += ["Lennus II - Fuuin no Shito - 19 Holy Temple.flac"] # transient test
-    #test_samples += ["Donkey Kong Country 2 - Diddy's Kong Quest - 17 Stickerbrush Symphony.flac"]
-    #test_samples += ["Kirby Super Star  [Kirby's Fun Pak] - 36 Mine Cart Riding.flac"] # success case
-    #test_samples += ["Final Fantasy VI - 104 Locke.flac"] # this better sound good cuz its important
-    #test_samples += ["Kirby Super Star  [Kirby's Fun Pak] - 53 Heart of Nova.flac"]
-    #test_samples += ["Kirby Super Star  [Kirby's Fun Pak] - 41 Halberd ~ Nightmare Warship.flac"]
-    #test_samples += ["Pilotwings - 04 Light Plane.flac"]
-    #test_samples += ["Front Mission - 23 Arena.flac"]
-    #test_samples += ["Final Fantasy - Mystic Quest  [Mystic Quest Legend] - 07 Battle 1.flac"]
-    #test_samples += ["EarthBound - 087 Save the Miners!.flac"] # fast snare drum problems
-    #test_samples += ["Contra III - The Alien Wars - 05 Neo Kobe Steel Factory.flac"] # fast snare drum problems
-    #test_samples += ["Bahamut Lagoon - 09 Materaito.flac"] # reverb and snare test
-    #test_samples += ["U.N. Squadron - 11 The Minks.flac"]
-    #test_samples += ["Shin Megami Tensei II - 01 Title Demo.flac"]
+    test_samples = []
+    #test_samples += [(666, "1/Kirby Super Star  [Kirby's Fun Pak] - 36 Mine Cart Riding.flac")] # success case
+    #test_samples += [(666, "1/Kirby Super Star  [Kirby's Fun Pak] - 53 Heart of Nova.flac")]
+    #test_samples += [(666, "1/Kirby Super Star  [Kirby's Fun Pak] - 41 Halberd ~ Nightmare Warship.flac")]
+    #test_samples += [(1302, "2/Super Mario RPG - The Legend of the Seven Stars - 217 Weapons Factory.flac")]
+    #test_samples += [(1302, "2/Super Mario RPG - The Legend of the Seven Stars - 135 Welcome to Booster Tower.flac")]
+    #test_samples += [(1302, "2/Super Mario RPG - The Legend of the Seven Stars - 128 Beware the Forest's Mushrooms.flac")]
+    test_samples += [(788, "2/Mega Man X3 - 09 Blast Hornet.flac")]
+    test_samples += [(788, "2/Mega Man X3 - 11 Toxic Seahorse.flac")]
+    test_samples += [(788, "2/Mega Man X3 - 14 Crush Crawfish.flac")]
+    #test_samples += [(230, "1/Contra III - The Alien Wars - 05 Neo Kobe Steel Factory.flac")] 
+    #test_samples += [(230, "1/Contra III - The Alien Wars - 02 Ground Zero.flac")]
+    #test_samples += [(230, "1/Contra III - The Alien Wars - 06 Road Warriors.flac")]
+    #test_samples += [(471, "1/Gradius III - 03 Invitation.flac")]
+    #test_samples += [(471, "1/Gradius III - 04 Departure for Space.flac")]
+    #test_samples += [(471, "1/Gradius III - 05 Sand Storm.flac")]
+    #test_samples += [(387, "1/Final Fantasy VI - 104 Locke.flac")]
+    #test_samples += [(387, "1/Final Fantasy VI - 105 Battle Theme.flac")]
+    #test_samples += [(387, "1/Final Fantasy VI - 113 Cyan.flac")]
+    #test_samples += [(387, "1/Final Fantasy VI - 104 Locke.flac")]
+    #test_samples += [(387, "1/Final Fantasy VI - 215 Blackjack.flac")]
     #"""
     
     sample_shape = pipeline.format.get_sample_shape(length=length)
-    print(f"Sample shape: {sample_shape}  Latent shape: {vae.get_latent_shape(sample_shape)}")
+    print(f"Sample shape: {sample_shape}  Latent shape: {pipeline.vae.get_latent_shape(sample_shape)}")
     
     output_path = os.path.join(model_path, "output")
     os.makedirs(output_path, exist_ok=True)
     start_time = datetime.datetime.now()
     point_similarity = latents_mean = latents_std = 0
 
-    for filename in test_samples:
+    for sample in test_samples:
         
+        sample_game_id = torch.tensor(sample[0], device=pipeline.vae.device, dtype=torch.long)
+        filename = sample[1]
+
         file_ext = os.path.splitext(filename)[1]
         if dataset_format == ".raw":
             input_raw_sample = load_raw(os.path.join(dataset_path, filename),
@@ -107,24 +115,26 @@ if __name__ == "__main__":
             input_raw_sample = load_audio(os.path.join(dataset_path, filename), start=start, count=crop_width)
         input_raw_sample = input_raw_sample.unsqueeze(0).to(device)
 
+        class_labels = pipeline.get_class_labels(sample_game_id)
+        vae_class_embeddings = pipeline.vae.get_class_embeddings(class_labels)
+
         input_sample_dict = pipeline.format.raw_to_sample(input_raw_sample, return_dict=True)
         input_sample = input_sample_dict["samples"]
 
-        posterior = vae.encode(input_sample.type(model_dtype), return_dict=False)[0]
+        posterior = pipeline.vae.encode(input_sample.type(model_dtype), vae_class_embeddings, pipeline.format)
         if sample_latents:
-            latents = posterior.sample()
+            latents = posterior.sample(pipeline.noise_fn)
         else:
             latents = posterior.mode()
         if quantize_latents > 0:
             latents = quantize_tensor(latents, quantize_latents)
         if add_latent_noise > 0:
-            latents += torch.randn_like(latents) * add_latent_noise * latents.std()
+            latents += pipeline.noise_fn(latents.shape) * add_latent_noise
         if normalize_latents:
             latents = (latents - latents.mean()) / latents.std()
-            #latents = latents * model_params["latent_std"] + model_params["latent_mean"]
         if random_latents:
-            latents = torch.randn_like(latents)
-        model_output = vae.decode(latents, return_dict=False)[0]
+            latents = pipeline.noise_fn(latents.shape, dtype=latents.dtype, device=latents.device)
+        model_output = pipeline.vae.decode(latents, vae_class_embeddings, pipeline.format)
 
         output_sample_dict = pipeline.format.sample_to_raw(model_output.type(torch.float32), return_dict=True)
         output_raw_sample = output_sample_dict["raw_samples"]
@@ -142,14 +152,20 @@ if __name__ == "__main__":
             save_raw(output_sample, os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_sample.raw')}"))
             save_raw_img(output_sample, os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_sample.png')}"))
             save_raw(posterior.parameters, os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_posterior.raw')}"))
+            save_raw_img(output_sample-input_sample_dict["samples"], os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_sample_error.png')}"))
 
+            original_sample_dict = pipeline.format.sample_to_raw(input_sample, return_dict=True)
+            original_raw_sample = original_sample_dict["raw_samples"]
             output_flac_file_path = os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_original.flac')}")
-            save_audio(input_sample_dict["raw_samples"].squeeze(0), model_params["sample_rate"], output_flac_file_path)
+            save_audio(original_raw_sample.squeeze(0), model_params["sample_rate"], output_flac_file_path)
             print(f"Saved flac output to {output_flac_file_path}")
 
             output_flac_file_path = os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_decoded.flac')}")
             save_audio(output_raw_sample.squeeze(0), model_params["sample_rate"], output_flac_file_path)
             print(f"Saved flac output to {output_flac_file_path}")
+
+            latents_fft = torch.fft.rfft2(latents.float(), norm="ortho").abs().clip(min=noise_floor).log()
+            save_raw_img(latents_fft, os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_latents_fft_ln_psd.png')}"))
 
     print(f"Finished in: {datetime.datetime.now() - start_time}")
     print(f"Point similarity: {point_similarity / len(test_samples)}")
