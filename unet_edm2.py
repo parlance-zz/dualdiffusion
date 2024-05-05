@@ -286,7 +286,7 @@ class Block(torch.nn.Module):
 
 class UNet(ModelMixin, ConfigMixin):
 
-    __constants__ = ["label_dim", "label_dropout", "label_balance", "dropout", "concat_balance"]
+    __constants__ = ["label_dim", "training", "dtype", "label_dropout", "label_balance", "dropout", "concat_balance"]
 
     @register_to_config
     def __init__(self,
@@ -377,16 +377,16 @@ class UNet(ModelMixin, ConfigMixin):
     def forward(self, x, noise_labels, class_embeddings, t_ranges, format, return_logvar=False):
 
         # Embedding.
-        emb = self.emb_noise(self.emb_fourier(noise_labels))
+        emb = self.emb_noise(self.emb_fourier(noise_labels, self.dtype))
         if self.label_dim != 0:
             if class_embeddings is None or (self.training and self.label_dropout != 0):
-                unconditional_embedding = self.emb_label_unconditional(torch.ones(1, device=class_embeddings.device, dtype=class_embeddings.dtype))
+                unconditional_embedding = self.emb_label_unconditional(torch.ones(1, device=self.device, dtype=self.dtype))
             if class_embeddings is not None:
                 if self.training and self.label_dropout != 0:
                     conditioning_mask = torch.nn.functional.dropout(torch.ones(class_embeddings.shape[0],
-                                                                                device=class_embeddings.device,
-                                                                                dtype=class_embeddings.dtype),
-                                                                                p=self.label_dropout)
+                                                                                device=self.device,
+                                                                                dtype=self.dtype),
+                                                                                p=self.label_dropout).unsqueeze(1)
                     class_embeddings = class_embeddings * conditioning_mask + unconditional_embedding * (1 - conditioning_mask)
             else:
                 class_embeddings = unconditional_embedding 
@@ -437,7 +437,7 @@ if __name__ == "__main__": # fourier embedding inner product test
     load_dotenv(override=True)
     
     steps = 240
-    cnoise = 192*16
+    cnoise = 192*4
     target_snr = 3.5177683092482117
     schedule = "linear"
     mpfourier_mode = "gaussian"
