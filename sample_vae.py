@@ -36,8 +36,8 @@ if __name__ == "__main__":
     load_dotenv(override=True)
     #np.random.seed(0)
 
-    os.environ["MODEL_PATH"] = "Z:/dualdiffusion/models"; model_name = "edm2_vae_test6"
-    #model_name = "edm2_vae_test5"
+    #os.environ["MODEL_PATH"] = "Z:/dualdiffusion/models"; model_name = "edm2_vae_test6"
+    model_name = "edm2_vae_test7"
     
     num_samples = 1
     device = "cuda" #"cpu"
@@ -70,29 +70,30 @@ if __name__ == "__main__":
     dataset_raw_format = os.environ.get("DATASET_RAW_FORMAT", "int16")
     test_samples = np.random.choice(os.listdir(dataset_path), num_samples, replace=False)
 
-    #"""
     test_samples = []
-    #test_samples += [(666, "1/Kirby Super Star  [Kirby's Fun Pak] - 36 Mine Cart Riding.flac")] # success case
-    #test_samples += [(666, "1/Kirby Super Star  [Kirby's Fun Pak] - 53 Heart of Nova.flac")]
-    #test_samples += [(666, "1/Kirby Super Star  [Kirby's Fun Pak] - 41 Halberd ~ Nightmare Warship.flac")]
-    #test_samples += [(1302, "2/Super Mario RPG - The Legend of the Seven Stars - 217 Weapons Factory.flac")]
-    #test_samples += [(1302, "2/Super Mario RPG - The Legend of the Seven Stars - 135 Welcome to Booster Tower.flac")]
-    #test_samples += [(1302, "2/Super Mario RPG - The Legend of the Seven Stars - 128 Beware the Forest's Mushrooms.flac")]
+    test_samples += [(666, "1/Kirby Super Star  [Kirby's Fun Pak] - 36 Mine Cart Riding.flac")] # success case
+    test_samples += [(666, "1/Kirby Super Star  [Kirby's Fun Pak] - 53 Heart of Nova.flac")]
+    test_samples += [(666, "1/Kirby Super Star  [Kirby's Fun Pak] - 41 Halberd ~ Nightmare Warship.flac")]
+    test_samples += [(1302, "2/Super Mario RPG - The Legend of the Seven Stars - 217 Weapons Factory.flac")]
+    test_samples += [(1302, "2/Super Mario RPG - The Legend of the Seven Stars - 135 Welcome to Booster Tower.flac")]
+    test_samples += [(1302, "2/Super Mario RPG - The Legend of the Seven Stars - 128 Beware the Forest's Mushrooms.flac")]
     test_samples += [(788, "2/Mega Man X3 - 09 Blast Hornet.flac")]
     test_samples += [(788, "2/Mega Man X3 - 11 Toxic Seahorse.flac")]
     test_samples += [(788, "2/Mega Man X3 - 14 Crush Crawfish.flac")]
-    #test_samples += [(230, "1/Contra III - The Alien Wars - 05 Neo Kobe Steel Factory.flac")] 
-    #test_samples += [(230, "1/Contra III - The Alien Wars - 02 Ground Zero.flac")]
-    #test_samples += [(230, "1/Contra III - The Alien Wars - 06 Road Warriors.flac")]
-    #test_samples += [(471, "1/Gradius III - 03 Invitation.flac")]
-    #test_samples += [(471, "1/Gradius III - 04 Departure for Space.flac")]
-    #test_samples += [(471, "1/Gradius III - 05 Sand Storm.flac")]
-    #test_samples += [(387, "1/Final Fantasy VI - 104 Locke.flac")]
-    #test_samples += [(387, "1/Final Fantasy VI - 105 Battle Theme.flac")]
-    #test_samples += [(387, "1/Final Fantasy VI - 113 Cyan.flac")]
-    #test_samples += [(387, "1/Final Fantasy VI - 104 Locke.flac")]
-    #test_samples += [(387, "1/Final Fantasy VI - 215 Blackjack.flac")]
-    #"""
+    test_samples += [(230, "1/Contra III - The Alien Wars - 05 Neo Kobe Steel Factory.flac")] 
+    test_samples += [(230, "1/Contra III - The Alien Wars - 02 Ground Zero.flac")]
+    test_samples += [(230, "1/Contra III - The Alien Wars - 06 Road Warriors.flac")]
+    test_samples += [(471, "1/Gradius III - 03 Invitation.flac")]
+    test_samples += [(471, "1/Gradius III - 04 Departure for Space.flac")]
+    test_samples += [(471, "1/Gradius III - 05 Sand Storm.flac")]
+    test_samples += [(387, "1/Final Fantasy VI - 104 Locke.flac")]
+    test_samples += [(387, "1/Final Fantasy VI - 105 Battle Theme.flac")]
+    test_samples += [(387, "1/Final Fantasy VI - 113 Cyan.flac")]
+    test_samples += [(387, "1/Final Fantasy VI - 104 Locke.flac")]
+    test_samples += [(387, "1/Final Fantasy VI - 215 Blackjack.flac")]
+    test_samples += [(413, "1/Front Mission - 23 Arena.flac")]
+    test_samples += [(413, "1/Front Mission - 24 Shop.flac")]
+    test_samples += [(413, "1/Front Mission - 37 Terrible Density.flac")]
     
     sample_shape = pipeline.format.get_sample_shape(length=length)
     print(f"Sample shape: {sample_shape}  Latent shape: {pipeline.vae.get_latent_shape(sample_shape)}")
