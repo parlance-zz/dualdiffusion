@@ -513,7 +513,7 @@ class DualDiffusionPipeline(DiffusionPipeline):
             save_raw_img(inner_products[0], os.path.join(debug_path, "debug_o_inner_products.png"))
             
         if getattr(self, "vae", None) is not None:
-            sample = self.vae.decode(sample.to(self.vae.dtype), vae_class_embeddings).float()
+            sample = self.vae.decode(sample.to(self.vae.dtype), vae_class_embeddings, self.format).float()
         
         if debug_path is not None:
             save_raw(sample, os.path.join(debug_path, "debug_decoded_sample.raw"))
