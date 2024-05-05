@@ -377,7 +377,7 @@ class UNet(ModelMixin, ConfigMixin):
     def forward(self, x, noise_labels, class_embeddings, t_ranges, format, return_logvar=False):
 
         # Embedding.
-        emb = self.emb_noise(self.emb_fourier(noise_labels, self.dtype))
+        emb = self.emb_noise(self.emb_fourier(noise_labels))
         if self.label_dim != 0:
             if class_embeddings is None or (self.training and self.label_dropout != 0):
                 unconditional_embedding = self.emb_label_unconditional(torch.ones(1, device=self.device, dtype=self.dtype))
