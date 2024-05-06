@@ -94,6 +94,9 @@ if __name__ == "__main__":
     test_samples += [(413, "1/Front Mission - 23 Arena.flac")]
     test_samples += [(413, "1/Front Mission - 24 Shop.flac")]
     test_samples += [(413, "1/Front Mission - 37 Terrible Density.flac")]
+    test_samples += [(1303, "2/Super Mario World - 11a Overworld.flac")]
+    test_samples += [(1303, "2/Super Mario World - 12a Athletic.flac")]
+    test_samples += [(1303, "2/Super Mario World - 14a Swimming.flac")]
     
     sample_shape = pipeline.format.get_sample_shape(length=length)
     print(f"Sample shape: {sample_shape}  Latent shape: {pipeline.vae.get_latent_shape(sample_shape)}")
