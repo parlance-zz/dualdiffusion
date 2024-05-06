@@ -78,15 +78,14 @@ class GeodesicFlow:
                 return sample
         elif objective == "v_pred": # classic v-pred
             def objective_fn(sample, noise, timesteps): 
-                return slerp(noise, sample, self.get_timestep_theta(timesteps) / (torch.pi/2) + 1/(get_cos_angle(noise, sample) / (torch.pi/2)))
+                return slerp(noise, sample, self.get_timestep_theta(timesteps) / (torch.pi/2) + 1)
         elif objective == "rectified_flow": # equivalent to variance preserving sample - noise
-            bias = (np.arctan(target_snr) / (np.pi/2) - 1) / 2
             def objective_fn(sample, noise, timesteps):
-                return slerp(noise, sample, 1.5 / (get_cos_angle(noise, sample) / (torch.pi/2)) + bias)
+                return slerp(noise, sample, 1.5 / (get_cos_angle(noise, sample) / (torch.pi/2)))
         elif objective == "scaled_v_pred": # v-pred with objective scaled to a specific target_snr
             scale = np.arctan(target_snr) / (np.pi/2) # 0.8236786557085517
             def objective_fn(sample, noise, timesteps):
-                return slerp(noise, sample, self.get_timestep_theta(timesteps) / (torch.pi/2) + scale/(get_cos_angle(noise, sample) / (torch.pi/2)))
+                return slerp(noise, sample, self.get_timestep_theta(timesteps) / (torch.pi/2) + scale)
         else:
             raise ValueError(f"Invalid objective: {objective}")
             
@@ -194,11 +193,7 @@ if __name__ == "__main__": # small test with some debug output for target_snr / 
     noise = normalize(noise_fn(sample.shape))
     noised_sample = flow.add_noise(sample, noise, timesteps)
     objective = flow.get_objective(sample, noise, timesteps)
-
-    if flow.objective != "v_pred":
-        print("input * objective normalized cos angles:")
-        print(get_cos_angle(noised_sample, objective) / (torch.pi/2))
-        print("")
+    sample_objective_normalized_cos_angle = get_cos_angle(noised_sample, objective) / (torch.pi/2)
 
     print("min_timestep_normalized_theta:", min_timestep_normalized_theta)
     print("min_timestep_snr:", min_timestep_snr)
@@ -214,7 +209,9 @@ if __name__ == "__main__": # small test with some debug output for target_snr / 
         save_raw(timestep_noise_std, os.path.join(debug_path, "timestep_noise_std.raw"))
         save_raw(timestep_snr.clip(min=timestep_snr[1:].amin()).log(), os.path.join(debug_path, "timestep_ln_snr.raw"))
         save_raw(timestep_normalized_velocity, os.path.join(debug_path, "timestep_normalized_velocity.raw"))
+        save_raw(sample_objective_normalized_cos_angle, os.path.join(debug_path, "sample_objective_normalized_cos_angle.raw"))
 
     multi_plot((timestep_normalized_theta, "normalized_theta"),
                (timestep_snr, "snr"),
-               (timestep_normalized_velocity, "velocity"))
+               (timestep_normalized_velocity, "velocity"),
+               (sample_objective_normalized_cos_angle, "objective_normalized_cos_angle"))
