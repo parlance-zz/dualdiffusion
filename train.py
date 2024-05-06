@@ -813,7 +813,7 @@ def init_dataloader(accelerator,
 
     logger.info(f"Using training data from {train_data_dir} with {len(train_dataset)} samples and batch size {train_batch_size}")
     if dataloader_num_workers > 0:
-        logger.info(f"Using dataloader with {dataloader_num_workers} workers - prefetch factor: {gradient_accumulation_steps}")
+        logger.info(f"Using dataloader with {dataloader_num_workers} workers - prefetch factor: 2")
     logger.info(f"Dataset transform params: {dict_str(dataset_transform_params)}")
 
     return train_dataset, train_dataloader
@@ -978,9 +978,13 @@ def do_training_loop(args,
 
                 if args.module == "unet":
                     
+                    class_labels = pipeline.get_class_labels(sample_game_ids)
+                    unet_class_embeddings = module.get_class_embeddings(class_labels)
+
                     samples = pipeline.format.raw_to_sample(raw_samples)
                     if vae is not None:
-                        samples = vae.encode(samples.to(torch.bfloat16), sample_game_ids).mode().detach().float()
+                        vae_class_embeddings = vae.get_class_embeddings(class_labels)
+                        samples = vae.encode(samples.to(torch.bfloat16), vae_class_embeddings, pipeline.format).mode().detach().float()
                         samples = normalize(samples).float()
                     noise = normalize(pipeline.noise_fn(samples.shape, device=samples.device)).float()
 
@@ -996,7 +1000,7 @@ def do_training_loop(args,
                     model_input = pipeline.geodesic_flow.add_noise(samples, input_noise, timesteps).detach()
                     model_output, error_logvar = module(model_input,
                                                         model_input_noise_labels,
-                                                        sample_game_ids,
+                                                        unet_class_embeddings,
                                                         sample_t_ranges,
                                                         pipeline.format,
                                                         return_logvar=True)
@@ -1046,9 +1050,9 @@ def do_training_loop(args,
                     imag_nll_loss = (imag_loss / recon_loss_logvar.exp() + recon_loss_logvar) * (recon_loss_weight * imag_loss_weight)
 
                     latents_square_norm = (torch.linalg.vector_norm(latents, dim=(1,2,3), dtype=torch.float32) / latents[0].numel()**0.5).square()
-                    #latents_batch_mean = latents.mean(dim=(1,2,3))
-                    #channel_kl_loss = (latents_batch_mean.square() + latents_square_norm - 1 - latents_square_norm.log()).mean()
-                    channel_kl_loss = (latents_square_norm - 1 - latents_square_norm.log()).mean()
+                    latents_batch_mean = latents.mean(dim=(1,2,3))
+                    channel_kl_loss = (latents_batch_mean.square() + latents_square_norm - 1 - latents_square_norm.log()).mean()
+                    #channel_kl_loss = (latents_square_norm - 1 - latents_square_norm.log()).mean()
                     
                     loss = real_nll_loss + imag_nll_loss + channel_kl_loss * channel_kl_loss_weight + point_similarity_loss * point_loss_weight
                 else:
