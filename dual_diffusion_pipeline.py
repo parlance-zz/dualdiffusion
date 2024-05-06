@@ -419,7 +419,7 @@ class DualDiffusionPipeline(DiffusionPipeline):
 
         if img2img_input is not None:
             img2img_sample = self.format.raw_to_sample(img2img_input.unsqueeze(0).to(self.device).float())
-            latents = self.vae.encode(img2img_sample.type(self.unet.dtype), vae_class_embeddings).mode()
+            latents = self.vae.encode(img2img_sample.type(self.unet.dtype), vae_class_embeddings, self.format).mode()
             sample = self.geodesic_flow.add_noise(latents, sample, torch.tensor([img2img_strength], device=sample.device, dtype=sample.dtype))
             start_timestep = img2img_strength
         else:
