@@ -518,9 +518,10 @@ class DualDiffusionPipeline(DiffusionPipeline):
             save_raw(s_measured, os.path.join(debug_path, "debug_s_measured.raw"))
             save_raw(m_measured, os.path.join(debug_path, "debug_m_measured.raw"))
 
-            model_outputs = o_measured[:, 0:1].view(steps, -1)
-            inner_products = torch.einsum('ijk,ilk->ijl', model_outputs.unsqueeze(0), model_outputs.unsqueeze(1)).permute(2, 0, 1)
-            save_raw_img(inner_products[0], os.path.join(debug_path, "debug_o_inner_products.png"))
+            if steps < 250:
+                model_outputs = o_measured[:, 0:1].view(steps, -1)
+                inner_products = torch.einsum('ijk,ilk->ijl', model_outputs.unsqueeze(0), model_outputs.unsqueeze(1)).permute(2, 0, 1)
+                save_raw_img(inner_products[0], os.path.join(debug_path, "debug_o_inner_products.png"))
             
         if getattr(self, "vae", None) is not None:
             sample = self.vae.decode(sample.to(self.vae.dtype), vae_class_embeddings, self.format).float()
