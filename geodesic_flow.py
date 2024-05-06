@@ -159,14 +159,14 @@ class GeodesicFlow:
 
 if __name__ == "__main__": # small test with some debug output for target_snr / schedule / objective
 
-    from dual_diffusion_utils import save_raw, get_fractal_noise2d
+    from dual_diffusion_utils import multi_plot, save_raw, get_fractal_noise2d
     from dotenv import load_dotenv
     import os
-
+    
     load_dotenv(override=True)
 
-    target_snr = 16
-    schedule = "edm2"
+    target_snr = 31.984371183438952
+    schedule = "cos"
     objective = "v_pred"
     num_steps = 200
     noise_degree = 0
@@ -174,7 +174,7 @@ if __name__ == "__main__": # small test with some debug output for target_snr / 
     print("target_snr:", target_snr, "schedule:", schedule, "objective:", objective, "num_steps:", num_steps)
 
     flow = GeodesicFlow(target_snr, schedule=schedule, objective=objective)
-    timesteps = torch.linspace(1, 0, 200+1, dtype=torch.float64)[:-1]
+    timesteps = torch.linspace(1, 0, num_steps, dtype=torch.float64)
     if noise_degree == 0:
         noise_fn = torch.randn
     else:
@@ -194,9 +194,11 @@ if __name__ == "__main__": # small test with some debug output for target_snr / 
     noise = normalize(noise_fn(sample.shape))
     noised_sample = flow.add_noise(sample, noise, timesteps)
     objective = flow.get_objective(sample, noise, timesteps)
-    print("input * objective normalized cos angles:")
-    print(get_cos_angle(noised_sample, objective) / (torch.pi/2))
-    print("")
+
+    if flow.objective != "v_pred":
+        print("input * objective normalized cos angles:")
+        print(get_cos_angle(noised_sample, objective) / (torch.pi/2))
+        print("")
 
     print("min_timestep_normalized_theta:", min_timestep_normalized_theta)
     print("min_timestep_snr:", min_timestep_snr)
@@ -212,3 +214,7 @@ if __name__ == "__main__": # small test with some debug output for target_snr / 
         save_raw(timestep_noise_std, os.path.join(debug_path, "timestep_noise_std.raw"))
         save_raw(timestep_snr.clip(min=timestep_snr[1:].amin()).log(), os.path.join(debug_path, "timestep_ln_snr.raw"))
         save_raw(timestep_normalized_velocity, os.path.join(debug_path, "timestep_normalized_velocity.raw"))
+
+    multi_plot((timestep_normalized_theta, "normalized_theta"),
+               (timestep_snr, "snr"),
+               (timestep_normalized_velocity, "velocity"))
