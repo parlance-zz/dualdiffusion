@@ -214,4 +214,5 @@ if __name__ == "__main__": # small test with some debug output for target_snr / 
     multi_plot((timestep_normalized_theta, "normalized_theta"),
                (timestep_snr, "snr"),
                (timestep_normalized_velocity, "velocity"),
-               (sample_objective_normalized_cos_angle, "objective_normalized_cos_angle"))
+               (sample_objective_normalized_cos_angle, "objective_normalized_cos_angle"),
+               figsize=(5, 7))
