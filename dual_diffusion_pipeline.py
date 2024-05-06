@@ -34,7 +34,8 @@ from unet_edm2 import UNet
 from autoencoder_kl_dual import AutoencoderKLDual
 from autoencoder_kl_edm2 import AutoencoderKL_EDM2
 from spectrogram import SpectrogramParams, SpectrogramConverter
-from dual_diffusion_utils import mdct, imdct, save_raw, save_raw_img, get_fractal_noise2d
+from dual_diffusion_utils import mdct, imdct, save_raw, save_raw_img, get_fractal_noise2d, multi_plot
+
 from geodesic_flow import GeodesicFlow, normalize, slerp, get_cos_angle
 from loss import DualMultiscaleSpectralLoss, DualMultiscaleSpectralLoss2D
 
@@ -391,6 +392,7 @@ class DualDiffusionPipeline(DiffusionPipeline):
         input_perturbation: float = 0.5,
         img2img_strength: float = 0.8,
         img2img_input: torch.Tensor = None,
+        show_debug_plots: bool = False,
     ):
         if steps <= 0:
             raise ValueError(f"Steps must be > 0, got {steps}")
@@ -519,4 +521,14 @@ class DualDiffusionPipeline(DiffusionPipeline):
             save_raw(sample, os.path.join(debug_path, "debug_decoded_sample.raw"))
             save_raw_img(sample[0], os.path.join(debug_path, "debug_decoded_sample.png"))
 
-        return self.format.sample_to_raw(sample)
+        raw_sample = self.format.sample_to_raw(sample)
+
+        if show_debug_plots:
+            multi_plot((v_measured, "normalized_velocity"),
+                       (a_measured, "path_curvature"),
+                       (s_measured, "output_norm"),
+                       (m_measured, "output_mean"),
+                       (d_measured, "normalized_distance"),
+                       layout=(2, 3), figsize=(12, 5))
+            
+        return raw_sample
