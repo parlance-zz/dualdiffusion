@@ -177,7 +177,7 @@ class DualMultiscaleSpectralLoss2D:
                 blockfreq_y = torch.fft.fftfreq(block_width, 1/block_width, device=target.device)
                 blockfreq_x = torch.arange(block_width//2 + 1, device=target.device)
                 wavelength = 1 / ((blockfreq_y.square().view(-1, 1) + blockfreq_x.square().view(1, -1)).sqrt() + 1)
-                real_loss_weight = (1 / wavelength * wavelength.amin()).requires_grad_(False).sqrt()
+                real_loss_weight = (1 / wavelength * wavelength.amin()).requires_grad_(False)
                 
                 target_fft = self.stft2d(target, block_width, step, window)
                 target_fft_abs = target_fft.abs().requires_grad_(False)
