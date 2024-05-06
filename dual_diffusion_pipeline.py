@@ -466,7 +466,7 @@ class DualDiffusionPipeline(DiffusionPipeline):
             debug_d_list.append(get_cos_angle(initial_noise, sample) / (torch.pi/2))
             debug_s_list.append(cfg_model_output.square().mean(dim=(1,2,3)).sqrt())
             debug_m_list.append(cfg_model_output.mean(dim=(1,2,3)))
-            debug_o_list.append(cfg_model_output)
+            debug_o_list.append(normalize(cfg_model_output).float())
 
             print(f"step: {i:>{3}}/{steps:>{3}}",
                   f"v:{debug_v_list[-1][0].item():{8}f}",
