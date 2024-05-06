@@ -52,10 +52,10 @@ def torch_compile(*args, **kwargs):
             return func
     return wrapper
 
-def multi_plot(*args, layout=None):
+def multi_plot(*args, layout=None, figsize=None):
 
     layout = layout or (len(args), 1)
-    axes = np.atleast_2d(plt.subplots(layout[0], layout[1])[1])
+    axes = np.atleast_2d(plt.subplots(layout[0], layout[1], figsize=figsize)[1])
 
     for i, axis in enumerate(axes.flatten()):
         if i < len(args):
@@ -64,7 +64,13 @@ def multi_plot(*args, layout=None):
         else:
             axis.axis("off")
 
-    plt.tight_layout()
+    figsize = plt.gcf().get_size_inches()
+    plt.subplots_adjust(left=0.6/figsize[0],
+                        bottom=0.25/figsize[1],
+                        right=1-0.1/figsize[0],
+                        top=1-0.1/figsize[1],
+                        wspace=1.8/figsize[0],
+                        hspace=1/figsize[1])
     plt.show()
 
 def dict_str(d, indent=4):
