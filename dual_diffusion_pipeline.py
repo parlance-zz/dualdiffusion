@@ -391,6 +391,7 @@ class DualDiffusionPipeline(DiffusionPipeline):
         use_midpoint_integration: bool = False,
         input_perturbation: float = 0.5,
         img2img_strength: float = 0.8,
+        schedule: str = None,
         img2img_input: torch.Tensor = None,
         show_debug_plots: bool = False,
     ):
@@ -408,6 +409,13 @@ class DualDiffusionPipeline(DiffusionPipeline):
         debug_path = os.environ.get("DEBUG_PATH", None)
         model_params = self.config["model_params"]
         
+        if schedule is not None:
+            sampling_flow = GeodesicFlow(self.geodesic_flow.target_snr,
+                                         schedule,
+                                         self.geodesic_flow.objective)
+        else:
+            sampling_flow = self.geodesic_flow
+
         sample_shape = self.format.get_sample_shape(bsz=batch_size, length=length)
         if getattr(self, "vae", None) is not None:    
             sample_shape = self.vae.get_latent_shape(sample_shape)
@@ -422,7 +430,7 @@ class DualDiffusionPipeline(DiffusionPipeline):
         if img2img_input is not None:
             img2img_sample = self.format.raw_to_sample(img2img_input.unsqueeze(0).to(self.device).float())
             latents = self.vae.encode(img2img_sample.type(self.unet.dtype), vae_class_embeddings, self.format).mode()
-            sample = self.geodesic_flow.add_noise(latents, sample, torch.tensor([img2img_strength], device=sample.device, dtype=sample.dtype))
+            sample = sampling_flow.add_noise(latents, sample, torch.tensor([img2img_strength], device=sample.device, dtype=sample.dtype))
             start_timestep = img2img_strength
         else:
             start_timestep = 1
@@ -452,7 +460,7 @@ class DualDiffusionPipeline(DiffusionPipeline):
         for i, t in enumerate(self.progress_bar(t_schedule)):
             
             timestep_tensor = torch.tensor([t], device=self.device, dtype=sample.dtype)
-            model_input_noise_labels = self.geodesic_flow.get_timestep_noise_label(timestep_tensor).to(self.unet.dtype)
+            model_input_noise_labels = sampling_flow.get_timestep_noise_label(timestep_tensor).to(self.unet.dtype)
             model_input = sample.to(self.unet.dtype)
             model_output = self.unet(model_input, model_input_noise_labels, unet_class_embeddings, t_ranges, self.format)
             u_model_output = self.unet(model_input, model_input_noise_labels, None, t_ranges, self.format)
@@ -478,9 +486,9 @@ class DualDiffusionPipeline(DiffusionPipeline):
                   f"m:{debug_m_list[-1][0].item():{8}f}")
             
             next_t = t_schedule[i+1] if i+1 < len(t_schedule) else 0
-            sample = self.geodesic_flow.reverse_step(sample, cfg_model_output,
-                                                     v_scale, input_perturbation,
-                                                     t, next_t, generator=generator)
+            sample = sampling_flow.reverse_step(sample, cfg_model_output,
+                                                v_scale, input_perturbation,
+                                                t, next_t, generator=generator)
 
             save_raw_img(sample[0], os.path.join(debug_path, f"debug_sample_{i:03}.png"))
             save_raw_img(cfg_model_output[0], os.path.join(debug_path, f"debug_output_{i:03}.png"))

@@ -40,13 +40,14 @@ if __name__ == "__main__":
     #model_name = "edm2_200_8"
     
     num_samples = 1
-    batch_size = 2
+    batch_size = 1
     length = 0
     steps = 120
     cfg_scale = 3.5
     v_scale = 1
     use_midpoint_integration = False
     input_perturbation = 0
+    schedule = None #"cos"
     fgla_iterations = 200
     fp16 = True
     device = "cuda"
@@ -55,7 +56,7 @@ if __name__ == "__main__":
     #game_ids = [785]   #megaman 7
     #game_ids += [1027] #megaman 9
     #game_ids = [787]   #megaman x
-    game_ids = [788]   #megaman x2
+    #game_ids = [788]   #megaman x2
     #game_ids += [789]   #megaman x3
     #game_ids = [152]   #breath of fire
     #game_ids += [153]   #breath of fire 2
@@ -66,7 +67,7 @@ if __name__ == "__main__":
     #game_ids += [1078] #secret of mana
     #game_ids += [384]   #final fantasy mystic quest
     #game_ids += [385]   #final fantasy 4
-    #game_ids = [386]   #final fantasy 5
+    game_ids = [386]   #final fantasy 5
     #game_ids = [387]    #final fantasy 6
     #game_ids += [73]    #bahamut lagoon
     #game_ids += [1081]  #seiken densetsu 3
@@ -197,6 +198,7 @@ if __name__ == "__main__":
                           input_perturbation=input_perturbation,
                           img2img_strength=img2img_strength,
                           img2img_input=input_audio,
+                          schedule=schedule,
                           show_debug_plots=show_debug_plots)
         print(f"Time taken: {time.time()-start}")
 
