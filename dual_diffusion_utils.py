@@ -52,12 +52,20 @@ def torch_compile(*args, **kwargs):
             return func
     return wrapper
 
-def multi_plot(*args):
-    _, plots = plt.subplots(len(args), 1)
-    for plot, plot_data in zip(plots, args):
-        plot.plot(plot_data[0].detach().float().resolve_conj().cpu().numpy(), label=plot_data[1])
-        plot.legend()
-    plt.tight_layout(); plt.show()
+def multi_plot(*args, layout=None):
+
+    layout = layout or (len(args), 1)
+    axes = np.atleast_2d(plt.subplots(layout[0], layout[1])[1])
+
+    for i, axis in enumerate(axes.flatten()):
+        if i < len(args):
+            axis.plot(args[i][0].detach().float().resolve_conj().cpu().numpy(), label=args[i][1])
+            axis.legend()
+        else:
+            axis.axis("off")
+
+    plt.tight_layout()
+    plt.show()
 
 def dict_str(d, indent=4):
     if d is None: return "None"
