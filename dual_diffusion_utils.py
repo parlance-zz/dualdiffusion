@@ -24,6 +24,7 @@ import os
 import platform
 from io import BytesIO
 from json import dumps
+import matplotlib.pyplot as plt
 
 import numpy as np
 import torch
@@ -50,6 +51,13 @@ def torch_compile(*args, **kwargs):
         else:
             return func
     return wrapper
+
+def multi_plot(*args):
+    _, plots = plt.subplots(len(args), 1)
+    for plot, plot_data in zip(plots, args):
+        plot.plot(plot_data[0].detach().float().resolve_conj().cpu().numpy(), label=plot_data[1])
+        plot.legend()
+    plt.tight_layout(); plt.show()
 
 def dict_str(d, indent=4):
     if d is None: return "None"
