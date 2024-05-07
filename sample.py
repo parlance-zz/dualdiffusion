@@ -36,15 +36,15 @@ if __name__ == "__main__":
     init_cuda()
     load_dotenv(override=True)
 
-    os.environ["MODEL_PATH"] = "Z:/dualdiffusion/models"; model_name = "edm2_vae_test7"
-    #model_name = "edm2_200_8"
+    #os.environ["MODEL_PATH"] = "Z:/dualdiffusion/models"; model_name = "edm2_vae_test7"
+    model_name = "edm2_vae7_v_pred"
     
     num_samples = 1
-    batch_size = 1
+    batch_size = 2
     length = 0
-    steps = 120
-    cfg_scale = 3.5
-    v_scale = 1
+    steps = 100
+    cfg_scale = 4
+    v_scale = 1.1
     use_midpoint_integration = False
     input_perturbation = 0
     schedule = None #"cos"
@@ -55,21 +55,21 @@ if __name__ == "__main__":
 
     #game_ids = [785]   #megaman 7
     #game_ids += [1027] #megaman 9
-    #game_ids = [787]   #megaman x
+    game_ids = [787]   #megaman x
     #game_ids = [788]   #megaman x2
     #game_ids += [789]   #megaman x3
     #game_ids = [152]   #breath of fire
     #game_ids += [153]   #breath of fire 2
-    #game_ids += [213]   #chrono trigger
+    #game_ids = [213]   #chrono trigger
     #game_ids += [1190]  #star ocean
     #game_ids = [1400] #tales of phantasia
-    #game_ids += [1416]  #terranigma
-    #game_ids += [1078] #secret of mana
-    #game_ids += [384]   #final fantasy mystic quest
-    #game_ids += [385]   #final fantasy 4
-    game_ids = [386]   #final fantasy 5
+    #game_ids = [1416]  #terranigma
+    #game_ids = [1078] #secret of mana
+    #game_ids = [384]   #final fantasy mystic quest
+    #game_ids = [385]   #final fantasy 4
+    #game_ids = [386]   #final fantasy 5
     #game_ids = [387]    #final fantasy 6
-    #game_ids += [73]    #bahamut lagoon
+    #game_ids = [73]    #bahamut lagoon
     #game_ids += [1081]  #seiken densetsu 3
     #game_ids = [1302]  #super mario rpg
     #game_ids = [340]   #earthbound
@@ -77,8 +77,8 @@ if __name__ == "__main__":
     #game_ids += [1161] #soul blazer
     #game_ids = [413]   #front mission
     #game_ids += [414]   #front mission gun hazard
-    #game_ids += [230]   #contra
-    #game_ids += [249]   #cybernator
+    #game_ids = [230]   #contra
+    #game_ids = [249]   #cybernator
     #game_ids = [1409]  #turtles in time
     #game_ids += [1099]  #gundam wing endless duel
     #game_ids = [1168]  #sparkster
@@ -110,7 +110,7 @@ if __name__ == "__main__":
     #game_ids += [851]  #nba jam tournament edition
     #game_ids = [950]   #plok!
     #game_ids = [1232]  #super bomberman
-    #game_ids += [1234] #super bomberman 2
+    #game_ids = [1234] #super bomberman 2
     #game_ids += [1235] #super bomberman 3
     #game_ids += [1236] #super bomberman 4
     #game_ids = [1237] #super bomberman 5
@@ -126,7 +126,7 @@ if __name__ == "__main__":
     #game_ids = [1301]  #mario kart
     #game_ids = [np.random.randint(0, 1612)]
 
-    img2img_strength = 0.9
+    img2img_strength = 0.85
     img2img_input_path = None
     #img2img_input_path = "1/Final Fantasy - Mystic Quest  [Mystic Quest Legend] - 07 Battle 1.flac"
     #img2img_input_path = "1/Final Fantasy VI - 104 Locke.flac"
@@ -151,15 +151,16 @@ if __name__ == "__main__":
     #img2img_input_path = "1/Legend of Zelda, The - A Link to the Past - 04a Time of the Falling Rain.flac"
 
     seed = np.random.randint(10000, 99999-num_samples*batch_size)
-    seed = 53958 # good seed for x2
+    #seed = 53958 # good seed for x2
     #seed = 58367 # good seed for un squadron
     #seed = 97092 # good seed for gundam + x3 (4batch)
     #seed = 48146 # good seed for turtles in time (4batch)
     #seed = 74296 # good seed for contra + gundam wing (4batch), or umihara kawase (4batch)
-    #seed = 777
     #seed = 2000
     #seed = 88446
     #seed = 46699
+    #seed = 49171 # good seed for cybernator (2batch)
+    seed = 33818
 
     model_dtype = torch.bfloat16 if fp16 else torch.float32
     model_path = os.path.join(os.environ.get("MODEL_PATH", "./"), model_name)
@@ -182,6 +183,14 @@ if __name__ == "__main__":
     os.makedirs(output_path, exist_ok=True)
 
     start_time = datetime.datetime.now()
+
+    """
+    x = torch.linspace(1, 0, steps, dtype=pipeline.unet.dtype).to(pipeline.device)
+    y = pipeline.unet.get_timestep_logvar(x)
+    from dual_diffusion_utils import multi_plot
+    multi_plot((y, "logvar"))
+    exit()
+    """
 
     for i in range(num_samples):
         print(f"Generating batch {i+1}/{num_samples}...")

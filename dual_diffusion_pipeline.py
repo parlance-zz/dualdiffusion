@@ -26,6 +26,7 @@ import json
 
 import numpy as np
 import torch
+import cv2
 
 from diffusers.pipelines.pipeline_utils import DiffusionPipeline
 
@@ -445,7 +446,9 @@ class DualDiffusionPipeline(DiffusionPipeline):
             t_ranges[:, 1] = 1
             t_ranges = t_ranges * t_scale - t_scale/2
 
-        t_schedule = torch.linspace(start_timestep, 0, steps+1)[:-1].tolist()
+        t_schedule = torch.linspace(start_timestep, 0, steps+1)[:-1]
+        normalized_theta_schedule = sampling_flow.get_timestep_theta(t_schedule) / (torch.pi/2)
+        t_schedule = t_schedule.tolist()
 
         debug_v_list = []
         debug_a_list = []
@@ -453,6 +456,12 @@ class DualDiffusionPipeline(DiffusionPipeline):
         debug_s_list = []
         debug_m_list = []
         debug_o_list = []
+
+        if show_debug_plots:
+            cv2.namedWindow('sample / output', cv2.WINDOW_KEEPRATIO)
+            cv2.resizeWindow('sample / output', sample.shape[3]*2, sample.shape[2]*2*2)
+            cv2.moveWindow('sample / output', 0, 700)
+            cv2.setWindowProperty('sample / output', cv2.WND_PROP_TOPMOST, 1)
 
         cfg_model_output = torch.rand_like(sample)
 
@@ -490,8 +499,12 @@ class DualDiffusionPipeline(DiffusionPipeline):
                                                 v_scale, input_perturbation,
                                                 t, next_t, generator=generator)
 
-            save_raw_img(sample[0], os.path.join(debug_path, f"debug_sample_{i:03}.png"))
-            save_raw_img(cfg_model_output[0], os.path.join(debug_path, f"debug_output_{i:03}.png"))
+            sample0_img = save_raw_img(sample[0], os.path.join(debug_path, f"debug_sample_{i:03}.png"))
+            output0_img = save_raw_img(cfg_model_output[0], os.path.join(debug_path, f"debug_output_{i:03}.png"))
+
+            if show_debug_plots:
+                cv2.imshow("sample / output", cv2.vconcat([sample0_img, output0_img]))
+                cv2.waitKey(1)
                         
         sample = sample.float()
 
@@ -538,6 +551,9 @@ class DualDiffusionPipeline(DiffusionPipeline):
                        (s_measured, "output_norm"),
                        (m_measured, "output_mean"),
                        (d_measured, "normalized_distance"),
-                       layout=(2, 3), figsize=(12, 5))
+                       layout=(2, 3), figsize=(12, 5),
+                       added_plots={4: (normalized_theta_schedule, "theta_schedule")})
+            
+            cv2.destroyAllWindows()
             
         return raw_sample
