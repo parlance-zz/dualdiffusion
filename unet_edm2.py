@@ -87,11 +87,8 @@ class MPFourier(torch.nn.Module):
 
     __constants__ = ["bandwidth", "eps"]
 
-    def __init__(self, num_channels, bandwidth=None, eps=1e-3, mode="gaussian"):
+    def __init__(self, num_channels, bandwidth=1, eps=1e-2, mode="gaussian"):
         super().__init__()
-
-        if bandwidth is None:
-            bandwidth = np.log(num_channels)
         
         #self.register_buffer('freqs', 2 * np.pi * torch.randn(num_channels) * bandwidth)
         #self.register_buffer('phases', 2 * np.pi * torch.rand(num_channels))
@@ -315,7 +312,7 @@ class UNet(ModelMixin, ConfigMixin):
         cblock = [int(model_channels * x) for x in channel_mult]
         cnoise = int(model_channels * channel_mult_noise) if channel_mult_noise is not None else max(cblock)#cblock[0]
         cemb = int(model_channels * channel_mult_emb) if channel_mult_emb is not None else max(cblock)
-        clogvar = cnoise
+        clogvar = model_channels
         cpos = pos_channels
 
         self.label_dim = label_dim
@@ -436,9 +433,9 @@ if __name__ == "__main__": # fourier embedding inner product test
 
     load_dotenv(override=True)
     
-    steps = 240
-    cnoise = 192*4
-    target_snr = 3.5177683092482117
+    steps = 200
+    cnoise = 192
+    target_snr = 31.984371183438952
     schedule = "linear"
     mpfourier_mode = "gaussian"
 
