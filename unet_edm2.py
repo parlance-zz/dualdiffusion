@@ -290,6 +290,7 @@ class UNet(ModelMixin, ConfigMixin):
         in_channels = 4,                    # Number of input channels.
         out_channels = 4,                   # Number of output channels.
         pos_channels = 0,                   # Number of positional embedding channels for attention.
+        use_t_ranges = False,
         channels_per_head = 64,             # Number of channels per attention head.
         label_dim = 0,                      # Class label dimensionality. 0 = unconditional.
         label_dropout = 0.1,                # Dropout probability for class labels. 
@@ -334,7 +335,7 @@ class UNet(ModelMixin, ConfigMixin):
 
         # Encoder.
         self.enc = torch.nn.ModuleDict()
-        cout = in_channels + 3 # 1 const channel, 2 positional channels
+        cout = in_channels + 2 + int(use_t_ranges) # 1 const channel, 1 positional channels, plus 1 optional position channel
         for level, channels in enumerate(cblock):
             
             if level == 0:
