@@ -52,7 +52,7 @@ def torch_compile(*args, **kwargs):
             return func
     return wrapper
 
-def multi_plot(*args, layout=None, figsize=None):
+def multi_plot(*args, layout=None, figsize=None, added_plots=None):
 
     layout = layout or (len(args), 1)
     axes = np.atleast_2d(plt.subplots(layout[0], layout[1], figsize=figsize)[1])
@@ -60,6 +60,10 @@ def multi_plot(*args, layout=None, figsize=None):
     for i, axis in enumerate(axes.flatten()):
         if i < len(args):
             axis.plot(args[i][0].detach().float().resolve_conj().cpu().numpy(), label=args[i][1])
+            if added_plots is not None:
+                added_plot = added_plots.get(i, None)
+                if added_plot is not None:
+                    axis.plot(added_plot[0].detach().float().resolve_conj().cpu().numpy(), label=added_plot[1])
             axis.legend()
         else:
             axis.axis("off")
@@ -621,8 +625,11 @@ def save_raw_img(x, img_path, allow_inversion=False, allow_colormap=True, allow_
     else:
         raise ValueError(f"Unsupported number of dimensions in save_raw_img: {x.ndim}")
 
+    cv2_img = cv2.flip(cv2_img, 0)
     os.makedirs(os.path.dirname(img_path), exist_ok=True)
-    cv2.imwrite(img_path, cv2.flip(cv2_img, 0))
+    cv2.imwrite(img_path, cv2_img)
+
+    return cv2_img
 
 class ScaleNorm(nn.Module):
     def __init__(self, num_features, init_scale=1):
