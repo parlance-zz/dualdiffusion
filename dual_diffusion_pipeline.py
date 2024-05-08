@@ -274,15 +274,16 @@ class DualDiffusionPipeline(DiffusionPipeline):
         else:
             target_snr = model_params.get("target_snr", None)
 
-        self.geodesic_flow = GeodesicFlow(target_snr,
-                                          model_params["diffusion_schedule"],
-                                          model_params["diffusion_objective"])
+        self.target_snr = target_snr
+        #self.geodesic_flow = GeodesicFlow(target_snr,
+        #                                  model_params["diffusion_schedule"],
+        #                                  model_params["diffusion_objective"])
         
-        self.noise_degree = model_params.get("noise_degree", 0)
-        if self.noise_degree == 0:
-            self.noise_fn = torch.randn
-        else:
-            self.noise_fn = lambda shape, **kwargs: get_fractal_noise2d(shape, degree=self.noise_degree, **kwargs)
+        #self.noise_degree = model_params.get("noise_degree", 0)
+        #if self.noise_degree == 0:
+        #    self.noise_fn = torch.randn
+        #else:
+        #    self.noise_fn = lambda shape, **kwargs: get_fractal_noise2d(shape, degree=self.noise_degree, **kwargs)
 
     @staticmethod
     @torch.no_grad()
@@ -409,19 +410,11 @@ class DualDiffusionPipeline(DiffusionPipeline):
 
         debug_path = os.environ.get("DEBUG_PATH", None)
         model_params = self.config["model_params"]
-        
-        if schedule is not None:
-            sampling_flow = GeodesicFlow(self.geodesic_flow.target_snr,
-                                         schedule,
-                                         self.geodesic_flow.objective)
-        else:
-            sampling_flow = self.geodesic_flow
 
         sample_shape = self.format.get_sample_shape(bsz=batch_size, length=length)
         if getattr(self, "vae", None) is not None:    
             sample_shape = self.vae.get_latent_shape(sample_shape)
         print(f"Sample shape: {sample_shape}")
-        sample = normalize(self.noise_fn(sample_shape, device=self.device, generator=generator))
 
         game_ids = game_ids or torch.randint(0, self.unet.label_dim, 1, device=self.device, generator=generator)
         class_labels = self.get_class_labels(game_ids)
@@ -430,13 +423,11 @@ class DualDiffusionPipeline(DiffusionPipeline):
 
         if img2img_input is not None:
             img2img_sample = self.format.raw_to_sample(img2img_input.unsqueeze(0).to(self.device).float())
-            latents = self.vae.encode(img2img_sample.type(self.unet.dtype), vae_class_embeddings, self.format).mode()
-            sample = sampling_flow.add_noise(latents, sample, torch.tensor([img2img_strength], device=sample.device, dtype=sample.dtype))
+            start_data = self.vae.encode(img2img_sample.type(self.unet.dtype), vae_class_embeddings, self.format).mode().float()
             start_timestep = img2img_strength
         else:
+            start_data = 0
             start_timestep = 1
-
-        initial_noise = sample.clone()
 
         if model_params["t_scale"] is None:
             t_ranges = None
@@ -446,9 +437,22 @@ class DualDiffusionPipeline(DiffusionPipeline):
             t_ranges[:, 1] = 1
             t_ranges = t_ranges * t_scale - t_scale/2
 
-        t_schedule = torch.linspace(start_timestep, 0, steps+1)[:-1]
-        normalized_theta_schedule = sampling_flow.get_timestep_theta(t_schedule) / (torch.pi/2)
-        t_schedule = t_schedule.tolist()
+        sigma_data = 0.5
+        sigma_max = 80.
+        sigma_min = 0.5 / self.target_snr #2e-3
+        rho = 7
+
+        def get_timestep_sigma(timesteps):
+            return (sigma_max ** (1 / rho) + (1 - timesteps) * (sigma_min ** (1 / rho) - sigma_max ** (1 / rho))) ** rho
+        
+        t_schedule = torch.linspace(start_timestep, 0, steps)
+        sigma_schedule = get_timestep_sigma(t_schedule)
+
+        sample = torch.randn(sample_shape, device=self.device, generator=generator) * sigma_schedule[0] + start_data * sigma_data
+        initial_noise = sample.clone()
+
+        normalized_theta_schedule = (sigma_data / sigma_schedule).atan() / (torch.pi/2)
+        sigma_schedule = sigma_schedule.tolist()
 
         debug_v_list = []
         debug_a_list = []
@@ -465,17 +469,17 @@ class DualDiffusionPipeline(DiffusionPipeline):
 
         cfg_model_output = torch.rand_like(sample)
 
+        i = 0
         self.set_progress_bar_config(disable=True)
-        for i, t in enumerate(self.progress_bar(t_schedule)):
+        for sigma_curr, sigma_next in self.progress_bar(zip(sigma_schedule[:-1], sigma_schedule[1:]), total=len(sigma_schedule)-1):
             
-            timestep_tensor = torch.tensor([t], device=self.device, dtype=sample.dtype)
-            model_input_noise_labels = sampling_flow.get_timestep_noise_label(timestep_tensor).to(self.unet.dtype)
+            sigma = torch.tensor([sigma_curr], device=self.device)
             model_input = sample.to(self.unet.dtype)
-            model_output = self.unet(model_input, model_input_noise_labels, unet_class_embeddings, t_ranges, self.format)
-            u_model_output = self.unet(model_input, model_input_noise_labels, None, t_ranges, self.format)
+            model_output = self.unet(model_input, sigma, unet_class_embeddings, t_ranges, self.format).float()
+            u_model_output = self.unet(model_input, sigma, None, t_ranges, self.format).float()
 
             last_cfg_model_output = cfg_model_output
-            cfg_model_output = slerp(u_model_output, model_output, cfg_scale)
+            cfg_model_output = u_model_output.lerp(model_output, cfg_scale)
 
             if use_midpoint_integration:            
                 raise NotImplementedError("Midpoint integration not implemented")
@@ -494,10 +498,8 @@ class DualDiffusionPipeline(DiffusionPipeline):
                   f"s:{debug_s_list[-1][0].item():{8}f}",
                   f"m:{debug_m_list[-1][0].item():{8}f}")
             
-            next_t = t_schedule[i+1] if i+1 < len(t_schedule) else 0
-            sample = sampling_flow.reverse_step(sample, cfg_model_output,
-                                                v_scale, input_perturbation,
-                                                t, next_t, generator=generator)
+            t = sigma_next / sigma_curr
+            sample = (t * sample + (1 - t) * cfg_model_output)
 
             sample0_img = save_raw_img(sample[0], os.path.join(debug_path, f"debug_sample_{i:03}.png"))
             output0_img = save_raw_img(cfg_model_output[0], os.path.join(debug_path, f"debug_output_{i:03}.png"))
@@ -505,8 +507,11 @@ class DualDiffusionPipeline(DiffusionPipeline):
             if show_debug_plots:
                 cv2.imshow("sample / output", cv2.vconcat([sample0_img, output0_img]))
                 cv2.waitKey(1)
+
+            i += 1
                         
-        sample = sample.float()
+        sample = sample.float() / sigma_data
+        print("sample std:", sample.std().item(), " sample mean:", sample.mean().item())
 
         v_measured = torch.stack(debug_v_list, dim=0)
         a_measured = torch.stack(debug_a_list, dim=0); a_measured[0] = a_measured[1] # first value is irrelevant
@@ -532,7 +537,7 @@ class DualDiffusionPipeline(DiffusionPipeline):
             save_raw(m_measured, os.path.join(debug_path, "debug_m_measured.raw"))
 
             if steps < 250:
-                model_outputs = o_measured[:, 0:1].view(steps, -1)
+                model_outputs = o_measured[:, 0:1].view(steps-1, -1)
                 inner_products = torch.einsum('ijk,ilk->ijl', model_outputs.unsqueeze(0), model_outputs.unsqueeze(1)).permute(2, 0, 1)
                 save_raw_img(inner_products[0], os.path.join(debug_path, "debug_o_inner_products.png"))
             

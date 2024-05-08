@@ -900,11 +900,6 @@ def do_training_loop(args,
 
         logger.info(f"Target SNR: {target_snr:{8}f} Schedule: {model_params['diffusion_schedule']} Objective: {model_params['diffusion_objective']}")
 
-        use_snr_loss_weighting = model_params["unet_training_params"]["use_snr_loss_weighting"]
-        logger.info(f"Using SNR loss weighting: {use_snr_loss_weighting}")
-        use_acos_timestep_sampling = model_params["unet_training_params"]["use_acos_timestep_sampling"]
-        logger.info(f"Using acos timestep sampling: {use_acos_timestep_sampling}")
-
         input_perturbation = model_params["unet_training_params"]["input_perturbation"]
         if input_perturbation > 0:
             logger.info(f"Using input perturbation of {input_perturbation}")
@@ -950,12 +945,6 @@ def do_training_loop(args,
                 batch_timesteps = (torch.arange(total_batch_size, device=accelerator.device)+0.5) / total_batch_size
                 batch_timesteps += (torch.rand(1, device=accelerator.device) - 0.5) / total_batch_size
 
-                # slightly bias the sampled timesteps away from pure noise, apparently even this small bias is bad
-                if use_acos_timestep_sampling:
-                    min_timestep_normalized_theta = pipeline.geodesic_flow.get_timestep_theta(torch.tensor(0.)).item() / (torch.pi/2)
-                    batch_timestep_normalized_thetas = pipeline.geodesic_flow.get_timestep_theta(batch_timesteps) / (torch.pi/2)
-                    batch_timesteps = 1 - ((1 - 2*batch_timestep_normalized_thetas).acos() / np.arccos(1 - 2*min_timestep_normalized_theta)).clip(min=0, max=1)
-
                 # sync timesteps across all ranks / processes
                 batch_timesteps = accelerator.gather(batch_timesteps.unsqueeze(0))[0]
                 
@@ -984,37 +973,44 @@ def do_training_loop(args,
                     samples = pipeline.format.raw_to_sample(raw_samples)
                     if vae is not None:
                         vae_class_embeddings = vae.get_class_embeddings(class_labels)
-                        samples = vae.encode(samples.to(torch.bfloat16), vae_class_embeddings, pipeline.format).mode().detach().float()
+                        samples = vae.encode(samples.to(torch.bfloat16), vae_class_embeddings, pipeline.format).mode().detach()
                         samples = normalize(samples).float()
-                    noise = normalize(pipeline.noise_fn(samples.shape, device=samples.device)).float()
 
-                    if input_perturbation > 0:
-                        input_noise = normalize(noise + pipeline.noise_fn(samples.shape, device=samples.device) * input_perturbation).float()
-                    else:
-                        input_noise = noise
-                    
                     process_batch_timesteps = batch_timesteps[accelerator.local_process_index::accelerator.num_processes]
                     timesteps = process_batch_timesteps[grad_accum_steps * args.train_batch_size:(grad_accum_steps+1) * args.train_batch_size]
 
-                    model_input_noise_labels = pipeline.geodesic_flow.get_timestep_noise_label(timesteps)
-                    model_input = pipeline.geodesic_flow.add_noise(samples, input_noise, timesteps).detach()
-                    model_output, error_logvar = module(model_input,
-                                                        model_input_noise_labels,
-                                                        unet_class_embeddings,
-                                                        sample_t_ranges,
-                                                        pipeline.format,
-                                                        return_logvar=True)
+                    #P_mean = -0.4
+                    P_mean = -0.16
+                    P_std = 1.
+                    sigma_data = 0.5
+                    sigma_min = sigma_data / target_snr
+                    max_erfinv = 5
 
-                    target = pipeline.geodesic_flow.get_objective(samples, noise, timesteps).detach()
-                    
-                    loss = F.mse_loss(model_output.float(), target.float(), reduction="none")
-                    timestep_loss = loss.mean(dim=list(range(1, len(loss.shape))))
+                    #rnd_normal = torch.randn(samples.shape[0], device=accelerator.device)
+                    rnd_normal = (timesteps * 2 - 1).erfinv().clip(min=-max_erfinv, max=max_erfinv)
+                    #sigma = (rnd_normal * P_std + P_mean).exp()
+                    #sigma = sigma_data / (sigma_data / sigma).clip(max=target_snr)
+                    sigma = (rnd_normal * P_std + P_mean).exp().clip(min=sigma_min)
+                    noise = torch.randn_like(samples) * sigma.view(-1, 1, 1, 1)
+                    samples = samples * sigma_data
 
-                    if use_snr_loss_weighting:
-                        loss_weight = pipeline.geodesic_flow.get_timestep_snr(timesteps)
+                    if input_perturbation > 0:
+                        input_noise = noise + torch.randn_like(noise) * input_perturbation
                     else:
-                        loss_weight = 1.
-                    loss = ((timestep_loss / error_logvar.exp() + error_logvar) * loss_weight).mean()
+                        input_noise = noise
+                    
+                    denoised, error_logvar = module(samples + input_noise,
+                                                    sigma,
+                                                    unet_class_embeddings,
+                                                    sample_t_ranges,
+                                                    pipeline.format,
+                                                    return_logvar=True)
+                    
+                    mse_loss = F.mse_loss(denoised, samples, reduction="none")
+                    timestep_loss = mse_loss.mean(dim=(1,2,3))
+
+                    loss_weight = (sigma ** 2 + sigma_data ** 2) / (sigma * sigma_data) ** 2
+                    loss = (loss_weight.view(-1, 1, 1, 1) / error_logvar.exp() * mse_loss + error_logvar).mean()
 
                     if args.num_timestep_loss_buckets > 0:
                         all_timesteps = accelerator.gather(timesteps.detach()).cpu()
@@ -1413,4 +1409,6 @@ if __name__ == "__main__":
 
     init_cuda()
     load_dotenv(override=True)
+    os.environ["TORCH_COMPILE"] = "1"
+    
     main()

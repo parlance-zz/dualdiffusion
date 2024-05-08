@@ -85,8 +85,6 @@ def mp_cat(a, b, dim=1, t=0.5):
 
 class MPFourier(torch.nn.Module):
 
-    __constants__ = ["bandwidth", "eps"]
-
     def __init__(self, num_channels, bandwidth=1, eps=1e-2, mode="gaussian"):
         super().__init__()
         
@@ -105,15 +103,9 @@ class MPFourier(torch.nn.Module):
         
         self.register_buffer('phases', torch.pi/2 * (torch.arange(num_channels) % 2 == 0).float())
 
-        self.bandwidth = bandwidth
-        self.eps = eps
-
     def forward(self, x):
-        y = x.to(torch.float32)
-        y = y.ger(self.freqs.to(torch.float32))
-        y = y + self.phases.to(torch.float32)
-        y = y.cos() * np.sqrt(2)
-        return y.to(x.dtype)
+        y = x.float().ger(self.freqs.float()) + self.phases.float()
+        return (y.cos() * np.sqrt(2)).to(x.dtype)
 
 #----------------------------------------------------------------------------
 # Magnitude-preserving convolution or fully-connected layer (Equation 47)
@@ -290,6 +282,7 @@ class UNet(ModelMixin, ConfigMixin):
         in_channels = 4,                    # Number of input channels.
         out_channels = 4,                   # Number of output channels.
         pos_channels = 0,                   # Number of positional embedding channels for attention.
+        logvar_channels = 128,              # Number of channels for training uncertainty estimation.
         use_t_ranges = False,
         channels_per_head = 64,             # Number of channels per attention head.
         label_dim = 0,                      # Class label dimensionality. 0 = unconditional.
@@ -313,7 +306,7 @@ class UNet(ModelMixin, ConfigMixin):
         cblock = [int(model_channels * x) for x in channel_mult]
         cnoise = int(model_channels * channel_mult_noise) if channel_mult_noise is not None else max(cblock)#cblock[0]
         cemb = int(model_channels * channel_mult_emb) if channel_mult_emb is not None else max(cblock)
-        clogvar = model_channels
+        clogvar = logvar_channels
         cpos = pos_channels
 
         self.label_dim = label_dim
@@ -372,10 +365,22 @@ class UNet(ModelMixin, ConfigMixin):
         self.conv_out = MPConv(cout, out_channels, kernel=[3,3])
 
     @torch_compile(fullgraph=True)
-    def forward(self, x, noise_labels, class_embeddings, t_ranges, format, return_logvar=False):
+    def forward(self, x_in, sigma, class_embeddings, t_ranges, format, return_logvar=False):
+
+        sigma_data = 0.5
+        sigma = sigma.view(-1, 1, 1, 1)
+
+        # Preconditioning weights.
+        c_skip = sigma_data ** 2 / (sigma ** 2 + sigma_data ** 2)
+        c_out = sigma * sigma_data / (sigma ** 2 + sigma_data ** 2).sqrt()
+        c_in = 1 / (sigma_data ** 2 + sigma ** 2).sqrt()
+        c_noise = (sigma.flatten().log() / 4).to(self.dtype)
+
+        # Run the model.
+        x = (c_in * x_in).to(self.dtype)
 
         # Embedding.
-        emb = self.emb_noise(self.emb_fourier(noise_labels))
+        emb = self.emb_noise(self.emb_fourier(c_noise))
         if self.label_dim != 0:
             if class_embeddings is None or (self.training and self.label_dropout != 0):
                 unconditional_embedding = self.emb_label_unconditional(torch.ones(1, device=self.device, dtype=self.dtype))
@@ -388,7 +393,7 @@ class UNet(ModelMixin, ConfigMixin):
                     class_embeddings = class_embeddings * conditioning_mask + unconditional_embedding * (1 - conditioning_mask)
             else:
                 class_embeddings = unconditional_embedding 
-            emb = mp_sum(emb, class_embeddings, t=self.label_balance)
+            emb = mp_sum(emb, class_embeddings.to(self.dtype), t=self.label_balance)
         emb = mp_silu(emb)
 
         # Encoder.
@@ -406,18 +411,17 @@ class UNet(ModelMixin, ConfigMixin):
             x = block(x, emb, format, t_ranges)
         x = self.conv_out(x, gain=self.out_gain)
 
+        D_x = c_skip * x_in + c_out * x.float()
+
         # Training uncertainty, if requested.
         if return_logvar:
-            logvar = self.logvar_linear(self.logvar_fourier(noise_labels)).reshape(-1, 1, 1, 1)
-            return x, logvar
+            logvar = self.logvar_linear(self.logvar_fourier(c_noise)).view(-1, 1, 1, 1)
+            return D_x, logvar.float()
         
-        return x
+        return D_x
     
     def get_class_embeddings(self, class_labels):
         return self.emb_label(normalize(class_labels).to(device=self.device, dtype=self.dtype))
-
-    def get_timestep_logvar(self, noise_labels):
-        return self.logvar_linear(self.logvar_fourier(noise_labels))
     
     @torch.no_grad()
     def normalize_weights(self):
