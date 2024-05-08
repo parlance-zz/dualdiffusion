@@ -979,8 +979,8 @@ def do_training_loop(args,
                     process_batch_timesteps = batch_timesteps[accelerator.local_process_index::accelerator.num_processes]
                     timesteps = process_batch_timesteps[grad_accum_steps * args.train_batch_size:(grad_accum_steps+1) * args.train_batch_size]
 
-                    #P_mean = -0.4
-                    P_mean = -0.16
+                    P_mean = -0.4
+                    #P_mean = -0.16
                     P_std = 1.
                     sigma_data = 0.5
                     sigma_min = sigma_data / target_snr

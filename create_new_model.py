@@ -29,7 +29,7 @@ from dual_diffusion_utils import dict_str
 
 load_dotenv(override=True)
 
-MODEL_NAME = "edm2_vae_test6"
+MODEL_NAME = "edm2_vae_test7_2"
 MODEL_SEED = 2000
 
 MODEL_PARAMS = {
@@ -39,7 +39,7 @@ MODEL_PARAMS = {
 
     # sample format params
     "sample_format": "spectrogram",
-    "sample_raw_length": 112000,#32000*45,
+    "sample_raw_length": 32000*45,
     "noise_floor": 2e-5,
     "t_scale": 3.5714285714, # scales the linear positional embedding for absolute time range within each sample, None disables t_range conditioning
     "noise_degree": 0, #0.6180339887498948, # set to 0 for standard gaussian
@@ -52,8 +52,6 @@ MODEL_PARAMS = {
     # diffusion unet training params
     "unet_training_params": {
         "input_perturbation": 0,
-        "use_snr_loss_weighting": False,
-        "use_acos_timestep_sampling": False,
     },
 
     "spectrogram_params": {
@@ -121,9 +119,10 @@ VAE_PARAMS = {
 
 UNET_PARAMS = {
     "pos_channels": 0,           # Number of positional embedding channels for attention.
+    "use_t_ranges": True,
     "label_dim": 1612,           # Class label dimensionality. 0 = unconditional.
     "label_dropout": 0.1,        # Dropout rate for the class embedding.
-    "dropout": 0.1,                # Dropout rate for model blocks
+    "dropout": 0,                # Dropout rate for model blocks
     "model_channels": 192,       # Base multiplier for the number of channels.
     "channels_per_head": 64,     # Number of channels per attention head for blocks using self-attention
     "channel_mult": [1,2,3,4],   # Per-resolution multipliers for the number of channels.
