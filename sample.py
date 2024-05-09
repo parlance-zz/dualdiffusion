@@ -47,7 +47,7 @@ if __name__ == "__main__":
     sigma_max = 80
     sigma_min = 0.002
     rho = 7
-    slerp_cfg = False,
+    slerp_cfg = False
     use_midpoint_integration = False
     input_perturbation = 0
     schedule = None #"cos"
