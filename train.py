@@ -941,7 +941,7 @@ def do_training_loop(args,
                 continue
             
             if args.module == "unet" and grad_accum_steps == 0:
-                #total_batch_size = args.train_batch_size * accelerator.num_processes * args.gradient_accumulation_steps
+                total_batch_size = args.train_batch_size * accelerator.num_processes * args.gradient_accumulation_steps
 
                 # instead of randomly sampling each timestep, distribute the batch evenly across timesteps
                 # and add a random offset for continuous uniform coverage
@@ -954,7 +954,6 @@ def do_training_loop(args,
                 #if args.num_timestep_loss_buckets > 0:
                 #    timestep_loss_buckets.zero_()
                 #    timestep_loss_bucket_counts.zero_()
-                pass
 
             with accelerator.accumulate(module):
 
@@ -987,11 +986,12 @@ def do_training_loop(args,
                     P_std = 1.
                     sigma_data = 0.5
                     sigma_max = 80.
-                    sigma_min = sigma_data / target_snr
+                    sigma_min = sigma_data / target_snr / 2
                     #rho = 7
                     #max_erfinv = 5
+                    fudge_factor = np.sqrt(2*np.log(2048)) / np.sqrt(2*np.log(total_batch_size))
 
-                    rnd_normal = torch.randn(samples.shape[0], device=accelerator.device)
+                    rnd_normal = torch.randn(samples.shape[0], device=accelerator.device) * fudge_factor
                     #rnd_normal = (timesteps * 2 - 1).erfinv().clip(min=-max_erfinv, max=max_erfinv)
                     sigma = (rnd_normal * P_std + P_mean).exp().clip(min=sigma_min, max=sigma_max)
                     #sigma = get_timestep_sigma(timesteps, sigma_max, sigma_min, rho)
