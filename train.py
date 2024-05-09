@@ -974,32 +974,26 @@ def do_training_loop(args,
                     if vae is not None:
                         vae_class_embeddings = vae.get_class_embeddings(class_labels)
                         samples = vae.encode(samples.to(torch.bfloat16), vae_class_embeddings, pipeline.format).mode().detach()
-                        samples = normalize(samples).float()
+                        samples = normalize(samples, zero_mean=True).float()
 
                     process_batch_timesteps = batch_timesteps[accelerator.local_process_index::accelerator.num_processes]
                     timesteps = process_batch_timesteps[grad_accum_steps * args.train_batch_size:(grad_accum_steps+1) * args.train_batch_size]
 
                     P_mean = -0.4
-                    #P_mean = -0.16
                     P_std = 1.
                     sigma_data = 0.5
+                    sigma_max = 80.
                     sigma_min = sigma_data / target_snr
+
                     max_erfinv = 5
 
                     #rnd_normal = torch.randn(samples.shape[0], device=accelerator.device)
                     rnd_normal = (timesteps * 2 - 1).erfinv().clip(min=-max_erfinv, max=max_erfinv)
-                    #sigma = (rnd_normal * P_std + P_mean).exp()
-                    #sigma = sigma_data / (sigma_data / sigma).clip(max=target_snr)
-                    sigma = (rnd_normal * P_std + P_mean).exp().clip(min=sigma_min)
-                    noise = torch.randn_like(samples) * sigma.view(-1, 1, 1, 1)
+                    sigma = (rnd_normal * P_std + P_mean).exp().clip(min=sigma_min, max=sigma_max)
+                    noise = normalize(torch.randn_like(samples), zero_mean=True).float() * sigma.view(-1, 1, 1, 1)
                     samples = samples * sigma_data
 
-                    if input_perturbation > 0:
-                        input_noise = noise + torch.randn_like(noise) * input_perturbation
-                    else:
-                        input_noise = noise
-                    
-                    denoised, error_logvar = module(samples + input_noise,
+                    denoised, error_logvar = module(samples + noise,
                                                     sigma,
                                                     unet_class_embeddings,
                                                     sample_t_ranges,
