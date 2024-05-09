@@ -974,7 +974,7 @@ def do_training_loop(args,
                     if vae is not None:
                         vae_class_embeddings = vae.get_class_embeddings(class_labels)
                         samples = vae.encode(samples.to(torch.bfloat16), vae_class_embeddings, pipeline.format).mode().detach()
-                        samples = normalize(samples, zero_mean=True).float()
+                        samples = normalize(samples).float()
 
                     process_batch_timesteps = batch_timesteps[accelerator.local_process_index::accelerator.num_processes]
                     timesteps = process_batch_timesteps[grad_accum_steps * args.train_batch_size:(grad_accum_steps+1) * args.train_batch_size]
@@ -990,7 +990,7 @@ def do_training_loop(args,
                     #rnd_normal = torch.randn(samples.shape[0], device=accelerator.device)
                     rnd_normal = (timesteps * 2 - 1).erfinv().clip(min=-max_erfinv, max=max_erfinv)
                     sigma = (rnd_normal * P_std + P_mean).exp().clip(min=sigma_min, max=sigma_max)
-                    noise = normalize(torch.randn_like(samples), zero_mean=True).float() * sigma.view(-1, 1, 1, 1)
+                    noise = torch.randn_like(samples) * sigma.view(-1, 1, 1, 1)
                     samples = samples * sigma_data
 
                     denoised, error_logvar = module(samples + noise,
