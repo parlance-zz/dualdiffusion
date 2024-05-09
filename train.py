@@ -818,6 +818,9 @@ def init_dataloader(accelerator,
 
     return train_dataset, train_dataloader
 
+def get_timestep_sigma(timesteps, sigma_max, sigma_min, rho):
+    return (sigma_max ** (1 / rho) + (1 - timesteps) * (sigma_min ** (1 / rho) - sigma_max ** (1 / rho))) ** rho
+
 def do_training_loop(args,
                      accelerator,
                      module,
@@ -938,19 +941,20 @@ def do_training_loop(args,
                 continue
             
             if args.module == "unet" and grad_accum_steps == 0:
-                total_batch_size = args.train_batch_size * accelerator.num_processes * args.gradient_accumulation_steps
+                #total_batch_size = args.train_batch_size * accelerator.num_processes * args.gradient_accumulation_steps
 
                 # instead of randomly sampling each timestep, distribute the batch evenly across timesteps
                 # and add a random offset for continuous uniform coverage
-                batch_timesteps = (torch.arange(total_batch_size, device=accelerator.device)+0.5) / total_batch_size
-                batch_timesteps += (torch.rand(1, device=accelerator.device) - 0.5) / total_batch_size
+                #batch_timesteps = (torch.arange(total_batch_size, device=accelerator.device)+0.5) / total_batch_size
+                #batch_timesteps += (torch.rand(1, device=accelerator.device) - 0.5) / total_batch_size
 
                 # sync timesteps across all ranks / processes
-                batch_timesteps = accelerator.gather(batch_timesteps.unsqueeze(0))[0]
+                #batch_timesteps = accelerator.gather(batch_timesteps.unsqueeze(0))[0]
                 
-                if args.num_timestep_loss_buckets > 0:
-                    timestep_loss_buckets.zero_()
-                    timestep_loss_bucket_counts.zero_()
+                #if args.num_timestep_loss_buckets > 0:
+                #    timestep_loss_buckets.zero_()
+                #    timestep_loss_bucket_counts.zero_()
+                pass
 
             with accelerator.accumulate(module):
 
@@ -976,20 +980,21 @@ def do_training_loop(args,
                         samples = vae.encode(samples.to(torch.bfloat16), vae_class_embeddings, pipeline.format).mode().detach()
                         samples = normalize(samples).float()
 
-                    process_batch_timesteps = batch_timesteps[accelerator.local_process_index::accelerator.num_processes]
-                    timesteps = process_batch_timesteps[grad_accum_steps * args.train_batch_size:(grad_accum_steps+1) * args.train_batch_size]
+                    #process_batch_timesteps = batch_timesteps[accelerator.local_process_index::accelerator.num_processes]
+                    #timesteps = process_batch_timesteps[grad_accum_steps * args.train_batch_size:(grad_accum_steps+1) * args.train_batch_size]
 
                     P_mean = -0.4
                     P_std = 1.
                     sigma_data = 0.5
                     sigma_max = 80.
                     sigma_min = sigma_data / target_snr
+                    #rho = 7
+                    #max_erfinv = 5
 
-                    max_erfinv = 5
-
-                    #rnd_normal = torch.randn(samples.shape[0], device=accelerator.device)
-                    rnd_normal = (timesteps * 2 - 1).erfinv().clip(min=-max_erfinv, max=max_erfinv)
+                    rnd_normal = torch.randn(samples.shape[0], device=accelerator.device)
+                    #rnd_normal = (timesteps * 2 - 1).erfinv().clip(min=-max_erfinv, max=max_erfinv)
                     sigma = (rnd_normal * P_std + P_mean).exp().clip(min=sigma_min, max=sigma_max)
+                    #sigma = get_timestep_sigma(timesteps, sigma_max, sigma_min, rho)
                     noise = torch.randn_like(samples) * sigma.view(-1, 1, 1, 1)
                     samples = samples * sigma_data
 
@@ -1001,18 +1006,20 @@ def do_training_loop(args,
                                                     return_logvar=True)
                     
                     mse_loss = F.mse_loss(denoised, samples, reduction="none")
-                    timestep_loss = mse_loss.mean(dim=(1,2,3))
+                    #timestep_loss = mse_loss.mean(dim=(1,2,3))
 
                     loss_weight = (sigma ** 2 + sigma_data ** 2) / (sigma * sigma_data) ** 2
                     loss = (loss_weight.view(-1, 1, 1, 1) / error_logvar.exp() * mse_loss + error_logvar).mean()
-
+                    
+                    """
                     if args.num_timestep_loss_buckets > 0:
                         all_timesteps = accelerator.gather(timesteps.detach()).cpu()
                         all_timestep_loss = accelerator.gather(timestep_loss.detach()).cpu()
                         target_buckets = (all_timesteps * timestep_loss_buckets.shape[0]).long().clip(max=timestep_loss_buckets.shape[0]-1)
                         timestep_loss_buckets.index_add_(0, target_buckets, all_timestep_loss)
                         timestep_loss_bucket_counts.index_add_(0, target_buckets, torch.ones_like(all_timestep_loss))
-                    
+                    """
+
                 elif args.module == "vae":
 
                     samples_dict = pipeline.format.raw_to_sample(raw_samples, return_dict=True)
@@ -1063,7 +1070,6 @@ def do_training_loop(args,
                     grad_norm = accelerator.clip_grad_norm_(module.parameters(), args.max_grad_norm).item()
                     if math.isinf(grad_norm) or math.isnan(grad_norm):
                         logger.warning(f"Warning: grad norm is {grad_norm} - step={global_step} loss={loss.item()} debug_last_sample_paths={raw_sample_paths}")
-                        logger.info(f"Batch timesteps: {batch_timesteps}")
                     if math.isnan(grad_norm):
                         logger.error(f"Error: grad norm is {grad_norm}, aborting...")
                         import pdb; pdb.set_trace(); exit(1)
