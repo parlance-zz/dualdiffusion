@@ -389,7 +389,11 @@ class DualDiffusionPipeline(DiffusionPipeline):
         length: int = 0,
         game_ids = None,
         cfg_scale: float = 5.,
-        v_scale: float = 1.,
+        sigma_data = 0.5,
+        sigma_max = 80,
+        sigma_min = 0.002,
+        rho = 7,
+        slerp_cfg: bool = False,
         use_midpoint_integration: bool = False,
         input_perturbation: float = 0.5,
         img2img_strength: float = 0.8,
@@ -437,22 +441,20 @@ class DualDiffusionPipeline(DiffusionPipeline):
             t_ranges[:, 1] = 1
             t_ranges = t_ranges * t_scale - t_scale/2
 
-        sigma_data = 0.5
-        sigma_max = 80.
-        sigma_min = 0.5 / self.target_snr #2e-3
-        rho = 7
-
         def get_timestep_sigma(timesteps):
             return (sigma_max ** (1 / rho) + (1 - timesteps) * (sigma_min ** (1 / rho) - sigma_max ** (1 / rho))) ** rho
-        
-        t_schedule = torch.linspace(start_timestep, 0, steps)
+  
+        t_schedule = torch.linspace(start_timestep, 0, steps+1)
         sigma_schedule = get_timestep_sigma(t_schedule)
 
-        sample = torch.randn(sample_shape, device=self.device, generator=generator) * sigma_schedule[0] + start_data * sigma_data
-        initial_noise = sample.clone()
+        noise = torch.randn(sample_shape, device=self.device, generator=generator)
+        initial_noise = noise * sigma_max
+        sample = noise * sigma_schedule[0] + start_data * sigma_data
 
         normalized_theta_schedule = (sigma_data / sigma_schedule).atan() / (torch.pi/2)
         sigma_schedule = sigma_schedule.tolist()
+
+        cfg_fn = slerp if slerp_cfg else torch.lerp
 
         debug_v_list = []
         debug_a_list = []
@@ -463,7 +465,7 @@ class DualDiffusionPipeline(DiffusionPipeline):
 
         if show_debug_plots:
             cv2.namedWindow('sample / output', cv2.WINDOW_KEEPRATIO)
-            cv2.resizeWindow('sample / output', sample.shape[3]*2, sample.shape[2]*2*2)
+            cv2.resizeWindow('sample / output', int(sample.shape[3]*2.5), int(sample.shape[2]*2*2.5))
             cv2.moveWindow('sample / output', 0, 700)
             cv2.setWindowProperty('sample / output', cv2.WND_PROP_TOPMOST, 1)
 
@@ -479,7 +481,7 @@ class DualDiffusionPipeline(DiffusionPipeline):
             u_model_output = self.unet(model_input, sigma, None, t_ranges, self.format).float()
 
             last_cfg_model_output = cfg_model_output
-            cfg_model_output = u_model_output.lerp(model_output, cfg_scale)
+            cfg_model_output = cfg_fn(u_model_output, model_output, cfg_scale).float()
 
             if use_midpoint_integration:            
                 raise NotImplementedError("Midpoint integration not implemented")
@@ -505,7 +507,9 @@ class DualDiffusionPipeline(DiffusionPipeline):
             output0_img = save_raw_img(cfg_model_output[0], os.path.join(debug_path, f"debug_output_{i:03}.png"))
 
             if show_debug_plots:
-                cv2.imshow("sample / output", cv2.vconcat([sample0_img, output0_img]))
+                cv2_img = cv2.vconcat([sample0_img, output0_img]).astype(np.float32)
+                cv2_img = (cv2_img[:, :, :3] * cv2_img[:, :, 3:4] / 255).astype(np.uint8)
+                cv2.imshow("sample / output", cv2_img)
                 cv2.waitKey(1)
 
             i += 1
@@ -536,8 +540,8 @@ class DualDiffusionPipeline(DiffusionPipeline):
             save_raw(s_measured, os.path.join(debug_path, "debug_s_measured.raw"))
             save_raw(m_measured, os.path.join(debug_path, "debug_m_measured.raw"))
 
-            if steps < 250:
-                model_outputs = o_measured[:, 0:1].view(steps-1, -1)
+            if False:#steps < 250:
+                model_outputs = o_measured[:, 0:1].view(steps, -1)
                 inner_products = torch.einsum('ijk,ilk->ijl', model_outputs.unsqueeze(0), model_outputs.unsqueeze(1)).permute(2, 0, 1)
                 save_raw_img(inner_products[0], os.path.join(debug_path, "debug_o_inner_products.png"))
             
