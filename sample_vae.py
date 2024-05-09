@@ -97,6 +97,10 @@ if __name__ == "__main__":
     test_samples += [(1303, "2/Super Mario World - 11a Overworld.flac")]
     test_samples += [(1303, "2/Super Mario World - 12a Athletic.flac")]
     test_samples += [(1303, "2/Super Mario World - 14a Swimming.flac")]
+    test_samples += [(788, "2/Mega Man X2 - 09 Panzer des Drachens.flac")]
+    test_samples += [(788, "2/Mega Man X2 - 13 Red Alert.flac")]
+    test_samples += [(788, "2/Mega Man X2 - 04 The Mavericks' Last Stand.flac")]
+    test_samples += [(788, "2/Mega Man X2 - 11 Volcano's Fury.flac")]
     
     sample_shape = pipeline.format.get_sample_shape(length=length)
     print(f"Sample shape: {sample_shape}  Latent shape: {pipeline.vae.get_latent_shape(sample_shape)}")
@@ -127,7 +131,7 @@ if __name__ == "__main__":
 
         posterior = pipeline.vae.encode(input_sample.type(model_dtype), vae_class_embeddings, pipeline.format)
         if sample_latents:
-            latents = posterior.sample(pipeline.noise_fn)
+            latents = posterior.sample(torch.randn)
         else:
             latents = posterior.mode()
         if quantize_latents > 0:
