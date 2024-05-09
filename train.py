@@ -818,9 +818,6 @@ def init_dataloader(accelerator,
 
     return train_dataset, train_dataloader
 
-def get_timestep_sigma(timesteps, sigma_max, sigma_min, rho):
-    return (sigma_max ** (1 / rho) + (1 - timesteps) * (sigma_min ** (1 / rho) - sigma_max ** (1 / rho))) ** rho
-
 def do_training_loop(args,
                      accelerator,
                      module,
@@ -982,19 +979,18 @@ def do_training_loop(args,
                     #process_batch_timesteps = batch_timesteps[accelerator.local_process_index::accelerator.num_processes]
                     #timesteps = process_batch_timesteps[grad_accum_steps * args.train_batch_size:(grad_accum_steps+1) * args.train_batch_size]
 
-                    P_mean = -0.4
+                    P_mean = -0.4 
                     P_std = 1.
+
+                    P_corrected_std = P_std * np.sqrt(2*np.log(2048)) / np.sqrt(2*np.log(total_batch_size))
+                    P_corrected_mean = P_mean + P_std**2 / 2 - P_corrected_std**2 / 2
+
                     sigma_data = 0.5
                     sigma_max = 80.
                     sigma_min = sigma_data / target_snr / 2
-                    #rho = 7
-                    #max_erfinv = 5
-                    fudge_factor = np.sqrt(2*np.log(2048)) / np.sqrt(2*np.log(total_batch_size))
-
-                    rnd_normal = torch.randn(samples.shape[0], device=accelerator.device) * fudge_factor
-                    #rnd_normal = (timesteps * 2 - 1).erfinv().clip(min=-max_erfinv, max=max_erfinv)
-                    sigma = (rnd_normal * P_std + P_mean).exp().clip(min=sigma_min, max=sigma_max)
-                    #sigma = get_timestep_sigma(timesteps, sigma_max, sigma_min, rho)
+                    
+                    rnd_normal = torch.randn(samples.shape[0], device=accelerator.device)
+                    sigma = (rnd_normal * P_corrected_std + P_corrected_mean).exp().clip(min=sigma_min, max=sigma_max)
                     noise = torch.randn_like(samples) * sigma.view(-1, 1, 1, 1)
                     samples = samples * sigma_data
 
