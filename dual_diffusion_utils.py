@@ -34,6 +34,7 @@ import torchaudio
 import torchaudio.functional as AF
 import cv2
 from dotenv import load_dotenv
+from scipy.special import erfinv
 
 def init_cuda():
     if not torch.cuda.is_available():
@@ -96,6 +97,9 @@ def get_activation(act_fn):
         return torch.sinc
     else:
         raise ValueError(f"Unsupported activation function: {act_fn}")
+
+def get_expected_max_normal(n):
+    return erfinv((n - np.pi/8) / (n - np.pi/4 + 1))
 
 def compute_snr(noise_scheduler, timesteps):
     """
