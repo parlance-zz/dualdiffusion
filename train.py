@@ -53,7 +53,7 @@ from diffusers.utils import deprecate, is_tensorboard_available
 from unet_edm2 import UNet
 from unet_edm2_ema import PowerFunctionEMA
 from dual_diffusion_pipeline import DualDiffusionPipeline
-from dual_diffusion_utils import init_cuda, load_audio, save_audio, load_raw, save_raw, dict_str, normalize_lufs
+from dual_diffusion_utils import init_cuda, load_audio, save_audio, load_raw, save_raw, dict_str, normalize_lufs, get_expected_max_normal
 from geodesic_flow import normalize
 
 
@@ -908,6 +908,22 @@ def do_training_loop(args,
 
         logger.info(f"Dropout: {module.dropout} Conditioning dropout: {module.label_dropout}")
 
+        total_batch_size = args.train_batch_size * accelerator.num_processes * args.gradient_accumulation_steps
+        reference_batch_size = 2048
+
+        P_std = 1.
+        P_mean = -0.4
+        mean_correction_amount = 0.25
+        
+        reference_expected_max = get_expected_max_normal(reference_batch_size)
+        batch_expected_max = get_expected_max_normal(total_batch_size)
+        
+        std_correction_factor = reference_expected_max / batch_expected_max
+        P_corrected_std = P_std * std_correction_factor
+        mean_correction_offset = P_std**2 / 2 - P_corrected_std**2 / 2
+        P_corrected_mean = (P_mean + mean_correction_offset) * mean_correction_amount + P_mean * (1 - mean_correction_amount)
+        logger.info(f"P_corrected_std: {P_corrected_std:.4f} P_corrected_mean: {P_corrected_mean:.4f}")
+
     noise_degree = "normal" if model_params.get("noise_degree", 0) == 0 else f"fractal - degree: {model_params['noise_degree']}"
     logger.info(f"Noise type: {noise_degree}")
 
@@ -938,19 +954,18 @@ def do_training_loop(args,
                 continue
             
             if args.module == "unet" and grad_accum_steps == 0:
-                total_batch_size = args.train_batch_size * accelerator.num_processes * args.gradient_accumulation_steps
 
                 # instead of randomly sampling each timestep, distribute the batch evenly across timesteps
-                # and add a random offset for continuous uniform coverage
-                #batch_timesteps = (torch.arange(total_batch_size, device=accelerator.device)+0.5) / total_batch_size
-                #batch_timesteps += (torch.rand(1, device=accelerator.device) - 0.5) / total_batch_size
+                # and add a random offset for continuous uniform coverage e.g. stratified sampling
+                batch_timesteps = (torch.arange(total_batch_size, device=accelerator.device)+0.5) / total_batch_size
+                batch_timesteps += (torch.rand(1, device=accelerator.device) - 0.5) / total_batch_size
 
                 # sync timesteps across all ranks / processes
-                #batch_timesteps = accelerator.gather(batch_timesteps.unsqueeze(0))[0]
+                batch_timesteps = accelerator.gather(batch_timesteps.unsqueeze(0))[0]
                 
-                #if args.num_timestep_loss_buckets > 0:
-                #    timestep_loss_buckets.zero_()
-                #    timestep_loss_bucket_counts.zero_()
+                if args.num_timestep_loss_buckets > 0:
+                    timestep_loss_buckets.zero_()
+                    timestep_loss_bucket_counts.zero_()
 
             with accelerator.accumulate(module):
 
@@ -976,21 +991,16 @@ def do_training_loop(args,
                         samples = vae.encode(samples.to(torch.bfloat16), vae_class_embeddings, pipeline.format).mode().detach()
                         samples = normalize(samples).float()
 
-                    #process_batch_timesteps = batch_timesteps[accelerator.local_process_index::accelerator.num_processes]
-                    #timesteps = process_batch_timesteps[grad_accum_steps * args.train_batch_size:(grad_accum_steps+1) * args.train_batch_size]
-
-                    P_mean = -0.4 
-                    P_std = 1.
-
-                    P_corrected_std = P_std * np.sqrt(2*np.log(2048)) / np.sqrt(2*np.log(total_batch_size))
-                    P_corrected_mean = P_mean + P_std**2 / 2 - P_corrected_std**2 / 2
+                    process_batch_timesteps = batch_timesteps[accelerator.local_process_index::accelerator.num_processes]
+                    timesteps = process_batch_timesteps[grad_accum_steps * args.train_batch_size:(grad_accum_steps+1) * args.train_batch_size]
 
                     sigma_data = 0.5
                     sigma_max = 80.
-                    sigma_min = sigma_data / target_snr / 2
+                    sigma_min = sigma_data / target_snr
                     
-                    rnd_normal = torch.randn(samples.shape[0], device=accelerator.device)
-                    sigma = (rnd_normal * P_corrected_std + P_corrected_mean).exp().clip(min=sigma_min, max=sigma_max)
+                    #batch_normal = torch.randn(samples.shape[0], device=accelerator.device) * P_corrected_std + P_corrected_mean
+                    batch_normal = P_corrected_mean + (P_corrected_std * (2 ** 0.5)) * (timesteps * 2 - 1).erfinv().clip(min=-5, max=5)
+                    sigma = batch_normal.exp().clip(min=sigma_min, max=sigma_max)
                     noise = torch.randn_like(samples) * sigma.view(-1, 1, 1, 1)
                     samples = samples * sigma_data
 
@@ -1002,19 +1012,17 @@ def do_training_loop(args,
                                                     return_logvar=True)
                     
                     mse_loss = F.mse_loss(denoised, samples, reduction="none")
-                    #timestep_loss = mse_loss.mean(dim=(1,2,3))
+                    timestep_loss = mse_loss.mean(dim=(1,2,3))
 
                     loss_weight = (sigma ** 2 + sigma_data ** 2) / (sigma * sigma_data) ** 2
                     loss = (loss_weight.view(-1, 1, 1, 1) / error_logvar.exp() * mse_loss + error_logvar).mean()
                     
-                    """
                     if args.num_timestep_loss_buckets > 0:
                         all_timesteps = accelerator.gather(timesteps.detach()).cpu()
                         all_timestep_loss = accelerator.gather(timestep_loss.detach()).cpu()
                         target_buckets = (all_timesteps * timestep_loss_buckets.shape[0]).long().clip(max=timestep_loss_buckets.shape[0]-1)
                         timestep_loss_buckets.index_add_(0, target_buckets, all_timestep_loss)
                         timestep_loss_bucket_counts.index_add_(0, target_buckets, torch.ones_like(all_timestep_loss))
-                    """
 
                 elif args.module == "vae":
 
