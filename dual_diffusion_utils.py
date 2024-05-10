@@ -66,7 +66,7 @@ def multi_plot(*args, layout=None, figsize=None, added_plots=None, x_log_scale=F
             if x_axis_range is not None:
                 x_values = np.linspace(x_axis_range[0], x_axis_range[1], y_values.shape[-1])
             else:
-                x_values = np.arange(y_values.shape[-1])
+                x_values = np.arange(y_values.shape[0])
             axis.plot(x_values, y_values, label=args[i][1])
 
             if added_plots is not None:
@@ -76,7 +76,7 @@ def multi_plot(*args, layout=None, figsize=None, added_plots=None, x_log_scale=F
                     if x_axis_range is not None:
                         x_values = np.linspace(x_axis_range[0], x_axis_range[1], y_values.shape[-1])
                     else:
-                        x_values = np.arange(y_values.shape[-1])
+                        x_values = np.arange(y_values.shape[0])
                     axis.plot(x_values, y_values, label=added_plot[1])
             
             axis.legend()
