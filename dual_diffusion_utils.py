@@ -53,19 +53,27 @@ def torch_compile(*args, **kwargs):
             return func
     return wrapper
 
-def multi_plot(*args, layout=None, figsize=None, added_plots=None):
+def multi_plot(*args, layout=None, figsize=None, added_plots=None, x_log_scale=False, y_log_scale=False, x_axis_range=None):
 
     layout = layout or (len(args), 1)
     axes = np.atleast_2d(plt.subplots(layout[0], layout[1], figsize=figsize)[1])
 
     for i, axis in enumerate(axes.flatten()):
         if i < len(args):
-            axis.plot(args[i][0].detach().float().resolve_conj().cpu().numpy(), label=args[i][1])
+            y_values =args[i][0].detach().float().resolve_conj().cpu().numpy()
+            if x_axis_range is not None:
+                x_values = np.linspace(x_axis_range[0], x_axis_range[1], y_values.shape[-1])
+            else:
+                x_values = np.arange(y_values.shape[-1])
+            axis.plot(x_values, y_values, label=args[i][1])
             if added_plots is not None:
                 added_plot = added_plots.get(i, None)
                 if added_plot is not None:
                     axis.plot(added_plot[0].detach().float().resolve_conj().cpu().numpy(), label=added_plot[1])
+            
             axis.legend()
+            if x_log_scale: axis.set_xscale("log")
+            if y_log_scale: axis.set_yscale("log")
         else:
             axis.axis("off")
 
