@@ -428,6 +428,7 @@ class DualDiffusionPipeline(DiffusionPipeline):
         if img2img_input is not None:
             img2img_sample = self.format.raw_to_sample(img2img_input.unsqueeze(0).to(self.device).float())
             start_data = self.vae.encode(img2img_sample.type(self.unet.dtype), vae_class_embeddings, self.format).mode().float()
+            start_data = normalize(start_data).float()
             start_timestep = img2img_strength
         else:
             start_data = 0
@@ -452,7 +453,7 @@ class DualDiffusionPipeline(DiffusionPipeline):
         sample = noise * sigma_schedule[0] + start_data * sigma_data
 
         normalized_theta_schedule = (sigma_data / sigma_schedule).atan() / (torch.pi/2)
-        sigma_schedule = sigma_schedule.tolist()
+        sigma_schedule_list = sigma_schedule.tolist()
 
         cfg_fn = slerp if slerp_cfg else torch.lerp
 
@@ -473,7 +474,9 @@ class DualDiffusionPipeline(DiffusionPipeline):
 
         i = 0
         self.set_progress_bar_config(disable=True)
-        for sigma_curr, sigma_next in self.progress_bar(zip(sigma_schedule[:-1], sigma_schedule[1:]), total=len(sigma_schedule)-1):
+        for sigma_curr, sigma_next in self.progress_bar(zip(sigma_schedule_list[:-1],
+                                                            sigma_schedule_list[1:]),
+                                                            total=len(sigma_schedule_list)-1):
             
             sigma = torch.tensor([sigma_curr], device=self.device)
             model_input = sample.to(self.unet.dtype)
@@ -491,7 +494,7 @@ class DualDiffusionPipeline(DiffusionPipeline):
             debug_d_list.append(get_cos_angle(initial_noise, sample) / (torch.pi/2))
             debug_s_list.append(cfg_model_output.square().mean(dim=(1,2,3)).sqrt())
             debug_m_list.append(cfg_model_output.mean(dim=(1,2,3)))
-            debug_o_list.append(normalize(cfg_model_output).float())
+            #debug_o_list.append(normalize(cfg_model_output).float())
 
             print(f"step: {i:>{3}}/{steps:>{3}}",
                   f"v:{debug_v_list[-1][0].item():{8}f}",
@@ -522,13 +525,15 @@ class DualDiffusionPipeline(DiffusionPipeline):
         d_measured = torch.stack(debug_d_list, dim=0)
         s_measured = torch.stack(debug_s_list, dim=0)
         m_measured = torch.stack(debug_m_list, dim=0)
-        o_measured = torch.stack(debug_o_list, dim=0)
+        #o_measured = torch.stack(debug_o_list, dim=0)
 
         print(f"Average v_measured: {v_measured.mean()}")
         print(f"Average a_measured: {a_measured.mean()}")
         print(f"Average s_measured: {s_measured.mean()}")
         print(f"Average m_measured: {m_measured.mean()}")
         print(f"Final distance: ", get_cos_angle(initial_noise, sample)[0].item() / (torch.pi/2), "  Final mean:", m_measured[-1, 0].item())
+
+        sigma_schedule_error_logvar = self.unet.logvar_linear(self.unet.logvar_fourier(sigma_schedule.log().to(self.unet.device, self.unet.dtype)/4)).float()
 
         if debug_path is not None:
             save_raw(sample, os.path.join(debug_path, "debug_sampled_latents.raw"))
@@ -540,6 +545,8 @@ class DualDiffusionPipeline(DiffusionPipeline):
             save_raw(s_measured, os.path.join(debug_path, "debug_s_measured.raw"))
             save_raw(m_measured, os.path.join(debug_path, "debug_m_measured.raw"))
 
+            save_raw(sigma_schedule_error_logvar, os.path.join(debug_path, "debug_sigma_schedule_error_logvar.raw"))
+                     
             if False:#steps < 250:
                 model_outputs = o_measured[:, 0:1].view(steps, -1)
                 inner_products = torch.einsum('ijk,ilk->ijl', model_outputs.unsqueeze(0), model_outputs.unsqueeze(1)).permute(2, 0, 1)
@@ -560,6 +567,7 @@ class DualDiffusionPipeline(DiffusionPipeline):
                        (s_measured, "output_norm"),
                        (m_measured, "output_mean"),
                        (d_measured, "normalized_distance"),
+                       (sigma_schedule_error_logvar, "timestep_error_logvar"),
                        layout=(2, 3), figsize=(12, 5),
                        added_plots={4: (normalized_theta_schedule, "theta_schedule")})
             
