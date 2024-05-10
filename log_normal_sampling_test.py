@@ -3,7 +3,7 @@ import numpy as np
 
 from dual_diffusion_utils import get_expected_max_normal
 
-total_batch_size = 28 #132
+total_batch_size = 132
 reference_batch_size = 2048
 
 P_std = 1.
@@ -43,7 +43,7 @@ for i in range(n_iter):
     if use_stratified_sampling:
         batch_normal = (torch.arange(total_batch_size) + 0.5) / total_batch_size
         batch_normal += (torch.rand(1) - 0.5) / total_batch_size
-        batch_normal = P_corrected_mean + P_corrected_std * (2 ** 0.5) * (batch_normal * 2 - 1).erfinv().clip(min=-5, max=5)
+        batch_normal = P_corrected_mean + (P_corrected_std * (2 ** 0.5)) * (batch_normal * 2 - 1).erfinv().clip(min=-5, max=5)
     else:
         batch_normal = torch.randn(total_batch_size) * P_corrected_std + P_corrected_mean
     batch_sigma = batch_normal.exp()
