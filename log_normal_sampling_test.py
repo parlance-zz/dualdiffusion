@@ -12,10 +12,12 @@ sigma_min = 0.5 / target_snr
 
 P_std = 1.
 P_mean = -0.4
-mean_correction_amount = 1 # best match overall with 1
+mean_correction_amount = 1 # (for non-theta formulation, best match overall with 1)
 use_stratified_sampling = True
 use_theta_formulation = True#False
+
 n_iter = 1000
+use_y_log_scale = False
 
 print("total_batch_size:", total_batch_size, "reference_batch_size:", reference_batch_size)
 print("")
@@ -96,4 +98,4 @@ print(f"avg reference mean: {avg_reference_mean / n_iter:{5}f}, min: {avg_refere
 
 batch_sigma_histo /= total_batch_size
 reference_sigma_histo /= reference_batch_size
-multi_plot((batch_sigma_histo, "batch sigma"), (reference_sigma_histo, "reference sigma"), x_log_scale=True, y_log_scale=True, x_axis_range=(sigma_min, sigma_max))
+multi_plot((batch_sigma_histo, "batch sigma"), (reference_sigma_histo, "reference sigma"), x_log_scale=True, y_log_scale=use_y_log_scale, x_axis_range=(sigma_min, sigma_max))
