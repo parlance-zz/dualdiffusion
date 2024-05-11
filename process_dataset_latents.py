@@ -35,7 +35,7 @@ if __name__ == "__main__":
     init_cuda()
     load_dotenv(override=True)
 
-    model_name = "edm2_vae_test7"
+    model_name = "edm2_vae_test7_2"
     device = "cuda"
     fp16 = True
 
@@ -104,12 +104,16 @@ if __name__ == "__main__":
         progress_bar.close()
 
         # save split metadata for latents dataset
-        with open(os.path.join(latents_dataset_path, f"{split_metadata_file}.jsonl"), "w") as f:
+        split_metadata_output_path = os.path.join(latents_dataset_path, f"{split_metadata_file}.jsonl")
+        print(f"Saving split metadata to {split_metadata_output_path}...")
+        with open(split_metadata_output_path, "w") as f:
             for sample in split_metadata:
                 f.write(json.dumps(sample) + "\n")
 
     # save model info so we know which model / checkpoint was used to generate the latents
-    with open(os.path.join(latents_dataset_path, "vae_model_info.md"), "w") as f:
+    vae_model_info_path = os.path.join(latents_dataset_path, "vae_model_info.md")
+    print(f"Saving model info to {vae_model_info_path}...")
+    with open(vae_model_info_path, "w") as f:
         f.write(f"model_name: {model_name}\n")
         f.write(f"last_global_step: {last_global_step}\n")
         f.write(f"dtype: {model_dtype}\n")
