@@ -377,6 +377,8 @@ class DualDiffusionPipeline(DiffusionPipeline):
         elif isinstance(labels, dict):
             class_ids, weights = torch.tensor(list(labels.keys()), dtype=torch.long), torch.tensor(list(labels.values()))
             return torch.zeros((1, self.unet.label_dim)).index_fill_(1, class_ids, weights).to(device=self.device)
+        elif isinstance(labels, int):
+            return torch.nn.functional.one_hot(torch.tensor([labels], dtype=torch.long), num_classes=self.unet.label_dim).to(device=self.device, dtype=torch.float32)
         else:
             raise ValueError(f"Unknown labels dtype '{type(labels)}'")
 
