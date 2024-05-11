@@ -33,6 +33,7 @@ import torch.nn as nn
 import torchaudio
 import torchaudio.functional as AF
 import cv2
+import safetensors.torch as ST
 from dotenv import load_dotenv
 from scipy.special import erfinv
 
@@ -510,7 +511,19 @@ def load_audio(input_path, start=0, count=-1, return_sample_rate=False, device="
         return return_vals[0]
     else:
         return return_vals
-    
+
+def save_safetensors(tensors_dict, output_path):
+    directory = os.path.dirname(output_path)
+    os.makedirs(directory, exist_ok=True)
+
+    for key in tensors_dict:
+        tensors_dict[key] = tensors_dict[key].detach().resolve_conj().cpu()
+
+    ST.save_file(tensors_dict, output_path)
+
+def load_safetensors(input_path, device="cpu"):
+    return ST.load_file(input_path, device=device)
+
 def save_sample_img(sample, img_path, include_phase=False):
     
     num_chunks = sample.shape[2]
