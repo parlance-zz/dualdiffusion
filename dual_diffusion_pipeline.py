@@ -562,7 +562,8 @@ class DualDiffusionPipeline(DiffusionPipeline):
         raw_sample = self.format.sample_to_raw(sample)
 
         if show_debug_plots:
-            multi_plot((v_measured, "normalized_velocity"),
+            #multi_plot((v_measured, "normalized_velocity"),
+            multi_plot((sigma_schedule, "sigma_schedule"),
                        (a_measured, "path_curvature"),
                        (s_measured, "output_norm"),
                        (m_measured, "output_mean"),
