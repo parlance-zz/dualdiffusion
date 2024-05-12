@@ -53,7 +53,7 @@ from diffusers.utils import deprecate, is_tensorboard_available
 from unet_edm2 import UNet
 from unet_edm2_ema import PowerFunctionEMA
 from dual_diffusion_pipeline import DualDiffusionPipeline
-from dual_diffusion_utils import init_cuda, load_audio, save_audio, load_raw, save_raw, dict_str, normalize_lufs, get_expected_max_normal
+from dual_diffusion_utils import init_cuda, load_audio, save_audio, load_raw, dict_str, normalize_lufs, load_safetensors
 from geodesic_flow import normalize
 
 
@@ -210,6 +210,16 @@ def parse_args():
             " loaded from the path specified in the DATASET_PATH environment variable."
         ),
     )
+    parser.add_argument(
+        "--latents_dataset_name",
+        type=str,
+        default=None,
+        required=False,
+        help=(
+            "Specify a dataset name to load pre-encoded training latents from the huggingface hub. If not specified the training data will be"
+            " loaded from the path specified in the LATENTS_DATASET_PATH environment variable if it is set, if not then DATASET_PATH."
+        ),
+    )
     parser.add_argument("--adam_beta1", type=float, default=0.9, help="The beta1 parameter for the Adam optimizer.")
     parser.add_argument("--adam_beta2", type=float, default=0.99, help="The beta2 parameter for the Adam optimizer.")
     parser.add_argument("--adam_epsilon", type=float, default=1e-08, help="Epsilon value for the Adam optimizer")
@@ -315,10 +325,23 @@ def parse_args():
     if env_local_rank != -1 and env_local_rank != args.local_rank:
         args.local_rank = env_local_rank
 
+    args.module = args.module.lower().strip()
+    if args.module not in ["unet", "vae"]:
+        raise ValueError(f"Unknown module type {args.module}")
+    
     args.train_data_dir = os.environ.get("DATASET_PATH", None)
     args.train_data_format = os.environ.get("DATASET_FORMAT", None)
     args.train_data_num_channels = os.environ.get("DATASET_NUM_CHANNELS", None)
     args.train_data_raw_format = os.environ.get("DATASET_RAW_FORMAT", None)
+    args.train_data_latents_dir = os.environ.get("LATENTS_DATASET_PATH", None)
+
+    if args.module == "unet" and args.train_data_latents_dir is not None:
+        args.train_data_dir = args.train_data_latents_dir
+        args.train_data_format = ".safetensors"
+
+    if args.module == "unet" and args.latents_dataset_name is not None:
+        args.dataset_name = args.latents_dataset_name
+        args.train_data_format = ".safetensors"
 
     if args.train_data_dir is None:
         raise ValueError("DATASET_PATH environment variable is undefined.")
@@ -330,9 +353,6 @@ def parse_args():
         args.train_data_num_channels = int(args.train_data_num_channels)
     if args.train_data_format == ".raw" and args.train_data_raw_format is None:
         raise ValueError("DATASET_FORMAT is '.raw' and DATASET_RAW_SAMPLE_FORMAT environment variable is undefined.")
-        
-    if not os.path.exists(args.train_data_dir) and args.dataset_name is None:
-        raise ValueError(f"Training data directory {args.train_data_dir} does not exist.")
     
     args.hf_token = os.environ.get("HF_TOKEN", None)
 
@@ -341,10 +361,6 @@ def parse_args():
     else:
         if not os.path.exists(args.validation_sample_dir):
             raise ValueError(f"Validation sample directory {args.validation_sample_dir} does not exist.")
-        
-    args.module = args.module.lower().strip()
-    if args.module not in ["unet", "vae"]:
-        raise ValueError(f"Unknown module type {args.module}")
     
     # default to using the same revision for the non-ema model if not specified
     if args.non_ema_revision is None:
@@ -570,7 +586,7 @@ def load_checkpoint(checkpoint,
 
     return global_step, resume_step, first_epoch
 
-def init_module_pipeline(pretrained_model_name_or_path, module_type, vae_encode_batch_size, device):
+def init_module_pipeline(pretrained_model_name_or_path, module_type, vae_encode_batch_size, device, dataset_format):
 
     pipeline = DualDiffusionPipeline.from_pretrained(pretrained_model_name_or_path)
     module = getattr(pipeline, module_type)
@@ -580,7 +596,8 @@ def init_module_pipeline(pretrained_model_name_or_path, module_type, vae_encode_
 
         vae = getattr(pipeline, "vae", None)
         if vae is not None:
-            vae = vae.to(device).to(torch.bfloat16)
+            if dataset_format != ".safetensors":
+                vae = vae.to(device).to(torch.bfloat16)
 
             if vae_encode_batch_size > 0:
                 #vae.enable_slicing(vae_encode_batch_size)
@@ -710,6 +727,10 @@ class DatasetTransformer(torch.nn.Module):
                                             start=-1,
                                             count=self.sample_crop_width,
                                             return_start=True)
+            elif self.dataset_format == ".safetensors":
+                sample = load_safetensors(file_path)["latents"].squeeze(0)
+                t_offset = np.random.randint(0, sample.shape[-1] - self.sample_crop_width + 1)
+                sample = sample[..., t_offset:t_offset + self.sample_crop_width]
             else:
                 sample, t_offset = load_audio(file_path,
                                               start=-1,
@@ -908,35 +929,15 @@ def do_training_loop(args,
 
         logger.info(f"Dropout: {module.dropout} Conditioning dropout: {module.label_dropout}")
 
-        #total_batch_size = args.train_batch_size * accelerator.num_processes * args.gradient_accumulation_steps
-        #reference_batch_size = 2048
-
-        #batch size = 28 settings
-        P_std = 1.2
-        P_mean = 0
-
-        #batch size = 132 settings
-        #P_std = 1.1
-        #P_mean = -0.2
-
-        #mean_correction_amount = 0.25
-        
-        """
-        reference_expected_max = get_expected_max_normal(reference_batch_size)
-        batch_expected_max = get_expected_max_normal(total_batch_size)
-        
-        std_correction_factor = reference_expected_max / batch_expected_max
-        P_corrected_std = P_std * std_correction_factor
-        mean_correction_offset = P_std**2 / 2 - P_corrected_std**2 / 2
-        P_corrected_mean = (P_mean + mean_correction_offset) * mean_correction_amount + P_mean * (1 - mean_correction_amount)
-        logger.info(f"P_corrected_std: {P_corrected_std:.4f} P_corrected_mean: {P_corrected_mean:.4f}")
-        """
+        P_std = 1
+        P_mean = -0.4
         logger.info(f"P_std: {P_std:.4f} P_mean: {P_mean:.4f}")
 
     noise_degree = "normal" if model_params.get("noise_degree", 0) == 0 else f"fractal - degree: {model_params['noise_degree']}"
     logger.info(f"Noise type: {noise_degree}")
 
-    logger.info(f"Sample shape: {sample_shape}")
+    if args.train_data_format != ".safetensors":
+        logger.info(f"Sample shape: {sample_shape}")
     if latent_shape is not None:
         logger.info(f"Latent shape: {latent_shape}")
 
@@ -964,9 +965,9 @@ def do_training_loop(args,
             
             if args.module == "unet" and grad_accum_steps == 0:
                 
-                """
                 # instead of randomly sampling each timestep, distribute the batch evenly across timesteps
                 # and add a random offset for continuous uniform coverage e.g. stratified sampling
+                total_batch_size = args.train_batch_size * accelerator.num_processes * args.gradient_accumulation_steps
                 batch_timesteps = (torch.arange(total_batch_size, device=accelerator.device)+0.5) / total_batch_size
                 batch_timesteps += (torch.rand(1, device=accelerator.device) - 0.5) / total_batch_size
 
@@ -976,8 +977,6 @@ def do_training_loop(args,
                 if args.num_timestep_loss_buckets > 0:
                     timestep_loss_buckets.zero_()
                     timestep_loss_bucket_counts.zero_()
-                """
-                pass
 
             with accelerator.accumulate(module):
 
@@ -997,23 +996,25 @@ def do_training_loop(args,
                     class_labels = pipeline.get_class_labels(sample_game_ids)
                     unet_class_embeddings = module.get_class_embeddings(class_labels)
 
-                    samples = pipeline.format.raw_to_sample(raw_samples)
-                    if vae is not None:
-                        vae_class_embeddings = vae.get_class_embeddings(class_labels)
-                        samples = vae.encode(samples.to(torch.bfloat16), vae_class_embeddings, pipeline.format).mode().detach()
-                        samples = normalize(samples).float()
+                    if args.train_data_format == ".safetensors":
+                        samples = normalize(raw_samples).float()
+                    else:
+                        samples = pipeline.format.raw_to_sample(raw_samples)
+                        if vae is not None:
+                            vae_class_embeddings = vae.get_class_embeddings(class_labels)
+                            samples = vae.encode(samples.to(torch.bfloat16), vae_class_embeddings, pipeline.format).mode().detach()
+                            samples = normalize(samples).float()
 
-                    #process_batch_timesteps = batch_timesteps[accelerator.local_process_index::accelerator.num_processes]
-                    #timesteps = process_batch_timesteps[grad_accum_steps * args.train_batch_size:(grad_accum_steps+1) * args.train_batch_size]
+                    process_batch_timesteps = batch_timesteps[accelerator.local_process_index::accelerator.num_processes]
+                    timesteps = process_batch_timesteps[grad_accum_steps * args.train_batch_size:(grad_accum_steps+1) * args.train_batch_size]
 
                     sigma_data = 0.5
                     sigma_max = 80.
                     sigma_min = sigma_data / target_snr
                     
-                    #batch_normal = torch.randn(samples.shape[0], device=accelerator.device) * P_corrected_std + P_corrected_mean
-                    #batch_normal = P_corrected_mean + (P_corrected_std * (2 ** 0.5)) * (timesteps * 2 - 1).erfinv().clip(min=-5, max=5)
-                    batch_normal = torch.randn(samples.shape[0], device=accelerator.device) * P_std + P_mean
-                    sigma = batch_normal.exp().clip(min=sigma_min, max=sigma_max)
+                    #batch_normal = torch.randn(samples.shape[0], device=accelerator.device) * P_std + P_mean
+                    batch_normal = P_mean + (P_std * (2 ** 0.5)) * (timesteps * 2 - 1).erfinv().clip(min=-5, max=5)
+                    sigma = (batch_normal.exp() + sigma_min).clip(max=sigma_max)
                     noise = torch.randn_like(samples) * sigma.view(-1, 1, 1, 1)
                     samples = samples * sigma_data
 
@@ -1025,19 +1026,17 @@ def do_training_loop(args,
                                                     return_logvar=True)
                     
                     mse_loss = F.mse_loss(denoised, samples, reduction="none")
-                    #timestep_loss = mse_loss.mean(dim=(1,2,3))
+                    timestep_loss = mse_loss.mean(dim=(1,2,3))
 
                     loss_weight = (sigma ** 2 + sigma_data ** 2) / (sigma * sigma_data) ** 2
                     loss = (loss_weight.view(-1, 1, 1, 1) / error_logvar.exp() * mse_loss + error_logvar).mean()
                     
-                    """
                     if args.num_timestep_loss_buckets > 0:
                         all_timesteps = accelerator.gather(timesteps.detach()).cpu()
                         all_timestep_loss = accelerator.gather(timestep_loss.detach()).cpu()
                         target_buckets = (all_timesteps * timestep_loss_buckets.shape[0]).long().clip(max=timestep_loss_buckets.shape[0]-1)
                         timestep_loss_buckets.index_add_(0, target_buckets, all_timestep_loss)
                         timestep_loss_bucket_counts.index_add_(0, target_buckets, torch.ones_like(all_timestep_loss))
-                    """
 
                 elif args.module == "vae":
 
@@ -1068,7 +1067,6 @@ def do_training_loop(args,
                     latents_square_norm = (torch.linalg.vector_norm(latents, dim=(1,2,3), dtype=torch.float32) / latents[0].numel()**0.5).square()
                     latents_batch_mean = latents.mean(dim=(1,2,3))
                     channel_kl_loss = (latents_batch_mean.square() + latents_square_norm - 1 - latents_square_norm.log()).mean()
-                    #channel_kl_loss = (latents_square_norm - 1 - latents_square_norm.log()).mean()
                     
                     loss = real_nll_loss + imag_nll_loss + channel_kl_loss * channel_kl_loss_weight + point_similarity_loss * point_loss_weight
                 else:
@@ -1127,20 +1125,6 @@ def do_training_loop(args,
                             bucket_timestep_min = int(i / timestep_loss_buckets.shape[0] * 1000.)
                             bucket_timestep_max = int((i+1) / timestep_loss_buckets.shape[0] * 1000.)
                             logs[f"unet/timestep_loss_{bucket_timestep_min}-{bucket_timestep_max}"] = (timestep_loss_buckets[i] / timestep_loss_bucket_counts[i]).item()
-                    """
-                    logging_timesteps = torch.arange(0.5, args.num_timestep_loss_buckets+0.5, device=accelerator.device) / args.num_timestep_loss_buckets
-                    timestep_error = module.get_timestep_logvar(logging_timesteps).detach().cpu().exp()
-
-                    #tensorboard_tracker = accelerator.get_tracker("tensorboard", unwrap=True)
-                    #if tensorboard_tracker is not None:
-                    #    tensorboard_tracker.add_histogram("unet/timestep_loss", timestep_error, global_step=global_step)
-                    #else:
-
-                    for i in range(args.num_timestep_loss_buckets):
-                        bucket_timestep_min = int(i / args.num_timestep_loss_buckets * 1000.)
-                        bucket_timestep_max = int((i+1) / args.num_timestep_loss_buckets * 1000.)
-                        logs[f"unet/timestep_loss_{bucket_timestep_min}-{bucket_timestep_max}"] = timestep_error[i].item()
-                    """
 
                 accelerator.log(logs, step=global_step)
                 progress_bar.set_postfix(**logs)
@@ -1171,19 +1155,10 @@ def do_training_loop(args,
         accelerator.wait_for_everyone()
         if accelerator.is_main_process:
             
-            # full model saving disabled for now, not really necessary now that checkpoints are saved with config and safetensors
-            """
-            if checkpoint_saved_this_epoch == True:
-                logger.info(f"Saving model to {args.output_dir}")
-
-                module = accelerator.unwrap_model(module)
-                if args.use_ema:
-                    ema_module.store(module.parameters())
-                    ema_module.copy_to(module.parameters())
-
-                setattr(pipeline, args.module, module)
-                pipeline.save_pretrained(args.output_dir, safe_serialization=True)
-            """
+            if args.use_ema:
+                ema_module.store(module.parameters())
+                ema_module.copy_to(module.parameters())
+                
             if args.num_validation_samples > 0 and args.num_validation_epochs > 0:
                 if epoch % args.num_validation_epochs == 0:
                     module.eval().requires_grad_(False)
@@ -1212,8 +1187,8 @@ def do_training_loop(args,
 
                     module.train().requires_grad_(True)
 
-            #if args.use_ema:
-            #    ema_module.restore(module.parameters())
+            if args.use_ema:
+                ema_module.restore(module.parameters())
             
     accelerator.end_training()
 
@@ -1322,7 +1297,8 @@ def main():
     pipeline, module, module_class, vae = init_module_pipeline(args.pretrained_model_name_or_path,
                                                                args.module,
                                                                args.vae_encode_batch_size,
-                                                               accelerator.device)
+                                                               accelerator.device,
+                                                               args.train_data_format)
 
     if args.use_ema:
         ema_module = init_ema_module(args.pretrained_model_name_or_path,
@@ -1352,6 +1328,11 @@ def main():
                                args.adam_epsilon,
                                module)
 
+    if args.module == "unet" and args.train_data_format == ".safetensors":
+        sample_crop_width = vae.get_latent_shape(pipeline.format.get_sample_shape())[-1]
+    else:
+        sample_crop_width = pipeline.format.get_sample_crop_width()
+
     train_dataset, train_dataloader = init_dataloader(accelerator,
                                                       args.dataset_name,
                                                       args.hf_token,
@@ -1365,7 +1346,7 @@ def main():
                                                       args.train_data_raw_format,
                                                       args.train_data_num_channels,
                                                       pipeline.config["model_params"]["sample_rate"],
-                                                      pipeline.format.get_sample_crop_width(),
+                                                      sample_crop_width,
                                                       pipeline.config["model_params"]["t_scale"])
 
     num_update_steps_per_epoch = math.floor(len(train_dataloader) / accelerator.num_processes)
