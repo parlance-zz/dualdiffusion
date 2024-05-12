@@ -468,7 +468,7 @@ class DualDiffusionPipeline(DiffusionPipeline):
 
         if show_debug_plots:
             cv2.namedWindow('sample / output', cv2.WINDOW_KEEPRATIO)
-            cv2.resizeWindow('sample / output', int(sample.shape[3]*2.5), int(sample.shape[2]*2*2.5))
+            cv2.resizeWindow('sample / output', int(sample.shape[3]*2), int(sample.shape[2]*2*2))
             cv2.moveWindow('sample / output', 0, 700)
             cv2.setWindowProperty('sample / output', cv2.WND_PROP_TOPMOST, 1)
 
