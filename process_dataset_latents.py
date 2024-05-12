@@ -78,7 +78,7 @@ if __name__ == "__main__":
             file_name = sample["file_name"]
             output_filename = f"{os.path.splitext(file_name)[0]}.safetensors"
             output_path = os.path.join(latents_dataset_path, output_filename)
-            split_metadata[i]["file_name"] = output_path
+            split_metadata[i]["file_name"] = output_filename
 
             if os.path.exists(output_path):
                 progress_bar.update(1)
@@ -120,7 +120,7 @@ if __name__ == "__main__":
         f.write(f"dtype: {model_dtype}\n")
 
     #lastly, copy the dataset_info folder to the latents dataset
-    dataset_infos_path = os.path.join(dataset_path, "dataset_info")
-    latents_dataset_infos_path = os.path.join(latents_dataset_path, "dataset_info")
+    dataset_infos_path = os.path.join(dataset_path, "dataset_infos")
+    latents_dataset_infos_path = os.path.join(latents_dataset_path, "dataset_infos")
     print(f"Copying dataset_infos from {dataset_infos_path} to {latents_dataset_infos_path}...")
-    shutil.copytree(dataset_infos_path, latents_dataset_infos_path)
+    shutil.copytree(dataset_infos_path, latents_dataset_infos_path, dirs_exist_ok=True)
