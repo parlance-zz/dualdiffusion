@@ -1189,7 +1189,8 @@ def do_training_loop(args,
 
             if args.use_ema:
                 ema_module.restore(module.parameters())
-            
+    
+    logger.info("Training complete")
     accelerator.end_training()
 
 def log_validation_unet(pipeline, args, accelerator, global_step):
