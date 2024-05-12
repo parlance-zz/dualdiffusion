@@ -1010,11 +1010,11 @@ def do_training_loop(args,
 
                     sigma_data = 0.5
                     sigma_max = 80.
-                    sigma_min = sigma_data / target_snr
+                    sigma_min = 0.002
                     
                     #batch_normal = torch.randn(samples.shape[0], device=accelerator.device) * P_std + P_mean
                     batch_normal = P_mean + (P_std * (2 ** 0.5)) * (timesteps * 2 - 1).erfinv().clip(min=-5, max=5)
-                    sigma = (batch_normal.exp() + sigma_min).clip(max=sigma_max)
+                    sigma = batch_normal.exp().clip(min=sigma_min, max=sigma_max)
                     noise = torch.randn_like(samples) * sigma.view(-1, 1, 1, 1)
                     samples = samples * sigma_data
 
