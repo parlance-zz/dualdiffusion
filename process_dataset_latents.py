@@ -22,6 +22,7 @@
 
 import os
 import json
+import shutil
 
 from dotenv import load_dotenv
 import torch
@@ -104,7 +105,7 @@ if __name__ == "__main__":
         progress_bar.close()
 
         # save split metadata for latents dataset
-        split_metadata_output_path = os.path.join(latents_dataset_path, f"{split_metadata_file}.jsonl")
+        split_metadata_output_path = os.path.join(latents_dataset_path, split_metadata_file)
         print(f"Saving split metadata to {split_metadata_output_path}...")
         with open(split_metadata_output_path, "w") as f:
             for sample in split_metadata:
@@ -117,3 +118,9 @@ if __name__ == "__main__":
         f.write(f"model_name: {model_name}\n")
         f.write(f"last_global_step: {last_global_step}\n")
         f.write(f"dtype: {model_dtype}\n")
+
+    #lastly, copy the dataset_info folder to the latents dataset
+    dataset_infos_path = os.path.join(dataset_path, "dataset_info")
+    latents_dataset_infos_path = os.path.join(latents_dataset_path, "dataset_info")
+    print(f"Copying dataset_infos from {dataset_infos_path} to {latents_dataset_infos_path}...")
+    shutil.copytree(dataset_infos_path, latents_dataset_infos_path)
