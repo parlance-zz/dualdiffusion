@@ -30,14 +30,12 @@ import cv2
 
 from diffusers.pipelines.pipeline_utils import DiffusionPipeline
 
-#from unet_dual import UNetDualModel
 from unet_edm2 import UNet
 from autoencoder_kl_dual import AutoencoderKLDual
 from autoencoder_kl_edm2 import AutoencoderKL_EDM2
 from spectrogram import SpectrogramParams, SpectrogramConverter
-from dual_diffusion_utils import mdct, imdct, save_raw, save_raw_img, get_fractal_noise2d, multi_plot
-
-from geodesic_flow import GeodesicFlow, normalize, slerp, get_cos_angle
+from dual_diffusion_utils import mdct, imdct, save_raw, save_raw_img, multi_plot
+from dual_diffusion_utils import normalize, slerp, get_cos_angle
 from loss import DualMultiscaleSpectralLoss, DualMultiscaleSpectralLoss2D
 
 class DualMCLTFormat(torch.nn.Module):
@@ -273,17 +271,7 @@ class DualDiffusionPipeline(DiffusionPipeline):
             target_snr = vae.get_target_snr()
         else:
             target_snr = model_params.get("target_snr", None)
-
         self.target_snr = target_snr
-        #self.geodesic_flow = GeodesicFlow(target_snr,
-        #                                  model_params["diffusion_schedule"],
-        #                                  model_params["diffusion_objective"])
-        
-        #self.noise_degree = model_params.get("noise_degree", 0)
-        #if self.noise_degree == 0:
-        #    self.noise_fn = torch.randn
-        #else:
-        #    self.noise_fn = lambda shape, **kwargs: get_fractal_noise2d(shape, degree=self.noise_degree, **kwargs)
 
     @staticmethod
     @torch.no_grad()
