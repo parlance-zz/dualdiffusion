@@ -431,6 +431,8 @@ class UNet(ModelMixin, ConfigMixin):
 
 if __name__ == "__main__": # fourier embedding inner product test
 
+    raise NotImplementedError("MPFourier inner product test needs to be re-written")
+    """
     from dual_diffusion_utils import save_raw, save_raw_img
     from geodesic_flow import GeodesicFlow
     from dotenv import load_dotenv
@@ -458,3 +460,4 @@ if __name__ == "__main__": # fourier embedding inner product test
 
         coverage = inner_products.sum(dim=0)
         save_raw(coverage / coverage.amax(), os.path.join(debug_path, "fourier_inner_products_coverage.raw"))
+    """
