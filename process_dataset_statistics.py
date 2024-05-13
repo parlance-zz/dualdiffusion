@@ -1,26 +1,3 @@
-"""
-import torch
-import torch.distributions as dist
-import time
-
-# Create a random PDF tensor of dimension 1000
-pdf_tensor = torch.rand(1000).to("cpu")
-pdf_tensor /= pdf_tensor.sum()  # Normalize to make it a valid PDF
-
-# Create a Categorical distribution from the PDF tensor
-categorical_dist = dist.Categorical(probs=pdf_tensor)
-
-# Measure the time taken to sample
-start_time = time.time()
-for i in range(9100):
-    sampled_indices = categorical_dist.sample()
-end_time = time.time()
-
-#print("Sampled index:", sampled_indices.item())
-print("Time taken for sampling:", end_time - start_time, "seconds")
-exit()
-"""
-
 # MIT License
 #
 # Copyright (c) 2023 Christopher Friesen
