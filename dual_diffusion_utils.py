@@ -119,28 +119,6 @@ def get_activation(act_fn):
 def get_expected_max_normal(n):
     return erfinv((n - np.pi/8) / (n - np.pi/4 + 1))
 
-def compute_snr(noise_scheduler, timesteps):
-    """
-    Computes SNR as per
-    https://github.com/TiankaiHang/Min-SNR-Diffusion-Training/blob/521b624bd70c67cee4bdf49225915f5945a872e3/guided_diffusion/gaussian_diffusion.py#L847-L849
-    """
-    alphas_cumprod = noise_scheduler.alphas_cumprod
-    sqrt_alphas_cumprod = alphas_cumprod**0.5
-    sqrt_one_minus_alphas_cumprod = (1.0 - alphas_cumprod) ** 0.5
-
-    sqrt_alphas_cumprod = sqrt_alphas_cumprod.to(device=timesteps.device)[timesteps].float()
-    while len(sqrt_alphas_cumprod.shape) < len(timesteps.shape):
-        sqrt_alphas_cumprod = sqrt_alphas_cumprod[..., None]
-    alpha = sqrt_alphas_cumprod.expand(timesteps.shape)
-
-    sqrt_one_minus_alphas_cumprod = sqrt_one_minus_alphas_cumprod.to(device=timesteps.device)[timesteps].float()
-    while len(sqrt_one_minus_alphas_cumprod.shape) < len(timesteps.shape):
-        sqrt_one_minus_alphas_cumprod = sqrt_one_minus_alphas_cumprod[..., None]
-    sigma = sqrt_one_minus_alphas_cumprod.expand(timesteps.shape)
-
-    snr = (alpha / sigma) ** 2
-    return snr
-
 def get_fractal_noise2d(shape, degree=1, **kwargs):
     
     noise_shape = shape[:-2] + (shape[-2]*2, shape[-1]*2)
@@ -285,37 +263,6 @@ def stft(x, block_width, window_fn="hann", step=None, add_channelwise_fft=False)
         return torch.fft.fft(x, norm="ortho", dim=-3)
     else:
         return x
-
-"""
-def stft(x, block_width, step=None, window_fn="hann", add_channelwise_fft=False):
-
-    if step is None:
-        step = block_width // 2
-
-    x = x.unfold(-1, block_width, step)
-
-    if window_fn == "hann":
-        window = get_hann_window(block_width, device=x.device) * 2
-    elif window_fn == "hann^0.5":
-        window = get_hann_window(block_width, device=x.device).sqrt() * (2/torch.pi)
-    elif window_fn == "hann^2":
-        window = get_hann_window(block_width, device=x.device).square() * (8/3)
-    elif window_fn == "blackman_harris":
-        window = get_blackman_harris_window(block_width, device=x.device)
-    elif window_fn == "none":
-        window = 1
-    else:
-        raise ValueError(f"Unsupported window function: {window_fn}")
-    
-    N = x.shape[-1] // 2
-    pre_shift = (torch.exp(-1j * torch.pi / 2 / N * torch.arange(2*N, device=x.device)) * window)
-    x = torch.fft.fft(x * pre_shift.requires_grad_(False), norm="forward")[..., :N] * (2 * N ** 0.5)
-
-    if add_channelwise_fft:
-        return torch.fft.fft(x, norm="ortho", dim=-3)
-    else:
-        return x
-"""
 
 def to_ulaw(x, u=255):
 
@@ -556,72 +503,6 @@ def mels_to_hz(mels):
 def get_mel_density(hz):
     return 1127. / (700. + hz)
 
-def stft2(x, block_width, overlap=2, window_fn="hann"):
-
-    step = block_width // overlap
-    padding = block_width * (overlap - 1) // overlap // 2
-    x = F.pad(x, (padding, padding))
-    x = x.unfold(-1, block_width, step)
-
-    N = x.shape[-1] // 2
-    n = torch.arange(2*N, device=x.device)
-    k = torch.arange(0.5, N + 0.5, device=x.device)
-    pre_shift = torch.exp(-1j * torch.pi / 2 / N * n)
-    post_shift = torch.exp(-1j * torch.pi / 2 / N * (N + 1) * k)
-
-    if window_fn == "hann":
-        window = get_hann_window(block_width, device=x.device) * 2
-    elif window_fn == "hann^0.5":
-        window = get_hann_window(block_width, device=x.device).sqrt() * (2/torch.pi)
-    elif window_fn == "hann^2":
-        window = get_hann_window(block_width, device=x.device).square() * (8/3)
-    elif window_fn == "blackman_harris":
-        window = get_blackman_harris_window(block_width, device=x.device)
-    elif window_fn == "none":
-        window = 1
-    else:
-        raise ValueError(f"Unsupported window function: {window_fn}")
-
-    return torch.fft.fft(x * pre_shift * window, norm="forward")[..., :N] * post_shift * 2 * N ** 0.5
-
-def istft2(x, block_width, overlap=2, window_fn="none"):
-
-    step = block_width // overlap
-
-    signal_len = (x.shape[-2] - 1) * step + block_width
-    y = torch.zeros(x.shape[:-2] + (signal_len,), device=x.device)
-
-    N = x.shape[-1]
-    n = torch.arange(2*N, device=x.device)
-    k = torch.arange(0.5, N + 0.5, device=x.device)
-    pre_shift = torch.exp(-1j * torch.pi / 2 / N * n)
-    post_shift = torch.exp(-1j * torch.pi / 2 / N * (N + 1) * k)
-
-    if window_fn == "hann":
-        window = get_hann_window(block_width, device=x.device) * 2
-    elif window_fn == "hann^0.5":
-        window = get_hann_window(block_width, device=x.device).sqrt() * (2/torch.pi)
-    elif window_fn == "hann^2":
-        window = get_hann_window(block_width, device=x.device).square() * (8/3)
-    elif window_fn == "blackman_harris":
-        window = get_blackman_harris_window(block_width, device=x.device)
-    elif window_fn == "none":
-        window = 1
-    else:
-        raise ValueError(f"Unsupported window function: {window_fn}")
-    
-    x = (torch.fft.ifft(x / post_shift, n=block_width, norm="backward") / pre_shift).real * window * 2 * N ** 0.5
-
-    for i in range(overlap):
-        t = x[..., i::overlap, :].reshape(*x.shape[:-2], -1)
-        y[..., i*step:i*step + t.shape[-1]] += t
-
-    if overlap > 1:
-        padding = block_width * (overlap - 1) // overlap // 2
-        y = y[..., padding:-padding] / overlap
-
-    return y
-
 def quantize_tensor(x, levels):
     min_val = x.amin()
     max_val = x.amax()
@@ -698,17 +579,6 @@ def normalize(x, zero_mean=False, dtype=torch.float64):
 
     return x / x.square().mean(dim=reduction_dims, keepdim=True).sqrt()
 
-class ScaleNorm(nn.Module):
-    def __init__(self, num_features, init_scale=1):
-        super(ScaleNorm, self).__init__()
-
-        self.num_features = num_features
-        self.scale = nn.Parameter(torch.ones(num_features) * np.log(np.exp(init_scale) - 1))
-
-    def forward(self, x):
-
-        view_shape = (1, -1,) + (1,) * (x.ndim - 2)
-        return x * F.softplus(self.scale).view(view_shape)
 
 if __name__ == "__main__": # fractal noise test
 
