@@ -23,7 +23,7 @@ if __name__ == "__main__":
                             multi_commits=True, multi_commits_verbose=True)
         except Exception as e:
             print(f"Error: {e}")
-            time.sleep(300)
+            time.sleep(60 * 45)
             continue
 
         break
