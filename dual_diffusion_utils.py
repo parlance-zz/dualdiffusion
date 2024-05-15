@@ -464,7 +464,12 @@ def save_safetensors(tensors_dict, output_path):
     os.makedirs(directory, exist_ok=True)
 
     for key in tensors_dict:
-        tensors_dict[key] = tensors_dict[key].detach().resolve_conj().cpu()
+        val = tensors_dict[key]
+        if torch.is_tensor(val):
+            val = val.detach().resolve_conj().cpu()
+        else:
+            val = torch.tensor(val)
+        tensors_dict[key] = val
 
     ST.save_file(tensors_dict, output_path)
 
