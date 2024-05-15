@@ -452,7 +452,6 @@ class DualDiffusionPipeline(DiffusionPipeline):
         debug_d_list = []
         debug_s_list = []
         debug_m_list = []
-        debug_o_list = []
 
         if show_debug_plots:
             cv2.namedWindow('sample / output', cv2.WINDOW_KEEPRATIO)
@@ -475,16 +474,27 @@ class DualDiffusionPipeline(DiffusionPipeline):
 
             last_cfg_model_output = cfg_model_output
             cfg_model_output = cfg_fn(u_model_output, model_output, cfg_scale).float()
+            
+            if use_midpoint_integration:
+                t_hat = sigma_next / sigma_curr
+                sample_hat = (t_hat * sample + (1 - t_hat) * cfg_model_output)
 
-            if use_midpoint_integration:            
-                raise NotImplementedError("Midpoint integration not implemented")
+                sigma_hat = torch.tensor([sigma_next], device=self.device)
+                model_input_hat = sample_hat.to(self.unet.dtype)
+                model_output_hat = self.unet(model_input_hat, sigma_hat, unet_class_embeddings, t_ranges, self.format).float()
+                u_model_output_hat = self.unet(model_input_hat, sigma_hat, None, t_ranges, self.format).float()
+                cfg_model_output_hat = cfg_fn(u_model_output_hat, model_output_hat, cfg_scale).float()
+                
+                cfg_model_output = (cfg_model_output + cfg_model_output_hat) / 2
+
+            #if i <= 5:
+            #    cfg_model_output /= cfg_model_output.square().mean(dim=(1,2,3), keepdim=True).sqrt().clip(min=0.23) / 0.23
 
             debug_v_list.append(get_cos_angle(sample, cfg_model_output) / (torch.pi/2))
             debug_a_list.append(get_cos_angle(cfg_model_output, last_cfg_model_output) / (torch.pi/2))
             debug_d_list.append(get_cos_angle(initial_noise, sample) / (torch.pi/2))
             debug_s_list.append(cfg_model_output.square().mean(dim=(1,2,3)).sqrt())
             debug_m_list.append(cfg_model_output.mean(dim=(1,2,3)))
-            #debug_o_list.append(normalize(cfg_model_output).float())
 
             print(f"step: {i:>{3}}/{steps:>{3}}",
                   f"v:{debug_v_list[-1][0].item():{8}f}",
@@ -515,7 +525,6 @@ class DualDiffusionPipeline(DiffusionPipeline):
         d_measured = torch.stack(debug_d_list, dim=0)
         s_measured = torch.stack(debug_s_list, dim=0)
         m_measured = torch.stack(debug_m_list, dim=0)
-        #o_measured = torch.stack(debug_o_list, dim=0)
 
         print(f"Average v_measured: {v_measured.mean()}")
         print(f"Average a_measured: {a_measured.mean()}")
@@ -536,11 +545,6 @@ class DualDiffusionPipeline(DiffusionPipeline):
             save_raw(m_measured, os.path.join(debug_path, "debug_m_measured.raw"))
 
             save_raw(sigma_schedule_error_logvar, os.path.join(debug_path, "debug_sigma_schedule_error_logvar.raw"))
-                     
-            if False:#steps < 250:
-                model_outputs = o_measured[:, 0:1].view(steps, -1)
-                inner_products = torch.einsum('ijk,ilk->ijl', model_outputs.unsqueeze(0), model_outputs.unsqueeze(1)).permute(2, 0, 1)
-                save_raw_img(inner_products[0], os.path.join(debug_path, "debug_o_inner_products.png"))
             
         if getattr(self, "vae", None) is not None:
             sample = self.vae.decode(sample.to(self.vae.dtype), vae_class_embeddings, self.format).float()
