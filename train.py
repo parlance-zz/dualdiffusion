@@ -611,8 +611,12 @@ def init_lr_scheduler(lr_schedule, optimizer,
 
     logger.info(f"Using learning rate schedule {lr_schedule} with warmup steps {lr_warmup_steps}")
     
+    lr_warmup_steps *= num_processes
+    lr_reference_steps *= num_processes
+    max_train_steps *= num_processes
+
     if lr_schedule == "edm2":
-        logger.info(f"Using edm2 learning rate schedule with reference steps = {lr_reference_steps}")
+        logger.info(f"Using edm2 learning rate schedule with reference steps = {lr_reference_steps / num_processes}")
 
         def edm2_lr_lambda(current_step: int):
             lr = 1.
@@ -627,8 +631,8 @@ def init_lr_scheduler(lr_schedule, optimizer,
     return get_scheduler(
         lr_schedule,
         optimizer=optimizer,
-        num_warmup_steps=lr_warmup_steps * num_processes,
-        num_training_steps=max_train_steps * num_processes,
+        num_warmup_steps=lr_warmup_steps,
+        num_training_steps=max_train_steps,
     )
 
 class DatasetTransformer(torch.nn.Module):
