@@ -421,23 +421,14 @@ def init_accelerator_loadsave_hooks(accelerator, module_type, module_class, ema_
 
     def save_model_hook(models, weights, output_dir):
         if accelerator.is_main_process:
-            if ema_module is not None:
-                ema_module.save_pretrained(os.path.join(output_dir, f"{module_type}_ema"))
-
             for model in models:
                 model.save_pretrained(os.path.join(output_dir, module_type))
                 weights.pop() # make sure to pop weight so that corresponding model is not saved again
 
-    def load_model_hook(models, input_dir):
-        if ema_module is not None:
-            if not os.path.exists(os.path.join(input_dir, f"{module_type}_ema")):
-                logger.warning("EMA model in checkpoint not found, using new ema model")
-            else:
-                load_model = PowerFunctionEMA.from_pretrained(os.path.join(input_dir, f"{module_type}_ema"), module_class)
-                ema_module.load_state_dict(load_model.state_dict())
-                ema_module.to(accelerator.device)
-                del load_model
+            if ema_module is not None:
+                ema_module.save(os.path.join(output_dir, f"{module_type}_ema"))
 
+    def load_model_hook(models, input_dir):
         for _ in range(len(models)):
             model = models.pop() # pop models so that they are not loaded again
 
@@ -446,6 +437,12 @@ def init_accelerator_loadsave_hooks(accelerator, module_type, module_class, ema_
             model.register_to_config(**load_model.config)
             model.load_state_dict(load_model.state_dict())
             del load_model
+        
+        if ema_module is not None:
+            if not os.path.exists(os.path.join(input_dir, f"{module_type}_ema")):
+                logger.warning("EMA model in checkpoint not found, using new ema model")
+            else:
+                ema_module.load(os.path.join(input_dir, f"{module_type}_ema"), default_model=model)
 
     accelerator.register_save_state_pre_hook(save_model_hook)
     accelerator.register_load_state_pre_hook(load_model_hook)
@@ -1060,8 +1057,9 @@ def do_training_loop(args,
                         logs[channel_name] = module_logs[channel] / grad_accum_steps
 
                 if args.use_ema:
-                    ema_module.step(module.parameters())
-                    logs["ema_decay"] = ema_module.cur_decay_value    
+                    std_betas = ema_module.update(global_step * total_batch_size, total_batch_size)
+                    for std, beta in std_betas:
+                        logs[f"ema/std_{std:.3f}_beta"] = beta
 
                 if args.module == "unet" and args.num_timestep_loss_buckets > 0:
 
@@ -1100,10 +1098,6 @@ def do_training_loop(args,
         accelerator.wait_for_everyone()
         if accelerator.is_main_process:
             
-            if args.use_ema:
-                ema_module.store(module.parameters())
-                ema_module.copy_to(module.parameters())
-                
             if args.num_validation_samples > 0 and args.num_validation_epochs > 0:
                 if epoch % args.num_validation_epochs == 0:
                     module.eval().requires_grad_(False)
@@ -1131,9 +1125,6 @@ def do_training_loop(args,
                         logger.error(f"Error running validation: {e}")
 
                     module.train().requires_grad_(True)
-
-            if args.use_ema:
-                ema_module.restore(module.parameters())
     
     logger.info("Training complete")
     accelerator.end_training()

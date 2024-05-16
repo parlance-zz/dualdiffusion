@@ -8,6 +8,7 @@
 """Routines for post-hoc EMA and power function EMA proposed in the paper
 "Analyzing and Improving the Training Dynamics of Diffusion Models"."""
 
+import os
 import copy
 import numpy as np
 import torch
@@ -92,6 +93,7 @@ def solve_posthoc_coefficients(in_ofs, in_std, out_ofs, out_std): # => [in, out]
 class PowerFunctionEMA:
     @torch.no_grad()
     def __init__(self, net, stds=[0.050, 0.100], device="cpu"):
+
         self.net = net
         self.stds = stds
         self.device = device
@@ -105,23 +107,31 @@ class PowerFunctionEMA:
 
     @torch.no_grad()
     def update(self, cur_nimg, batch_size):
+        betas = []
         for std, ema in zip(self.stds, self.emas):
             beta = power_function_beta(std=std, t_next=cur_nimg, t_delta=batch_size)
             torch._foreach_lerp_(ema.parameters(), self.net.parameters(), 1 - beta)
+            betas.append(beta)
+        return zip(self.stds, betas)
 
-    """
     @torch.no_grad()
-    def get(self):
-        for ema in self.emas:
-            for p_net, p_ema in zip(self.net.buffers(), ema.buffers()):
-                p_ema.copy_(p_net)
-        return [(ema, f'-{std:.3f}') for std, ema in zip(self.stds, self.emas)]
-    """
+    def save(self, save_directory):
+        os.makedirs(save_directory, exist_ok=True)
+        for std, ema in zip(self.stds, self.emas):
+            ema_save_path = os.path.join(save_directory, f"pf_ema_std-{std:.3f}.safetensors")
+            save_safetensors(ema_save_path, ema.state_dict())
 
-    def state_dict(self):
-        return dict(stds=self.stds, emas=[ema.state_dict() for ema in self.emas])
+    @torch.no_grad()
+    def load(self, load_directory, default_model=None):
+        
+        if default_model is not None:
+            self.net = default_model
 
-    def load_state_dict(self, state):
-        self.stds = state['stds']
-        for ema, s_ema in zip(self.emas, state['emas']):
-            ema.load_state_dict(s_ema)
+        for std, ema in zip(self.stds, self.emas):
+            ema_load_path = os.path.join(load_directory, f"pf_ema_std-{std:.3f}.safetensors")
+            if os.path.exists(ema_load_path):
+                ema.load_state_dict(load_safetensors(ema_load_path))
+            elif default_model is not None:
+                torch._foreach_copy_(ema.parameters(), default_model.parameters())
+            else:
+                raise FileNotFoundError(f"Could not find PowerFunctionEMA model for std={std:.3f} at {ema_load_path}")
