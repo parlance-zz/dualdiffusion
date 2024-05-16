@@ -107,11 +107,11 @@ if __name__ == "__main__":
     sigma_data = 0.5
     sigma_min = 0.002
 
-    training_batch_size = 33
+    training_batch_size = 48
     #batch_distribution = "log_sech^2"
     batch_distribution = "log_normal"
-    batch_dist_scale = 1
-    batch_dist_offset = -0.4
+    batch_dist_scale = 1.1
+    batch_dist_offset = -0.52#-0.43
     batch_stratified_sampling = True
     batch_distribution_file = None
     #batch_distribution_file = os.path.join(dataset_path, "statistics.safetensors")
@@ -157,22 +157,29 @@ if __name__ == "__main__":
 
     for i in range(n_iter):
 
-        batch_sigma = batch_sampler.sample(training_batch_size, batch_stratified_sampling)
-        reference_sigma = reference_sampler.sample(reference_batch_size, reference_stratified_sampling)
+        batch_ln_sigma = batch_sampler.sample(training_batch_size, batch_stratified_sampling).log()
+        reference_ln_sigma = reference_sampler.sample(reference_batch_size, reference_stratified_sampling).log()
 
-        avg_batch_mean += batch_sigma.mean().item()
-        avg_batch_min  += batch_sigma.amin().item()
-        avg_batch_max  += batch_sigma.amax().item()
-        avg_reference_mean += reference_sigma.mean().item()
-        avg_reference_min  += reference_sigma.amin().item()
-        avg_reference_max  += reference_sigma.amax().item()
+        avg_batch_mean += batch_ln_sigma.mean().item()
+        avg_batch_min  += batch_ln_sigma.amin().item()
+        avg_batch_max  += batch_ln_sigma.amax().item()
+        avg_reference_mean += reference_ln_sigma.mean().item()
+        avg_reference_min  += reference_ln_sigma.amin().item()
+        avg_reference_max  += reference_ln_sigma.amax().item()
 
-        batch_sigma_histo += batch_sigma.log().histc(bins=n_histo_bins, min=np.log(sigma_min), max=np.log(sigma_max)) / (training_batch_size * n_iter)
-        reference_sigma_histo += reference_sigma.log().histc(bins=n_histo_bins, min=np.log(sigma_min), max=np.log(sigma_max)) / (reference_batch_size * n_iter)
+        batch_sigma_histo += batch_ln_sigma.histc(bins=n_histo_bins, min=np.log(sigma_min), max=np.log(sigma_max)) / (training_batch_size * n_iter)
+        reference_sigma_histo += reference_ln_sigma.histc(bins=n_histo_bins, min=np.log(sigma_min), max=np.log(sigma_max)) / (reference_batch_size * n_iter)
 
-    print(f"avg batch     mean: {avg_batch_mean / n_iter:{5}f}, min: {avg_batch_min / n_iter:{5}f}, max: {avg_batch_max / n_iter:{5}f}")
-    print(f"avg reference mean: {avg_reference_mean / n_iter:{5}f}, min: {avg_reference_min / n_iter:{5}f}, max: {avg_reference_max / n_iter:{5}f}")
+    avg_batch_mean = np.exp(avg_batch_mean / n_iter)
+    avg_batch_min = np.exp(avg_batch_min / n_iter)
+    avg_batch_max = np.exp(avg_batch_max / n_iter)
+    avg_reference_mean = np.exp(avg_reference_mean / n_iter)
+    avg_reference_min = np.exp(avg_reference_min / n_iter)
+    avg_reference_max = np.exp(avg_reference_max / n_iter)
+
+    print(f"avg batch     mean: {avg_batch_mean:{5}f}, min: {avg_batch_min:{5}f}, max: {avg_batch_max:{5}f}")
+    print(f"avg reference mean: {avg_reference_mean:{5}f}, min: {avg_reference_min:{5}f}, max: {avg_reference_max:{5}f}")
 
     multi_plot((batch_sigma_histo, "batch sigma"),
             added_plots={0: (reference_sigma_histo, "reference_sigma")},
-            x_log_scale=False, y_log_scale=use_y_log_scale, x_axis_range=(np.log(sigma_min), np.log(sigma_max)))
+            y_log_scale=use_y_log_scale, x_axis_range=(np.log(sigma_min), np.log(sigma_max)))
