@@ -12,6 +12,8 @@ import copy
 import numpy as np
 import torch
 
+from dual_diffusion_utils import save_safetensors, load_safetensors
+
 #----------------------------------------------------------------------------
 # Convert power function exponent to relative standard deviation
 # according to Equation 123.
@@ -89,42 +91,33 @@ def solve_posthoc_coefficients(in_ofs, in_std, out_ofs, out_std): # => [in, out]
 
 class PowerFunctionEMA:
     @torch.no_grad()
-    def __init__(self, net, stds=[0.050, 0.100]):
+    def __init__(self, net, stds=[0.050, 0.100], device="cpu"):
         self.net = net
         self.stds = stds
-        self.emas = [copy.deepcopy(net) for _std in stds]
+        self.device = device
+
+        self.emas = [copy.deepcopy(net).to(device) for _ in stds]
 
     @torch.no_grad()
     def reset(self):
         for ema in self.emas:
-            for p_net, p_ema in zip(self.net.parameters(), ema.parameters()):
-                p_ema.copy_(p_net)
+            torch._foreach_copy_(ema.parameters(), self.net.parameters())
 
     @torch.no_grad()
     def update(self, cur_nimg, batch_size):
         for std, ema in zip(self.stds, self.emas):
             beta = power_function_beta(std=std, t_next=cur_nimg, t_delta=batch_size)
-            for p_net, p_ema in zip(self.net.parameters(), ema.parameters()):
-                p_ema.lerp_(p_net, 1 - beta)
+            torch._foreach_lerp_(ema.parameters(), self.net.parameters(), 1 - beta)
 
+    """
     @torch.no_grad()
     def get(self):
         for ema in self.emas:
             for p_net, p_ema in zip(self.net.buffers(), ema.buffers()):
                 p_ema.copy_(p_net)
         return [(ema, f'-{std:.3f}') for std, ema in zip(self.stds, self.emas)]
+    """
 
-    @classmethod
-    @torch.no_grad()
-    def from_pretrained(cls, path, model_cls):
-        _, ema_kwargs = model_cls.load_config(path, return_unused_kwargs=True)
-        model = model_cls.from_pretrained(path)
-
-        ema_model = cls(model.parameters(), model_cls=model_cls, model_config=model.config)
-
-        ema_model.load_state_dict(ema_kwargs)
-        return ema_model
-    
     def state_dict(self):
         return dict(stds=self.stds, emas=[ema.state_dict() for ema in self.emas])
 
@@ -132,42 +125,3 @@ class PowerFunctionEMA:
         self.stds = state['stds']
         for ema, s_ema in zip(self.emas, state['emas']):
             ema.load_state_dict(s_ema)
-
-#----------------------------------------------------------------------------
-# Class for tracking traditional EMA during training.
-
-class TraditionalEMA:
-    @torch.no_grad()
-    def __init__(self, net, halflife_Mimg=float('inf'), rampup_ratio=0.09):
-        self.net = net
-        self.halflife_Mimg = halflife_Mimg
-        self.rampup_ratio = rampup_ratio
-        self.ema = copy.deepcopy(net)
-
-    @torch.no_grad()
-    def reset(self):
-        for p_net, p_ema in zip(self.net.parameters(), self.ema.parameters()):
-            p_ema.copy_(p_net)
-
-    @torch.no_grad()
-    def update(self, cur_nimg, batch_size):
-        halflife_Mimg = self.halflife_Mimg
-        if self.rampup_ratio is not None:
-            halflife_Mimg = min(halflife_Mimg, cur_nimg / 1e6 * self.rampup_ratio)
-        beta = 0.5 ** (batch_size / max(halflife_Mimg * 1e6, 1e-8))
-        for p_net, p_ema in zip(self.net.parameters(), self.ema.parameters()):
-            p_ema.lerp_(p_net, 1 - beta)
-
-    @torch.no_grad()
-    def get(self):
-        for p_net, p_ema in zip(self.net.buffers(), self.ema.buffers()):
-            p_ema.copy_(p_net)
-        return self.ema
-
-    def state_dict(self):
-        return self.ema.state_dict()
-
-    def load_state_dict(self, state):
-        self.ema.load_state_dict(state)
-
-#----------------------------------------------------------------------------

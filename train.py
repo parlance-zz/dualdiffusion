@@ -49,12 +49,11 @@ import diffusers
 from diffusers.optimization import get_scheduler
 from diffusers.utils import deprecate, is_tensorboard_available
 
-#from unet_dual import UNetDualModel
 from unet_edm2 import UNet
 from unet_edm2_ema import PowerFunctionEMA
 from dual_diffusion_pipeline import DualDiffusionPipeline
-from dual_diffusion_utils import init_cuda, load_audio, save_audio, load_raw, dict_str, normalize_lufs, load_safetensors
-from geodesic_flow import normalize
+from dual_diffusion_utils import init_cuda, load_audio, save_audio, load_raw, dict_str
+from dual_diffusion_utils import normalize, normalize_lufs, load_safetensors
 
 
 logger = get_logger(__name__, log_level="INFO")
@@ -75,13 +74,6 @@ def parse_args():
         default="unet",
         required=False,
         help="Which module in the model to train. Choose between ['unet', 'vae']",
-    )
-    parser.add_argument(
-        "--revision",
-        type=str,
-        default=None,
-        required=False,
-        help="Revision of pretrained model identifier",
     )
     parser.add_argument(
         "--max_train_samples",
@@ -116,12 +108,6 @@ def parse_args():
         default=16,
         help="Batch size (per device) for the training dataloader."
     )
-    parser.add_argument(
-        "--vae_encode_batch_size",
-        type=int,
-        default=0,
-        help="If set, use this batch size for VAE encoding when training diffusion UNet module. Defaults to train_batch_size."
-    )
     parser.add_argument("--num_train_epochs", type=int, default=1000)
     parser.add_argument(
         "--gradient_accumulation_steps",
@@ -145,19 +131,16 @@ def parse_args():
         type=str,
         default="constant",
         help=(
-            'The scheduler type to use. Choose between ["linear", "cosine", "cosine_with_restarts", "polynomial",'
-            ' "constant", "constant_with_warmup", "edm2"] If using edm2 lr_warmup_steps is instead used as the beginning of decay (25k default)'
+            'Learn rate scheduler type to use. Choose between ["linear", "cosine", "cosine_with_restarts", "polynomial",'
+            ' "constant", "constant_with_warmup", "edm2"]'
         ),
     )
     parser.add_argument(
-        "--lr_warmup_steps", type=int, default=500, help="Number of steps for the warmup in the lr scheduler."
+        "--lr_warmup_steps", type=int, default=5000, help="Number of steps for the warmup in the learn rate schedule."
     )
     parser.add_argument(
-        "--snr_gamma",
-        type=float,
-        default=None,
-        help="SNR weighting gamma to be used if rebalancing the loss. Recommended value is 5.0. "
-        "More details here: https://arxiv.org/abs/2303.09556.",
+        "--lr_reference_steps", type=int, default=70000,
+        help="Only used for the edm2 learning rate schedule - Learn rate decay begins at this step count",
     )
     parser.add_argument(
         "--num_timestep_loss_buckets",
@@ -178,19 +161,14 @@ def parse_args():
     #    help="Modulate the tempo of the sample by a random amount within this range (value of 1 is double/half speed)  - Currently unused",
     #)
     parser.add_argument("--use_ema", action="store_true", help="Whether to use EMA model.")
-    parser.add_argument("--ema_inv_gamma", type=float, default=1.0, help="The inverse gamma value for the EMA decay.")
-    parser.add_argument("--ema_power", type=float, default=2 / 3, help="The power value for the EMA decay.")
-    parser.add_argument("--ema_min_decay", type=float, default=0., help="The minimum decay magnitude for EMA.")
-    parser.add_argument("--ema_max_decay", type=float, default=0.9999, help="The maximum decay magnitude for EMA.")
+    parser.add_argument("--ema_cpu_offload", action="store_true", help="Enable to save vram and offload EMA model to CPU.")
     parser.add_argument(
-        "--non_ema_revision",
-        type=str,
-        default=None,
+        "--ema_stds",
+        type=float,
+        nargs="+",
+        default=[0.050, 0.100],
         required=False,
-        help=(
-            "Revision of pretrained non-ema model identifier. Must be a branch, tag or git identifier of the local or"
-            " remote repository specified with --pretrained_model_name_or_path."
-        ),
+        help="List of standard deviations for PowerFunctionEMA decay.",
     )
     parser.add_argument(
         "--dataloader_num_workers",
@@ -361,20 +339,6 @@ def parse_args():
     else:
         if not os.path.exists(args.validation_sample_dir):
             raise ValueError(f"Validation sample directory {args.validation_sample_dir} does not exist.")
-    
-    # default to using the same revision for the non-ema model if not specified
-    if args.non_ema_revision is None:
-        args.non_ema_revision = args.revision
-
-    if args.non_ema_revision is not None:
-        deprecate(
-            "non_ema_revision!=None",
-            "0.15.0",
-            message=(
-                "Downloading 'non_ema' weights from revision branches of the Hub is deprecated. Please make sure to"
-                " use `--variant=non_ema` instead."
-            ),
-        )
 
     if args.output_dir is None:
         args.output_dir = args.pretrained_model_name_or_path
@@ -386,9 +350,6 @@ def parse_args():
 
     if args.tracker_project_name is None:
         args.tracker_project_name = os.path.basename(args.output_dir)
-
-    if args.lr_scheduler == "edm2" and args.lr_warmup_steps == 500:
-        args.lr_warmup_steps = 25000
 
     return args
 
@@ -470,7 +431,7 @@ def init_accelerator_loadsave_hooks(accelerator, module_type, module_class, ema_
     def load_model_hook(models, input_dir):
         if ema_module is not None:
             if not os.path.exists(os.path.join(input_dir, f"{module_type}_ema")):
-                logger.info("EMA model in checkpoint not found, using new ema model")
+                logger.warning("EMA model in checkpoint not found, using new ema model")
             else:
                 load_model = PowerFunctionEMA.from_pretrained(os.path.join(input_dir, f"{module_type}_ema"), module_class)
                 ema_module.load_state_dict(load_model.state_dict())
@@ -586,7 +547,7 @@ def load_checkpoint(checkpoint,
 
     return global_step, resume_step, first_epoch
 
-def init_module_pipeline(pretrained_model_name_or_path, module_type, vae_encode_batch_size, device, dataset_format):
+def init_module_pipeline(pretrained_model_name_or_path, module_type, device, dataset_format):
 
     pipeline = DualDiffusionPipeline.from_pretrained(pretrained_model_name_or_path)
     module = getattr(pipeline, module_type)
@@ -598,11 +559,6 @@ def init_module_pipeline(pretrained_model_name_or_path, module_type, vae_encode_
         if vae is not None:
             if dataset_format != ".safetensors":
                 vae = vae.to(device).to(torch.bfloat16)
-
-            if vae_encode_batch_size > 0:
-                #vae.enable_slicing(vae_encode_batch_size)
-                raise NotImplementedError("Slicing not yet implemented for EDM2 VAE")
-
             logger.info(f"Training diffusion model with VAE")
         else:
             logger.info(f"Training diffusion model without VAE")
@@ -621,29 +577,10 @@ def init_module_pipeline(pretrained_model_name_or_path, module_type, vae_encode_
     logger.info(f"Training module class: {module_class.__name__}")
     return pipeline, module, module_class, vae
 
-def init_ema_module(pretrained_model_name_or_path,
-                    module_type,
-                    module_class,
-                    revision,
-                    ema_min_decay,
-                    ema_max_decay,
-                    ema_inv_gamma,
-                    ema_power,
-                    device):
-    
-    ema_module = module_class.from_pretrained(
-        pretrained_model_name_or_path, subfolder=module_type, revision=revision
-    )
-    ema_module = PowerFunctionEMA(ema_module.parameters(),
-                                  model_cls=module_class,
-                                  model_config=ema_module.config,
-                                  min_decay=ema_min_decay,
-                                  decay=ema_max_decay,
-                                  inv_gamma=ema_inv_gamma,
-                                  power=ema_power).to(device)
-
-    logger.info(f"Using EMA model with max decay: {ema_max_decay} min decay: {ema_min_decay} inv gamma: {ema_inv_gamma} power: {ema_power}")
-
+def init_ema_module(module, ema_stds, device):
+    ema_module = PowerFunctionEMA(module, stds=ema_stds, device=device)
+    logger.info(f"Using EMA model with stds: {ema_stds}")
+    logger.info(f"EMA CPU offloading {'enabled' if device =='cpu' else 'disabled'}")
     return ema_module
     
 def init_optimizer(learning_rate,
@@ -668,26 +605,30 @@ def init_optimizer(learning_rate,
 
     return optimizer
 
-def init_lr_scheduler(lr_schedule, optimizer, lr_warmup_steps, max_train_steps, num_processes):
+def init_lr_scheduler(lr_schedule, optimizer,
+                      lr_warmup_steps, lr_reference_steps,
+                      max_train_steps, num_processes):
 
-    lr_warmup_steps *= num_processes
-    max_train_steps *= num_processes
-
+    logger.info(f"Using learning rate schedule {lr_schedule} with warmup steps {lr_warmup_steps}")
+    
     if lr_schedule == "edm2":
+        logger.info(f"Using edm2 learning rate schedule with reference steps = {lr_reference_steps}")
 
         def edm2_lr_lambda(current_step: int):
+            lr = 1.
             if current_step < lr_warmup_steps:
-                return 1.
-            else:
-                return (lr_warmup_steps / current_step) ** 0.5
+                lr *= current_step / lr_warmup_steps
+            if current_step > lr_reference_steps:
+                lr *= (lr_reference_steps / current_step) ** 0.5
+            return lr
             
         return LambdaLR(optimizer, edm2_lr_lambda)
 
     return get_scheduler(
         lr_schedule,
         optimizer=optimizer,
-        num_warmup_steps=lr_warmup_steps,
-        num_training_steps=max_train_steps,
+        num_warmup_steps=lr_warmup_steps * num_processes,
+        num_training_steps=max_train_steps * num_processes,
     )
 
 class DatasetTransformer(torch.nn.Module):
@@ -1297,20 +1238,12 @@ def main():
 
     pipeline, module, module_class, vae = init_module_pipeline(args.pretrained_model_name_or_path,
                                                                args.module,
-                                                               args.vae_encode_batch_size,
                                                                accelerator.device,
                                                                args.train_data_format)
 
     if args.use_ema:
-        ema_module = init_ema_module(args.pretrained_model_name_or_path,
-                                     args.module,
-                                     module_class,
-                                     args.revision,
-                                     args.ema_min_decay,
-                                     args.ema_max_decay,
-                                     args.ema_inv_gamma,
-                                     args.ema_power,
-                                     accelerator.device)
+        ema_device = "cpu" if args.ema_cpu_offload else accelerator.device
+        ema_module = init_ema_module(module, args.ema_stds, ema_device)
     else:
         ema_module = None
         logger.info("Not using EMA model")
@@ -1360,10 +1293,9 @@ def main():
     lr_scheduler = init_lr_scheduler(args.lr_scheduler,
                                      optimizer,
                                      args.lr_warmup_steps,
+                                     args.lr_reference_steps,
                                      max_train_steps,
                                      accelerator.num_processes)
-    
-    logger.info(f"Using learning rate schedule {args.lr_scheduler} with warmup steps {args.lr_warmup_steps}", main_process_only=True)
 
     module, optimizer, train_dataloader, lr_scheduler = accelerator.prepare(
         module, optimizer, train_dataloader, lr_scheduler
