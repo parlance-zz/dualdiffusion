@@ -143,10 +143,10 @@ def parse_args():
         help="Only used for the edm2 learning rate schedule - Learn rate decay begins at this step count",
     )
     parser.add_argument(
-        "--num_timestep_loss_buckets",
+        "--num_unet_loss_buckets",
         type=int,
         default=10,
-        help=("When training a unet/diffusion module un-weighted loss for groups of timesteps can be logged separately. Set to 0 to disable."),
+        help=("When training the diffusion unet with stratified sigma sampling unweighted loss for sigma sampling quantiles can be logged individually. Set to 0 to disable."),
     )
     #parser.add_argument(
     #    "--pitch_augmentation_range",
@@ -456,21 +456,34 @@ def save_checkpoint(module, module_type, output_dir, global_step, accelerator, c
     accelerator.save_state(save_path)
     logger.info(f"Saved state to {save_path}")
 
+    def copy_files(src_path, target_path, file_types=None):
+        try:
+            os.makedirs(target_path, exist_ok=True)
+            if file_types is not None:
+                src_files = []
+                for file_type in file_types:
+                    src_files += glob(os.path.join(src_path, file_type))
+                for src_file in src_files:
+                    shutil.copy(src_file, os.path.join(target_path, os.path.basename(src_file)))
+            else:
+                shutil.copytree(src_path, target_path, dirs_exist_ok=True)
+        except Exception as e:
+            logger.warning(f"Failed to copy files from {src_path} to {target_path}: {e}")
+
     # copy all source code / scripts to model folder for posterity
     source_src_path = os.path.dirname(__file__)
     target_src_path = os.path.join(save_path, "src")
     logger.info(f"Copying source code at '{source_src_path}' to checkpoint folder '{target_src_path}'")
+    copy_files(source_src_path, target_src_path, file_types=["*.py", "*.cmd", "*.yml", "*.sh", "*.env"])
 
-    try:
-        os.makedirs(target_src_path, exist_ok=True)
-        src_file_types = ["py", "cmd", "yml", "sh", "env"]
-        src_files = []
-        for file_type in src_file_types:
-            src_files += glob(f"*.{file_type}") # todo: update this to be case insensitive when upgrading to python 3.12
-        for src_file in src_files:
-            shutil.copy(src_file, os.path.join(target_src_path, os.path.basename(src_file)))
-    except Exception as e:
-        logger.warning(f"Failed to copy source code to model folder: {e}")
+    # copy logs
+    source_logs_path = os.path.join(output_dir, f"logs_{module_type}")
+    target_logs_path = os.path.join(save_path, f"logs_{module_type}")
+    logger.info(f"Copying logs at '{source_logs_path}' to checkpoint folder '{target_logs_path}'")
+    copy_files(source_logs_path, target_logs_path)
+
+    #copy model params
+    copy_files(output_dir, save_path, file_types=["model_index.json"])
 
     # delete old checkpoints AFTER saving new checkpoint
     if checkpoints_total_limit is not None:
@@ -813,6 +826,10 @@ def do_training_loop(args,
         logger.info(f"Channel KL loss weight: {channel_kl_loss_weight}")
         logger.info(f"Recon loss weight: {recon_loss_weight} - Point loss weight: {point_loss_weight} - Imag loss weight: {imag_loss_weight}")
 
+        target_snr = module.get_target_snr()
+        target_noise_std = (1 / (target_snr**2 + 1))**0.5
+        logger.info(f"VAE Target SNR: {target_snr:{8}f}")
+
         channel_kl_loss_weight = torch.tensor(channel_kl_loss_weight, device=accelerator.device, dtype=torch.float32)
         recon_loss_weight = torch.tensor(recon_loss_weight, device=accelerator.device, dtype=torch.float32)
         point_loss_weight = torch.tensor(point_loss_weight, device=accelerator.device, dtype=torch.float32)
@@ -832,51 +849,48 @@ def do_training_loop(args,
             "point_loss_weight",
         ]
 
-        target_snr = module.get_target_snr()
-        target_noise_std = (1 / (target_snr**2 + 1))**0.5
-        logger.info(f"VAE Target SNR: {target_snr:{8}f}")
-
     elif args.module == "unet":
         logger.info("Training UNet model:")
 
-        if args.num_timestep_loss_buckets > 0:
-            logger.info(f"Using {args.num_timestep_loss_buckets} timestep loss buckets")
+        use_stratified_sigma_sampling = model_params["unet_training_params"]["stratified_sigma_sampling"]
+        logger.info(f"Using stratified sigma sampling: {use_stratified_sigma_sampling}")
+        sigma_ln_std = model_params["unet_training_params"]["sigma_ln_std"]
+        sigma_ln_mean = model_params["unet_training_params"]["sigma_ln_mean"]
+        logger.info(f"sigma_ln_std: {sigma_ln_std:.4f} sigma_ln_mean: {sigma_ln_mean:.4f}")
 
-            timestep_loss_buckets = torch.zeros(args.num_timestep_loss_buckets,
+        if args.num_unet_loss_buckets > 0 and use_stratified_sigma_sampling:
+            logger.info(f"Using {args.num_unet_loss_buckets} loss buckets")
+            unet_loss_buckets = torch.zeros(args.num_unet_loss_buckets,
                                                 device="cpu", dtype=torch.float32)
-            timestep_loss_bucket_counts = torch.zeros(args.num_timestep_loss_buckets,
+            unet_loss_bucket_counts = torch.zeros(args.num_unet_loss_buckets,
                                                     device="cpu", dtype=torch.float32)
         else:
-            logger.info("Timestep loss buckets are disabled")
-
-        module_log_channels = []
+            logger.info("UNet loss buckets are disabled")
+            args.num_unet_loss_buckets = 0
 
         if vae is not None:
             if vae.config.last_global_step == 0:
                 logger.error("VAE model has not been trained, aborting...")
                 exit(1)
-
             latent_shape = vae.get_latent_shape(sample_shape)
             target_snr = vae.get_target_snr()
         else:
             target_snr = model_params.get("target_snr", 1e4)
 
-        logger.info(f"Target SNR: {target_snr:{8}f} Schedule: {model_params['diffusion_schedule']} Objective: {model_params['diffusion_objective']}")
-
         input_perturbation = model_params["unet_training_params"]["input_perturbation"]
-        if input_perturbation > 0:
-            logger.info(f"Using input perturbation of {input_perturbation}")
-        else:
-            logger.info("Input perturbation is disabled")
+        if input_perturbation > 0: logger.info(f"Using input perturbation of {input_perturbation}")
+        else: logger.info("Input perturbation is disabled")
 
         logger.info(f"Dropout: {module.dropout} Conditioning dropout: {module.label_dropout}")
 
-        P_std = 1
-        P_mean = -0.4
-        logger.info(f"P_std: {P_std:.4f} P_mean: {P_mean:.4f}")
+        sigma_ln_std = torch.tensor(sigma_ln_std, device=accelerator.device, dtype=torch.float32)
+        sigma_ln_mean = torch.tensor(sigma_ln_mean, device=accelerator.device, dtype=torch.float32)
+        module_log_channels = [
+            "sigma_ln_std",
+            "sigma_ln_mean",
+        ]
 
-    noise_degree = "normal" if model_params.get("noise_degree", 0) == 0 else f"fractal - degree: {model_params['noise_degree']}"
-    logger.info(f"Noise type: {noise_degree}")
+    total_batch_size = args.train_batch_size * accelerator.num_processes * args.gradient_accumulation_steps
 
     if args.train_data_format != ".safetensors":
         logger.info(f"Sample shape: {sample_shape}")
@@ -905,31 +919,26 @@ def do_training_loop(args,
                     progress_bar.update(1)
                 continue
             
-            if args.module == "unet" and grad_accum_steps == 0:
+            if args.module == "unet" and grad_accum_steps == 0 and use_stratified_sigma_sampling:
                 
-                # instead of randomly sampling each timestep, distribute the batch evenly across timesteps
-                # and add a random offset for continuous uniform coverage e.g. stratified sampling
-                total_batch_size = args.train_batch_size * accelerator.num_processes * args.gradient_accumulation_steps
-                batch_timesteps = (torch.arange(total_batch_size, device=accelerator.device)+0.5) / total_batch_size
-                batch_timesteps += (torch.rand(1, device=accelerator.device) - 0.5) / total_batch_size
-
-                # sync timesteps across all ranks / processes
-                batch_timesteps = accelerator.gather(batch_timesteps.unsqueeze(0))[0]
+                # instead of randomly sampling each sigma, distribute the batch evenly across the distribution
+                # and add a random offset for continuous uniform coverage
+                global_quantiles = (torch.arange(total_batch_size, device=accelerator.device)+0.5) / total_batch_size
+                global_quantiles += (torch.rand(1, device=accelerator.device) - 0.5) / total_batch_size
+                global_quantiles = accelerator.gather(global_quantiles.unsqueeze(0))[0] # sync quantiles across all ranks / processes
                 
-                if args.num_timestep_loss_buckets > 0:
-                    timestep_loss_buckets.zero_()
-                    timestep_loss_bucket_counts.zero_()
+                if args.num_unet_loss_buckets > 0:
+                    unet_loss_buckets.zero_()
+                    unet_loss_bucket_counts.zero_()
 
             with accelerator.accumulate(module):
 
                 raw_samples = batch["input"]
                 sample_game_ids = batch["game_ids"]
-                
                 if model_params["t_scale"] is not None:
                     sample_t_ranges = batch["t_ranges"]
                 else:
                     sample_t_ranges = None
-
                 #sample_author_ids = batch["author_ids"]
                 raw_sample_paths = batch["sample_paths"]
 
@@ -947,18 +956,16 @@ def do_training_loop(args,
                             samples = vae.encode(samples.to(torch.bfloat16), vae_class_embeddings, pipeline.format).mode().detach()
                             samples = normalize(samples).float()
 
-                    process_batch_timesteps = batch_timesteps[accelerator.local_process_index::accelerator.num_processes]
-                    timesteps = process_batch_timesteps[grad_accum_steps * args.train_batch_size:(grad_accum_steps+1) * args.train_batch_size]
-
-                    sigma_data = 0.5
-                    sigma_max = 80.
-                    sigma_min = 0.002
+                    process_batch_quantiles = global_quantiles[accelerator.local_process_index::accelerator.num_processes]
+                    quantiles = process_batch_quantiles[grad_accum_steps * args.train_batch_size:(grad_accum_steps+1) * args.train_batch_size]
                     
-                    #batch_normal = torch.randn(samples.shape[0], device=accelerator.device) * P_std + P_mean
-                    batch_normal = P_mean + (P_std * (2 ** 0.5)) * (timesteps * 2 - 1).erfinv().clip(min=-5, max=5)
-                    sigma = batch_normal.exp().clip(min=sigma_min, max=sigma_max)
+                    if use_stratified_sigma_sampling:
+                        batch_normal = sigma_ln_mean + (sigma_ln_std * (2 ** 0.5)) * (quantiles * 2 - 1).erfinv().clip(min=-5, max=5)
+                    else:
+                        batch_normal = torch.randn(samples.shape[0], device=accelerator.device) * sigma_ln_std + sigma_ln_mean
+                    sigma = batch_normal.exp().clip(min=module.sigma_min, max=module.sigma_max)
                     noise = torch.randn_like(samples) * sigma.view(-1, 1, 1, 1)
-                    samples = samples * sigma_data
+                    samples = samples * module.sigma_data
 
                     denoised, error_logvar = module(samples + noise,
                                                     sigma,
@@ -968,17 +975,17 @@ def do_training_loop(args,
                                                     return_logvar=True)
                     
                     mse_loss = F.mse_loss(denoised, samples, reduction="none")
-                    timestep_loss = mse_loss.mean(dim=(1,2,3))
+                    batch_loss = mse_loss.mean(dim=(1,2,3))
 
-                    loss_weight = (sigma ** 2 + sigma_data ** 2) / (sigma * sigma_data) ** 2
+                    loss_weight = (sigma ** 2 + module.sigma_data ** 2) / (sigma * module.sigma_data) ** 2
                     loss = (loss_weight.view(-1, 1, 1, 1) / error_logvar.exp() * mse_loss + error_logvar).mean()
                     
-                    if args.num_timestep_loss_buckets > 0:
-                        all_timesteps = accelerator.gather(timesteps.detach()).cpu()
-                        all_timestep_loss = accelerator.gather(timestep_loss.detach()).cpu()
-                        target_buckets = (all_timesteps * timestep_loss_buckets.shape[0]).long().clip(max=timestep_loss_buckets.shape[0]-1)
-                        timestep_loss_buckets.index_add_(0, target_buckets, all_timestep_loss)
-                        timestep_loss_bucket_counts.index_add_(0, target_buckets, torch.ones_like(all_timestep_loss))
+                    if args.num_unet_loss_buckets > 0:
+                        global_step_quantiles = accelerator.gather(quantiles.detach()).cpu()
+                        global_step_batch_loss = accelerator.gather(batch_loss.detach()).cpu()
+                        target_buckets = (global_step_quantiles * unet_loss_buckets.shape[0]).long().clip(max=unet_loss_buckets.shape[0]-1)
+                        unet_loss_buckets.index_add_(0, target_buckets, global_step_batch_loss)
+                        unet_loss_bucket_counts.index_add_(0, target_buckets, torch.ones_like(global_step_batch_loss))
 
                 elif args.module == "vae":
 
@@ -1061,13 +1068,10 @@ def do_training_loop(args,
                     for std, beta in std_betas:
                         logs[f"ema/std_{std:.3f}_beta"] = beta
 
-                if args.module == "unet" and args.num_timestep_loss_buckets > 0:
-
-                    for i in range(timestep_loss_buckets.shape[0]):
-                        if timestep_loss_bucket_counts[i].item() > 0:
-                            bucket_timestep_min = int(i / timestep_loss_buckets.shape[0] * 1000.)
-                            bucket_timestep_max = int((i+1) / timestep_loss_buckets.shape[0] * 1000.)
-                            logs[f"unet/timestep_loss_{bucket_timestep_min}-{bucket_timestep_max}"] = (timestep_loss_buckets[i] / timestep_loss_bucket_counts[i]).item()
+                if args.module == "unet" and args.num_unet_loss_buckets > 0:
+                    for i in range(unet_loss_buckets.shape[0]):
+                        if unet_loss_bucket_counts[i].item() > 0:
+                            logs[f"unet_loss_buckets/{i}"] = (unet_loss_buckets[i] / unet_loss_bucket_counts[i]).item()
 
                 accelerator.log(logs, step=global_step)
                 progress_bar.set_postfix(**logs)
