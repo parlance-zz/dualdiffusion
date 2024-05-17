@@ -440,7 +440,6 @@ if __name__ == "__main__": # fourier embedding inner product test
     cnoise = 192*4
     sigma_max = 80.
     sigma_min = 0.002
-    mpfourier_mode = "gaussian"
 
     emb_fourier = MPFourier(cnoise)
     noise_label = torch.linspace(sigma_max, sigma_min, steps).log() / 4
