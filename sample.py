@@ -29,7 +29,7 @@ import torch
 import datetime
 
 from dual_diffusion_pipeline import DualDiffusionPipeline
-from dual_diffusion_utils import init_cuda, save_audio, load_audio
+from dual_diffusion_utils import init_cuda, save_audio, load_audio, dict_str
 
 if __name__ == "__main__":
 
@@ -37,7 +37,8 @@ if __name__ == "__main__":
     load_dotenv(override=True)
 
     #os.environ["MODEL_PATH"] = "Z:/dualdiffusion/models"
-    model_name = "edm2_vae_test7_2"
+    #model_name = "edm2_vae_test7_2"
+    model_name = "edm2_vae_test7_3"
     #model_name = "edm2_vae7_3"
     
     num_samples = 1
@@ -47,12 +48,12 @@ if __name__ == "__main__":
     cfg_scale = 4.2
     sigma_max = 80
     sigma_min = 0.002
-    rho = 7
+    rho = 7 #14 #3
     slerp_cfg = False
-    use_midpoint_integration = False
+    use_midpoint_integration = True#False
     input_perturbation = 0
-    schedule = None #"cos"
-    fgla_iterations = 200
+    schedule = None
+    fgla_iterations = 300
     fp16 = True
     device = "cuda"
     show_debug_plots = True
@@ -60,9 +61,9 @@ if __name__ == "__main__":
     game_ids = []
     #game_ids += [785]   #megaman 7
     #game_ids += [1027]  #megaman 9
-    game_ids += [787]   #megaman x
+    #game_ids += [787]   #megaman x
     #game_ids += [788]   #megaman x2
-    game_ids += [789]   #megaman x3
+    #game_ids += [789]   #megaman x3
     #game_ids += [152]   #breath of fire
     #game_ids += [153]   #breath of fire 2
     #game_ids += [213]   #chrono trigger
@@ -70,7 +71,7 @@ if __name__ == "__main__":
     #game_ids += [1400]  #tales of phantasia
     #game_ids += [1416]  #terranigma
     #game_ids += [1078]  #secret of mana
-    game_ids += [384]   #final fantasy mystic quest
+    #game_ids += [384]   #final fantasy mystic quest
     #game_ids += [385]   #final fantasy 4
     #game_ids += [386]   #final fantasy 5
     #game_ids += [387]   #final fantasy 6
@@ -88,7 +89,7 @@ if __name__ == "__main__":
     game_ids += [1099]  #gundam wing endless duel
     #game_ids += [1168]  #sparkster
     #game_ids += [1505]  #vortex
-    #game_ids = [471]   #gradius 3
+    #game_ids += [471]   #gradius 3
     #game_ids += [341]   #earthworm jim
     #game_ids += [342]   #earthworm jim 2
     #game_ids += [1187]  #star fox
@@ -106,8 +107,8 @@ if __name__ == "__main__":
     #game_ids += [896]   #cameltry (on the ball)
     #game_ids += [668]   #super puyo puyo
     #game_ids += [1130]  #sim city
-    game_ids += [107]   #battletoads & double dragon
-    game_ids += [108]   #battletoads in battlemaniacs
+    #game_ids += [107]   #battletoads & double dragon
+    #game_ids += [108]   #battletoads in battlemaniacs
     #game_ids += [1494]  #uniracers
     #game_ids += [1024]  #rock n' roll racing
     #game_ids += [1449]  #top gear 3000
@@ -131,9 +132,9 @@ if __name__ == "__main__":
     #game_ids += [1301]  #mario kart
     #game_ids = [np.random.randint(0, 1612)]
 
-    img2img_strength = 0.49 #0.66 #0.42
+    img2img_strength = 0.75#0.75#0.46 #0.66 #0.42
     img2img_input_path = None
-    img2img_input_path = "1/Final Fantasy - Mystic Quest  [Mystic Quest Legend] - 07 Battle 1.flac"
+    #img2img_input_path = "1/Final Fantasy - Mystic Quest  [Mystic Quest Legend] - 07 Battle 1.flac"
     #img2img_input_path = "1/Final Fantasy VI - 104 Locke.flac"
     #img2img_input_path = "2/Mega Man X - 14 Spark Mandrill.flac"
     #img2img_input_path = "1/Final Fantasy V - 203 Battle with Gilgamesh.flac"
@@ -163,9 +164,14 @@ if __name__ == "__main__":
     #seed = 74296 # good seed for contra + gundam wing (4batch), or umihara kawase (4batch)
     #seed = 49171 # good seed for cybernator (2batch)
     #seed = 43820 # good seed for contra3 + cybernator (1batch)
-    #seed = 84512 # good seed for gundam (2batch), mm7 + mm9 (2batch)
-    seed = 24012 # good seed for vortex (2batch)
+    seed = 84512 # good seed for gundam (2batch), mm7 + mm9 (2batch), kirby superstar (2batch)
+    #seed = 24012 # good seed for vortex (2batch)
     #seed = 19534 # good seed for ff5 (2batch)
+    #seed = 66787 # good seed for gundam wing (2batch)
+    #seed = 19905 # good seed for mm7 (2batch)
+    #seed = 47588 # good seed for ff6 (1batch) or gundam wing (1batch) img2img on spark mandrill with 0.5str
+    #seed = 22176 # good seed for ff6 (3batch) or bahamut lagoon (3batch)
+    #seed = 58012 # good seed for gradius (2batch) or ff5 (2batch)
 
     model_dtype = torch.bfloat16 if fp16 else torch.float32
     model_path = os.path.join(os.environ.get("MODEL_PATH", "./"), model_name)
@@ -184,8 +190,34 @@ if __name__ == "__main__":
     else:
         input_audio = None
 
-    output_path = os.path.join(model_path, "output")
+    output_path = os.path.join(model_path, f"output/step_{last_global_step}")
     os.makedirs(output_path, exist_ok=True)
+
+    sampling_params = {
+        "steps": steps,
+        "seed": seed,
+        "batch_size": batch_size,
+        "length": length,
+        "cfg_scale": cfg_scale,
+        "sigma_max": sigma_max,
+        "sigma_min": sigma_min,
+        "rho": rho,
+        "slerp_cfg": slerp_cfg,
+        "game_ids": game_ids,
+        "use_midpoint_integration": use_midpoint_integration,
+        "input_perturbation": input_perturbation,
+        "img2img_strength": img2img_strength,
+        "img2img_input": input_audio,
+        "schedule": schedule,
+        "show_debug_plots": show_debug_plots
+    }
+    metadata = sampling_params.copy()
+    metadata["model_name"] = model_name
+    metadata["global_step"] = last_global_step
+    metadata["fp16"] = fp16
+    metadata["fgla_iterations"] = fgla_iterations
+    metadata["img2img_input"] = img2img_input_path
+    metadata["timestamp"] = datetime.datetime.now().strftime("%m/%d/%Y %I:%M:%S %p")
 
     start_time = datetime.datetime.now()
 
@@ -193,35 +225,15 @@ if __name__ == "__main__":
         print(f"Generating batch {i+1}/{num_samples}...")
 
         start = time.time()
-        output = pipeline(steps=steps,
-                          seed=seed,
-                          batch_size=batch_size,
-                          length=length,
-                          cfg_scale=cfg_scale,
-                          sigma_max=sigma_max,
-                          sigma_min=sigma_min,
-                          rho=rho,
-                          slerp_cfg=slerp_cfg,
-                          game_ids=game_ids,
-                          use_midpoint_integration=use_midpoint_integration,
-                          input_perturbation=input_perturbation,
-                          img2img_strength=img2img_strength,
-                          img2img_input=input_audio,
-                          schedule=schedule,
-                          show_debug_plots=show_debug_plots)
+        output = pipeline(**sampling_params)
         print(f"Time taken: {time.time()-start}")
 
-        output_path = os.path.join(output_path, f"step_{last_global_step}_{steps}_{'s' if slerp_cfg else 'l'}cfg{cfg_scale}_sgm{sigma_max}_p{input_perturbation}_g{game_ids[0]}_s{seed}")
+        batch_output_path = os.path.join(output_path, f"step_{last_global_step}_{steps}_{'s' if slerp_cfg else 'l'}cfg{cfg_scale}_sgm{sigma_max}_r{rho}_g{game_ids[0]}_s{seed}")
         for i, sample in enumerate(output.unbind(0)):
-            output_flac_file_path = f"{output_path}_b{i}.flac"
-            save_audio(sample, pipeline.config["model_params"]["sample_rate"], output_flac_file_path)
+            output_flac_file_path = f"{batch_output_path}_b{i}.flac"
+            save_audio(sample, pipeline.config["model_params"]["sample_rate"], output_flac_file_path, metadata={"diffusion_metadata": dict_str(metadata)})
             print(f"Saved flac output to {output_flac_file_path}")
 
         seed += batch_size
-    
-    if img2img_input_path is not None:
-        output_flac_file_path = f"{output_path}_original.flac"
-        save_audio(input_audio, pipeline.config["model_params"]["sample_rate"], output_flac_file_path)
-        print(f"Saved flac output to {output_flac_file_path}")
 
     print(f"Finished in: {datetime.datetime.now() - start_time}")
