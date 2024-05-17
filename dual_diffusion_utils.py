@@ -36,6 +36,7 @@ import cv2
 import safetensors.torch as ST
 from dotenv import load_dotenv
 from scipy.special import erfinv
+from mutagen import File as MTAudioFile
 
 def init_cuda():
     if not torch.cuda.is_available():
@@ -411,7 +412,7 @@ def normalize_lufs(raw_samples, sample_rate, target_lufs=-16., max_clip=0.15):
 
     return normalized_raw_samples.view(original_shape)
 
-def save_audio(raw_samples, sample_rate, output_path, target_lufs=-16.):
+def save_audio(raw_samples, sample_rate, output_path, target_lufs=-16., metadata=None):
     
     raw_samples = raw_samples.detach().real.float()
     if raw_samples.ndim == 1:
@@ -425,6 +426,12 @@ def save_audio(raw_samples, sample_rate, output_path, target_lufs=-16.):
         os.makedirs(directory)
     
     torchaudio.save(output_path, raw_samples.cpu(), sample_rate, bits_per_sample=16)
+
+    if metadata is not None:
+        audio_file = MTAudioFile(output_path)
+        for key in metadata:
+            audio_file[key] = metadata[key]
+        audio_file.save()
 
 def load_audio(input_path, start=0, count=-1, return_sample_rate=False, device="cpu", return_start=False):
 
