@@ -48,7 +48,7 @@ MODEL_PARAMS = {
     "unet_training_params": {
         "input_perturbation": 0,
         "sigma_ln_std": 1.,
-        "sigma_ln_mean": 0.4,
+        "sigma_ln_mean": -0.4,
         "stratified_sigma_sampling": True,
     },
 
