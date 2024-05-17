@@ -108,9 +108,10 @@ class PowerFunctionEMA:
     @torch.no_grad()
     def update(self, cur_nimg, batch_size):
         betas = []
+        net_parameters = tuple(self.net.parameters())
         for std, ema in zip(self.stds, self.emas):
             beta = power_function_beta(std=std, t_next=cur_nimg, t_delta=batch_size)
-            torch._foreach_lerp_(ema.parameters(), self.net.parameters(), 1 - beta)
+            torch._foreach_lerp_(tuple(ema.parameters()), net_parameters, 1 - beta)
             betas.append(beta)
         return zip(self.stds, betas)
 
@@ -119,7 +120,7 @@ class PowerFunctionEMA:
         os.makedirs(save_directory, exist_ok=True)
         for std, ema in zip(self.stds, self.emas):
             ema_save_path = os.path.join(save_directory, f"pf_ema_std-{std:.3f}.safetensors")
-            save_safetensors(ema_save_path, ema.state_dict())
+            save_safetensors(ema.state_dict(), ema_save_path)
 
     @torch.no_grad()
     def load(self, load_directory, default_model=None):
