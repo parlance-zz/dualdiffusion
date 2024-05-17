@@ -42,7 +42,6 @@ MODEL_PARAMS = {
     "sample_raw_length": 32000*45,
     "noise_floor": 2e-5,
     "t_scale": None, #3.5714285714, # scales the linear positional embedding for absolute time range within each sample, None disables t_range conditioning
-    "noise_degree": 0, #0.6180339887498948, # set to 0 for standard gaussian
     "vae_class": "AutoencoderKL_EDM2",
     
     # diffusion schedule params
