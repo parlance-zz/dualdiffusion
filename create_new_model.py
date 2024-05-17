@@ -43,10 +43,6 @@ MODEL_PARAMS = {
     "noise_floor": 2e-5,
     "t_scale": None, #3.5714285714, # scales the linear positional embedding for absolute time range within each sample, None disables t_range conditioning
     "vae_class": "AutoencoderKL_EDM2",
-    
-    # diffusion schedule params
-    "diffusion_schedule": "linear",
-    "diffusion_objective": "v_pred",
 
     # diffusion unet training params
     "unet_training_params": {
