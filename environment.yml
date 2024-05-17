@@ -24,4 +24,5 @@ dependencies:
     - python-dotenv
     - torchsde
     - gradio_client
+    - mutagen
     
