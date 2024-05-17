@@ -29,7 +29,7 @@ from dual_diffusion_utils import dict_str
 
 load_dotenv(override=True)
 
-MODEL_NAME = "edm2_vae_test7_2"
+MODEL_NAME = "edm2_vae_test7_3"
 MODEL_SEED = 2000
 
 MODEL_PARAMS = {
@@ -41,7 +41,7 @@ MODEL_PARAMS = {
     "sample_format": "spectrogram",
     "sample_raw_length": 32000*45,
     "noise_floor": 2e-5,
-    "t_scale": 3.5714285714, # scales the linear positional embedding for absolute time range within each sample, None disables t_range conditioning
+    "t_scale": None, #3.5714285714, # scales the linear positional embedding for absolute time range within each sample, None disables t_range conditioning
     "noise_degree": 0, #0.6180339887498948, # set to 0 for standard gaussian
     "vae_class": "AutoencoderKL_EDM2",
     
@@ -52,6 +52,8 @@ MODEL_PARAMS = {
     # diffusion unet training params
     "unet_training_params": {
         "input_perturbation": 0,
+        "sigma_ln_std": 1.,
+        "sigma_ln_mean": 0.4,
     },
 
     "spectrogram_params": {
@@ -119,7 +121,7 @@ VAE_PARAMS = {
 
 UNET_PARAMS = {
     "pos_channels": 0,           # Number of positional embedding channels for attention.
-    "use_t_ranges": True,
+    "use_t_ranges": False,
     "label_dim": 1612,           # Class label dimensionality. 0 = unconditional.
     "label_dropout": 0.1,        # Dropout rate for the class embedding.
     "dropout": 0,                # Dropout rate for model blocks
@@ -132,6 +134,9 @@ UNET_PARAMS = {
     "attn_levels": [2,3],        # List of resolutions with self-attention.
     "label_balance": 0.5,        # Balance between noise embedding (0) and class embedding (1).
     "concat_balance": 0.5,       # Balance between skip connections (0) and main path (1).
+    "sigma_max": 80.,            # Expected max noise std
+    "sigma_min": 0.002,          # Expected min noise std
+    "sigma_data": 0.5,           # Expected data / input sample std
 }
 
 if __name__ == "__main__":
