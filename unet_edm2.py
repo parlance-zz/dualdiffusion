@@ -275,7 +275,8 @@ class Block(torch.nn.Module):
 
 class UNet(ModelMixin, ConfigMixin):
 
-    __constants__ = ["label_dim", "training", "dtype", "label_dropout", "label_balance", "dropout", "concat_balance"]
+    __constants__ = ["label_dim", "training", "dtype", "label_dropout", "label_balance",
+                     "dropout", "concat_balance", "sigma_max", "sigma_min", "sigma_data"]
 
     @register_to_config
     def __init__(self,
@@ -296,6 +297,9 @@ class UNet(ModelMixin, ConfigMixin):
         attn_levels          = [2,3],       # List of resolutions with self-attention.
         label_balance        = 0.5,         # Balance between noise embedding (0) and class embedding (1).
         concat_balance       = 0.5,         # Balance between skip connections (0) and main path (1).
+        sigma_max = 80.,                    # Expected max noise std
+        sigma_min = 0.002,                  # Expected min noise std
+        sigma_data = 0.5,                   # Expected data / input sample std
         #**block_kwargs,                    # Arguments for Block.
         last_global_step = 0,               # Only used to track training progress in config.
     ):
@@ -308,6 +312,10 @@ class UNet(ModelMixin, ConfigMixin):
         cemb = int(model_channels * channel_mult_emb) if channel_mult_emb is not None else max(cblock)
         clogvar = logvar_channels
         cpos = pos_channels
+
+        self.sigma_max = sigma_max
+        self.sigma_min = sigma_min
+        self.sigma_data = sigma_data
 
         self.label_dim = label_dim
         self.label_dropout = label_dropout
@@ -367,13 +375,12 @@ class UNet(ModelMixin, ConfigMixin):
     @torch_compile(fullgraph=True)
     def forward(self, x_in, sigma, class_embeddings, t_ranges, format, return_logvar=False):
 
-        sigma_data = 0.5
         sigma = sigma.view(-1, 1, 1, 1)
 
         # Preconditioning weights.
-        c_skip = sigma_data ** 2 / (sigma ** 2 + sigma_data ** 2)
-        c_out = sigma * sigma_data / (sigma ** 2 + sigma_data ** 2).sqrt()
-        c_in = 1 / (sigma_data ** 2 + sigma ** 2).sqrt()
+        c_skip = self.sigma_data ** 2 / (sigma ** 2 + self.sigma_data ** 2)
+        c_out = sigma * self.sigma_data / (sigma ** 2 + self.sigma_data ** 2).sqrt()
+        c_in = 1 / (self.sigma_data ** 2 + sigma ** 2).sqrt()
         c_noise = (sigma.flatten().log() / 4).to(self.dtype)
 
         # Run the model.
