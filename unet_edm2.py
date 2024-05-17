@@ -85,22 +85,14 @@ def mp_cat(a, b, dim=1, t=0.5):
 
 class MPFourier(torch.nn.Module):
 
-    def __init__(self, num_channels, bandwidth=1, eps=1e-2, mode="gaussian"):
+    def __init__(self, num_channels, bandwidth=1):
         super().__init__()
         
         #self.register_buffer('freqs', 2 * np.pi * torch.randn(num_channels) * bandwidth)
         #self.register_buffer('phases', 2 * np.pi * torch.rand(num_channels))
 
         # smoother inner product space with less overlap
-        if mode == "acos":
-            self.register_buffer('freqs', torch.linspace(-1, 1, num_channels).acos())
-        elif mode == "gaussian":
-            self.register_buffer('freqs', torch.pi * torch.linspace(0, 1-eps, num_channels).erfinv() * bandwidth)
-        elif mode == "linear":            
-            self.register_buffer('freqs', torch.pi * torch.linspace(0, 1-1/num_channels, num_channels))
-        else:
-            raise ValueError(f"Invalid mode: {mode}")
-        
+        self.register_buffer('freqs', (bandwidth * 2**0.5 * 2*torch.pi) * ((torch.arange(num_channels)+0.5) / num_channels).erfinv())
         self.register_buffer('phases', torch.pi/2 * (torch.arange(num_channels) % 2 == 0).float())
 
     def forward(self, x):
@@ -438,26 +430,22 @@ class UNet(ModelMixin, ConfigMixin):
 
 if __name__ == "__main__": # fourier embedding inner product test
 
-    raise NotImplementedError("MPFourier inner product test needs to be re-written")
-    """
     from dual_diffusion_utils import save_raw, save_raw_img
-    from geodesic_flow import GeodesicFlow
     from dotenv import load_dotenv
     import os
 
     load_dotenv(override=True)
     
     steps = 200
-    cnoise = 192
-    target_snr = 31.984371183438952
-    schedule = "linear"
+    cnoise = 192*4
+    sigma_max = 80.
+    sigma_min = 0.002
     mpfourier_mode = "gaussian"
 
-    emb_fourier = MPFourier(cnoise, mode=mpfourier_mode)
-    flow = GeodesicFlow(target_snr, schedule=schedule)
-    t = flow.get_timestep_noise_label(torch.linspace(1, 0, steps))
+    emb_fourier = MPFourier(cnoise)
+    noise_label = torch.linspace(sigma_max, sigma_min, steps).log() / 4
 
-    emb = emb_fourier(t)
+    emb = emb_fourier(noise_label)
     inner_products = (emb.view(1, steps, cnoise) * emb.view(steps, 1, cnoise)).sum(dim=2)
 
     debug_path = os.environ.get("DEBUG_PATH", None)
@@ -467,4 +455,3 @@ if __name__ == "__main__": # fourier embedding inner product test
 
         coverage = inner_products.sum(dim=0)
         save_raw(coverage / coverage.amax(), os.path.join(debug_path, "fourier_inner_products_coverage.raw"))
-    """
