@@ -439,10 +439,13 @@ def init_accelerator_loadsave_hooks(accelerator, module_type, module_class, ema_
             del load_model
         
         if ema_module is not None:
-            if not os.path.exists(os.path.join(input_dir, f"{module_type}_ema")):
-                logger.warning("EMA model in checkpoint not found, using new ema model")
+            ema_model_dir = os.path.join(input_dir, f"{module_type}_ema")
+            ema_load_errors = ema_module.load(ema_model_dir, default_model=model)
+            if len(ema_load_errors) > 0:
+                logger.warning(f"Errors loading EMA model - Missing EMAs initialized from checkpoint model:")
+                logger.warning("\n".join(ema_load_errors))
             else:
-                ema_module.load(os.path.join(input_dir, f"{module_type}_ema"), default_model=model)
+                logger.info(f"Successfully loaded EMA model from {ema_model_dir}")
 
     accelerator.register_save_state_pre_hook(save_model_hook)
     accelerator.register_load_state_pre_hook(load_model_hook)

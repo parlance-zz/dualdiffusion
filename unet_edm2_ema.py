@@ -128,11 +128,16 @@ class PowerFunctionEMA:
         if default_model is not None:
             self.net = default_model
 
+        load_errors = []
         for std, ema in zip(self.stds, self.emas):
             ema_load_path = os.path.join(load_directory, f"pf_ema_std-{std:.3f}.safetensors")
             if os.path.exists(ema_load_path):
                 ema.load_state_dict(load_safetensors(ema_load_path))
-            elif default_model is not None:
-                torch._foreach_copy_(ema.parameters(), default_model.parameters())
             else:
-                raise FileNotFoundError(f"Could not find PowerFunctionEMA model for std={std:.3f} at {ema_load_path}")
+                error_str = f"Could not find PowerFunctionEMA model for std={std:.3f} at {ema_load_path}"
+                if default_model is not None:
+                    torch._foreach_copy_(ema.parameters(), default_model.parameters())
+                    load_errors.append(error_str)
+                else:
+                    raise FileNotFoundError(error_str)
+        return load_errors
