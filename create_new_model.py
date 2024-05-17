@@ -54,6 +54,7 @@ MODEL_PARAMS = {
         "input_perturbation": 0,
         "sigma_ln_std": 1.,
         "sigma_ln_mean": 0.4,
+        "stratified_sigma_sampling": True,
     },
 
     "spectrogram_params": {
