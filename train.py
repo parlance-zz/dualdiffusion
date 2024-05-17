@@ -959,8 +959,9 @@ def do_training_loop(args,
                             samples = vae.encode(samples.to(torch.bfloat16), vae_class_embeddings, pipeline.format).mode().detach()
                             samples = normalize(samples).float()
 
-                    process_batch_quantiles = global_quantiles[accelerator.local_process_index::accelerator.num_processes]
-                    quantiles = process_batch_quantiles[grad_accum_steps * args.train_batch_size:(grad_accum_steps+1) * args.train_batch_size]
+                    if use_stratified_sigma_sampling:
+                        process_batch_quantiles = global_quantiles[accelerator.local_process_index::accelerator.num_processes]
+                        quantiles = process_batch_quantiles[grad_accum_steps * args.train_batch_size:(grad_accum_steps+1) * args.train_batch_size]
                     
                     if use_stratified_sigma_sampling:
                         batch_normal = sigma_ln_mean + (sigma_ln_std * (2 ** 0.5)) * (quantiles * 2 - 1).erfinv().clip(min=-5, max=5)
