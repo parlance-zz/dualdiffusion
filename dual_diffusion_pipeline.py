@@ -379,9 +379,8 @@ class DualDiffusionPipeline(DiffusionPipeline):
         length: int = 0,
         game_ids = None,
         cfg_scale: float = 5.,
-        sigma_data = 0.5,
-        sigma_max = 80,
-        sigma_min = 0.002,
+        sigma_max = None,
+        sigma_min = None,
         rho = 7,
         slerp_cfg: bool = False,
         use_midpoint_integration: bool = False,
@@ -410,6 +409,10 @@ class DualDiffusionPipeline(DiffusionPipeline):
             sample_shape = self.vae.get_latent_shape(sample_shape)
         print(f"Sample shape: {sample_shape}")
 
+        sigma_max = sigma_max or self.unet.sigma_max
+        sigma_min = sigma_min or self.unet.sigma_min
+        sigma_data = self.unet.sigma_data
+        
         game_ids = game_ids or torch.randint(0, self.unet.label_dim, 1, device=self.device, generator=generator)
         class_labels = self.get_class_labels(game_ids)
         vae_class_embeddings = self.vae.get_class_embeddings(class_labels)
