@@ -128,14 +128,16 @@ class MPFourier(torch.nn.Module):
 
 class MPConv(torch.nn.Module):
 
-    __constants__ = ["in_channels", "out_channels", "weight_gain"]
+    __constants__ = ["in_channels", "out_channels", "weight_gain", "disable_weight_normalization"]
 
-    def __init__(self, in_channels, out_channels, kernel):
+    def __init__(self, in_channels, out_channels, kernel, disable_weight_normalization=False):
         super().__init__()
         self.in_channels = in_channels
         self.out_channels = out_channels
         self.weight = torch.nn.Parameter(torch.randn(out_channels, in_channels, *kernel))
         self.weight_gain = np.sqrt(self.weight[0].numel())
+
+        self.disable_weight_normalization = disable_weight_normalization
 
     """
     def forward(self, x, gain=1):
@@ -163,6 +165,7 @@ class MPConv(torch.nn.Module):
 
     @torch.no_grad()
     def normalize_weights(self):
+        if self.disable_weight_normalization: return
         self.weight.copy_(normalize(self.weight))
 
 #----------------------------------------------------------------------------
@@ -347,7 +350,7 @@ class UNet(ModelMixin, ConfigMixin):
 
         # Training uncertainty estimation.
         self.logvar_fourier = MPFourier(clogvar)
-        self.logvar_linear = MPConv(clogvar, 1, kernel=[])
+        self.logvar_linear = MPConv(clogvar, 1, kernel=[], disable_weight_normalization=True)
 
         # Encoder.
         self.enc = torch.nn.ModuleDict()
