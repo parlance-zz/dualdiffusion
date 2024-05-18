@@ -107,19 +107,24 @@ def mp_cat(a, b, dim=1, t=0.5):
 
 class MPFourier(torch.nn.Module):
 
-    def __init__(self, num_channels, bandwidth=1):
+    __constants__ = ["std", "gain"]
+
+    def __init__(self, num_channels, std=1e-2):
         super().__init__()
         
         #self.register_buffer('freqs', 2 * np.pi * torch.randn(num_channels) * bandwidth)
         #self.register_buffer('phases', 2 * np.pi * torch.rand(num_channels))
-
+        self.register_buffer('z', torch.linspace(0, 1, num_channels).unsqueeze(0))
+        self.std = std
+        self.gain = 1 / (-((0.5 - self.z) / self.std).square()).exp().std().item()
         # smoother inner product space with less overlap
-        self.register_buffer('freqs', (bandwidth * 2**0.5 * 2*torch.pi) * ((torch.arange(num_channels)+0.5) / num_channels).erfinv())
-        self.register_buffer('phases', torch.pi/2 * (torch.arange(num_channels) % 2 == 0).float())
+        #self.register_buffer('freqs', (bandwidth * 2**0.5 * 2*torch.pi) * ((torch.arange(num_channels)+0.5) / num_channels).erfinv())
+        #self.register_buffer('phases', torch.pi/2 * (torch.arange(num_channels) % 2 == 0).float())
 
     def forward(self, x):
-        y = x.float().ger(self.freqs.float()) + self.phases.float()
-        return (y.cos() * np.sqrt(2)).to(x.dtype)
+        #y = x.float().ger(self.freqs.float()) + self.phases.float()
+        #return (y.cos() * np.sqrt(2)).to(x.dtype)
+        return ((-((x.float().unsqueeze(1) - self.z) / self.std).square()).exp() * self.gain).to(x.dtype)
 
 #----------------------------------------------------------------------------
 # Magnitude-preserving convolution or fully-connected layer (Equation 47)
@@ -346,7 +351,7 @@ class UNet(ModelMixin, ConfigMixin):
 
         # Training uncertainty estimation.
         self.logvar_fourier = MPFourier(clogvar)
-        self.logvar_linear = MPConv(clogvar, 1, kernel=[])
+        self.logvar_linear = torch.nn.Linear(clogvar, 1, bias=False)#MPConv(clogvar, 1, kernel=[])
 
         # Encoder.
         self.enc = torch.nn.ModuleDict()
@@ -395,7 +400,8 @@ class UNet(ModelMixin, ConfigMixin):
         c_skip = self.sigma_data ** 2 / (sigma ** 2 + self.sigma_data ** 2)
         c_out = sigma * self.sigma_data / (sigma ** 2 + self.sigma_data ** 2).sqrt()
         c_in = 1 / (self.sigma_data ** 2 + sigma ** 2).sqrt()
-        c_noise = (sigma.flatten().log() / 4).to(self.dtype)
+        #c_noise = (sigma.flatten().log() / 4).to(self.dtype)
+        c_noise = ((sigma.flatten().log() - np.log(self.sigma_min)) / (np.log(self.sigma_max) - np.log(self.sigma_min))).clip(min=0, max=1).to(self.dtype)
 
         # Run the model.
         x = (c_in * x_in).to(self.dtype)
@@ -458,13 +464,20 @@ if __name__ == "__main__": # fourier embedding inner product test
 
     load_dotenv(override=True)
     
-    steps = 200
-    cnoise = 192*4
+    steps = 100
+    cnoise = 128
     sigma_max = 80.
     sigma_min = 0.002
+    rho = 7
+
+    def get_timestep_sigma(timesteps):
+        return (sigma_max ** (1 / rho) + (1 - timesteps) * (sigma_min ** (1 / rho) - sigma_max ** (1 / rho))) ** rho
+    
+    sigma = get_timestep_sigma(torch.linspace(1, 0, steps))
+    #sigma = torch.linspace(np.log(sigma_max), np.log(sigma_min), steps).exp()
 
     emb_fourier = MPFourier(cnoise)
-    noise_label = torch.linspace(sigma_max, sigma_min, steps).log() / 4
+    noise_label = ((sigma.log() - np.log(sigma_min)) / (np.log(sigma_max) - np.log(sigma_min))).clip(min=0, max=1)
 
     emb = emb_fourier(noise_label)
     inner_products = (emb.view(1, steps, cnoise) * emb.view(steps, 1, cnoise)).sum(dim=2)
