@@ -22,7 +22,6 @@ dependencies:
     - opencv-python
     - soundfile
     - python-dotenv
-    - torchsde
     - gradio_client
     - mutagen
     
