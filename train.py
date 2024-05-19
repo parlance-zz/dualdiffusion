@@ -636,7 +636,7 @@ def init_lr_scheduler(lr_schedule, optimizer,
             if current_step < lr_warmup_steps:
                 lr *= current_step / lr_warmup_steps
             if current_step > lr_reference_steps:
-                lr *= (lr_reference_steps / current_step) ** 0.5
+                lr *= (lr_reference_steps / current_step) #** 0.5
             return lr
             
         return LambdaLR(optimizer, edm2_lr_lambda)
