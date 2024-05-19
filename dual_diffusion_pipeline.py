@@ -352,8 +352,7 @@ class DualDiffusionPipeline(DiffusionPipeline):
             if len(ema_checkpoints) > 0:
                 unet.ema_checkpoint = ema_checkpoints[0]
                 ema_path = os.path.join(ema_model_path, ema_checkpoints[0])
-                ema_state_dict = load_safetensors(ema_path)
-                unet.load_state_dict(ema_state_dict)
+                unet.state_dict().update(load_safetensors(ema_path))
             
         return DualDiffusionPipeline(unet, vae, model_params=model_params).to(device=device)
 
