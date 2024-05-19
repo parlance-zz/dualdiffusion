@@ -158,7 +158,7 @@ class PowerFunctionEMA:
             else:
                 error_str = f"Could not find PowerFunctionEMA model for std={std:.3f} at {ema_load_path}"
                 if default_model is not None:
-                    torch._foreach_copy_(ema.parameters(), default_model.parameters())
+                    torch._foreach_copy_(tuple(ema.parameters()), tuple(default_model.parameters()))
                     load_errors.append(error_str)
                 else:
                     raise FileNotFoundError(error_str)
