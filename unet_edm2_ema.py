@@ -145,10 +145,10 @@ class PowerFunctionEMA:
             save_safetensors(ema.state_dict(), ema_save_path)
 
     @torch.no_grad()
-    def load(self, load_directory, default_model=None):
+    def load(self, load_directory, target_model=None):
         
-        if default_model is not None:
-            self.net = default_model
+        if target_model is not None:
+            self.net = target_model
 
         load_errors = []
         for std, ema in zip(self.stds, self.emas):
@@ -157,8 +157,8 @@ class PowerFunctionEMA:
                 ema.state_dict().update(load_safetensors(ema_load_path))
             else:
                 error_str = f"Could not find PowerFunctionEMA model for std={std:.3f} at {ema_load_path}"
-                if default_model is not None:
-                    torch._foreach_copy_(tuple(ema.parameters()), tuple(default_model.parameters()))
+                if target_model is not None:
+                    torch._foreach_copy_(tuple(ema.parameters()), tuple(target_model.parameters()))
                     load_errors.append(error_str)
                 else:
                     raise FileNotFoundError(error_str)
