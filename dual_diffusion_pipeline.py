@@ -353,6 +353,9 @@ class DualDiffusionPipeline(DiffusionPipeline):
                 unet.ema_checkpoint = ema_checkpoints[0]
                 ema_path = os.path.join(ema_model_path, ema_checkpoints[0])
                 unet.state_dict().update(load_safetensors(ema_path))
+                unet.normalize_weights()
+            else:
+                raise FileNotFoundError(f"No EMA checkpoints found in '{ema_model_path}'")
             
         return DualDiffusionPipeline(unet, vae, model_params=model_params).to(device=device)
 
