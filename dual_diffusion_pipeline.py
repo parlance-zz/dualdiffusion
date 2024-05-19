@@ -35,7 +35,7 @@ from autoencoder_kl_dual import AutoencoderKLDual
 from autoencoder_kl_edm2 import AutoencoderKL_EDM2
 from spectrogram import SpectrogramParams, SpectrogramConverter
 from dual_diffusion_utils import mdct, imdct, save_raw, save_raw_img, multi_plot
-from dual_diffusion_utils import normalize, slerp, get_cos_angle
+from dual_diffusion_utils import normalize, slerp, get_cos_angle, load_safetensors
 from loss import DualMultiscaleSpectralLoss, DualMultiscaleSpectralLoss2D
 
 class DualMCLTFormat(torch.nn.Module):
@@ -318,6 +318,7 @@ class DualDiffusionPipeline(DiffusionPipeline):
                         torch_dtype=torch.float32,
                         device="cpu",
                         load_latest_checkpoints=False,
+                        load_ema=False,
                         requires_grad=False):
         
         with open(os.path.join(model_path, "model_index.json"), "r") as f:
@@ -345,6 +346,15 @@ class DualDiffusionPipeline(DiffusionPipeline):
                                     torch_dtype=torch_dtype,
                                     device=device).requires_grad_(requires_grad).train(requires_grad)
         
+        if load_ema: # just load the first ema checkpoint found for now, need to integrate post-hoc combining multiple checkpoints ema later
+            ema_model_path = os.path.join(model_path, unet_checkpoints[-1], "unet_ema")
+            ema_checkpoints = [f for f in os.listdir(ema_model_path) if f.startswith("pf_ema") and f.endswith(".safetensors")]
+            if len(ema_checkpoints) > 0:
+                unet.ema_checkpoint = ema_checkpoints[0]
+                ema_path = os.path.join(ema_model_path, ema_checkpoints[0])
+                ema_state_dict = load_safetensors(ema_path)
+                unet.load_state_dict(ema_state_dict)
+            
         return DualDiffusionPipeline(unet, vae, model_params=model_params).to(device=device)
 
     # not sure why this is needed, DiffusionPipeline doesn't consider format to be a module, but it is

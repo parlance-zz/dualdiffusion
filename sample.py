@@ -54,6 +54,7 @@ if __name__ == "__main__":
     input_perturbation = 0
     schedule = None
     fgla_iterations = 300
+    load_ema = True
     fp16 = True
     device = "cuda"
     show_debug_plots = True
@@ -179,6 +180,7 @@ if __name__ == "__main__":
     pipeline = DualDiffusionPipeline.from_pretrained(model_path,
                                                      torch_dtype=model_dtype,
                                                      load_latest_checkpoints=True,
+                                                     load_ema=True,
                                                      device=device)
     last_global_step = pipeline.unet.config["last_global_step"]
     pipeline.format.spectrogram_params.num_griffin_lim_iters = fgla_iterations
@@ -213,6 +215,7 @@ if __name__ == "__main__":
     }
     metadata = sampling_params.copy()
     metadata["model_name"] = model_name
+    metadata["ema_checkpoint"] = pipeline.unet.ema_checkpoint if load_ema else None
     metadata["global_step"] = last_global_step
     metadata["fp16"] = fp16
     metadata["fgla_iterations"] = fgla_iterations
