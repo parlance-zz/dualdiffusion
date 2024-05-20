@@ -622,15 +622,16 @@ def init_lr_scheduler(lr_schedule, optimizer,
                       lr_warmup_steps, lr_reference_steps,
                       max_train_steps, num_processes):
 
-    logger.info(f"Using learning rate schedule {lr_schedule} with warmup steps {lr_warmup_steps}")
+    if lr_schedule == "edm2":
+        logger.info(f"Using learning rate schedule {lr_schedule} with warmup steps = {lr_warmup_steps}, reference steps = {lr_reference_steps}")
+    else:
+        logger.info(f"Using learning rate schedule {lr_schedule} with warmup steps = {lr_warmup_steps}")
     
     lr_warmup_steps *= num_processes
     lr_reference_steps *= num_processes
     max_train_steps *= num_processes
 
     if lr_schedule == "edm2":
-        logger.info(f"Using edm2 learning rate schedule with reference steps = {lr_reference_steps / num_processes}")
-
         def edm2_lr_lambda(current_step: int):
             lr = 1.
             if current_step < lr_warmup_steps:
@@ -790,9 +791,9 @@ def init_dataloader(accelerator,
         drop_last=True,
     )
 
-    logger.info(f"Using training data from {train_data_dir} with {len(train_dataset)} samples and batch size {train_batch_size}")
+    logger.info(f"Using training data from {train_data_dir} with {len(train_dataset)} samples, batch size = {train_batch_size}")
     if dataloader_num_workers > 0:
-        logger.info(f"Using dataloader with {dataloader_num_workers} workers - prefetch factor: 2")
+        logger.info(f"Using dataloader with {dataloader_num_workers} workers - prefetch factor = 2")
     logger.info(f"Dataset transform params: {dict_str(dataset_transform_params)}")
 
     return train_dataset, train_dataloader
@@ -859,7 +860,7 @@ def do_training_loop(args,
         logger.info(f"Using stratified sigma sampling: {use_stratified_sigma_sampling}")
         sigma_ln_std = model_params["unet_training_params"]["sigma_ln_std"]
         sigma_ln_mean = model_params["unet_training_params"]["sigma_ln_mean"]
-        logger.info(f"sigma_ln_std: {sigma_ln_std:.4f} sigma_ln_mean: {sigma_ln_mean:.4f}")
+        logger.info(f"Sampling training sigmas with sigma_ln_std = {sigma_ln_std:.4f}, sigma_ln_mean = {sigma_ln_mean:.4f}")
 
         if args.num_unet_loss_buckets > 0 and use_stratified_sigma_sampling:
             logger.info(f"Using {args.num_unet_loss_buckets} loss buckets")
