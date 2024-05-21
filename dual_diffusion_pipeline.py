@@ -318,7 +318,7 @@ class DualDiffusionPipeline(DiffusionPipeline):
                         torch_dtype=torch.float32,
                         device="cpu",
                         load_latest_checkpoints=False,
-                        load_ema=False,
+                        load_ema=None,
                         requires_grad=False):
         
         with open(os.path.join(model_path, "model_index.json"), "r") as f:
@@ -346,17 +346,13 @@ class DualDiffusionPipeline(DiffusionPipeline):
                                     torch_dtype=torch_dtype,
                                     device=device).requires_grad_(requires_grad).train(requires_grad)
         
-        if load_ema: # just load the first ema checkpoint found for now, need to integrate post-hoc combining multiple checkpoints ema later
-            ema_model_path = os.path.join(model_path, unet_checkpoints[-1], "unet_ema")
-            ema_checkpoints = [f for f in os.listdir(ema_model_path) if f.startswith("pf_ema") and f.endswith(".safetensors")]
-            if len(ema_checkpoints) > 0:
-                unet.ema_checkpoint = ema_checkpoints[-1]
-                ema_path = os.path.join(ema_model_path, ema_checkpoints[0])
-                #unet.state_dict().update(load_safetensors(ema_path))
-                unet.load_state_dict(load_safetensors(ema_path))
+        if load_ema is not None:
+            ema_model_path = os.path.join(model_path, unet_checkpoints[-1], "unet_ema", load_ema)
+            if os.path.exists(ema_model_path):
+                unet.load_state_dict(load_safetensors(ema_model_path))
                 unet.normalize_weights()
             else:
-                raise FileNotFoundError(f"No EMA checkpoints found in '{ema_model_path}'")
+                raise FileNotFoundError(f"EMA checkpoint '{load_ema}' not found in '{os.path.dirname(ema_model_path)}'")
             
         return DualDiffusionPipeline(unet, vae, model_params=model_params).to(device=device)
 
@@ -376,8 +372,8 @@ class DualDiffusionPipeline(DiffusionPipeline):
             class_labels = torch.zeros((1, self.unet.label_dim))
             return class_labels.index_fill_(1, torch.tensor(labels, dtype=torch.long), 1).to(device=self.device)
         elif isinstance(labels, dict):
-            class_ids, weights = torch.tensor(list(labels.keys()), dtype=torch.long), torch.tensor(list(labels.values()))
-            return torch.zeros((1, self.unet.label_dim)).index_fill_(1, class_ids, weights).to(device=self.device)
+            class_ids, weights = torch.tensor(list(labels.keys()), dtype=torch.long), torch.tensor(list(labels.values())).float()
+            return torch.zeros((1, self.unet.label_dim)).scatter_(1, class_ids.unsqueeze(0), weights.unsqueeze(0)).to(device=self.device)
         elif isinstance(labels, int):
             return torch.nn.functional.one_hot(torch.tensor([labels], dtype=torch.long), num_classes=self.unet.label_dim).to(device=self.device, dtype=torch.float32)
         else:
