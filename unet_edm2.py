@@ -390,19 +390,19 @@ class UNet(ModelMixin, ConfigMixin):
                                                              flavor='dec', attention=(level in attn_levels), **block_kwargs)
         self.conv_out = MPConv(cout, out_channels, kernel=[3,3])
 
-    @torch_compile(fullgraph=True)
+    @torch_compile(fullgraph=True, dynamic=False)
     def forward(self, x_in, sigma, class_embeddings, t_ranges, format, return_logvar=False):
 
-        sigma = sigma.view(-1, 1, 1, 1)
+        with torch.no_grad():
+            sigma = sigma.view(-1, 1, 1, 1)
 
-        # Preconditioning weights.
-        c_skip = self.sigma_data ** 2 / (sigma ** 2 + self.sigma_data ** 2)
-        c_out = sigma * self.sigma_data / (sigma ** 2 + self.sigma_data ** 2).sqrt()
-        c_in = 1 / (self.sigma_data ** 2 + sigma ** 2).sqrt()
-        c_noise = (sigma.flatten().log() / 4).to(self.dtype)
+            # Preconditioning weights.
+            c_skip = self.sigma_data ** 2 / (sigma ** 2 + self.sigma_data ** 2)
+            c_out = sigma * self.sigma_data / (sigma ** 2 + self.sigma_data ** 2).sqrt()
+            c_in = 1 / (self.sigma_data ** 2 + sigma ** 2).sqrt()
+            c_noise = (sigma.flatten().log() / 4).to(self.dtype)
 
-        # Run the model.
-        x = (c_in * x_in).to(self.dtype)
+            x = (c_in * x_in).to(self.dtype)
 
         # Embedding.
         emb = self.emb_noise(self.emb_fourier(c_noise))
@@ -423,7 +423,7 @@ class UNet(ModelMixin, ConfigMixin):
 
         # Encoder.
         x = torch.cat((x, torch.ones_like(x[:, :1]),
-                       format.get_positional_embedding(x, t_ranges, mode="linear")), dim=1)
+                    format.get_positional_embedding(x, t_ranges, mode="linear")), dim=1)
         skips = []
         for name, block in self.enc.items():
             x = block(x) if 'conv' in name else block(x, emb, format, t_ranges)
