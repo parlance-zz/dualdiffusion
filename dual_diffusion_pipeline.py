@@ -147,6 +147,8 @@ class DualMCLTFormat(torch.nn.Module):
 
 class DualSpectrogramFormat(torch.nn.Module):
 
+    __constants__ = ["mels_min", "mels_max"]
+
     def __init__(self, model_params):
         super(DualSpectrogramFormat, self).__init__()
 
@@ -161,6 +163,9 @@ class DualSpectrogramFormat(torch.nn.Module):
         self.mels_min = DualSpectrogramFormat._hz_to_mel(self.spectrogram_params.min_frequency)
         self.mels_max = DualSpectrogramFormat._hz_to_mel(self.spectrogram_params.max_frequency)
 
+        if self.spectrogram_params.mel_scale_type != "htk":
+            raise NotImplementedError("Only HTK mel scale is supported")
+        
     def get_sample_crop_width(self, length=0):
         if length <= 0: length = self.model_params["sample_raw_length"]
         return self.spectrogram_converter.get_crop_width(length)
@@ -213,22 +218,18 @@ class DualSpectrogramFormat(torch.nn.Module):
         return tuple(spectrogram_shape)
 
     @staticmethod    
-    def _hz_to_mel(freq, mel_scale="htk"):
-        if mel_scale != "htk":
-            raise NotImplementedError("Only HTK mel scale is supported")
+    def _hz_to_mel(freq):
         return 2595. * np.log10(1. + (freq / 700.))
-        
+
     @staticmethod
-    def _mel_to_hz(mels, mel_scale="htk"):
-        if mel_scale != "htk":
-            raise NotImplementedError("Only HTK mel scale is supported")
+    def _mel_to_hz(mels):
         return 700. * (10. ** (mels / 2595.) - 1.)
 
-    #@torch.no_grad()
+    @torch.no_grad()
     def get_positional_embedding(self, x, t_ranges, mode="linear", num_fourier_channels=0):
 
         mels = torch.linspace(self.mels_min, self.mels_max, x.shape[2] + 2, device=x.device)[1:-1]
-        ln_freqs = DualSpectrogramFormat._mel_to_hz(mels, mel_scale=self.spectrogram_params.mel_scale_type).log2()
+        ln_freqs = DualSpectrogramFormat._mel_to_hz(mels).log2()
 
         if mode == "linear":
             emb_freq = ln_freqs.view(1, 1,-1, 1).repeat(x.shape[0], 1, 1, x.shape[3])
