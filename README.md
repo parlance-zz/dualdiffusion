@@ -27,7 +27,7 @@ The model has changed substantially over the course of development.
    * I found that it was possible to considerably improve the FGLA phase reconstruction by tuning the window and spectrogram parameters, as well as modifying the algorithm to anneal phases for stereo signals in a more coherent way. I settled on a set of parameters that resulted in a spectrogram dimensionality that is the same as the critically sampled raw audio without sacrificing too much perceptual quality.
    * I found that multi-scale spectral loss works well 2d for spectrogram / image data, the resulting quality is somewhere between point-wise loss and adversarial loss.
 
-* In April/2024 I replaced the diffusion model unet (based on the existing unconditional unet in [diffusers](https://github.com/huggingface/diffusers)) with the improved [edm2](https://github.com/NVlabs/edm2) unet.
+* In April/2024 I replaced the diffusion model and VAE unets (previously based on the unconditional unet in [diffusers](https://github.com/huggingface/diffusers)) with the improved [edm2](https://github.com/NVlabs/edm2) unet.
    * I made several improvements to the edm2 unet:
       * Replaced einsum attention with torch sdp attention
       * Replaced fourier embedding frequencies / phases for a smoother inner product space
