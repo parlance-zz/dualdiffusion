@@ -14,7 +14,7 @@ The model has changed substantially over the course of development.
    * I experimented with 1d and 2d formats with various preprocessing steps. I found 2d formats were able to generalize better with a small dataset and were more compute and parameter efficient than 1d formats.
    * For 2d formats I also found using separable attention (merging the rows / columns with the batch dimension alternately) could make using attention in a high dimensionality model practical without sacrificing too much quality.
    * I found that attention was an absolute requirement to allow the model to understand the perceptual ~log-frequency scale in music when the format uses a linear-frequency scale, especially with positional embeddings for the frequency axis.
-   * I also found that v-prediction with a cosine-based schedule worked significantly better than any alternatives.
+   * I also found that v-prediction with a cosine-based schedule worked significantly better than any alternatives (at least for non-latent diffusion).
 * In December/2023 I began training variational auto-encoder models to try a latent diffusion model.
    * After moving to latent diffusion I was able to begin training the diffusion model on crops of 45 seconds @ 32khz stereo
    * I found that point-wise loss works very poorly in terms of reconstruction quality, and multi-scale spectral loss was a much better option. I found that multi-scale spectral power density loss works considerably better for music and learning pitch if you add an appropriately weighted loss term for phase.
