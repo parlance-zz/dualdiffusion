@@ -34,7 +34,7 @@ The model has changed substantially over the course of development.
       * Added class label dropout in a way that preserves magnitude on expectation
       * Replaced the weight normalization in the forward method of the mpconv module with weight normalization that is only applied when the weights are updated for improved performance and lower memory consumption
       * Added correction for the output magnitude when using dropout inside blocks
-      * Replaced the up/downsample with equivilent torch built-ins for improved performance
+      * Replaced the up/downsample with equivalent torch built-ins for improved performance
       * Merged some of the pre-conditioning code into the unet itself.
    * I started using torch dynamo / model compilation and added the appropriate compiler hints for maximum performance.
    * I also started using class label-based conditioning and implemented classifier free guidance for a major improvement in quality and control.
