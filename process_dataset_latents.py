@@ -36,8 +36,10 @@ if __name__ == "__main__":
     init_cuda()
     load_dotenv(override=True)
 
-    model_name = "edm2_vae_test7_2"
+    model_name = "edm2_vae_test7_4"
     device = "cuda"
+    num_encode_offsets = 8 # should be equal to latent downsample factor
+    batch_size = 2
     fp16 = True
 
     model_path = os.path.join(os.environ.get("MODEL_PATH", "./"), model_name)
@@ -49,6 +51,11 @@ if __name__ == "__main__":
                                                      device=device)
     pipeline.unet = pipeline.unet.to("cpu")
     last_global_step = pipeline.vae.config["last_global_step"]
+    spectrogram_hop_length = pipeline.format.spectrogram_params.hop_length
+    encode_offset_padding = spectrogram_hop_length * num_encode_offsets
+    encode_offsets = [i * spectrogram_hop_length for i in range(num_encode_offsets)]
+    num_batches_per_sample = num_encode_offsets // batch_size
+    assert num_encode_offsets % batch_size == 0, "num_encode_offsets must be divisible by batch_size"
 
     latents_dataset_path = os.environ.get("LATENTS_DATASET_PATH", "./dataset/latents")
     os.makedirs(latents_dataset_path, exist_ok=True)
@@ -89,14 +96,35 @@ if __name__ == "__main__":
                 input_raw_sample = load_raw(os.path.join(dataset_path, file_name), dtype=dataset_raw_format)
             else:
                 input_raw_sample = load_audio(os.path.join(dataset_path, file_name))
-            crop_width = pipeline.format.get_sample_crop_width(length=input_raw_sample.shape[-1])
-            input_raw_sample = input_raw_sample[:, :crop_width].unsqueeze(0).to(device)
+            crop_width = pipeline.format.get_sample_crop_width(length=input_raw_sample.shape[-1] - encode_offset_padding)
+
+            input_raw_samples = []
+            for offset in encode_offsets:
+                input_raw_offset_sample = input_raw_sample[:, offset:offset+crop_width].unsqueeze(0).to(device)
+                input_raw_samples.append(input_raw_offset_sample)
+            input_raw_sample = torch.cat(input_raw_samples, dim=0)
 
             class_labels = pipeline.get_class_labels(game_id)
             vae_class_embeddings = pipeline.vae.get_class_embeddings(class_labels)
-            input_sample = pipeline.format.raw_to_sample(input_raw_sample, return_dict=True)["samples"]
-            posterior = pipeline.vae.encode(input_sample.type(model_dtype), vae_class_embeddings, pipeline.format)
-            latents = posterior.mode()
+            input_samples = []
+            for i in range(num_batches_per_sample):
+                batch_input_raw_sample = input_raw_sample[i*batch_size:(i+1)*batch_size]
+                input_sample = pipeline.format.raw_to_sample(batch_input_raw_sample, return_dict=True)["samples"].type(model_dtype)
+                input_samples.append(input_sample)
+            input_sample = torch.cat(input_samples, dim=0)
+            
+            latents = []
+            for i in range(num_batches_per_sample):
+                batch_input_sample = input_sample[i*batch_size:(i+1)*batch_size]
+                posterior = pipeline.vae.encode(batch_input_sample, vae_class_embeddings, pipeline.format)
+                latents.append(posterior.mode())
+            latents = torch.cat(latents, dim=0)
+
+            # debug
+            #from dual_diffusion_utils import save_raw_img
+            #for i in range(latents.shape[0]):
+            #    save_raw_img(latents[i], f"./debug/_latents_{i}.png")
+            #exit()
 
             save_safetensors({"latents": latents}, output_path)
             progress_bar.update(1)
