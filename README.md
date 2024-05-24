@@ -48,3 +48,4 @@ The model has changed substantially over the course of development.
 Some additional notes:
 * The training code supports multiple GPUs and distributed training through huggingface accelerate, currently logging is to tensorboard.
 * The dataset pre/post-processing code is included in this repository which includes everything needed to train a new model on your own data
+* All the code in this repository is tested to work on both Windows and Linux platforms, although performance is significantly better on Linux
