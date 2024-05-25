@@ -68,31 +68,28 @@ class SigmaSampler():
         if sigma_min <= 0:
             raise ValueError(f"sigma_min must be greater than 0: {sigma_min}")
 
-    def sample_stratified(self, n_samples):
+    def sample_uniform_stratified(self, n_samples):
         return (torch.arange(n_samples) + 0.5) / n_samples + (torch.rand(1) - 0.5) / n_samples
     
-    def sample(self, n_samples, stratified_sampling=False):
+    def sample(self, n_samples, quantiles=None):
         
         if self.distribution == "log_normal":
-            return self.sample_log_normal(n_samples, stratified_sampling)
+            return self.sample_log_normal(n_samples, quantiles=quantiles)
         elif self.distribution == "log_sech^2":
-            return self.sample_log_sech2(n_samples, stratified_sampling)
+            return self.sample_log_sech2(n_samples, quantiles=quantiles)
         elif self.distribution == "ln_data":
-            return self.sample_log_data(n_samples, stratified_sampling)
+            return self.sample_log_data(n_samples, quantiles=quantiles)
     
-    def sample_log_normal(self, n_samples, stratified_sampling=False):
-        if stratified_sampling is False:
+    def sample_log_normal(self, n_samples, quantiles=None):
+        if quantiles is None:
             return (torch.randn(n_samples) * self.dist_scale + self.dist_offset).exp().clip(self.sigma_min, self.sigma_max)
         
-        quantiles = self.sample_stratified(n_samples)
         ln_sigma = self.dist_offset + (self.dist_scale * 2**0.5) * (quantiles * 2 - 1).erfinv().clip(min=-5, max=5)
         return ln_sigma.exp().clip(self.sigma_min, self.sigma_max)
     
-    def sample_log_sech2(self, n_samples, stratified_sampling=False):
-        if stratified_sampling is False:
+    def sample_log_sech2(self, n_samples, quantiles=None):
+        if quantiles is None:
             quantiles = torch.rand(n_samples)
-        else:
-            quantiles = self.sample_stratified(n_samples)
 
         low = np.tanh(self.sigma_ln_min); high = np.tanh(self.sigma_ln_max)
         ln_sigma = (quantiles * (high - low) + low).atanh() * self.dist_scale + self.dist_offset
@@ -103,17 +100,15 @@ class SigmaSampler():
         self.dist_cdf[1:] = self.dist_pdf.cumsum(dim=0)
 
     def _sample_pdf(self, quantiles):
-        sample_indices = torch.searchsorted(self.dist_cdf[1:], quantiles, out_int32=True)
+        sample_indices = torch.searchsorted(self.dist_cdf, quantiles, out_int32=True).clip(max=self.dist_cdf.shape[0]-2)
         left_bin_values = self.dist_cdf[sample_indices]
         right_bin_values = self.dist_cdf[sample_indices+1]
         t = (quantiles - left_bin_values) / (right_bin_values - left_bin_values)
-        return (sample_indices + t) / self.dist_cdf.shape[0]
+        return (sample_indices + t) / (self.dist_cdf.shape[0]-1)
 
-    def sample_log_data(self, n_samples, stratified_sampling=False, quantiles=None):
-        if stratified_sampling is False:
-            quantiles = quantiles or torch.rand(n_samples)
-        else:
-            quantiles = quantiles or self.sample_stratified(n_samples)
+    def sample_log_data(self, n_samples=None, quantiles=None):
+        if quantiles is None:
+            quantiles = torch.rand(n_samples)
 
         ln_sigma = self._sample_pdf(quantiles) * (self.sigma_ln_max - self.sigma_ln_min) + self.sigma_ln_min
         return ln_sigma.exp().clip(min=self.sigma_min, max=self.sigma_max)
