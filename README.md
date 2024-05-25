@@ -12,9 +12,9 @@ The model has changed substantially over the course of development.
 * Initially (August/2023) the diffusion model worked directly on raw audio.
    * Due to memory and performance constraints this meant I was limited to ~16 seconds of mono audio at 8khz.
    * I experimented with 1d and 2d formats with various preprocessing steps. I found 2d formats were able to generalize better with a small dataset and were more compute and parameter efficient than 1d formats.
-   * For 2d formats I also found using separable attention (merging the rows / columns with the batch dimension alternately) could make using attention in a high dimensionality model practical without sacrificing too much quality.
+   * For 2d formats I found using separable attention (merging the rows / columns with the batch dimension alternately) could make using attention in a high dimensionality model practical without sacrificing too much quality.
    * I found that attention was an absolute requirement to allow the model to understand the perceptual ~log-frequency scale in music when the format uses a linear-frequency scale, especially with positional embeddings for the frequency axis.
-   * I also found that v-prediction with a cosine-based schedule worked significantly better than any alternatives (at least for non-latent diffusion).
+   * I found that v-prediction with a cosine-based schedule worked significantly better than any alternatives (at least for non-latent diffusion).
 
 * In December/2023 I began training variational auto-encoder models to try a latent diffusion model.
    * After moving to latent diffusion I was able to begin training the diffusion model on crops of 45 seconds @ 32khz stereo
@@ -33,17 +33,17 @@ The model has changed substantially over the course of development.
       * Replaced fourier embedding frequencies / phases for a smoother inner product space
       * Added class label dropout in a way that preserves magnitude on expectation
       * Replaced the weight normalization in the forward method of the mpconv module with weight normalization that is only applied when the weights are updated for improved performance and lower memory consumption
-      * Added correction for the output magnitude when using dropout inside blocks
+      * Added a correction when using dropout inside blocks to preserve magnitude on expectation during inference
       * Replaced the up/downsample with equivalent torch built-ins for improved performance
       * Merged some of the pre-conditioning code into the unet itself.
    * I started using torch dynamo / model compilation and added the appropriate compiler hints for maximum performance.
-   * I also started using class label-based conditioning and implemented classifier free guidance for a major improvement in quality and control.
+   * I started using class label-based conditioning and implemented classifier free guidance for a major improvement in quality and control.
 
 * In May/2024 I adopted the edm/ddim noise schedule, sampling algorithm, and learn rate schedule.
    * I found that the log-normal sigma sampling in training could be improved by using the per-sigma estimated error variance to calculate a sigma sampling pdf that explicitly focuses on the noise levels that the model is most capable of making progress on.
    * I found that using stratified sampling to distribute sigmas as evenly as possible within each mini-batch could mitigate problems with smaller mini-batches.
-   * I began pre-encoding the latents for my dataset before diffusion model training for increased performance and reduced memory consumption. I found pre-encoding the latents before random crop can negatively influence model quality due to lacking the variations created by sub-latent-pixel offsets, I added pre-encoded latent variations for those offsets.
-   * I also began training with EMA weights of multiple lengths.
+   * I began pre-encoding the latents for my dataset before diffusion model training for increased performance and reduced memory consumption. I found pre-encoding the latents _before_ random crop can negatively influence generated sample quality due to the lack of variations created by sub-latent-pixel offsets. I added pre-encoded latent variations for those offsets.
+   * I began training with EMA weights of multiple lengths.
 
 Some additional notes:
 * The training code supports multiple GPUs and distributed training through huggingface accelerate, currently logging is to tensorboard.
