@@ -37,7 +37,7 @@ if __name__ == "__main__":
     #np.random.seed(0)
 
     #os.environ["MODEL_PATH"] = "Z:/dualdiffusion/models"; model_name = "edm2_vae_test6"
-    model_name = "edm2_vae_test7"
+    model_name = "edm2_vae_test7_4"
     
     num_samples = 1
     device = "cuda" #"cpu"
@@ -49,7 +49,7 @@ if __name__ == "__main__":
     sample_latents = True
     normalize_latents = False #True
     random_latents = False #True
-    quantize_latents = 0 #8
+    quantize_latents = 0 #255
     add_latent_noise = 0 #0.1
 
     model_path = os.path.join(os.environ.get("MODEL_PATH", "./"), model_name)
@@ -105,7 +105,7 @@ if __name__ == "__main__":
     sample_shape = pipeline.format.get_sample_shape(length=length)
     print(f"Sample shape: {sample_shape}  Latent shape: {pipeline.vae.get_latent_shape(sample_shape)}")
     
-    output_path = os.path.join(model_path, "output")
+    output_path = os.path.join(model_path, "output", "vae")
     os.makedirs(output_path, exist_ok=True)
     start_time = datetime.datetime.now()
     point_similarity = latents_mean = latents_std = 0
