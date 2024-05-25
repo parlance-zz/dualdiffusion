@@ -28,7 +28,6 @@ import shutil
 import subprocess
 import atexit
 from glob import glob
-from typing import Any
 from dotenv import load_dotenv
 import json
 
@@ -47,14 +46,15 @@ from tqdm.auto import tqdm
 
 import diffusers
 from diffusers.optimization import get_scheduler
-from diffusers.utils import deprecate, is_tensorboard_available
+from diffusers.utils import is_tensorboard_available
+import safetensors.torch as ST
 
 from unet_edm2 import UNet
 from unet_edm2_ema import PowerFunctionEMA
 from dual_diffusion_pipeline import DualDiffusionPipeline
 from dual_diffusion_utils import init_cuda, load_audio, save_audio, load_raw, dict_str
-from dual_diffusion_utils import normalize, normalize_lufs, load_safetensors
-
+from dual_diffusion_utils import normalize, normalize_lufs
+from sigma_sampler import SigmaSampler
 
 logger = get_logger(__name__, log_level="INFO")
 
@@ -442,10 +442,10 @@ def init_accelerator_loadsave_hooks(accelerator, module_type, module_class, ema_
             ema_model_dir = os.path.join(input_dir, f"{module_type}_ema")
             ema_load_errors = ema_module.load(ema_model_dir, target_model=model)
             if len(ema_load_errors) > 0:
-                logger.warning(f"Errors loading EMA model - Missing EMAs initialized from checkpoint model:")
+                logger.warning(f"Errors loading EMA model(s) - Missing EMA(s) initialized from checkpoint model:")
                 logger.warning("\n".join(ema_load_errors))
             else:
-                logger.info(f"Successfully loaded EMA model from {ema_model_dir}")
+                logger.info(f"Successfully loaded EMA model(s) from {ema_model_dir}")
 
     accelerator.register_save_state_pre_hook(save_model_hook)
     accelerator.register_load_state_pre_hook(load_model_hook)
@@ -687,9 +687,13 @@ class DatasetTransformer(torch.nn.Module):
                                             count=self.sample_crop_width,
                                             return_start=True)
             elif self.dataset_format == ".safetensors":
-                sample = load_safetensors(file_path)["latents"].squeeze(0)
-                t_offset = np.random.randint(0, sample.shape[-1] - self.sample_crop_width + 1)
-                sample = sample[..., t_offset:t_offset + self.sample_crop_width]
+                with ST.safe_open(file_path, framework="pt") as f:
+                    latents_slice = f.get_slice("latents")
+                    latents_shape = latents_slice.get_shape()
+
+                    latents_idx = np.random.randint(0, latents_shape[0])
+                    t_offset = np.random.randint(0, latents_shape[-1] - self.sample_crop_width + 1)
+                    sample = latents_slice[latents_idx, ..., t_offset:t_offset + self.sample_crop_width]
             else:
                 sample, t_offset = load_audio(file_path,
                                               start=-1,
@@ -725,7 +729,6 @@ def init_dataloader(accelerator,
                     train_data_dir,
                     cache_dir,
                     train_batch_size,
-                    gradient_accumulation_steps,
                     dataloader_num_workers,
                     max_train_samples,
                     dataset_format,
@@ -894,6 +897,15 @@ def do_training_loop(args,
             "sigma_ln_mean",
         ]
 
+        sigma_sample_temperature = 4.4 #5
+        sigma_sample_resolution = 250
+        ln_sigma = torch.linspace(np.log(module.sigma_min), np.log(module.sigma_max), sigma_sample_resolution, device=accelerator.device)
+        ln_sigma_error = module.logvar_linear(module.logvar_fourier(ln_sigma/4)).float().flatten().detach()
+        sigma_distribution_pdf = (-sigma_sample_temperature * ln_sigma_error).exp()
+        sigma_sampler = SigmaSampler(module.sigma_max, module.sigma_min, module.sigma_data,
+                                     distribution="ln_data", distribution_pdf=sigma_distribution_pdf)
+
+
     total_batch_size = args.train_batch_size * accelerator.num_processes * args.gradient_accumulation_steps
 
     if args.train_data_format != ".safetensors":
@@ -953,6 +965,7 @@ def do_training_loop(args,
 
                     if args.train_data_format == ".safetensors":
                         samples = normalize(raw_samples).float()
+                        assert samples.shape == latent_shape
                     else:
                         samples = pipeline.format.raw_to_sample(raw_samples)
                         if vae is not None:
@@ -964,11 +977,12 @@ def do_training_loop(args,
                         process_batch_quantiles = global_quantiles[accelerator.local_process_index::accelerator.num_processes]
                         quantiles = process_batch_quantiles[grad_accum_steps * args.train_batch_size:(grad_accum_steps+1) * args.train_batch_size]
                     
-                    if use_stratified_sigma_sampling:
-                        batch_normal = sigma_ln_mean + (sigma_ln_std * (2 ** 0.5)) * (quantiles * 2 - 1).erfinv().clip(min=-5, max=5)
-                    else:
-                        batch_normal = torch.randn(samples.shape[0], device=accelerator.device) * sigma_ln_std + sigma_ln_mean
-                    sigma = batch_normal.exp().clip(min=module.sigma_min, max=module.sigma_max)
+                    #if use_stratified_sigma_sampling:
+                    #    batch_normal = sigma_ln_mean + (sigma_ln_std * (2 ** 0.5)) * (quantiles * 2 - 1).erfinv().clip(min=-5, max=5)
+                    #else:
+                    #    batch_normal = torch.randn(samples.shape[0], device=accelerator.device) * sigma_ln_std + sigma_ln_mean
+                    #sigma = batch_normal.exp().clip(min=module.sigma_min, max=module.sigma_max)
+                    sigma = sigma_sampler.sample_log_data(quantiles=quantiles)
                     noise = torch.randn_like(samples) * sigma.view(-1, 1, 1, 1)
                     samples = samples * module.sigma_data
 
@@ -1053,6 +1067,11 @@ def do_training_loop(args,
             if accelerator.sync_gradients:
                 module.normalize_weights()
 
+                ln_sigma = torch.linspace(np.log(module.sigma_min), np.log(module.sigma_max), sigma_sample_resolution, device=accelerator.device)
+                ln_sigma_error = module.logvar_linear(module.logvar_fourier(ln_sigma/4)).float().flatten().detach()
+                sigma_distribution_pdf = (-sigma_sample_temperature * ln_sigma_error).exp()
+                sigma_sampler.update_pdf(sigma_distribution_pdf)
+            
                 progress_bar.update(1)
                 global_step += 1
 
@@ -1277,7 +1296,6 @@ def main():
                                                       args.train_data_dir,
                                                       args.cache_dir,
                                                       args.train_batch_size,
-                                                      args.gradient_accumulation_steps,
                                                       args.dataloader_num_workers,
                                                       args.max_train_samples,
                                                       args.train_data_format,
@@ -1346,6 +1364,5 @@ if __name__ == "__main__":
 
     init_cuda()
     load_dotenv(override=True)
-    os.environ["TORCH_COMPILE"] = "1"
     
     main()
