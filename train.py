@@ -897,7 +897,7 @@ def do_training_loop(args,
             "sigma_ln_mean",
         ]
 
-        sigma_sample_temperature = 4.4 #5
+        sigma_sample_temperature = 2#4.75 #5
         sigma_sample_resolution = 250
         ln_sigma = torch.linspace(np.log(module.sigma_min), np.log(module.sigma_max), sigma_sample_resolution, device=accelerator.device)
         ln_sigma_error = module.logvar_linear(module.logvar_fourier(ln_sigma/4)).float().flatten().detach()
@@ -994,15 +994,15 @@ def do_training_loop(args,
                                                     return_logvar=True)
                     
                     mse_loss = F.mse_loss(denoised, samples, reduction="none")
-                    batch_loss = mse_loss.mean(dim=(1,2,3))
-
                     loss_weight = (sigma ** 2 + module.sigma_data ** 2) / (sigma * module.sigma_data) ** 2
                     loss = (loss_weight.view(-1, 1, 1, 1) / error_logvar.exp() * mse_loss + error_logvar).mean()
                     
                     if args.num_unet_loss_buckets > 0:
-                        global_step_quantiles = accelerator.gather(quantiles.detach()).cpu()
+                        batch_loss = mse_loss.mean(dim=(1,2,3)) * loss_weight
+                        
+                        global_step_quantiles = (accelerator.gather(sigma.detach()).cpu().log() - np.log(module.sigma_min)) / (np.log(module.sigma_max) - np.log(module.sigma_min))
                         global_step_batch_loss = accelerator.gather(batch_loss.detach()).cpu()
-                        target_buckets = (global_step_quantiles * unet_loss_buckets.shape[0]).long().clip(max=unet_loss_buckets.shape[0]-1)
+                        target_buckets = (global_step_quantiles * unet_loss_buckets.shape[0]).long().clip(min=0, max=unet_loss_buckets.shape[0]-1)
                         unet_loss_buckets.index_add_(0, target_buckets, global_step_batch_loss)
                         unet_loss_bucket_counts.index_add_(0, target_buckets, torch.ones_like(global_step_batch_loss))
 
