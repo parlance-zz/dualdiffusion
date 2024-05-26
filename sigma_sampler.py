@@ -23,8 +23,6 @@
 import torch
 import numpy as np
 
-from dual_diffusion_pipeline import DualDiffusionPipeline
-
 class SigmaSampler():
 
     def __init__(self,
@@ -62,7 +60,7 @@ class SigmaSampler():
             if distribution == "ln_data":
                 raise ValueError("distribution_pdf is required for ln_data distribution")
             
-        if distribution not in ["log_normal", "log_sech^2", "ln_data"]:
+        if distribution not in ["log_normal", "log_sech", "log_sech^2", "ln_data"]:
             raise ValueError(f"Invalid distribution: {distribution}")
         
         if sigma_min <= 0:
@@ -75,6 +73,8 @@ class SigmaSampler():
         
         if self.distribution == "log_normal":
             return self.sample_log_normal(n_samples, quantiles=quantiles)
+        elif self.distribution == "log_sech":
+            return self.sample_log_sech(n_samples, quantiles=quantiles)
         elif self.distribution == "log_sech^2":
             return self.sample_log_sech2(n_samples, quantiles=quantiles)
         elif self.distribution == "ln_data":
@@ -85,6 +85,22 @@ class SigmaSampler():
             return (torch.randn(n_samples) * self.dist_scale + self.dist_offset).exp().clip(self.sigma_min, self.sigma_max)
         
         ln_sigma = self.dist_offset + (self.dist_scale * 2**0.5) * (quantiles * 2 - 1).erfinv().clip(min=-5, max=5)
+        return ln_sigma.exp().clip(self.sigma_min, self.sigma_max)
+    
+    def sample_log_sech(self, n_samples, quantiles=None):
+        if quantiles is None:
+            quantiles = torch.rand(n_samples)
+
+        theta_min = np.arctan(self.sigma_data / self.sigma_max)
+        theta_max = np.arctan(self.sigma_data / self.sigma_min)
+
+        theta = quantiles * (theta_max - theta_min) + theta_min
+        #reference_ln_sigma = (1 / theta.tan() / 1.707).log()
+        ln_sigma = (1 / theta.tan()).log() * self.dist_scale + self.dist_offset
+        return ln_sigma.exp().clip(self.sigma_min)#, self.sigma_max)
+
+        low = np.tanh(self.sigma_ln_min); high = np.tanh(self.sigma_ln_max)
+        ln_sigma = (quantiles * (high - low) + low).atanh() * self.dist_scale + self.dist_offset
         return ln_sigma.exp().clip(self.sigma_min, self.sigma_max)
     
     def sample_log_sech2(self, n_samples, quantiles=None):
@@ -116,6 +132,7 @@ class SigmaSampler():
 
 if __name__ == "__main__":
 
+    from dual_diffusion_pipeline import DualDiffusionPipeline
     from dual_diffusion_utils import multi_plot
     from dotenv import load_dotenv
     import os
@@ -124,28 +141,30 @@ if __name__ == "__main__":
 
     reference_model_name = "edm2_vae_test7_4"
     target_snr = 32
-    sigma_max = 80
+    sigma_max = 125#80
     sigma_data = 0.5
     sigma_min = 0.002
 
-    training_batch_size = 30
+    training_batch_size = 60
     #batch_distribution = "log_sech^2"
     batch_distribution = "ln_data"
-    batch_dist_scale = 1
-    batch_dist_offset = -0.4
+    #batch_distribution = "log_normal"
+    #batch_distribution = "ln_data"
+    batch_dist_scale = 2
+    batch_dist_offset = 0
     batch_stratified_sampling = True
     batch_distribution_pdf = None
 
-    reference_batch_size = 2048
-    reference_distribution = "log_normal"
-    reference_dist_scale = 1
-    reference_dist_offset = -0.4
+    reference_batch_size = 60
+    reference_distribution = "log_sech"
+    reference_dist_scale = 1#1.3#1
+    reference_dist_offset = -0.54#-0.4
     reference_stratified_sampling = False
     reference_distribution_pdf = None
 
     n_iter = 10000
     n_histo_bins = 200
-    use_y_log_scale = False
+    use_y_log_scale = True
 
     if batch_distribution == "ln_data":
         model_path = os.path.join(os.environ.get("MODEL_PATH", "./"), reference_model_name)
@@ -153,7 +172,10 @@ if __name__ == "__main__":
         pipeline = DualDiffusionPipeline.from_pretrained(model_path, load_latest_checkpoints=True)
         ln_sigma = torch.linspace(np.log(sigma_min), np.log(sigma_max), n_histo_bins)
         ln_sigma_error = pipeline.unet.logvar_linear(pipeline.unet.logvar_fourier(ln_sigma/4)).float().flatten()
-        batch_distribution_pdf = (-torch.e * ln_sigma_error).exp()
+        batch_distribution_pdf = ((-batch_dist_scale * ln_sigma_error) + batch_dist_offset).exp()
+
+        #reference_distribution = "ln_data"
+        #reference_distribution_pdf = (-2 * ln_sigma_error).exp()
 
     batch_sampler = SigmaSampler(sigma_max=sigma_max,
                                  sigma_min=sigma_min,
@@ -182,9 +204,12 @@ if __name__ == "__main__":
     reference_sigma_histo = torch.zeros(n_histo_bins)
 
     for i in range(n_iter):
+        
+        batch_quantiles = batch_sampler.sample_uniform_stratified(training_batch_size) if batch_stratified_sampling else None
+        batch_ln_sigma = batch_sampler.sample(training_batch_size, quantiles=batch_quantiles).log()
 
-        batch_ln_sigma = batch_sampler.sample(training_batch_size, batch_stratified_sampling).log()
-        reference_ln_sigma = reference_sampler.sample(reference_batch_size, reference_stratified_sampling).log()
+        reference_quantiles = reference_sampler.sample_uniform_stratified(reference_batch_size) if reference_stratified_sampling else None
+        reference_ln_sigma = reference_sampler.sample(reference_batch_size, quantiles=reference_quantiles).log()
 
         avg_batch_mean += batch_ln_sigma.mean().item()
         avg_batch_min  += batch_ln_sigma.amin().item()
