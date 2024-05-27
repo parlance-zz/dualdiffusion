@@ -141,24 +141,27 @@ if __name__ == "__main__":
 
     reference_model_name = "edm2_vae_test7_4"
     target_snr = 32
-    sigma_max = 125#80
+    sigma_max = 125 #80
     sigma_data = 0.5
-    sigma_min = 0.002
+    sigma_min = sigma_data / target_snr #0.002
 
     training_batch_size = 60
-    #batch_distribution = "log_sech^2"
     batch_distribution = "ln_data"
-    #batch_distribution = "log_normal"
-    #batch_distribution = "ln_data"
     batch_dist_scale = torch.e
     batch_dist_offset = 0
     batch_stratified_sampling = True
     batch_distribution_pdf = None
 
     reference_batch_size = 60
-    reference_distribution = "ln_data"#"log_sech"
-    reference_dist_scale = 2 #1
-    reference_dist_offset = 0 #-0.54#-0.4
+    reference_distribution = "ln_data"
+    reference_dist_scale = 2
+    reference_dist_offset = 0
+    #reference_distribution = "log_normal"
+    #reference_dist_scale = 1
+    #reference_dist_offset = -0.4
+    #reference_distribution = "log_sech"
+    #reference_dist_scale = 1
+    #reference_dist_offset = -0.54
     reference_stratified_sampling = True
     reference_distribution_pdf = None
 
