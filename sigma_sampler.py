@@ -150,7 +150,7 @@ if __name__ == "__main__":
     batch_distribution = "ln_data"
     #batch_distribution = "log_normal"
     #batch_distribution = "ln_data"
-    batch_dist_scale = 2.5
+    batch_dist_scale = torch.e
     batch_dist_offset = 0
     batch_stratified_sampling = True
     batch_distribution_pdf = None
@@ -196,8 +196,8 @@ if __name__ == "__main__":
                                      distribution_pdf=reference_distribution_pdf)
 
     if batch_sampler.distribution == "ln_data":
-        multi_plot((batch_sampler.dist_pdf, "ln_sigma_pdf"),
-                   (batch_sampler.dist_cdf, "ln_sigma_cdf"),)
+        multi_plot((batch_sampler.dist_pdf, "batch_distribution_pdf"),
+                   (batch_sampler.dist_cdf, "batch_distribution_cdf"),)
         
     avg_batch_mean = avg_batch_min = avg_batch_max = 0
     avg_reference_mean = avg_reference_min = avg_reference_max = 0
@@ -205,8 +205,8 @@ if __name__ == "__main__":
     batch_sigma_histo = torch.zeros(n_histo_bins)
     reference_sigma_histo = torch.zeros(n_histo_bins)
 
-    batch_example = torch.ones(n_histo_bins)
-    reference_example = torch.ones(n_histo_bins)
+    batch_example = torch.ones(n_histo_bins * 4)
+    reference_example = torch.ones(n_histo_bins * 4)
 
     for i in range(n_iter):
         
@@ -220,9 +220,9 @@ if __name__ == "__main__":
             print(f"batch example sigma: {batch_ln_sigma.exp()}")
             print(f"reference example sigma: {reference_ln_sigma.exp()}")
 
-            batch_example_idx = (batch_ln_sigma - np.log(sigma_min)) / (np.log(sigma_max) - np.log(sigma_min)) * (n_histo_bins-1)
+            batch_example_idx = (batch_ln_sigma - np.log(sigma_min)) / (np.log(sigma_max) - np.log(sigma_min)) * (batch_example.shape[0]-1)
             batch_example.scatter_add_(0, batch_example_idx.long(), torch.ones(training_batch_size))
-            reference_example_idx = (reference_ln_sigma - np.log(sigma_min)) / (np.log(sigma_max) - np.log(sigma_min)) * (n_histo_bins-1)
+            reference_example_idx = (reference_ln_sigma - np.log(sigma_min)) / (np.log(sigma_max) - np.log(sigma_min)) * (reference_example.shape[0]-1)
             reference_example.scatter_add_(0, reference_example_idx.long(), torch.ones(reference_batch_size))
 
         avg_batch_mean += batch_ln_sigma.mean().item()
