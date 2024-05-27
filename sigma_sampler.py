@@ -150,32 +150,34 @@ if __name__ == "__main__":
     batch_distribution = "ln_data"
     #batch_distribution = "log_normal"
     #batch_distribution = "ln_data"
-    batch_dist_scale = 2
+    batch_dist_scale = 2.5
     batch_dist_offset = 0
     batch_stratified_sampling = True
     batch_distribution_pdf = None
 
     reference_batch_size = 60
-    reference_distribution = "log_sech"
-    reference_dist_scale = 1#1.3#1
-    reference_dist_offset = -0.54#-0.4
-    reference_stratified_sampling = False
+    reference_distribution = "ln_data"#"log_sech"
+    reference_dist_scale = 2 #1
+    reference_dist_offset = 0 #-0.54#-0.4
+    reference_stratified_sampling = True
     reference_distribution_pdf = None
 
     n_iter = 10000
     n_histo_bins = 200
     use_y_log_scale = True
 
-    if batch_distribution == "ln_data":
+    if batch_distribution == "ln_data" or reference_distribution == "ln_data":
         model_path = os.path.join(os.environ.get("MODEL_PATH", "./"), reference_model_name)
         print(f"Loading DualDiffusion model from '{model_path}'...")
         pipeline = DualDiffusionPipeline.from_pretrained(model_path, load_latest_checkpoints=True)
         ln_sigma = torch.linspace(np.log(sigma_min), np.log(sigma_max), n_histo_bins)
         ln_sigma_error = pipeline.unet.logvar_linear(pipeline.unet.logvar_fourier(ln_sigma/4)).float().flatten()
+    
+    if batch_distribution == "ln_data":
         batch_distribution_pdf = ((-batch_dist_scale * ln_sigma_error) + batch_dist_offset).exp()
 
-        #reference_distribution = "ln_data"
-        #reference_distribution_pdf = (-2 * ln_sigma_error).exp()
+    if reference_distribution == "ln_data":
+        reference_distribution_pdf = ((-reference_dist_scale * ln_sigma_error) + reference_dist_offset).exp()
 
     batch_sampler = SigmaSampler(sigma_max=sigma_max,
                                  sigma_min=sigma_min,
@@ -203,6 +205,9 @@ if __name__ == "__main__":
     batch_sigma_histo = torch.zeros(n_histo_bins)
     reference_sigma_histo = torch.zeros(n_histo_bins)
 
+    batch_example = torch.ones(n_histo_bins)
+    reference_example = torch.ones(n_histo_bins)
+
     for i in range(n_iter):
         
         batch_quantiles = batch_sampler.sample_uniform_stratified(training_batch_size) if batch_stratified_sampling else None
@@ -210,6 +215,15 @@ if __name__ == "__main__":
 
         reference_quantiles = reference_sampler.sample_uniform_stratified(reference_batch_size) if reference_stratified_sampling else None
         reference_ln_sigma = reference_sampler.sample(reference_batch_size, quantiles=reference_quantiles).log()
+
+        if i == 0:
+            print(f"batch example sigma: {batch_ln_sigma.exp()}")
+            print(f"reference example sigma: {reference_ln_sigma.exp()}")
+
+            batch_example_idx = (batch_ln_sigma - np.log(sigma_min)) / (np.log(sigma_max) - np.log(sigma_min)) * (n_histo_bins-1)
+            batch_example.scatter_add_(0, batch_example_idx.long(), torch.ones(training_batch_size))
+            reference_example_idx = (reference_ln_sigma - np.log(sigma_min)) / (np.log(sigma_max) - np.log(sigma_min)) * (n_histo_bins-1)
+            reference_example.scatter_add_(0, reference_example_idx.long(), torch.ones(reference_batch_size))
 
         avg_batch_mean += batch_ln_sigma.mean().item()
         avg_batch_min  += batch_ln_sigma.amin().item()
@@ -231,6 +245,6 @@ if __name__ == "__main__":
     print(f"avg batch     mean: {avg_batch_mean:{5}f}, min: {avg_batch_min:{5}f}, max: {avg_batch_max:{5}f}")
     print(f"avg reference mean: {avg_reference_mean:{5}f}, min: {avg_reference_min:{5}f}, max: {avg_reference_max:{5}f}")
 
-    multi_plot((batch_sigma_histo, "batch sigma"),
+    multi_plot((batch_sigma_histo, "batch sigma"), (batch_example, "batch example"), (reference_example, "reference example"),
             added_plots={0: (reference_sigma_histo, "reference_sigma")},
             y_log_scale=use_y_log_scale, x_axis_range=(np.log(sigma_min), np.log(sigma_max)))
