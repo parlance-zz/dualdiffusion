@@ -40,19 +40,16 @@ class SigmaSampler():
         self.distribution = distribution
         self.dist_scale = dist_scale
         self.dist_offset = dist_offset
-
+        self.sigma_ln_min = np.log(sigma_min)
+        self.sigma_ln_max = np.log(sigma_max)
+    
         if distribution_pdf is not None:
             self.distribution = "ln_data"
             self.dist_pdf = distribution_pdf / distribution_pdf.sum()
             self.dist_cdf = torch.cat((torch.tensor([0.], device=self.dist_pdf.device), self.dist_pdf.cumsum(dim=0)))
 
-            self.sigma_ln_min = np.log(sigma_min)
-            self.sigma_ln_max = np.log(sigma_max)
-            self.sigma_min = np.exp(self.sigma_ln_min)
-            self.sigma_max = np.exp(self.sigma_ln_max)
             self.dist_scale = None
             self.dist_offset = None
-            
         else:
             self.sigma_ln_min = np.log(sigma_min)
             self.sigma_ln_max = np.log(sigma_max)
@@ -60,7 +57,7 @@ class SigmaSampler():
             if distribution == "ln_data":
                 raise ValueError("distribution_pdf is required for ln_data distribution")
             
-        if distribution not in ["log_normal", "log_sech", "log_sech^2", "ln_data"]:
+        if distribution not in ["log_normal", "log_sech", "log_sech^2", "ln_data", "linear"]:
             raise ValueError(f"Invalid distribution: {distribution}")
         
         if sigma_min <= 0:
@@ -79,6 +76,8 @@ class SigmaSampler():
             return self.sample_log_sech2(n_samples, quantiles=quantiles)
         elif self.distribution == "ln_data":
             return self.sample_log_data(n_samples, quantiles=quantiles)
+        elif self.distribution == "linear":
+            return self.sample_linear(n_samples, quantiles=quantiles)
     
     def sample_log_normal(self, n_samples, quantiles=None):
         if quantiles is None:
@@ -95,13 +94,8 @@ class SigmaSampler():
         theta_max = np.arctan(self.sigma_data / self.sigma_min)
 
         theta = quantiles * (theta_max - theta_min) + theta_min
-        #reference_ln_sigma = (1 / theta.tan() / 1.707).log()
         ln_sigma = (1 / theta.tan()).log() * self.dist_scale + self.dist_offset
-        return ln_sigma.exp().clip(self.sigma_min)#, self.sigma_max)
-
-        low = np.tanh(self.sigma_ln_min); high = np.tanh(self.sigma_ln_max)
-        ln_sigma = (quantiles * (high - low) + low).atanh() * self.dist_scale + self.dist_offset
-        return ln_sigma.exp().clip(self.sigma_min, self.sigma_max)
+        return ln_sigma.exp().clip(min=self.sigma_min, max=self.sigma_max)
     
     def sample_log_sech2(self, n_samples, quantiles=None):
         if quantiles is None:
@@ -109,6 +103,13 @@ class SigmaSampler():
 
         low = np.tanh(self.sigma_ln_min); high = np.tanh(self.sigma_ln_max)
         ln_sigma = (quantiles * (high - low) + low).atanh() * self.dist_scale + self.dist_offset
+        return ln_sigma.exp().clip(self.sigma_min, self.sigma_max)
+    
+    def sample_linear(self, n_samples, quantiles=None):
+        if quantiles is None:
+            quantiles = torch.rand(n_samples)
+        
+        ln_sigma = quantiles * (self.sigma_ln_max - self.sigma_ln_min) + self.sigma_ln_min
         return ln_sigma.exp().clip(self.sigma_min, self.sigma_max)
     
     def update_pdf(self, pdf):
@@ -145,9 +146,9 @@ if __name__ == "__main__":
     sigma_data = 0.5
     sigma_min = sigma_data / target_snr #0.002
 
-    training_batch_size = 60
+    training_batch_size = 120
     batch_distribution = "ln_data"
-    batch_dist_scale = torch.e
+    batch_dist_scale = 2.2
     batch_dist_offset = 0
     batch_stratified_sampling = True
     batch_distribution_pdf = None
