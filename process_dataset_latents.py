@@ -23,14 +23,23 @@
 import os
 import json
 import shutil
+from copy import deepcopy
 
 from dotenv import load_dotenv
 import torch
 from tqdm.auto import tqdm
 
-from dual_diffusion_pipeline import DualDiffusionPipeline
-from dual_diffusion_utils import init_cuda, load_raw, load_audio, save_safetensors
-        
+from dual_diffusion_pipeline import DualDiffusionPipeline, DualSpectrogramFormat
+from dual_diffusion_utils import init_cuda, load_raw, load_audio, save_safetensors, load_safetensors
+from dual_diffusion_utils import quantize_tensor, dequantize_tensor, save_raw_img, save_audio
+
+def get_pitch_augmentation_format(original_format, shift_semitones):
+    shift_rate = 2 ** (shift_semitones / 12)
+    aug_model_params = deepcopy(original_format.model_params)
+    aug_model_params["spectrogram_params"]["min_frequency"] *= shift_rate
+    aug_model_params["spectrogram_params"]["max_frequency"] *= shift_rate
+    return DualSpectrogramFormat(aug_model_params)
+
 if __name__ == "__main__":
 
     init_cuda()
@@ -39,8 +48,14 @@ if __name__ == "__main__":
     model_name = "edm2_vae_test7_4"
     device = "cuda"
     num_encode_offsets = 8 # should be equal to latent downsample factor
-    batch_size = 2
+    pitch_shifts = [-1, 1]
+    batch_size = 2 # num_encode_offsets should be divisible by batch_size
+    sample_latents = True
+    seed = 2000
+    write_debug_files = True
     fp16 = True
+
+    torch.manual_seed(seed)
 
     model_path = os.path.join(os.environ.get("MODEL_PATH", "./"), model_name)
     model_dtype = torch.bfloat16 if fp16 else torch.float32
@@ -57,12 +72,18 @@ if __name__ == "__main__":
     num_batches_per_sample = num_encode_offsets // batch_size
     assert num_encode_offsets % batch_size == 0, "num_encode_offsets must be divisible by batch_size"
 
+    pipeline.format.spectrogram_params.num_griffin_lim_iters = 200
+    model_params = pipeline.format.model_params
+    pitch_augmentation_formats = [get_pitch_augmentation_format(pipeline.format, shift).to(device) for shift in pitch_shifts]
+    formats = [pipeline.format] + pitch_augmentation_formats
+    
     latents_dataset_path = os.environ.get("LATENTS_DATASET_PATH", "./dataset/latents")
     os.makedirs(latents_dataset_path, exist_ok=True)
 
     dataset_path = os.environ.get("DATASET_PATH", "./dataset/samples")
     dataset_format = os.environ.get("DATASET_FORMAT", ".flac")
     dataset_raw_format = os.environ.get("DATASET_RAW_FORMAT", "int16")
+    debug_path = os.environ.get("DEBUG_PATH", "./debug")
     
     # get split metadata
     split_metadata_files = []
@@ -104,29 +125,40 @@ if __name__ == "__main__":
                 input_raw_samples.append(input_raw_offset_sample)
             input_raw_sample = torch.cat(input_raw_samples, dim=0)
 
-            class_labels = pipeline.get_class_labels(game_id)
-            vae_class_embeddings = pipeline.vae.get_class_embeddings(class_labels)
             input_samples = []
-            for i in range(num_batches_per_sample):
-                batch_input_raw_sample = input_raw_sample[i*batch_size:(i+1)*batch_size]
-                input_sample = pipeline.format.raw_to_sample(batch_input_raw_sample, return_dict=True)["samples"].type(model_dtype)
-                input_samples.append(input_sample)
+            for format in formats:
+                for j in range(num_batches_per_sample):
+                    batch_input_raw_sample = input_raw_sample[j*batch_size:(j+1)*batch_size]
+                    input_sample = format.raw_to_sample(batch_input_raw_sample, return_dict=True)["samples"].type(model_dtype)
+                    input_samples.append(input_sample)
             input_sample = torch.cat(input_samples, dim=0)
             
+            class_labels = pipeline.get_class_labels(game_id)
+            vae_class_embeddings = pipeline.vae.get_class_embeddings(class_labels)            
             latents = []
-            for i in range(num_batches_per_sample):
-                batch_input_sample = input_sample[i*batch_size:(i+1)*batch_size]
+            for j in range(input_sample.shape[0] // batch_size):
+                batch_input_sample = input_sample[j*batch_size:(j+1)*batch_size]
                 posterior = pipeline.vae.encode(batch_input_sample, vae_class_embeddings, pipeline.format)
-                latents.append(posterior.mode())
+                batch_latents = posterior.sample(torch.randn) if sample_latents else posterior.mode()
+                latents.append(batch_latents)
             latents = torch.cat(latents, dim=0)
 
-            # debug
-            #from dual_diffusion_utils import save_raw_img
-            #for i in range(latents.shape[0]):
-            #    save_raw_img(latents[i], f"./debug/_latents_{i}.png")
-            #exit()
+            latents_quantized, offset_and_range = quantize_tensor(latents, 256)
+            latents_dict = {"latents": latents_quantized.type(torch.uint8), "offset_and_range": offset_and_range}
+            save_safetensors(latents_dict, output_path)
 
-            save_safetensors({"latents": latents}, output_path)
+            # debug
+            if write_debug_files:
+                latents_dict = load_safetensors(output_path)
+                latents = dequantize_tensor(latents_dict["latents"], latents_dict["offset_and_range"]).to(device)
+                for j, latent in enumerate(latents.unbind(0)):
+                    save_raw_img(latent, os.path.join(debug_path, "latents", f"latents_{j:02}.png"))
+
+                    decoded = pipeline.vae.decode(latent.unsqueeze(0).to(pipeline.vae.dtype), vae_class_embeddings, pipeline.format)
+                    raw_sample = pipeline.format.sample_to_raw(decoded.float()).squeeze(0)
+                    save_audio(raw_sample, model_params["sample_rate"], os.path.join(debug_path, "latents", f"audio_{j:02}.flac"))
+                exit()
+
             progress_bar.update(1)
             progress_bar.set_postfix({"file_name": file_name})
 
