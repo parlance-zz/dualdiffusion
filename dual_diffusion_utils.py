@@ -38,7 +38,7 @@ from dotenv import load_dotenv
 from scipy.special import erfinv
 from mutagen import File as MTAudioFile
 
-def init_cuda():
+def init_cuda(default_device=None):
     if not torch.cuda.is_available():
         print("Error: PyTorch not compiled with CUDA support or CUDA unavailable")
         exit(1)
@@ -46,6 +46,9 @@ def init_cuda():
         torch.backends.cuda.matmul.allow_tf32 = True
         torch.backends.cudnn.allow_tf32 = True
         torch.backends.cuda.cufft_plan_cache[0].max_size = 250 # stupid cufft memory leak
+
+        if default_device is not None:
+            torch.cuda.set_device(default_device)
 
 def torch_compile(*args, **kwargs):
     def wrapper(func):
