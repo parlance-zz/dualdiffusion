@@ -51,9 +51,6 @@ class SigmaSampler():
             self.dist_scale = None
             self.dist_offset = None
         else:
-            self.sigma_ln_min = np.log(sigma_min)
-            self.sigma_ln_max = np.log(sigma_max)
-
             if distribution == "ln_data":
                 raise ValueError("distribution_pdf is required for ln_data distribution")
             
@@ -117,6 +114,7 @@ class SigmaSampler():
         self.dist_cdf[1:] = self.dist_pdf.cumsum(dim=0)
 
     def _sample_pdf(self, quantiles):
+        quantiles = quantiles.to(self.dist_cdf.device)
         sample_indices = torch.searchsorted(self.dist_cdf, quantiles, out_int32=True).clip(max=self.dist_cdf.shape[0]-2)
         left_bin_values = self.dist_cdf[sample_indices]
         right_bin_values = self.dist_cdf[sample_indices+1]
