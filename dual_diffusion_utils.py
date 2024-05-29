@@ -516,12 +516,20 @@ def get_mel_density(hz):
     return 1127. / (700. + hz)
 
 def quantize_tensor(x, levels):
-    min_val = x.amin()
-    max_val = x.amax()
-    range_val = max_val - min_val
-    step = range_val / (levels - 1)
-    quantized = ((x - min_val) / step).round().clamp(0, levels - 1) * step + min_val
-    return quantized
+    reduction_dims = tuple(range(1, x.ndim)) if x.ndim > 1 else (0,)
+
+    min_val = x.amin(dim=reduction_dims, keepdim=True)
+    max_val = x.amax(dim=reduction_dims, keepdim=True)
+    scale = (max_val - min_val) / (levels - 1)
+
+    quantized = ((x - min_val) / scale).round().clamp(0, levels - 1)
+    offset_and_range = torch.stack((min_val.flatten(), scale.flatten()), dim=-1)
+    return quantized, offset_and_range
+
+def dequantize_tensor(x, offset_and_range):
+    view_dims = (-1,) + ((1,) * (x.ndim-1) if x.ndim > 1 else ())
+    min_val, scale = offset_and_range.unbind(-1)
+    return x * scale.view(view_dims) + min_val.view(view_dims)
 
 def save_raw_img(x, img_path, allow_inversion=False, allow_colormap=True, allow_recenter=True, allow_rescaling=True):
     
