@@ -3,13 +3,13 @@ from dotenv import load_dotenv
 from huggingface_hub import HfApi
 import time
 
-TARGET_HF_REPOSITORY = "parlance/spc_audio_latents"
-#OUTPUT_SAMPLE_DIR = os.environ.get("DATASET_PATH")
-OUTPUT_SAMPLE_DIR = os.environ.get("LATENTS_DATASET_PATH")
-
 if __name__ == "__main__":
 
     load_dotenv(override=True)
+
+    TARGET_HF_REPOSITORY = "parlance/spc_audio_latents"
+    #OUTPUT_SAMPLE_DIR = os.environ.get("DATASET_PATH")
+    OUTPUT_SAMPLE_DIR = os.environ.get("LATENTS_DATASET_PATH")
 
     if not os.path.exists(OUTPUT_SAMPLE_DIR):        
         print(f"Dataset path {OUTPUT_SAMPLE_DIR} does not exist")
