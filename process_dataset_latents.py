@@ -157,7 +157,7 @@ if __name__ == "__main__":
                     batch_input_sample = input_sample[j*batch_size:(j+1)*batch_size]
                     posterior = pipeline.vae.encode(batch_input_sample, vae_class_embeddings, pipeline.format)
                     batch_latents = posterior.sample(torch.randn) if sample_latents else posterior.mode()
-                    latents.append(batch_latents)
+                    latents.append(batch_latents.float())
                 latents = torch.cat(latents, dim=0)
 
                 latents_quantized, offset_and_range = quantize_tensor(latents, 256)
