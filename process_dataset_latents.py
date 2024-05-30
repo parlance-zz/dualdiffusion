@@ -28,6 +28,7 @@ from copy import deepcopy
 from dotenv import load_dotenv
 import torch
 from tqdm.auto import tqdm
+from accelerate import PartialState
 
 from dual_diffusion_pipeline import DualDiffusionPipeline, DualSpectrogramFormat
 from dual_diffusion_utils import init_cuda, load_raw, load_audio, save_safetensors, load_safetensors
@@ -46,7 +47,6 @@ if __name__ == "__main__":
     load_dotenv(override=True)
 
     model_name = "edm2_vae_test7_4"
-    device = "cuda"
     num_encode_offsets = 8 # should be equal to latent downsample factor
     pitch_shifts = [-1, 1]
     batch_size = 2 # num_encode_offsets should be divisible by batch_size
@@ -55,6 +55,8 @@ if __name__ == "__main__":
     write_debug_files = True
     fp16 = True
 
+    distributed_state = PartialState()
+    device = distributed_state.device
     torch.manual_seed(seed)
 
     model_path = os.path.join(os.environ.get("MODEL_PATH", "./"), model_name)
@@ -100,13 +102,13 @@ if __name__ == "__main__":
         progress_bar = tqdm(total=len(split_metadata))
         progress_bar.set_description(f"Split: {split_metadata_file}")
 
-        for i, sample in enumerate(split_metadata):
+        #for i, sample in enumerate(split_metadata):
+        with distributed_state.split_between_processes(split_metadata) as sample:
 
             game_id = sample["game_id"]
             file_name = sample["file_name"]
             output_filename = f"{os.path.splitext(file_name)[0]}.safetensors"
             output_path = os.path.join(latents_dataset_path, output_filename)
-            split_metadata[i]["file_name"] = output_filename
 
             if os.path.exists(output_path):
                 progress_bar.update(1)
@@ -159,10 +161,17 @@ if __name__ == "__main__":
                     save_audio(raw_sample, model_params["sample_rate"], os.path.join(debug_path, "latents", f"audio_{j:02}.flac"))
                 exit()
 
-            progress_bar.update(1)
-            progress_bar.set_postfix({"file_name": file_name})
+            if distributed_state.is_main_process:
+                progress_bar.update(1)
+                progress_bar.set_postfix({"file_name": file_name})
 
         progress_bar.close()
+
+        # update filename in split metadatato new safetensors latents
+        for i, sample in enumerate(split_metadata):
+            file_name = sample["file_name"]
+            output_filename = f"{os.path.splitext(file_name)[0]}.safetensors"
+            split_metadata[i]["file_name"] = output_filename
 
         # save split metadata for latents dataset
         split_metadata_output_path = os.path.join(latents_dataset_path, split_metadata_file)
