@@ -3,6 +3,8 @@ from dotenv import load_dotenv
 from huggingface_hub import HfApi
 import time
 
+# huggingface-cli download parlance/spc_audio_latents --repo-type dataset --local-dir ./datasets/latents
+
 if __name__ == "__main__":
 
     load_dotenv(override=True)
