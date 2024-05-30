@@ -864,8 +864,9 @@ def do_training_loop(args,
         sigma_ln_std = model_params["unet_training_params"]["sigma_ln_std"]
         sigma_ln_mean = model_params["unet_training_params"]["sigma_ln_mean"]
         logger.info(f"Sampling training sigmas with sigma_ln_std = {sigma_ln_std:.4f}, sigma_ln_mean = {sigma_ln_mean:.4f}")
+        logger.info(f"sigma_max = {module.sigma_max}, sigma_min = {module.sigma_min}")
 
-        if args.num_unet_loss_buckets > 0 and use_stratified_sigma_sampling:
+        if args.num_unet_loss_buckets > 0:
             logger.info(f"Using {args.num_unet_loss_buckets} loss buckets")
             unet_loss_buckets = torch.zeros(args.num_unet_loss_buckets,
                                                 device="cpu", dtype=torch.float32)
@@ -873,7 +874,6 @@ def do_training_loop(args,
                                                     device="cpu", dtype=torch.float32)
         else:
             logger.info("UNet loss buckets are disabled")
-            args.num_unet_loss_buckets = 0
 
         if vae is not None:
             if vae.config.last_global_step == 0:
@@ -883,6 +883,8 @@ def do_training_loop(args,
             target_snr = vae.get_target_snr()
         else:
             target_snr = model_params.get("target_snr", 1e4)
+
+        logger.info(f"Target SNR: {target_snr:.3f}")
 
         input_perturbation = model_params["unet_training_params"]["input_perturbation"]
         if input_perturbation > 0: logger.info(f"Using input perturbation of {input_perturbation}")
@@ -897,13 +899,18 @@ def do_training_loop(args,
             "sigma_ln_mean",
         ]
 
-        sigma_sample_temperature = 2#4.75 #5
+        sigma_sample_temperature = 2.15 #2.2 #2.35 #2
         sigma_sample_resolution = 250
-        ln_sigma = torch.linspace(np.log(module.sigma_min), np.log(module.sigma_max), sigma_sample_resolution, device=accelerator.device)
+        sigma_max = module.sigma_max
+        sigma_min = module.sigma_data / target_snr
+        sigma_data = module.sigma_data
+        ln_sigma = torch.linspace(np.log(sigma_min), np.log(sigma_max), sigma_sample_resolution, device=accelerator.device)
         ln_sigma_error = module.logvar_linear(module.logvar_fourier(ln_sigma/4)).float().flatten().detach()
         sigma_distribution_pdf = (-sigma_sample_temperature * ln_sigma_error).exp()
-        sigma_sampler = SigmaSampler(module.sigma_max, module.sigma_min, module.sigma_data,
+        sigma_sampler = SigmaSampler(sigma_max, sigma_min, sigma_data,
                                      distribution="ln_data", distribution_pdf=sigma_distribution_pdf)
+        #sigma_sampler = SigmaSampler(module.sigma_max, module.sigma_min, module.sigma_data,
+        #                             distribution="log_sech", dist_scale=1, dist_offset=-0.54)
 
 
     total_batch_size = args.train_batch_size * accelerator.num_processes * args.gradient_accumulation_steps
@@ -935,13 +942,14 @@ def do_training_loop(args,
                     progress_bar.update(1)
                 continue
             
-            if args.module == "unet" and grad_accum_steps == 0 and use_stratified_sigma_sampling:
+            if args.module == "unet" and grad_accum_steps == 0:
                 
-                # instead of randomly sampling each sigma, distribute the batch evenly across the distribution
-                # and add a random offset for continuous uniform coverage
-                global_quantiles = (torch.arange(total_batch_size, device=accelerator.device)+0.5) / total_batch_size
-                global_quantiles += (torch.rand(1, device=accelerator.device) - 0.5) / total_batch_size
-                global_quantiles = accelerator.gather(global_quantiles.unsqueeze(0))[0] # sync quantiles across all ranks / processes
+                if use_stratified_sigma_sampling:
+                    # instead of randomly sampling each sigma, distribute the batch evenly across the distribution
+                    # and add a random offset for continuous uniform coverage
+                    global_quantiles = (torch.arange(total_batch_size, device=accelerator.device)+0.5) / total_batch_size
+                    global_quantiles += (torch.rand(1, device=accelerator.device) - 0.5) / total_batch_size
+                    global_quantiles = accelerator.gather(global_quantiles.unsqueeze(0))[0] # sync quantiles across all ranks / processes
                 
                 if args.num_unet_loss_buckets > 0:
                     unet_loss_buckets.zero_()
@@ -976,13 +984,15 @@ def do_training_loop(args,
                     if use_stratified_sigma_sampling:
                         process_batch_quantiles = global_quantiles[accelerator.local_process_index::accelerator.num_processes]
                         quantiles = process_batch_quantiles[grad_accum_steps * args.train_batch_size:(grad_accum_steps+1) * args.train_batch_size]
-                    
+                    else:
+                        quantiles = None
+
                     #if use_stratified_sigma_sampling:
                     #    batch_normal = sigma_ln_mean + (sigma_ln_std * (2 ** 0.5)) * (quantiles * 2 - 1).erfinv().clip(min=-5, max=5)
                     #else:
                     #    batch_normal = torch.randn(samples.shape[0], device=accelerator.device) * sigma_ln_std + sigma_ln_mean
                     #sigma = batch_normal.exp().clip(min=module.sigma_min, max=module.sigma_max)
-                    sigma = sigma_sampler.sample_log_data(quantiles=quantiles)
+                    sigma = sigma_sampler.sample(samples.shape[0], quantiles=quantiles).to(accelerator.device)
                     noise = torch.randn_like(samples) * sigma.view(-1, 1, 1, 1)
                     samples = samples * module.sigma_data
 
@@ -996,10 +1006,11 @@ def do_training_loop(args,
                     mse_loss = F.mse_loss(denoised, samples, reduction="none")
                     loss_weight = (sigma ** 2 + module.sigma_data ** 2) / (sigma * module.sigma_data) ** 2
                     loss = (loss_weight.view(-1, 1, 1, 1) / error_logvar.exp() * mse_loss + error_logvar).mean()
+                    #loss = (loss_weight.view(-1, 1, 1, 1) * mse_loss).mean()
                     
                     if args.num_unet_loss_buckets > 0:
                         batch_loss = mse_loss.mean(dim=(1,2,3)) * loss_weight
-                        
+
                         global_step_quantiles = (accelerator.gather(sigma.detach()).cpu().log() - np.log(module.sigma_min)) / (np.log(module.sigma_max) - np.log(module.sigma_min))
                         global_step_batch_loss = accelerator.gather(batch_loss.detach()).cpu()
                         target_buckets = (global_step_quantiles * unet_loss_buckets.shape[0]).long().clip(min=0, max=unet_loss_buckets.shape[0]-1)
@@ -1067,7 +1078,7 @@ def do_training_loop(args,
             if accelerator.sync_gradients:
                 module.normalize_weights()
 
-                ln_sigma = torch.linspace(np.log(module.sigma_min), np.log(module.sigma_max), sigma_sample_resolution, device=accelerator.device)
+                ln_sigma = torch.linspace(np.log(sigma_min), np.log(sigma_max), sigma_sample_resolution, device=accelerator.device)
                 ln_sigma_error = module.logvar_linear(module.logvar_fourier(ln_sigma/4)).float().flatten().detach()
                 sigma_distribution_pdf = (-sigma_sample_temperature * ln_sigma_error).exp()
                 sigma_sampler.update_pdf(sigma_distribution_pdf)
