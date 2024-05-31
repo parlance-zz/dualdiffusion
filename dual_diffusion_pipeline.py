@@ -500,23 +500,20 @@ class DualDiffusionPipeline(DiffusionPipeline):
                 
                 cfg_model_output = (cfg_model_output + cfg_model_output_hat) / 2
 
-            #if i <= 5:
-            #    cfg_model_output /= cfg_model_output.square().mean(dim=(1,2,3), keepdim=True).sqrt().clip(min=0.23) / 0.23
-
             debug_v_list.append(get_cos_angle(sample, cfg_model_output) / (torch.pi/2))
             debug_a_list.append(get_cos_angle(cfg_model_output, last_cfg_model_output) / (torch.pi/2))
             debug_d_list.append(get_cos_angle(initial_noise, sample) / (torch.pi/2))
             debug_s_list.append(cfg_model_output.square().mean(dim=(1,2,3)).sqrt())
             debug_m_list.append(cfg_model_output.mean(dim=(1,2,3)))
 
-            print(f"step: {i:>{3}}/{steps:>{3}}",
+            print(f"step: {(i+1):>{3}}/{steps:>{3}}",
                   f"v:{debug_v_list[-1][0].item():{8}f}",
                   f"a:{debug_a_list[-1][0].item():{8}f}",
                   f"d:{debug_d_list[-1][0].item():{8}f}",
                   f"s:{debug_s_list[-1][0].item():{8}f}",
                   f"m:{debug_m_list[-1][0].item():{8}f}")
             
-            t = sigma_next / sigma_curr
+            t = sigma_next / sigma_curr if (i+1) < steps else 0
             sample = (t * sample + (1 - t) * cfg_model_output)
 
             sample0_img = save_raw_img(sample[0], os.path.join(debug_path, f"debug_sample_{i:03}.png"))
@@ -569,7 +566,6 @@ class DualDiffusionPipeline(DiffusionPipeline):
         raw_sample = self.format.sample_to_raw(sample)
 
         if show_debug_plots:
-            #multi_plot((v_measured, "normalized_velocity"),
             multi_plot((sigma_schedule, "sigma_schedule"),
                        (a_measured, "path_curvature"),
                        (s_measured, "output_norm"),
