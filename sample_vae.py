@@ -28,8 +28,10 @@ import numpy as np
 import torch
 
 from dual_diffusion_pipeline import DualDiffusionPipeline
-from dual_diffusion_utils import init_cuda, save_audio, save_raw, load_raw, load_audio, save_raw_img, quantize_tensor
-        
+from dual_diffusion_utils import init_cuda, save_audio, save_raw, load_raw
+from dual_diffusion_utils import load_audio, save_raw_img, quantize_tensor, dequantize_tensor
+from unet_edm2 import normalize
+
 if __name__ == "__main__":
 
     init_cuda()
@@ -49,8 +51,8 @@ if __name__ == "__main__":
     sample_latents = True
     normalize_latents = False #True
     random_latents = False #True
-    quantize_latents = 0 #255
-    add_latent_noise = 0 #0.1
+    quantize_latents = 0#256
+    add_latent_noise = 0#1/32
 
     model_path = os.path.join(os.environ.get("MODEL_PATH", "./"), model_name)
     model_dtype = torch.bfloat16 if fp16 else torch.float32
@@ -135,11 +137,12 @@ if __name__ == "__main__":
         else:
             latents = posterior.mode()
         if quantize_latents > 0:
-            latents = quantize_tensor(latents, quantize_latents)
+            latents, offset_and_range = quantize_tensor(latents, quantize_latents)
+            latents = dequantize_tensor(latents, offset_and_range)
         if add_latent_noise > 0:
-            latents += pipeline.noise_fn(latents.shape) * add_latent_noise
+            latents += torch.rand_like(latents) * add_latent_noise  
         if normalize_latents:
-            latents = (latents - latents.mean()) / latents.std()
+            latents = normalize(latents)
         if random_latents:
             latents = pipeline.noise_fn(latents.shape, dtype=latents.dtype, device=latents.device)
         model_output = pipeline.vae.decode(latents, vae_class_embeddings, pipeline.format)
