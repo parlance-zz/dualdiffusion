@@ -28,13 +28,14 @@ import torch
 import numpy as np
 from tqdm.auto import tqdm
 
-from dual_diffusion_utils import init_cuda, save_raw, load_safetensors, multi_plot, save_safetensors
+from dual_diffusion_utils import init_cuda, save_raw, load_safetensors, multi_plot, save_safetensors, dequantize_tensor
 
 DATASET_PATH = os.environ.get("LATENTS_DATASET_PATH", "./dataset/latents")
+
 SPLIT_FILE = "train.jsonl"
-SIGMA_MAX = 80
-SIGMA_MIN = 0.002
-SIGMA_DATA = 0.5
+SIGMA_MAX = 200
+SIGMA_MIN = 1/32
+SIGMA_DATA = 1
 NUM_BINS = 1000
 
 if __name__ == "__main__":
@@ -57,12 +58,13 @@ if __name__ == "__main__":
     progress_bar.set_description(f"Split: {split_metadata_file}")
 
     for i, sample in enumerate(split_metadata):
-
+        
         file_name = sample["file_name"]
         output_filename = f"{os.path.splitext(file_name)[0]}.safetensors"
-        latents = load_safetensors(os.path.join(DATASET_PATH, output_filename))["latents"].float()
-
-        rfft2_abs = (torch.fft.rfft2(latents, norm="ortho").abs() * SIGMA_DATA).log().clip(min=hist_min, max=hist_max)
+        latents_dict = load_safetensors(os.path.join(DATASET_PATH, output_filename))
+        latents = dequantize_tensor(latents_dict["latents"], latents_dict["offset_and_range"]).float()
+        
+        rfft2_abs = (torch.fft.rfft2(latents * SIGMA_DATA, norm="ortho").abs()).log().clip(min=hist_min, max=hist_max)
         hist += torch.histc(rfft2_abs, bins=NUM_BINS, min=hist_min, max=hist_max) / len(split_metadata)
 
         progress_bar.update(1)
@@ -73,9 +75,13 @@ if __name__ == "__main__":
     print(f"sigma mode: {sigma_mode}")
 
     hist /= hist.sum()
-    multi_plot((hist, "latents_ln_sigma_histogram"))
+    multi_plot((hist, "latents_abs_histogram"),
+               (hist.log(), "ln_latents_abs_histogram"),
+               x_axis_range=(hist_min, hist_max))
     if debug_path is not None:
-        save_raw(hist, os.path.join(debug_path, "latents_ln_sigma_histogram.raw"))
+        save_raw(hist, os.path.join(debug_path, "latents_abs_histogram.raw"))
+
+    exit()
 
     statistics_file_path = os.path.join(DATASET_PATH, "statistics.safetensors")
     print(f"Saving statistics to {statistics_file_path}...")
