@@ -87,8 +87,8 @@ class SigmaSampler():
         if quantiles is None:
             quantiles = torch.rand(n_samples)
 
-        theta_min = np.arctan(self.sigma_data / self.sigma_max)
-        theta_max = np.arctan(self.sigma_data / self.sigma_min)
+        theta_min = np.arctan(1 / self.sigma_max * np.exp(self.dist_offset))
+        theta_max = np.arctan(1 / self.sigma_min * np.exp(self.dist_offset))
 
         theta = quantiles * (theta_max - theta_min) + theta_min
         ln_sigma = (1 / theta.tan()).log() * self.dist_scale + self.dist_offset
@@ -138,27 +138,34 @@ if __name__ == "__main__":
 
     load_dotenv(override=True)
 
-    reference_model_name = "edm2_vae_test7_4"
+    reference_model_name = "edm2_vae_test7_5"
     target_snr = 32
-    sigma_max = 125 #80
+    sigma_max = 200 #125 #80
     sigma_data = 0.5
     sigma_min = sigma_data / target_snr #0.002
 
-    training_batch_size = 120
+    training_batch_size = 72
+    #batch_distribution = "log_sech"
+    #batch_dist_scale = 1
+    #batch_dist_offset = -0.54
     batch_distribution = "ln_data"
-    batch_dist_scale = 2.2
+    batch_dist_scale = 3.75#5
     batch_dist_offset = 0
+    #batch_distribution = "log_normal"
+    #batch_dist_scale = 1
+    #batch_dist_offset = -0.54
     batch_stratified_sampling = True
     batch_distribution_pdf = None
 
-    reference_batch_size = 60
-    reference_distribution = "ln_data"
-    reference_dist_scale = 2
-    reference_dist_offset = 0
+    reference_batch_size = 72
+    #reference_distribution = "ln_data"
+    #reference_dist_scale = 4
+    #reference_dist_offset = 0
     #reference_distribution = "log_normal"
-    #reference_dist_scale = 1
-    #reference_dist_offset = -0.4
-    #reference_distribution = "log_sech"
+    reference_distribution = "log_sech"
+    reference_dist_scale = 1#0.7071
+    reference_dist_offset = -0.54 #-0.4
+    #reference_distribution = "log_sech^2"
     #reference_dist_scale = 1
     #reference_dist_offset = -0.54
     reference_stratified_sampling = True
@@ -207,8 +214,8 @@ if __name__ == "__main__":
     batch_sigma_histo = torch.zeros(n_histo_bins)
     reference_sigma_histo = torch.zeros(n_histo_bins)
 
-    batch_example = torch.ones(n_histo_bins * 4)
-    reference_example = torch.ones(n_histo_bins * 4)
+    batch_example = torch.ones(n_histo_bins * 8)
+    reference_example = torch.ones(n_histo_bins * 8)
 
     for i in range(n_iter):
         
