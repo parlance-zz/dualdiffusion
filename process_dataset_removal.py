@@ -22,6 +22,7 @@
 
 import os
 import json
+import shutil
 from copy import deepcopy
 
 from dotenv import load_dotenv
@@ -108,6 +109,7 @@ if __name__ == "__main__":
                     split_metadata.remove(sample)
 
             # save filtered split metadata for dataset
+            shutil.copyfile(os.path.join(dataset_path, split_metadata_file), os.path.join(dataset_path, f"{split_metadata_file}.old"))
             split_metadata_output_path = os.path.join(dataset_path, split_metadata_file)
             print(f"Saving updated split metadata to {split_metadata_output_path}...")
             with open(split_metadata_output_path, "w") as f:
