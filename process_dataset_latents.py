@@ -50,7 +50,8 @@ if __name__ == "__main__":
     num_encode_offsets = 8 # should be equal to latent downsample factor
     pitch_shifts = [-1, 1]
     batch_size = 8 # num_encode_offsets should be divisible by batch_size
-    sample_latents = True
+    sample_latents = False
+    quantize_latents = False
     seed = 2000
     write_debug_files = False
     fp16 = True
@@ -160,15 +161,23 @@ if __name__ == "__main__":
                     latents.append(batch_latents.float())
                 latents = torch.cat(latents, dim=0)
 
-                latents_quantized, offset_and_range = quantize_tensor(latents, 256)
-                latents_dict = {"latents": latents_quantized.type(torch.uint8), "offset_and_range": offset_and_range}
+                if quantize_latents:
+                    latents_quantized, offset_and_range = quantize_tensor(latents, 256)
+                    latents_dict = {"latents": latents_quantized.type(torch.uint8), "offset_and_range": offset_and_range}
+                else:
+                    latents_dict = {"latents": latents }
                 save_safetensors(latents_dict, output_path)
 
                 # debug
                 if write_debug_files:
                     if distributed_state.is_main_process:
+                        
                         latents_dict = load_safetensors(output_path)
-                        latents = dequantize_tensor(latents_dict["latents"], latents_dict["offset_and_range"]).to(device)
+                        if quantize_latents:
+                            latents = dequantize_tensor(latents_dict["latents"], latents_dict["offset_and_range"]).to(device)
+                        else:
+                            latents = latents_dict["latents"].to(device)
+                            
                         for j, latent in enumerate(latents.unbind(0)):
                             save_raw_img(latent, os.path.join(debug_path, "latents", f"latents_{j:02}.png"))
 
