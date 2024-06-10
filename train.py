@@ -49,11 +49,12 @@ from diffusers.optimization import get_scheduler
 from diffusers.utils import is_tensorboard_available
 import safetensors.torch as ST
 
-from unet_edm2 import UNet
+#from unet_edm2 import UNet
+from dit_edm2 import UNet
 from unet_edm2_ema import PowerFunctionEMA
 from dual_diffusion_pipeline import DualDiffusionPipeline
 from dual_diffusion_utils import init_cuda, load_audio, save_audio, load_raw, dict_str
-from dual_diffusion_utils import normalize, normalize_lufs
+from dual_diffusion_utils import normalize, normalize_lufs, dequantize_tensor
 from sigma_sampler import SigmaSampler
 
 logger = get_logger(__name__, log_level="INFO")
@@ -146,20 +147,8 @@ def parse_args():
         "--num_unet_loss_buckets",
         type=int,
         default=10,
-        help=("When training the diffusion unet with stratified sigma sampling unweighted loss for sigma sampling quantiles can be logged individually. Set to 0 to disable."),
+        help=("Unweighted loss for log-linear sigma ranges can be logged individually. Set to 0 to disable."),
     )
-    #parser.add_argument(
-    #    "--pitch_augmentation_range",
-    #    type=float,
-    #    default=0, #2/12,
-    #    help="Modulate the pitch of the sample by a random amount within this range (in octaves) - Currently unused",
-    #)
-    #parser.add_argument(
-    #    "--tempo_augmentation_range",
-    #    type=float,
-    #    default=0, #0.167,
-    #    help="Modulate the tempo of the sample by a random amount within this range (value of 1 is double/half speed)  - Currently unused",
-    #)
     parser.add_argument("--use_ema", action="store_true", help="Whether to use EMA model.")
     parser.add_argument("--ema_cpu_offload", action="store_true", help="Enable to save vram and offload EMA model to CPU.")
     parser.add_argument(
@@ -694,6 +683,12 @@ class DatasetTransformer(torch.nn.Module):
                     latents_idx = np.random.randint(0, latents_shape[0])
                     t_offset = np.random.randint(0, latents_shape[-1] - self.sample_crop_width + 1)
                     sample = latents_slice[latents_idx, ..., t_offset:t_offset + self.sample_crop_width]
+
+                    try:
+                        offset_and_range = f.get_slice("offset_and_range")
+                        sample = dequantize_tensor(sample, offset_and_range[latents_idx])
+                    except Exception as _:
+                        pass
             else:
                 sample, t_offset = load_audio(file_path,
                                               start=-1,
@@ -899,18 +894,21 @@ def do_training_loop(args,
             "sigma_ln_mean",
         ]
 
-        sigma_sample_temperature = 2.15 #2.2 #2.35 #2
-        sigma_sample_resolution = 250
-        sigma_max = module.sigma_max
-        sigma_min = module.sigma_data / target_snr
-        sigma_data = module.sigma_data
-        ln_sigma = torch.linspace(np.log(sigma_min), np.log(sigma_max), sigma_sample_resolution, device=accelerator.device)
-        ln_sigma_error = module.logvar_linear(module.logvar_fourier(ln_sigma/4)).float().flatten().detach()
-        sigma_distribution_pdf = (-sigma_sample_temperature * ln_sigma_error).exp()
-        sigma_sampler = SigmaSampler(sigma_max, sigma_min, sigma_data,
-                                     distribution="ln_data", distribution_pdf=sigma_distribution_pdf)
-        #sigma_sampler = SigmaSampler(module.sigma_max, module.sigma_min, module.sigma_data,
-        #                             distribution="log_sech", dist_scale=1, dist_offset=-0.54)
+        #sigma_sample_max_temperature = 5
+        #sigma_sample_pdf_skew = 12.
+        #sigma_temperature_ref_steps = 20000
+        #sigma_sample_temperature = min(global_step / sigma_temperature_ref_steps, 1) * sigma_sample_max_temperature
+        #sigma_sample_resolution = 128 - 1
+        #sigma_max = module.sigma_max
+        #sigma_min = module.sigma_data / target_snr
+        #sigma_data = module.sigma_data
+        #ln_sigma = torch.linspace(np.log(sigma_min), np.log(sigma_max), sigma_sample_resolution, device=accelerator.device)
+        #ln_sigma_error = module.logvar_linear(module.logvar_fourier(ln_sigma/4)).float().flatten().detach()
+        #sigma_distribution_pdf = (-sigma_sample_temperature * ln_sigma_error).exp() + torch.linspace(sigma_sample_pdf_skew**0.5, 0, sigma_sample_resolution, device=accelerator.device).square()
+        #sigma_sampler = SigmaSampler(sigma_max, sigma_min, sigma_data,
+        #                             distribution="ln_data", distribution_pdf=sigma_distribution_pdf)
+        sigma_sampler = SigmaSampler(module.sigma_max, module.sigma_data / target_snr, module.sigma_data,
+                                     distribution="log_sech", dist_scale=1, dist_offset=0.2) #-0.54)
 
 
     total_batch_size = args.train_batch_size * accelerator.num_processes * args.gradient_accumulation_steps
@@ -972,6 +970,7 @@ def do_training_loop(args,
                     unet_class_embeddings = module.get_class_embeddings(class_labels)
 
                     if args.train_data_format == ".safetensors":
+                        #samples = normalize(raw_samples + torch.randn_like(raw_samples) * np.exp(0.5 * vae.get_noise_logvar())).float()
                         samples = normalize(raw_samples).float()
                         assert samples.shape == latent_shape
                     else:
@@ -1078,10 +1077,11 @@ def do_training_loop(args,
             if accelerator.sync_gradients:
                 module.normalize_weights()
 
-                ln_sigma = torch.linspace(np.log(sigma_min), np.log(sigma_max), sigma_sample_resolution, device=accelerator.device)
-                ln_sigma_error = module.logvar_linear(module.logvar_fourier(ln_sigma/4)).float().flatten().detach()
-                sigma_distribution_pdf = (-sigma_sample_temperature * ln_sigma_error).exp()
-                sigma_sampler.update_pdf(sigma_distribution_pdf)
+                #sigma_sample_temperature = min(global_step / sigma_temperature_ref_steps, 1) * sigma_sample_max_temperature
+                #ln_sigma = torch.linspace(np.log(sigma_min), np.log(sigma_max), sigma_sample_resolution, device=accelerator.device)
+                #ln_sigma_error = module.logvar_linear(module.logvar_fourier(ln_sigma/4)).float().flatten().detach()
+                #sigma_distribution_pdf = (-sigma_sample_temperature * ln_sigma_error).exp() + torch.linspace(sigma_sample_pdf_skew**0.5, 0, sigma_sample_resolution, device=accelerator.device).square()
+                #sigma_sampler.update_pdf(sigma_distribution_pdf)
             
                 progress_bar.update(1)
                 global_step += 1
@@ -1106,7 +1106,9 @@ def do_training_loop(args,
                 if args.module == "unet" and args.num_unet_loss_buckets > 0:
                     for i in range(unet_loss_buckets.shape[0]):
                         if unet_loss_bucket_counts[i].item() > 0:
-                            logs[f"unet_loss_buckets/{i}"] = (unet_loss_buckets[i] / unet_loss_bucket_counts[i]).item()
+                            bucket_ln_sigma_start = np.log(module.sigma_min) + i * (np.log(module.sigma_max) - np.log(module.sigma_min)) / unet_loss_buckets.shape[0]
+                            bucket_ln_sigma_end = np.log(module.sigma_min) + (i+1) * (np.log(module.sigma_max) - np.log(module.sigma_min)) / unet_loss_buckets.shape[0]
+                            logs[f"unet_loss_buckets/b{i} s:{bucket_ln_sigma_start:.3f} ~ {bucket_ln_sigma_end:.3f}"] = (unet_loss_buckets[i] / unet_loss_bucket_counts[i]).item()
 
                 accelerator.log(logs, step=global_step)
                 progress_bar.set_postfix(**logs)
