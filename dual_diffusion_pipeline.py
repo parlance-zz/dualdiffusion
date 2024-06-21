@@ -31,7 +31,12 @@ import cv2
 from diffusers.pipelines.pipeline_utils import DiffusionPipeline
 
 #from unet_edm2 import UNet
-from dit_edm2 import UNet
+from unet_edm2_b import UNet
+#from dit_edm2 import UNet
+#from dit_edm2_b import UNet
+#from dit_edm2_c import UNet
+#from dit_edm2_e import UNet
+#from dit_edm2_f import UNet
 from autoencoder_kl_dual import AutoencoderKLDual
 from autoencoder_kl_edm2 import AutoencoderKL_EDM2
 from spectrogram import SpectrogramParams, SpectrogramConverter

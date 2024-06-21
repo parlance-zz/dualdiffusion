@@ -50,6 +50,18 @@ def normalize(x, dim=None, eps=1e-4):
     return x / norm.to(x.dtype)
 
 #----------------------------------------------------------------------------
+# Upsample or downsample the given tensor with the given filter,
+# or keep it as is.
+
+def resample(x, mode="keep"):
+    if mode == "keep":
+        return x
+    elif mode == 'down':
+        return x[:, :, 0::2] + x[:, :, 1::2]
+    elif mode == 'up':
+        return x.repeat_interleave(2, dim=2)
+
+#----------------------------------------------------------------------------
 # Magnitude-preserving SiLU (Equation 81).
 
 def mp_silu(x):
@@ -84,10 +96,7 @@ class MPFourier(torch.nn.Module):
         self.register_buffer('phases', torch.pi/2 * (torch.arange(num_channels) % 2 == 0).float())
 
     def forward(self, x):
-        if x.ndim == 1:
-            y = x.float().ger(self.freqs.float()) + self.phases.float()
-        else:
-            y = (x.float() * self.freqs.float().view(1,-1, 1, 1) + self.phases.float().view(1,-1, 1, 1))
+        y = x.float().ger(self.freqs.float()) + self.phases.float()
         return (y.cos() * np.sqrt(2)).to(x.dtype)
 
 #----------------------------------------------------------------------------
@@ -120,59 +129,71 @@ class MPConv(torch.nn.Module):
     def normalize_weights(self):
         if self.disable_weight_normalization: return
         self.weight.copy_(normalize(self.weight))
-
+   
 #----------------------------------------------------------------------------
 # U-Net encoder/decoder block with optional self-attention (Figure 21).
 
 class Block(torch.nn.Module):
 
-    __constants__ = ["out_channels", "pos_channels", "flavor", "resample_mode", "num_heads", "dropout", "res_balance", "attn_balance", "clip_act"]
+    __constants__ = ["out_channels", "flavor", "resample_mode", "num_heads",
+                     "dropout", "res_balance", "attn_balance", "clip_act", "width", "height"]
 
     def __init__(self,
         in_channels,                    # Number of input channels.
         out_channels,                   # Number of output channels.
         emb_channels,                   # Number of embedding channels.
-        pos_channels,                   # Number of positional embedding channels.
         flavor              = 'enc',    # Flavor: 'enc' or 'dec'.
-        channels_per_head   = 128,      # Number of channels per attention head.
+        resample_mode       = 'keep',   # Resampling: 'keep', 'up', or 'down'.
+        attention           = False,    # Include self-attention?
+        channels_per_head   = 64,       # Number of channels per attention head.
         dropout             = 0,        # Dropout probability.
-        res_balance         = 0.5,      # Balance between main branch (0) and residual branch (1).
-        attn_balance        = 0.5,      # Balance between main branch (0) and self-attention (1).
+        res_balance         = 0.33333,      # Balance between main branch (0) and residual branch (1).
+        attn_balance        = 0.33333,      # Balance between main branch (0) and self-attention (1).
         clip_act            = 256,      # Clip output activations. None = do not clip.
+        width               = 696,
+        height              = 32,
     ):
         super().__init__()
 
-        if out_channels % channels_per_head != 0:
-            raise ValueError(f'Number of output channels {out_channels} must be divisible by the number of channels per head {channels_per_head}.')
+        kernel_size = [(3 if height > 1 else 1), 3]
 
         self.out_channels = out_channels
-        self.pos_channels = pos_channels
         self.flavor = flavor
-        self.num_heads = out_channels // channels_per_head
+        self.resample_mode = resample_mode
+        self.num_heads = out_channels // channels_per_head if attention else 0
         self.dropout = dropout
         self.res_balance = res_balance
         self.attn_balance = attn_balance
         self.clip_act = clip_act
         self.emb_gain = torch.nn.Parameter(torch.zeros([]))
-        self.conv_res0 = MPConv(out_channels if flavor == 'enc' else in_channels, out_channels, kernel=[1,3])
+        self.conv_res0 = MPConv(out_channels if flavor == 'enc' else in_channels, out_channels, kernel=kernel_size)
         self.emb_linear = MPConv(emb_channels, out_channels, kernel=[]) if emb_channels != 0 else None
-        self.conv_res1 = MPConv(out_channels, out_channels, kernel=[1,3])
+        self.conv_res1 = MPConv(out_channels, out_channels, kernel=kernel_size)
         self.conv_skip = MPConv(in_channels, out_channels, kernel=[1,1]) if in_channels != out_channels else None
 
-        self.attn_qk = MPConv(out_channels * 2, out_channels * 2, kernel=[1,1])
-        self.attn_v = MPConv(out_channels, out_channels, kernel=[1,1])
-        self.attn_proj = MPConv(out_channels, out_channels, kernel=[1,1])
+        self.width = width
+        self.height = height
 
-    def forward(self, x, emb, pos_emb):
+        if self.num_heads != 0:
+            self.attn_qkv = MPConv(out_channels, out_channels * 3, kernel=[1,1])
+            self.attn_proj = MPConv(out_channels, out_channels, kernel=[1,1])
+        else:
+            self.attn_qkv = None
+            self.attn_proj = None
+
+    def forward(self, x, emb, format, t_ranges):
         # Main branch.
-
+        #x = resample(x, f=self.resample_filter, mode=self.resample_mode)
+        x = resample(x, mode=self.resample_mode)
+        
         if self.flavor == 'enc':
             if self.conv_skip is not None:
                 x = self.conv_skip(x)
             x = normalize(x, dim=1) # pixel norm
-
+        
         # Residual branch.
         y = self.conv_res0(mp_silu(x))
+        
         if self.emb_linear is not None:
             c = self.emb_linear(emb, gain=self.emb_gain) + 1
             y = mp_silu(y * c.unsqueeze(2).unsqueeze(3).to(y.dtype))
@@ -184,25 +205,24 @@ class Block(torch.nn.Module):
                 y *= 1 - self.dropout
 
         y = self.conv_res1(y)
-
+        
         # Connect the branches.
         if self.flavor == 'dec' and self.conv_skip is not None:
             x = self.conv_skip(x)
         x = mp_sum(x, y, t=self.res_balance)
+        
+        # Self-attention.
+        if self.num_heads != 0:
+            
+            qkv = self.attn_qkv(x)
+            qkv = qkv.reshape(qkv.shape[0], self.num_heads, -1, 3, y.shape[2] * y.shape[3])
+            q, k, v = normalize(qkv, dim=2).unbind(3)
 
-        qk = self.attn_qk(mp_cat(x, x * pos_emb))
-        qk = qk.reshape(qk.shape[0], self.num_heads, -1, 2, y.shape[2] * y.shape[3])
-        q, k = normalize(qk, dim=2).unbind(3)
-
-        v = self.attn_v(x)
-        v = v.reshape(v.shape[0], self.num_heads, -1, y.shape[2] * y.shape[3])
-        v = normalize(v, dim=2)
-
-        y = torch.nn.functional.scaled_dot_product_attention(q.transpose(-1, -2),
-                                                             k.transpose(-1, -2),
-                                                             v.transpose(-1, -2)).transpose(-1, -2)
-        y = self.attn_proj(y.reshape(*x.shape))
-        x = mp_sum(x, y, t=self.attn_balance)
+            y = torch.nn.functional.scaled_dot_product_attention(q.transpose(-1, -2),
+                                                                 k.transpose(-1, -2),
+                                                                 v.transpose(-1, -2)).transpose(-1, -2)
+            y = self.attn_proj(y.reshape(*x.shape))
+            x = mp_sum(x, y, t=self.attn_balance)
 
         # Clip activations.
         if self.clip_act is not None:
@@ -214,51 +234,49 @@ class Block(torch.nn.Module):
 
 class UNet(ModelMixin, ConfigMixin):
 
-    __constants__ = ["label_dim", "training", "dtype", "label_dropout", "label_balance",
-                     "dropout", "concat_balance", "sigma_max", "sigma_min", "sigma_data", "in_channels", "out_channels", "pos_channels"]
+    __constants__ = ["label_dim", "training", "dtype", "label_dropout", "label_balance", "width", "height",
+                     "dropout", "concat_balance", "sigma_max", "sigma_min", "sigma_data"]
 
     @register_to_config
     def __init__(self,
         in_channels = 4,                    # Number of input channels.
         out_channels = 4,                   # Number of output channels.
-        pos_channels = 768,                 # Number of positional embedding channels for attention.
         logvar_channels = 128,              # Number of channels for training uncertainty estimation.
-        use_t_ranges = True,
         channels_per_head = 64,             # Number of channels per attention head.
         label_dim = 0,                      # Class label dimensionality. 0 = unconditional.
         label_dropout = 0.1,                # Dropout probability for class labels. 
         dropout = 0,                        # Dropout probability.
-        model_channels       = 1024,        # Base multiplier for the number of channels.
-        channel_mult         = [1,1,1,1],   # Per-resolution multipliers for the number of channels.
+        model_channels       = 192,         # Base multiplier for the number of channels.
+        channel_mult         = [1,2,3,4,5,6],   # Per-resolution multipliers for the number of channels.
         channel_mult_noise   = None,        # Multiplier for noise embedding dimensionality. None = select based on channel_mult.
         channel_mult_emb     = None,        # Multiplier for final embedding dimensionality. None = select based on channel_mult.
-        num_layers_per_block = 1,           # Number of residual blocks per resolution.
+        num_layers_per_block = 3,           # Number of residual blocks per resolution.
+        attn_levels          = [2,3,4,5],       # List of resolutions with self-attention.
         label_balance        = 0.5,         # Balance between noise embedding (0) and class embedding (1).
         concat_balance       = 0.5,         # Balance between skip connections (0) and main path (1).
         sigma_max = 200.,                   # Expected max noise std
         sigma_min = 0.03,                   # Expected min noise std
         sigma_data = 1.,                    # Expected data / input sample std
+        width=696,
+        height=32,
         #**block_kwargs,                    # Arguments for Block.
         last_global_step = 0,               # Only used to track training progress in config.
     ):
         super().__init__()
 
-        assert use_t_ranges and (model_channels + pos_channels) % channels_per_head == 0 and pos_channels > 0 and pos_channels % 2 == 0
         block_kwargs = {"channels_per_head": channels_per_head, "dropout": dropout}
 
         cblock = [int(model_channels * x) for x in channel_mult]
         cnoise = int(model_channels * channel_mult_noise) if channel_mult_noise is not None else max(cblock)
         cemb = int(model_channels * channel_mult_emb) if channel_mult_emb is not None else max(cblock)
         clogvar = logvar_channels
-        cpos = pos_channels
 
         self.sigma_max = sigma_max
         self.sigma_min = sigma_min
         self.sigma_data = sigma_data
+        self.width = width
+        self.height = height
 
-        self.in_channels = in_channels
-        self.out_channels = out_channels
-        self.pos_channels = pos_channels
         self.label_dim = label_dim
         self.label_dropout = label_dropout
         self.label_balance = label_balance
@@ -267,48 +285,55 @@ class UNet(ModelMixin, ConfigMixin):
         self.out_gain = torch.nn.Parameter(torch.zeros([]))
 
         # Embedding.
-        self.emb_fourier = MPFourier(cnoise, bandwidth=1.414)
+        self.emb_fourier = MPFourier(cnoise)
         self.emb_noise = MPConv(cnoise, cemb, kernel=[])
         self.emb_label = MPConv(label_dim, cemb, kernel=[]) if label_dim != 0 else None
         self.emb_label_unconditional = MPConv(1, cemb, kernel=[]) if label_dim != 0 else None
-        self.emb_pos_fourier = MPFourier(cpos, bandwidth=100)
 
         # Training uncertainty estimation.
         self.logvar_fourier = MPFourier(clogvar)
         self.logvar_linear = MPConv(clogvar, 1, kernel=[], disable_weight_normalization=True)
 
+        widths = [width for i in range(len(cblock))]
+        heights = [height // 2**i for i in range(len(cblock))]
+
         # Encoder.
         self.enc = torch.nn.ModuleDict()
-        cout = 32*in_channels + 1
+        cout = in_channels + 2
         for level, channels in enumerate(cblock):
             
             if level == 0:
                 cin = cout
                 cout = channels
-                self.enc[f'conv_in'] = MPConv(cin, cout, kernel=[1,3])
+                self.enc[f'conv_in'] = MPConv(cin, cout, kernel=[3,3])
             else:
-                self.enc[f'block{level}_in'] = Block(cout, cout, cemb, cpos,
-                                                       flavor='enc', **block_kwargs)
+                self.enc[f'block{level}_down'] = Block(cout, cout, cemb, width=widths[level], height=heights[level],
+                                                       flavor='enc', resample_mode='down', **block_kwargs)
             for idx in range(num_layers_per_block):
                 cin = cout
                 cout = channels
-                self.enc[f'block{level}_layer{idx}'] = Block(cin, cout, cemb, cpos,
-                                                             flavor='enc', **block_kwargs)
+                self.enc[f'block{level}_layer{idx}'] = Block(cin, cout, cemb, width=widths[level], height=heights[level],
+                                                             flavor='enc', attention=(level in attn_levels), **block_kwargs)
 
         # Decoder.
         self.dec = torch.nn.ModuleDict()
         skips = [block.out_channels for block in self.enc.values()]
         for level, channels in reversed(list(enumerate(cblock))):
             
-            self.dec[f'block{level}_in'] = Block(cout, cout, cemb, cpos,
-                                                    flavor='dec', **block_kwargs)
+            if level == len(cblock) - 1:
+                self.dec[f'block{level}_in0'] = Block(cout, cout, cemb, width=widths[level], height=heights[level],
+                                                      flavor='dec', attention=True, **block_kwargs)
+                self.dec[f'block{level}_in1'] = Block(cout, cout, cemb,
+                                                      flavor='dec', **block_kwargs)
+            else:
+                self.dec[f'block{level}_up'] = Block(cout, cout, cemb, width=widths[level], height=heights[level],
+                                                     flavor='dec', resample_mode='up', **block_kwargs)
             for idx in range(num_layers_per_block + 1):
                 cin = cout + skips.pop()
                 cout = channels
-                self.dec[f'block{level}_layer{idx}'] = Block(cin, cout, cemb, cpos,
-                                                             flavor='dec', **block_kwargs)
-                
-        self.conv_out = MPConv(cout, 32 * out_channels, kernel=[1,3])
+                self.dec[f'block{level}_layer{idx}'] = Block(cin, cout, cemb, width=widths[level], height=heights[level],
+                                                             flavor='dec', attention=(level in attn_levels), **block_kwargs)
+        self.conv_out = MPConv(cout, out_channels, kernel=[3,3])
 
     @torch_compile(fullgraph=True, dynamic=False)
     def forward(self, x_in, sigma, class_embeddings, t_ranges, format, return_logvar=False):
@@ -321,11 +346,8 @@ class UNet(ModelMixin, ConfigMixin):
             c_out = sigma * self.sigma_data / (sigma ** 2 + self.sigma_data ** 2).sqrt()
             c_in = 1 / (self.sigma_data ** 2 + sigma ** 2).sqrt()
             c_noise = (sigma.flatten().log() / 4).to(self.dtype)
-            
-            x = self.patchify(c_in * x_in).to(self.dtype)
-            
-            pos_t = torch.linspace(0, 1, x.shape[3], device=self.device).view(1, -1) * (t_ranges[:, 1:2] - t_ranges[:, 0:1]) + t_ranges[:, 0:1]
-            pos_emb = self.emb_pos_fourier(pos_t.view(pos_t.shape[0], 1, 1,-1)).to(self.dtype)
+
+            x = (c_in * x_in).to(self.dtype)
 
         # Embedding.
         emb = self.emb_noise(self.emb_fourier(c_noise))
@@ -345,21 +367,21 @@ class UNet(ModelMixin, ConfigMixin):
         emb = mp_silu(emb)
 
         # Encoder.
-        x = torch.cat((x, torch.ones_like(x[:, :1])), dim=1)
-
+        x = torch.cat((x, torch.ones_like(x[:, :1]),
+                    format.get_positional_embedding(x, None, mode="linear")), dim=1)
         skips = []
         for name, block in self.enc.items():
-            x = block(x) if 'conv' in name else block(x, emb, pos_emb)
+            x = block(x) if 'conv' in name else block(x, emb, format, t_ranges)
             skips.append(x)
 
         # Decoder.
         for name, block in self.dec.items():
             if 'layer' in name:
                 x = mp_cat(x, skips.pop(), t=self.concat_balance)
-            x = block(x, emb, pos_emb)
+            x = block(x, emb, format, t_ranges)
         x = self.conv_out(x, gain=self.out_gain)
 
-        D_x = c_skip * x_in + c_out * self.unpatchify(x.float())
+        D_x = c_skip * x_in + c_out * x.float()
 
         # Training uncertainty, if requested.
         if return_logvar:
@@ -368,12 +390,6 @@ class UNet(ModelMixin, ConfigMixin):
         
         return D_x
     
-    def patchify(self, x):
-        return x.reshape(x.shape[0], x.shape[1]*x.shape[2], 1, x.shape[3])
-
-    def unpatchify(self, x):
-        return x.reshape(x.shape[0], self.out_channels, 32, x.shape[3])
-
     def get_class_embeddings(self, class_labels):
         return self.emb_label(normalize(class_labels).to(device=self.device, dtype=self.dtype))
     
