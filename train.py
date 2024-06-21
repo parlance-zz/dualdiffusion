@@ -50,7 +50,12 @@ from diffusers.utils import is_tensorboard_available
 import safetensors.torch as ST
 
 #from unet_edm2 import UNet
-from dit_edm2 import UNet
+from unet_edm2_b import UNet
+#from dit_edm2 import UNet
+#from dit_edm2_b import UNet
+#from dit_edm2_c import UNet
+#from dit_edm2_e import UNet
+#from dit_edm2_f import UNet
 from unet_edm2_ema import PowerFunctionEMA
 from dual_diffusion_pipeline import DualDiffusionPipeline
 from dual_diffusion_utils import init_cuda, load_audio, save_audio, load_raw, dict_str
@@ -696,7 +701,8 @@ class DatasetTransformer(torch.nn.Module):
                                               return_start=True)
             
             if self.t_scale is not None:
-                t_range = torch.tensor([self.get_t(t_offset), self.get_t(t_offset + self.sample_crop_width)])
+                #t_range = torch.tensor([self.get_t(t_offset), self.get_t(t_offset + self.sample_crop_width)])
+                t_range = torch.tensor([self.get_t(0), self.get_t(self.sample_crop_width)])
 
             samples.append(sample)
             paths.append(file_path)
@@ -762,7 +768,21 @@ def init_dataloader(accelerator,
             return example
         
         dataset = dataset.map(add_absolute_path)
+    
+    if dataset_format == ".safetensors":
+
+        def min_length_filter(example):            
+            with ST.safe_open(example["file_name"], framework="pt") as f:
+                latents_slice = f.get_slice("latents")
+                latents_shape = latents_slice.get_shape()
+                return latents_shape[-1] >= sample_crop_width
         
+        pre_filter_num_samples = len(dataset)
+        dataset = dataset.filter(min_length_filter)
+        num_filtered_samples = pre_filter_num_samples - len(dataset)
+    else:
+        num_filtered_samples = 0
+
     dataset_transform_params = {
         "format": dataset_format,
         "raw_format": dataset_raw_format,
@@ -789,7 +809,7 @@ def init_dataloader(accelerator,
         drop_last=True,
     )
 
-    logger.info(f"Using training data from {train_data_dir} with {len(train_dataset)} samples, batch size = {train_batch_size}")
+    logger.info(f"Using training data from {train_data_dir} with {len(train_dataset)} samples ({num_filtered_samples} filtered), batch size = {train_batch_size}")
     if dataloader_num_workers > 0:
         logger.info(f"Using dataloader with {dataloader_num_workers} workers - prefetch factor = 2")
     logger.info(f"Dataset transform params: {dict_str(dataset_transform_params)}")
@@ -894,8 +914,8 @@ def do_training_loop(args,
             "sigma_ln_mean",
         ]
 
-        #sigma_sample_max_temperature = 5
-        #sigma_sample_pdf_skew = 12.
+        #sigma_sample_max_temperature = 4
+        #sigma_sample_pdf_skew = 0.
         #sigma_temperature_ref_steps = 20000
         #sigma_sample_temperature = min(global_step / sigma_temperature_ref_steps, 1) * sigma_sample_max_temperature
         #sigma_sample_resolution = 128 - 1
@@ -908,7 +928,7 @@ def do_training_loop(args,
         #sigma_sampler = SigmaSampler(sigma_max, sigma_min, sigma_data,
         #                             distribution="ln_data", distribution_pdf=sigma_distribution_pdf)
         sigma_sampler = SigmaSampler(module.sigma_max, module.sigma_data / target_snr, module.sigma_data,
-                                     distribution="log_sech", dist_scale=1, dist_offset=0.2) #-0.54)
+                                     distribution="log_sech", dist_scale=1, dist_offset=0.1)#0.21) #0.2)
 
 
     total_batch_size = args.train_batch_size * accelerator.num_processes * args.gradient_accumulation_steps
@@ -1062,7 +1082,7 @@ def do_training_loop(args,
                 accelerator.backward(loss)
 
                 if accelerator.sync_gradients: # clip and check for nan/inf grad
-                    grad_norm = accelerator.clip_grad_norm_(module.parameters(), args.max_grad_norm).item()
+                    grad_norm = accelerator.gather(accelerator.clip_grad_norm_(module.parameters(), args.max_grad_norm)).mean().item()
                     if math.isinf(grad_norm) or math.isnan(grad_norm):
                         logger.warning(f"Warning: grad norm is {grad_norm} - step={global_step} loss={loss.item()} debug_last_sample_paths={raw_sample_paths}")
                     if math.isnan(grad_norm):
@@ -1261,7 +1281,7 @@ def main():
     accelerator.wait_for_everyone()
 
     if args.seed is not None:
-        set_seed(args.seed)
+        set_seed(args.seed, device_specific=True)
         logger.info(f"Using random seed {args.seed}")
     else:
         logger.info("Using random seed from system - Training may not be reproducible")
@@ -1322,7 +1342,7 @@ def main():
     num_update_steps_per_epoch = math.ceil(num_update_steps_per_epoch / args.gradient_accumulation_steps)
     max_train_steps = args.num_train_epochs * num_update_steps_per_epoch
 
-    if args.checkpointing_steps is None: args.checkpointing_steps = num_update_steps_per_epoch*3
+    if args.checkpointing_steps is None: args.checkpointing_steps = num_update_steps_per_epoch*12
     logger.info(f"Saving checkpoints every {args.checkpointing_steps} steps")
     
     lr_scheduler = init_lr_scheduler(args.lr_scheduler,
