@@ -29,7 +29,7 @@ from dual_diffusion_utils import dict_str
 
 load_dotenv(override=True)
 
-MODEL_NAME = "edm2_vae_test7_3"
+MODEL_NAME = "edm2_vae_test7_12"
 MODEL_SEED = 2000
 
 MODEL_PARAMS = {
@@ -39,16 +39,18 @@ MODEL_PARAMS = {
 
     # sample format params
     "sample_format": "spectrogram",
-    "sample_raw_length": 32000*45,
+    #"sample_raw_length": 32000*45, # 696
+    #"sample_raw_length": 1584000, # 768
+    "sample_raw_length": 1057570, # 512,
     "noise_floor": 2e-5,
-    "t_scale": None, #3.5714285714, # scales the linear positional embedding for absolute time range within each sample, None disables t_range conditioning
+    "t_scale": None,#3.5714285714, # scales the linear positional embedding for absolute time range within each sample, None disables t_range conditioning
     "vae_class": "AutoencoderKL_EDM2",
 
     # diffusion unet training params
     "unet_training_params": {
         "input_perturbation": 0,
         "sigma_ln_std": 1.,
-        "sigma_ln_mean": -0.4,
+        "sigma_ln_mean": 0.,
         "stratified_sigma_sampling": True,
     },
 
@@ -116,24 +118,26 @@ VAE_PARAMS = {
 }
 
 UNET_PARAMS = {
-    "pos_channels": 0,           # Number of positional embedding channels for attention.
+    "pos_channels": 0,        # Number of positional embedding channels for attention.
     "use_t_ranges": False,
     "label_dim": 1612,           # Class label dimensionality. 0 = unconditional.
     "label_dropout": 0.1,        # Dropout rate for the class embedding.
-    "dropout": 0,                # Dropout rate for model blocks
-    "model_channels": 192,       # Base multiplier for the number of channels.
-    "channels_per_head": 64,     # Number of channels per attention head for blocks using self-attention
-    "channel_mult": [1,2,3,4],   # Per-resolution multipliers for the number of channels.
+    "dropout": 0.,               # Dropout rate for model blocks
+    "model_channels": 1536,      # Base multiplier for the number of channels.
+    "channels_per_head": 192,    # Number of channels per attention head for blocks using self-attention
+    "channel_mult": [1]*7,   # Per-resolution multipliers for the number of channels.
+    "attn_levels": [], #list(range(1)),
     "channel_mult_noise": None,  # Multiplier for noise embedding dimensionality. None = select based on channel_mult.
     "channel_mult_emb": None,    # Multiplier for final embedding dimensionality. None = select based on channel_mult.
-    "num_layers_per_block": 3,   # Number of residual blocks per resolution.
-    "attn_levels": [2,3],        # List of resolutions with self-attention.
+    "num_layers_per_block": 2,   # Number of residual blocks per resolution.
     "label_balance": 0.5,        # Balance between noise embedding (0) and class embedding (1).
     "concat_balance": 0.5,       # Balance between skip connections (0) and main path (1).
-    "sigma_max": 80.,            # Expected max noise std
-    "sigma_min": 0.002,          # Expected min noise std
-    "sigma_data": 0.5,           # Expected data / input sample std
+    "sigma_max": 200.,            # Expected max noise std
+    "sigma_min": 0.03,          # Expected min noise std
+    "sigma_data": 1,           # Expected data / input sample std
+    "mlp_multiplier": 2,         # Multiplier for the number of channels in the MLP.
 }
+
 
 if __name__ == "__main__":
 
@@ -156,12 +160,26 @@ if __name__ == "__main__":
     print(dict_str(UNET_PARAMS))
     print("")
     
-    NEW_MODEL_PATH = os.path.join(os.environ.get("MODEL_PATH"), MODEL_NAME)
+    pipeline = DualDiffusionPipeline.create_new(MODEL_PARAMS, UNET_PARAMS, vae_params=VAE_PARAMS)
 
+    num_emb_params = num_conv_params = num_attn_params = num_other_params = num_total_params = 0
+    for name, param in pipeline.unet.named_parameters():
+        if "emb" in name: num_emb_params += param.numel()
+        elif "conv" in name: num_conv_params += param.numel()
+        elif "attn" in name: num_attn_params += param.numel()
+        else: num_other_params += param.numel()
+        num_total_params += param.numel()
+    print(f"Number of emb params:  {num_emb_params/1000000:{4}f}m")
+    print(f"Number of conv params: {num_conv_params/1000000:{4}f}m")
+    print(f"Number of attn params: {num_attn_params/1000000:{4}f}m")
+    print(f"Number of other params: {num_other_params/1000000:{4}f}m")
+    print(f"Estimated size (MB): {num_total_params*4/1000000:{4}f}m")
+    print("")
+
+    NEW_MODEL_PATH = os.path.join(os.environ.get("MODEL_PATH"), MODEL_NAME)
     if os.path.exists(NEW_MODEL_PATH):
         print(f"Warning: Output folder already exists '{NEW_MODEL_PATH}'")
         if input("Overwrite existing model? (y/n): ").lower() not in ["y","yes"]: exit()
     
-    pipeline = DualDiffusionPipeline.create_new(MODEL_PARAMS, UNET_PARAMS, vae_params=VAE_PARAMS)
     pipeline.save_pretrained(NEW_MODEL_PATH, safe_serialization=True)
     print(f"Created new DualDiffusion model with config at '{NEW_MODEL_PATH}'")
