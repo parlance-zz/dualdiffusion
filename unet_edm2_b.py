@@ -157,9 +157,10 @@ class Block(torch.nn.Module):
         channels_per_head   = 64,       # Number of channels per attention head.
         dropout             = 0,        # Dropout probability.
         res_balance         = 0.5,      # Balance between main branch (0) and residual branch (1).
-        attn_balance        = 0.3,      # Balance between main branch (0) and self-attention (1).
+        attn_balance        = 0.5,      # Balance between main branch (0) and self-attention (1).
         clip_act            = 256,      # Clip output activations. None = do not clip.
         mlp_multiplier      = 4,        # Multiplier for the number of channels in the MLP.
+        mlp_kernel_width    = 3,        # Kernel width for the MLP.
     ):
         super().__init__()
 
@@ -177,13 +178,12 @@ class Block(torch.nn.Module):
         self.attn_balance = attn_balance
         self.clip_act = clip_act
         self.emb_gain = torch.nn.Parameter(torch.zeros([]))
-        self.conv_res0 = MPConv(out_channels if flavor == 'enc' else in_channels, out_channels * mlp_multiplier, kernel=[1,3], groups=8)
+        self.conv_res0 = MPConv(out_channels if flavor == 'enc' else in_channels, out_channels * mlp_multiplier, kernel=[1, mlp_kernel_width], groups=8)
         self.emb_linear = MPConv(emb_channels, out_channels * mlp_multiplier, kernel=[1,1], groups=8) if emb_channels != 0 else None
-        self.conv_res1 = MPConv(out_channels * mlp_multiplier, out_channels, kernel=[1,3], groups=8)
-        self.conv_skip = MPConv(in_channels, out_channels, kernel=[1,1], groups=1) #if in_channels != out_channels else None
+        self.conv_res1 = MPConv(out_channels * mlp_multiplier, out_channels, kernel=[1, mlp_kernel_width], groups=8)
+        self.conv_skip = MPConv(in_channels, out_channels, kernel=[1,1], groups=1)
 
         if self.num_heads != 0:
-            #self.attn_qk = MPConv(out_channels, out_channels * 2, kernel=[1,1])
             self.attn_qk = MPConv(out_channels * 2, out_channels * 2, kernel=[1,1])
             self.attn_v = MPConv(out_channels, out_channels, kernel=[1,1])
             self.attn_proj = MPConv(out_channels, out_channels, kernel=[1,1])
@@ -223,7 +223,6 @@ class Block(torch.nn.Module):
         # Self-attention.
         if self.num_heads != 0:
             
-            #qk = self.attn_qk(mp_sum(x, x * pos_emb))
             qk = self.attn_qk(mp_cat(x, x * pos_emb))
             qk = qk.reshape(qk.shape[0], self.num_heads, -1, 2, y.shape[2] * y.shape[3])
             q, k = normalize(qk, dim=2).unbind(3)
@@ -233,8 +232,8 @@ class Block(torch.nn.Module):
             v = normalize(v, dim=2)
 
             y = torch.nn.functional.scaled_dot_product_attention(q.transpose(-1, -2),
-                                                                k.transpose(-1, -2),
-                                                                v.transpose(-1, -2)).transpose(-1, -2)
+                                                                 k.transpose(-1, -2),
+                                                                 v.transpose(-1, -2)).transpose(-1, -2)
             y = self.attn_proj(y.reshape(*x.shape))
             x = mp_sum(x, y, t=self.attn_balance)
 
@@ -274,13 +273,17 @@ class UNet(ModelMixin, ConfigMixin):
         sigma_min = 0.03,                  # Expected min noise std
         sigma_data = 1.,                   # Expected data / input sample std
         mlp_multiplier = 1,                 # Multiplier for the number of channels in the MLP.
+        mlp_kernel_width = 3,              # Kernel width for the MLP.
         mid_block_attn = False,
         #**block_kwargs,                    # Arguments for Block.
         last_global_step = 0,               # Only used to track training progress in config.
     ):
         super().__init__()
 
-        block_kwargs = {"channels_per_head": channels_per_head, "dropout": dropout, "mlp_multiplier": mlp_multiplier}
+        block_kwargs = {"channels_per_head": channels_per_head,
+                        "dropout": dropout,
+                        "mlp_multiplier": mlp_multiplier,
+                        "mlp_kernel_width": mlp_kernel_width}
 
         cblock = [int(model_channels * x) for x in channel_mult]
         cnoise = int(model_channels * channel_mult_noise) if channel_mult_noise is not None else max(cblock)
@@ -317,12 +320,12 @@ class UNet(ModelMixin, ConfigMixin):
             if level == 0:
                 cin = cout
                 cout = channels
-                self.enc[f'conv_in'] = MPConv(cin, cout, kernel=[1,3])
+                self.enc[f'conv_in'] = MPConv(cin, cout, kernel=[1, mlp_kernel_width])
             else:
                 self.enc[f'block{level}_down'] = Block(cout, cout, cemb, cpos,
                                                        flavor='enc', resample_mode='down', **block_kwargs)
             
-            if level in attn_levels:
+            if (level in attn_levels) or (mid_block_attn and (level == (len(cblock) - 1))):
                 self.enc[f'emb_pos_fourier{level}'] = MPFourier(channels, bandwidth=100)
 
             for idx in range(num_layers_per_block):
@@ -341,14 +344,14 @@ class UNet(ModelMixin, ConfigMixin):
 
         for level, channels in reversed(list(enumerate(cblock))):
             
-            if level in attn_levels:
+            if (level in attn_levels) or (mid_block_attn and (level == (len(cblock) - 1))):
                 self.dec[f'emb_pos_fourier{level}'] = torch.nn.Identity()
 
             if level == len(cblock) - 1:
                 self.dec[f'block{level}_in0'] = Block(cout, cout, cemb, cpos,
                                                       flavor='dec', attention=mid_block_attn, **block_kwargs)
                 self.dec[f'block{level}_in1'] = Block(cout, cout, cemb, cpos,
-                                                      flavor='dec', **block_kwargs)
+                                                      flavor='dec', attention=mid_block_attn, **block_kwargs)
             else:
                 self.dec[f'block{level}_up'] = Block(cout, cout, cemb, cpos,
                                                      flavor='dec', resample_mode='up', **block_kwargs)
@@ -357,7 +360,7 @@ class UNet(ModelMixin, ConfigMixin):
                 cout = channels
                 self.dec[f'block{level}_layer{idx}'] = Block(cin, cout, cemb, cpos,
                                                              flavor='dec', attention=(level in attn_levels), **block_kwargs)
-        self.conv_out = MPConv(cout, out_channels*32, kernel=[1,3])
+        self.conv_out = MPConv(cout, out_channels*32, kernel=[1, mlp_kernel_width])
 
     @torch_compile(fullgraph=True, dynamic=False)
     def forward(self, x_in, sigma, class_embeddings, t_ranges, format, return_logvar=False):
