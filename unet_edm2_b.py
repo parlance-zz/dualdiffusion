@@ -44,6 +44,11 @@ def patchify(x, h=32):
 def unpatchify(x, h=32):
     return x.view(x.shape[0], x.shape[1]//h, x.shape[2]*h, x.shape[3])
 
+def apply_rotary_embedding(x, pos_emb):
+    pos_emb = pos_emb.repeat(1, x.shape[1] // pos_emb.shape[1], 1, 1)
+    real = x[:, ::2] * pos_emb[:,  ::2] - x[:, 1::2] * pos_emb[:, 1::2]
+    imag = x[:, ::2] * pos_emb[:, 1::2] + x[:, 1::2] * pos_emb[:,  ::2]
+    return torch.stack([real, imag], dim=2).reshape(x.shape)
 #----------------------------------------------------------------------------
 # Normalize given tensor to unit magnitude with respect to the given
 # dimensions. Default = all dimensions except the first.
@@ -154,13 +159,14 @@ class Block(torch.nn.Module):
         flavor              = 'enc',    # Flavor: 'enc' or 'dec'.
         resample_mode       = 'keep',   # Resampling: 'keep', 'up', or 'down'.
         attention           = False,    # Include self-attention?
-        channels_per_head   = 64,       # Number of channels per attention head.
+        channels_per_head   = 128,      # Number of channels per attention head.
         dropout             = 0,        # Dropout probability.
-        res_balance         = 0.5,      # Balance between main branch (0) and residual branch (1).
-        attn_balance        = 0.5,      # Balance between main branch (0) and self-attention (1).
+        res_balance         = 0.4,      # Balance between main branch (0) and residual branch (1).
+        attn_balance        = 0.4,      # Balance between main branch (0) and self-attention (1).
         clip_act            = 256,      # Clip output activations. None = do not clip.
-        mlp_multiplier      = 4,        # Multiplier for the number of channels in the MLP.
+        mlp_multiplier      = 2,        # Multiplier for the number of channels in the MLP.
         mlp_kernel_width    = 3,        # Kernel width for the MLP.
+        mlp_num_groups      = 8,        # Number of groups for the MLP. 
     ):
         super().__init__()
 
@@ -178,15 +184,15 @@ class Block(torch.nn.Module):
         self.attn_balance = attn_balance
         self.clip_act = clip_act
         self.emb_gain = torch.nn.Parameter(torch.zeros([]))
-        self.conv_res0 = MPConv(out_channels if flavor == 'enc' else in_channels, out_channels * mlp_multiplier, kernel=[1, mlp_kernel_width], groups=8)
-        self.emb_linear = MPConv(emb_channels, out_channels * mlp_multiplier, kernel=[1,1], groups=8) if emb_channels != 0 else None
-        self.conv_res1 = MPConv(out_channels * mlp_multiplier, out_channels, kernel=[1, mlp_kernel_width], groups=8)
-        self.conv_skip = MPConv(in_channels, out_channels, kernel=[1,1], groups=1)
+        self.conv_res0 = MPConv(out_channels if flavor == 'enc' else in_channels, out_channels * mlp_multiplier, kernel=[1, mlp_kernel_width], groups=mlp_num_groups)
+        self.emb_linear = MPConv(emb_channels, out_channels * mlp_multiplier, kernel=[1,1], groups=mlp_num_groups) if emb_channels != 0 else None
+        self.conv_res1 = MPConv(out_channels * mlp_multiplier, out_channels, kernel=[1, mlp_kernel_width], groups=mlp_num_groups)
+        self.conv_skip = MPConv(in_channels, out_channels, kernel=[1,1], groups=mlp_num_groups)
 
         if self.num_heads != 0:
-            self.attn_qk = MPConv(out_channels * 2, out_channels * 2, kernel=[1,1])
-            self.attn_v = MPConv(out_channels, out_channels, kernel=[1,1])
-            self.attn_proj = MPConv(out_channels, out_channels, kernel=[1,1])
+            self.attn_qk = MPConv(out_channels, out_channels * 2, kernel=[1,1], groups=mlp_num_groups)
+            self.attn_v = MPConv(out_channels, out_channels, kernel=[1,1], groups=mlp_num_groups)
+            self.attn_proj = MPConv(out_channels, out_channels, kernel=[1,1], groups=mlp_num_groups)
         else:
             self.attn_qk = None
             self.attn_v = None
@@ -223,7 +229,8 @@ class Block(torch.nn.Module):
         # Self-attention.
         if self.num_heads != 0:
             
-            qk = self.attn_qk(mp_cat(x, x * pos_emb))
+            #qk = self.attn_qk(mp_cat(x, x * pos_emb))
+            qk = self.attn_qk(apply_rotary_embedding(x, pos_emb))
             qk = qk.reshape(qk.shape[0], self.num_heads, -1, 2, y.shape[2] * y.shape[3])
             q, k = normalize(qk, dim=2).unbind(3)
 
@@ -257,25 +264,27 @@ class UNet(ModelMixin, ConfigMixin):
         pos_channels = 0,                   # Number of positional embedding channels for attention.
         logvar_channels = 128,              # Number of channels for training uncertainty estimation.
         use_t_ranges = False,
-        channels_per_head = 64,             # Number of channels per attention head.
+        channels_per_head = 128,            # Number of channels per attention head.
         label_dim = 0,                      # Class label dimensionality. 0 = unconditional.
         label_dropout = 0.1,                # Dropout probability for class labels. 
         dropout = 0,                        # Dropout probability.
-        model_channels       = 512,         # Base multiplier for the number of channels.
-        channel_mult         = [1,]*6,      # Per-resolution multipliers for the number of channels.
+        model_channels       = 1024,        # Base multiplier for the number of channels.
+        channel_mult         = [1,1,1,1],   # Per-resolution multipliers for the number of channels.
         channel_mult_noise   = None,        # Multiplier for noise embedding dimensionality. None = select based on channel_mult.
         channel_mult_emb     = None,        # Multiplier for final embedding dimensionality. None = select based on channel_mult.
         num_layers_per_block = 2,           # Number of residual blocks per resolution.
-        attn_levels     = list(range(2,6)), # List of resolutions with self-attention.
+        attn_levels          = [2,3],       # List of resolution levels with self-attention.
         label_balance        = 0.5,         # Balance between noise embedding (0) and class embedding (1).
         concat_balance       = 0.5,         # Balance between skip connections (0) and main path (1).
-        sigma_max = 200.,                    # Expected max noise std
-        sigma_min = 0.03,                  # Expected min noise std
-        sigma_data = 1.,                   # Expected data / input sample std
-        mlp_multiplier = 1,                 # Multiplier for the number of channels in the MLP.
-        mlp_kernel_width = 3,              # Kernel width for the MLP.
-        mid_block_attn = False,
-        #**block_kwargs,                    # Arguments for Block.
+        res_balance          = 0.4,         # Balance between main branch (0) and residual branch (1).
+        attn_balance         = 0.4,         # Balance between main branch (0) and self-attention (1).
+        sigma_max = 200.,                   # Expected max noise std
+        sigma_min = 0.03,                   # Expected min noise std
+        sigma_data = 1.,                    # Expected data / input sample std
+        mlp_multiplier = 2,                 # Multiplier for the number of channels in the MLP / conv layers.
+        mlp_kernel_width = 3,               # Kernel width for MLP / conv layers.
+        mlp_num_groups = 8,                 # Number of groups for the MLP / conv layers.
+        mid_block_attn = False,             # Enable / disable attention in the midblock between encoder and decoder.
         last_global_step = 0,               # Only used to track training progress in config.
     ):
         super().__init__()
@@ -283,7 +292,10 @@ class UNet(ModelMixin, ConfigMixin):
         block_kwargs = {"channels_per_head": channels_per_head,
                         "dropout": dropout,
                         "mlp_multiplier": mlp_multiplier,
-                        "mlp_kernel_width": mlp_kernel_width}
+                        "mlp_kernel_width": mlp_kernel_width,
+                        "mlp_num_groups": mlp_num_groups,
+                        "res_balance": res_balance,
+                        "attn_balance": attn_balance,}
 
         cblock = [int(model_channels * x) for x in channel_mult]
         cnoise = int(model_channels * channel_mult_noise) if channel_mult_noise is not None else max(cblock)
@@ -326,7 +338,7 @@ class UNet(ModelMixin, ConfigMixin):
                                                        flavor='enc', resample_mode='down', **block_kwargs)
             
             if (level in attn_levels) or (mid_block_attn and (level == (len(cblock) - 1))):
-                self.enc[f'emb_pos_fourier{level}'] = MPFourier(channels, bandwidth=100)
+                self.enc[f'emb_pos_fourier{level}'] = MPFourier(channels // channels_per_head, bandwidth=100)
 
             for idx in range(num_layers_per_block):
                 cin = cout
@@ -336,7 +348,6 @@ class UNet(ModelMixin, ConfigMixin):
 
         # Decoder.
         self.dec = torch.nn.ModuleDict()
-
         skips = []
         for name, block in self.enc.items():
             if 'emb' not in name:
