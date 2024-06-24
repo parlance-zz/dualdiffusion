@@ -98,6 +98,14 @@ def mp_cat(a, b, dim=1, t=0.5):
     wb = C / np.sqrt(Nb) * t
     return torch.cat([wa * a , wb * b], dim=dim)
 
+def mp_cat_interleave(a, b, dim=1, t=0.5):
+    Na = a.shape[dim]
+    Nb = b.shape[dim]
+    C = np.sqrt((Na + Nb) / ((1 - t) ** 2 + t ** 2))
+    wa = C / np.sqrt(Na) * (1 - t)
+    wb = C / np.sqrt(Nb) * t
+    return torch.stack([wa * a , wb * b], dim=dim+1).reshape(*a.shape[:dim], a.shape[dim]*2, *a.shape[dim+1:])
+
 #----------------------------------------------------------------------------
 # Magnitude-preserving Fourier features (Equation 75).
 
@@ -169,7 +177,6 @@ class Block(torch.nn.Module):
         mlp_multiplier      = 2,        # Multiplier for the number of channels in the MLP.
         mlp_kernel_width    = 3,        # Kernel width for the MLP.
         mlp_num_groups      = 8,        # Number of groups for the MLP. 
-        attn_multiplier     = 1,        # Multiplier for the number of channels in attention layers.
         rotary_pos_embedding = True,    # Use rotary position embedding for attention qk, or concatenated multiplicative if disabled
     ):
         super().__init__()
@@ -177,7 +184,7 @@ class Block(torch.nn.Module):
         self.out_channels = out_channels
         self.flavor = flavor
         self.resample_mode = resample_mode
-        self.num_heads = out_channels // (channels_per_head * attn_multiplier) if attention else 0
+        self.num_heads = out_channels // channels_per_head if attention else 0
         self.dropout = dropout
         self.res_balance = res_balance
         self.attn_balance = attn_balance
@@ -186,12 +193,11 @@ class Block(torch.nn.Module):
         self.conv_res0 = MPConv(out_channels if flavor == 'enc' else in_channels, out_channels * mlp_multiplier, kernel=[1, mlp_kernel_width], groups=mlp_num_groups)
         self.emb_linear = MPConv(emb_channels, out_channels * mlp_multiplier, kernel=[1,1], groups=mlp_num_groups) if emb_channels != 0 else None
         self.conv_res1 = MPConv(out_channels * mlp_multiplier, out_channels, kernel=[1, mlp_kernel_width], groups=mlp_num_groups)
-        self.conv_skip = MPConv(in_channels, out_channels, kernel=[1,1], groups=mlp_num_groups)
+        self.conv_skip = MPConv(in_channels, out_channels, kernel=[1,1], groups=mlp_num_groups) if in_channels != out_channels else None
 
         if self.num_heads != 0:
-            self.attn_qk = MPConv(out_channels if rotary_pos_embedding else out_channels * 2, 2 * out_channels * attn_multiplier, kernel=[1,1], groups=mlp_num_groups)
-            self.attn_v = MPConv(out_channels, out_channels * attn_multiplier, kernel=[1,1], groups=mlp_num_groups)
-            self.attn_proj = MPConv(out_channels * attn_multiplier, out_channels, kernel=[1,1], groups=mlp_num_groups)
+            self.attn_qk = MPConv(out_channels if rotary_pos_embedding else out_channels * 2, 2 * out_channels, kernel=[1,1], groups=mlp_num_groups)
+            self.attn_v = MPConv(out_channels, out_channels, kernel=[1,1], groups=mlp_num_groups)
             self.pos_emb_fn = apply_rotary_embedding if rotary_pos_embedding else apply_pos_embedding
         else:
             self.attn_qk = None
@@ -241,8 +247,8 @@ class Block(torch.nn.Module):
             y = torch.nn.functional.scaled_dot_product_attention(q.transpose(-1, -2),
                                                                  k.transpose(-1, -2),
                                                                  v.transpose(-1, -2)).transpose(-1, -2)
-            y = self.attn_proj(y.reshape(x.shape[0], y.shape[1]*y.shape[2], *x.shape[2:]))
-            x = mp_sum(x, y, t=self.attn_balance)
+
+            x = mp_sum(x, y.reshape(x.shape), t=self.attn_balance)
 
         # Clip activations.
         if self.clip_act is not None:
@@ -284,7 +290,6 @@ class UNet(ModelMixin, ConfigMixin):
         mlp_kernel_width = 3,               # Kernel width for MLP / conv layers.
         mlp_num_groups = 8,                 # Number of groups for the MLP / conv layers.
         mid_block_attn = False,             # Enable / disable attention in the midblock between encoder and decoder.
-        attn_multiplier = 1,                # Multiplier for the number of channels in attention layers.
         rotary_pos_embedding = True,        # Use rotary position embedding for attention qk, or concatenated multiplicative if disabled
         last_global_step = 0,               # Only used to track training progress in config.
         **kwargs,
@@ -298,7 +303,6 @@ class UNet(ModelMixin, ConfigMixin):
                         "mlp_num_groups": mlp_num_groups,
                         "res_balance": res_balance,
                         "attn_balance": attn_balance,
-                        "attn_multiplier": attn_multiplier,
                         "rotary_pos_embedding": rotary_pos_embedding}
 
         cblock = [int(model_channels * x) for x in channel_mult]
@@ -422,7 +426,7 @@ class UNet(ModelMixin, ConfigMixin):
                 pos_emb = pos_embeds.pop()
             else:
                 if 'layer' in name:
-                    x = mp_cat(x, skips.pop(), t=self.concat_balance)
+                    x = mp_cat_interleave(x, skips.pop(), t=self.concat_balance)
                 x = block(x, emb, pos_emb)
 
         x = self.conv_out(x, gain=self.out_gain)
