@@ -55,10 +55,10 @@ from utils.dual_diffusion_utils import dict_str, normalize
 @dataclass
 class LRScheduleConfig:
     lr_schedule: Literal["edm2", "linear", "cosine", "cosine_with_restarts",
-                         "polynomial", "constant", "constant_with_warmup"]
+                         "polynomial", "constant", "constant_with_warmup"] = "edm2"
     learning_rate: float     = 1e-2
     lr_warmup_steps: int     = 5000
-    lr_reference_steps: int  = 8000
+    lr_reference_steps: int  = 5000
     lr_decay_exponent: float = 1.
 
 @dataclass

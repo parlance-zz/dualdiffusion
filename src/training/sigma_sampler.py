@@ -31,7 +31,7 @@ class SigmaSamplerConfig:
     sigma_max: float  = 200.
     sigma_min: float  = 0.03
     sigma_data: float = 1.
-    distribution: Literal["ln_normal", "ln_sech", "ln_sech^2", "ln_linear", "ln_pdf"]
+    distribution: Literal["ln_normal", "ln_sech", "ln_sech^2", "ln_linear", "ln_pdf"] = "ln_sech"
     dist_scale: float  = 1.
     dist_offset: float = 0.1
     dist_pdf: Optional[torch.Tensor] = None
@@ -67,8 +67,8 @@ class SigmaSampler():
 
             self.sample = self.sample_ln_pdf
 
-    def sample_uniform_stratified(self, n_samples: int):
-        return (torch.arange(n_samples) + 0.5) / n_samples + (torch.rand(1) - 0.5) / n_samples
+    def sample_uniform_stratified(self, n_samples: int, device: Optional[torch.device]=None):
+        return ((torch.arange(n_samples) + 0.5) / n_samples + (torch.rand(1) - 0.5) / n_samples).to(device=device)
     
     def sample_ln_normal(self, n_samples: Optional[int]=None, quantiles: Optional[torch.Tensor]=None):
         quantiles = quantiles or torch.rand(n_samples)
