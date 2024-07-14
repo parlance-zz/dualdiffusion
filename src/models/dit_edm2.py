@@ -38,12 +38,6 @@ from diffusers.models.modeling_utils import ModelMixin
 
 from dual_diffusion_utils import torch_compile
 
-def patchify(x):
-    return x.view(x.shape[0], x.shape[1]*x.shape[2], 1, x.shape[3])
-
-def unpatchify(x, h):
-    return x.view(x.shape[0], -1, h, x.shape[3])
-
 #----------------------------------------------------------------------------
 # Normalize given tensor to unit magnitude with respect to the given
 # dimensions. Default = all dimensions except the first.
@@ -83,17 +77,10 @@ def mp_cat(a, b, dim=1, t=0.5):
 
 class MPFourier(torch.nn.Module):
 
-    def __init__(self, num_channels, bandwidth=1, eps=1e-3, flavor="gaussian"):
+    def __init__(self, num_channels, bandwidth=1, eps=1e-3): #eps=1e-2
         super().__init__()
         
-        assert num_channels % 2 == 0
-        if flavor == "gaussian":
-            self.register_buffer('freqs', torch.pi * torch.linspace(0, 1-eps, num_channels).erfinv() * bandwidth)
-        elif flavor == "pos":
-            self.register_buffer('freqs', torch.pi * torch.arange(0.5, num_channels//2 + 0.5).repeat_interleave(2, dim=0) * bandwidth)
-        else:
-            raise ValueError(f"Unknown MPFourier flavor: {flavor}")
-
+        self.register_buffer('freqs', torch.pi * torch.linspace(0, 1-eps, num_channels).erfinv() * bandwidth)
         self.register_buffer('phases', torch.pi/2 * (torch.arange(num_channels) % 2 == 0).float())
 
     def forward(self, x):
@@ -148,6 +135,7 @@ class Block(torch.nn.Module):
         pos_channels,                   # Number of positional embedding channels.
         flavor              = 'enc',    # Flavor: 'enc' or 'dec'.
         channels_per_head   = 128,      # Number of channels per attention head.
+        headroom = 1,
         dropout             = 0,        # Dropout probability.
         res_balance         = 0.5,      # Balance between main branch (0) and residual branch (1).
         attn_balance        = 0.5,      # Balance between main branch (0) and self-attention (1).
@@ -161,22 +149,21 @@ class Block(torch.nn.Module):
         self.out_channels = out_channels
         self.pos_channels = pos_channels
         self.flavor = flavor
-        self.num_heads = (out_channels*32) // channels_per_head
+        self.num_heads = (out_channels * headroom) // channels_per_head
         self.dropout = dropout
         self.res_balance = res_balance
         self.attn_balance = attn_balance
         self.clip_act = clip_act
-        self.emb_gain1 = torch.nn.Parameter(torch.zeros([]))
-        self.emb_gain2 = torch.nn.Parameter(torch.zeros([]))
-        self.conv_res0 = MPConv(out_channels if flavor == 'enc' else in_channels, out_channels, kernel=[5,5])
-        self.emb_linear1 = MPConv(emb_channels, out_channels*32, kernel=[]) if emb_channels != 0 else None
-        self.emb_linear2 = MPConv(emb_channels, out_channels*32, kernel=[]) if emb_channels != 0 else None
-        self.conv_res1 = MPConv(out_channels, out_channels, kernel=[5,5])
-        self.conv_skip = MPConv(in_channels, out_channels, kernel=[5,5]) if in_channels != out_channels else None
+        self.emb_gain = torch.nn.Parameter(torch.zeros([]))
+        self.conv_res0 = MPConv(out_channels if flavor == 'enc' else in_channels, out_channels, kernel=[1,3])
+        self.emb_linear = MPConv(emb_channels, out_channels, kernel=[]) if emb_channels != 0 else None
+        self.conv_res1 = MPConv(out_channels, out_channels, kernel=[1,3])
+        self.conv_skip = MPConv(in_channels, out_channels, kernel=[1,1]) if in_channels != out_channels else None
 
-        self.attn_qk = MPConv(out_channels*32 + pos_channels, out_channels*32, kernel=[1,1])
-        self.attn_v = MPConv(out_channels*32, out_channels*32, kernel=[1,1])
-        self.attn_proj = MPConv(out_channels*32, out_channels*32, kernel=[1,1])
+        #self.attn_qk = MPConv(out_channels + pos_channels, out_channels * 2 * headroom, kernel=[1,1])
+        self.attn_qk = MPConv(out_channels * 2, out_channels * 2 * headroom, kernel=[1,1])
+        self.attn_v = MPConv(out_channels, out_channels, kernel=[1,1])
+        self.attn_proj = MPConv(out_channels, out_channels, kernel=[1,1])
 
     def forward(self, x, emb, pos_emb):
         # Main branch.
@@ -188,9 +175,9 @@ class Block(torch.nn.Module):
 
         # Residual branch.
         y = self.conv_res0(mp_silu(x))
-        if self.emb_linear1 is not None:
-            c = self.emb_linear1(emb, gain=self.emb_gain1) + 1
-            y = unpatchify(mp_silu(patchify(y) * c.unsqueeze(2).unsqueeze(3).to(y.dtype)), 32)
+        if self.emb_linear is not None:
+            c = self.emb_linear(emb, gain=self.emb_gain) + 1
+            y = mp_silu(y * c.unsqueeze(2).unsqueeze(3).to(y.dtype))
 
         if self.dropout != 0: # magnitude preserving fix for dropout
             if self.training:
@@ -204,24 +191,25 @@ class Block(torch.nn.Module):
         if self.flavor == 'dec' and self.conv_skip is not None:
             x = self.conv_skip(x)
         x = mp_sum(x, y, t=self.res_balance)
-        
-        px = patchify(x)
-        if self.emb_linear2 is not None:
-            c2 = self.emb_linear2(emb, gain=self.emb_gain2) + 1
-            px = mp_silu(px * c2.unsqueeze(2).unsqueeze(3).to(x.dtype))
 
-        qk = self.attn_qk(mp_cat(px, px[:, :pos_emb.shape[1]] * pos_emb))
-        qk = qk.reshape(qk.shape[0], self.num_heads, -1, 2, px.shape[2] * px.shape[3])
+        #pos_emb = x * pos_emb
+        qk_x = mp_cat(x, x * pos_emb) #torch.cat((x, pos_emb), dim=1)
+        #qk_x = torch.cat((x * pos_emb[:, ::2], x * pos_emb[:, 1::2]), dim=1)
+        #qk_x = x * 0.5**0.5 + pos_emb * 0.5**0.5
+        qk = self.attn_qk(qk_x)
+        qk = qk.reshape(qk.shape[0], self.num_heads, -1, 2, y.shape[2] * y.shape[3])
         q, k = normalize(qk, dim=2).unbind(3)
 
-        v = self.attn_v(px)
-        v = v.reshape(v.shape[0], self.num_heads, -1, px.shape[2] * px.shape[3])
+        #self.w = torch.einsum('nhcq,nhck->nhqk', q, k / np.sqrt(q.shape[2])).softmax(dim=3)[0]
+
+        v = self.attn_v(x)
+        v = v.reshape(v.shape[0], self.num_heads, -1, y.shape[2] * y.shape[3])
         v = normalize(v, dim=2)
-        
+
         y = torch.nn.functional.scaled_dot_product_attention(q.transpose(-1, -2),
                                                              k.transpose(-1, -2),
                                                              v.transpose(-1, -2)).transpose(-1, -2)
-        y = unpatchify(self.attn_proj(y.reshape(*px.shape)), 32)
+        y = self.attn_proj(y.reshape(*x.shape))
         x = mp_sum(x, y, t=self.attn_balance)
 
         # Clip activations.
@@ -241,14 +229,14 @@ class UNet(ModelMixin, ConfigMixin):
     def __init__(self,
         in_channels = 4,                    # Number of input channels.
         out_channels = 4,                   # Number of output channels.
-        pos_channels = 696*2,               # Number of positional embedding channels for attention.
+        pos_channels = 768,                 # Number of positional embedding channels for attention.
         logvar_channels = 128,              # Number of channels for training uncertainty estimation.
         use_t_ranges = True,
         channels_per_head = 128,            # Number of channels per attention head.
         label_dim = 0,                      # Class label dimensionality. 0 = unconditional.
         label_dropout = 0.1,                # Dropout probability for class labels. 
         dropout = 0,                        # Dropout probability.
-        model_channels       = 64,          # Base multiplier for the number of channels.
+        model_channels       = 1024,        # Base multiplier for the number of channels.
         channel_mult         = [1,1,1,1],   # Per-resolution multipliers for the number of channels.
         channel_mult_noise   = None,        # Multiplier for noise embedding dimensionality. None = select based on channel_mult.
         channel_mult_emb     = None,        # Multiplier for final embedding dimensionality. None = select based on channel_mult.
@@ -263,14 +251,14 @@ class UNet(ModelMixin, ConfigMixin):
     ):
         super().__init__()
 
-        #assert use_t_ranges and (model_channels*32 + pos_channels) % channels_per_head == 0 and pos_channels > 0 and pos_channels % 2 == 0
+        assert use_t_ranges and (model_channels + pos_channels) % channels_per_head == 0 and pos_channels > 0 and pos_channels % 2 == 0
         block_kwargs = {"channels_per_head": channels_per_head, "dropout": dropout}
 
         cblock = [int(model_channels * x) for x in channel_mult]
-        cnoise = int(model_channels * channel_mult_noise) if channel_mult_noise is not None else max(cblock)*32
-        cemb = int(model_channels * channel_mult_emb) if channel_mult_emb is not None else max(cblock)*32
+        cnoise = int(model_channels * channel_mult_noise) if channel_mult_noise is not None else max(cblock)#cblock[0]
+        cemb = int(model_channels * channel_mult_emb) if channel_mult_emb is not None else max(cblock)
         clogvar = logvar_channels
-        cpos = 696*2
+        cpos = pos_channels
 
         self.sigma_max = sigma_max
         self.sigma_min = sigma_min
@@ -278,7 +266,7 @@ class UNet(ModelMixin, ConfigMixin):
 
         self.in_channels = in_channels
         self.out_channels = out_channels
-        self.pos_channels = 696*2
+        self.pos_channels = pos_channels
         self.label_dim = label_dim
         self.label_dropout = label_dropout
         self.label_balance = label_balance
@@ -287,11 +275,11 @@ class UNet(ModelMixin, ConfigMixin):
         self.out_gain = torch.nn.Parameter(torch.zeros([]))
 
         # Embedding.
-        self.emb_fourier = MPFourier(cnoise, bandwidth=2**0.5)
+        self.emb_fourier = MPFourier(cnoise, bandwidth=1.414)
         self.emb_noise = MPConv(cnoise, cemb, kernel=[])
         self.emb_label = MPConv(label_dim, cemb, kernel=[]) if label_dim != 0 else None
         self.emb_label_unconditional = MPConv(1, cemb, kernel=[]) if label_dim != 0 else None
-        self.emb_pos_fourier = MPFourier(cpos, bandwidth=1, flavor="pos")
+        self.emb_pos_fourier = MPFourier(cpos, bandwidth=100)
 
         # Training uncertainty estimation.
         self.logvar_fourier = MPFourier(clogvar)
@@ -299,13 +287,14 @@ class UNet(ModelMixin, ConfigMixin):
 
         # Encoder.
         self.enc = torch.nn.ModuleDict()
-        cout = in_channels + 2
+        #cout = ((32 * 3) // 2 + 1) * 2 * in_channels + 1
+        cout = 32*in_channels + 1
         for level, channels in enumerate(cblock):
             
             if level == 0:
                 cin = cout
                 cout = channels
-                self.enc[f'conv_in'] = MPConv(cin, cout, kernel=[5,5])
+                self.enc[f'conv_in'] = MPConv(cin, cout, kernel=[1,3])
             else:
                 self.enc[f'block{level}_in'] = Block(cout, cout, cemb, cpos,
                                                        flavor='enc', **block_kwargs)
@@ -328,7 +317,8 @@ class UNet(ModelMixin, ConfigMixin):
                 self.dec[f'block{level}_layer{idx}'] = Block(cin, cout, cemb, cpos,
                                                              flavor='dec', **block_kwargs)
                 
-        self.conv_out = MPConv(cout, out_channels, kernel=[5,5])
+        #self.conv_out = MPConv(cout, ((32 * 3) // 2 + 1) * 2 * out_channels, kernel=[1,3])
+        self.conv_out = MPConv(cout, 32 * out_channels, kernel=[1,3])
 
     @torch_compile(fullgraph=True, dynamic=False)
     def forward(self, x_in, sigma, class_embeddings, t_ranges, format, return_logvar=False):
@@ -342,10 +332,11 @@ class UNet(ModelMixin, ConfigMixin):
             c_in = 1 / (self.sigma_data ** 2 + sigma ** 2).sqrt()
             c_noise = (sigma.flatten().log() / 4).to(self.dtype)
             
-            x = (c_in * x_in).to(self.dtype)
+            x = self.patchify(c_in * x_in).to(self.dtype)
             
-            pos_t = (torch.arange(696, device=self.device) / 696.).view(1, 1, 1,-1)
-            pos_emb = self.emb_pos_fourier(pos_t).to(self.dtype)
+            pos_t = torch.linspace(0, 1, x.shape[3], device=self.device).view(1, -1) * (t_ranges[:, 1:2] - t_ranges[:, 0:1]) + t_ranges[:, 0:1]
+            #pos_t = torch.linspace(-3.5714285714/2, 3.5714285714/2, x.shape[3], device=self.device).view(1, -1)
+            pos_emb = self.emb_pos_fourier(pos_t.view(pos_t.shape[0], 1, 1,-1)).to(self.dtype)
 
         # Embedding.
         emb = self.emb_noise(self.emb_fourier(c_noise))
@@ -365,8 +356,8 @@ class UNet(ModelMixin, ConfigMixin):
         emb = mp_silu(emb)
 
         # Encoder.
-        x = torch.cat((x, torch.ones_like(x[:, :1]),
-                    format.get_positional_embedding(x, None, mode="linear")), dim=1)
+        x = torch.cat((x, torch.ones_like(x[:, :1])), dim=1)
+
         skips = []
         for name, block in self.enc.items():
             x = block(x) if 'conv' in name else block(x, emb, pos_emb)
@@ -379,7 +370,7 @@ class UNet(ModelMixin, ConfigMixin):
             x = block(x, emb, pos_emb)
         x = self.conv_out(x, gain=self.out_gain)
 
-        D_x = c_skip * x_in + c_out * x.float()
+        D_x = c_skip * x_in + c_out * self.unpatchify(x.float())
 
         # Training uncertainty, if requested.
         if return_logvar:
@@ -387,6 +378,19 @@ class UNet(ModelMixin, ConfigMixin):
             return D_x, logvar.float()
         
         return D_x
+    
+    @torch.no_grad()
+    def patchify(self, x):
+        #x = torch.nn.functional.pad(x, (0, 0, 32, 32)).float()
+        #x = torch.view_as_real(torch.fft.rfft(x, dim=2, norm="ortho")).permute(0, 1, 2, 4, 3)
+        #return x.reshape(x.shape[0], x.shape[1]*x.shape[2]*x.shape[3], 1, x.shape[4])
+        return x.reshape(x.shape[0], x.shape[1]*x.shape[2], 1, x.shape[3])
+
+    #@torch.no_grad()
+    def unpatchify(self, x):
+        #x = x.view(x.shape[0], self.out_channels, (32*3)//2+1, 2, x.shape[3]).permute(0, 1, 2, 4, 3).contiguous()
+        #return torch.fft.irfft(torch.view_as_complex(x), dim=2, norm="ortho")[:, :, 32:-32]
+        return x.reshape(x.shape[0], self.out_channels, 32, x.shape[3])
 
     def get_class_embeddings(self, class_labels):
         return self.emb_label(normalize(class_labels).to(device=self.device, dtype=self.dtype))

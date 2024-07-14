@@ -1,0 +1,51 @@
+{
+  "training_params": {
+    "compile_model": {
+      "fullgraph": true,
+      "dynamic": false
+    },
+    "train_batch_size": 8,
+    "num_train_epochs": 500000,
+    "gradient_accumulation_steps": 4,
+    "learning_rate": 1e-3,
+    "seed": 2000,
+    "lr_scheduler": "edm2",
+    "lr_scheduler_exponent": 0.5,
+    "lr_warmup_steps": 5000,
+    "lr_reference_steps": 50000,
+    "adam_beta1": 0.9,
+    "adam_beta2": 0.99,
+    "adam_epsilon": 1e-8,
+    "max_grad_norm": 10.0,
+    "use_ema": false,
+    "ema_stds": [],
+    "ema_cpu_offload": false,
+    "num_validation_samples": 0,
+    "dataloader_num_workers": 8,
+    "min_checkpoint_time": 3600,
+    "checkpoints_total_limit": 1,
+    "num_validation_epochs": 0,
+    "enable_anomaly_detection": false,
+    "logging_dir": null,
+    "tensorboard_http_port": 6006,
+    "module_name": "vae",
+    "trainer_class": [
+      "train",
+      "VAETrainer"
+    ]
+  },
+
+  "module_training_params": {
+    "block_overlap": 8,
+    "block_widths": [
+      8,
+      16,
+      32,
+      64
+    ],
+    "channel_kl_loss_weight": 1.0,
+    "imag_loss_weight": 1.0,
+    "point_loss_weight": 0,
+    "recon_loss_weight": 0.5
+  }
+}

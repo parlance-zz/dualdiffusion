@@ -1,0 +1,32 @@
+{
+  "_class_name": "UNet",
+  "_diffusers_version": "0.29.1",
+  "channel_mult": [
+    1,
+    1,
+    1,
+    1
+  ],
+  "channel_mult_emb": null,
+  "channel_mult_noise": null,
+  "concat_balance": 0.5,
+  "dropout": 0.0,
+  "in_channels": 4,
+  "label_balance": 0.5,
+  "label_dim": 1612,
+  "label_dropout": 0.1,
+  "last_global_step": 0,
+  "logvar_channels": 128,
+  "mlp_groups": 8,
+  "mlp_multiplier": 2,
+  "model_channels": 1024,
+  "num_layers_per_block": 3,
+  "out_channels": 4,
+  "patch_dim": 32,
+  "sigma_data": 1,
+  "sigma_max": 200.0,
+  "sigma_min": 0.03,
+  "t_conv_size": 9,
+  "t_mlp_groups": 128,
+  "t_scale": null
+}

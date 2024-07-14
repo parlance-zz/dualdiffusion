@@ -1,0 +1,16 @@
+{
+  "_class_name": "DualDiffusionPipeline",
+  "_diffusers_version": "0.29.1",
+  "unet": [
+    "models",
+    "UNet_EDM2_f"
+  ],
+  "vae": [
+    "models",
+    "AutoencoderKL_EDM2"
+  ],
+  "format": [
+    "format",
+    "SpectrogramFormat"
+  ]
+}

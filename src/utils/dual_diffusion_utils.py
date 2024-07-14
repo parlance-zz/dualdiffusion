@@ -23,13 +23,12 @@
 import os
 import platform
 from io import BytesIO
-from json import dumps
+from json import dumps as json_dumps, load as json_load
 import matplotlib.pyplot as plt
 
 import numpy as np
 import torch
 import torch.nn.functional as F
-import torch.nn as nn
 import torchaudio
 import torchaudio.functional as AF
 import cv2
@@ -102,23 +101,7 @@ def multi_plot(*args, layout=None, figsize=None, added_plots=None, x_log_scale=F
 
 def dict_str(d, indent=4):
     if d is None: return "None"
-    return dumps(d, indent=indent)
-
-def get_activation(act_fn):
-    if act_fn in ["swish", "silu"]:
-        return nn.SiLU()
-    elif act_fn == "mish":
-        return nn.Mish()
-    elif act_fn == "gelu":
-        return nn.GELU()
-    elif act_fn == "relu":
-        return nn.ReLU()
-    elif act_fn == "sin":
-        return torch.sin
-    elif act_fn == "sinc":
-        return torch.sinc
-    else:
-        raise ValueError(f"Unsupported activation function: {act_fn}")
+    return json_dumps(d, indent=indent)
 
 def get_expected_max_normal(n):
     return erfinv((n - np.pi/8) / (n - np.pi/4 + 1))
