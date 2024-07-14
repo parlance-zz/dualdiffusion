@@ -1,11 +1,14 @@
 from dataclasses import dataclass
 
-from .sigma_sampler import SigmaSampler
+from .sigma_sampler import SigmaSamplerConfig, SigmaSampler
 from .trainer import ModuleTrainerConfig, DualDiffusionTrainer
 
 @dataclass
 class UNetTrainerConfig(ModuleTrainerConfig):
-    pass
+
+    sigma_distribution: str = "ln_sech"
+    sigma_dist_scale: float = 1.0
+    sigma_dist_offset: float = 0.1
 
 class UNetTrainer:
     
@@ -14,12 +17,15 @@ class UNetTrainer:
         self.config = config
         self.trainer = trainer
 
-        self.sigma_sampler = SigmaSampler(self.trainer.module.config["sigma_max"],
-                                          self.trainer.module.config["sigma_min"],
-                                          self.trainer.module.config["sigma_data"],
-                                          self.config.sigma_distribution,
-                                          self.config.sigma_dist_scale,
-                                          self.config.sigma_dist_offset)
+        sigma_sampler_config = SigmaSamplerConfig(
+            sigma_max=self.trainer.module.config["sigma_max"],
+            sigma_min=self.trainer.module.config["sigma_min"],
+            sigma_data=self.trainer.module.config["sigma_data"],
+            sigma_distribution=self.config.sigma_distribution,
+            sigma_dist_scale=self.config.sigma_dist_scale,
+            sigma_dist_offset=self.config.sigma_dist_offset
+        )
+        self.sigma_sampler = SigmaSampler(sigma_sampler_config)
                                           
     def get_config_class():
         return UNetTrainerConfig

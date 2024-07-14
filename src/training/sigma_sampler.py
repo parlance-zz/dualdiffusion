@@ -27,6 +27,7 @@ import numpy as np
 
 @dataclass
 class SigmaSamplerConfig:
+
     sigma_max: float  = 200.
     sigma_min: float  = 0.03
     sigma_data: float = 1.
@@ -66,45 +67,47 @@ class SigmaSampler():
 
             self.sample = self.sample_ln_pdf
 
-    def sample_uniform_stratified(self, n_samples):
+    def sample_uniform_stratified(self, n_samples: int):
         return (torch.arange(n_samples) + 0.5) / n_samples + (torch.rand(1) - 0.5) / n_samples
     
-    def sample_ln_normal(self, n_samples=None, quantiles=None):
+    def sample_ln_normal(self, n_samples: Optional[int]=None, quantiles: Optional[torch.Tensor]=None):
         quantiles = quantiles or torch.rand(n_samples)
         
-        ln_sigma = self.dist_offset + (self.dist_scale * 2**0.5) * (quantiles * 2 - 1).erfinv().clip(min=-5, max=5)
-        ln_sigma[ln_sigma < self.sigma_ln_min] += self.sigma_ln_max - self.sigma_ln_min
-        ln_sigma[ln_sigma > self.sigma_ln_max] -= self.sigma_ln_max - self.sigma_ln_min
-        return ln_sigma.exp().clip(self.sigma_min, self.sigma_max)
+        ln_sigma = self.config.dist_offset + (self.config.dist_scale * 2**0.5) * (quantiles * 2 - 1).erfinv().clip(min=-5, max=5)
+        ln_sigma[ln_sigma < self.config.ln_sigma_min] += self.config.ln_sigma_max - self.config.ln_sigma_min
+        ln_sigma[ln_sigma > self.config.ln_sigma_max] -= self.config.ln_sigma_max - self.config.ln_sigma_min
+        return ln_sigma.exp().clip(self.config.sigma_min, self.config.sigma_max)
     
-    def sample_ln_sech(self, n_samples=None, quantiles=None):
+    def sample_ln_sech(self, n_samples: Optional[int]=None, quantiles: Optional[torch.Tensor]=None):
         quantiles = quantiles or torch.rand(n_samples)
 
-        theta_min = np.arctan(1 / self.sigma_max * np.exp(self.dist_offset))
-        theta_max = np.arctan(1 / self.sigma_min * np.exp(self.dist_offset))
+        theta_min = np.arctan(1 / self.config.sigma_max * np.exp(self.config.dist_offset))
+        theta_max = np.arctan(1 / self.config.sigma_min * np.exp(self.config.dist_offset))
 
         theta = quantiles * (theta_max - theta_min) + theta_min
-        ln_sigma = (1 / theta.tan()).log() * self.dist_scale + self.dist_offset
-        return ln_sigma.exp().clip(min=self.sigma_min, max=self.sigma_max)
+        ln_sigma = (1 / theta.tan()).log() * self.config.dist_scale + self.config.dist_offset
+        return ln_sigma.exp().clip(min=self.config.sigma_min, max=self.config.sigma_max)
     
-    def sample_ln_sech2(self, n_samples=None, quantiles=None):
+    def sample_ln_sech2(self, n_samples: Optional[int]=None, quantiles: Optional[torch.Tensor]=None):
         quantiles = quantiles or torch.rand(n_samples)
 
-        low = np.tanh(self.sigma_ln_min); high = np.tanh(self.sigma_ln_max)
-        ln_sigma = (quantiles * (high - low) + low).atanh() * self.dist_scale + self.dist_offset
-        return ln_sigma.exp().clip(self.sigma_min, self.sigma_max)
+        low = np.tanh(self.config.ln_sigma_min); high = np.tanh(self.config.ln_sigma_max)
+        ln_sigma = (quantiles * (high - low) + low).atanh() * self.config.dist_scale + self.config.dist_offset
+        ln_sigma[ln_sigma < self.config.ln_sigma_min] += self.config.ln_sigma_max - self.config.ln_sigma_min
+        ln_sigma[ln_sigma > self.config.ln_sigma_max] -= self.config.ln_sigma_max - self.config.ln_sigma_min
+        return ln_sigma.exp().clip(self.config.sigma_min, self.config.sigma_max)
     
-    def sample_ln_linear(self, n_samples=None, quantiles=None):
+    def sample_ln_linear(self, n_samples: Optional[int]=None, quantiles: Optional[torch.Tensor]=None):
         quantiles = quantiles or torch.rand(n_samples)
         
-        ln_sigma = quantiles * (self.sigma_ln_max - self.sigma_ln_min) + self.sigma_ln_min
-        return ln_sigma.exp().clip(self.sigma_min, self.sigma_max)
+        ln_sigma = quantiles * (self.config.ln_sigma_max - self.config.ln_sigma_min) + self.config.ln_sigma_min
+        return ln_sigma.exp().clip(self.config.sigma_min, self.config.sigma_max)
     
-    def update_pdf(self, pdf):
+    def update_pdf(self, pdf: torch.Tensor):
         self.dist_pdf = pdf / pdf.sum()
         self.dist_cdf[1:] = self.dist_pdf.cumsum(dim=0)
 
-    def _sample_pdf(self, quantiles):
+    def _sample_pdf(self, quantiles: torch.Tensor):
         quantiles = quantiles.to(self.dist_cdf.device)
 
         sample_indices = torch.searchsorted(self.dist_cdf, quantiles, out_int32=True).clip(max=self.dist_cdf.shape[0]-2)
@@ -114,16 +117,17 @@ class SigmaSampler():
 
         return (sample_indices + t) / (self.dist_cdf.shape[0]-1)
 
-    def sample_ln_pdf(self, n_samples=None, quantiles=None):
+    def sample_ln_pdf(self, n_samples: Optional[int]=None, quantiles: Optional[torch.Tensor]=None):
         quantiles = quantiles or torch.rand(n_samples)
 
-        ln_sigma = self._sample_pdf(quantiles) * (self.sigma_ln_max - self.sigma_ln_min) + self.sigma_ln_min
-        return ln_sigma.exp().clip(min=self.sigma_min, max=self.sigma_max)
+        ln_sigma = self._sample_pdf(quantiles) * (self.config.ln_sigma_max - self.config.ln_sigma_min) + self.config.ln_sigma_min
+        return ln_sigma.exp().clip(min=self.config.sigma_min, max=self.config.sigma_max)
 
 
 if __name__ == "__main__":
 
     import config
+    import os
     from dual_diffusion_pipeline import DualDiffusionPipeline
     from utils.dual_diffusion_utils import multi_plot
 
@@ -134,78 +138,63 @@ if __name__ == "__main__":
     sigma_min = sigma_data / target_snr
 
     training_batch_size = 384
-    #batch_distribution = "log_sech^2"
-    #batch_dist_scale = 1
-    #batch_dist_offset = -0.54#np.log(0.5)#-0.54
-    batch_distribution = "ln_data"
-    batch_distribution_skew = 0.#60.
-    #batch_dist_scale = 3#6
-    #batch_dist_offset = 0
-    #batch_distribution = "log_normal"
-    #batch_distribution = "log_sech"
-    batch_dist_scale = 3.
-    batch_dist_offset = 0. #53#21
+    batch_distribution = "ln_pdf"
+    batch_dist_scale = 1.
+    batch_dist_offset = 0.
     batch_stratified_sampling = True
-    batch_distribution_pdf = None
 
     reference_batch_size = 384
-    #reference_distribution = "ln_data"
-    reference_distribution_skew = 0.
-    #reference_dist_scale = 4
-    #reference_dist_offset = 0
     reference_distribution = "log_sech"
-    #reference_distribution = "log_sech"
-    reference_dist_scale = 1.#0.7071
-    reference_dist_offset = 0.1#0.55#np.log(0.5)#-0.54 #np.log(0.5)#-0.54 #-0.4
-    #reference_distribution = "log_sech"
-    #reference_dist_scale = 1
-    #reference_dist_offset = -0.54
+    reference_dist_scale = 1.
+    reference_dist_offset = 0.1
     reference_stratified_sampling = True
-    reference_distribution_pdf = None
 
     n_iter = 10000
     n_histo_bins = 200
     use_y_log_scale = False
 
-    if batch_distribution == "ln_data" or reference_distribution == "ln_data":
-        model_path = os.path.join(os.environ.get("MODEL_PATH", "./"), reference_model_name)
+    # ***********************************
+
+    batch_distribution_pdf = None
+    reference_distribution_pdf = None
+
+    if batch_distribution == "ln_pdf" or reference_distribution == "ln_pdf":
+
+        model_path = os.path.join(config.MODEL_PATH, reference_model_name)
         print(f"Loading DualDiffusion model from '{model_path}'...")
         pipeline = DualDiffusionPipeline.from_pretrained(model_path, load_latest_checkpoints=True)
+
         ln_sigma = torch.linspace(np.log(sigma_min), np.log(sigma_max), n_histo_bins)
         ln_sigma_error = pipeline.unet.logvar_linear(pipeline.unet.logvar_fourier(ln_sigma/4)).float().flatten()
     
-    if batch_distribution == "ln_data":
-        batch_distribution_pdf = ((-batch_dist_scale * ln_sigma_error) + batch_dist_offset).exp() + torch.linspace(batch_distribution_skew**0.5, 0, n_histo_bins)**2
-        #batch_distribution_pdf = ((-batch_dist_scale * ln_sigma_error) + batch_dist_offset).exp() + torch.linspace(batch_distribution_skew**(1/3), 0, n_histo_bins)**3
-        #batch_distribution_pdf = (1 - ln_sigma_error).clip(min=0.1)**5
-        #batch_distribution_pdf -= batch_distribution_pdf.amin()
+        if batch_distribution == "ln_pdf":
+            batch_distribution_pdf = ((-batch_dist_scale * ln_sigma_error) + batch_dist_offset).exp()
+        if reference_distribution == "ln_pdf":
+            reference_distribution_pdf = ((-reference_dist_scale * ln_sigma_error) + reference_dist_offset).exp()
 
-    if reference_distribution == "ln_data":
-        reference_distribution_pdf = ((-reference_dist_scale * ln_sigma_error) + reference_dist_offset).exp() + torch.linspace(reference_distribution_skew**0.5, 0, n_histo_bins)**2
-        #reference_distribution_pdf = (-0.5*(torch.linspace(np.log(sigma_min), np.log(sigma_max), n_histo_bins) - 1.3).square()).exp()
-        #reference_distribution_pdf = (-0.5*(torch.linspace(np.log(sigma_min), np.log(sigma_max), n_histo_bins) - -0.54).square()).exp()
-        #reference_distribution_pdf = (-0.5*(torch.linspace(np.log(sigma_min), np.log(sigma_max), n_histo_bins) - -0.69).square()).exp()
-        #reference_distribution_pdf **= 2
-        #reference_distribution_pdf = (1 - ln_sigma_error.exp()).clip(min=1e-3)**2
-        reference_distribution_pdf -= reference_distribution_pdf.amin()
+    batch_sampler_config = SigmaSamplerConfig(
+        sigma_max=sigma_max,
+        sigma_min=sigma_min,
+        sigma_data=sigma_data,
+        distribution=batch_distribution,
+        dist_scale=batch_dist_scale,
+        dist_offset=batch_dist_offset,
+        dist_pdf=batch_distribution_pdf
+    )
+    batch_sampler = SigmaSampler(batch_sampler_config)
 
-    batch_sampler = SigmaSampler(sigma_max=sigma_max,
-                                 sigma_min=sigma_min,
-                                 sigma_data=sigma_data,
-                                 distribution=batch_distribution,
-                                 dist_scale=batch_dist_scale,
-                                 dist_offset=batch_dist_offset,
-                                 distribution_pdf=batch_distribution_pdf)
+    reference_sampler_config = SigmaSamplerConfig(
+        sigma_max=sigma_max,
+        sigma_min=sigma_min,
+        sigma_data=sigma_data,
+        distribution=reference_distribution,
+        dist_scale=reference_dist_scale,
+        dist_offset=reference_dist_offset,
+        dist_pdf=reference_distribution_pdf
+    )
+    reference_sampler = SigmaSampler(reference_sampler_config)
 
-    reference_sampler = SigmaSampler(sigma_max=sigma_max,
-                                     sigma_min=sigma_min,
-                                     sigma_data=sigma_data,
-                                     distribution=reference_distribution,
-                                     dist_scale=reference_dist_scale,
-                                     dist_offset=reference_dist_offset,
-                                     distribution_pdf=reference_distribution_pdf)
-
-    if batch_sampler.distribution == "ln_data":
+    if batch_sampler.distribution == "ln_pdf":
         multi_plot((batch_sampler.dist_pdf, "batch_distribution_pdf"),
                    (batch_sampler.dist_cdf, "batch_distribution_cdf"),)
         
