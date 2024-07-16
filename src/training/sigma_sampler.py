@@ -35,6 +35,7 @@ class SigmaSamplerConfig:
     dist_scale: float  = 1.
     dist_offset: float = 0.1
     dist_pdf: Optional[torch.Tensor] = None
+    use_stratified_sigma_sampling: bool = True
 
     @property
     def ln_sigma_min(self) -> float:
@@ -53,23 +54,27 @@ class SigmaSampler():
             raise ValueError(f"Invalid distribution: {self.config.distribution}")
             
         if self.config.distribution == "ln_normal":
-            self.sample = self.sample_ln_normal
+            self.sample_fn = self.sample_ln_normal
         elif self.config.distribution == "ln_sech":
-            self.sample = self.sample_ln_sech
+            self.sample_fn = self.sample_ln_sech
         elif self.config.distribution == "ln_sech^2":
-            self.sample = self.sample_ln_sech2
+            self.sample_fn = self.sample_ln_sech2
         elif self.config.distribution == "ln_linear":
-            self.sample = self.sample_ln_linear
+            self.sample_fn = self.sample_ln_linear
         elif self.config.distribution == "ln_pdf":
 
             self.dist_pdf = self.config.dist_pdf / self.config.dist_pdf.sum()
             self.dist_cdf = torch.cat((torch.tensor([0.], device=self.dist_pdf.device), self.dist_pdf.cumsum(dim=0)))
 
-            self.sample = self.sample_ln_pdf
+            self.sample_fn = self.sample_ln_pdf
 
-    def sample_uniform_stratified(self, n_samples: int, device: Optional[torch.device]=None):
-        return ((torch.arange(n_samples) + 0.5) / n_samples + (torch.rand(1) - 0.5) / n_samples).to(device=device)
+    def _sample_uniform_stratified(self, n_samples: int):
+        return (torch.arange(n_samples) + 0.5) / n_samples + (torch.rand(1) - 0.5) / n_samples
     
+    def sample(self, n_samples: int, device: Optional[torch.device]=None):
+        quantiles = self._sample_uniform_stratified(n_samples) if self.config.use_stratified_sigma_sampling else None
+        return self.sample_fn(n_samples, quantiles).to(device)
+
     def sample_ln_normal(self, n_samples: Optional[int]=None, quantiles: Optional[torch.Tensor]=None):
         quantiles = quantiles or torch.rand(n_samples)
         
@@ -179,7 +184,8 @@ if __name__ == "__main__":
         distribution=batch_distribution,
         dist_scale=batch_dist_scale,
         dist_offset=batch_dist_offset,
-        dist_pdf=batch_distribution_pdf
+        dist_pdf=batch_distribution_pdf,
+        use_stratified_sigma_sampling=batch_stratified_sampling,
     )
     batch_sampler = SigmaSampler(batch_sampler_config)
 
@@ -190,7 +196,8 @@ if __name__ == "__main__":
         distribution=reference_distribution,
         dist_scale=reference_dist_scale,
         dist_offset=reference_dist_offset,
-        dist_pdf=reference_distribution_pdf
+        dist_pdf=reference_distribution_pdf,
+        use_stratified_sigma_sampling=reference_stratified_sampling,
     )
     reference_sampler = SigmaSampler(reference_sampler_config)
 
@@ -209,11 +216,8 @@ if __name__ == "__main__":
 
     for i in range(n_iter):
         
-        batch_quantiles = batch_sampler.sample_uniform_stratified(training_batch_size) if batch_stratified_sampling else None
-        batch_ln_sigma = batch_sampler.sample(training_batch_size, quantiles=batch_quantiles).log()
-
-        reference_quantiles = reference_sampler.sample_uniform_stratified(reference_batch_size) if reference_stratified_sampling else None
-        reference_ln_sigma = reference_sampler.sample(reference_batch_size, quantiles=reference_quantiles).log()
+        batch_ln_sigma = batch_sampler.sample(training_batch_size).log()
+        reference_ln_sigma = reference_sampler.sample(reference_batch_size).log()
 
         if i == 0:
             print(f"batch example sigma: {batch_ln_sigma.exp()}")
