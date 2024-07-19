@@ -48,7 +48,8 @@
     "sigma_distribution": "ln_sech",
     "sigma_dist_scale": 1.0,
     "sigma_dist_offset": 0.1,
-    "stratified_sigma_sampling": true,
+    "use_stratified_sigma_sampling": true,
+    "input_perturbation": null,
     "num_loss_buckets": 10
   }
 }

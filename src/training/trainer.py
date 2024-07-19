@@ -29,6 +29,7 @@ import shutil
 import subprocess
 import atexit
 import importlib
+import platform
 from datetime import datetime
 from typing import Optional, Literal, Type
 from dataclasses import dataclass
@@ -50,7 +51,36 @@ from diffusers.utils import is_tensorboard_available
 from dual_diffusion_pipeline import DualDiffusionPipeline
 from .ema_edm2 import PowerFunctionEMA
 from .dataset import DatasetConfig, SwitchableDataset
-from utils.dual_diffusion_utils import dict_str, normalize
+from utils.dual_diffusion_utils import dict_str
+
+class TrainLogger():
+
+    def __init__(self, accelerator: Accelerator) -> None:
+
+        self.accelerator = accelerator
+        self.channels, self.counts = {}, {}
+
+    def clear(self) -> None:
+        self.channels.clear()
+        self.counts.clear()
+
+    def add_log(self, key, value) -> None:
+        if torch.is_tensor(value):
+            value = self.accelerator.gather(value.detach()).mean().item()
+
+        if key in self.channels:
+            self.channels[key] += value
+            self.counts[key] += 1
+        else:
+            self.channels[key] = value
+            self.counts[key] = 1
+
+    def add_logs(self, logs) -> None:
+        for key, value in logs:
+            self.add_log(key, value)
+
+    def get_logs(self) -> dict:
+        return {key: value / self.counts[key] for key, value in self.items()}
 
 @dataclass
 class LRScheduleConfig:
@@ -89,6 +119,21 @@ class LoggingConfig:
 class ModuleTrainerConfig:
     pass
 
+class ModuleTrainer:
+
+    @staticmethod
+    def get_config_class():
+        return ModuleTrainerConfig
+    
+    def init_batch(self) -> None:
+        pass
+
+    def train_batch(self) -> dict:
+        return {}
+    
+    def finish_batch(self) -> dict:
+        return {}
+
 @dataclass
 class DualDiffusionTrainerConfig:
 
@@ -119,7 +164,7 @@ class DualDiffusionTrainerConfig:
     module_trainer_config: ModuleTrainerConfig
 
     @staticmethod
-    def from_json(json_path, **kwargs):
+    def from_json(json_path, **kwargs) -> "DualDiffusionTrainerConfig":
 
         train_config = config.load_json(json_path)
         train_config["train_config_path"] = json_path
@@ -141,7 +186,7 @@ class DualDiffusionTrainerConfig:
 
 class DualDiffusionTrainer:
 
-    def __init__(self, train_config: DualDiffusionTrainerConfig):
+    def __init__(self, train_config: DualDiffusionTrainerConfig) -> None:
 
         self.config = train_config
 
@@ -163,7 +208,7 @@ class DualDiffusionTrainer:
             self.module, self.optimizer, self.train_dataloader, self.lr_scheduler
         )
 
-    def init_logging(self):
+    def init_logging(self) -> None:
         
         self.logger = get_logger("dual_diffusion_training", log_level="INFO")
 
@@ -188,7 +233,7 @@ class DualDiffusionTrainer:
         datasets.utils.logging.set_verbosity_warning()
         diffusers.utils.logging.set_verbosity_info()
 
-    def init_accelerator(self):
+    def init_accelerator(self) -> None:
 
         accelerator_project_config = ProjectConfiguration(project_dir=self.config.model_path,
                                                           logging_dir=self.config.logging_config.logging_dir)
@@ -204,7 +249,7 @@ class DualDiffusionTrainer:
         self.logger.info(self.accelerator.state, main_process_only=False, in_order=True)
         self.accelerator.wait_for_everyone()
 
-    def init_tensorboard(self):
+    def init_tensorboard(self) -> None:
 
         if self.accelerator.is_main_process and self.config.logging_config.tensorboard_http_port is not None:
 
@@ -231,7 +276,7 @@ class DualDiffusionTrainer:
 
             atexit.register(cleanup_process)
 
-    def init_pytorch(self):
+    def init_pytorch(self) -> None:
 
         if self.config.seed is not None:
             set_seed(self.config.seed, device_specific=True)
@@ -245,17 +290,21 @@ class DualDiffusionTrainer:
         else:
             self.logger.info("Pytorch anomaly detection disabled")
 
-    def init_module_pipeline(self):
+    def init_module_pipeline(self) -> None:
 
         self.pipeline = DualDiffusionPipeline.from_pretrained(self.config.model_path)
-        self.module = getattr(self.pipeline, self.config.module_name)
+        self.module = getattr(self.pipeline, self.config.module_name).requires_grad_(True).train()
         self.module_class = type(self.module)
 
         self.vae = self.pipeline.vae
 
         if self.config.module_name == "unet":
             if not self.config.dataloader_config.use_pre_encoded_latents:
-                self.vae = self.vae.to(self.accelerator.device).to(torch.bfloat16)
+
+                self.vae = self.vae.to(self.accelerator.device).requires_grad_(False).eval()
+                if self.accelerator.state.mixed_precision in ["fp16", "bf16"]:
+                    self.vae = self.vae.to(self.accelerator.state.mixed_precision)
+
                 self.logger.info(f"Training diffusion model with VAE")
             else:
                 self.logger.info(f"Training diffusion model with pre-encoded latents")
@@ -269,8 +318,12 @@ class DualDiffusionTrainer:
 
         self.logger.info(f"Module class: {self.module_class.__name__}")
         self.logger.info(f"Module trainer class: {self.config.module_trainer_class.__name__}")
+        
+        if self.config.compile_params is not None and platform.system() == "Linux":
+            self.logger.info(f"Compiling model with options: {dict_str(self.config.compile_params)}")
+            self.module.forward = torch.compile(self.module.forward, **self.config.compile_params)
 
-    def init_ema_module(self):
+    def init_ema_module(self) -> None:
         
         if self.config.ema_config.use_ema:
             ema_device = "cpu" if self.config.ema_config.ema_cpu_offload else self.accelerator.device
@@ -282,7 +335,7 @@ class DualDiffusionTrainer:
         else:
             self.logger.info("Not using EMA model")
 
-    def init_optimizer(self):
+    def init_optimizer(self) -> None:
         
         #optimizer = torch.optim.Adam(
         optimizer = torch.optim.AdamW(
@@ -298,7 +351,7 @@ class DualDiffusionTrainer:
 
         return optimizer
 
-    def init_checkpointing(self):
+    def init_checkpointing(self) -> None:
 
         self.last_checkpoint_time = datetime.now()
         self.logger.info(f"Saving checkpoints every {self.config.min_checkpoint_time}s")
@@ -316,7 +369,7 @@ class DualDiffusionTrainer:
             for _ in range(len(models)):
                 model = models.pop() # pop models so that they are not loaded again
 
-                # load diffusers style into model
+                # copy loaded state and config into model
                 load_model = self.module_class.from_pretrained(input_dir, subfolder=self.config.module_name)
                 model.register_to_config(**load_model.config)
                 model.load_state_dict(load_model.state_dict())
@@ -351,7 +404,7 @@ class DualDiffusionTrainer:
             if self.config.train_config_path is not None:
                 shutil.copy(self.config.train_config_path, tmp_path)
 
-    def init_dataloader(self):
+    def init_dataloader(self) -> None:
         
         if self.config.module_name == "unet" and self.config.dataloader_config.use_pre_encoded_latents:
             train_data_dir = config.LATENTS_DATASET_PATH
@@ -391,7 +444,7 @@ class DualDiffusionTrainer:
         self.max_train_steps = self.config.num_train_epochs * self.num_update_steps_per_epoch
         self.total_batch_size = self.config.train_batch_size * self.accelerator.num_processes * self.config.gradient_accumulation_steps
  
-    def init_lr_scheduler(self):
+    def init_lr_scheduler(self) -> None:
 
         if self.config.lr_schedule_config.lr_schedule == "edm2":
             self.logger.info((
@@ -425,7 +478,7 @@ class DualDiffusionTrainer:
                 num_training_steps=scaled_max_train_steps,
             )
    
-    def save_checkpoint(self, global_step):
+    def save_checkpoint(self, global_step) -> None:
         
         # save model checkpoint and training / optimizer state
         self.module.config["last_global_step"] = global_step
@@ -471,7 +524,9 @@ class DualDiffusionTrainer:
             except Exception as e:
                 self.logger.error(f"Error removing old checkpoints: {e}")
 
-    def load_checkpoint(self):
+        self.last_checkpoint_time = datetime.now()
+
+    def load_checkpoint(self) -> None:
 
         global_step = 0
         resume_step = 0
@@ -506,10 +561,10 @@ class DualDiffusionTrainer:
 
         return global_step, resume_step, first_epoch
 
-    def train(self):
+    def train(self) -> None:
 
         self.logger.info("***** Running training *****")
-        self.logger.info(f"  Num examples = {len(self.train_dataset)}")
+        self.logger.info(f"  Num examples = {len(self.dataset)}")
         self.logger.info(f"  Num Epochs = {self.config.num_train_epochs}")
         self.logger.info(f"  Instantaneous batch size per device = {self.config.train_batch_size}")
         self.logger.info(f"  Gradient Accumulation steps = {self.config.gradient_accumulation_steps}")
@@ -518,360 +573,104 @@ class DualDiffusionTrainer:
         self.logger.info(f"  Path to save/load checkpoints = {self.config.model_path}")
 
         global_step, resume_step, first_epoch = self.load_checkpoint()
+        resume_dataloader = self.accelerator.skip_first_batches(self.train_dataloader, resume_step) if resume_step > 0 else None
+
         module_trainer = self.config.module_trainer_class(self.config.module_trainer_config, self)
+        train_logger = TrainLogger()
+        sample_logger = TrainLogger()
 
-        if args.module == "vae":
+        if not self.config.dataloader_config.use_pre_encoded_latents:
+            self.logger.info(f"Sample shape: {self.sample_shape}")
+        self.logger.info(f"Latent shape: {self.latent_shape}")
 
-            latent_shape = module.get_latent_shape(sample_shape)
-            channel_kl_loss_weight = model_params["vae_training_params"]["channel_kl_loss_weight"]
-            recon_loss_weight = model_params["vae_training_params"]["recon_loss_weight"]
-            point_loss_weight = model_params["vae_training_params"]["point_loss_weight"]
-            imag_loss_weight = model_params["vae_training_params"]["imag_loss_weight"]
-
-            logger.info("Training VAE model:")
-            logger.info(f"VAE Training params: {dict_str(model_params['vae_training_params'])}")
-            logger.info(f"Channel KL loss weight: {channel_kl_loss_weight}")
-            logger.info(f"Recon loss weight: {recon_loss_weight} - Point loss weight: {point_loss_weight} - Imag loss weight: {imag_loss_weight}")
-
-            target_snr = module.get_target_snr()
-            target_noise_std = (1 / (target_snr**2 + 1))**0.5
-            logger.info(f"VAE Target SNR: {target_snr:{8}f}")
-
-            channel_kl_loss_weight = torch.tensor(channel_kl_loss_weight, device=accelerator.device, dtype=torch.float32)
-            recon_loss_weight = torch.tensor(recon_loss_weight, device=accelerator.device, dtype=torch.float32)
-            point_loss_weight = torch.tensor(point_loss_weight, device=accelerator.device, dtype=torch.float32)
-            imag_loss_weight = torch.tensor(imag_loss_weight, device=accelerator.device, dtype=torch.float32)
-
-            module_log_channels = [
-                "channel_kl_loss_weight",
-                "recon_loss_weight",
-                "imag_loss_weight",
-                "real_loss",
-                "imag_loss",
-                "channel_kl_loss",
-                "latents_mean",
-                "latents_std",
-                "latents_snr",
-                "point_similarity_loss",
-                "point_loss_weight",
-            ]
-
-        elif args.module == "unet":
-            logger.info("Training UNet model:")
-
-            use_stratified_sigma_sampling = model_params["unet_training_params"]["stratified_sigma_sampling"]
-            logger.info(f"Using stratified sigma sampling: {use_stratified_sigma_sampling}")
-            sigma_ln_std = model_params["unet_training_params"]["sigma_ln_std"]
-            sigma_ln_mean = model_params["unet_training_params"]["sigma_ln_mean"]
-            logger.info(f"Sampling training sigmas with sigma_ln_std = {sigma_ln_std:.4f}, sigma_ln_mean = {sigma_ln_mean:.4f}")
-            logger.info(f"sigma_max = {module.sigma_max}, sigma_min = {module.sigma_min}")
-
-            if args.num_unet_loss_buckets > 0:
-                logger.info(f"Using {args.num_unet_loss_buckets} loss buckets")
-                unet_loss_buckets = torch.zeros(args.num_unet_loss_buckets,
-                                                    device="cpu", dtype=torch.float32)
-                unet_loss_bucket_counts = torch.zeros(args.num_unet_loss_buckets,
-                                                        device="cpu", dtype=torch.float32)
-            else:
-                logger.info("UNet loss buckets are disabled")
-
-            if vae is not None:
-                if vae.config.last_global_step == 0 and args.train_data_format != ".safetensors":
-                    logger.error("VAE model has not been trained, aborting...")
-                    exit(1)
-                latent_shape = vae.get_latent_shape(sample_shape)
-                target_snr = vae.get_target_snr()
-            else:
-                target_snr = model_params.get("target_snr", 1e4)
-
-            logger.info(f"Target SNR: {target_snr:.3f}")
-
-            input_perturbation = model_params["unet_training_params"]["input_perturbation"]
-            if input_perturbation > 0: logger.info(f"Using input perturbation of {input_perturbation}")
-            else: logger.info("Input perturbation is disabled")
-
-            logger.info(f"Dropout: {module.dropout} Conditioning dropout: {module.label_dropout}")
-
-            sigma_ln_std = torch.tensor(sigma_ln_std, device=accelerator.device, dtype=torch.float32)
-            sigma_ln_mean = torch.tensor(sigma_ln_mean, device=accelerator.device, dtype=torch.float32)
-            module_log_channels = [
-                "sigma_ln_std",
-                "sigma_ln_mean",
-            ]
-
-            #sigma_sample_max_temperature = 4
-            #sigma_sample_pdf_skew = 0.
-            #sigma_temperature_ref_steps = 20000
-            #sigma_sample_temperature = min(global_step / sigma_temperature_ref_steps, 1) * sigma_sample_max_temperature
-            #sigma_sample_resolution = 128 - 1
-            #sigma_max = module.sigma_max
-            #sigma_min = module.sigma_data / target_snr
-            #sigma_data = module.sigma_data
-            #ln_sigma = torch.linspace(np.log(sigma_min), np.log(sigma_max), sigma_sample_resolution, device=accelerator.device)
-            #ln_sigma_error = module.logvar_linear(module.logvar_fourier(ln_sigma/4)).float().flatten().detach()
-            #sigma_distribution_pdf = (-sigma_sample_temperature * ln_sigma_error).exp() + torch.linspace(sigma_sample_pdf_skew**0.5, 0, sigma_sample_resolution, device=accelerator.device).square()
-            #sigma_sampler = SigmaSampler(sigma_max, sigma_min, sigma_data,
-            #                             distribution="ln_data", distribution_pdf=sigma_distribution_pdf)
-            #sigma_sampler = SigmaSampler(module.sigma_max, module.sigma_data / target_snr, module.sigma_data,
-            #                             distribution="log_sech", dist_scale=1, dist_offset=0.1)#0.21) #0.2)
-            sigma_sampler = SigmaSampler(module.sigma_max, module.sigma_data / target_snr, module.sigma_data,
-                                        distribution="log_sech", dist_scale=1., dist_offset=0.)#0.21) #0.2)
-
-        total_batch_size = args.train_batch_size * accelerator.num_processes * args.gradient_accumulation_steps
-
-        if args.train_data_format != ".safetensors":
-            logger.info(f"Sample shape: {sample_shape}")
-        if latent_shape is not None:
-            logger.info(f"Latent shape: {latent_shape}")
-
-        module.normalize_weights()
-
-        for epoch in range(first_epoch, args.num_train_epochs):
-
-            module.train().requires_grad_(True)
-
-            train_loss = 0.
-            grad_accum_steps = 0
-            module_logs = {}
-            for channel in module_log_channels:
-                module_logs[channel] = 0.
+        if getattr(self.module, "normalize_weights", None) is not None:
+            self.module.normalize_weights()
             
-            progress_bar = tqdm(total=num_update_steps_per_epoch, disable=not accelerator.is_local_main_process)
+        for epoch in range(first_epoch, self.config.num_train_epochs):
+            
+            progress_bar = tqdm(total=self.num_update_steps_per_epoch, disable=not self.accelerator.is_local_main_process)
+            if resume_step > 0: progress_bar.update(resume_step // self.config.gradient_accumulation_steps)
             progress_bar.set_description(f"Epoch {epoch}")
 
-            for step, batch in enumerate(train_dataloader):
-                # skip steps until we reach the resumed step if resuming from checkpoint - todo: this is inefficient
-                if args.resume_from_checkpoint and epoch == first_epoch and step < resume_step:
-                    if step % args.gradient_accumulation_steps == 0:
-                        progress_bar.update(1)
-                    continue
+            grad_accum_steps = 0
+
+            for batch in (resume_dataloader or self.train_dataloader):
                 
-                if args.module == "unet" and grad_accum_steps == 0:
-                    
-                    if use_stratified_sigma_sampling:
-                        # instead of randomly sampling each sigma, distribute the batch evenly across the distribution
-                        # and add a random offset for continuous uniform coverage
-                        global_quantiles = (torch.arange(total_batch_size, device=accelerator.device)+0.5) / total_batch_size
-                        global_quantiles += (torch.rand(1, device=accelerator.device) - 0.5) / total_batch_size
-                        global_quantiles = accelerator.gather(global_quantiles.unsqueeze(0))[0] # sync quantiles across all ranks / processes
-                    
-                    if args.num_unet_loss_buckets > 0:
-                        unet_loss_buckets.zero_()
-                        unet_loss_bucket_counts.zero_()
+                if grad_accum_steps == 0:                        
+                    train_logger.clear()
+                    module_trainer.init_batch()
 
-                with accelerator.accumulate(module):
+                with self.accelerator.accumulate(self.module):
 
-                    raw_samples = batch["input"]
-                    sample_game_ids = batch["game_ids"]
-                    if model_params["t_scale"] is not None:
-                        sample_t_ranges = batch["t_ranges"]
-                    else:
-                        sample_t_ranges = None
-                    #sample_author_ids = batch["author_ids"]
-                    raw_sample_paths = batch["sample_paths"]
+                    module_logs = module_trainer.train_batch(batch)
+                    train_logger.add_logs(module_logs)
+                    for i, sample_path in enumerate(batch["sample_paths"]):
+                        sample_logger.add_log(sample_path, module_logs["loss"][i])
 
-                    if args.module == "unet":
-                        
-                        class_labels = pipeline.get_class_labels(sample_game_ids)
-                        unet_class_embeddings = module.get_class_embeddings(class_labels)
-
-                        if args.train_data_format == ".safetensors":
-                            #samples = normalize(raw_samples + torch.randn_like(raw_samples) * np.exp(0.5 * vae.get_noise_logvar())).float()
-                            samples = normalize(raw_samples).float()
-                            assert samples.shape == latent_shape
-                        else:
-                            samples = pipeline.format.raw_to_sample(raw_samples)
-                            if vae is not None:
-                                vae_class_embeddings = vae.get_class_embeddings(class_labels)
-                                samples = vae.encode(samples.to(torch.bfloat16), vae_class_embeddings, pipeline.format).mode().detach()
-                                samples = normalize(samples).float()
-
-                        if use_stratified_sigma_sampling:
-                            process_batch_quantiles = global_quantiles[accelerator.local_process_index::accelerator.num_processes]
-                            quantiles = process_batch_quantiles[grad_accum_steps * args.train_batch_size:(grad_accum_steps+1) * args.train_batch_size]
-                        else:
-                            quantiles = None
-
-                        #if use_stratified_sigma_sampling:
-                        #    batch_normal = sigma_ln_mean + (sigma_ln_std * (2 ** 0.5)) * (quantiles * 2 - 1).erfinv().clip(min=-5, max=5)
-                        #else:
-                        #    batch_normal = torch.randn(samples.shape[0], device=accelerator.device) * sigma_ln_std + sigma_ln_mean
-                        #sigma = batch_normal.exp().clip(min=module.sigma_min, max=module.sigma_max)
-                        sigma = sigma_sampler.sample(samples.shape[0], quantiles=quantiles).to(accelerator.device)
-                        noise = torch.randn_like(samples) * sigma.view(-1, 1, 1, 1)
-                        samples = samples * module.sigma_data
-
-                        denoised, error_logvar = module(samples + noise,
-                                                        sigma,
-                                                        unet_class_embeddings,
-                                                        sample_t_ranges,
-                                                        pipeline.format,
-                                                        return_logvar=True)
-                        
-                        mse_loss = torch.nn.functional.mse_loss(denoised, samples, reduction="none")
-                        loss_weight = (sigma ** 2 + module.sigma_data ** 2) / (sigma * module.sigma_data) ** 2
-                        loss = (loss_weight.view(-1, 1, 1, 1) / error_logvar.exp() * mse_loss + error_logvar).mean()
-                        #loss = (loss_weight.view(-1, 1, 1, 1) * mse_loss).mean()
-                        
-                        if args.num_unet_loss_buckets > 0:
-                            batch_loss = mse_loss.mean(dim=(1,2,3)) * loss_weight
-
-                            global_step_quantiles = (accelerator.gather(sigma.detach()).cpu().log() - np.log(module.sigma_min)) / (np.log(module.sigma_max) - np.log(module.sigma_min))
-                            global_step_batch_loss = accelerator.gather(batch_loss.detach()).cpu()
-                            target_buckets = (global_step_quantiles * unet_loss_buckets.shape[0]).long().clip(min=0, max=unet_loss_buckets.shape[0]-1)
-                            unet_loss_buckets.index_add_(0, target_buckets, global_step_batch_loss)
-                            unet_loss_bucket_counts.index_add_(0, target_buckets, torch.ones_like(global_step_batch_loss))
-
-                    elif args.module == "vae":
-
-                        samples_dict = pipeline.format.raw_to_sample(raw_samples, return_dict=True)
-                        vae_class_embeddings = module.get_class_embeddings(pipeline.get_class_labels(sample_game_ids))
-                        
-                        posterior = module.encode(samples_dict["samples"],
-                                                vae_class_embeddings,
-                                                pipeline.format)
-                        latents = posterior.sample(pipeline.noise_fn)
-                        latents_mean = latents.mean()
-                        latents_std = latents.std()
-
-                        measured_sample_std = (latents_std**2 - target_noise_std**2).clip(min=0)**0.5
-                        latents_snr = measured_sample_std / target_noise_std
-                        model_output = module.decode(latents,
-                                                    vae_class_embeddings,
-                                                    pipeline.format)
-
-                        recon_samples_dict = pipeline.format.sample_to_raw(model_output, return_dict=True, decode=False)
-                        point_similarity_loss = (samples_dict["samples"] - recon_samples_dict["samples"]).abs().mean()
-                        
-                        recon_loss_logvar = module.get_recon_loss_logvar()
-                        real_loss, imag_loss = pipeline.format.get_loss(recon_samples_dict, samples_dict)
-                        real_nll_loss = (real_loss / recon_loss_logvar.exp() + recon_loss_logvar) * recon_loss_weight
-                        imag_nll_loss = (imag_loss / recon_loss_logvar.exp() + recon_loss_logvar) * (recon_loss_weight * imag_loss_weight)
-
-                        latents_square_norm = (torch.linalg.vector_norm(latents, dim=(1,2,3), dtype=torch.float32) / latents[0].numel()**0.5).square()
-                        latents_batch_mean = latents.mean(dim=(1,2,3))
-                        channel_kl_loss = (latents_batch_mean.square() + latents_square_norm - 1 - latents_square_norm.log()).mean()
-                        
-                        loss = real_nll_loss + imag_nll_loss + channel_kl_loss * channel_kl_loss_weight + point_similarity_loss * point_loss_weight
-                    else:
-                        raise ValueError(f"Unknown module {args.module}")
-                    
-                    # Gather the losses across all processes for logging (if we use distributed training).
                     grad_accum_steps += 1
-                    avg_loss = accelerator.gather(loss.detach()).mean()
-                    train_loss += avg_loss.item()
-                    for channel in module_log_channels:
-                        avg = accelerator.gather(locals()[channel].detach()).mean()
-                        module_logs[channel] += avg.item()
+                    self.accelerator.backward(module_logs["loss"].mean())
 
-                    # Backpropagate
-                    accelerator.backward(loss)
+                    if self.accelerator.sync_gradients:   
+                        grad_norm = self.accelerator.clip_grad_norm_(self.module.parameters(),
+                                                                     self.config.optimizer_config.max_grad_norm)
+                        train_logger.add_log("grad_norm", grad_norm)
 
-                    if accelerator.sync_gradients: # clip and check for nan/inf grad
-                        grad_norm = accelerator.gather(accelerator.clip_grad_norm_(module.parameters(), args.max_grad_norm)).mean().item()
                         if math.isinf(grad_norm) or math.isnan(grad_norm):
-                            logger.warning(f"Warning: grad norm is {grad_norm} - step={global_step} loss={loss.item()} debug_last_sample_paths={raw_sample_paths}")
+                            self.logger.warning(f"Warning: grad norm is {grad_norm} step={global_step}")
                         if math.isnan(grad_norm):
-                            logger.error(f"Error: grad norm is {grad_norm}, aborting...")
-                            import pdb; pdb.set_trace(); exit(1)
+                            self.logger.error(f"Error: grad norm is {grad_norm}, aborting...")
+                            import pdb; pdb.set_trace()
 
-                    optimizer.step()
-                    lr_scheduler.step()
-                    optimizer.zero_grad()
+                    self.optimizer.step()
+                    self.lr_scheduler.step()
+                    self.optimizer.zero_grad()
 
-                # Checks if the accelerator has performed an optimization step behind the scenes
-                if accelerator.sync_gradients:
-                    module.normalize_weights()
-
-                    #sigma_sample_temperature = min(global_step / sigma_temperature_ref_steps, 1) * sigma_sample_max_temperature
-                    #ln_sigma = torch.linspace(np.log(sigma_min), np.log(sigma_max), sigma_sample_resolution, device=accelerator.device)
-                    #ln_sigma_error = module.logvar_linear(module.logvar_fourier(ln_sigma/4)).float().flatten().detach()
-                    #sigma_distribution_pdf = (-sigma_sample_temperature * ln_sigma_error).exp() + torch.linspace(sigma_sample_pdf_skew**0.5, 0, sigma_sample_resolution, device=accelerator.device).square()
-                    #sigma_sampler.update_pdf(sigma_distribution_pdf)
+                if self.accelerator.sync_gradients:
                 
+                    if getattr(self.module, "normalize_weights", None) is not None:
+                        self.module.normalize_weights()
+                        
+                    train_logger.add_logs({"lr": self.lr_scheduler.get_last_lr()[0], "step": global_step})
                     progress_bar.update(1)
                     global_step += 1
-
-                    if grad_accum_steps >= args.gradient_accumulation_steps: # don't log incomplete batches
-                        logs = {"loss": train_loss / grad_accum_steps,
-                                "lr": lr_scheduler.get_last_lr()[0],
-                                "step": global_step,
-                                "grad_norm": grad_norm}
-                        for channel in module_log_channels:
-                            if "loss_weight" in channel:
-                                channel_name = f"{args.module}_loss_weight/{channel}"
-                            else:
-                                channel_name = f"{args.module}/{channel}"
-                            logs[channel_name] = module_logs[channel] / grad_accum_steps
-
-                    if args.use_ema:
-                        std_betas = ema_module.update(global_step * total_batch_size, total_batch_size)
-                        for std, beta in std_betas:
-                            logs[f"ema/std_{std:.3f}_beta"] = beta
-
-                    if args.module == "unet" and args.num_unet_loss_buckets > 0:
-                        for i in range(unet_loss_buckets.shape[0]):
-                            if unet_loss_bucket_counts[i].item() > 0:
-                                bucket_ln_sigma_start = np.log(module.sigma_min) + i * (np.log(module.sigma_max) - np.log(module.sigma_min)) / unet_loss_buckets.shape[0]
-                                bucket_ln_sigma_end = np.log(module.sigma_min) + (i+1) * (np.log(module.sigma_max) - np.log(module.sigma_min)) / unet_loss_buckets.shape[0]
-                                logs[f"unet_loss_buckets/b{i} s:{bucket_ln_sigma_start:.3f} ~ {bucket_ln_sigma_end:.3f}"] = (unet_loss_buckets[i] / unet_loss_bucket_counts[i]).item()
-
-                    accelerator.log(logs, step=global_step)
-                    progress_bar.set_postfix(**logs)
-
-                    train_loss = 0.
                     grad_accum_steps = 0
-                    for channel in module_log_channels:
-                        module_logs[channel] = 0.
+                    
+                    if self.config.ema_config.use_ema:
+                        std_betas = self.ema_module.update(global_step * self.total_batch_size, self.total_batch_size)
+                        for std, beta in std_betas:
+                            train_logger.add_log(f"ema/std_{std:.3f}_beta", beta)
+
+                    train_logger.add_logs(module_trainer.finish_batch())
+
+                    logs = train_logger.get_logs()
+                    self.accelerator.log(logs, step=global_step)
+                    progress_bar.set_postfix(loss=logs["loss"], grad_norm=logs["grad_norm"], global_step=global_step)
                         
-                    if accelerator.is_main_process:
-                        _save_checkpoint = ((global_step % args.checkpointing_steps) == 0)
-
-                        if os.path.exists(os.path.join(args.output_dir, "_save_checkpoint")):
+                    if self.accelerator.is_main_process:
+                        if (datetime.now() - self.last_checkpoint_time).total_seconds() >= self.config.min_checkpoint_time:
                             _save_checkpoint = True
+                        
+                        _save_checkpoint_path = os.path.join(self.config.model_path, "_save_checkpoint")
+                        if os.path.exists(_save_checkpoint): _save_checkpoint = True
+                        if _save_checkpoint: self.save_checkpoint(global_step)
+                        if os.path.exists(_save_checkpoint_path): os.remove(_save_checkpoint_path)
 
-                        if _save_checkpoint:
-                            save_checkpoint(module, args.module, args.output_dir, global_step, accelerator, args.checkpoints_total_limit)
-
-                        if os.path.exists(os.path.join(args.output_dir, "_save_checkpoint")):
-                            os.remove(os.path.join(args.output_dir, "_save_checkpoint"))
-
-                if global_step >= max_train_steps:
-                    logger.info(f"Reached max train steps ({max_train_steps}) - Training complete")
+                if global_step >= self.max_train_steps:
+                    self.logger.info(f"Reached max train steps ({self.max_train_steps})")
                     break
             
             progress_bar.close()
+            resume_dataloader = None
 
-            accelerator.wait_for_everyone()
-            if accelerator.is_main_process:
+            self.accelerator.wait_for_everyone()
+            if self.accelerator.is_main_process:
                 
-                if args.num_validation_samples > 0 and args.num_validation_epochs > 0:
-                    if epoch % args.num_validation_epochs == 0:
-                        module.eval().requires_grad_(False)
-                        logger.info("Running validation... ")
+                sample_log_path = os.path.join(self.config.model_path, "tmp", "sample_loss.json")
+                try:
+                    sorted_sample_logs = dict(sorted(sample_logger.get_logs().items(), key=lambda item: item[1]))
+                    config.save_json(sample_log_path, sorted_sample_logs)
+                except Exception as e:
+                    self.logger.warning(f"Error saving sample logs to {sample_log_path}: {e}")
         
-                        try:
-                            pipeline.set_progress_bar_config(disable=True)
-
-                            if args.module == "unet":
-                                log_validation_unet(
-                                    pipeline,
-                                    args,
-                                    accelerator,
-                                    global_step,
-                                )
-                            elif args.module == "vae":
-                                log_validation_vae(
-                                    pipeline,
-                                    args,
-                                    accelerator,
-                                    global_step,
-                                )
-
-                        except Exception as e:
-                            logger.error(f"Error running validation: {e}")
-
-                        module.train().requires_grad_(True)
-        
-        logger.info("Training complete")
-        accelerator.end_training()
+        self.logger.info("Training complete")
+        self.accelerator.end_training()
