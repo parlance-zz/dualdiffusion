@@ -34,7 +34,6 @@ from datetime import datetime
 from typing import Optional, Literal, Type
 from dataclasses import dataclass
 
-import numpy as np
 import datasets
 import torch
 import torch.utils.checkpoint
@@ -128,7 +127,7 @@ class ModuleTrainer:
     def init_batch(self) -> None:
         pass
 
-    def train_batch(self) -> dict:
+    def train_batch(self, batch: dict, grad_accum_steps: int) -> dict:
         return {}
     
     def finish_batch(self) -> dict:
@@ -141,24 +140,26 @@ class DualDiffusionTrainerConfig:
     model_name: str
     model_src_path: str
     train_config_path: Optional[str]    = None
-    module_name: Literal["unet", "vae"]
+    module_name: str
     seed: Optional[int]                 = None
     train_batch_size: int               = 1
     gradient_accumulation_steps: int    = 1
 
     num_train_epochs: int               = 500000
     num_validation_epochs: int          = 100
+    min_validation_time: int            = 3600
     min_checkpoint_time: int            = 3600
     checkpoints_total_limit: int        = 1
+    strict_checkpoint_time: bool        = False
 
     enable_anomaly_detection: bool      = False
     compile_params: Optional[dict]      = {"fullgraph": True, "dynamic": False}
 
-    lr_schedule_config: LRScheduleConfig
-    optimizer_config: OptimizerConfig
-    ema_config: EMAConfig
-    dataloader_config: DataLoaderConfig
-    logging_config: LoggingConfig
+    lr_schedule: LRScheduleConfig
+    optimizer: OptimizerConfig
+    ema: EMAConfig
+    dataloader: DataLoaderConfig
+    logging: LoggingConfig
 
     module_trainer_class: Type
     module_trainer_config: ModuleTrainerConfig
@@ -173,10 +174,10 @@ class DualDiffusionTrainerConfig:
             train_config[key] = value
         
         train_config["lr_schedule"] = LRScheduleConfig(**train_config["lr_schedule"])
-        train_config["optimizer_config"] = OptimizerConfig(**train_config["optimizer_config"])
-        train_config["ema_config"] = EMAConfig(**train_config["ema_config"])
-        train_config["data_loader_config"] = DataLoaderConfig(**train_config["data_loader_config"])
-        train_config["logging_config"] = LoggingConfig(**train_config["logging_config"])
+        train_config["optimizer"] = OptimizerConfig(**train_config["optimizer"])
+        train_config["ema"] = EMAConfig(**train_config["ema"])
+        train_config["dataloader"] = DataLoaderConfig(**train_config["dataloader"])
+        train_config["logging"] = LoggingConfig(**train_config["logging"])
 
         module_trainer_module = importlib.import_module(train_config["module_trainer_class"][0])
         train_config["module_trainer_class"] = getattr(module_trainer_module, train_config["module_trainer_class"][1])
@@ -189,9 +190,6 @@ class DualDiffusionTrainer:
     def __init__(self, train_config: DualDiffusionTrainerConfig) -> None:
 
         self.config = train_config
-
-        if self.config.module_name not in ["unet", "vae"]:
-            raise ValueError(f"Unknown module type {self.config.module_name}")
 
         self.init_logging()
         self.init_accelerator()
@@ -212,12 +210,12 @@ class DualDiffusionTrainer:
         
         self.logger = get_logger("dual_diffusion_training", log_level="INFO")
 
-        if self.config.logging_config.logging_dir is None:
-            self.config.logging_config.logging_dir = os.path.join(self.config.model_path, f"logs_{self.config.module_name}")
+        if self.config.logging.logging_dir is None:
+            self.config.logging.logging_dir = os.path.join(self.config.model_path, f"logs_{self.config.module_name}")
             
-        os.makedirs(self.config.logging_config.logging_dir, exist_ok=True)
+        os.makedirs(self.config.logging.logging_dir, exist_ok=True)
 
-        log_path = os.path.join(self.config.logging_config.logging_dir, f"train_{self.config.module_name}.log")
+        log_path = os.path.join(self.config.logging.logging_dir, f"train_{self.config.module_name}.log")
         logging.basicConfig(
             handlers=[
                 logging.FileHandler(log_path),
@@ -236,7 +234,7 @@ class DualDiffusionTrainer:
     def init_accelerator(self) -> None:
 
         accelerator_project_config = ProjectConfiguration(project_dir=self.config.model_path,
-                                                          logging_dir=self.config.logging_config.logging_dir)
+                                                          logging_dir=self.config.logging.logging_dir)
         self.accelerator = Accelerator(
             gradient_accumulation_steps=self.config.gradient_accumulation_steps,
             log_with="tensorboard",
@@ -251,7 +249,7 @@ class DualDiffusionTrainer:
 
     def init_tensorboard(self) -> None:
 
-        if self.accelerator.is_main_process and self.config.logging_config.tensorboard_http_port is not None:
+        if self.accelerator.is_main_process and self.config.logging.tensorboard_http_port is not None:
 
             if not is_tensorboard_available():
                 raise ImportError("Make sure to install tensorboard if you want to use it for logging during training.")
@@ -259,12 +257,12 @@ class DualDiffusionTrainer:
             tensorboard_args = [
                 "tensorboard",
                 "--logdir",
-                self.config.logging_config.logging_dir,
+                self.config.logging.logging_dir,
                 "--bind_all",
                 "--port",
-                str(self.config.logging_config.tensorboard_http_port),
+                str(self.config.logging.tensorboard_http_port),
                 "--samples_per_plugin",
-                f"scalars={self.config.logging_config.tensorboard_num_scalars}",
+                f"scalars={self.config.logging.tensorboard_num_scalars}",
             ]
             tensorboard_monitor_process = subprocess.Popen(tensorboard_args)
 
@@ -292,6 +290,9 @@ class DualDiffusionTrainer:
 
     def init_module_pipeline(self) -> None:
 
+        if getattr(self.pipeline, self.config.module_name, None) is None:
+            raise ValueError(f"Module type '{self.config.module_name}' not registered in loaded pipeline")
+        
         self.pipeline = DualDiffusionPipeline.from_pretrained(self.config.model_path)
         self.module = getattr(self.pipeline, self.config.module_name).requires_grad_(True).train()
         self.module_class = type(self.module)
@@ -299,7 +300,7 @@ class DualDiffusionTrainer:
         self.vae = self.pipeline.vae
 
         if self.config.module_name == "unet":
-            if not self.config.dataloader_config.use_pre_encoded_latents:
+            if not self.config.dataloader.use_pre_encoded_latents:
 
                 self.vae = self.vae.to(self.accelerator.device).requires_grad_(False).eval()
                 if self.accelerator.state.mixed_precision in ["fp16", "bf16"]:
@@ -325,11 +326,11 @@ class DualDiffusionTrainer:
 
     def init_ema_module(self) -> None:
         
-        if self.config.ema_config.use_ema:
-            ema_device = "cpu" if self.config.ema_config.ema_cpu_offload else self.accelerator.device
-            self.ema_module = PowerFunctionEMA(self.module, stds=self.config.ema_config.ema_stds, device=self.accelerator.device)
+        if self.config.ema.use_ema:
+            ema_device = "cpu" if self.config.ema.ema_cpu_offload else self.accelerator.device
+            self.ema_module = PowerFunctionEMA(self.module, stds=self.config.ema.ema_stds, device=self.accelerator.device)
 
-            self.logger.info(f"Using EMA model with stds: {self.config.ema_config.ema_stds}")
+            self.logger.info(f"Using EMA model with stds: {self.config.ema.ema_stds}")
             self.logger.info(f"EMA CPU offloading {'enabled' if ema_device == 'cpu' else 'disabled'}")
 
         else:
@@ -340,14 +341,14 @@ class DualDiffusionTrainer:
         #optimizer = torch.optim.Adam(
         optimizer = torch.optim.AdamW(
             self.module.parameters(),
-            lr=self.config.lr_schedule_config.learning_rate,
-            betas=(self.config.optimizer_config.adam_beta1, self.config.optimizer_config.adam_beta2),
+            lr=self.config.lr_schedule.learning_rate,
+            betas=(self.config.optimizer.adam_beta1, self.config.optimizer.adam_beta2),
             weight_decay=0,
-            eps=self.config.optimizer_config.adam_epsilon,
+            eps=self.config.optimizer.adam_epsilon,
         )
 
-        self.logger.info(f"Using Adam optimiser with learning rate {self.config.lr_schedule_config.learning_rate}")
-        self.logger.info(f"AdamW beta1: {self.config.optimizer_config.adam_beta1} beta2: {self.config.optimizer_config.adam_beta2} eps: {self.config.optimizer_config.adam_epsilon}")
+        self.logger.info(f"Using Adam optimiser with learning rate {self.config.lr_schedule.learning_rate}")
+        self.logger.info(f"AdamW beta1: {self.config.optimizer.adam_beta1} beta2: {self.config.optimizer.adam_beta2} eps: {self.config.optimizer.adam_epsilon}")
 
         return optimizer
 
@@ -406,7 +407,7 @@ class DualDiffusionTrainer:
 
     def init_dataloader(self) -> None:
         
-        if self.config.module_name == "unet" and self.config.dataloader_config.use_pre_encoded_latents:
+        if self.config.module_name == "unet" and self.config.dataloader.use_pre_encoded_latents:
             train_data_dir = config.LATENTS_DATASET_PATH
             sample_crop_width = self.latent_shape[-1]
         else:
@@ -416,9 +417,9 @@ class DualDiffusionTrainer:
         dataset_config = DatasetConfig(
             train_data_dir=train_data_dir,
             cache_dir=config.CACHE_PATH,
-            num_proc=self.config.dataloader_config.dataloader_num_workers if self.config.dataloader_config.dataloader_num_workers > 0 else None,
+            num_proc=self.config.dataloader.dataloader_num_workers if self.config.dataloader.dataloader_num_workers > 0 else None,
             sample_crop_width=sample_crop_width,
-            use_pre_encoded_latents=self.config.dataloader_config.use_pre_encoded_latents,
+            use_pre_encoded_latents=self.config.dataloader.use_pre_encoded_latents,
             t_scale=getattr(self.pipeline.unet.config, "t_scale", None) if self.config.module_name == "unet" else None,
         )
         
@@ -428,16 +429,16 @@ class DualDiffusionTrainer:
             self.dataset,
             shuffle=True,
             batch_size=self.config.train_batch_size,
-            num_workers=self.config.dataloader_config.dataloader_num_workers,
+            num_workers=self.config.dataloader.dataloader_num_workers,
             pin_memory=True,
-            persistent_workers=True if self.config.dataloader_config.dataloader_num_workers > 0 else False,
-            prefetch_factor=2 if self.config.dataloader_config.dataloader_num_workers > 0 else None,
+            persistent_workers=True if self.config.dataloader.dataloader_num_workers > 0 else False,
+            prefetch_factor=2 if self.config.dataloader.dataloader_num_workers > 0 else None,
             drop_last=True,
         )
 
         self.logger.info(f"Using training data from {train_data_dir} with {len(self.dataset)} samples ({self.dataset.get_num_filtered_samples()} filtered)")
-        if self.config.dataloader_config.dataloader_num_workers > 0:
-            self.logger.info(f"Using dataloader with {self.config.dataloader_config.dataloader_num_workers} workers - prefetch factor = 2")
+        if self.config.dataloader.dataloader_num_workers > 0:
+            self.logger.info(f"Using dataloader with {self.config.dataloader.dataloader_num_workers} workers - prefetch factor = 2")
 
         num_process_steps_per_epoch = math.floor(len(self.train_dataloader) / self.accelerator.num_processes)
         self.num_update_steps_per_epoch = math.ceil(num_process_steps_per_epoch / self.config.gradient_accumulation_steps)
@@ -446,33 +447,33 @@ class DualDiffusionTrainer:
  
     def init_lr_scheduler(self) -> None:
 
-        if self.config.lr_schedule_config.lr_schedule == "edm2":
+        if self.config.lr_schedule.lr_schedule == "edm2":
             self.logger.info((
-                f"Using learning rate schedule {self.config.lr_schedule_config.lr_schedule}",
-                f" with warmup steps = {self.config.lr_schedule_config.lr_warmup_steps},",
-                f" reference steps = {self.config.lr_schedule_config.lr_reference_steps},",
-                f" decay exponent = {self.config.lr_schedule_config.lr_decay_exponent}"))
+                f"Using learning rate schedule {self.config.lr_schedule.lr_schedule}",
+                f" with warmup steps = {self.config.lr_schedule.lr_warmup_steps},",
+                f" reference steps = {self.config.lr_schedule.lr_reference_steps},",
+                f" decay exponent = {self.config.lr_schedule.lr_decay_exponent}"))
         else:
-            self.logger.info((f"Using learning rate schedule {self.config.lr_schedule_config.lr_schedule}",
-                              f"with warmup steps = {self.config.lr_schedule_config.lr_warmup_steps}"))
+            self.logger.info((f"Using learning rate schedule {self.config.lr_schedule.lr_schedule}",
+                              f"with warmup steps = {self.config.lr_schedule.lr_warmup_steps}"))
         
-        scaled_lr_warmup_steps = self.config.lr_schedule_config.lr_warmup_steps * self.accelerator.num_processes
-        scaled_lr_reference_steps = self.config.lr_schedule_config.lr_reference_steps * self.accelerator.num_processes
+        scaled_lr_warmup_steps = self.config.lr_schedule.lr_warmup_steps * self.accelerator.num_processes
+        scaled_lr_reference_steps = self.config.lr_schedule.lr_reference_steps * self.accelerator.num_processes
         scaled_max_train_steps = self.max_train_steps * self.accelerator.num_processes
 
-        if self.config.lr_schedule_config.lr_schedule == "edm2":
+        if self.config.lr_schedule.lr_schedule == "edm2":
             def edm2_lr_lambda(current_step: int):
                 lr = 1.
                 if current_step < scaled_lr_warmup_steps:
                     lr *= current_step / scaled_lr_warmup_steps
                 if current_step > scaled_lr_reference_steps:
-                    lr *= (scaled_lr_reference_steps / current_step) ** self.config.lr_schedule_config.lr_decay_exponent
+                    lr *= (scaled_lr_reference_steps / current_step) ** self.config.lr_schedule.lr_decay_exponent
                 return lr
                 
             self.lr_scheduler = LambdaLR(self.optimizer, edm2_lr_lambda)
         else:
             self.lr_scheduler = get_scheduler(
-                self.config.lr_schedule_config.lr_schedule,
+                self.config.lr_schedule.lr_schedule,
                 optimizer=self.optimizer,
                 num_warmup_steps=scaled_lr_warmup_steps,
                 num_training_steps=scaled_max_train_steps,
@@ -547,12 +548,12 @@ class DualDiffusionTrainer:
             # update learning rate in case we've changed it
             updated_learn_rate = False
             for g in self.optimizer.param_groups:
-                if g["lr"] != self.config.lr_schedule_config.learning_rate:
-                    g["lr"] = self.config.lr_schedule_config.learning_rate
+                if g["lr"] != self.config.lr_schedule.learning_rate:
+                    g["lr"] = self.config.lr_schedule.learning_rate
                     updated_learn_rate = True
             if updated_learn_rate:
-                self.lr_scheduler.scheduler.base_lrs = [self.config.lr_schedule_config.learning_rate]
-                self.logger.info(f"Using updated learning rate: {self.config.lr_schedule_config.learning_rate}")
+                self.lr_scheduler.scheduler.base_lrs = [self.config.lr_schedule.learning_rate]
+                self.logger.info(f"Using updated learning rate: {self.config.lr_schedule.learning_rate}")
 
         if global_step > 0:
             resume_global_step = global_step * self.config.gradient_accumulation_steps
@@ -572,14 +573,15 @@ class DualDiffusionTrainer:
         self.logger.info(f"  Total optimization steps for full run = {self.max_train_steps}")
         self.logger.info(f"  Path to save/load checkpoints = {self.config.model_path}")
 
+        self.last_validation_time = datetime.now()
         global_step, resume_step, first_epoch = self.load_checkpoint()
         resume_dataloader = self.accelerator.skip_first_batches(self.train_dataloader, resume_step) if resume_step > 0 else None
 
-        module_trainer = self.config.module_trainer_class(self.config.module_trainer_config, self)
+        self.module_trainer = self.config.module_trainer_class(self.config.module_trainer_config, self)
         train_logger = TrainLogger()
         sample_logger = TrainLogger()
 
-        if not self.config.dataloader_config.use_pre_encoded_latents:
+        if not self.config.dataloader.use_pre_encoded_latents:
             self.logger.info(f"Sample shape: {self.sample_shape}")
         self.logger.info(f"Latent shape: {self.latent_shape}")
 
@@ -598,11 +600,11 @@ class DualDiffusionTrainer:
                 
                 if grad_accum_steps == 0:                        
                     train_logger.clear()
-                    module_trainer.init_batch()
+                    self.module_trainer.init_batch()
 
                 with self.accelerator.accumulate(self.module):
 
-                    module_logs = module_trainer.train_batch(batch)
+                    module_logs = self.module_trainer.train_batch(batch, grad_accum_steps)
                     train_logger.add_logs(module_logs)
                     for i, sample_path in enumerate(batch["sample_paths"]):
                         sample_logger.add_log(sample_path, module_logs["loss"][i])
@@ -612,7 +614,7 @@ class DualDiffusionTrainer:
 
                     if self.accelerator.sync_gradients:   
                         grad_norm = self.accelerator.clip_grad_norm_(self.module.parameters(),
-                                                                     self.config.optimizer_config.max_grad_norm)
+                                                                     self.config.optimizer.max_grad_norm)
                         train_logger.add_log("grad_norm", grad_norm)
 
                         if math.isinf(grad_norm) or math.isnan(grad_norm):
@@ -635,20 +637,21 @@ class DualDiffusionTrainer:
                     global_step += 1
                     grad_accum_steps = 0
                     
-                    if self.config.ema_config.use_ema:
+                    if self.config.ema.use_ema:
                         std_betas = self.ema_module.update(global_step * self.total_batch_size, self.total_batch_size)
                         for std, beta in std_betas:
                             train_logger.add_log(f"ema/std_{std:.3f}_beta", beta)
 
-                    train_logger.add_logs(module_trainer.finish_batch())
+                    train_logger.add_logs(self.module_trainer.finish_batch())
 
                     logs = train_logger.get_logs()
                     self.accelerator.log(logs, step=global_step)
                     progress_bar.set_postfix(loss=logs["loss"], grad_norm=logs["grad_norm"], global_step=global_step)
                         
                     if self.accelerator.is_main_process:
-                        if (datetime.now() - self.last_checkpoint_time).total_seconds() >= self.config.min_checkpoint_time:
-                            _save_checkpoint = True
+                        if self.config.strict_checkpoint_time:
+                            if (datetime.now() - self.last_checkpoint_time).total_seconds() >= self.config.min_checkpoint_time:
+                                _save_checkpoint = True
                         
                         _save_checkpoint_path = os.path.join(self.config.model_path, "_save_checkpoint")
                         if os.path.exists(_save_checkpoint): _save_checkpoint = True
@@ -665,12 +668,73 @@ class DualDiffusionTrainer:
             self.accelerator.wait_for_everyone()
             if self.accelerator.is_main_process:
                 
+                if not self.config.strict_checkpoint_time:
+                    if (datetime.now() - self.last_checkpoint_time).total_seconds() >= self.config.min_checkpoint_time:
+                        self.save_checkpoint(global_step)
+                        
                 sample_log_path = os.path.join(self.config.model_path, "tmp", "sample_loss.json")
                 try:
                     sorted_sample_logs = dict(sorted(sample_logger.get_logs().items(), key=lambda item: item[1]))
                     config.save_json(sample_log_path, sorted_sample_logs)
                 except Exception as e:
                     self.logger.warning(f"Error saving sample logs to {sample_log_path}: {e}")
-        
+
+            self.accelerator.wait_for_everyone()
+            if self.config.num_validation_epochs > 0:
+                if (datetime.now() - self.last_validation_time).total_seconds() >= self.config.min_validation_time:
+                    self.run_validation(global_step)
+                    
         self.logger.info("Training complete")
         self.accelerator.end_training()
+
+    def run_validation(self, global_step):
+
+        self.dataset.set_split("validation")
+
+        self.logger.info("***** Running validation *****")
+        self.logger.info(f"  Num examples = {len(self.dataset)}")
+        self.logger.info(f"  Num Epochs = {self.config.num_validation_epochs}")
+
+        num_validation_process_steps_per_epoch = math.floor(len(self.train_dataloader) / self.accelerator.num_processes)
+        num_validation_update_steps_per_epoch = math.ceil(num_validation_process_steps_per_epoch / self.config.gradient_accumulation_steps)
+
+        validation_logger = TrainLogger()
+        sample_logger = TrainLogger()
+
+        for epoch in range(self.config.num_validation_epochs):
+            progress_bar = tqdm(total=num_validation_update_steps_per_epoch, disable=not self.accelerator.is_local_main_process)
+            progress_bar.set_description(f"Validation Epoch {epoch}")
+
+            for step, batch in enumerate(self.train_dataloader):        
+                if step % self.config.gradient_accumulation_steps == 0:
+                    self.module_trainer.init_batch()
+                
+                module_logs = self.module_trainer.train_batch(batch, step % self.config.gradient_accumulation_steps)
+                validation_logger.add_logs(module_logs)
+                for i, sample_path in enumerate(batch["sample_paths"]):
+                    sample_logger.add_log(sample_path, module_logs["loss"][i])
+
+                if (step + 1) % self.config.gradient_accumulation_steps == 0:
+                    validation_logger.add_logs(self.module_trainer.finish_batch())
+                    progress_bar.update(1)
+            
+            progress_bar.close()
+
+            validation_logs = {}
+            for key, value in validation_logger.get_logs():
+                key = key.replace("/", "_validation/", 1) if "/" in key else key + "_validation"
+                validation_logs[key] = value
+            self.accelerator.log(validation_logs, step=global_step)
+
+            self.accelerator.wait_for_everyone()
+            if self.accelerator.is_main_process:                   
+                sample_log_path = os.path.join(self.config.model_path, "tmp", "sample_loss_validation.json")
+                try:
+                    sorted_sample_logs = dict(sorted(sample_logger.get_logs().items(), key=lambda item: item[1]))
+                    config.save_json(sample_log_path, sorted_sample_logs)
+                except Exception as e:
+                    self.logger.warning(f"Error saving validation sample logs to {sample_log_path}: {e}")
+
+        self.logger.info(f"Validation complete (runtime: {(datetime.now() - self.last_validation_time).total_seconds()}s")
+        self.last_validation_time = datetime.now()
+        self.dataset.set_split("train")

@@ -36,6 +36,7 @@ class SigmaSamplerConfig:
     dist_offset: float = 0.1
     dist_pdf: Optional[torch.Tensor] = None
     use_stratified_sigma_sampling: bool = True
+    sigma_pdf_resolution: Optional[int] = 127
 
     @property
     def ln_sigma_min(self) -> float:
@@ -62,7 +63,9 @@ class SigmaSampler():
         elif self.config.distribution == "ln_linear":
             self.sample_fn = self.sample_ln_linear
         elif self.config.distribution == "ln_pdf":
-
+            
+            if self.config.dist_pdf is None:
+                self.config.dist_pdf = torch.ones(self.config.sigma_pdf_resolution)
             self.dist_pdf = self.config.dist_pdf / self.config.dist_pdf.sum()
             self.dist_cdf = torch.cat((torch.tensor([0.], device=self.dist_pdf.device), self.dist_pdf.cumsum(dim=0)))
 
@@ -173,9 +176,9 @@ if __name__ == "__main__":
         ln_sigma_error = pipeline.unet.logvar_linear(pipeline.unet.logvar_fourier(ln_sigma/4)).float().flatten()
     
         if batch_distribution == "ln_pdf":
-            batch_distribution_pdf = ((-batch_dist_scale * ln_sigma_error) + batch_dist_offset).exp()
+            batch_distribution_pdf = (-ln_sigma_error / batch_dist_scale).exp()
         if reference_distribution == "ln_pdf":
-            reference_distribution_pdf = ((-reference_dist_scale * ln_sigma_error) + reference_dist_offset).exp()
+            reference_distribution_pdf = (-ln_sigma_error / reference_dist_scale).exp()
 
     batch_sampler_config = SigmaSamplerConfig(
         sigma_max=sigma_max,

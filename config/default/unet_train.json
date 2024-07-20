@@ -3,38 +3,40 @@
   "train_batch_size": 192,
   "gradient_accumulation_steps": 2,
   "num_train_epochs": 500000,
-  "num_validation_epochs": 100,
   "min_checkpoint_time": 3600,
+  "strict_checkpoint_time": false,
   "checkpoints_total_limit": 1,
+  "min_validation_time": 3600,
+  "num_validation_epochs": 100,
   "enable_anomaly_detection": false,
 
   "compile_params": {
     "fullgraph": true,
     "dynamic": false
   },
-  "lr_schedule_config": {
+  "lr_schedule": {
     "learning_rate": 1e-2,
     "lr_schedule": "edm2",
     "lr_warmup_steps": 5000,
     "lr_reference_steps": 10000,
     "lr_decay_exponent": 1.0
   },
-  "optimizer_config": {
+  "optimizer": {
     "adam_beta1": 0.9,
     "adam_beta2": 0.99,
     "adam_epsilon": 1e-8,
     "max_grad_norm": 10.0
   },
-  "ema_config": {
+  "ema": {
     "use_ema": true,
     "ema_stds": [0.01],
     "ema_cpu_offload": false
   },
-  "dataloader_config": {
+  "dataloader": {
     "use_pre_encoded_latents": true,
     "dataloader_num_workers": 8
   },
-  "logging_config": {
+  "logging": {
     "logging_dir": null,
     "tensorboard_http_port": 6006
   },

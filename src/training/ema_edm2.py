@@ -35,7 +35,7 @@ import copy
 import numpy as np
 import torch
 
-from dual_diffusion_utils import save_safetensors, load_safetensors
+from utils.dual_diffusion_utils import save_safetensors, load_safetensors
 
 #----------------------------------------------------------------------------
 # Convert power function exponent to relative standard deviation

@@ -24,7 +24,7 @@ import torch
 import torch.nn.functional as F
 import numpy as np
 
-from dual_diffusion_utils import stft, get_mel_density, torch_compile
+from utils.dual_diffusion_utils import stft, get_mel_density, torch_compile
 
 class DualMultiscaleSpectralLoss:
 
@@ -312,7 +312,7 @@ class DualLGSpectralLoss2D:
 
 if __name__ == "__main__":
 
-    from dual_diffusion_utils import save_raw_img, save_raw
+    from utils.dual_diffusion_utils import save_raw_img, save_raw
     from dotenv import load_dotenv
     import os
 
