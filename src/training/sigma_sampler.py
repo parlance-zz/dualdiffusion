@@ -134,9 +134,9 @@ class SigmaSampler():
 
 if __name__ == "__main__":
 
-    import config
+    import utils.config as config
     import os
-    from dual_diffusion_pipeline import DualDiffusionPipeline
+    from pipelines.dual_diffusion_pipeline import DualDiffusionPipeline
     from utils.dual_diffusion_utils import multi_plot
 
     reference_model_name = "edm2_vae_test7_12"

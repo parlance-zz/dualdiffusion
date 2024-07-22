@@ -21,303 +21,45 @@
 # SOFTWARE.
 
 import os
-from typing import Union
 import json
+from dataclasses import dataclass
+from typing import Union, Type, List
 
 import numpy as np
 import torch
 import cv2
 
 from diffusers.pipelines.pipeline_utils import DiffusionPipeline
+from diffusers.models.modeling_utils import ModelMixin
 
-#from unet_edm2 import UNet
-#from unet_edm2_b import UNet
-#from unet_edm2_b2 import UNet
-#from unet_edm2_mixer import UNet
-#from unet_edm2_e import UNet
-from unet_edm2_f import UNet
+from utils.dual_diffusion_utils import save_raw, save_raw_img, multi_plot
+from utils.dual_diffusion_utils import normalize, slerp, get_cos_angle, load_safetensors
 
-from autoencoder_kl_dual import AutoencoderKLDual
-from autoencoder_kl_edm2 import AutoencoderKL_EDM2
-from spectrogram import SpectrogramParams, SpectrogramConverter
-from dual_diffusion_utils import mdct, imdct, save_raw, save_raw_img, multi_plot
-from dual_diffusion_utils import normalize, slerp, get_cos_angle, load_safetensors
-from loss import DualMultiscaleSpectralLoss, DualMultiscaleSpectralLoss2D
-
-class DualMCLTFormat(torch.nn.Module):
-
-    def __init__(self, model_params):
-        super(DualMCLTFormat, self).__init__()
-
-        self.model_params = model_params
-        self.loss = DualMultiscaleSpectralLoss(model_params["vae_training_params"])
-
-    def get_sample_crop_width(self, length=0):
-        block_width = self.model_params["num_chunks"] * 2
-        if length <= 0: length = self.model_params["sample_raw_length"]
-        return length // block_width // 64 * 64 * block_width + block_width
-    
-    def get_num_channels(self):
-        in_channels = self.model_params["sample_raw_channels"] * 2
-        out_channels = self.model_params["sample_raw_channels"] * 2
-        return (in_channels, out_channels)
-
-    def multichannel_transform(self, wave):
-        if wave.shape[1] == 1:
-            return wave
-        elif wave.shape[1] == 2:
-            return torch.stack((wave[:, 0] + wave[:, 1], wave[:, 0] - wave[:, 1]), dim=1) / (2 ** 0.5)
-        else: # we would need to do a (ortho normalized) dct/idct over the channel dim here
-            raise NotImplementedError("Multichannel transform not implemented for > 2 channels")
-
-    """
-    @staticmethod
-    def cos_angle_to_norm_angle(x):
-        return (x / torch.pi * 2 - 1).clip(min=-.99999, max=.99999).erfinv()
-    
-    @staticmethod
-    def norm_angle_to_cos_angle(x):
-        return (x.erf() + 1) / 2 * torch.pi
-    """
-
-    @torch.no_grad()
-    def raw_to_sample(self, raw_samples, return_dict=False):
-        
-        noise_floor = self.model_params["noise_floor"]
-        block_width = self.model_params["num_chunks"] * 2
-
-        samples_mdct = mdct(raw_samples, block_width, window_degree=1)[:, :, 1:-2, :]
-        samples_mdct = samples_mdct.permute(0, 1, 3, 2)
-        samples_mdct *= torch.exp(2j * torch.pi * torch.rand(1, device=samples_mdct.device))
-        samples_mdct = self.multichannel_transform(samples_mdct)
-
-        samples_mdct_abs = samples_mdct.abs()
-        samples_mdct_abs_amax = samples_mdct_abs.amax(dim=(1,2,3), keepdim=True).clip(min=1e-5)
-        samples_mdct_abs = (samples_mdct_abs / samples_mdct_abs_amax).clip(min=noise_floor)
-        samples_abs_ln = samples_mdct_abs.log()
-        samples_qphase1 = samples_mdct.angle().abs()
-        samples = torch.cat((samples_abs_ln, samples_qphase1), dim=1)
-
-        samples_mdct /= samples_mdct_abs_amax
-        raw_samples = imdct(self.multichannel_transform(samples_mdct).permute(0, 1, 3, 2), window_degree=1).real.requires_grad_(False)
-
-        if return_dict:
-            samples_dict = {
-                "samples": samples,
-                "raw_samples": raw_samples,
-            }
-            return samples_dict
-        else:
-            return samples
-
-    def sample_to_raw(self, samples, return_dict=False, original_samples_dict=None):
-        
-        samples_abs, samples_phase1 = samples.chunk(2, dim=1)
-        samples_abs = samples_abs.exp()
-        samples_phase = samples_phase1.cos()
-        raw_samples = imdct(self.multichannel_transform(samples_abs * samples_phase).permute(0, 1, 3, 2), window_degree=1).real
-
-        if original_samples_dict is not None:
-            orig_samples_abs, orig_samples_phase1 = original_samples_dict["samples"].chunk(2, dim=1)
-            orig_samples_abs = orig_samples_abs.exp()
-            orig_samples_phase = orig_samples_phase1.cos()
-
-            raw_samples_orig_phase = imdct(self.multichannel_transform(samples_abs * orig_samples_phase).permute(0, 1, 3, 2), window_degree=1).real
-            raw_samples_orig_abs = imdct(self.multichannel_transform(orig_samples_abs * samples_phase).permute(0, 1, 3, 2), window_degree=1).real
-        else:
-            raw_samples_orig_phase = None
-            raw_samples_orig_abs = None
-
-        if not return_dict:         
-            return raw_samples
-        else:
-            samples_dict = {
-                "samples": samples,
-                "raw_samples": raw_samples,
-                "raw_samples_orig_phase": raw_samples_orig_phase,
-                "raw_samples_orig_abs": raw_samples_orig_abs,
-            }
-            return samples_dict
-
-    def get_loss(self, sample, target):
-        return self.loss(sample, target, self.model_params)
-
-    def get_sample_shape(self, bsz=1, length=0):
-        _, num_output_channels = self.get_num_channels()
-
-        crop_width = self.get_sample_crop_width(length=length)
-        num_chunks = self.model_params["num_chunks"]
-        chunk_len = crop_width // num_chunks - 2
-
-        return (bsz, num_output_channels, num_chunks, chunk_len,)
-
-class DualSpectrogramFormat(torch.nn.Module):
-
-    __constants__ = ["mels_min", "mels_max"]
-
-    def __init__(self, model_params):
-        super(DualSpectrogramFormat, self).__init__()
-
-        self.model_params = model_params
-        self.spectrogram_params = SpectrogramParams(sample_rate=model_params["sample_rate"],
-                                                    stereo=model_params["sample_raw_channels"] == 2,
-                                                    **model_params["spectrogram_params"])
-        
-        self.spectrogram_converter = SpectrogramConverter(self.spectrogram_params)
-        self.loss = DualMultiscaleSpectralLoss2D(model_params["vae_training_params"])
-
-        self.mels_min = DualSpectrogramFormat._hz_to_mel(self.spectrogram_params.min_frequency)
-        self.mels_max = DualSpectrogramFormat._hz_to_mel(self.spectrogram_params.max_frequency)
-
-        if self.spectrogram_params.mel_scale_type != "htk":
-            raise NotImplementedError("Only HTK mel scale is supported")
-        
-    def get_sample_crop_width(self, length=0):
-        if length <= 0: length = self.model_params["sample_raw_length"]
-        return self.spectrogram_converter.get_crop_width(length)
-    
-    def get_num_channels(self):
-        in_channels = out_channels = self.model_params["sample_raw_channels"]
-        return (in_channels, out_channels)
-
-    @torch.no_grad()
-    def raw_to_sample(self, raw_samples, return_dict=False):
-        
-        noise_floor = self.model_params["noise_floor"]
-        samples = self.spectrogram_converter.audio_to_spectrogram(raw_samples)
-        samples /= samples.std(dim=(1,2,3), keepdim=True).clip(min=noise_floor)
-
-        if return_dict:
-            samples_dict = {
-                "samples": samples,
-                "raw_samples": raw_samples,
-            }
-            return samples_dict
-        else:
-            return samples
-
-    def sample_to_raw(self, samples, return_dict=False, decode=True):
-        
-        if decode:
-            raw_samples = self.spectrogram_converter.spectrogram_to_audio(samples.clip(min=0))
-        else:
-            raw_samples = None
-
-        if not return_dict:         
-            return raw_samples
-        else:
-            samples_dict = {
-                "samples": samples,
-                "raw_samples": raw_samples,
-            }
-            return samples_dict
-
-    def get_loss(self, sample, target):
-        return self.loss(sample, target, self.model_params)
-    
-    def get_sample_shape(self, bsz=1, length=0):
-        _, num_output_channels = self.get_num_channels()
-        crop_width = self.get_sample_crop_width(length=length)
-        audio_shape = torch.Size((bsz, num_output_channels, crop_width))
-        
-        spectrogram_shape = self.spectrogram_converter.get_spectrogram_shape(audio_shape)
-        return tuple(spectrogram_shape)
-
-    @staticmethod    
-    def _hz_to_mel(freq):
-        return 2595. * np.log10(1. + (freq / 700.))
-
-    @staticmethod
-    def _mel_to_hz(mels):
-        return 700. * (10. ** (mels / 2595.) - 1.)
-
-    @torch.no_grad()
-    def get_positional_embedding(self, x, t_ranges, mode="linear", num_fourier_channels=0):
-
-        mels = torch.linspace(self.mels_min, self.mels_max, x.shape[2] + 2, device=x.device)[1:-1]
-        ln_freqs = DualSpectrogramFormat._mel_to_hz(mels).log2()
-
-        if mode == "linear":
-            emb_freq = ln_freqs.view(1, 1,-1, 1).repeat(x.shape[0], 1, 1, x.shape[3])
-            emb_freq = (emb_freq - emb_freq.mean()) / emb_freq.std()
-
-            if t_ranges is not None:
-                t = torch.linspace(0, 1, x.shape[3], device=x.device).view(-1, 1)
-                t = ((1 - t) * t_ranges[:, 0] + t * t_ranges[:, 1]).permute(1, 0).view(x.shape[0], 1, 1, x.shape[3])
-                emb_time = t.repeat(1, 1, x.shape[2], 1)
-
-                return torch.cat((emb_freq, emb_time), dim=1).to(x.dtype)
-            else:
-                return emb_freq.to(x.dtype)
-
-        elif mode == "fourier":
-            raise NotImplementedError("Fourier positional embeddings not implemented")
-        else:
-            raise ValueError(f"Unknown mode '{mode}'")
+@dataclass
+class DualDiffusionPipelineModule:
+    module_name: str
+    module_class: Type[ModelMixin]
+    module_config: dict
 
 class DualDiffusionPipeline(DiffusionPipeline):
 
     @torch.no_grad()
-    def __init__(self, unet, vae, model_params=None):
+    def __init__(self, **kwargs):
         super().__init__()
-
-        modules = {
-            "unet": unet,
-            "vae": vae,
-        }
-        self.register_modules(**modules)
-        
-        if model_params is not None:
-            self.config["model_params"] = model_params
-        else:
-            model_params = self.config["model_params"]
-            
-        self.format = DualDiffusionPipeline.get_sample_format(model_params)
-
-        if vae is not None:
-            target_snr = vae.get_target_snr()
-        else:
-            target_snr = model_params.get("target_snr", None)
-        self.target_snr = target_snr
+        self.register_modules(**kwargs)
 
     @staticmethod
     @torch.no_grad()
-    def get_sample_format(model_params):
-        sample_format = model_params["sample_format"]
-
-        if sample_format == "mclt":
-            return DualMCLTFormat(model_params)
-        elif sample_format == "spectrogram":
-            return DualSpectrogramFormat(model_params)
-        else:
-            raise ValueError(f"Unknown sample format '{sample_format}'")
-    
-    @staticmethod
-    @torch.no_grad()
-    def get_vae_class(model_params):
-        vae_class = model_params.get("vae_class", None)
-        if vae_class is None or vae_class == "AutoencoderKLDual":
-            return AutoencoderKLDual
-        elif vae_class == "AutoencoderKL_EDM2":
-            return AutoencoderKL_EDM2
-        else:
-            raise ValueError(f"Unknown vae class '{vae_class}'")
-
-    @staticmethod
-    @torch.no_grad()
-    def create_new(model_params, unet_params, vae_params=None):
+    def create_new(modules: List[DualDiffusionPipelineModule]):
         
-        unet = UNet(**unet_params)
-        unet.normalize_weights()
-        
-        vae_class = DualDiffusionPipeline.get_vae_class(model_params)
-        if vae_params is not None:
-            vae = vae_class(**vae_params)
-            vae.normalize_weights()
-        else:
-            vae = None
+        initialized_modules = {}
+        for module in modules:
+            initialized_modules[module.module_name] = module.module_class(**module.module_config)
 
-        return DualDiffusionPipeline(unet, vae, model_params=model_params)
+            if hasattr(initialized_modules[module.module_name], "normalize_weights"):
+                initialized_modules[module.module_name].normalize_weights()
+
+        return DualDiffusionPipeline(**initialized_modules)
     
     @staticmethod
     @torch.no_grad()
