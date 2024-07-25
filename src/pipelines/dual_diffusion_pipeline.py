@@ -23,7 +23,7 @@
 import os
 import json
 from dataclasses import dataclass
-from typing import Union, Type, List
+from typing import Type, List, Optional
 
 import numpy as np
 import torch
@@ -40,6 +40,25 @@ class DualDiffusionPipelineModule:
     module_name: str
     module_class: Type[ModelMixin]
     module_config: dict
+
+@dataclass
+class SamplingParams:
+    steps: int                 = 100
+    seed: Optional[int]        = None
+    batch_size: int            = 1
+    length: Optional[int]      = None
+    cfg_scale: float           = 1.5
+    sigma_max: Optional[float] = 200.
+    sigma_min: Optional[float] = 0.03
+    rho: float                 = 7.
+    game_ids: dict
+    generator: Optional[torch.Generator] = None
+    use_midpoint_integration: bool       = True
+    input_perturbation: Optional[float]  = None
+    img2img_strength: Optional[float]    = None
+    img2img_input: Optional[str]         = None
+    schedule: Optional[str]              = "edm2"
+    show_debug_plots: bool               = False
 
 class DualDiffusionPipeline(DiffusionPipeline):
 
@@ -129,25 +148,8 @@ class DualDiffusionPipeline(DiffusionPipeline):
             raise ValueError(f"Unknown labels dtype '{type(labels)}'")
 
     @torch.no_grad()
-    def __call__(
-        self,
-        steps: int = 120,
-        seed: Union[int, torch.Generator]=None,
-        batch_size: int = 1,
-        length: int = 0,
-        game_ids = None,
-        cfg_scale: float = 5.,
-        sigma_max = None,
-        sigma_min = None,
-        rho = 7,
-        slerp_cfg: bool = False,
-        use_midpoint_integration: bool = False,
-        input_perturbation: float = 0.5,
-        img2img_strength: float = 0.8,
-        schedule: str = None,
-        img2img_input: torch.Tensor = None,
-        show_debug_plots: bool = False,
-    ):
+    def __call__(self, sampling_params: SamplingParams):
+
         if steps <= 0:
             raise ValueError(f"Steps must be > 0, got {steps}")
         if length < 0:

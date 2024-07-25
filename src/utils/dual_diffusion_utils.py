@@ -49,14 +49,6 @@ def init_cuda(default_device=None):
         if default_device is not None:
             torch.cuda.set_device(default_device)
 
-def torch_compile(*args, **kwargs):
-    def wrapper(func):
-        if platform.system() == "Linux":
-            return torch.compile(func, *args, **kwargs)
-        else:
-            return func
-    return wrapper
-
 def multi_plot(*args, layout=None, figsize=None, added_plots=None, x_log_scale=False, y_log_scale=False, x_axis_range=None):
 
     layout = layout or (len(args), 1)

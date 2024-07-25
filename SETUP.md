@@ -54,7 +54,7 @@ ssh-keygen -t rsa -b 8192
 
 # enable discard/trim and noatime for ssd
 sudo nano /etc/fstab
-# UUID=df39839a-05b1-4bc9-9c5c-3ee6b30981a8 /               ext4    discard,noatime,errors=remount-ro 0
+# UUID=df39839a-05b1-4bc9-9c5c-3ee6b30981a8 /               ext4    discard,noatime,nodiratime,errors=remount-ro 0
 reboot
 
 # disable x on startup
