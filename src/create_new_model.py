@@ -57,6 +57,7 @@ def print_module_info(module):
     print(f"Estimated size (MB): {num_total_params*4/1000000:{4}f}m")
     print("")
 
+
 if __name__ == "__main__":
 
     model_name = input(f"Enter model name:")

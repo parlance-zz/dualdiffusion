@@ -1,11 +1,12 @@
+import utils.config as config
+
 import os
+
 from gradio_client import Client
-from dotenv import load_dotenv
 
 if __name__ == "__main__":
 
-      load_dotenv(override=True)
-      dataset_path = os.environ.get("DATASET_PATH", "./dataset/samples")
+      dataset_path = config.DATASET_PATH
       samples = os.listdir(dataset_path)
 
       # resume from last processed sample

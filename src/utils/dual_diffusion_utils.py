@@ -23,7 +23,6 @@
 import os
 from io import BytesIO
 from json import dumps as json_dumps
-import matplotlib.pyplot as plt
 
 import numpy as np
 import torch
@@ -32,9 +31,10 @@ import torchaudio
 import torchaudio.functional as AF
 import cv2
 import safetensors.torch as ST
-from dotenv import load_dotenv
+import matplotlib.pyplot as plt
 from scipy.special import erfinv
 from mutagen import File as MTAudioFile
+
 
 def init_cuda(default_device=None):
     if not torch.cuda.is_available():
@@ -575,25 +575,3 @@ def normalize(x, zero_mean=False, dtype=torch.float64):
         x = x - x.mean(dim=reduction_dims, keepdim=True)
 
     return x / x.square().mean(dim=reduction_dims, keepdim=True).sqrt()
-
-
-if __name__ == "__main__": # fractal noise test
-
-    init_cuda()
-    load_dotenv(override=True)
-
-    noise_test_iter = 5
-    noise_test_dim = (696, 32)
-    noise_test_degree = 1 #2/(1+5**0.5) #0.5
-
-    debug_path = os.environ.get("DEBUG_PATH", None)
-    if debug_path is not None:
-        debug_path = os.path.join(debug_path, "noise_test")
-        
-        for i in range(noise_test_iter):
-            noise = get_fractal_noise2d(noise_test_dim, degree=noise_test_degree)
-            save_raw_img(noise, os.path.join(debug_path, f"fractal_noise{i}.png"), allow_colormap=False)
-            print(os.path.join(debug_path, f"fractal_noise{i}.png"))
-
-        noise_fft = torch.fft.fft2(noise, norm="ortho").abs().clip(min=4e-2).log()
-        save_raw_img(noise_fft, os.path.join(debug_path, "fractal_noise_ln_psd.png"))

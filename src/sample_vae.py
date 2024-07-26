@@ -34,6 +34,7 @@ from utils.dual_diffusion_utils import (
 )
 from models.unet_edm2 import normalize
 
+
 if __name__ == "__main__":
 
     init_cuda()

@@ -20,10 +20,11 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
+import utils.config as config
+
 import os
 import json
 
-from dotenv import load_dotenv
 import torch
 import numpy as np
 from tqdm.auto import tqdm
@@ -33,24 +34,24 @@ from utils.dual_diffusion_utils import (
     multi_plot, save_safetensors, dequantize_tensor
 )
 
-DATASET_PATH = os.environ.get("LATENTS_DATASET_PATH", "./dataset/latents")
-
-SPLIT_FILE = "train.jsonl"
-SIGMA_MAX = 200
-SIGMA_MIN = 1/32
-SIGMA_DATA = 1
-NUM_BINS = 1000
 
 if __name__ == "__main__":
 
     init_cuda()
-    load_dotenv(override=True)
+
+    DATASET_PATH = config.LATENTS_DATASET_PATH
+
+    SPLIT_FILE = "train.jsonl"
+    SIGMA_MAX = 200
+    SIGMA_MIN = 1/32
+    SIGMA_DATA = 1
+    NUM_BINS = 1000
 
     hist_min = np.log(SIGMA_MIN)
     hist_max = np.log(SIGMA_MAX)
 
     hist = torch.zeros(NUM_BINS, dtype=torch.float32)
-    debug_path = os.environ.get("DEBUG_PATH", None)
+    debug_path = config.DEBUG_PATH
     split_metadata_file = os.path.join(DATASET_PATH, SPLIT_FILE)
 
     with open(os.path.join(DATASET_PATH, split_metadata_file), "r") as f:

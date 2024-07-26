@@ -20,21 +20,23 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
+import utils.config as config
+
 import os
 import json
 import shutil
 from copy import deepcopy
 
-from dotenv import load_dotenv
 from huggingface_hub import HfApi, list_repo_files
+
 
 if __name__ == "__main__":
 
-    load_dotenv(override=True)
+    dataset_cfg = config.load_json(os.path.join(config.CONFIG_PATH, "dataset.json"))
 
     datasets = [
-        (os.environ.get("LATENTS_DATASET_PATH", "./dataset/latents"), "parlance/spc_audio_latents"),
-        (os.environ.get("DATASET_PATH", "./dataset/samples"), "parlance/spc_audio"),
+        (config.LATENTS_DATASET_PATH, dataset_cfg["latents_hf_repository"]),
+        (config.DATASET_PATH, dataset_cfg["dataset_hf_repository"]),
     ]
 
     removal_list = [

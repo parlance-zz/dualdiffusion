@@ -1,15 +1,16 @@
+import utils.config as config
+
 import os
-from dotenv import load_dotenv
 from huggingface_hub import HfApi
 import time
 
-# huggingface-cli download parlance/spc_audio_latents --repo-type dataset --local-dir ./datasets/latents
+
 
 if __name__ == "__main__":
 
-    load_dotenv(override=True)
+    dataset_cfg = config.load_json(os.path.join(config.CONFIG_PATH, "dataset.json"))
 
-    TARGET_HF_REPOSITORY = "parlance/spc_audio_latents"
+    TARGET_HF_REPOSITORY = dataset_cfg["dataset_hf_repository"]
     #OUTPUT_SAMPLE_DIR = os.environ.get("DATASET_PATH")
     OUTPUT_SAMPLE_DIR = os.environ.get("LATENTS_DATASET_PATH")
 

@@ -20,11 +20,13 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
+import utils.config as config
+
 import os
 import subprocess
-from dotenv import load_dotenv
 
 import torchaudio
+
 
 def decode_source_file(input_file, sample_num):
 
@@ -104,17 +106,17 @@ def decode_source_to_samples():
 
 if __name__ == "__main__":
 
-    load_dotenv(override=True)
+    FFMPEG_PATH = config.FFMPEG_PATH
+    SOURCE_DIR = config.DATASOURCE_PATH
+    OUTPUT_SAMPLE_DIR = config.DATASET_PATH
 
-    FFMPEG_PATH = os.environ.get("FFMPEG_PATH")
-    SOURCE_DIR = os.environ.get("DATASOURCE_PATH")
-    SOURCE_FORMATS = [x.strip().lower() for x in os.environ.get("DATASOURCE_FORMATS").split(",")]
-    OUTPUT_SAMPLE_DIR = os.environ.get("DATASET_PATH")
-    OUTPUT_SAMPLE_FORMAT=os.environ.get('DATASET_FORMAT').lower()
-    OUTPUT_SAMPLE_RATE = int(os.environ.get("DATASET_SAMPLE_RATE"))
-    OUTPUT_NUM_CHANNELS = int(os.environ.get("DATASET_NUM_CHANNELS"))
-    MINIMUM_SAMPLE_LENGTH = int(os.environ.get("DATASET_MINIMUM_SAMPLE_LENGTH"))
-    MAXIMUM_SAMPLE_LENGTH = os.environ.get("DATASET_MAXIMUM_SAMPLE_LENGTH")
+    dataset_cfg = config.load_json(os.path.join(config.CONFIG_PATH, "dataset.json"))
+    SOURCE_FORMATS = dataset_cfg["datasource_formats"]
+    OUTPUT_SAMPLE_FORMAT = dataset_cfg["dataset_format"]
+    OUTPUT_SAMPLE_RATE = dataset_cfg["dataset_sample_rate"]
+    OUTPUT_NUM_CHANNELS = dataset_cfg["dataset_num_channels"]
+    MINIMUM_SAMPLE_LENGTH = dataset_cfg["dataset_min_sample_length"]
+    MAXIMUM_SAMPLE_LENGTH = dataset_cfg["dataset_max_sample_length"]
 
     RESUME_FROM = -1
 

@@ -31,7 +31,17 @@ accelerate config
 # - mixed precision bf16
 # *install python vscode extension and set interpreter to dualdiffusion env*
 
+# dataset config
+nano ./config/dataset.json
 
+# dataset upload / download
+# huggingface-cli download hf_user/dataset_repo --repo-type dataset --local-dir /path/to/dataset
+# huggingface-cli upload hf_user/dataset_repo --repo-type dataset --local-dir /path/to/dataset
+
+# new model setup / training config setup
+# copy ./config/default to ./config/model_name
+# edit config files as needed
+# run create_new_model.py and enter model_name
 
 # ***system setup***
 

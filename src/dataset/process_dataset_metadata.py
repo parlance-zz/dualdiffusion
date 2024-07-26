@@ -20,16 +20,15 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
+import utils.config as config
+
 import os
 import json
 import subprocess
 import random
 import math
-from dotenv import load_dotenv
 import os
 
-MIN_NUM_CLASS_SAMPLES_FOR_VALIDATION = 8 # minimum number of examples of sample class to be included in validation set
-MAX_NUM_VALIDATION_SAMPLES = 100         # maximum number of samples to be included in validation set
 
 def extract_sample_metadata(sample_file):
 
@@ -235,11 +234,14 @@ def organize_dataset(): # organize samples into directories of 10,000 samples ea
 
 if __name__ == "__main__":
 
-    load_dotenv(override=True)
+    dataset_cfg = config.load_json(os.path.join(config.CONFIG_PATH, "dataset.json"))
 
-    FFMPEG_PATH = os.environ.get("FFMPEG_PATH")
-    OUTPUT_SAMPLE_DIR = os.environ.get("DATASET_PATH")
-    OUTPUT_SAMPLE_FORMAT = os.environ.get('DATASET_FORMAT').lower()
+    FFMPEG_PATH = config.FFMPEG_PATH
+    OUTPUT_SAMPLE_DIR = config.DATASET_PATH
+    OUTPUT_SAMPLE_FORMAT = dataset_cfg["dataset_format"]
+
+    MIN_NUM_CLASS_SAMPLES_FOR_VALIDATION = 8 # minimum number of examples of sample class to be included in validation set
+    MAX_NUM_VALIDATION_SAMPLES = 100         # maximum number of samples to be included in validation set
 
     if not os.path.exists(OUTPUT_SAMPLE_DIR):        
         print(f"Error: Output directory '{OUTPUT_SAMPLE_DIR}' does not exist")

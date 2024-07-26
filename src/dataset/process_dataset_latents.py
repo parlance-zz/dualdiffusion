@@ -20,12 +20,13 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
+import utils.config as config
+
 import os
 import json
 import shutil
 from copy import deepcopy
 
-from dotenv import load_dotenv
 import torch
 from tqdm.auto import tqdm
 from accelerate import PartialState
@@ -33,9 +34,10 @@ from accelerate import PartialState
 from pipelines.dual_diffusion_pipeline import DualDiffusionPipeline
 from formats.spectrogram import DualSpectrogramFormat
 from utils.dual_diffusion_utils import (
-    init_cuda, load_raw, load_audio, save_safetensors, load_safetensors,
+    init_cuda, load_audio, save_safetensors, load_safetensors,
     quantize_tensor, dequantize_tensor, save_raw_img, save_audio
 )
+
 
 def get_pitch_augmentation_format(original_format, shift_semitones):
     shift_rate = 2 ** (shift_semitones / 12)
@@ -47,7 +49,6 @@ def get_pitch_augmentation_format(original_format, shift_semitones):
 if __name__ == "__main__":
 
     init_cuda()
-    load_dotenv(override=True)
 
     model_name = "edm2_vae7_5"
     num_encode_offsets = 8 # should be equal to latent downsample factor
@@ -62,8 +63,8 @@ if __name__ == "__main__":
     distributed_state = PartialState()
     device = distributed_state.device
     torch.manual_seed(seed)
-
-    model_path = os.path.join(os.environ.get("MODEL_PATH", "./"), model_name)
+    
+    model_path = config.MODEL_PATH
     model_dtype = torch.bfloat16 if fp16 else torch.float32
     print(f"Loading DualDiffusion model from '{model_path}' (dtype={model_dtype})...")
     pipeline = DualDiffusionPipeline.from_pretrained(model_path,
@@ -83,13 +84,13 @@ if __name__ == "__main__":
     pitch_augmentation_formats = [get_pitch_augmentation_format(pipeline.format, shift).to(device) for shift in pitch_shifts]
     formats = [pipeline.format] + pitch_augmentation_formats
     
-    latents_dataset_path = os.environ.get("LATENTS_DATASET_PATH", "./dataset/latents")
-    os.makedirs(latents_dataset_path, exist_ok=True)
+    dataset_cfg = config.load_json(os.path.join(config.CONFIG_PATH, "dataset.json"))
+    dataset_path = config.DATASET_PATH
+    debug_path = config.DEBUG_PATH
+    dataset_format = dataset_cfg["dataset_format"]
 
-    dataset_path = os.environ.get("DATASET_PATH", "./dataset/samples")
-    dataset_format = os.environ.get("DATASET_FORMAT", ".flac")
-    dataset_raw_format = os.environ.get("DATASET_RAW_FORMAT", "int16")
-    debug_path = os.environ.get("DEBUG_PATH", "./debug")
+    latents_dataset_path = config.LATENTS_DATASET_PATH
+    os.makedirs(latents_dataset_path, exist_ok=True)
     
     # get split metadata
     split_metadata_files = []
@@ -134,10 +135,7 @@ if __name__ == "__main__":
                     continue
 
                 file_ext = os.path.splitext(file_name)[1]
-                if dataset_format == ".raw":
-                    input_raw_sample = load_raw(os.path.join(dataset_path, file_name), dtype=dataset_raw_format)
-                else:
-                    input_raw_sample = load_audio(os.path.join(dataset_path, file_name))
+                input_raw_sample = load_audio(os.path.join(dataset_path, file_name))
                 crop_width = pipeline.format.get_sample_crop_width(length=input_raw_sample.shape[-1] - encode_offset_padding)
 
                 input_raw_samples = []
