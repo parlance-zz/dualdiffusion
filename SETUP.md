@@ -20,6 +20,8 @@ git clone https://github.com/parlance-zz/dualdiffusion
 # environment setup
 cd dualdiffusion
 conda env create -f environment.yml
+# alternatively to use a specific location for the conda env
+# you could use conda env create -f environment.yml --prefix /path/to/env
 conda activate dualdiffusion
 cp ./.env.default ./.env
 nano ./.env
