@@ -36,7 +36,6 @@ import torch
 from diffusers.configuration_utils import ConfigMixin, register_to_config
 from diffusers.models.modeling_utils import ModelMixin
 
-from dual_diffusion_utils import torch_compile
 
 def patchify(x, h=32):
     return x.view(x.shape[0], x.shape[1]*h, x.shape[2]//h, x.shape[3])
@@ -286,7 +285,6 @@ class UNet(ModelMixin, ConfigMixin):
 
         self.conv_out = MPConv(model_channels, out_channels*32, kernel=[1, 3])
 
-    @torch_compile(fullgraph=True, dynamic=False)
     def forward(self, x_in, sigma, class_embeddings, t_ranges, format, return_logvar=False):
 
         with torch.no_grad():
@@ -352,7 +350,7 @@ class UNet(ModelMixin, ConfigMixin):
 
 if __name__ == "__main__": # fourier embedding inner product test
 
-    from dual_diffusion_utils import save_raw, save_raw_img
+    from utils.dual_diffusion_utils import save_raw, save_raw_img
     from dotenv import load_dotenv
     import os
 

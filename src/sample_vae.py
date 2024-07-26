@@ -27,10 +27,12 @@ from dotenv import load_dotenv
 import numpy as np
 import torch
 
-from dual_diffusion_pipeline import DualDiffusionPipeline
-from dual_diffusion_utils import init_cuda, save_audio, save_raw, load_raw
-from dual_diffusion_utils import load_audio, save_raw_img, quantize_tensor, dequantize_tensor
-from unet_edm2 import normalize
+from pipelines.dual_diffusion_pipeline import DualDiffusionPipeline
+from utils.dual_diffusion_utils import (
+    init_cuda, save_audio, save_raw, load_raw,
+    load_audio, save_raw_img, quantize_tensor, dequantize_tensor
+)
+from models.unet_edm2 import normalize
 
 if __name__ == "__main__":
 

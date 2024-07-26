@@ -27,7 +27,8 @@ from diffusers.configuration_utils import ConfigMixin, register_to_config
 from diffusers.models.modeling_utils import ModelMixin
 
 from unet_edm2 import Block, MPConv, mp_silu, normalize
-from dual_diffusion_utils import torch_compile
+
+
 class IsotropicGaussianDistribution(object):
 
     def __init__(self, parameters, logvar, deterministic=False):
@@ -163,7 +164,6 @@ class AutoencoderKL_EDM2(ModelMixin, ConfigMixin):
     def get_class_embeddings(self, class_labels):
         return mp_silu(self.emb_label(normalize(class_labels).to(device=self.device, dtype=self.dtype)))
 
-    @torch_compile(fullgraph=True, dynamic=False)
     def encode(self, x, class_embeddings, format):
         
         x = torch.cat((x, torch.ones_like(x[:, :1]),
@@ -175,7 +175,6 @@ class AutoencoderKL_EDM2(ModelMixin, ConfigMixin):
         noise_logvar = torch.tensor(np.log(1 / (self.target_snr**2 + 1)), device=x.device, dtype=x.dtype)
         return IsotropicGaussianDistribution(latents, noise_logvar)
     
-    @torch_compile(fullgraph=True, dynamic=False)
     def decode(self, x, class_embeddings, format):
         
         x = torch.cat((x, torch.ones_like(x[:, :1]),

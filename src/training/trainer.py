@@ -48,9 +48,9 @@ from diffusers.optimization import get_scheduler
 from diffusers.utils import is_tensorboard_available
 
 from pipelines.dual_diffusion_pipeline import DualDiffusionPipeline
+from utils.dual_diffusion_utils import dict_str
 from .ema_edm2 import PowerFunctionEMA
 from .dataset import DatasetConfig, SwitchableDataset
-from utils.dual_diffusion_utils import dict_str
 
 class TrainLogger():
 

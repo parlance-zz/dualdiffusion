@@ -28,7 +28,10 @@ import torch
 import numpy as np
 from tqdm.auto import tqdm
 
-from dual_diffusion_utils import init_cuda, save_raw, load_safetensors, multi_plot, save_safetensors, dequantize_tensor
+from utils.dual_diffusion_utils import (
+    init_cuda, save_raw, load_safetensors,
+    multi_plot, save_safetensors, dequantize_tensor
+)
 
 DATASET_PATH = os.environ.get("LATENTS_DATASET_PATH", "./dataset/latents")
 

@@ -21,9 +21,8 @@
 # SOFTWARE.
 
 import os
-import platform
 from io import BytesIO
-from json import dumps as json_dumps, load as json_load
+from json import dumps as json_dumps
 import matplotlib.pyplot as plt
 
 import numpy as np

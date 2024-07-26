@@ -24,8 +24,8 @@ import utils.config as config
 import os
 import argparse
 
-from utils import init_cuda
-from training import DualDiffusionTrainer, DualDiffusionTrainerConfig
+from utils.dual_diffusion_utils import init_cuda
+from training.trainer import DualDiffusionTrainer, DualDiffusionTrainerConfig
 
 def parse_args():
     parser = argparse.ArgumentParser(description="DualDiffusion training script.")

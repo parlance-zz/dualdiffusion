@@ -30,9 +30,12 @@ import torch
 from tqdm.auto import tqdm
 from accelerate import PartialState
 
-from dual_diffusion_pipeline import DualDiffusionPipeline, DualSpectrogramFormat
-from dual_diffusion_utils import init_cuda, load_raw, load_audio, save_safetensors, load_safetensors
-from dual_diffusion_utils import quantize_tensor, dequantize_tensor, save_raw_img, save_audio
+from pipelines.dual_diffusion_pipeline import DualDiffusionPipeline
+from formats.spectrogram import DualSpectrogramFormat
+from utils.dual_diffusion_utils import (
+    init_cuda, load_raw, load_audio, save_safetensors, load_safetensors,
+    quantize_tensor, dequantize_tensor, save_raw_img, save_audio
+)
 
 def get_pitch_augmentation_format(original_format, shift_semitones):
     shift_rate = 2 ** (shift_semitones / 12)

@@ -24,7 +24,7 @@ import torch
 import torch.nn.functional as F
 import numpy as np
 
-from utils.dual_diffusion_utils import stft, get_mel_density, torch_compile
+from utils.dual_diffusion_utils import stft, get_mel_density
 
 class DualMultiscaleSpectralLoss:
 
@@ -154,7 +154,6 @@ class DualMultiscaleSpectralLoss2D:
 
         return x
     
-    @torch_compile(fullgraph=True)
     def __call__(self, sample, target, model_params):
 
         target = target["samples"]
@@ -268,7 +267,6 @@ class DualLGSpectralLoss2D:
 
         return x
     
-    @torch_compile(fullgraph=True)
     def __call__(self, sample, target, model_params):
 
         target = target["samples"]
