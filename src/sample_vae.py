@@ -121,11 +121,7 @@ if __name__ == "__main__":
         filename = sample[1]
 
         file_ext = os.path.splitext(filename)[1]
-        if dataset_format == ".raw":
-            input_raw_sample = load_raw(os.path.join(dataset_path, filename),
-                                        dtype=dataset_raw_format, start=start, count=crop_width)
-        else:
-            input_raw_sample = load_audio(os.path.join(dataset_path, filename), start=start, count=crop_width)
+        input_raw_sample = load_audio(os.path.join(dataset_path, filename), start=start, count=crop_width)
         input_raw_sample = input_raw_sample.unsqueeze(0).to(device)
 
         class_labels = pipeline.get_class_labels(sample_game_id)

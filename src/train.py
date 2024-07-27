@@ -27,7 +27,7 @@ import argparse
 from utils.dual_diffusion_utils import init_cuda
 from training.trainer import DualDiffusionTrainer, DualDiffusionTrainerConfig
 
-def parse_args():
+def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="DualDiffusion training script.")
     parser.add_argument(
         "--model_path",

@@ -22,6 +22,7 @@
 
 import os
 from io import BytesIO
+from typing import Optional, Union
 from json import dumps as json_dumps
 
 import numpy as np
@@ -36,22 +37,29 @@ from scipy.special import erfinv
 from mutagen import File as MTAudioFile
 
 
-def init_cuda(default_device=None):
+def init_cuda(default_device: Optional[torch.device] = None) -> None:
+
     if not torch.cuda.is_available():
-        print("Error: PyTorch not compiled with CUDA support or CUDA unavailable")
-        exit(1)
+        raise ValueError("Error: PyTorch not compiled with CUDA support or CUDA unavailable")
     else:
         torch.backends.cuda.matmul.allow_tf32 = True
         torch.backends.cudnn.allow_tf32 = True
-        torch.backends.cuda.cufft_plan_cache[0].max_size = 250 # stupid cufft memory leak
+        torch.backends.cuda.cufft_plan_cache[0].max_size = 250 # cufft memory leak
 
         if default_device is not None:
             torch.cuda.set_device(default_device)
 
-def multi_plot(*args, layout=None, figsize=None, added_plots=None, x_log_scale=False, y_log_scale=False, x_axis_range=None):
+def multi_plot(*args, layout: Optional[tuple] = None,
+               figsize: Optional[tuple] = None,
+               added_plots: Optional[dict] = None,
+               x_log_scale: bool = False,
+               y_log_scale: bool = False,
+               x_axis_range: Optional[tuple] = None) -> None:
 
     layout = layout or (len(args), 1)
-    axes = np.atleast_2d(plt.subplots(layout[0], layout[1], figsize=figsize)[1])
+    axes = np.atleast_2d(plt.subplots(layout[0],
+                                      layout[1],
+                                      figsize=figsize)[1])
 
     for i, axis in enumerate(axes.flatten()):
 
@@ -59,7 +67,9 @@ def multi_plot(*args, layout=None, figsize=None, added_plots=None, x_log_scale=F
 
             y_values =args[i][0].detach().float().resolve_conj().cpu().numpy()
             if x_axis_range is not None:
-                x_values = np.linspace(x_axis_range[0], x_axis_range[1], y_values.shape[-1])
+                x_values = np.linspace(x_axis_range[0],
+                                       x_axis_range[1],
+                                       y_values.shape[-1])
             else:
                 x_values = np.arange(y_values.shape[0])
             axis.plot(x_values, y_values, label=args[i][1])
@@ -69,7 +79,9 @@ def multi_plot(*args, layout=None, figsize=None, added_plots=None, x_log_scale=F
                 if added_plot is not None:
                     y_values = added_plot[0].detach().float().resolve_conj().cpu().numpy()
                     if x_axis_range is not None:
-                        x_values = np.linspace(x_axis_range[0], x_axis_range[1], y_values.shape[-1])
+                        x_values = np.linspace(x_axis_range[0],
+                                               x_axis_range[1],
+                                               y_values.shape[-1])
                     else:
                         x_values = np.arange(y_values.shape[0])
                     axis.plot(x_values, y_values, label=added_plot[1])
@@ -90,306 +102,54 @@ def multi_plot(*args, layout=None, figsize=None, added_plots=None, x_log_scale=F
                         hspace=1/figsize[1])
     plt.show()
 
-def dict_str(d, indent=4):
-    if d is None: return "None"
+def dict_str(d: dict, indent: int = 4) -> str:
     return json_dumps(d, indent=indent)
 
-def get_expected_max_normal(n):
-    return erfinv((n - np.pi/8) / (n - np.pi/4 + 1))
+@torch.no_grad()
+def save_raw(tensor: torch.Tensor, output_path: str) -> None:
 
-def get_fractal_noise2d(shape, degree=1, **kwargs):
-    
-    noise_shape = shape[:-2] + (shape[-2]*2, shape[-1]*2)
-    noise_complex = torch.randn(noise_shape, **kwargs)
-
-    linspace_x = (torch.arange(0, noise_complex.shape[-2], device=noise_complex.device) - noise_complex.shape[-2]//2).square() / noise_complex.shape[-2]**2
-    linspace_y = (torch.arange(0, noise_complex.shape[-1], device=noise_complex.device) - noise_complex.shape[-1]//2).square() / noise_complex.shape[-1]**2
-    linspace = (linspace_x.view(-1, 1) + linspace_y.view(1, -1)).pow(-degree/2)
-    linspace[noise_complex.shape[-2]//2, noise_complex.shape[-1]//2] = 0
-    linspace = linspace.view((1,)*(len(shape)-2) + (noise_complex.shape[-2], noise_complex.shape[-1]))
-    linspace = torch.roll(linspace, shifts=(linspace.shape[-2]//2, linspace.shape[-1]//2), dims=(-2, -1))
-
-    pink_noise = torch.fft.ifft2(noise_complex * linspace, norm="ortho").real[..., :shape[-2], :shape[-1]]
-    return (pink_noise / pink_noise.std(dim=(-2, -1), keepdim=True)).detach().requires_grad_(False)
-
-def get_hann_window(window_len, device="cpu"):
-    n = torch.arange(window_len, device=device) / window_len
-    return (0.5 - 0.5 * torch.cos(2 * torch.pi * n)).requires_grad_(False)
-
-def get_kaiser_window(window_len, beta=4*torch.pi, device="cpu"):    
-    alpha = (window_len - 1) / 2
-    n = torch.arange(window_len, device=device)
-    return (torch.special.i0(beta * torch.sqrt(1 - ((n - alpha) / alpha).square())) / torch.special.i0(torch.tensor(beta))).requires_grad_(False)
-
-def get_kaiser_derived_window(window_len, beta=4*torch.pi, device="cpu"):
-
-    kaiserw = get_kaiser_window(window_len // 2 + 1, beta, device)
-    csum = torch.cumsum(kaiserw, dim=0)
-    halfw = torch.sqrt(csum[:-1] / csum[-1])
-
-    w = torch.zeros(window_len, device=device)
-    w[:window_len//2] = halfw
-    w[-window_len//2:] = halfw.flip(0)
-
-    return w.requires_grad_(False)
-
-def get_hann_poisson_window(window_len, alpha=2, device="cpu"):
-    x = torch.arange(window_len, device=device) / window_len
-    return (torch.exp(-alpha * (1 - 2*x).abs()) * 0.5 * (1 - torch.cos(2*torch.pi*x))).requires_grad_(False)
-
-def get_blackman_harris_window(window_len, device="cpu"):
-    x = torch.arange(window_len, device=device) / window_len * 2*torch.pi
-    return (0.35875 - 0.48829 * torch.cos(x) + 0.14128 * torch.cos(2*x) - 0.01168 * torch.cos(3*x)).requires_grad_(False)
-
-def get_flat_top_window(window_len, device="cpu"):
-    x = torch.arange(window_len, device=device) / window_len * 2*torch.pi
-    return (0.21557895 - 0.41663158 * torch.cos(x) + 0.277263158 * torch.cos(2*x) - 0.083578947 * torch.cos(3*x) + 0.006947368 * torch.cos(4*x)).requires_grad_(False)
-
-def mdct(x, block_width, window_fn="hann", window_degree=1):
-
-    padding_left = padding_right = block_width // 2
-    remainder = x.shape[-1] % (block_width // 2)
-    if remainder > 0:
-        padding_right += block_width // 2 - remainder
-
-    pad_tuple = (padding_left, padding_right) + (0,0,) * (x.ndim-1)
-    x = F.pad(x, pad_tuple).unfold(-1, block_width, block_width//2)
-
-    N = x.shape[-1] // 2
-    n = torch.arange(2*N, device=x.device)
-    k = torch.arange(0.5, N + 0.5, device=x.device)
-
-    if window_fn == "hann":
-        if window_degree == 0:
-            window = 1
-        else:
-            window = torch.sin(torch.pi * (n + 0.5) / (2*N)).requires_grad_(False)
-            if window_degree == 2: window = window.square()
-    elif window_fn == "hann_poisson":
-        window = get_hann_poisson_window(2*N, device=x.device)
-    elif window_fn == "blackman_harris":
-        window = get_blackman_harris_window(2*N, device=x.device)
-    elif window_fn == "flat_top":
-        window = get_flat_top_window(2*N, device=x.device)
-    else:
-        raise ValueError(f"Unsupported window function: {window_fn}")
-    
-    pre_shift = torch.exp(-1j * torch.pi / 2 / N * n).requires_grad_(False)
-    post_shift = torch.exp(-1j * torch.pi / 2 / N * (N + 1) * k).requires_grad_(False)
-    
-    return torch.fft.fft(x * pre_shift * window, norm="forward")[..., :N] * post_shift * (2 * N ** 0.5)
-
-def imdct(x, window_fn="hann", window_degree=1):
-    N = x.shape[-1]
-    n = torch.arange(2*N, device=x.device)
-    k = torch.arange(0.5, N + 0.5, device=x.device)
-
-    if window_fn == "hann":
-        if window_degree == 0:
-            window = 1
-        else:
-            window = torch.sin(torch.pi * (n + 0.5) / (2*N)).requires_grad_(False)
-            if window_degree == 2: window = window.square()
-    elif window_fn == "hann_poisson":
-        window = get_hann_poisson_window(2*N, device=x.device)
-    elif window_fn == "blackman_harris":
-        window = get_blackman_harris_window(2*N, device=x.device)
-    elif window_fn == "flat_top":
-        window = get_flat_top_window(2*N, device=x.device)
-    else:
-        raise ValueError(f"Unsupported window function: {window_fn}")
-
-    pre_shift = torch.exp(-1j * torch.pi / 2 / N * n).requires_grad_(False)
-    post_shift = torch.exp(-1j * torch.pi / 2 / N * (N + 1) * k).requires_grad_(False)
-
-    y = (torch.fft.ifft(x / post_shift, norm="backward", n=2*N) / pre_shift) * window
-
-    padded_sample_len = (y.shape[-2] + 1) * y.shape[-1] // 2
-    raw_sample = torch.zeros(y.shape[:-2] + (padded_sample_len,), device=y.device, dtype=y.dtype)
-    y_even = y[...,  ::2, :].reshape(*y[...,  ::2, :].shape[:-2], -1)
-    y_odd  = y[..., 1::2, :].reshape(*y[..., 1::2, :].shape[:-2], -1)
-    raw_sample[..., :y_even.shape[-1]] = y_even
-    raw_sample[..., N:y_odd.shape[-1] + N] += y_odd
-
-    return raw_sample[..., N:-N] * (2 * N ** 0.5)
-
-def stft(x, block_width, window_fn="hann", step=None, add_channelwise_fft=False):
-
-    if step is None:
-        step = block_width // 2
-
-    x = x.unfold(-1, block_width, step)
-
-    if window_fn == "hann":
-        window = get_hann_window(block_width, device=x.device) * 2
-    elif window_fn == "hann^0.5":
-        window = get_hann_window(block_width, device=x.device).sqrt() * (2/torch.pi)
-    elif window_fn == "hann^2":
-        window = get_hann_window(block_width, device=x.device).square() * (8/3)
-    elif window_fn == "blackman_harris":
-        window = get_blackman_harris_window(block_width, device=x.device)
-    elif window_fn == "blackman_harris2":
-        window = get_blackman_harris_window(block_width, device=x.device) ** 2
-    elif window_fn == "none":
-        window = 1
-    else:
-        raise ValueError(f"Unsupported window function: {window_fn}")
-    
-    x = torch.fft.rfft(x * window, norm="ortho")
-
-    if add_channelwise_fft:
-        return torch.fft.fft(x, norm="ortho", dim=-3)
-    else:
-        return x
-
-def to_ulaw(x, u=255):
-
-    complex = False
-    if torch.is_complex(x):
-        complex = True
-        x = torch.view_as_real(x)
-
-    x = x / x.abs().amax(dim=tuple(range(x.ndim-2-int(complex), x.ndim)), keepdim=True)
-    x = torch.sign(x) * torch.log1p(u * x.abs()) / np.log(1 + u)
-
-    if complex:
-        x = torch.view_as_complex(x)
-    
-    return x
-
-def from_ulaw(x, u=255):
-
-    complex = False
-    if torch.is_complex(x):
-        complex = True
-        x = torch.view_as_real(x)
-
-    x = x / x.abs().amax(dim=tuple(range(x.ndim-2-int(complex), x.ndim)), keepdim=True)
-    x = torch.sign(x) * ((1 + u) ** x.abs() - 1) / u
-
-    if complex:
-        x = torch.view_as_complex(x)
-
-    return x
-
-STR_DTYPE_TO_NUMPY_DTYPE = {
-    "float16": np.float16,
-    "float32": np.float32,
-    "float64": np.float64,
-    "int8": np.int8,
-    "int16": np.int16,
-    "int32": np.int32,
-    "int64": np.int64,
-    "uint8": np.uint8,
-    "uint16": np.uint16,
-    "uint32": np.uint32,
-    "uint64": np.uint64,
-    "complex64": np.complex64,
-    "complex128": np.complex128
-}
-
-STR_DTYPE_SIZE = {
-    "float16": 2,
-    "float32": 4,
-    "float64": 8,
-    "int8": 1,
-    "int16": 2,
-    "int32": 4,
-    "int64": 8,
-    "uint8": 1,
-    "uint16": 2,
-    "uint32": 4,
-    "uint64": 8,
-    "complex64": 8,
-    "complex128": 16
-}
-
-STR_DTYPE_MAX_VALUE = {
-    "float16": 1.,
-    "float32": 1.,
-    "float64": 1.,
-    "int8": 128.,
-    "int16": 32768.,
-    "int32": 2147483648.,
-    "int64": 9223372036854775808.,
-    "uint8": 255.,
-    "uint16": 65535.,
-    "uint32": 4294967295.,
-    "uint64": 18446744073709551615.,
-    "complex64": 1.,
-    "complex128": 1.
-}
-
-def save_raw(tensor, output_path):  
     directory = os.path.dirname(output_path)
-    if not os.path.exists(directory):
-        os.makedirs(directory)
+    os.makedirs(directory, exist_ok=True)
 
-    if tensor.dtype == torch.float16 or tensor.dtype == torch.bfloat16:
+    if tensor.dtype in [torch.float16, torch.bfloat16]:
         tensor = tensor.float()
     elif tensor.dtype == torch.complex32:
         tensor = tensor.complex64()
     tensor.detach().resolve_conj().cpu().numpy().tofile(output_path)
 
-def load_raw(input_path, dtype="int16", num_channels=1, start=0, count=-1, device="cpu", return_start=False):
-
-    np_dtype = STR_DTYPE_TO_NUMPY_DTYPE.get(dtype, None)
-    if np_dtype is None:
-        raise ValueError(f"Unsupported dtype: {dtype} - Supported dtypes: {list(STR_DTYPE_TO_NUMPY_DTYPE.keys())}")
-    dtype_size = STR_DTYPE_SIZE[dtype]
-
-    if isinstance(input_path, str):
-        sample_len = os.path.getsize(input_path) // dtype_size // num_channels
-    else:
-        if not isinstance(input_path, (bytes, bytearray)):
-            raise ValueError(f"Unsupported input_path type: {type(input_path)}")
-        sample_len = len(input_path) // dtype_size // num_channels
-
-    if sample_len < count:
-        raise ValueError(f"Requested {count} samples, but only {sample_len} available")
-    if start < 0:
-        if count < 0:
-            raise ValueError(f"If start < 0 count cannot be < 0")
-        start = np.random.randint(0, sample_len - count + 1)
-    elif start > 0 and count > 0:
-        if sample_len < start + count:
-            raise ValueError(f"Requested {start + count} samples, but only {sample_len} available")
-
-    offset = start * dtype_size * num_channels
-
-    if isinstance(input_path, str):
-        tensor = torch.from_numpy(np.fromfile(input_path, dtype=np_dtype, count=count * num_channels, offset=offset))
-    else:
-        tensor = torch.from_numpy(np.frombuffer(input_path, dtype=np_dtype, count=count * num_channels, offset=offset))
-    tensor = (tensor / STR_DTYPE_MAX_VALUE[dtype]).view(-1, num_channels).permute(1, 0).to(device)
-
-    if return_start:
-        return tensor, start
-    else:
-        return tensor
-
 @torch.no_grad()
-def normalize_lufs(raw_samples, sample_rate, target_lufs=-16., max_clip=0.15):
+def normalize_lufs(raw_samples: torch.Tensor,
+                   sample_rate: int,
+                   target_lufs: float = -16.,
+                   max_clip:float = 0.15) -> torch.Tensor:
     
     original_shape = raw_samples.shape
     raw_samples = torch.nan_to_num(raw_samples, nan=0, posinf=0, neginf=0)
     
     if raw_samples.ndim == 1:
-        raw_samples = raw_samples.view(1, 1, -1)
+        raw_samples = raw_samples.view(1, 1,-1)
     elif raw_samples.ndim == 2:
         raw_samples = raw_samples.view(1, raw_samples.shape[0], -1)
 
-    raw_samples /= raw_samples.abs().amax(dim=tuple(range(1, len(raw_samples.shape))), keepdim=True).clip(min=1e-16)
+    raw_samples /= raw_samples.abs().amax(
+        dim=tuple(range(1, len(raw_samples.shape))), keepdim=True).clip(min=1e-16)
+    
     current_lufs = AF.loudness(raw_samples, sample_rate)
     gain = 10. ** ((target_lufs - current_lufs) / 20.0)
     gain = gain.view((*gain.shape,) + (1,) * (raw_samples.ndim - gain.ndim))
 
     normalized_raw_samples = raw_samples * gain
-    normalized_raw_samples /= normalized_raw_samples.abs().amax(dim=tuple(range(1, len(normalized_raw_samples.shape))), keepdim=True).clip(min=1+max_clip)
+    normalized_raw_samples /= normalized_raw_samples.abs().amax(
+        dim=tuple(range(1, len(normalized_raw_samples.shape))), keepdim=True).clip(min=1+max_clip)
 
     return normalized_raw_samples.view(original_shape)
 
-def save_audio(raw_samples, sample_rate, output_path, target_lufs=-16., metadata=None):
+@torch.no_grad()
+def save_audio(raw_samples: torch.Tensor,
+               sample_rate: int,
+               output_path: str,
+               target_lufs: float = -16.,
+               metadata: Optional[dict] = None) -> None:
     
     raw_samples = raw_samples.detach().real.float()
     if raw_samples.ndim == 1:
@@ -399,8 +159,7 @@ def save_audio(raw_samples, sample_rate, output_path, target_lufs=-16., metadata
         raw_samples = normalize_lufs(raw_samples, sample_rate, target_lufs)
 
     directory = os.path.dirname(output_path)
-    if not os.path.exists(directory):
-        os.makedirs(directory)
+    os.makedirs(directory, exist_ok=True)
     
     torchaudio.save(output_path, raw_samples.cpu(), sample_rate, bits_per_sample=16)
 
@@ -410,7 +169,12 @@ def save_audio(raw_samples, sample_rate, output_path, target_lufs=-16., metadata
             audio_file[key] = metadata[key]
         audio_file.save()
 
-def load_audio(input_path, start=0, count=-1, return_sample_rate=False, device="cpu", return_start=False):
+@torch.no_grad()
+def load_audio(input_path: str,
+               start: int = 0, count: int = -1,
+               return_sample_rate: bool = False,
+               device: torch.device = "cpu",
+               return_start:bool = False):
 
     if isinstance(input_path, bytes):
         input_path = BytesIO(input_path)
@@ -443,7 +207,8 @@ def load_audio(input_path, start=0, count=-1, return_sample_rate=False, device="
     else:
         return return_vals
 
-def save_safetensors(tensors_dict, output_path):
+@torch.no_grad()
+def save_safetensors(tensors_dict:torch.Tensor , output_path: str) -> None:
     directory = os.path.dirname(output_path)
     os.makedirs(directory, exist_ok=True)
 
@@ -457,42 +222,72 @@ def save_safetensors(tensors_dict, output_path):
 
     ST.save_file(tensors_dict, output_path)
 
-def load_safetensors(input_path, device="cpu"):
+@torch.no_grad()
+def load_safetensors(input_path: str, device: torch.device = "cpu") -> torch.Tensor:
     return ST.load_file(input_path, device=device)
 
-def save_sample_img(sample, img_path, include_phase=False):
+def get_expected_max_normal(n: int) -> float:
+    return erfinv((n - np.pi/8) / (n - np.pi/4 + 1))
+
+@torch.no_grad()
+def get_fractal_noise2d(shape: tuple, degree: int = 1, **kwargs) -> torch.Tensor:
     
-    num_chunks = sample.shape[2]
-    chunk_len = sample.shape[3]
-    bsz = sample.shape[0]
-
-    sample = torch.view_as_complex(sample.clone().detach().permute(0, 2, 3, 1).contiguous().float())
-    sample *= torch.arange(num_chunks//8, num_chunks+num_chunks//8).to(sample.device).view(1, num_chunks, 1)
-    sample = sample.view(bsz * num_chunks, chunk_len)
-    amp = sample.abs(); amp = (amp / torch.max(amp)).cpu().numpy()
+    noise_shape = shape[:-2] + (shape[-2]*2, shape[-1]*2)
+    noise_complex = torch.randn(noise_shape, **kwargs)
     
-    if include_phase:
-        phase = sample.angle().cpu().numpy()
-        cv2_img = np.zeros((bsz * num_chunks, chunk_len, 3), dtype=np.uint8)
-        cv2_img[:, :, 0] = (np.sin(phase) + 1) * 255/2 * amp
-        cv2_img[:, :, 1] = (np.sin(phase + 2*np.pi/3) + 1) * 255/2 * amp
-        cv2_img[:, :, 2] = (np.sin(phase + 4*np.pi/3) + 1) * 255/2 * amp
-    else:
-        cv2_img = (amp * 255).astype(np.uint8)
-        cv2_img = cv2.applyColorMap(cv2_img, cv2.COLORMAP_JET)
+    linspace_x = torch.arange(0, noise_complex.shape[-2], device=noise_complex.device)
+    linspace_y = torch.arange(0, noise_complex.shape[-1], device=noise_complex.device)
+    linspace_x = (linspace_x - noise_complex.shape[-2]//2).square() / noise_complex.shape[-2]**2
+    linspace_y = (linspace_y - noise_complex.shape[-1]//2).square() / noise_complex.shape[-1]**2
 
-    cv2.imwrite(img_path, cv2.flip(cv2_img, -1))
+    linspace = (linspace_x.view(-1, 1) + linspace_y.view(1, -1)).pow(-degree/2)
+    linspace[noise_complex.shape[-2]//2, noise_complex.shape[-1]//2] = 0
+    linspace = linspace.view((1,)*(len(shape)-2) + (noise_complex.shape[-2], noise_complex.shape[-1]))
+    linspace = torch.roll(linspace, shifts=(linspace.shape[-2]//2, linspace.shape[-1]//2), dims=(-2, -1))
 
-def hz_to_mels(hz):
+    pink_noise = torch.fft.ifft2(noise_complex * linspace, norm="ortho").real[..., :shape[-2], :shape[-1]]
+    return (pink_noise / pink_noise.std(dim=(-2, -1), keepdim=True)).detach().requires_grad_(False)
+
+def to_ulaw(x: torch.Tensor, u: float = 255.) -> torch.Tensor:
+
+    complex = False
+    if torch.is_complex(x):
+        complex = True
+        x = torch.view_as_real(x)
+
+    x = x / x.abs().amax(dim=tuple(range(x.ndim-2-int(complex), x.ndim)), keepdim=True)
+    x = torch.sign(x) * torch.log1p(u * x.abs()) / np.log(1 + u)
+
+    if complex:
+        x = torch.view_as_complex(x)
+    
+    return x
+
+def from_ulaw(x: torch.Tensor, u: float = 255.) -> torch.Tensor:
+
+    complex = False
+    if torch.is_complex(x):
+        complex = True
+        x = torch.view_as_real(x)
+
+    x = x / x.abs().amax(dim=tuple(range(x.ndim-2-int(complex), x.ndim)), keepdim=True)
+    x = torch.sign(x) * ((1 + u) ** x.abs() - 1) / u
+
+    if complex:
+        x = torch.view_as_complex(x)
+
+    return x
+
+def hz_to_mels(hz: torch.Tensor) -> torch.Tensor:
     return 1127. * torch.log(1 + hz / 700.)
 
-def mels_to_hz(mels):
+def mels_to_hz(mels: torch.Tensor) -> torch.Tensor:
     return 700. * (torch.exp(mels / 1127.) - 1)
 
-def get_mel_density(hz):
+def get_mel_density(hz: torch.Tensor) -> torch.Tensor:
     return 1127. / (700. + hz)
 
-def quantize_tensor(x, levels):
+def quantize_tensor(x: torch.Tensor, levels: int) -> torch.Tensor:
     reduction_dims = tuple(range(1, x.ndim)) if x.ndim > 1 else (0,)
 
     min_val = x.amin(dim=reduction_dims, keepdim=True)
@@ -503,12 +298,14 @@ def quantize_tensor(x, levels):
     offset_and_range = torch.stack((min_val.flatten(), scale.flatten()), dim=-1)
     return quantized, offset_and_range
 
-def dequantize_tensor(x, offset_and_range):
+def dequantize_tensor(x: torch.Tensor, offset_and_range: torch.Tensor) -> torch.Tensor:
     view_dims = (-1,) + ((1,) * (x.ndim-1) if x.ndim > 1 else ())
     min_val, scale = offset_and_range.unbind(-1)
     return x * scale.view(view_dims) + min_val.view(view_dims)
 
-def save_raw_img(x, img_path, allow_inversion=False, allow_colormap=True, allow_recenter=True, allow_rescaling=True):
+def save_raw_img(x: torch.Tensor, img_path: str,
+                 allow_inversion: bool = False, allow_colormap: bool = True,
+                 allow_recenter: bool = True, allow_rescaling: bool = True):
     
     x = x.clone().detach().real.float().resolve_conj().cpu()
 
@@ -543,7 +340,10 @@ def save_raw_img(x, img_path, allow_inversion=False, allow_colormap=True, allow_
 
     return cv2_img
 
-def slerp(start, end, t, dtype=torch.float64):
+def slerp(start: torch.Tensor,
+          end: torch.Tensor,
+          t: Union[float, torch.Tensor],
+          dtype: torch.dtype = torch.float64) -> torch.Tensor:
 
     if torch.is_tensor(t):
         t = t.to(dtype)
@@ -556,7 +356,10 @@ def slerp(start, end, t, dtype=torch.float64):
 
     return (torch.sin((1 - t) * omega) / so) * start + (torch.sin(t * omega) / so) * end
 
-def get_cos_angle(start, end, keepdim=False, dtype=torch.float64):
+def get_cos_angle(start: torch.Tensor,
+                  end: torch.Tensor,
+                  keepdim: bool = False,
+                  dtype: torch.dtype = torch.float64) -> torch.Tensor:
     
     reduction_dims = tuple(range(1, start.ndim)) if start.ndim > 1 else (0,)
 
@@ -566,7 +369,7 @@ def get_cos_angle(start, end, keepdim=False, dtype=torch.float64):
 
     return (start / start_len * end / end_len).sum(dim=reduction_dims, keepdim=keepdim).clamp(-1, 1).acos()
 
-def normalize(x, zero_mean=False, dtype=torch.float64):
+def normalize(x: torch.Tensor, zero_mean: bool = False, dtype: torch.dtype = torch.float64) -> torch.Tensor:
 
     reduction_dims = tuple(range(1, x.ndim)) if x.ndim > 1 else (0,)
     x = x.to(dtype)

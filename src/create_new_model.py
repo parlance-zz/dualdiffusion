@@ -27,10 +27,11 @@ import shutil
 import importlib
 
 import torch
+from diffusers.models.modeling_utils import ModelMixin
 
 from pipelines.dual_diffusion_pipeline import DualDiffusionPipeline
 
-def print_module_info(module):
+def print_module_info(module: ModelMixin) -> None:
 
     module_params = {}
     num_emb_params = num_conv_params = num_attn_params = num_other_params = num_total_params = 0
@@ -70,6 +71,7 @@ if __name__ == "__main__":
     if not os.path.isdir(model_config_source_path):
         raise FileNotFoundError(f"Model config path '{model_config_source_path}' not found")
     
+    # load and initialize model modules
     model_modules = {}
     model_index = config.load_json(os.path.join(model_config_source_path, "model_index.json"))
     for module_name in model_index:
@@ -87,6 +89,7 @@ if __name__ == "__main__":
         model_modules[module_name] = module_class(**module_config)
         print_module_info(model_modules[module_name])
 
+    # create and save pipeline from loaded modules
     pipeline = DualDiffusionPipeline.create_new(**model_modules)
 
     new_model_path = os.path.join(config.MODEL_PATH, model_name)
@@ -100,6 +103,7 @@ if __name__ == "__main__":
     pipeline.save_pretrained(new_model_path, safe_serialization=True)
     print(f"Created new DualDiffusion model with config at '{new_model_path}'")
 
+    # copy module training configs
     model_train_config_path = os.path.join(new_model_path, "training")
     os.makedirs(model_train_config_path, exist_ok=True)
 
@@ -128,3 +132,12 @@ if __name__ == "__main__":
                     --model_path="{new_model_path}" \
                     --train_config_path="{module_train_config_dest_path}"
             """)
+
+    # copy dataset info to model path if available
+    dataset_info_path = os.path.join(config.LATENTS_DATASET_PATH, "dataset_infos", "dataset_info.json")
+    if not os.path.isfile(dataset_info_path):
+        dataset_info_path = os.path.join(config.DATASET_PATH, "dataset_infos", "dataset_info.json")
+    if not os.path.isfile(dataset_info_path):
+        print(f"Warning: Unable to copy dataset info to model, file not found at '{dataset_info_path}'")
+    else:
+        shutil.copy(dataset_info_path, new_model_path)

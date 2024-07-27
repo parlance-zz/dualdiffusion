@@ -20,10 +20,12 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
+import utils.config as config
+
 import os
-import json
+import importlib
 from dataclasses import dataclass
-from typing import Type, List, Optional
+from typing import Type, List, Optional, Union
 
 import numpy as np
 import torch
@@ -69,7 +71,7 @@ class DualDiffusionPipeline(DiffusionPipeline):
 
     @staticmethod
     @torch.no_grad()
-    def create_new(modules: List[DualDiffusionPipelineModule]):
+    def create_new(modules: List[DualDiffusionPipelineModule]) -> "DualDiffusionPipeline":
         
         initialized_modules = {}
         for module in modules:
@@ -82,78 +84,105 @@ class DualDiffusionPipeline(DiffusionPipeline):
     
     @staticmethod
     @torch.no_grad()
-    def from_pretrained(model_path,
-                        torch_dtype=torch.float32,
-                        device="cpu",
-                        load_latest_checkpoints=False,
-                        load_ema=None,
-                        requires_grad=False):
+    def from_pretrained(model_path: str,
+                        torch_dtype: torch.dtype = torch.float32,
+                        device: torch.device = "cpu",
+                        load_latest_checkpoints: bool = False,
+                        load_emas: Optional[dict] = None ) -> "DualDiffusionPipeline":
         
-        with open(os.path.join(model_path, "model_index.json"), "r") as f:
-            model_index = json.load(f)
-        model_params = model_index["model_params"]
+        model_index = config.load_json(os.path.join(model_path, "model_index.json"))
+        model_modules = {}
 
-        vae_class = DualDiffusionPipeline.get_vae_class(model_params)
-        vae_path = os.path.join(model_path, "vae")
-        if load_latest_checkpoints:
-            vae_checkpoints = [f for f in os.listdir(model_path) if os.path.isdir(os.path.join(model_path, f)) and f.startswith("vae_checkpoint")]
-            if len(vae_checkpoints) > 0:
-                vae_checkpoints = sorted(vae_checkpoints, key=lambda x: int(x.split("-")[1]))
-                vae_path = os.path.join(model_path, vae_checkpoints[-1], "vae")
-        vae = vae_class.from_pretrained(vae_path,
-                                        torch_dtype=torch_dtype,
-                                        device=device).requires_grad_(requires_grad).train(requires_grad)
+        # load pipeline modules
+        for module_name in model_index:
+            if module_name.startswith("_") or not isinstance(model_index[module_name], list): continue
 
-        unet_path = os.path.join(model_path, "unet")
-        if load_latest_checkpoints:
-            unet_checkpoints = [f for f in os.listdir(model_path) if os.path.isdir(os.path.join(model_path, f)) and f.startswith("unet_checkpoint")]
-            if len(unet_checkpoints) > 0:
-                unet_checkpoints = sorted(unet_checkpoints, key=lambda x: int(x.split("-")[1]))
-                unet_path = os.path.join(model_path, unet_checkpoints[-1], "unet")
-        unet = UNet.from_pretrained(unet_path,
-                                    torch_dtype=torch_dtype,
-                                    device=device).requires_grad_(requires_grad).train(requires_grad)
-        
-        if load_ema is not None:
-            ema_model_path = os.path.join(model_path, unet_checkpoints[-1], "unet_ema", load_ema)
-            if os.path.exists(ema_model_path):
-                unet.load_state_dict(load_safetensors(ema_model_path))
-                unet.normalize_weights()
-            else:
-                raise FileNotFoundError(f"EMA checkpoint '{load_ema}' not found in '{os.path.dirname(ema_model_path)}'")
+            module_package_name, module_class_name = model_index[module_name][0], model_index[module_name][1]
+            module_package = importlib.import_module(module_package_name)
+            module_class = getattr(module_package, module_class_name)
             
-        return DualDiffusionPipeline(unet, vae, model_params=model_params).to(device=device)
+            module_path = os.path.join(model_path, module_name)
+            if load_latest_checkpoints:
 
-    # not sure why this is needed, DiffusionPipeline doesn't consider format to be a module, but it is
-    @torch.no_grad()
-    def to(self, *args, **kwargs):
-        super().to(*args, **kwargs)
-        self.format = self.format.to(*args, **kwargs)
-        return self
+                module_checkpoints = []
+                for path in os.listdir(model_path):
+                    if os.path.isdir(path) and path.startswith(f"{module_name}_checkpoint"):
+                        module_checkpoints.append(path)
+
+                if len(module_checkpoints) > 0:
+                    module_checkpoints = sorted(module_checkpoints, key=lambda x: int(x.split("-")[1]))
+                    module_path = os.path.join(model_path, module_checkpoints[-1], module_name)
+
+            model_modules[module_name] = module_class.from_pretrained(
+                module_path, torch_dtype=torch_dtype, device=device).requires_grad_(False).train(False)
+        
+        # load and merge ema weights
+        if load_emas is not None:
+            for module_name in load_emas:
+                ema_module_path = os.path.join(module_path, f"{module_name}_ema", load_emas[module_name])
+                if os.path.exists(ema_module_path):
+                    model_modules[module_name].load_state_dict(load_safetensors(ema_module_path))
+
+                    if hasattr(model_modules[module_name], "normalize_weights"):
+                        model_modules[module_name].normalize_weights()
+                else:
+                    raise FileNotFoundError(f"EMA checkpoint '{load_emas[module_name]}' not found in '{os.path.dirname(ema_module_path)}'")
+        
+        pipeline = DualDiffusionPipeline(**model_modules).to(device=device)
+
+        # load optional dataset info
+        dataset_info_path = os.path.join(model_path, "dataset_info.json")
+        if os.path.isfile(dataset_info_path):
+            pipeline.dataset_info = config.load_json(dataset_info_path)
+        else:
+            pipeline.dataset_info = None
+        
+        return pipeline
     
     @torch.no_grad()
-    def get_class_labels(self, labels):
+    def get_class_label(self, label_name: Union[str, int]) -> int:
+
+        if isinstance(label_name, int):
+            return label_name
+        elif isinstance(label_name, str):
+            if self.dataset_info is None:
+                raise ValueError("Unable to retrieve class label, pipeline.dataset_info not found")
+            else:
+                return self.dataset_info["games"][label_name]
+        else:
+            raise ValueError(f"Unknown label type '{type(label_name)}'")
+        
+    @torch.no_grad()
+    def get_class_labels(self, labels: Union[int, torch.Tensor, list, dict],
+                         module: str = "unet") -> torch.Tensor:
+
+        label_dim = getattr(self, module).label_dim
+        assert label_dim > 0, f"{module} label dim must be > 0, got {label_dim}"
+
+        if isinstance(labels, int):
+            class_labels = torch.tensor([labels])
+        
         if isinstance(labels, torch.Tensor):
-            if labels.ndim == 0: labels = labels.unsqueeze(0)
-            return torch.nn.functional.one_hot(labels, num_classes=self.unet.label_dim).to(device=self.device, dtype=torch.float32)
+            if labels.ndim < 1: labels = labels.unsqueeze(0)
+            class_labels = torch.nn.functional.one_hot(labels, num_classes=label_dim)
+        
         elif isinstance(labels, list):
-            class_labels = torch.zeros((1, self.unet.label_dim))
-            return class_labels.index_fill_(1, torch.tensor(labels, dtype=torch.long), 1).to(device=self.device)
+            class_labels = torch.zeros((1, label_dim))
+            class_labels = class_labels.index_fill_(1, torch.tensor(labels, dtype=torch.long), 1)
+        
         elif isinstance(labels, dict):
-            class_ids, weights = torch.tensor(list(labels.keys()), dtype=torch.long), torch.tensor(list(labels.values())).float()
-            return torch.zeros((1, self.unet.label_dim)).scatter_(1, class_ids.unsqueeze(0), weights.unsqueeze(0)).to(device=self.device)
-        elif isinstance(labels, int):
-            return torch.nn.functional.one_hot(torch.tensor([labels], dtype=torch.long), num_classes=self.unet.label_dim).to(device=self.device, dtype=torch.float32)
+            _labels = {self.get_class_label(l): w for l, w in labels.items()}
+
+            class_ids = torch.tensor(list(_labels.keys()), dtype=torch.long)
+            weights = torch.tensor(list(_labels.values())).float()
+            class_labels = torch.zeros((1, label_dim)).scatter_(1, class_ids.unsqueeze(0), weights.unsqueeze(0))
         else:
             raise ValueError(f"Unknown labels dtype '{type(labels)}'")
+        
+        return class_labels.to(device=self.device, dtype=self.dtype)
 
     @torch.no_grad()
-    def __call__(self, sampling_params: SamplingParams):
-
-        if steps <= 0:
-            raise ValueError(f"Steps must be > 0, got {steps}")
-        if length < 0:
-            raise ValueError(f"Length must be greater than or equal to 0, got {length}")
+    def __call__(self, sampling_params: SamplingParams) -> torch.Tensor:
         
         if isinstance(seed, int):
             if seed == 0: seed = np.random.randint(100000, 999999)
@@ -200,6 +229,18 @@ class DualDiffusionPipeline(DiffusionPipeline):
   
         t_schedule = torch.linspace(start_timestep, 0, steps+1)
         sigma_schedule = get_timestep_sigma(t_schedule)
+        #sigma_schedule = torch.linspace(np.log(sigma_max), np.log(sigma_min), steps+1).exp()
+        #a = 1.7677669529663689
+        #a = 0.5 ##3.125#np.exp(-0.54)#torch.pi#torch.pi#4.48
+        #theta1 = np.arctan(a / sigma_max); theta0 = np.arctan(a / sigma_min)
+        #theta = (1-t_schedule) * (theta0 - theta1) + theta1
+        #sigma_schedule = theta.cos() / theta.sin() * a#sigma_data
+
+        #from sigma_sampler import SigmaSampler
+        #sigma_sampler = SigmaSampler(sigma_max=sigma_max, sigma_min=sigma_min, sigma_data=sigma_data, distribution="log_sech", dist_offset=-0.54)
+        #sigma_schedule = sigma_sampler.sample(0, quantiles = t_schedule).flip(dims=(0,))
+
+        #print("sigma_schedule:", sigma_schedule)
 
         noise = torch.randn(sample_shape, device=self.device, generator=generator)
         initial_noise = noise * sigma_max
@@ -208,8 +249,12 @@ class DualDiffusionPipeline(DiffusionPipeline):
         normalized_theta_schedule = (sigma_data / sigma_schedule).atan() / (torch.pi/2)
         sigma_schedule_list = sigma_schedule.tolist()
 
-        cfg_fn = slerp if slerp_cfg else torch.lerp
+        ln_sigma_error = self.unet.logvar_linear(self.unet.logvar_fourier((sigma_schedule.to(self.unet.device).log()/4).to(self.unet.dtype))).float().flatten()
+        #perturbation_gain = (-4 * ln_sigma_error).exp(); perturbation_gain /= perturbation_gain.amax()
 
+
+        cfg_fn = slerp if slerp_cfg else torch.lerp
+    
         debug_v_list = []
         debug_a_list = []
         debug_d_list = []
@@ -218,26 +263,46 @@ class DualDiffusionPipeline(DiffusionPipeline):
 
         if show_debug_plots:
             cv2.namedWindow('sample / output', cv2.WINDOW_KEEPRATIO)
-            cv2.resizeWindow('sample / output', int(sample.shape[3]*2), int(sample.shape[2]*2*2))
+            cv2.resizeWindow('sample / output', int(sample.shape[3]*3), int(sample.shape[2]*2*3))
             cv2.moveWindow('sample / output', 0, 700)
             cv2.setWindowProperty('sample / output', cv2.WND_PROP_TOPMOST, 1)
 
         cfg_model_output = torch.rand_like(sample)
-
+        #x = torch.zeros_like(cfg_model_output)
+        #sample = normalize(sample) * 2**0.5#***
         i = 0
         self.set_progress_bar_config(disable=True)
         for sigma_curr, sigma_next in self.progress_bar(zip(sigma_schedule_list[:-1],
                                                             sigma_schedule_list[1:]),
                                                             total=len(sigma_schedule_list)-1):
-            
+
+            if input_perturbation > 0:
+                #p = input_perturbation * (1 - sigma_next/sigma_curr) * sigma_curr
+                p = input_perturbation * sigma_curr
+                sample += torch.randn(sample.shape, generator=generator, device=sample.device, dtype=sample.dtype) * p
+                sigma_curr = (sigma_curr**2 + p**2)**0.5
+
+                """
+                sigma_next = 1e-2
+                if i > 0:
+                    p = sigma_curr
+                    sample += torch.randn(sample.shape, generator=generator, device=sample.device, dtype=sample.dtype) * p
+                """
+                print(sample.std().item(), sigma_curr)
+
             sigma = torch.tensor([sigma_curr], device=self.device)
             model_input = sample.to(self.unet.dtype)
+            #print(model_input.std().item(), sigma_curr)
+            
             model_output = self.unet(model_input, sigma, unet_class_embeddings, t_ranges, self.format).float()
             u_model_output = self.unet(model_input, sigma, None, t_ranges, self.format).float()
 
             last_cfg_model_output = cfg_model_output
             cfg_model_output = cfg_fn(u_model_output, model_output, cfg_scale).float()
-            
+    
+            #last_x = x
+            #x = self.unet.last_x
+                
             if use_midpoint_integration:
                 t_hat = sigma_next / sigma_curr
                 sample_hat = (t_hat * sample + (1 - t_hat) * cfg_model_output)
@@ -252,32 +317,48 @@ class DualDiffusionPipeline(DiffusionPipeline):
 
             debug_v_list.append(get_cos_angle(sample, cfg_model_output) / (torch.pi/2))
             debug_a_list.append(get_cos_angle(cfg_model_output, last_cfg_model_output) / (torch.pi/2))
+            #debug_a_list.append(get_cos_angle(x, last_x) / (torch.pi/2))
             debug_d_list.append(get_cos_angle(initial_noise, sample) / (torch.pi/2))
             debug_s_list.append(cfg_model_output.square().mean(dim=(1,2,3)).sqrt())
             debug_m_list.append(cfg_model_output.mean(dim=(1,2,3)))
 
-            print(f"step: {(i+1):>{3}}/{steps:>{3}}",
-                  f"v:{debug_v_list[-1][0].item():{8}f}",
-                  f"a:{debug_a_list[-1][0].item():{8}f}",
-                  f"d:{debug_d_list[-1][0].item():{8}f}",
-                  f"s:{debug_s_list[-1][0].item():{8}f}",
-                  f"m:{debug_m_list[-1][0].item():{8}f}")
+            #print(f"step: {(i+1):>{3}}/{steps:>{3}}",
+            #      f"v:{debug_v_list[-1][0].item():{8}f}",
+            #      f"a:{debug_a_list[-1][0].item():{8}f}",
+            #      f"d:{debug_d_list[-1][0].item():{8}f}",
+            #      f"s:{debug_s_list[-1][0].item():{8}f}",
+            #      f"m:{debug_m_list[-1][0].item():{8}f}")
             
             t = sigma_next / sigma_curr if (i+1) < steps else 0
+            #t = 0#0.03 / 1#***
             sample = (t * sample + (1 - t) * cfg_model_output)
+            #if (i+1) < steps:
+            #    sample = normalize(sample) + torch.randn_like(sample)#***
+            #print((sigma_next**2 + sigma_data**2) - sample.var(dim=(1,2,3)))
+            #sample += torch.randn_like(sample) * ((sigma_next**2 + sigma_data**2) - sample.var(dim=(1,2,3), keepdim=True)).clip(min=0).sqrt()
+            #sample *= ((sigma_next**2 + sigma_data**2) ** 0.5 / sample.std(dim=(1,2,3), keepdim=True)).clip(max=1)
 
-            sample0_img = save_raw_img(sample[0], os.path.join(debug_path, f"debug_sample_{i:03}.png"))
-            output0_img = save_raw_img(cfg_model_output[0], os.path.join(debug_path, f"debug_output_{i:03}.png"))
+            #sample0 = sample[0]
+            #output0 = torch.view_as_real(torch.fft.rfft(cfg_model_output[0], dim=1, norm="ortho")).permute(0, 1, 3, 2)
+            #output0 = output0.view(4, output0.shape[1]*output0.shape[2], output0.shape[3]); output0[:, 0:2] = 0
+            sample0 = sample[0]
+            output0 = cfg_model_output[0]
+            #output0 = self.unet.last_x[0]
+
+            sample0_img = save_raw_img(sample0, os.path.join(debug_path, f"debug_sample_{i:03}.png"), no_save=True)
+            output0_img = save_raw_img(output0, os.path.join(debug_path, f"debug_output_{i:03}.png"), no_save=True)
 
             if show_debug_plots:
                 cv2_img = cv2.vconcat([sample0_img, output0_img]).astype(np.float32)
+                #cv2_img = output0_img.astype(np.float32); cv2.resizeWindow('sample / output', int(output0.shape[2]*2), int(output0.shape[1]*2*2))
                 cv2_img = (cv2_img[:, :, :3] * cv2_img[:, :, 3:4] / 255).astype(np.uint8)
                 cv2.imshow("sample / output", cv2_img)
                 cv2.waitKey(1)
 
             i += 1
                         
-        sample = sample.float() / sigma_data
+        #sample = sample.float() / sigma_data
+        sample = normalize(sample).float() * sigma_data#***
         print("sample std:", sample.std().item(), " sample mean:", sample.mean().item())
 
         v_measured = torch.stack(debug_v_list, dim=0)
@@ -286,10 +367,10 @@ class DualDiffusionPipeline(DiffusionPipeline):
         s_measured = torch.stack(debug_s_list, dim=0)
         m_measured = torch.stack(debug_m_list, dim=0)
 
-        print(f"Average v_measured: {v_measured.mean()}")
-        print(f"Average a_measured: {a_measured.mean()}")
-        print(f"Average s_measured: {s_measured.mean()}")
-        print(f"Average m_measured: {m_measured.mean()}")
+        #print(f"Average v_measured: {v_measured.mean()}")
+        #print(f"Average a_measured: {a_measured.mean()}")
+        #print(f"Average s_measured: {s_measured.mean()}")
+        #print(f"Average m_measured: {m_measured.mean()}")
         print(f"Final distance: ", get_cos_angle(initial_noise, sample)[0].item() / (torch.pi/2), "  Final mean:", m_measured[-1, 0].item())
 
         sigma_schedule_error_logvar = self.unet.logvar_linear(self.unet.logvar_fourier(sigma_schedule.log().to(self.unet.device, self.unet.dtype)/4)).float()
@@ -316,7 +397,7 @@ class DualDiffusionPipeline(DiffusionPipeline):
         raw_sample = self.format.sample_to_raw(sample)
 
         if show_debug_plots:
-            multi_plot((sigma_schedule, "sigma_schedule"),
+            multi_plot((sigma_schedule.log(), "ln_sigma_schedule"),
                        (a_measured, "path_curvature"),
                        (s_measured, "output_norm"),
                        (m_measured, "output_mean"),
