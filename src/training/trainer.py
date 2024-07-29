@@ -96,6 +96,7 @@ class OptimizerConfig:
     adam_beta2: float       = 0.99
     adam_epsilon: float     = 1e-8
     max_grad_norm: float    = 10.
+    add_grad_noise: float   = 0.
 
 @dataclass
 class EMAConfig:
@@ -622,6 +623,11 @@ class DualDiffusionTrainer:
                         if math.isnan(grad_norm):
                             self.logger.error(f"Error: grad norm is {grad_norm}, aborting...")
                             import pdb; pdb.set_trace()
+
+                        if self.config.optimizer.add_grad_noise > 0:
+                            for p in self.module.parameters():
+                                p_noise = torch.randn_like(p) * (torch.linalg.vector_norm(p.grad) / p.grad.numel() ** 0.5)
+                                p.grad += p_noise * self.config.optimizer.add_grad_noise * self.lr_scheduler.get_last_lr()[0]
 
                     self.optimizer.step()
                     self.lr_scheduler.step()
