@@ -27,6 +27,7 @@ from training.loss import DualMultiscaleSpectralLoss
 
 class DualMCLTFormat(torch.nn.Module):
 
+    @torch.no_grad()
     def __init__(self, model_params):
         super(DualMCLTFormat, self).__init__()
 
@@ -43,6 +44,7 @@ class DualMCLTFormat(torch.nn.Module):
         out_channels = self.model_params["sample_raw_channels"] * 2
         return (in_channels, out_channels)
 
+    @torch.no_grad()
     def multichannel_transform(self, wave):
         if wave.shape[1] == 1:
             return wave
@@ -123,6 +125,7 @@ class DualMCLTFormat(torch.nn.Module):
     def get_loss(self, sample, target):
         return self.loss(sample, target, self.model_params)
 
+    @torch.no_grad()
     def get_sample_shape(self, bsz=1, length=0):
         _, num_output_channels = self.get_num_channels()
 

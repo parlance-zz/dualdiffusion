@@ -38,7 +38,7 @@ from utils.dual_diffusion_utils import (
     quantize_tensor, dequantize_tensor, save_raw_img, save_audio
 )
 
-
+@torch.no_grad()
 def get_pitch_augmentation_format(original_format, shift_semitones):
     shift_rate = 2 ** (shift_semitones / 12)
     aug_model_params = deepcopy(original_format.model_params)

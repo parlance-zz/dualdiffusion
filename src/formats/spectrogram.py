@@ -81,9 +81,11 @@ class SpectrogramParams:
 class SpectrogramConverter(torch.nn.Module):
 
     @staticmethod
+    @torch.no_grad()
     def hann_power_window(window_length, periodic=True, *, dtype=None, layout=torch.strided, device=None, requires_grad=False, exponent=1):
         return torch.hann_window(window_length, periodic=periodic, dtype=dtype, layout=layout, device=device, requires_grad=requires_grad) ** exponent
 
+    @torch.no_grad()
     def __init__(self, params: SpectrogramParams):
         super(SpectrogramConverter, self).__init__()
         self.p = params
@@ -146,14 +148,17 @@ class SpectrogramConverter(torch.nn.Module):
         else:
             self.mel_scaler = self.inverse_mel_scaler = torch.nn.Identity()
 
+    @torch.no_grad()
     def get_spectrogram_shape(self, audio_shape: torch.Size) -> torch.Size:
         num_frames = 1 + (audio_shape[-1] + self.p.n_fft - self.p.win_length) // self.p.hop_length
         return torch.Size(audio_shape[:-1] + (self.p.num_frequencies, num_frames))
     
+    @torch.no_grad()
     def get_audio_shape(self, spectrogram_shape: torch.Size) -> torch.Size:
         audio_len = (spectrogram_shape[-1] - 1) * self.p.hop_length + self.p.win_length - self.p.n_fft
         return torch.Size(spectrogram_shape[:-2] + (audio_len,))
 
+    @torch.no_grad()
     def get_crop_width(self, audio_len: int) -> int:
         spectrogram_len = self.get_spectrogram_shape(torch.Size((1, audio_len)))[-1] // 64 * 64
         return self.get_audio_shape(torch.Size((1, spectrogram_len)))[-1]
@@ -175,6 +180,7 @@ class DualSpectrogramFormat(torch.nn.Module):
 
     __constants__ = ["mels_min", "mels_max"]
 
+    @torch.no_grad()
     def __init__(self, model_params):
         super(DualSpectrogramFormat, self).__init__()
 
@@ -191,11 +197,13 @@ class DualSpectrogramFormat(torch.nn.Module):
 
         if self.spectrogram_params.mel_scale_type != "htk":
             raise NotImplementedError("Only HTK mel scale is supported")
-        
+    
+    @torch.no_grad()
     def get_sample_crop_width(self, length=0):
         if length <= 0: length = self.model_params["sample_raw_length"]
         return self.spectrogram_converter.get_crop_width(length)
     
+    @torch.no_grad()
     def get_num_channels(self):
         in_channels = out_channels = self.model_params["sample_raw_channels"]
         return (in_channels, out_channels)
@@ -216,6 +224,7 @@ class DualSpectrogramFormat(torch.nn.Module):
         else:
             return samples
 
+    @torch.no_grad()
     def sample_to_raw(self, samples, return_dict=False, decode=True):
         
         if decode:
@@ -235,6 +244,7 @@ class DualSpectrogramFormat(torch.nn.Module):
     def get_loss(self, sample, target):
         return self.loss(sample, target, self.model_params)
     
+    @torch.no_grad()
     def get_sample_shape(self, bsz=1, length=0):
         _, num_output_channels = self.get_num_channels()
         crop_width = self.get_sample_crop_width(length=length)
@@ -243,11 +253,13 @@ class DualSpectrogramFormat(torch.nn.Module):
         spectrogram_shape = self.spectrogram_converter.get_spectrogram_shape(audio_shape)
         return tuple(spectrogram_shape)
 
-    @staticmethod    
+    @staticmethod
+    @torch.no_grad()
     def _hz_to_mel(freq):
         return 2595. * np.log10(1. + (freq / 700.))
 
     @staticmethod
+    @torch.no_grad()
     def _mel_to_hz(mels):
         return 700. * (10. ** (mels / 2595.) - 1.)
 

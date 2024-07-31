@@ -63,6 +63,7 @@ class TrainLogger():
         self.channels.clear()
         self.counts.clear()
 
+    @torch.no_grad()
     def add_log(self, key, value) -> None:
         if torch.is_tensor(value):
             value = self.accelerator.gather(value.detach()).mean().item()
@@ -693,6 +694,7 @@ class DualDiffusionTrainer:
         self.logger.info("Training complete")
         self.accelerator.end_training()
 
+    @torch.no_grad()
     def run_validation(self, global_step):
 
         self.dataset.set_split("validation")

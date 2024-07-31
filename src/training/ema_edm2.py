@@ -113,6 +113,7 @@ def solve_posthoc_coefficients(in_ofs, in_std, out_ofs, out_std): # => [in, out]
 # Class for tracking power function EMA during the training.
 
 class PowerFunctionEMA:
+    
     @torch.no_grad()
     def __init__(self, net, stds=[0.050, 0.100], device="cpu"):
 

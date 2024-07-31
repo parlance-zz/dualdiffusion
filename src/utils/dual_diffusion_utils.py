@@ -278,15 +278,19 @@ def from_ulaw(x: torch.Tensor, u: float = 255.) -> torch.Tensor:
 
     return x
 
+@torch.no_grad()
 def hz_to_mels(hz: torch.Tensor) -> torch.Tensor:
     return 1127. * torch.log(1 + hz / 700.)
 
+@torch.no_grad()
 def mels_to_hz(mels: torch.Tensor) -> torch.Tensor:
     return 700. * (torch.exp(mels / 1127.) - 1)
 
+@torch.no_grad()
 def get_mel_density(hz: torch.Tensor) -> torch.Tensor:
     return 1127. / (700. + hz)
 
+@torch.no_grad()
 def quantize_tensor(x: torch.Tensor, levels: int) -> torch.Tensor:
     reduction_dims = tuple(range(1, x.ndim)) if x.ndim > 1 else (0,)
 
@@ -298,11 +302,13 @@ def quantize_tensor(x: torch.Tensor, levels: int) -> torch.Tensor:
     offset_and_range = torch.stack((min_val.flatten(), scale.flatten()), dim=-1)
     return quantized, offset_and_range
 
+@torch.no_grad()
 def dequantize_tensor(x: torch.Tensor, offset_and_range: torch.Tensor) -> torch.Tensor:
     view_dims = (-1,) + ((1,) * (x.ndim-1) if x.ndim > 1 else ())
     min_val, scale = offset_and_range.unbind(-1)
     return x * scale.view(view_dims) + min_val.view(view_dims)
 
+@torch.no_grad()
 def save_raw_img(x: torch.Tensor, img_path: str,
                  allow_inversion: bool = False, allow_colormap: bool = True,
                  allow_recenter: bool = True, allow_rescaling: bool = True):

@@ -68,9 +68,7 @@ class UNetTrainer(ModuleTrainer):
     def get_config_class() -> ModuleTrainerConfig:
         return UNetTrainerConfig
     
-    def get_log_channels(self):
-        pass
-    
+    @torch.no_grad()
     def init_batch(self) -> None:
         
         if self.config.num_loss_buckets > 0:
@@ -136,6 +134,7 @@ class UNetTrainer(ModuleTrainer):
 
         return {"loss": batch_loss}
 
+    @torch.no_grad()
     def finish_batch(self) -> None:    
         logs = {}
 

@@ -24,7 +24,8 @@ import torch
 import torch.nn.functional as F
 import numpy as np
 
-from utils.dual_diffusion_utils import stft, get_mel_density
+from utils.dual_diffusion_utils import get_mel_density
+from utils.mclt import stft
 
 class DualMultiscaleSpectralLoss:
 
@@ -131,9 +132,11 @@ class DualMultiscaleSpectralLoss2D:
         self.block_overlap = loss_params["block_overlap"]
         self.loss_scale = 4e-3
 
+    @torch.no_grad()
     def _flat_top_window(self, x):
         return 0.21557895 - 0.41663158 * torch.cos(x) + 0.277263158 * torch.cos(2*x) - 0.083578947 * torch.cos(3*x) + 0.006947368 * torch.cos(4*x)
 
+    @torch.no_grad()
     def get_flat_top_window_2d(self, block_width, device):
         wx = torch.linspace(0, 2*torch.pi, block_width, device=device)
         return self._flat_top_window(wx.view(1, 1,-1, 1)) * self._flat_top_window(wx.view(1, 1, 1,-1)).requires_grad_(False)
