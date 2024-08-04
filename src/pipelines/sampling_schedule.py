@@ -20,23 +20,25 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
+from typing import Optional
+
 import torch
 
 class SamplingSchedule:
 
     @staticmethod
     @torch.no_grad()
-    def get_schedule(name: str, steps: int, device: torch.device = "cpu", **kwargs) -> torch.Tensor:
+    def get_schedule(name: str, steps: int, t_start: float, device: Optional[torch.device] = None, **kwargs) -> torch.Tensor:
         schedule_fn = getattr(SamplingSchedule, name)
-        t = torch.linspace(1, 0, steps, device=device)
+        t = torch.linspace(t_start, 0, steps, device=device)
         return schedule_fn(t, **kwargs)
     
     @staticmethod
     @torch.no_grad()
-    def linear(t: torch.Tensor, sigma_max: float, sigma_min: float) -> torch.Tensor:
+    def linear(t: torch.Tensor, sigma_max: float, sigma_min: float, **kwargs) -> torch.Tensor:
         return sigma_min + (sigma_max - sigma_min) * t
     
     @staticmethod
     @torch.no_grad()
-    def edm2(t: torch.Tensor, sigma_max: float, sigma_min: float, rho: float = 7.) -> torch.Tensor:
+    def edm2(t: torch.Tensor, sigma_max: float, sigma_min: float, rho: float = 7., **kwargs) -> torch.Tensor:
         return (sigma_max ** (1 / rho) + (1 - t) * (sigma_min ** (1 / rho) - sigma_max ** (1 / rho))) ** rho

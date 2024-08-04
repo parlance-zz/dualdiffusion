@@ -22,13 +22,14 @@
 
 import os
 from dotenv import load_dotenv
+from typing import Union
 from json import dumps as json_dumps, load as json_load
 
-def load_json(json_path):
+def load_json(json_path: str) -> dict:
     with open(json_path, "r") as f:
         return json_load(f)
     
-def save_json(json_path, data, indent=2):
+def save_json(json_path: str, data: Union[dict, list], indent: int = 2) -> None:
     os.makedirs(os.path.dirname(json_path), exist_ok=True)
     with open(json_path, "w") as f:
         f.write(json_dumps(data, indent=indent))

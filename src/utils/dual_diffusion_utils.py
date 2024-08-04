@@ -27,7 +27,6 @@ from json import dumps as json_dumps
 
 import numpy as np
 import torch
-import torch.nn.functional as F
 import torchaudio
 import torchaudio.functional as AF
 import cv2
@@ -106,7 +105,7 @@ def dict_str(d: dict, indent: int = 4) -> str:
     return json_dumps(d, indent=indent)
 
 @torch.no_grad()
-def save_raw(tensor: torch.Tensor, output_path: str) -> None:
+def save_tensor_raw(tensor: torch.Tensor, output_path: str) -> None:
 
     directory = os.path.dirname(output_path)
     os.makedirs(directory, exist_ok=True)
@@ -170,10 +169,10 @@ def save_audio(raw_samples: torch.Tensor,
         audio_file.save()
 
 @torch.no_grad()
-def load_audio(input_path: str,
+def load_audio(input_path: Union[str, bytes],
                start: int = 0, count: int = -1,
                return_sample_rate: bool = False,
-               device: torch.device = "cpu",
+               device: Optional[torch.device] = None,
                return_start:bool = False):
 
     if isinstance(input_path, bytes):
@@ -223,7 +222,7 @@ def save_safetensors(tensors_dict:torch.Tensor , output_path: str) -> None:
     ST.save_file(tensors_dict, output_path)
 
 @torch.no_grad()
-def load_safetensors(input_path: str, device: torch.device = "cpu") -> torch.Tensor:
+def load_safetensors(input_path: str, device: Optional[torch.device] = None) -> torch.Tensor:
     return ST.load_file(input_path, device=device)
 
 def get_expected_max_normal(n: int) -> float:
@@ -309,43 +308,60 @@ def dequantize_tensor(x: torch.Tensor, offset_and_range: torch.Tensor) -> torch.
     return x * scale.view(view_dims) + min_val.view(view_dims)
 
 @torch.no_grad()
-def save_raw_img(x: torch.Tensor, img_path: str,
-                 allow_inversion: bool = False, allow_colormap: bool = True,
-                 allow_recenter: bool = True, allow_rescaling: bool = True):
+def tensor_to_img(x: torch.Tensor,
+                  recenter: bool = True,
+                  rescale: bool = True,
+                  flip_x: bool = False,
+                  flip_y: bool = False,
+                  colormap: bool = False,) -> np.ndarray:
     
     x = x.clone().detach().real.float().resolve_conj().cpu()
+    while x.ndim < 4: x.unsqueeze_(0)
+    x = x.permute(0, 2, 3, 1).contiguous().view(x.shape[0] * x.shape[2], x.shape[3], x.shape[1])
 
-    if allow_recenter:
-        x -= x.amin(dim=(x.ndim-1, x.ndim-2), keepdim=True)
-    if allow_rescaling:
-        x /= x.amax(dim=(x.ndim-1, x.ndim-2), keepdim=True).clip(min=1e-16)
+    if recenter: x -= x.amin(dim=(-3,-2,-1), keepdim=True)
+    if rescale:  x /= x.amax(dim=(-3,-2,-1), keepdim=True).clip(min=1e-16)
 
-    if allow_inversion:
-        invert_channel_mask = ((x.mean(dim=(x.ndim-1, x.ndim-2), keepdim=True) > 0.5) * torch.ones_like(x)) > 0.5
-        x[invert_channel_mask] = 1 - x[invert_channel_mask]
+    if x.shape[-1] == 4: # show alpha channel as pre-multiplied brightness
+        x = x[..., :3] * x[..., 3:4]
+        if recenter: x -= x.amin(dim=(-3,-2,-1), keepdim=True)
+        if rescale:  x /= x.amax(dim=(-3,-2,-1), keepdim=True).clip(min=1e-16)  
+    elif x.shape[-1] == 2:
+        x = torch.cat((x, torch.zeros_like(x[..., 0:1])), dim=-1)
+        x[..., 2], x[..., 1] = x[..., 1], 0
+    elif x.shape[-1] > 4:
+        raise ValueError(f"Unsupported number of channels in tensor_to_img: {x.shape[-1]}")
+    
+    img = (x * 255).clip(min=0, max=255).numpy().astype(np.uint8)
 
-    if (x.ndim >= 3) and (x.ndim <=4):
-        if x.ndim == 4: x = x.squeeze(0)
-        x = x.permute(1, 2, 0).contiguous().numpy()
-        cv2_img = (x * 255).astype(np.uint8)
-        if cv2_img.shape[2] == 2:
-            cv2_img = np.concatenate((cv2_img, np.zeros((cv2_img.shape[0], cv2_img.shape[1], 1))), axis=2)
-            cv2_img[..., 2] = cv2_img[..., 1]
-            cv2_img[..., 1] = 0
-    elif x.ndim == 2:
-        x = x.permute(1, 0).contiguous().numpy()
-        cv2_img = (x * 255).astype(np.uint8)
-        if allow_colormap:
-            cv2_img = cv2.applyColorMap(cv2_img, cv2.COLORMAP_JET)
-    else:
-        raise ValueError(f"Unsupported number of dimensions in save_raw_img: {x.ndim}")
+    if flip_x: img = cv2.flip(img, 1)
+    if flip_y: img = cv2.flip(img, 0)
+    if colormap: img = cv2.applyColorMap(img, cv2.COLORMAP_JET)
 
-    cv2_img = cv2.flip(cv2_img, 0)
+    return img
+
+def save_img(np_img: np.ndarray, img_path: str) -> None:
     os.makedirs(os.path.dirname(img_path), exist_ok=True)
-    cv2.imwrite(img_path, cv2_img)
+    cv2.imwrite(img_path, np_img)
 
-    return cv2_img
+def open_img_window(name: str,
+                    width: int = None,
+                    height: int = None,
+                    topmost: bool = False) -> None:
 
+    cv2.namedWindow(name, cv2.WINDOW_NORMAL)
+    if width is not None and height is not None:
+        cv2.resizeWindow(name, width, height)
+    if topmost:
+        cv2.setWindowProperty(name, cv2.WND_PROP_TOPMOST, 1)
+
+def show_img(np_img: np.ndarray, name: str, wait: int = 1) -> None:
+    cv2.imshow(name, np_img)
+    cv2.waitKey(wait)
+
+def close_img_window(name: str) -> None:
+    cv2.destroyWindow(name)
+    
 def slerp(start: torch.Tensor,
           end: torch.Tensor,
           t: Union[float, torch.Tensor],

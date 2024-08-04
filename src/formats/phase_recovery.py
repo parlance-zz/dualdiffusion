@@ -35,65 +35,6 @@ def _get_complex_dtype(real_dtype: torch.dtype):
     raise ValueError(f"Unexpected dtype {real_dtype}")
 
 @torch.no_grad()
-def difference_map(
-    specgram: Tensor,
-    window: Tensor,
-    n_fft: int,
-    hop_length: int,
-    win_length: int,
-    n_iter: int,
-    beta: float,
-    length: Optional[int],
-    rand_init: bool,
-    manual_init: Optional[Tensor] = None,
-) -> Tensor:
-
-    def pA(x):
-        return x.div(x.abs().add(1e-16)) * specgram
-
-    def pC(x):
-        inverse = torch.istft(
-            x, n_fft=n_fft, hop_length=hop_length, win_length=win_length, window=window, length=length
-        )
-        
-        return torch.stft(
-            input=inverse,
-            n_fft=n_fft,
-            hop_length=hop_length,
-            win_length=win_length,
-            window=window,
-            center=True,
-            pad_mode="reflect",
-            normalized=False,
-            onesided=True,
-            return_complex=True,
-        )
-
-    def fA(x):
-        pa = pA(x)
-        return pa + (pa - x) / beta
-    
-    def fC(x):
-        pc = pC(x)
-        return pc - (pc - x) / beta
-    
-    shape = specgram.size()
-    specgram = specgram.reshape([-1] + list(shape[-2:]))
-
-    if manual_init is not None:
-        angles = manual_init
-    else:
-        if rand_init:
-            angles = torch.randn(specgram.size(), dtype=_get_complex_dtype(specgram.dtype), device=specgram.device)
-        else:
-            angles = torch.full(specgram.size(), 1, dtype=_get_complex_dtype(specgram.dtype), device=specgram.device)
-
-    for _ in range(n_iter):
-        angles = angles + beta * ( pC(fA(angles)) - pA(fC(angles)) )
-
-    return angles.reshape(shape)
-
-@torch.no_grad()
 def griffinlim(
     specgram: Tensor,
     window: Tensor,
@@ -139,7 +80,8 @@ def griffinlim(
             interp_specgram = specgram
 
         inverse = torch.istft(
-            angles * interp_specgram, n_fft=n_fft, hop_length=hop_length, win_length=win_length, window=window, length=length
+            angles * interp_specgram, n_fft=n_fft, hop_length=hop_length,
+            win_length=win_length, window=window, length=length
         )
 
         rebuilt = torch.stft(
@@ -163,21 +105,22 @@ def griffinlim(
         tprev = rebuilt
 
     waveform = torch.istft(
-        angles * specgram, n_fft=n_fft, hop_length=hop_length, win_length=win_length, window=window, length=length
+        angles * specgram, n_fft=n_fft, hop_length=hop_length,
+        win_length=win_length, window=window, length=length
     )
 
     return waveform.reshape(shape[:-2] + waveform.shape[-1:])
 
 class PhaseRecovery(torch.nn.Module):
 
-    __constants__ = ["n_fft", "n_iter", "win_length", "hop_length", "length", "momentum", "rand_init", "beta", "stereo", "stereo_coherence"]
+    __constants__ = ["n_fft", "n_fgla_iter", "win_length", "hop_length", "length",
+                     "momentum", "rand_init", "stereo", "stereo_coherence"]
 
     @torch.no_grad()
     def __init__(
         self,
-        n_fft: int = 400,
-        n_fgla_iter: int = 400,
-        n_dm_iter: int = 0,
+        n_fft: int = 3201,
+        n_fgla_iter: int = 200,
         win_length: Optional[int] = None,
         hop_length: Optional[int] = None,
         window_fn: Callable[..., Tensor] = torch.hann_window,
@@ -185,7 +128,6 @@ class PhaseRecovery(torch.nn.Module):
         momentum: float = 0.99,
         length: Optional[int] = None,
         rand_init: bool = True,
-        beta: float = 1.,
         stereo: bool = True,
         stereo_coherence: float = 0.67,
     ) -> None:
@@ -196,38 +138,22 @@ class PhaseRecovery(torch.nn.Module):
 
         self.n_fft = n_fft
         self.n_fgla_iter = n_fgla_iter
-        self.n_dm_iter = n_dm_iter
         self.win_length = win_length if win_length is not None else n_fft
         self.hop_length = hop_length if hop_length is not None else self.win_length // 2
-        window = window_fn(self.win_length) if wkwargs is None else window_fn(self.win_length, **wkwargs)
-        self.register_buffer("window", window, persistent=False)
         self.length = length
         self.momentum = momentum
         self.rand_init = rand_init
-        self.beta = beta
         self.stereo = stereo
         self.stereo_coherence = stereo_coherence
 
+        window = window_fn(self.win_length) if wkwargs is None else window_fn(self.win_length, **wkwargs)
+        self.register_buffer("window", window, persistent=False)
+
     @torch.no_grad()
-    def forward(self, specgram: Tensor, n_fgla_iter=None) -> Tensor:
+    def forward(self, specgram: Tensor, n_fgla_iter: Optional[int] = None) -> Tensor:
 
         n_fgla_iter = n_fgla_iter or self.n_fgla_iter
 
-        if self.n_dm_iter > 0:
-            wave = difference_map(
-                specgram,
-                self.window,
-                self.n_fft,
-                self.hop_length,
-                self.win_length,
-                self.n_dm_iter,
-                self.beta,
-                self.length,
-                self.rand_init,
-            )
-        else:
-            wave = None
-        
         if self.n_fgla_iter > 0:
             wave = griffinlim(
                 specgram,
@@ -241,7 +167,7 @@ class PhaseRecovery(torch.nn.Module):
                 self.rand_init,
                 self.stereo,
                 self.stereo_coherence,
-                manual_init=wave,
+                manual_init=None,
             )
         else:
             wave_shape = wave.size()

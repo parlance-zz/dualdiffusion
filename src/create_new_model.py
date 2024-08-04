@@ -27,11 +27,11 @@ import shutil
 import importlib
 
 import torch
-from diffusers.models.modeling_utils import ModelMixin
+from diffusers.configuration_utils import ConfigMixin
 
 from pipelines.dual_diffusion_pipeline import DualDiffusionPipeline
 
-def print_module_info(module: ModelMixin) -> None:
+def print_module_info(module: ConfigMixin) -> None:
 
     module_params = {}
     num_emb_params = num_conv_params = num_attn_params = num_other_params = num_total_params = 0

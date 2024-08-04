@@ -31,6 +31,7 @@ class DatasetConfig:
 class DatasetTransform(torch.nn.Module):
 
     def __init__(self, dataset_transform_config: DatasetTransformConfig):
+        super(DatasetTransform, self).__init__()
         self.config = dataset_transform_config
     
     @torch.no_grad()

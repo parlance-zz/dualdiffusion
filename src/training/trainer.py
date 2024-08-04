@@ -102,7 +102,7 @@ class OptimizerConfig:
 @dataclass
 class EMAConfig:
     use_ema: bool           = False
-    ema_stds: list          = [0.01]
+    ema_stds: list[float]   = [0.01]
     ema_cpu_offload: bool   = False
 
 @dataclass
