@@ -21,6 +21,7 @@ class UNetTrainerConfig(ModuleTrainerConfig):
 
 class UNetTrainer(ModuleTrainer):
     
+    @torch.no_grad()
     def __init__(self, config: UNetTrainerConfig, trainer: DualDiffusionTrainer) -> None:
 
         self.config = config

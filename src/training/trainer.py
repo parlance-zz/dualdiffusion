@@ -33,6 +33,7 @@ import platform
 from datetime import datetime
 from typing import Optional, Literal, Type
 from dataclasses import dataclass
+from abc import ABC, abstractmethod
 
 import datasets
 import torch
@@ -117,23 +118,27 @@ class LoggingConfig:
     tensorboard_num_scalars: Optional[int] = 2000
 
 @dataclass
-class ModuleTrainerConfig:
+class ModuleTrainerConfig(ABC):
     pass
 
-class ModuleTrainer:
+class ModuleTrainer(ABC):
 
     @staticmethod
+    @abstractmethod
     def get_config_class():
         return ModuleTrainerConfig
     
+    @abstractmethod
     def init_batch(self) -> None:
         pass
-
-    def train_batch(self, batch: dict, grad_accum_steps: int) -> dict:
-        return {}
     
+    @abstractmethod
+    def train_batch(self, batch: dict, grad_accum_steps: int) -> dict:
+        pass
+    
+    @abstractmethod
     def finish_batch(self) -> dict:
-        return {}
+        pass
 
 @dataclass
 class DualDiffusionTrainerConfig:

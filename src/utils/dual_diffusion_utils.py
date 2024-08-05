@@ -245,7 +245,7 @@ def get_fractal_noise2d(shape: tuple, degree: int = 1, **kwargs) -> torch.Tensor
     linspace = torch.roll(linspace, shifts=(linspace.shape[-2]//2, linspace.shape[-1]//2), dims=(-2, -1))
 
     pink_noise = torch.fft.ifft2(noise_complex * linspace, norm="ortho").real[..., :shape[-2], :shape[-1]]
-    return (pink_noise / pink_noise.std(dim=(-2, -1), keepdim=True)).detach().requires_grad_(False)
+    return (pink_noise / pink_noise.std(dim=(-2, -1), keepdim=True)).detach()
 
 def to_ulaw(x: torch.Tensor, u: float = 255.) -> torch.Tensor:
 

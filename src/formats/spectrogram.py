@@ -174,6 +174,7 @@ class SpectrogramConverter(torch.nn.Module):
 
 class DualSpectrogramFormat(ModelMixin, ConfigMixin, DualDiffusionFormat):
 
+    @torch.no_grad()
     @register_to_config
     def __init__(self,
                  noise_floor: float = 2e-5,
@@ -209,7 +210,8 @@ class DualSpectrogramFormat(ModelMixin, ConfigMixin, DualDiffusionFormat):
         return tuple(spectrogram_shape)
 
     @torch.no_grad()
-    def raw_to_sample(self, raw_samples: torch.Tensor, return_dict: bool = False) -> Union[torch.Tensor, dict]:
+    def raw_to_sample(self, raw_samples: torch.Tensor,
+                      return_dict: bool = False) -> Union[torch.Tensor, dict]:
         
         noise_floor = self.config["noise_floor"]
         samples = self.spectrogram_converter.audio_to_spectrogram(raw_samples)

@@ -20,69 +20,72 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
+from typing import Optional, Union
+
 import torch
+from diffusers.configuration_utils import ConfigMixin, register_to_config
+from diffusers.models.modeling_utils import ModelMixin
 
-from utils.dual_diffusion_utils import mdct, imdct
-from training.loss import DualMultiscaleSpectralLoss
+from utils.mclt import mclt, imclt
+from .format import DualDiffusionFormat
 
-class DualMCLTFormat(torch.nn.Module):
+class DualMCLTFormat(ModelMixin, ConfigMixin, DualDiffusionFormat):
 
     @torch.no_grad()
-    def __init__(self, model_params):
+    @register_to_config
+    def __init__(self,
+                 noise_floor: float = 2e-5,
+                 sample_rate: int = 32000,
+                 sample_raw_channels: int = 2,
+                 sample_raw_length: int = 1057570,
+                 t_scale: Optional[float] = None,
+                 mclt_window_len: int = 512,
+                 mclt_window_fn: str = "hann",
+                 mclt_window_exponent: float = 0.5,
+                 ) -> None:
         super(DualMCLTFormat, self).__init__()
 
-        self.model_params = model_params
-        self.loss = DualMultiscaleSpectralLoss(model_params["vae_training_params"])
-
-    def get_sample_crop_width(self, length=0):
-        block_width = self.model_params["num_chunks"] * 2
-        if length <= 0: length = self.model_params["sample_raw_length"]
+    @torch.no_grad()
+    def get_raw_crop_width(self, length: Optional[int] = None) -> int:
+        block_width = self.config["mclt_window_len"]
+        length = length or self.config["sample_raw_length"]
         return length // block_width // 64 * 64 * block_width + block_width
     
+    @torch.no_grad()
     def get_num_channels(self):
-        in_channels = self.model_params["sample_raw_channels"] * 2
-        out_channels = self.model_params["sample_raw_channels"] * 2
+        in_channels = out_channels = self.config["sample_raw_channels"] * 2
         return (in_channels, out_channels)
 
     @torch.no_grad()
-    def multichannel_transform(self, wave):
-        if wave.shape[1] == 1:
-            return wave
-        elif wave.shape[1] == 2:
-            return torch.stack((wave[:, 0] + wave[:, 1], wave[:, 0] - wave[:, 1]), dim=1) / (2 ** 0.5)
-        else: # we would need to do a (ortho normalized) dct/idct over the channel dim here
-            raise NotImplementedError("Multichannel transform not implemented for > 2 channels")
+    def get_sample_shape(self, bsz: int = 1, length: Optional[int] = None):
+        _, num_output_channels = self.get_num_channels()
 
-    """
-    @staticmethod
-    def cos_angle_to_norm_angle(x):
-        return (x / torch.pi * 2 - 1).clip(min=-.99999, max=.99999).erfinv()
-    
-    @staticmethod
-    def norm_angle_to_cos_angle(x):
-        return (x.erf() + 1) / 2 * torch.pi
-    """
+        crop_width = self.get_raw_crop_width(length=length)
+        num_mclt_bins = self.config["mclt_window_len"] // 2
+        chunk_len = crop_width // num_mclt_bins - 2
+
+        return (bsz, num_output_channels, num_mclt_bins, chunk_len,)
 
     @torch.no_grad()
-    def raw_to_sample(self, raw_samples, return_dict=False):
-        
-        noise_floor = self.model_params["noise_floor"]
-        block_width = self.model_params["num_chunks"] * 2
+    def raw_to_sample(self, raw_samples: torch.Tensor,
+                      return_dict: bool = False) -> Union[torch.Tensor, dict]:
 
-        samples_mdct = mdct(raw_samples, block_width, window_degree=1)[:, :, 1:-2, :]
+        samples_mdct = mclt(raw_samples,
+                            self.config["mclt_window_len"],
+                            self.config["mclt_window_exponent"])[:, :, 1:-2, :]
         samples_mdct = samples_mdct.permute(0, 1, 3, 2)
         samples_mdct *= torch.exp(2j * torch.pi * torch.rand(1, device=samples_mdct.device))
-        samples_mdct = self.multichannel_transform(samples_mdct)
 
         samples_mdct_abs = samples_mdct.abs()
         samples_mdct_abs_amax = samples_mdct_abs.amax(dim=(1,2,3), keepdim=True).clip(min=1e-5)
-        samples_mdct_abs = (samples_mdct_abs / samples_mdct_abs_amax).clip(min=noise_floor)
+        samples_mdct_abs = (samples_mdct_abs / samples_mdct_abs_amax).clip(min=self.config["noise_floor"])
         samples_abs_ln = samples_mdct_abs.log()
         samples_qphase1 = samples_mdct.angle().abs()
         samples = torch.cat((samples_abs_ln, samples_qphase1), dim=1)
 
         samples_mdct /= samples_mdct_abs_amax
-        raw_samples = imdct(self.multichannel_transform(samples_mdct).permute(0, 1, 3, 2), window_degree=1).real.requires_grad_(False)
+        raw_samples = imclt(samples_mdct.permute(0, 1, 3, 2),
+                            window_degree=self.config["mclt_window_exponent"]).real
 
         if return_dict:
             samples_dict = {
@@ -93,44 +96,24 @@ class DualMCLTFormat(torch.nn.Module):
         else:
             return samples
 
-    def sample_to_raw(self, samples, return_dict=False, original_samples_dict=None):
+    def sample_to_raw(self, samples: torch.Tensor,
+                      return_dict: bool = False) -> Union[torch.Tensor, dict]:
         
         samples_abs, samples_phase1 = samples.chunk(2, dim=1)
         samples_abs = samples_abs.exp()
         samples_phase = samples_phase1.cos()
-        raw_samples = imdct(self.multichannel_transform(samples_abs * samples_phase).permute(0, 1, 3, 2), window_degree=1).real
+        raw_samples = imclt((samples_abs * samples_phase).permute(0, 1, 3, 2),
+                            window_degree=self.config["mclt_window_exponent"]).real
 
-        if original_samples_dict is not None:
-            orig_samples_abs, orig_samples_phase1 = original_samples_dict["samples"].chunk(2, dim=1)
-            orig_samples_abs = orig_samples_abs.exp()
-            orig_samples_phase = orig_samples_phase1.cos()
-
-            raw_samples_orig_phase = imdct(self.multichannel_transform(samples_abs * orig_samples_phase).permute(0, 1, 3, 2), window_degree=1).real
-            raw_samples_orig_abs = imdct(self.multichannel_transform(orig_samples_abs * samples_phase).permute(0, 1, 3, 2), window_degree=1).real
+        if return_dict:
+            return {"samples": samples, "raw_samples": raw_samples}
         else:
-            raw_samples_orig_phase = None
-            raw_samples_orig_abs = None
-
-        if not return_dict:         
             return raw_samples
-        else:
-            samples_dict = {
-                "samples": samples,
-                "raw_samples": raw_samples,
-                "raw_samples_orig_phase": raw_samples_orig_phase,
-                "raw_samples_orig_abs": raw_samples_orig_abs,
-            }
-            return samples_dict
-
-    def get_loss(self, sample, target):
-        return self.loss(sample, target, self.model_params)
-
+        
     @torch.no_grad()
-    def get_sample_shape(self, bsz=1, length=0):
-        _, num_output_channels = self.get_num_channels()
+    def get_ln_freqs(self, x: torch.Tensor) -> torch.Tensor:
 
-        crop_width = self.get_sample_crop_width(length=length)
-        num_chunks = self.model_params["num_chunks"]
-        chunk_len = crop_width // num_chunks - 2
+        ln_freqs = torch.linspace(0, self.config["sample_rate"]/2, x.shape[2] + 2, device=x.device)[1:-1].log2()
+        ln_freqs = ln_freqs.view(1, 1,-1, 1).repeat(x.shape[0], 1, 1, x.shape[3])
 
-        return (bsz, num_output_channels, num_chunks, chunk_len,)
+        return ((ln_freqs - ln_freqs.mean()) / ln_freqs.std()).to(x.dtype)

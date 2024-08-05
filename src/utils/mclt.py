@@ -30,7 +30,7 @@ class WindowFunction:
     @torch.no_grad()
     def hann(window_len: int, device: Optional[torch.device] = None) -> torch.Tensor:
         n = torch.arange(window_len, device=device) / window_len
-        return (0.5 - 0.5 * torch.cos(2 * torch.pi * n)).requires_grad_(False)
+        return (0.5 - 0.5 * torch.cos(2 * torch.pi * n))
 
     @staticmethod
     @torch.no_grad()
@@ -38,7 +38,7 @@ class WindowFunction:
         alpha = (window_len - 1) / 2
         n = torch.arange(window_len, device=device)
         return (torch.special.i0(beta * torch.sqrt(1 - ((n - alpha) / alpha).square()))
-                / torch.special.i0(torch.tensor(beta))).requires_grad_(False)
+                / torch.special.i0(torch.tensor(beta)))
 
     @staticmethod
     @torch.no_grad()
@@ -52,19 +52,19 @@ class WindowFunction:
         w[:window_len//2] = halfw
         w[-window_len//2:] = halfw.flip(0)
 
-        return w.requires_grad_(False)
+        return w
 
     @staticmethod
     @torch.no_grad()
     def hann_poisson(window_len: int, alpha: float = 2, device: Optional[torch.device] = None) -> torch.Tensor:
         x = torch.arange(window_len, device=device) / window_len
-        return (torch.exp(-alpha * (1 - 2*x).abs()) * 0.5 * (1 - torch.cos(2*torch.pi*x))).requires_grad_(False)
+        return (torch.exp(-alpha * (1 - 2*x).abs()) * 0.5 * (1 - torch.cos(2*torch.pi*x)))
 
     @staticmethod
     @torch.no_grad()
     def blackman_harris(window_len: int, device: Optional[torch.device] = None) -> torch.Tensor:
         x = torch.arange(window_len, device=device) / window_len * 2*torch.pi
-        return (0.35875 - 0.48829 * torch.cos(x) + 0.14128 * torch.cos(2*x) - 0.01168 * torch.cos(3*x)).requires_grad_(False)
+        return (0.35875 - 0.48829 * torch.cos(x) + 0.14128 * torch.cos(2*x) - 0.01168 * torch.cos(3*x))
 
     @staticmethod
     @torch.no_grad()
@@ -74,14 +74,15 @@ class WindowFunction:
                 - 0.41663158 * torch.cos(x)
                 + 0.277263158 * torch.cos(2*x)
                 - 0.083578947 * torch.cos(3*x)
-                + 0.006947368 * torch.cos(4*x)).requires_grad_(False)
+                + 0.006947368 * torch.cos(4*x))
 
     @staticmethod
     @torch.no_grad()
     def get_window_fn(window_fn: str):
         return getattr(WindowFunction, window_fn)
-    
-def mclt(x: torch.Tensor, block_width: int, window_fn: str ="hann", window_degree: float = 1., **kwargs) -> torch.Tensor:
+
+def mclt(x: torch.Tensor, block_width: int, window_fn: str ="hann",
+         window_exponent: float = 1., **kwargs) -> torch.Tensor:
 
     padding_left = padding_right = block_width // 2
     remainder = x.shape[-1] % (block_width // 2)
@@ -95,22 +96,25 @@ def mclt(x: torch.Tensor, block_width: int, window_fn: str ="hann", window_degre
     n = torch.arange(2*N, device=x.device)
     k = torch.arange(0.5, N + 0.5, device=x.device)
 
-    window = 1 if window_degree == 0 else WindowFunction.get_window_fn(window_fn)(2*N, device=x.device, **kwargs) ** window_degree
+    window = 1 if window_exponent == 0 else WindowFunction.get_window_fn(window_fn)(
+        2*N, device=x.device, **kwargs) ** window_exponent
     
-    pre_shift = torch.exp(-1j * torch.pi / 2 / N * n).requires_grad_(False)
-    post_shift = torch.exp(-1j * torch.pi / 2 / N * (N + 1) * k).requires_grad_(False)
+    pre_shift = torch.exp(-1j * torch.pi / 2 / N * n)
+    post_shift = torch.exp(-1j * torch.pi / 2 / N * (N + 1) * k)
     
     return torch.fft.fft(x * pre_shift * window, norm="forward")[..., :N] * post_shift * (2 * N ** 0.5)
 
-def imclt(x: torch.Tensor, window_fn: str = "hann", window_degree: float = 1, **kwargs) -> torch.Tensor:
+def imclt(x: torch.Tensor, window_fn: str = "hann",
+          window_degree: float = 1, **kwargs) -> torch.Tensor:
+    
     N = x.shape[-1]
     n = torch.arange(2*N, device=x.device)
     k = torch.arange(0.5, N + 0.5, device=x.device)
 
     window = 1 if window_degree == 0 else WindowFunction.get_window_fn(window_fn)(2*N, device=x.device, **kwargs) ** window_degree
 
-    pre_shift = torch.exp(-1j * torch.pi / 2 / N * n).requires_grad_(False)
-    post_shift = torch.exp(-1j * torch.pi / 2 / N * (N + 1) * k).requires_grad_(False)
+    pre_shift = torch.exp(-1j * torch.pi / 2 / N * n)
+    post_shift = torch.exp(-1j * torch.pi / 2 / N * (N + 1) * k)
 
     y = (torch.fft.ifft(x / post_shift, norm="backward", n=2*N) / pre_shift) * window
 
