@@ -35,7 +35,6 @@ import matplotlib.pyplot as plt
 from scipy.special import erfinv
 from mutagen import File as MTAudioFile
 
-
 def init_cuda(default_device: Optional[torch.device] = None) -> None:
 
     if not torch.cuda.is_available():
@@ -48,8 +47,8 @@ def init_cuda(default_device: Optional[torch.device] = None) -> None:
         if default_device is not None:
             torch.cuda.set_device(default_device)
 
-def multi_plot(*args, layout: Optional[tuple] = None,
-               figsize: Optional[tuple] = None,
+def multi_plot(*args, layout: Optional[tuple[int, int]] = None,
+               figsize: Optional[tuple[int, int]] = None,
                added_plots: Optional[dict] = None,
                x_log_scale: bool = False,
                y_log_scale: bool = False,
@@ -345,8 +344,8 @@ def save_img(np_img: np.ndarray, img_path: str) -> None:
     cv2.imwrite(img_path, np_img)
 
 def open_img_window(name: str,
-                    width: int = None,
-                    height: int = None,
+                    width:  Optional[int] = None,
+                    height: Optional[int] = None,
                     topmost: bool = False) -> None:
 
     cv2.namedWindow(name, cv2.WINDOW_NORMAL)

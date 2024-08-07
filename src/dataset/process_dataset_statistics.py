@@ -66,7 +66,9 @@ if __name__ == "__main__":
         file_name = sample["file_name"]
         output_filename = f"{os.path.splitext(file_name)[0]}.safetensors"
         latents_dict = load_safetensors(os.path.join(DATASET_PATH, output_filename))
-        latents = dequantize_tensor(latents_dict["latents"], latents_dict["offset_and_range"]).float()
+        latents = latents_dict["latents"].float()
+        if hasattr(latents_dict, "offset_and_range"):
+            latents = dequantize_tensor(latents, latents_dict["offset_and_range"]).float()
         
         rfft2_abs = (torch.fft.rfft2(latents * SIGMA_DATA, norm="ortho").abs()).log().clip(min=hist_min, max=hist_max)
         hist += torch.histc(rfft2_abs, bins=NUM_BINS, min=hist_min, max=hist_max) / len(split_metadata)
