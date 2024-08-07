@@ -21,7 +21,7 @@ class DatasetTransformConfig:
 @dataclass
 class DatasetConfig:
      
-     train_data_dir: str
+     data_dir: str
      cache_dir: str
      num_proc: Optional[int] = None
      sample_crop_width: int
@@ -30,16 +30,16 @@ class DatasetConfig:
 
 class DatasetTransform(torch.nn.Module):
 
-    def __init__(self, dataset_transform_config: DatasetTransformConfig):
+    def __init__(self, dataset_transform_config: DatasetTransformConfig) -> None:
         super(DatasetTransform, self).__init__()
         self.config = dataset_transform_config
     
     @torch.no_grad()
-    def get_t(self, t):
+    def get_t(self, t: float) -> float:
         return t / self.config.sample_crop_width * self.config.t_scale - self.config.t_scale/2
     
     @torch.no_grad()
-    def __call__(self, examples):
+    def __call__(self, examples: dict) -> dict:
 
         samples = []
         paths = []
@@ -83,7 +83,8 @@ class DatasetTransform(torch.nn.Module):
             #author_ids.append(author_id)
 
             if self.config.t_scale is not None:
-                t_ranges.append(torch.tensor([self.get_t(t_offset), self.get_t(t_offset + self.config.sample_crop_width)]))
+                t_ranges.append(torch.tensor([self.get_t(t_offset),
+                                              self.get_t(t_offset + self.config.sample_crop_width)]))
         
         batch_data = {
             "input": samples,
@@ -97,47 +98,31 @@ class DatasetTransform(torch.nn.Module):
 
         return batch_data
 
-class SwitchableDataset(Dataset):
+class DualDiffusionDataset:
 
-    def __init__(self, dataset_config: DatasetConfig):
+    def __init__(self, dataset_config: DatasetConfig) -> None:
         
         self.config = dataset_config
-        self.split = "train"
-
         self.dataset_dict = load_dataset(
-            self.config.train_data_dir,
+            self.config.data_dir,
             cache_dir=self.config.cache_dir,
             num_proc=self.config.num_proc,
         )
 
-        processed_datasets = {}; num_filtered_samples = {}
-        for split, dataset in self.dataset_dict.items():
-            processed_datasets[split], num_filtered_samples[split] = self.preprocess_dataset(dataset)
+        self.preprocess_dataset()
 
-        self.dataset_dict = DatasetDict(processed_datasets)
-        self.num_filtered_samples = num_filtered_samples
+    def __getitem__(self, split: str) -> dict:
+        return self.dataset_dict[split]
 
-    def set_split(self, split):
-        self.split = split
-
-    def get_num_filtered_samples(self, split=None):
-        return self.num_filtered_samples[split or self.split]
-    
-    def __len__(self):
-        return len(self.dataset_dict[self.split])
-
-    def __getitem__(self, idx):
-        return self.dataset_dict[self.split][idx]
-
-    def preprocess_dataset(self, dataset: Dataset):
-            
+    def preprocess_dataset(self) -> None:
+        
         def resolve_absolute_path(example):
             relative_path = example['file_name']
-            absolute_path = os.path.join(self.config.train_data_dir, relative_path)
+            absolute_path = os.path.join(self.config.data_dir, relative_path)
             example['file_name'] = absolute_path
             return example
         
-        dataset = dataset.map(resolve_absolute_path)
+        self.dataset_dict = self.dataset_dict.map(resolve_absolute_path)
         
         if self.config.use_pre_encoded_latents:
             def min_length_filter(example):          
@@ -149,9 +134,9 @@ class SwitchableDataset(Dataset):
             def min_length_filter(example):          
                 return torchaudio.info(example["file_name"]).num_frames >= self.config.sample_crop_width
         
-        pre_filter_num_samples = len(dataset)
-        dataset = dataset.filter(min_length_filter)
-        num_filtered_samples = pre_filter_num_samples - len(dataset)
+        pre_filter_n_samples = {split: len(ds) for split, ds in self.dataset_dict}
+        self.dataset_dict = self.dataset_dict.filter(min_length_filter)
+        self.num_filtered_samples = {split: (len(ds) - pre_filter_n_samples[split]) for split, ds in self.dataset_dict}
 
         dataset_transform_config = DatasetTransformConfig(
             use_pre_encoded_latents=self.config.use_pre_encoded_latents,
@@ -159,6 +144,4 @@ class SwitchableDataset(Dataset):
             t_scale=self.config.t_scale
         )
         dataset_transform = DatasetTransform(dataset_transform_config)
-        dataset = dataset.with_transform(dataset_transform)
-
-        return dataset, num_filtered_samples
+        self.dataset_dict.set_transform(dataset_transform)

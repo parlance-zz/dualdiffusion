@@ -51,7 +51,7 @@ from diffusers.utils import is_tensorboard_available
 from pipelines.dual_diffusion_pipeline import DualDiffusionPipeline
 from utils.dual_diffusion_utils import dict_str
 from .ema_edm2 import PowerFunctionEMA
-from .dataset import DatasetConfig, SwitchableDataset
+from .dataset import DatasetConfig, DualDiffusionDataset
 
 class TrainLogger():
 
@@ -109,12 +109,12 @@ class EMAConfig:
 @dataclass
 class DataLoaderConfig:
     use_pre_encoded_latents: bool = False
-    dataloader_num_workers = 0
+    dataloader_num_workers: int   = 0
 
 @dataclass
 class LoggingConfig:
     logging_dir: Optional[str] = None
-    tensorboard_http_port: Optional[int] = 6006
+    tensorboard_http_port:   Optional[int] = 6006
     tensorboard_num_scalars: Optional[int] = 2000
 
 @dataclass
@@ -209,8 +209,8 @@ class DualDiffusionTrainer:
         self.init_lr_scheduler()
         self.init_dataloader()
 
-        self.module, self.optimizer, self.dataloader, self.lr_scheduler = self.accelerator.prepare(
-            self.module, self.optimizer, self.dataloader, self.lr_scheduler
+        self.module, self.optimizer, self.train_dataloader, self.validation_dataloader, self.lr_scheduler = self.accelerator.prepare(
+            self.module, self.optimizer, self.train_dataloader, self.validation_dataloader, self.lr_scheduler
         )
 
     def init_logging(self) -> None:
@@ -415,14 +415,14 @@ class DualDiffusionTrainer:
     def init_dataloader(self) -> None:
         
         if self.config.module_name == "unet" and self.config.dataloader.use_pre_encoded_latents:
-            train_data_dir = config.LATENTS_DATASET_PATH
+            data_dir = config.LATENTS_DATASET_PATH
             sample_crop_width = self.latent_shape[-1]
         else:
-            train_data_dir = config.DATASET_PATH
+            data_dir = config.DATASET_PATH
             sample_crop_width = self.pipeline.format.get_sample_crop_width()
         
         dataset_config = DatasetConfig(
-            train_data_dir=train_data_dir,
+            data_dir=data_dir,
             cache_dir=config.CACHE_PATH,
             num_proc=self.config.dataloader.dataloader_num_workers if self.config.dataloader.dataloader_num_workers > 0 else None,
             sample_crop_width=sample_crop_width,
@@ -430,10 +430,10 @@ class DualDiffusionTrainer:
             t_scale=getattr(self.pipeline.unet.config, "t_scale", None) if self.config.module_name == "unet" else None,
         )
         
-        self.dataset = SwitchableDataset(dataset_config)
+        self.dataset = DualDiffusionDataset(dataset_config)
 
-        self.dataloader = torch.utils.data.DataLoader(
-            self.dataset,
+        self.train_dataloader = torch.utils.data.DataLoader(
+            self.dataset["train"],
             shuffle=True,
             batch_size=self.config.train_batch_size,
             num_workers=self.config.dataloader.dataloader_num_workers,
@@ -443,11 +443,19 @@ class DualDiffusionTrainer:
             drop_last=True,
         )
 
-        self.logger.info(f"Using training data from {train_data_dir} with {len(self.dataset)} samples ({self.dataset.get_num_filtered_samples()} filtered)")
-        if self.config.dataloader.dataloader_num_workers > 0:
-            self.logger.info(f"Using dataloader with {self.config.dataloader.dataloader_num_workers} workers - prefetch factor = 2")
+        self.validation_dataloader = torch.utils.data.DataLoader(
+            self.dataset["validation"],
+            batch_size=self.config.train_batch_size,
+            drop_last=False,
+        )
 
-        num_process_steps_per_epoch = math.floor(len(self.dataloader) / self.accelerator.num_processes)
+        self.logger.info(f"Using dataset path {data_dir}")
+        self.logger.info(f"{len(self.dataset["train"])} train samples ({self.dataset.num_filtered_samples["train"]} filtered)")
+        self.logger.info(f"{len(self.dataset["validation"])} validation samples ({self.dataset.num_filtered_samples["validation"]} filtered)")
+        if self.config.dataloader.dataloader_num_workers > 0:
+            self.logger.info(f"Using train dataloader with {self.config.dataloader.dataloader_num_workers} workers - prefetch factor = 2")
+
+        num_process_steps_per_epoch = math.floor(len(self.train_dataloader) / self.accelerator.num_processes)
         self.num_update_steps_per_epoch = math.ceil(num_process_steps_per_epoch / self.config.gradient_accumulation_steps)
         self.max_train_steps = self.config.num_train_epochs * self.num_update_steps_per_epoch
         self.total_batch_size = self.config.train_batch_size * self.accelerator.num_processes * self.config.gradient_accumulation_steps
@@ -572,7 +580,7 @@ class DualDiffusionTrainer:
     def train(self) -> None:
 
         self.logger.info("***** Running training *****")
-        self.logger.info(f"  Num examples = {len(self.dataset)}")
+        self.logger.info(f"  Num examples = {len(self.dataset["train"])}")
         self.logger.info(f"  Num Epochs = {self.config.num_train_epochs}")
         self.logger.info(f"  Instantaneous batch size per device = {self.config.train_batch_size}")
         self.logger.info(f"  Gradient Accumulation steps = {self.config.gradient_accumulation_steps}")
@@ -582,7 +590,7 @@ class DualDiffusionTrainer:
 
         self.last_validation_time = datetime.now()
         global_step, resume_step, first_epoch = self.load_checkpoint()
-        resume_dataloader = self.accelerator.skip_first_batches(self.dataloader, resume_step) if resume_step > 0 else None
+        resume_dataloader = self.accelerator.skip_first_batches(self.train_dataloader, resume_step) if resume_step > 0 else None
 
         self.module_trainer = self.config.module_trainer_class(self.config.module_trainer_config, self)
         train_logger = TrainLogger()
@@ -603,7 +611,7 @@ class DualDiffusionTrainer:
 
             grad_accum_steps = 0
 
-            for batch in (resume_dataloader or self.dataloader):
+            for batch in (resume_dataloader or self.train_dataloader):
                 
                 if grad_accum_steps == 0:                        
                     train_logger.clear()
@@ -702,13 +710,11 @@ class DualDiffusionTrainer:
     @torch.no_grad()
     def run_validation(self, global_step):
 
-        self.dataset.set_split("validation")
-
         self.logger.info("***** Running validation *****")
-        self.logger.info(f"  Num examples = {len(self.dataset)}")
+        self.logger.info(f"  Num examples = {len(self.dataset["validation"])}")
         self.logger.info(f"  Num Epochs = {self.config.num_validation_epochs}")
 
-        num_validation_process_steps_per_epoch = math.floor(len(self.dataloader) / self.accelerator.num_processes)
+        num_validation_process_steps_per_epoch = math.floor(len(self.validation_dataloader) / self.accelerator.num_processes)
         num_validation_update_steps_per_epoch = math.ceil(num_validation_process_steps_per_epoch / self.config.gradient_accumulation_steps)
 
         validation_logger = TrainLogger()
@@ -718,7 +724,7 @@ class DualDiffusionTrainer:
             progress_bar = tqdm(total=num_validation_update_steps_per_epoch, disable=not self.accelerator.is_local_main_process)
             progress_bar.set_description(f"Validation Epoch {epoch}")
 
-            for step, batch in enumerate(self.dataloader):        
+            for step, batch in enumerate(self.validation_dataloader):        
                 if step % self.config.gradient_accumulation_steps == 0:
                     self.module_trainer.init_batch()
                 
@@ -750,4 +756,3 @@ class DualDiffusionTrainer:
 
         self.logger.info(f"Validation complete (runtime: {(datetime.now() - self.last_validation_time).total_seconds()}s")
         self.last_validation_time = datetime.now()
-        self.dataset.set_split("train")
