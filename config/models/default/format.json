@@ -8,6 +8,7 @@
   "t_scale": null,
   
   "spectrogram_params": {
+    "stereo": true,
     "abs_exponent": 0.25,
     "freq_scale_type": "mel",
     "freq_scale_norm": null,

@@ -27,7 +27,7 @@ import timeit
 
 import torch
 
-from formats.spectrogram import DualSpectrogramFormat
+from formats.spectrogram import SpectrogramFormat
 from utils.dual_diffusion_utils import (
     load_audio, tensor_to_img, save_img, save_audio,
     save_tensor_raw, init_cuda, quantize_tensor
@@ -39,7 +39,7 @@ def spectrogram_test() -> None:
     test_params = config.load_json(os.path.join(config.CONFIG_PATH, "tests", "spectrogram_test.json"))
     format_params = config.load_json(os.path.join(config.CONFIG_PATH, "tests", test_params["format_cfg_file"]))
 
-    spectrogram_format = DualSpectrogramFormat(**format_params).to(device=test_params["device"])
+    spectrogram_format = SpectrogramFormat(**format_params).to(device=test_params["device"])
     crop_width = spectrogram_format.get_raw_crop_width(length=test_params["audio_len"])
     test_output_path = os.path.join(config.DEBUG_PATH, "spectrogram_test") if config.DEBUG_PATH is not None else None
 

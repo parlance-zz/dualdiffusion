@@ -1,6 +1,4 @@
 {
-  "_class_name": "AutoencoderKL_EDM2",
-  "_diffusers_version": "0.27.1",
   "attn_levels": [],
   "channel_mult": [
     1,

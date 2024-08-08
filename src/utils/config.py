@@ -29,7 +29,7 @@ def load_json(json_path: str) -> dict:
     with open(json_path, "r") as f:
         return json_load(f)
     
-def save_json(json_path: str, data: Union[dict, list], indent: int = 2) -> None:
+def save_json(data: Union[dict, list], json_path: str, indent: int = 2) -> None:
     os.makedirs(os.path.dirname(json_path), exist_ok=True)
     with open(json_path, "w") as f:
         f.write(json_dumps(data, indent=indent))
@@ -37,7 +37,7 @@ def save_json(json_path: str, data: Union[dict, list], indent: int = 2) -> None:
 load_dotenv(override=True)
 
 CONFIG_PATH = os.getenv("CONFIG_PATH")
-MODEL_PATH = os.getenv("MODEL_PATH")
+MODELS_PATH = os.getenv("MODELS_PATH")
 DEBUG_PATH = os.getenv("DEBUG_PATH")
 SRC_PATH = os.getenv("PYTHON_PATH")
 CACHE_PATH = os.getenv("CACHE_PATH")

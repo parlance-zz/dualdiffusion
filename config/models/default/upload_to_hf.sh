@@ -1,7 +1,7 @@
 #!/bin/bash
 
 prefix="unet_checkpoint-"
-repo="parlance/edm2_vae_test7_12d"
+repo="hf_username/repo_name"
 
 # *********************************
 

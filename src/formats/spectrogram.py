@@ -172,7 +172,7 @@ class SpectrogramConverter(torch.nn.Module):
     def half(self) -> "SpectrogramConverter": # prevent casting to fp16/bf16
         return self
 
-class DualSpectrogramFormat(ModelMixin, ConfigMixin, DualDiffusionFormat):
+class SpectrogramFormat(ModelMixin, ConfigMixin, DualDiffusionFormat):
 
     @torch.no_grad()
     @register_to_config
@@ -184,7 +184,7 @@ class DualSpectrogramFormat(ModelMixin, ConfigMixin, DualDiffusionFormat):
                  t_scale: Optional[float] = None,
                  spectrogram_params: Optional[dict] = None
                  ) -> None:
-        super(DualSpectrogramFormat, self).__init__()
+        super(SpectrogramFormat, self).__init__()
 
         spectrogram_params = spectrogram_params or {}
         self.spectrogram_params = SpectrogramParams(**spectrogram_params)

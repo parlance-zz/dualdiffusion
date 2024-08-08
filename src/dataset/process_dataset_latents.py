@@ -32,7 +32,7 @@ from tqdm.auto import tqdm
 from accelerate import PartialState
 
 from pipelines.dual_diffusion_pipeline import DualDiffusionPipeline
-from formats.spectrogram import DualSpectrogramFormat
+from formats.spectrogram import SpectrogramFormat
 from utils.dual_diffusion_utils import (
     init_cuda, load_audio, save_safetensors, load_safetensors,
     quantize_tensor, dequantize_tensor, save_raw_img, save_audio
@@ -44,7 +44,7 @@ def get_pitch_augmentation_format(original_format, shift_semitones):
     aug_model_params = deepcopy(original_format.model_params)
     aug_model_params["spectrogram_params"]["min_frequency"] *= shift_rate
     aug_model_params["spectrogram_params"]["max_frequency"] *= shift_rate
-    return DualSpectrogramFormat(aug_model_params)
+    return SpectrogramFormat(aug_model_params)
 
 if __name__ == "__main__":
 
@@ -64,7 +64,7 @@ if __name__ == "__main__":
     device = distributed_state.device
     torch.manual_seed(seed)
     
-    model_path = config.MODEL_PATH
+    model_path = config.MODELS_PATH
     model_dtype = torch.bfloat16 if fp16 else torch.float32
     print(f"Loading DualDiffusion model from '{model_path}' (dtype={model_dtype})...")
     pipeline = DualDiffusionPipeline.from_pretrained(model_path,

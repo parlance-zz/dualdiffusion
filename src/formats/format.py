@@ -3,7 +3,9 @@ from abc import ABC, abstractmethod
 
 import torch
 
-class DualDiffusionFormat(ABC):
+from models.module import DualDiffusionModule
+
+class DualDiffusionFormat(DualDiffusionModule, ABC):
 
     @abstractmethod
     def get_raw_crop_width(self, length: Optional[int] = None) -> int:
@@ -14,15 +16,18 @@ class DualDiffusionFormat(ABC):
         pass
     
     @abstractmethod
-    def get_sample_shape(self, bsz: int = 1, length: Optional[int] = None) -> tuple:
+    def get_sample_shape(self, bsz: int = 1,
+                         length: Optional[int] = None) -> tuple:
         pass
 
     @abstractmethod
-    def raw_to_sample(self, raw_samples: torch.Tensor, return_dict: bool = False) -> Union[torch.Tensor, dict]:
+    def raw_to_sample(self, raw_samples: torch.Tensor,
+                      return_dict: bool = False) -> Union[torch.Tensor, dict]:
         pass
 
     @abstractmethod
-    def sample_to_raw(self, samples: torch.Tensor, return_dict: bool = False) -> Union[torch.Tensor, dict]:
+    def sample_to_raw(self, samples: torch.Tensor,
+                      return_dict: bool = False) -> Union[torch.Tensor, dict]:
         pass
     
     @abstractmethod

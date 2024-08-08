@@ -25,26 +25,18 @@ import utils.config as config
 import os
 import importlib
 from dataclasses import dataclass
-from typing import Type, Optional, Union
+from typing import Optional, Union
 
 import numpy as np
 import torch
 
-from diffusers.pipelines.pipeline_utils import DiffusionPipeline
-from diffusers.models.modeling_utils import ModelMixin
-
-from .sampling_schedule import SamplingSchedule
+from models.module import DualDiffusionModule
 from models.unet_edm2 import mp_sum
 from utils.dual_diffusion_utils import (
     open_img_window, close_img_window, show_img, tensor_to_img, save_img,
     multi_plot, normalize, get_cos_angle, load_safetensors
 )
-
-@dataclass
-class DualDiffusionPipelineModule:
-    module_name: str
-    module_class: Type[ModelMixin]
-    module_config: dict
+from .sampling_schedule import SamplingSchedule
 
 @dataclass
 class SamplingParams:
@@ -67,26 +59,18 @@ class SamplingParams:
     img2img_input: Optional[torch.Tensor] = None
     show_debug_plots: bool                = False
 
-class DualDiffusionPipeline(DiffusionPipeline):
+class DualDiffusionPipeline(torch.nn.Module):
 
     @torch.no_grad()
-    def __init__(self, **kwargs):
+    def __init__(self, pipeline_modules: dict[str, DualDiffusionModule]) -> None:
         super().__init__()
-        self.register_modules(**kwargs)
 
-    @staticmethod
-    @torch.no_grad()
-    def create_new(modules: list[DualDiffusionPipelineModule]) -> "DualDiffusionPipeline":
-        
-        initialized_modules = {}
-        for module in modules:
-            initialized_modules[module.module_name] = module.module_class(**module.module_config)
+        for module_name, module in pipeline_modules.items():
+            if not isinstance(module, DualDiffusionModule):
+                raise ValueError(f"Module '{module_name}' must be an instance of DualDiffusionModule")
+            
+            self.add_module(module_name, module)
 
-            if hasattr(initialized_modules[module.module_name], "normalize_weights"):
-                initialized_modules[module.module_name].normalize_weights()
-
-        return DualDiffusionPipeline(**initialized_modules)
-    
     @staticmethod
     @torch.no_grad()
     def from_pretrained(model_path: str,
@@ -99,12 +83,10 @@ class DualDiffusionPipeline(DiffusionPipeline):
         model_modules = {}
 
         # load pipeline modules
-        for module_name in model_index:
-            if module_name.startswith("_") or not isinstance(model_index[module_name], list): continue
-
-            module_package_name, module_class_name = model_index[module_name][0], model_index[module_name][1]
-            module_package = importlib.import_module(module_package_name)
-            module_class = getattr(module_package, module_class_name)
+        for module_name, module_import_dict in model_index["modules"].items():
+            
+            module_package = importlib.import_module(module_import_dict["package"])
+            module_class = getattr(module_package, module_import_dict["class"])
             
             module_path = os.path.join(model_path, module_name)
             if load_latest_checkpoints:
@@ -144,6 +126,27 @@ class DualDiffusionPipeline(DiffusionPipeline):
         
         return pipeline
     
+    def save_pretrained(self, model_path: str, subfolder: Optional[str] = None) -> None:
+        
+        if subfolder is not None:
+            model_path = os.path.join(model_path, subfolder)
+        os.makedirs(model_path, exist_ok=True)
+        
+        model_modules = {}
+        for module_name, module in self.named_children():
+            if not isinstance(module, DualDiffusionModule):
+                continue
+            
+            module_import_dict = {
+                "package": module.__class__.__module__,
+                "class": module.__class__.__name__
+            }
+            model_modules[module_name] = module_import_dict
+            module.save_pretrained(model_path, subfolder=module_name)
+
+        model_index = {"modules": model_modules}
+        config.save_json(model_index, os.path.join(model_path, "model_index.json"))
+
     @torch.no_grad()
     def get_class_label(self, label_name: Union[str, int]) -> int:
 

@@ -31,14 +31,14 @@ from diffusers.configuration_utils import ConfigMixin
 
 from pipelines.dual_diffusion_pipeline import DualDiffusionPipeline
 
-def print_module_info(module: ConfigMixin) -> None:
+def print_module_info(module: ConfigMixin, module_name: str) -> None:
 
     module_params = {}
     num_emb_params = num_conv_params = num_attn_params = num_other_params = num_total_params = 0
     for name, param in module.named_parameters():
 
-        module_name = name.replace(".weight", "").split(".")[-1]
-        module_params[module_name] = module_params.get(module_name, 0) + param.numel()
+        submodule_name = name.replace(".weight", "").split(".")[-1]
+        module_params[submodule_name] = module_params.get(submodule_name, 0) + param.numel()
 
         if "emb" in name: num_emb_params += param.numel()
         elif "conv" in name: num_conv_params += param.numel()
@@ -46,40 +46,40 @@ def print_module_info(module: ConfigMixin) -> None:
         else: num_other_params += param.numel()
         num_total_params += param.numel()
 
+    if len(module_params) == 0: return
     module_params = sorted(module_params.items(), key=lambda x:x[1])
-    print("\nNumber of module params: ")
+    print(f"{module_name} params: ")
     for name, count in module_params:
-        print(f"  {name.ljust(11)}: {count/1000000:{4}f}m")
-    print("")
-    print(f"Number of emb params:   {num_emb_params/1000000:{4}f}m")
-    print(f"Number of conv params:  {num_conv_params/1000000:{4}f}m")
-    print(f"Number of attn params:  {num_attn_params/1000000:{4}f}m")
-    print(f"Number of other params: {num_other_params/1000000:{4}f}m")
+        print(f"  {name.ljust(20)}: {count/1000000:{4}f}m")
+    print(f"Total emb params:   {num_emb_params/1000000:{4}f}m")
+    print(f"Total conv params:  {num_conv_params/1000000:{4}f}m")
+    print(f"Total attn params:  {num_attn_params/1000000:{4}f}m")
+    print(f"Total other params: {num_other_params/1000000:{4}f}m")
     print(f"Estimated size (MB): {num_total_params*4/1000000:{4}f}m")
     print("")
 
 
 if __name__ == "__main__":
 
-    model_name = input(f"Enter model name:")
-    model_seed = input(f"Enter random seed (or none for random seed):")
+    model_name = input(f"Enter model name: ")
+    model_seed = input(f"Enter random seed (or none for random seed): ")
+    print("")
 
     if model_seed != "":
         torch.manual_seed(int(model_seed))
     
-    model_config_source_path = os.path.join(config.CONFIG_PATH, model_name)
+    model_config_source_path = os.path.join(config.CONFIG_PATH, "models", model_name)
     if not os.path.isdir(model_config_source_path):
         raise FileNotFoundError(f"Model config path '{model_config_source_path}' not found")
     
     # load and initialize model modules
     model_modules = {}
     model_index = config.load_json(os.path.join(model_config_source_path, "model_index.json"))
-    for module_name in model_index:
-        if module_name.startswith("_") or not isinstance(model_index[module_name], list): continue
 
-        module_package_name, module_class_name = model_index[module_name][0], model_index[module_name][1]
-        module_package = importlib.import_module(module_package_name)
-        module_class = getattr(module_package, module_class_name)
+    for module_name, module_import_dict in model_index["modules"].items():
+
+        module_package = importlib.import_module(module_import_dict["package"])
+        module_class = getattr(module_package, module_import_dict["class"])
 
         module_config_path = os.path.join(model_config_source_path, f"{module_name}.json")
         if not os.path.isfile(module_config_path):
@@ -87,12 +87,15 @@ if __name__ == "__main__":
         module_config = config.load_json(module_config_path)
 
         model_modules[module_name] = module_class(**module_config)
-        print_module_info(model_modules[module_name])
+        print_module_info(model_modules[module_name], module_name)
+
+        if hasattr(model_modules[module_name], "normalize_weights"):
+            model_modules[module_name].normalize_weights()
 
     # create and save pipeline from loaded modules
-    pipeline = DualDiffusionPipeline.create_new(**model_modules)
+    pipeline = DualDiffusionPipeline(model_modules)
 
-    new_model_path = os.path.join(config.MODEL_PATH, model_name)
+    new_model_path = os.path.join(config.MODELS_PATH, model_name)
     if os.path.exists(new_model_path):
         print(f"Warning: Output folder already exists '{new_model_path}'")
         prompt = "Overwrite existing model? (y/n): "
@@ -100,7 +103,7 @@ if __name__ == "__main__":
         prompt = f"Create new model with config at '{new_model_path}'? (y/n): "
     if input(prompt).lower() not in ["y","yes"]: exit()
     
-    pipeline.save_pretrained(new_model_path, safe_serialization=True)
+    pipeline.save_pretrained(new_model_path)
     print(f"Created new DualDiffusion model with config at '{new_model_path}'")
 
     # copy module training configs

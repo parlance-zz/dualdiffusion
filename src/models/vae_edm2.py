@@ -23,13 +23,10 @@
 import numpy as np
 import torch
 
-from diffusers.configuration_utils import ConfigMixin, register_to_config
-from diffusers.models.modeling_utils import ModelMixin
+from .module import DualDiffusionModule
+from .unet_edm2 import Block, MPConv, mp_silu, normalize
 
-from unet_edm2 import Block, MPConv, mp_silu, normalize
-
-
-class IsotropicGaussianDistribution(object):
+class IsotropicGaussianDistribution:
 
     def __init__(self, parameters, logvar, deterministic=False):
 
@@ -72,11 +69,10 @@ class IsotropicGaussianDistribution(object):
                 dim=reduction_dims,
             )
     
-class AutoencoderKL_EDM2(ModelMixin, ConfigMixin):
+class AutoencoderKL_EDM2(DualDiffusionModule):
 
     __constants__ = ["label_dim", "dropout", "target_snr", "num_blocks"]
 
-    @register_to_config
     def __init__(self,
         in_channels = 2,                    # Number of input channels.
         out_channels = 2,                   # Number of output channels.

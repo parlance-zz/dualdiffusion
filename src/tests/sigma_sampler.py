@@ -62,7 +62,7 @@ if __name__ == "__main__":
 
     if batch_distribution == "ln_pdf" or reference_distribution == "ln_pdf":
 
-        model_path = os.path.join(config.MODEL_PATH, reference_model_name)
+        model_path = os.path.join(config.MODELS_PATH, reference_model_name)
         print(f"Loading DualDiffusion model from '{model_path}'...")
         pipeline = DualDiffusionPipeline.from_pretrained(model_path, load_latest_checkpoints=True)
 

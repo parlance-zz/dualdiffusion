@@ -695,7 +695,7 @@ class DualDiffusionTrainer:
                 sample_log_path = os.path.join(self.config.model_path, "tmp", "sample_loss.json")
                 try:
                     sorted_sample_logs = dict(sorted(sample_logger.get_logs().items(), key=lambda item: item[1]))
-                    config.save_json(sample_log_path, sorted_sample_logs)
+                    config.save_json(sorted_sample_logs, sample_log_path)
                 except Exception as e:
                     self.logger.warning(f"Error saving sample logs to {sample_log_path}: {e}")
 
@@ -750,7 +750,7 @@ class DualDiffusionTrainer:
                 sample_log_path = os.path.join(self.config.model_path, "tmp", "sample_loss_validation.json")
                 try:
                     sorted_sample_logs = dict(sorted(sample_logger.get_logs().items(), key=lambda item: item[1]))
-                    config.save_json(sample_log_path, sorted_sample_logs)
+                    config.save_json(sorted_sample_logs, sample_log_path)
                 except Exception as e:
                     self.logger.warning(f"Error saving validation sample logs to {sample_log_path}: {e}")
 
