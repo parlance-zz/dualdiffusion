@@ -81,7 +81,8 @@ class DualDiffusionPipeline(torch.nn.Module):
         
         model_index = config.load_json(os.path.join(model_path, "model_index.json"))
         model_modules = {}
-
+        load_emas = load_emas or {}
+        
         # load pipeline modules
         for module_name, module_import_dict in model_index["modules"].items():
             
@@ -101,19 +102,18 @@ class DualDiffusionPipeline(torch.nn.Module):
                     module_path = os.path.join(model_path, module_checkpoints[-1], module_name)
 
             model_modules[module_name] = module_class.from_pretrained(
-                module_path, torch_dtype=torch_dtype, device=device).requires_grad_(False).train(False)
+                module_path, torch_dtype=torch_dtype, device=device, load_config_only=module_name in load_emas)
         
         # load and merge ema weights
-        if load_emas is not None:
-            for module_name in load_emas:
-                ema_module_path = os.path.join(module_path, f"{module_name}_ema", load_emas[module_name])
-                if os.path.exists(ema_module_path):
-                    model_modules[module_name].load_state_dict(load_safetensors(ema_module_path))
+        for module_name in load_emas:
+            ema_module_path = os.path.join(module_path, f"{module_name}_ema", load_emas[module_name])
+            if os.path.exists(ema_module_path):
+                model_modules[module_name].load_state_dict(load_safetensors(ema_module_path))
 
-                    if hasattr(model_modules[module_name], "normalize_weights"):
-                        model_modules[module_name].normalize_weights()
-                else:
-                    raise FileNotFoundError(f"EMA checkpoint '{load_emas[module_name]}' not found in '{os.path.dirname(ema_module_path)}'")
+                if hasattr(model_modules[module_name], "normalize_weights"):
+                    model_modules[module_name].normalize_weights()
+            else:
+                raise FileNotFoundError(f"EMA checkpoint '{load_emas[module_name]}' not found in '{os.path.dirname(ema_module_path)}'")
         
         pipeline = DualDiffusionPipeline(**model_modules).to(device=device)
 
