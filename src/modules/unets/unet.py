@@ -28,7 +28,6 @@ import torch
 
 from modules.module import DualDiffusionModule, DualDiffusionModuleConfig
 from modules.formats.format import DualDiffusionFormat
-from modules.mp_tools import MPConv, normalize
 
 @dataclass
 class DualDiffusionUNetConfig(DualDiffusionModuleConfig, ABC):
@@ -48,10 +47,13 @@ class DualDiffusionUNet(DualDiffusionModule, ABC):
     module_name: str = "unet"
 
     @abstractmethod
-    def __init__(self, config: DualDiffusionUNetConfig):
-        super().__init__()
-        self.config = config
-
+    def get_class_embeddings(self, class_labels: torch.Tensor) -> torch.Tensor:
+        pass
+    
+    @abstractmethod
+    def get_sigma_loss_logvar(self, sigma: torch.Tensor) -> torch.Tensor:
+        pass
+    
     @abstractmethod
     def forward(self, x_in: torch.Tensor,
                 sigma: torch.Tensor,
@@ -59,15 +61,3 @@ class DualDiffusionUNet(DualDiffusionModule, ABC):
                 class_embeddings: Optional[torch.Tensor] = None,
                 t_ranges: Optional[torch.Tensor] = None) -> torch.Tensor:
         pass
-
-    def get_class_embeddings(self, class_labels: torch.Tensor) -> torch.Tensor:
-        return self.emb_label(normalize(class_labels).to(device=self.device, dtype=self.dtype))
-    
-    def get_sigma_logvar(self, sigma: torch.Tensor) -> torch.Tensor:
-        return self.logvar_linear(self.logvar_fourier(sigma.flatten().log() / 4)).view(-1, 1, 1, 1).float()
-    
-    @torch.no_grad()
-    def normalize_weights(self) -> None:
-        for module in self.modules():
-            if isinstance(module, MPConv):
-                module.normalize_weights()

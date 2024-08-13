@@ -91,7 +91,7 @@ class SpectrogramConverter(torch.nn.Module):
 
     @torch.no_grad()
     def __init__(self, config: SpectrogramFormatConfig) -> None:
-        super(SpectrogramConverter, self).__init__()
+        super().__init__()
         self.config = config
         
         window_args = {
@@ -137,27 +137,24 @@ class SpectrogramConverter(torch.nn.Module):
             filter_norm=config.freq_scale_norm,
         )
 
-    @torch.no_grad()
     def get_spectrogram_shape(self, audio_shape: torch.Size) -> torch.Size:
         num_frames = 1 + (audio_shape[-1] + self.config.padded_length - self.config.win_length) // self.config.hop_length
         return torch.Size(audio_shape[:-1] + (self.config.num_frequencies, num_frames))
     
-    @torch.no_grad()
     def get_audio_shape(self, spectrogram_shape: torch.Size) -> torch.Size:
         audio_len = (spectrogram_shape[-1] - 1) * self.config.hop_length + self.config.win_length - self.config.padded_length
         return torch.Size(spectrogram_shape[:-2] + (audio_len,))
 
-    @torch.no_grad()
     def get_raw_crop_width(self, audio_len: int) -> int:
         spectrogram_len = self.get_spectrogram_shape(torch.Size((1, audio_len)))[-1] // 64 * 64
         return self.get_audio_shape(torch.Size((1, spectrogram_len)))[-1]
 
-    @torch.no_grad()    
+    @torch.inference_mode()
     def audio_to_spectrogram(self, audio: torch.Tensor) -> torch.Tensor:
         spectrogram_complex = self.spectrogram_func(audio)
         return self.freq_scale.scale(spectrogram_complex.abs()) ** self.config.abs_exponent
 
-    @torch.no_grad()
+    @torch.inference_mode()
     def spectrogram_to_audio(self, spectrogram: torch.Tensor) -> torch.Tensor:
         amplitudes_linear = self.freq_scale.unscale(spectrogram ** (1 / self.config.abs_exponent))
         return self.inverse_spectrogram_func(amplitudes_linear, n_fgla_iter=self.config.num_fgla_iters)
@@ -173,11 +170,13 @@ class SpectrogramFormat(DualDiffusionFormat):
         self.config = config
         self.spectrogram_converter = SpectrogramConverter(config)
     
-    @torch.no_grad()
+    def get_num_channels(self) -> tuple[int, int]:
+        in_channels = out_channels = self.config.sample_raw_channels
+        return (in_channels, out_channels)
+    
     def get_raw_crop_width(self, length: Optional[int] = None) -> int:
         return self.spectrogram_converter.get_raw_crop_width(length or self.config.sample_raw_length)
     
-    @torch.no_grad()
     def get_sample_shape(self, bsz: int = 1, length: Optional[int] = None) -> tuple:
 
         _, num_output_channels = self.get_num_channels()
@@ -187,31 +186,32 @@ class SpectrogramFormat(DualDiffusionFormat):
         spectrogram_shape = self.spectrogram_converter.get_spectrogram_shape(audio_shape)
         return tuple(spectrogram_shape)
 
-    @torch.no_grad()
     def raw_to_sample(self, raw_samples: torch.Tensor,
                       return_dict: bool = False) -> Union[torch.Tensor, dict]:
-        
-        samples = self.spectrogram_converter.audio_to_spectrogram(raw_samples)
-        samples /= samples.std(dim=(1,2,3), keepdim=True).clip(min=self.config.noise_floor)
+
+        with torch.no_grad():        
+            samples = self.spectrogram_converter.audio_to_spectrogram(raw_samples)
+            samples /= samples.std(dim=(1,2,3), keepdim=True).clip(min=self.config.noise_floor)
 
         if return_dict:
             return {"samples": samples, "raw_samples": raw_samples}
         else:
             return samples
 
-    @torch.no_grad()
     def sample_to_raw(self, samples: torch.Tensor, return_dict: bool = False) -> Union[torch.Tensor, dict]:
         
-        raw_samples = self.spectrogram_converter.spectrogram_to_audio(samples.clip(min=0))
+        with torch.no_grad():
+            raw_samples = self.spectrogram_converter.spectrogram_to_audio(samples.clip(min=0))
+
         if return_dict:
             return {"raw_samples": raw_samples, "samples": samples}
         else:
             return raw_samples
     
-    @torch.no_grad()
     def get_ln_freqs(self, x: torch.Tensor) -> torch.Tensor:
+        
+        with torch.no_grad():
+            ln_freqs = self.spectrogram_converter.freq_scale.get_unscaled(x.shape[2] + 2, device=x.device)[1:-1].log2()
+            ln_freqs = ln_freqs.view(1, 1,-1, 1).repeat(x.shape[0], 1, 1, x.shape[3])
 
-        ln_freqs = self.spectrogram_converter.freq_scale.get_unscaled(x.shape[2] + 2, device=x.device)[1:-1].log2()
-        ln_freqs = ln_freqs.view(1, 1,-1, 1).repeat(x.shape[0], 1, 1, x.shape[3])
-
-        return ((ln_freqs - ln_freqs.mean()) / ln_freqs.std()).to(x.dtype)
+            return ((ln_freqs - ln_freqs.mean()) / ln_freqs.std()).to(x.dtype)

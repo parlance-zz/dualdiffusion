@@ -21,7 +21,6 @@ class DualDiffusionModule(torch.nn.Module, ABC):
     has_trainable_parameters: bool = True
         
     @classmethod
-    @torch.no_grad()
     def from_pretrained(cls: Type["DualDiffusionModule"],
                         module_path: str,
                         subfolder: Optional[str] = None,
@@ -44,7 +43,6 @@ class DualDiffusionModule(torch.nn.Module, ABC):
         
         return module.to(dtype=torch_dtype, device=device)
     
-    @torch.no_grad()
     def save_pretrained(self, module_path: str, subfolder: Optional[str] = None) -> None:
         
         if subfolder is not None:
@@ -56,3 +54,9 @@ class DualDiffusionModule(torch.nn.Module, ABC):
         config.save_json(self.config.asdict(), os.path.join(module_path, f"{module_name}.json"))
         if type(self).has_trainable_parameters:
             save_safetensors(self.state_dict(), os.path.join(module_path, f"{module_name}.safetensors"))
+
+    @torch.no_grad()
+    def normalize_weights(self) -> None:
+        for module in self.modules():
+            if hasattr(module, "normalize_weights"):
+                module.normalize_weights()

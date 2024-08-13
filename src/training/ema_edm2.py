@@ -32,8 +32,10 @@
 
 import os
 import copy
-import numpy as np
+from typing import Optional
+
 import torch
+import numpy as np
 
 from utils.dual_diffusion_utils import save_safetensors, load_safetensors
 
@@ -41,7 +43,7 @@ from utils.dual_diffusion_utils import save_safetensors, load_safetensors
 # Convert power function exponent to relative standard deviation
 # according to Equation 123.
 
-def exp_to_std(exp):
+def exp_to_std(exp: np.ndarray) -> np.ndarray:
     exp = np.float64(exp)
     std = np.sqrt((exp + 1) / (exp + 2) ** 2 / (exp + 3))
     return std
@@ -50,7 +52,7 @@ def exp_to_std(exp):
 # Convert relative standard deviation to power function exponent
 # according to Equation 126 and Algorithm 2.
 
-def std_to_exp(std):
+def std_to_exp(std: np.ndarray) -> np.ndarray:
     std = np.float64(std)
     tmp = std.flatten() ** -2
     exp = [np.roots([1, 7, 16 - t, 12 - t]).real.max() for t in tmp]
@@ -61,7 +63,8 @@ def std_to_exp(std):
 # Construct response functions for the given EMA profiles
 # according to Equations 121 and 108.
 
-def power_function_response(ofs, std, len, axis=0):
+def power_function_response(ofs: np.ndarray, std: np.ndarray,
+                            len: int, axis: int = 0) -> np.ndarray:
     ofs, std = np.broadcast_arrays(ofs, std)
     ofs = np.stack([np.float64(ofs)], axis=axis)
     exp = np.stack([std_to_exp(std)], axis=axis)
@@ -76,7 +79,8 @@ def power_function_response(ofs, std, len, axis=0):
 # Compute inner products between the given pairs of EMA profiles
 # according to Equation 151 and Algorithm 3.
 
-def power_function_correlation(a_ofs, a_std, b_ofs, b_std):
+def power_function_correlation(a_ofs: np.ndarray, a_std: np.ndarray,
+                               b_ofs: np.ndarray, b_std: np.ndarray) -> np.ndarray:
     a_exp = std_to_exp(a_std)
     b_exp = std_to_exp(b_std)
     t_ratio = a_ofs / b_ofs
@@ -90,7 +94,7 @@ def power_function_correlation(a_ofs, a_std, b_ofs, b_std):
 # Calculate beta for tracking a given EMA profile during training
 # according to Equation 127.
 
-def power_function_beta(std, t_next, t_delta):
+def power_function_beta(std: np.ndarray, t_next: int, t_delta: int) -> np.ndarray:
     beta = (1 - t_delta / t_next) ** (std_to_exp(std) + 1)
     return beta
 
@@ -98,7 +102,8 @@ def power_function_beta(std, t_next, t_delta):
 # Solve the coefficients for post-hoc EMA reconstruction
 # according to Algorithm 3.
 
-def solve_posthoc_coefficients(in_ofs, in_std, out_ofs, out_std): # => [in, out]
+def solve_posthoc_coefficients(in_ofs: np.ndarray, in_std: np.ndarray,
+                               out_ofs: np.ndarray, out_std: np.ndarray) -> np.ndarray:
     in_ofs, in_std = np.broadcast_arrays(in_ofs, in_std)
     out_ofs, out_std = np.broadcast_arrays(out_ofs, out_std)
     rv = lambda x: np.float64(x).reshape(-1, 1)
@@ -114,53 +119,51 @@ def solve_posthoc_coefficients(in_ofs, in_std, out_ofs, out_std): # => [in, out]
 
 class PowerFunctionEMA:
     
-    @torch.no_grad()
-    def __init__(self, net, stds=[0.050, 0.100], device="cpu"):
+    def __init__(self, module: torch.nn.Module, stds: list[float],
+                 device: Optional[torch.device] = None) -> None:
 
-        self.net = net
+        self.module = module
         self.stds = stds
         self.device = device
 
-        self.emas = [copy.deepcopy(net).to(device) for _ in stds]
+        self.emas = [copy.deepcopy(module).to(device) for _ in stds]
 
     @torch.no_grad()
-    def reset(self):
+    def reset(self) -> None:
         for ema in self.emas:
-            torch._foreach_copy_(ema.parameters(), self.net.parameters())
+            torch._foreach_copy_(ema.parameters(), self.module.parameters())
 
     @torch.no_grad()
-    def update(self, cur_nimg, batch_size):
+    def update(self, cur_nimg: int, batch_size: int) -> list[tuple[float, float]]:
         betas = []
-        net_parameters = tuple(self.net.parameters())
+        net_parameters = tuple(self.module.parameters())
         for std, ema in zip(self.stds, self.emas):
-            beta = power_function_beta(std=std, t_next=cur_nimg, t_delta=batch_size)
+            beta = float(power_function_beta(std=std, t_next=cur_nimg, t_delta=batch_size))
             torch._foreach_lerp_(tuple(ema.parameters()), net_parameters, 1 - beta)
             betas.append(beta)
         return zip(self.stds, betas)
 
-    @torch.no_grad()
-    def save(self, save_directory):
+    def save(self, save_directory: str) -> None:
         os.makedirs(save_directory, exist_ok=True)
         for std, ema in zip(self.stds, self.emas):
             ema_save_path = os.path.join(save_directory, f"pf_ema_std-{std:.3f}.safetensors")
             save_safetensors(ema.state_dict(), ema_save_path)
 
     @torch.no_grad()
-    def load(self, load_directory, target_model=None):
+    def load(self, ema_path: str, target_module: Optional[torch.nn.Module] = None) -> list[str]:
         
-        if target_model is not None:
-            self.net = target_model
+        if target_module is not None:
+            self.module = target_module
 
         load_errors = []
         for std, ema in zip(self.stds, self.emas):
-            ema_load_path = os.path.join(load_directory, f"pf_ema_std-{std:.3f}.safetensors")
+            ema_load_path = os.path.join(ema_path, f"pf_ema_std-{std:.3f}.safetensors")
             if os.path.exists(ema_load_path):
-                #ema.state_dict().update(load_safetensors(ema_load_path))
                 ema.load_state_dict(load_safetensors(ema_load_path))
             else:
                 error_str = f"Could not find PowerFunctionEMA model for std={std:.3f} at {ema_load_path}"
-                if target_model is not None:
-                    torch._foreach_copy_(tuple(ema.parameters()), tuple(target_model.parameters()))
+                if target_module is not None:
+                    torch._foreach_copy_(tuple(ema.parameters()), tuple(target_module.parameters()))
                     load_errors.append(error_str)
                 else:
                     raise FileNotFoundError(error_str)

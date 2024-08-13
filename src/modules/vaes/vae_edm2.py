@@ -20,13 +20,15 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
-from typing import Optional
+from typing import Optional, Union
 from dataclasses import dataclass
 
 import torch
+import numpy as np
 
-from modules.vaes.vae import DualDiffusionVAEConfig, DualDiffusionVAE
-from modules.mp_tools import MPConv
+from modules.formats.format import DualDiffusionFormat
+from modules.vaes.vae import DualDiffusionVAEConfig, DualDiffusionVAE, IsotropicGaussianDistribution
+from modules.mp_tools import MPConv, normalize, resample, mp_silu, mp_sum
 
 @dataclass
 class DualDiffusionVAE_EDM2Config(DualDiffusionVAEConfig):
@@ -225,3 +227,44 @@ class AutoencoderKL_EDM2(DualDiffusionVAE):
                 self.dec[f'block{level}_layer{idx}'] = Block(cin, cout, cemb, 0,
                                                              flavor='dec', attention=(level in attn_levels), **block_kwargs)
         self.conv_out = MPConv(cout, out_channels, kernel=[3,3])
+
+    def get_class_embeddings(self, class_labels: torch.Tensor) -> torch.Tensor:
+        return mp_silu(self.emb_label(normalize(class_labels).to(device=self.device, dtype=self.dtype)))
+
+    def get_recon_loss_logvar(self) -> torch.Tensor:
+        return self.recon_loss_logvar
+    
+    def get_target_snr(self) -> float:
+        return self.config.target_snr
+    
+    def get_latent_shape(self, sample_shape: Union[torch.Size, tuple[int, int, int, int]]) -> torch.Size:
+        if len(sample_shape) == 4:
+            return (sample_shape[0],
+                    self.config.latent_channels,
+                    sample_shape[2] // 2 ** (self.config.num_levels-1),
+                    sample_shape[3] // 2 ** (self.config.num_levels-1))
+        else:
+            raise ValueError(f"Invalid sample shape: {sample_shape}")
+        
+    def encode(self, x: torch.Tensor,
+               class_embeddings: torch.Tensor,
+               format: DualDiffusionFormat) -> IsotropicGaussianDistribution:
+        
+        x = torch.cat((x, torch.ones_like(x[:, :1]), format.get_ln_freqs(x)), dim=1)
+        for name, block in self.enc.items():
+            x = block(x) if 'conv' in name else block(x, class_embeddings, None, None)
+
+        latents = self.conv_latents_out(x, gain=self.latents_out_gain)
+        noise_logvar = torch.tensor(np.log(1 / (self.config.target_snr**2 + 1)), device=x.device, dtype=x.dtype)
+        return IsotropicGaussianDistribution(latents, noise_logvar)
+    
+    def decode(self, x: torch.Tensor,
+               class_embeddings: torch.Tensor,
+               format: DualDiffusionFormat) -> torch.Tensor:
+        
+        x = torch.cat((x, torch.ones_like(x[:, :1]), format.get_ln_freqs(x)), dim=1)
+        x = self.conv_latents_in(x)
+        for _, block in self.dec.items():
+            x = block(x, class_embeddings, None, None)
+
+        return self.conv_out(x, gain=self.out_gain)

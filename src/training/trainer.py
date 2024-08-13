@@ -386,7 +386,7 @@ class DualDiffusionTrainer:
             
             if self.ema_module is not None:
                 ema_model_dir = os.path.join(input_dir, f"{self.config.module_name}_ema")
-                ema_load_errors = self.ema_module.load(ema_model_dir, target_model=model)
+                ema_load_errors = self.ema_module.load(ema_model_dir, target_module=model)
                 if len(ema_load_errors) > 0:
                     self.logger.warning(f"Errors loading EMA model(s) - Missing EMA(s) initialized from checkpoint model:")
                     self.logger.warning("\n".join(ema_load_errors))

@@ -61,7 +61,6 @@ class SamplingParams:
 
 class DualDiffusionPipeline(torch.nn.Module):
 
-    @torch.no_grad()
     def __init__(self, pipeline_modules: dict[str, DualDiffusionModule]) -> None:
         super().__init__()
 
@@ -72,7 +71,6 @@ class DualDiffusionPipeline(torch.nn.Module):
             self.add_module(module_name, module)
 
     @staticmethod
-    @torch.no_grad()
     def from_pretrained(model_path: str,
                         torch_dtype: torch.dtype = torch.float32,
                         device: Optional[torch.device] = None,
@@ -147,7 +145,6 @@ class DualDiffusionPipeline(torch.nn.Module):
         model_index = {"modules": model_modules}
         config.save_json(model_index, os.path.join(model_path, "model_index.json"))
 
-    @torch.no_grad()
     def get_class_label(self, label_name: Union[str, int]) -> int:
 
         if isinstance(label_name, int):
@@ -189,7 +186,7 @@ class DualDiffusionPipeline(torch.nn.Module):
         
         return class_labels.to(device=self.device, dtype=self.dtype)
 
-    @torch.no_grad()
+    @torch.inference_mode()
     def __call__(self, params: SamplingParams) -> torch.Tensor:
         
         params.seed = params.seed or np.random.randint(100000, 999999)

@@ -230,6 +230,12 @@ class UNet(DualDiffusionUNet):
         self.out_gain = torch.nn.Parameter(torch.zeros([]))
         self.conv_out = MPConv(cout, config.out_channels, kernel=(3,3))
 
+    def get_class_embeddings(self, class_labels: torch.Tensor) -> torch.Tensor:
+        return self.emb_label(normalize(class_labels).to(device=self.device, dtype=self.dtype))
+    
+    def get_sigma_loss_logvar(self, sigma: torch.Tensor) -> torch.Tensor:
+        return self.logvar_linear(self.logvar_fourier(sigma.flatten().log() / 4)).view(-1, 1, 1, 1).float()
+    
     def forward(self, x_in: torch.Tensor,
                 sigma: torch.Tensor,
                 format: DualDiffusionFormat,

@@ -63,7 +63,7 @@ def multi_plot(*args, layout: Optional[tuple[int, int]] = None,
 
         if i < len(args):
 
-            y_values =args[i][0].detach().float().resolve_conj().cpu().numpy()
+            y_values = args[i][0].detach().float().resolve_conj().cpu().numpy()
             if x_axis_range is not None:
                 x_values = np.linspace(x_axis_range[0],
                                        x_axis_range[1],
@@ -103,7 +103,6 @@ def multi_plot(*args, layout: Optional[tuple[int, int]] = None,
 def dict_str(d: dict, indent: int = 4) -> str:
     return json_dumps(d, indent=indent)
 
-@torch.no_grad()
 def save_tensor_raw(tensor: torch.Tensor, output_path: str) -> None:
 
     directory = os.path.dirname(output_path)
@@ -115,7 +114,7 @@ def save_tensor_raw(tensor: torch.Tensor, output_path: str) -> None:
         tensor = tensor.complex64()
     tensor.detach().resolve_conj().cpu().numpy().tofile(output_path)
 
-@torch.no_grad()
+@torch.inference_mode()
 def normalize_lufs(raw_samples: torch.Tensor,
                    sample_rate: int,
                    target_lufs: float = -16.,
@@ -142,7 +141,6 @@ def normalize_lufs(raw_samples: torch.Tensor,
 
     return normalized_raw_samples.view(original_shape)
 
-@torch.no_grad()
 def save_audio(raw_samples: torch.Tensor,
                sample_rate: int,
                output_path: str,
@@ -167,7 +165,6 @@ def save_audio(raw_samples: torch.Tensor,
             audio_file[key] = metadata[key]
         audio_file.save()
 
-@torch.no_grad()
 def load_audio(input_path: Union[str, bytes],
                start: int = 0, count: int = -1,
                return_sample_rate: bool = False,
@@ -205,7 +202,6 @@ def load_audio(input_path: Union[str, bytes],
     else:
         return return_vals
 
-@torch.no_grad()
 def save_safetensors(tensors_dict:torch.Tensor , output_path: str) -> None:
     directory = os.path.dirname(output_path)
     os.makedirs(directory, exist_ok=True)
@@ -220,14 +216,13 @@ def save_safetensors(tensors_dict:torch.Tensor , output_path: str) -> None:
 
     ST.save_file(tensors_dict, output_path)
 
-@torch.no_grad()
 def load_safetensors(input_path: str, device: Optional[torch.device] = None) -> torch.Tensor:
     return ST.load_file(input_path, device=device)
 
 def get_expected_max_normal(n: int) -> float:
     return erfinv((n - np.pi/8) / (n - np.pi/4 + 1))
 
-@torch.no_grad()
+@torch.inference_mode()
 def get_fractal_noise2d(shape: tuple, degree: int = 1, **kwargs) -> torch.Tensor:
     
     noise_shape = shape[:-2] + (shape[-2]*2, shape[-1]*2)
@@ -275,18 +270,6 @@ def from_ulaw(x: torch.Tensor, u: float = 255.) -> torch.Tensor:
         x = torch.view_as_complex(x)
 
     return x
-
-@torch.no_grad()
-def hz_to_mels(hz: torch.Tensor) -> torch.Tensor:
-    return 1127. * torch.log(1 + hz / 700.)
-
-@torch.no_grad()
-def mels_to_hz(mels: torch.Tensor) -> torch.Tensor:
-    return 700. * (torch.exp(mels / 1127.) - 1)
-
-@torch.no_grad()
-def get_mel_density(hz: torch.Tensor) -> torch.Tensor:
-    return 1127. / (700. + hz)
 
 @torch.no_grad()
 def quantize_tensor(x: torch.Tensor, levels: int) -> torch.Tensor:

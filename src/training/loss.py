@@ -21,10 +21,9 @@
 # SOFTWARE.
 
 import torch
-import torch.nn.functional as F
 import numpy as np
 
-from utils.dual_diffusion_utils import get_mel_density
+from modules.formats.frequency_scale import get_mel_density
 from utils.mclt import stft
 
 class DualMultiscaleSpectralLoss:
@@ -144,7 +143,7 @@ class DualMultiscaleSpectralLoss2D:
     def stft2d(self, x, block_width, step, window):
         
         padding = block_width // 2
-        x = F.pad(x, (padding, padding, padding, padding), mode="reflect")
+        x = torch.nn.functional.pad(x, (padding, padding, padding, padding), mode="reflect")
         x = x.unfold(2, block_width, step).unfold(3, block_width, step)
 
         x = torch.fft.rfft2(x * window, norm="backward")

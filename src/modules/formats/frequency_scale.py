@@ -31,6 +31,10 @@ def _hz_to_mel(freq: float) -> float:
 def _mel_to_hz(mels: torch.Tensor) -> torch.Tensor:
     return 700.0 * (10.0 ** (mels / 2595.0) - 1.0)
 
+def get_mel_density(hz: torch.Tensor) -> torch.Tensor:
+    return 1127. / (700. + hz)
+
+@torch.no_grad()
 def _create_triangular_filterbank(all_freqs: torch.Tensor, f_pts: torch.Tensor) -> torch.Tensor:
     # Adopted from Librosa
     # calculate the difference between each filter mid point and each stft freq point in hertz
@@ -49,11 +53,6 @@ def _create_triangular_filterbank(all_freqs: torch.Tensor, f_pts: torch.Tensor) 
 
 class FrequencyScale(torch.nn.Module):
 
-    __constants__ = ["freq_scale", "freq_min", "freq_max", "sample_rate",
-                     "num_stft_bins", "num_filters", "filter_norm",
-                     "unscale_driver", "scale_fn", "unscale_fn"]
-
-    @torch.no_grad()
     def __init__(
         self,
         freq_scale: Literal["mel", "log"] = "mel",
@@ -66,7 +65,7 @@ class FrequencyScale(torch.nn.Module):
         unscale_driver: Literal["gels", "gelsy", "gelsd", "gelss"] = "gels",
     ) -> None:
         
-        super(FrequencyScale, self).__init__()
+        super().__init__()
 
         self.freq_scale = freq_scale
         self.freq_min = freq_min
@@ -92,11 +91,11 @@ class FrequencyScale(torch.nn.Module):
         if (self.filters.max(dim=0).values == 0.0).any():
             print("Warning: At least one FrequencyScale filterbank has all zero values.")
 
-    @torch.no_grad()
+    @torch.inference_mode()
     def scale(self, specgram: torch.Tensor) -> torch.Tensor:
         return torch.matmul(specgram.transpose(-1, -2), self.filters).transpose(-1, -2)
     
-    @torch.no_grad()
+    @torch.inference_mode()
     def unscale(self, spectrogram: torch.Tensor) -> torch.Tensor:
         # pack batch
         original_shape = spectrogram.size()

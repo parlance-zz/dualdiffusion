@@ -34,7 +34,7 @@ def _get_complex_dtype(real_dtype: torch.dtype):
         return torch.complex32
     raise ValueError(f"Unexpected dtype {real_dtype}")
 
-@torch.no_grad()
+@torch.inference_mode()
 def griffinlim(
     specgram: Tensor,
     window: Tensor,
@@ -113,13 +113,9 @@ def griffinlim(
 
 class PhaseRecovery(torch.nn.Module):
 
-    __constants__ = ["n_fft", "n_fgla_iter", "win_length", "hop_length", "length",
-                     "momentum", "rand_init", "stereo", "stereo_coherence"]
-
-    @torch.no_grad()
     def __init__(
         self,
-        n_fft: int = 3201,
+        n_fft: int,
         n_fgla_iter: int = 200,
         win_length: Optional[int] = None,
         hop_length: Optional[int] = None,
@@ -131,7 +127,7 @@ class PhaseRecovery(torch.nn.Module):
         stereo: bool = True,
         stereo_coherence: float = 0.67,
     ) -> None:
-        super(PhaseRecovery, self).__init__()
+        super().__init__()
 
         if not (0 <= momentum < 1):
             raise ValueError("momentum must be in the range [0, 1). Found: {}".format(momentum))
@@ -149,7 +145,7 @@ class PhaseRecovery(torch.nn.Module):
         window = window_fn(self.win_length) if wkwargs is None else window_fn(self.win_length, **wkwargs)
         self.register_buffer("window", window, persistent=False)
 
-    @torch.no_grad()
+    @torch.inference_mode()
     def forward(self, specgram: Tensor, n_fgla_iter: Optional[int] = None) -> Tensor:
 
         n_fgla_iter = n_fgla_iter or self.n_fgla_iter

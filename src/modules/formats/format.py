@@ -41,16 +41,10 @@ class DualDiffusionFormat(DualDiffusionModule, ABC):
 
     module_name: str = "format"
     has_trainable_parameters: bool = False
-    
-    @abstractmethod
-    def __init__(self, config: DualDiffusionFormatConfig):
-        super().__init__()
-        self.config = config
 
-    @torch.no_grad()
+    @abstractmethod
     def get_num_channels(self) -> tuple[int, int]:
-        in_channels = out_channels = self.config.sample_raw_channels
-        return (in_channels, out_channels)
+        pass
     
     @abstractmethod
     def get_raw_crop_width(self, length: Optional[int] = None) -> int:
