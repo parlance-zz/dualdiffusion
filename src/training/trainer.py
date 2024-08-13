@@ -103,7 +103,7 @@ class OptimizerConfig:
 @dataclass
 class EMAConfig:
     use_ema: bool           = False
-    ema_stds: list[float]
+    ema_stds: tuple[float]  = (0.01,)
     ema_cpu_offload: bool   = False
 
 @dataclass
@@ -143,11 +143,20 @@ class ModuleTrainer(ABC):
 @dataclass
 class DualDiffusionTrainerConfig:
 
+    lr_schedule: LRScheduleConfig
+    optimizer: OptimizerConfig
+    ema: EMAConfig
+    dataloader: DataLoaderConfig
+    logging: LoggingConfig
+
+    module_trainer_class: Type
+    module_trainer_config: ModuleTrainerConfig
+
+    module_name: str
     model_path: str
     model_name: str
     model_src_path: str
     train_config_path: Optional[str]    = None
-    module_name: str
     seed: Optional[int]                 = None
     train_batch_size: int               = 1
     gradient_accumulation_steps: int    = 1
@@ -160,16 +169,7 @@ class DualDiffusionTrainerConfig:
     strict_checkpoint_time: bool        = False
 
     enable_anomaly_detection: bool      = False
-    compile_params: Optional[dict]
-
-    lr_schedule: LRScheduleConfig
-    optimizer: OptimizerConfig
-    ema: EMAConfig
-    dataloader: DataLoaderConfig
-    logging: LoggingConfig
-
-    module_trainer_class: Type
-    module_trainer_config: ModuleTrainerConfig
+    compile_full_graph: bool            = True
 
     @staticmethod
     def from_json(json_path, **kwargs) -> "DualDiffusionTrainerConfig":
@@ -345,13 +345,14 @@ class DualDiffusionTrainer:
 
     def init_optimizer(self) -> None:
         
-        #optimizer = torch.optim.Adam(
         optimizer = torch.optim.AdamW(
             self.module.parameters(),
             lr=self.config.lr_schedule.learning_rate,
             betas=(self.config.optimizer.adam_beta1, self.config.optimizer.adam_beta2),
             weight_decay=0,
             eps=self.config.optimizer.adam_epsilon,
+            foreach=True,
+            fused=True,
         )
 
         self.logger.info(f"Using Adam optimiser with learning rate {self.config.lr_schedule.learning_rate}")

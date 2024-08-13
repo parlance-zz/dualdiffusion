@@ -63,3 +63,6 @@ class DualDiffusionUNet(DualDiffusionModule, ABC):
 
     def get_class_embeddings(self, class_labels: torch.Tensor) -> torch.Tensor:
         return self.emb_label(normalize(class_labels).to(device=self.device, dtype=self.dtype))
+    
+    def get_sigma_logvar(self, sigma: torch.Tensor) -> torch.Tensor:
+        return self.logvar_linear(self.logvar_fourier(sigma.flatten().log() / 4)).view(-1, 1, 1, 1).float()

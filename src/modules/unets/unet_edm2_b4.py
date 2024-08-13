@@ -75,7 +75,7 @@ class Block(torch.nn.Module):
         mlp_groups: int        = 8,        # Number of groups for the MLP.
         channels_per_head: int = 64,       # Number of channels per attention head.
         use_attention: bool    = False,    # Use self-attention in this block.
-    ):
+    ) -> None:
         super().__init__()
 
         self.level = level
@@ -281,11 +281,6 @@ class UNet(DualDiffusionUNet):
 
         x = self.conv_out(x, gain=self.out_gain)
         D_x = c_skip * x_in + c_out * x.float()
-
-        # Training uncertainty, if requested.
-        if return_logvar:
-            logvar = self.logvar_linear(self.logvar_fourier(c_noise)).view(-1, 1, 1, 1)
-            return D_x, logvar.float()
         
         return D_x
     

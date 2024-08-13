@@ -27,7 +27,7 @@ import timeit
 
 import torch
 
-from formats.spectrogram import SpectrogramFormat
+from modules.formats.spectrogram import SpectrogramFormat
 from utils.dual_diffusion_utils import (
     load_audio, tensor_to_img, save_img, save_audio,
     save_tensor_raw, init_cuda, quantize_tensor
@@ -66,8 +66,8 @@ def spectrogram_test() -> None:
         spectrogram = quantize_tensor(spectrogram, test_params["quantize_level"])
 
     print("Audio shape:", audio.shape, "Spectrogram shape:", spectrogram.shape)
-    win_length = spectrogram_format.spectrogram_params.win_length
-    hop_length = spectrogram_format.spectrogram_params.hop_length
+    win_length = spectrogram_format.config.win_length
+    hop_length = spectrogram_format.config.hop_length
     print(f"win_length: {win_length}, hop_length: {hop_length}")
 
     if test_output_path is not None:

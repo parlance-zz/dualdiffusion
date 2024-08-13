@@ -31,7 +31,7 @@ import numpy as np
 import torch
 
 from modules.module import DualDiffusionModule
-from modules.unet_edm2 import mp_sum
+from modules.mp_tools import mp_sum
 from utils.dual_diffusion_utils import (
     open_img_window, close_img_window, show_img, tensor_to_img, save_img,
     multi_plot, normalize, get_cos_angle, load_safetensors

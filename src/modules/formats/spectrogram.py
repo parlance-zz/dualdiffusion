@@ -90,7 +90,7 @@ class SpectrogramConverter(torch.nn.Module):
                                  layout=layout, device=device, requires_grad=requires_grad) ** exponent
 
     @torch.no_grad()
-    def __init__(self, config: SpectrogramFormatConfig):
+    def __init__(self, config: SpectrogramFormatConfig) -> None:
         super(SpectrogramConverter, self).__init__()
         self.config = config
         
