@@ -89,7 +89,7 @@ class UNetTrainer(ModuleTrainer):
         self.global_sigma = self.sigma_sampler.sample(self.trainer.total_batch_size, device=self.trainer.accelerator.device)
         self.global_sigma = self.trainer.accelerator.gather(self.global_sigma.unsqueeze(0))[0] # sync sigma across all ranks / processes
 
-    def train_batch(self, batch: dict, grad_accum_steps: int) -> dict:
+    def train_batch(self, batch: dict, grad_accum_steps: int) -> dict[str, torch.Tensor]:
 
         raw_samples = batch["input"]
         sample_game_ids = batch["game_ids"]

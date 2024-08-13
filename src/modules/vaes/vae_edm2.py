@@ -23,8 +23,8 @@
 import numpy as np
 import torch
 
-from .module import DualDiffusionModule
-from .unet_edm2 import Block, MPConv, mp_silu, normalize
+from ..module import DualDiffusionModule
+from ..unets.unet_edm2 import Block, MPConv, mp_silu, normalize
 
 class IsotropicGaussianDistribution:
 

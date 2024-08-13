@@ -25,17 +25,14 @@ from dataclasses import dataclass
 
 import torch
 import torchaudio
-from diffusers.configuration_utils import ConfigMixin, register_to_config
-from diffusers.models.modeling_utils import ModelMixin
 
-from .format import DualDiffusionFormat
+from .format import DualDiffusionFormat, DualDiffusionFormatConfig
 from .frequency_scale import FrequencyScale
 from .phase_recovery import PhaseRecovery
 
 @dataclass()
-class SpectrogramParams:
+class SpectrogramFormatConfig(DualDiffusionFormatConfig):
 
-    stereo: bool = True
     abs_exponent: float = 0.25
 
     # FFT parameters
@@ -54,7 +51,7 @@ class SpectrogramParams:
     #padded_duration_ms: int = 200
 
     # freq scale params
-    freq_scale_type: Literal["mel", "log"] = "log"
+    freq_scale_type: Literal["mel", "log"] = "mel"
     num_frequencies: int = 256
     min_frequency: int = 20
     max_frequency: int = 16000
@@ -65,10 +62,6 @@ class SpectrogramParams:
     fgla_momentum: float = 0.99
     stereo_coherence: float = 0.67
 
-    @property
-    def num_channels(self) -> int:
-        return 2 if self.stereo else 1
-    
     @property
     def num_stft_bins(self) -> int:
         return self.padded_length // 2 + 1
@@ -97,19 +90,19 @@ class SpectrogramConverter(torch.nn.Module):
                                  layout=layout, device=device, requires_grad=requires_grad) ** exponent
 
     @torch.no_grad()
-    def __init__(self, params: SpectrogramParams):
+    def __init__(self, config: SpectrogramFormatConfig):
         super(SpectrogramConverter, self).__init__()
-        self.p = params
+        self.config = config
         
         window_args = {
-            "exponent": params.window_exponent,
-            "periodic": params.window_periodic,
+            "exponent": config.window_exponent,
+            "periodic": config.window_periodic,
         }
 
         self.spectrogram_func = torchaudio.transforms.Spectrogram(
-            n_fft=params.padded_length,
-            win_length=params.win_length,
-            hop_length=params.hop_length,
+            n_fft=config.padded_length,
+            win_length=config.win_length,
+            hop_length=config.hop_length,
             pad=0,
             window_fn=SpectrogramConverter.hann_power_window,
             power=None,
@@ -121,37 +114,37 @@ class SpectrogramConverter(torch.nn.Module):
         )
 
         self.inverse_spectrogram_func = PhaseRecovery(
-            n_fft=params.padded_length,
-            n_fgla_iter=params.num_fgla_iters,
-            win_length=params.win_length,
-            hop_length=params.hop_length,
+            n_fft=config.padded_length,
+            n_fgla_iter=config.num_fgla_iters,
+            win_length=config.win_length,
+            hop_length=config.hop_length,
             window_fn=SpectrogramConverter.hann_power_window,
             wkwargs=window_args,
-            momentum=params.fgla_momentum,
+            momentum=config.fgla_momentum,
             length=None,
             rand_init=True,
-            stereo=params.stereo,
-            stereo_coherence=params.stereo_coherence
+            stereo=config.stereo,
+            stereo_coherence=config.stereo_coherence
         )
 
         self.freq_scale = FrequencyScale(
-            freq_scale=params.freq_scale_type,
-            freq_min=params.min_frequency,
-            freq_max=params.max_frequency,
-            sample_rate=params.sample_rate,
-            num_stft_bins=params.num_stft_bins,
-            num_filters=params.num_frequencies,
-            filter_norm=params.freq_scale_norm,
+            freq_scale=config.freq_scale_type,
+            freq_min=config.min_frequency,
+            freq_max=config.max_frequency,
+            sample_rate=config.sample_rate,
+            num_stft_bins=config.num_stft_bins,
+            num_filters=config.num_frequencies,
+            filter_norm=config.freq_scale_norm,
         )
 
     @torch.no_grad()
     def get_spectrogram_shape(self, audio_shape: torch.Size) -> torch.Size:
-        num_frames = 1 + (audio_shape[-1] + self.p.padded_length - self.p.win_length) // self.p.hop_length
-        return torch.Size(audio_shape[:-1] + (self.p.num_frequencies, num_frames))
+        num_frames = 1 + (audio_shape[-1] + self.config.padded_length - self.config.win_length) // self.config.hop_length
+        return torch.Size(audio_shape[:-1] + (self.config.num_frequencies, num_frames))
     
     @torch.no_grad()
     def get_audio_shape(self, spectrogram_shape: torch.Size) -> torch.Size:
-        audio_len = (spectrogram_shape[-1] - 1) * self.p.hop_length + self.p.win_length - self.p.padded_length
+        audio_len = (spectrogram_shape[-1] - 1) * self.config.hop_length + self.config.win_length - self.config.padded_length
         return torch.Size(spectrogram_shape[:-2] + (audio_len,))
 
     @torch.no_grad()
@@ -162,41 +155,31 @@ class SpectrogramConverter(torch.nn.Module):
     @torch.no_grad()    
     def audio_to_spectrogram(self, audio: torch.Tensor) -> torch.Tensor:
         spectrogram_complex = self.spectrogram_func(audio)
-        return self.freq_scale.scale(spectrogram_complex.abs()) ** self.p.abs_exponent
+        return self.freq_scale.scale(spectrogram_complex.abs()) ** self.config.abs_exponent
 
     @torch.no_grad()
     def spectrogram_to_audio(self, spectrogram: torch.Tensor) -> torch.Tensor:
-        amplitudes_linear = self.freq_scale.unscale(spectrogram ** (1 / self.p.abs_exponent))
-        return self.inverse_spectrogram_func(amplitudes_linear, n_fgla_iter=self.p.num_fgla_iters)
+        amplitudes_linear = self.freq_scale.unscale(spectrogram ** (1 / self.config.abs_exponent))
+        return self.inverse_spectrogram_func(amplitudes_linear, n_fgla_iter=self.config.num_fgla_iters)
     
     def half(self) -> "SpectrogramConverter": # prevent casting to fp16/bf16
         return self
 
-class SpectrogramFormat(ModelMixin, ConfigMixin, DualDiffusionFormat):
+class SpectrogramFormat(DualDiffusionFormat):
 
     @torch.no_grad()
-    @register_to_config
-    def __init__(self,
-                 noise_floor: float = 2e-5,
-                 sample_rate: int = 32000,
-                 sample_raw_channels: int = 2,
-                 sample_raw_length: int = 1057570,
-                 t_scale: Optional[float] = None,
-                 spectrogram_params: Optional[dict] = None
-                 ) -> None:
-        super(SpectrogramFormat, self).__init__()
-
-        spectrogram_params = spectrogram_params or {}
-        self.spectrogram_params = SpectrogramParams(**spectrogram_params)
-        self.spectrogram_converter = SpectrogramConverter(self.spectrogram_params)
+    def __init__(self, config: DualDiffusionFormatConfig) -> None:
+        super().__init__()
+        self.config = config
+        self.spectrogram_converter = SpectrogramConverter(config)
     
     @torch.no_grad()
     def get_raw_crop_width(self, length: Optional[int] = None) -> int:
-        return self.spectrogram_converter.get_raw_crop_width(length or self.config["sample_raw_length"])
+        return self.spectrogram_converter.get_raw_crop_width(length or self.config.sample_raw_length)
     
     @torch.no_grad()
     def get_num_channels(self) -> tuple[int, int]:
-        in_channels = out_channels = self.spectrogram_params.num_channels
+        in_channels = out_channels = self.config.sample_raw_channels
         return (in_channels, out_channels)
     
     @torch.no_grad()
@@ -213,9 +196,8 @@ class SpectrogramFormat(ModelMixin, ConfigMixin, DualDiffusionFormat):
     def raw_to_sample(self, raw_samples: torch.Tensor,
                       return_dict: bool = False) -> Union[torch.Tensor, dict]:
         
-        noise_floor = self.config["noise_floor"]
         samples = self.spectrogram_converter.audio_to_spectrogram(raw_samples)
-        samples /= samples.std(dim=(1,2,3), keepdim=True).clip(min=noise_floor)
+        samples /= samples.std(dim=(1,2,3), keepdim=True).clip(min=self.config.noise_floor)
 
         if return_dict:
             return {"samples": samples, "raw_samples": raw_samples}

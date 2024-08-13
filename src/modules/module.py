@@ -18,10 +18,7 @@ class DualDiffusionModule(torch.nn.Module, ABC):
     
     config_class: Optional[Type[DualDiffusionModuleConfig]] = None
     module_name: Optional[str] = None
-
-    def __init__(self, config: DualDiffusionModuleConfig):
-        super().__init__()
-        self.config = config
+    has_trainable_parameters: bool = True
         
     @classmethod
     @torch.no_grad()
@@ -35,17 +32,19 @@ class DualDiffusionModule(torch.nn.Module, ABC):
         
         if subfolder is not None:
             module_path = os.path.join(module_path, subfolder)
-
+        
         config_class = cls.config_class or inspect.signature(cls.__init__).parameters["config"].annotation
         module_name = cls.module_name or os.path.basename(module_path)
         module_config = config_class(**config.load_json(os.path.join(module_path, f"{module_name}.json")))
 
         module = cls(module_config).requires_grad_(False).train(False)
-        if not load_config_only:
+        
+        if (not load_config_only) and cls.has_trainable_parameters:
             module.load_state_dict(load_safetensors(os.path.join(module_path, f"{module_name}.safetensors")))
         
         return module.to(dtype=torch_dtype, device=device)
     
+    @torch.no_grad()
     def save_pretrained(self, module_path: str, subfolder: Optional[str] = None) -> None:
         
         if subfolder is not None:
@@ -55,4 +54,5 @@ class DualDiffusionModule(torch.nn.Module, ABC):
         module_name = type(self).module_name or os.path.basename(module_path)
 
         config.save_json(self.config.asdict(), os.path.join(module_path, f"{module_name}.json"))
-        save_safetensors(self.state_dict(), os.path.join(module_path, f"{module_name}.safetensors"))
+        if type(self).has_trainable_parameters:
+            save_safetensors(self.state_dict(), os.path.join(module_path, f"{module_name}.safetensors"))

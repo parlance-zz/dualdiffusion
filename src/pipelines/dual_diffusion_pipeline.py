@@ -30,8 +30,8 @@ from typing import Optional, Union
 import numpy as np
 import torch
 
-from models.module import DualDiffusionModule
-from models.unet_edm2 import mp_sum
+from modules.module import DualDiffusionModule
+from modules.unet_edm2 import mp_sum
 from utils.dual_diffusion_utils import (
     open_img_window, close_img_window, show_img, tensor_to_img, save_img,
     multi_plot, normalize, get_cos_angle, load_safetensors

@@ -27,7 +27,7 @@ import os
 import numpy as np
 import torch
 
-from models.unet_edm2 import MPFourier
+from modules.unet_edm2 import MPFourier
 from utils.dual_diffusion_utils import save_raw, save_raw_img
 
 

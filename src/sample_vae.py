@@ -32,7 +32,7 @@ from utils.dual_diffusion_utils import (
     init_cuda, save_audio, save_raw, load_raw,
     load_audio, save_raw_img, quantize_tensor, dequantize_tensor
 )
-from models.unet_edm2 import normalize
+from modules.unet_edm2 import normalize
 
 
 if __name__ == "__main__":

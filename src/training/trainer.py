@@ -103,7 +103,7 @@ class OptimizerConfig:
 @dataclass
 class EMAConfig:
     use_ema: bool           = False
-    ema_stds: list[float]   = [0.01]
+    ema_stds: list[float]
     ema_cpu_offload: bool   = False
 
 @dataclass
@@ -133,11 +133,11 @@ class ModuleTrainer(ABC):
         pass
     
     @abstractmethod
-    def train_batch(self, batch: dict, grad_accum_steps: int) -> dict:
+    def train_batch(self, batch: dict, grad_accum_steps: int) -> dict[str, torch.Tensor]:
         pass
     
     @abstractmethod
-    def finish_batch(self) -> dict:
+    def finish_batch(self) -> dict[str, torch.Tensor]:
         pass
 
 @dataclass
@@ -160,7 +160,7 @@ class DualDiffusionTrainerConfig:
     strict_checkpoint_time: bool        = False
 
     enable_anomaly_detection: bool      = False
-    compile_params: Optional[dict]      = {"fullgraph": True, "dynamic": False}
+    compile_params: Optional[dict]
 
     lr_schedule: LRScheduleConfig
     optimizer: OptimizerConfig
