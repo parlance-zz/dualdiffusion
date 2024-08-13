@@ -20,67 +20,136 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
-import numpy as np
+from typing import Optional
+from dataclasses import dataclass
+
 import torch
 
-from ..module import DualDiffusionModule
-from ..unets.unet_edm2 import Block, MPConv, mp_silu, normalize
+from modules.vaes.vae import DualDiffusionVAEConfig, DualDiffusionVAE
+from modules.mp_tools import MPConv
 
-class IsotropicGaussianDistribution:
+@dataclass
+class DualDiffusionVAE_EDM2Config(DualDiffusionVAEConfig):
+    pass
 
-    def __init__(self, parameters, logvar, deterministic=False):
-
-        self.deterministic = deterministic
-        self.parameters = self.mean = parameters
-        self.logvar = torch.clamp(logvar, -30.0, 20.0)
-        
-        if self.deterministic:
-            self.var = self.std = torch.zeros_like(
-                self.mean, device=self.parameters.device, dtype=self.parameters.dtype
-            )
-        else:
-            self.std = torch.exp(0.5 * self.logvar)
-            self.var = torch.exp(self.logvar)
-
-    def sample(self, noise_fn, **kwargs): 
-        noise = noise_fn(self.mean.shape,
-                         device=self.parameters.device,
-                         dtype=self.parameters.dtype,
-                         **kwargs)
-        return self.mean + self.std * noise
-
-    def mode(self):
-        return self.mean
-    
-    def kl(self, other=None):
-        if self.deterministic:
-            return torch.Tensor([0.0], device=self.parameters.device, dtype=self.parameters.dtype)
-        
-        reduction_dims = tuple(range(0, len(self.mean.shape)))
-        if other is None:
-            return 0.5 * torch.mean(torch.pow(self.mean, 2) + self.var - 1.0 - self.logvar, dim=reduction_dims)
-        else:
-            return 0.5 * torch.mean(
-                torch.pow(self.mean - other.mean, 2) / other.var
-                + self.var / other.var
-                - 1.0
-                - self.logvar
-                + other.logvar,
-                dim=reduction_dims,
-            )
-    
-class AutoencoderKL_EDM2(DualDiffusionModule):
-
-    __constants__ = ["label_dim", "dropout", "target_snr", "num_blocks"]
+class Block(torch.nn.Module):
 
     def __init__(self,
-        in_channels = 2,                    # Number of input channels.
-        out_channels = 2,                   # Number of output channels.
-        latent_channels = 4,                # Number of channels in latent space.
-        target_snr = 2.,                    # The learned latent snr will not exceed this snr
+        in_channels,                    # Number of input channels.
+        out_channels,                   # Number of output channels.
+        emb_channels,                   # Number of embedding channels.
+        pos_channels,                   # Number of positional embedding channels.
+        flavor              = 'enc',    # Flavor: 'enc' or 'dec'.
+        resample_mode       = 'keep',   # Resampling: 'keep', 'up', or 'down'.
+        attention           = False,    # Include self-attention?
+        channels_per_head   = 64,       # Number of channels per attention head.
+        dropout             = 0,        # Dropout probability.
+        res_balance         = 0.3,      # Balance between main branch (0) and residual branch (1).
+        attn_balance        = 0.3,      # Balance between main branch (0) and self-attention (1).
+        clip_act            = 256,      # Clip output activations. None = do not clip.
+    ):
+        super().__init__()
+
+        if attention:
+            if (out_channels % channels_per_head != 0) or ((out_channels + pos_channels) % channels_per_head != 0):
+                raise ValueError(f'Number of output channels {out_channels} must be divisible by the number of channels per head {channels_per_head}.')
+
+        self.out_channels = out_channels
+        self.pos_channels = pos_channels
+        self.flavor = flavor
+        #self.resample_filter = resample_filter
+        self.resample_mode = resample_mode
+        self.num_heads = out_channels // channels_per_head if attention else 0
+        self.dropout = dropout
+        self.res_balance = res_balance
+        self.attn_balance = attn_balance
+        self.clip_act = clip_act
+        self.emb_gain = torch.nn.Parameter(torch.zeros([]))
+        self.conv_res0 = MPConv(out_channels if flavor == 'enc' else in_channels, out_channels, kernel=[3,3])
+        self.emb_linear = MPConv(emb_channels, out_channels, kernel=[]) if emb_channels != 0 else None
+        self.conv_res1 = MPConv(out_channels, out_channels, kernel=[3,3])
+        self.conv_skip = MPConv(in_channels, out_channels, kernel=[1,1]) if in_channels != out_channels else None
+
+        if self.num_heads != 0:
+            #self.attn_qkv = MPConv(out_channels, out_channels * 3, kernel=[1,1])
+            #self.attn_proj = MPConv(out_channels, out_channels, kernel=[1,1])
+            self.attn_qk = MPConv(out_channels + pos_channels, (out_channels + pos_channels) * 2, kernel=[1,1])
+            self.attn_v = MPConv(out_channels, out_channels, kernel=[1,1])
+            self.attn_proj = MPConv(out_channels, out_channels, kernel=[1,1])
+        else:
+            self.attn_qk = None
+            self.attn_v = None
+            self.attn_proj = None
+
+    def forward(self, x, emb, format, t_ranges):
+        # Main branch.
+        #x = resample(x, f=self.resample_filter, mode=self.resample_mode)
+        x = resample(x, mode=self.resample_mode)
+
+        if self.flavor == 'enc':
+            if self.conv_skip is not None:
+                x = self.conv_skip(x)
+            x = normalize(x, dim=1) # pixel norm
+
+        # Residual branch.
+        y = self.conv_res0(mp_silu(x))
+        if self.emb_linear is not None:
+            c = self.emb_linear(emb, gain=self.emb_gain) + 1
+            y = mp_silu(y * c.unsqueeze(2).unsqueeze(3).to(y.dtype))
+        #if self.training and self.dropout != 0:
+        #    y = torch.nn.functional.dropout(y, p=self.dropout)
+        if self.dropout != 0: # magnitude preserving fix for dropout
+            if self.training:
+                y = torch.nn.functional.dropout(y, p=self.dropout)
+            else:
+                y *= 1 - self.dropout
+
+        y = self.conv_res1(y)
+
+        # Connect the branches.
+        if self.flavor == 'dec' and self.conv_skip is not None:
+            x = self.conv_skip(x)
+        x = mp_sum(x, y, t=self.res_balance)
+
+        # Self-attention.
+        if self.num_heads != 0:
+            
+            #y = y.reshape(y.shape[0], self.num_heads, -1, 3, y.shape[2] * y.shape[3])
+            #q, k, v = normalize(y, dim=2).unbind(3) # pixel norm & split
+            #w = torch.einsum('nhcq,nhck->nhqk', q, k / np.sqrt(q.shape[2])).softmax(dim=3)
+            #y = torch.einsum('nhqk,nhck->nhcq', w, v)
+            #y = self.attn_proj(y.reshape(*x.shape))
+            #x = mp_sum(x, y, t=self.attn_balance)
+
+            # faster self-attention with torch sdp, qk separated for positional embedding
+            if self.pos_channels > 0:
+                qk = torch.cat((x, format.get_positional_embedding(x, t_ranges, mode="fourier", num_fourier_channels=self.pos_channels)), dim=1)
+            else:
+                qk = x
+
+            qk = self.attn_qk(qk)
+            qk = qk.reshape(qk.shape[0], self.num_heads, -1, 2, y.shape[2] * y.shape[3])
+            q, k = normalize(qk, dim=2).unbind(3)
+
+            v = self.attn_v(x)
+            v = v.reshape(v.shape[0], self.num_heads, -1, y.shape[2] * y.shape[3])
+            v = normalize(v, dim=2)
+
+            y = torch.nn.functional.scaled_dot_product_attention(q.transpose(-1, -2),
+                                                                 k.transpose(-1, -2),
+                                                                 v.transpose(-1, -2)).transpose(-1, -2)
+            y = self.attn_proj(y.reshape(*x.shape))
+            x = mp_sum(x, y, t=self.attn_balance)
+
+        # Clip activations.
+        if self.clip_act is not None:
+            x = x.clip_(-self.clip_act, self.clip_act)
+        return x
+
+class AutoencoderKL_EDM2(DualDiffusionVAE):
+
+    def __init__(self,
         channels_per_head = 64,             # Number of channels per attention head.
-        label_dim = 0,                      # Class label dimensionality. 0 = unconditional.
-        dropout = 0,                        # Dropout probability.
         model_channels       = 64,          # Base multiplier for the number of channels.
         channel_mult         = [1,2,3,5],   # Per-resolution multipliers for the number of channels.
         channel_mult_emb     = None,        # Multiplier for final embedding dimensionality. None = select based on channel_mult.
@@ -103,7 +172,7 @@ class AutoencoderKL_EDM2(DualDiffusionModule):
         self.label_dim = label_dim
         self.dropout = dropout
         self.target_snr = target_snr
-        self.num_blocks = len(channel_mult)
+        self.num_levels = len(channel_mult)
 
         target_noise_std = (1 / (self.target_snr**2 + 1))**0.5
         target_sample_std = (1 - target_noise_std**2)**0.5
@@ -115,7 +184,7 @@ class AutoencoderKL_EDM2(DualDiffusionModule):
 
         # Training uncertainty estimation.
         self.recon_loss_logvar = torch.nn.Parameter(torch.zeros(1))
-        self.latents_logvar = torch.nn.Parameter(torch.zeros(1))
+        self.latents_logvar = torch.nn.Parameter(torch.zeros(1)) # currently unused
         
         # Encoder.
         self.enc = torch.nn.ModuleDict()
@@ -156,48 +225,3 @@ class AutoencoderKL_EDM2(DualDiffusionModule):
                 self.dec[f'block{level}_layer{idx}'] = Block(cin, cout, cemb, 0,
                                                              flavor='dec', attention=(level in attn_levels), **block_kwargs)
         self.conv_out = MPConv(cout, out_channels, kernel=[3,3])
-
-    def get_class_embeddings(self, class_labels):
-        return mp_silu(self.emb_label(normalize(class_labels).to(device=self.device, dtype=self.dtype)))
-
-    def encode(self, x, class_embeddings, format):
-        
-        x = torch.cat((x, torch.ones_like(x[:, :1]),
-                    format.get_positional_embedding(x, None, mode="linear")), dim=1)
-        for name, block in self.enc.items():
-            x = block(x) if 'conv' in name else block(x, class_embeddings, None, None)
-
-        latents = self.conv_latents_out(x, gain=self.latents_out_gain)
-        noise_logvar = torch.tensor(np.log(1 / (self.target_snr**2 + 1)), device=x.device, dtype=x.dtype)
-        return IsotropicGaussianDistribution(latents, noise_logvar)
-    
-    def decode(self, x, class_embeddings, format):
-        
-        x = torch.cat((x, torch.ones_like(x[:, :1]),
-                    format.get_positional_embedding(x, None, mode="linear")), dim=1)
-        x = self.conv_latents_in(x)
-        for _, block in self.dec.items():
-            x = block(x, class_embeddings, None, None)
-
-        return self.conv_out(x, gain=self.out_gain)
-    
-    def get_recon_loss_logvar(self):
-        return self.recon_loss_logvar
-    
-    def get_target_snr(self):
-        return self.target_snr
-    
-    def get_latent_shape(self, sample_shape):
-        if len(sample_shape) == 4:
-            return (sample_shape[0],
-                    self.config.latent_channels,
-                    sample_shape[2] // 2 ** (self.num_blocks-1),
-                    sample_shape[3] // 2 ** (self.num_blocks-1))
-        else:
-            raise ValueError(f"Invalid sample shape: {sample_shape}")
-    
-    @torch.no_grad()
-    def normalize_weights(self):
-        for module in self.modules():
-            if isinstance(module, MPConv):
-                module.normalize_weights()

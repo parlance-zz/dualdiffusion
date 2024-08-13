@@ -49,11 +49,6 @@ class DualMCLTFormat(DualDiffusionFormat):
         return length // block_width // 64 * 64 * block_width + block_width
     
     @torch.no_grad()
-    def get_num_channels(self):
-        in_channels = out_channels = self.config.sample_raw_channels
-        return (in_channels, out_channels)
-
-    @torch.no_grad()
     def get_sample_shape(self, bsz: int = 1, length: Optional[int] = None):
         _, num_output_channels = self.get_num_channels()
 

@@ -178,11 +178,6 @@ class SpectrogramFormat(DualDiffusionFormat):
         return self.spectrogram_converter.get_raw_crop_width(length or self.config.sample_raw_length)
     
     @torch.no_grad()
-    def get_num_channels(self) -> tuple[int, int]:
-        in_channels = out_channels = self.config.sample_raw_channels
-        return (in_channels, out_channels)
-    
-    @torch.no_grad()
     def get_sample_shape(self, bsz: int = 1, length: Optional[int] = None) -> tuple:
 
         _, num_output_channels = self.get_num_channels()
