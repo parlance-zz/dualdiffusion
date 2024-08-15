@@ -66,6 +66,12 @@ def spectrogram_test() -> None:
         spectrogram = quantize_tensor(spectrogram, test_params["quantize_level"])
 
     print("Audio shape:", audio.shape, "Spectrogram shape:", spectrogram.shape)
+    assert spectrogram.shape == spectrogram_format.get_sample_shape(audio.shape[0], audio.shape[-1])
+    assert spectrogram.shape[1] == spectrogram_format.config.sample_raw_channels
+    assert spectrogram.shape[2] == spectrogram_format.config.num_frequencies
+    assert spectrogram.shape[2] % 64 == 0
+    assert spectrogram.shape[3] % 64 == 0
+
     win_length = spectrogram_format.config.win_length
     hop_length = spectrogram_format.config.hop_length
     print(f"win_length: {win_length}, hop_length: {hop_length}")
@@ -77,13 +83,14 @@ def spectrogram_test() -> None:
             save_img(spectrogram_img, os.path.join(test_output_path, f"{base_filename}_spectrogram.png"))
     
     start = timeit.default_timer()
-    audio = spectrogram_format.sample_to_raw(spectrogram)
+    decoded_audio = spectrogram_format.sample_to_raw(spectrogram)
+    assert decoded_audio.shape == audio.shape
     print("Decode time: ", timeit.default_timer() - start)
 
     if test_output_path is not None:
-        for audio, sample_filename in zip(audio.unbind(0), test_params["sample_filenames"]):
+        for decoded_audio, sample_filename in zip(decoded_audio.unbind(0), test_params["sample_filenames"]):
             base_filename = os.path.splitext(os.path.basename(sample_filename))[0]
-            save_audio(audio, spectrogram_format.config.sample_rate,
+            save_audio(decoded_audio, spectrogram_format.config.sample_rate,
                        os.path.join(test_output_path, f"{base_filename}_reconstructed.flac"))
 
         save_tensor_raw(spectrogram_format.spectrogram_converter.spectrogram_func.window,
