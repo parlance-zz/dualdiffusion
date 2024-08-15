@@ -20,7 +20,7 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
-from typing import Optional, Union
+from typing import Optional, Union, Literal
 from dataclasses import dataclass
 
 import torch
@@ -32,104 +32,100 @@ from modules.mp_tools import MPConv, normalize, resample, mp_silu, mp_sum
 
 @dataclass
 class DualDiffusionVAE_EDM2Config(DualDiffusionVAEConfig):
-    pass
+
+    model_channels: int  = 256,               # Base multiplier for the number of channels.
+    channel_mult: list[int]   = (1,2,3,4),    # Per-resolution multipliers for the number of channels.
+    channel_mult_emb: Optional[int] = None,   # Multiplier for final embedding dimensionality.
+    channels_per_head: int    = 64,           # Number of channels per attention head.
+    num_layers_per_block: int = 2,            # Number of resnet blocks per resolution.
+    res_balance: float        = 0.3,          # Balance between main branch (0) and residual branch (1).
+    attn_balance: float       = 0.3,          # Balance between main branch (0) and self-attention (1).
+    mlp_multiplier: int = 1,                  # Multiplier for the number of channels in the MLP.
+    mlp_groups: int     = 1,                  # Number of groups for the MLPs.
+    add_mid_block_attention: bool = False     # Add attention layers in decoder mid-block
+    target_snr: float   = 32.                 # Sets SNR for isotropic gaussian latent decoder
 
 class Block(torch.nn.Module):
 
     def __init__(self,
-        in_channels,                    # Number of input channels.
-        out_channels,                   # Number of output channels.
-        emb_channels,                   # Number of embedding channels.
-        pos_channels,                   # Number of positional embedding channels.
-        flavor              = 'enc',    # Flavor: 'enc' or 'dec'.
-        resample_mode       = 'keep',   # Resampling: 'keep', 'up', or 'down'.
-        attention           = False,    # Include self-attention?
-        channels_per_head   = 64,       # Number of channels per attention head.
-        dropout             = 0,        # Dropout probability.
-        res_balance         = 0.3,      # Balance between main branch (0) and residual branch (1).
-        attn_balance        = 0.3,      # Balance between main branch (0) and self-attention (1).
-        clip_act            = 256,      # Clip output activations. None = do not clip.
-    ):
+        level: int,                             # Resolution level.
+        in_channels: int,                       # Number of input channels.
+        out_channels: int,                      # Number of output channels.
+        emb_channels: int,                      # Number of embedding channels.
+        flavor: Literal["enc", "dec"] = "enc",
+        resample_mode: Literal["keep", "up", "down"] = "keep",
+        dropout: float         = 0.,       # Dropout probability.
+        res_balance: float     = 0.3,      # Balance between main branch (0) and residual branch (1).
+        attn_balance: float    = 0.3,      # Balance between main branch (0) and self-attention (1).
+        clip_act: float        = 256,      # Clip output activations. None = do not clip.
+        mlp_multiplier: int    = 1,        # Multiplier for the number of channels in the MLP.
+        mlp_groups: int        = 1,        # Number of groups for the MLP.
+        channels_per_head: int = 64,       # Number of channels per attention head.
+        use_attention: bool    = False,    # Use self-attention in this block.
+    ) -> None:
         super().__init__()
 
-        if attention:
-            if (out_channels % channels_per_head != 0) or ((out_channels + pos_channels) % channels_per_head != 0):
-                raise ValueError(f'Number of output channels {out_channels} must be divisible by the number of channels per head {channels_per_head}.')
-
+        self.level = level
+        self.use_attention = use_attention
+        self.num_heads = out_channels // channels_per_head
         self.out_channels = out_channels
-        self.pos_channels = pos_channels
         self.flavor = flavor
-        #self.resample_filter = resample_filter
         self.resample_mode = resample_mode
-        self.num_heads = out_channels // channels_per_head if attention else 0
         self.dropout = dropout
         self.res_balance = res_balance
         self.attn_balance = attn_balance
         self.clip_act = clip_act
+        
+        self.conv_res0 = MPConv(out_channels if flavor == "enc" else in_channels,
+                                out_channels * mlp_multiplier, kernel=(3,3), groups=mlp_groups)
+        self.conv_res1 = MPConv(out_channels * mlp_multiplier, out_channels, kernel=(3,3), groups=mlp_groups)
+        self.conv_skip = MPConv(in_channels, out_channels, kernel=(1,1), groups=1) if in_channels != out_channels else None
+
         self.emb_gain = torch.nn.Parameter(torch.zeros([]))
-        self.conv_res0 = MPConv(out_channels if flavor == 'enc' else in_channels, out_channels, kernel=[3,3])
-        self.emb_linear = MPConv(emb_channels, out_channels, kernel=[]) if emb_channels != 0 else None
-        self.conv_res1 = MPConv(out_channels, out_channels, kernel=[3,3])
-        self.conv_skip = MPConv(in_channels, out_channels, kernel=[1,1]) if in_channels != out_channels else None
+        self.emb_linear = MPConv(emb_channels, out_channels * mlp_multiplier,
+                                 kernel=(), groups=mlp_groups) if emb_channels != 0 else None
 
-        if self.num_heads != 0:
-            #self.attn_qkv = MPConv(out_channels, out_channels * 3, kernel=[1,1])
-            #self.attn_proj = MPConv(out_channels, out_channels, kernel=[1,1])
-            self.attn_qk = MPConv(out_channels + pos_channels, (out_channels + pos_channels) * 2, kernel=[1,1])
-            self.attn_v = MPConv(out_channels, out_channels, kernel=[1,1])
-            self.attn_proj = MPConv(out_channels, out_channels, kernel=[1,1])
-        else:
-            self.attn_qk = None
-            self.attn_v = None
-            self.attn_proj = None
+        if self.use_attention:
+            self.emb_gain_qk = torch.nn.Parameter(torch.zeros([]))
+            self.emb_gain_v = torch.nn.Parameter(torch.zeros([]))
+            self.emb_linear_qk = MPConv(emb_channels, out_channels, kernel=(1,1), groups=1) if emb_channels != 0 else None
+            self.emb_linear_v = MPConv(emb_channels, out_channels, kernel=(1,1), groups=1) if emb_channels != 0 else None
 
-    def forward(self, x, emb, format, t_ranges):
-        # Main branch.
-        #x = resample(x, f=self.resample_filter, mode=self.resample_mode)
+            self.attn_qk = MPConv(out_channels, out_channels * 2, kernel=(1,1))
+            self.attn_v = MPConv(out_channels, out_channels, kernel=(1,1))
+            self.attn_proj = MPConv(out_channels, out_channels, kernel=(1,1))
+
+    def forward(self, x: torch.Tensor, emb: torch.Tensor) -> torch.Tensor:
+        
         x = resample(x, mode=self.resample_mode)
 
-        if self.flavor == 'enc':
+        if self.flavor == "enc":
             if self.conv_skip is not None:
                 x = self.conv_skip(x)
             x = normalize(x, dim=1) # pixel norm
 
-        # Residual branch.
         y = self.conv_res0(mp_silu(x))
-        if self.emb_linear is not None:
-            c = self.emb_linear(emb, gain=self.emb_gain) + 1
-            y = mp_silu(y * c.unsqueeze(2).unsqueeze(3).to(y.dtype))
-        #if self.training and self.dropout != 0:
-        #    y = torch.nn.functional.dropout(y, p=self.dropout)
+
+        c = self.emb_linear(emb, gain=self.emb_gain) + 1.
+        y = mp_silu(y * c)
+
         if self.dropout != 0: # magnitude preserving fix for dropout
             if self.training:
                 y = torch.nn.functional.dropout(y, p=self.dropout)
             else:
-                y *= 1 - self.dropout
+                y *= 1. - self.dropout
 
         y = self.conv_res1(y)
 
-        # Connect the branches.
-        if self.flavor == 'dec' and self.conv_skip is not None:
+        if self.flavor == "dec" and self.conv_skip is not None:
             x = self.conv_skip(x)
         x = mp_sum(x, y, t=self.res_balance)
+        
+        if self.use_attention:
 
-        # Self-attention.
-        if self.num_heads != 0:
-            
-            #y = y.reshape(y.shape[0], self.num_heads, -1, 3, y.shape[2] * y.shape[3])
-            #q, k, v = normalize(y, dim=2).unbind(3) # pixel norm & split
-            #w = torch.einsum('nhcq,nhck->nhqk', q, k / np.sqrt(q.shape[2])).softmax(dim=3)
-            #y = torch.einsum('nhqk,nhck->nhcq', w, v)
-            #y = self.attn_proj(y.reshape(*x.shape))
-            #x = mp_sum(x, y, t=self.attn_balance)
+            c = self.emb_linear_qk(emb, gain=self.emb_gain_qk) + 1.
 
-            # faster self-attention with torch sdp, qk separated for positional embedding
-            if self.pos_channels > 0:
-                qk = torch.cat((x, format.get_positional_embedding(x, t_ranges, mode="fourier", num_fourier_channels=self.pos_channels)), dim=1)
-            else:
-                qk = x
-
-            qk = self.attn_qk(qk)
+            qk = self.attn_qk(x * c)
             qk = qk.reshape(qk.shape[0], self.num_heads, -1, 2, y.shape[2] * y.shape[3])
             q, k = normalize(qk, dim=2).unbind(3)
 
@@ -140,49 +136,43 @@ class Block(torch.nn.Module):
             y = torch.nn.functional.scaled_dot_product_attention(q.transpose(-1, -2),
                                                                  k.transpose(-1, -2),
                                                                  v.transpose(-1, -2)).transpose(-1, -2)
-            y = self.attn_proj(y.reshape(*x.shape))
+            y = y.reshape(*x.shape)
+
+            c = self.emb_linear_v(emb, gain=self.emb_gain_v) + 1.
+            y = mp_silu(y * c)
+
+            y = self.attn_proj(y)
             x = mp_sum(x, y, t=self.attn_balance)
 
-        # Clip activations.
         if self.clip_act is not None:
             x = x.clip_(-self.clip_act, self.clip_act)
         return x
 
 class AutoencoderKL_EDM2(DualDiffusionVAE):
 
-    def __init__(self,
-        channels_per_head = 64,             # Number of channels per attention head.
-        model_channels       = 64,          # Base multiplier for the number of channels.
-        channel_mult         = [1,2,3,5],   # Per-resolution multipliers for the number of channels.
-        channel_mult_emb     = None,        # Multiplier for final embedding dimensionality. None = select based on channel_mult.
-        num_layers_per_block = 3,           # Number of residual blocks per resolution.
-        attn_levels          = [],          # List of resolutions with self-attention.
-        midblock_decoder_attn = False,      # Whether to use attention in the first layer of the decoder.
-        #**block_kwargs,                    # Arguments for Block.
-        last_global_step = 0,               # Only used to track training progress in config.
-    ):
+    def __init__(self, config: DualDiffusionVAE_EDM2Config) -> None:
         super().__init__()
+        self.config = config
 
-        block_kwargs = {"channels_per_head": channels_per_head, "dropout": dropout}
+        block_kwargs = {"dropout": config.dropout,
+                        "mlp_multiplier": config.mlp_multiplier,
+                        "mlp_groups": config.mlp_groups,
+                        "res_balance": config.res_balance,
+                        "attn_balance": config.attn_balance,
+                        "channels_per_head": config.channels_per_head}
+        
+        cblock = [config.model_channels * x for x in config.channel_mult]
+        cemb = config.model_channels * config.channel_mult_emb if config.channel_mult_emb is not None else max(cblock)
 
-        cblock = [int(model_channels * x) for x in channel_mult]
-        if label_dim != 0:
-            cemb = int(model_channels * channel_mult_emb) if channel_mult_emb is not None else max(cblock)
-        else:
-            cemb = 0
+        self.num_levels = len(config.channel_mult)
 
-        self.label_dim = label_dim
-        self.dropout = dropout
-        self.target_snr = target_snr
-        self.num_levels = len(channel_mult)
-
-        target_noise_std = (1 / (self.target_snr**2 + 1))**0.5
+        target_noise_std = (1 / (config.target_snr**2 + 1))**0.5
         target_sample_std = (1 - target_noise_std**2)**0.5
         self.latents_out_gain = torch.nn.Parameter(torch.tensor(target_sample_std))
         self.out_gain = torch.nn.Parameter(torch.ones([]))
         
         # Embedding.
-        self.emb_label = MPConv(label_dim, cemb, kernel=[]) if label_dim != 0 else None
+        self.emb_label = MPConv(config.label_dim, cemb, kernel=())
 
         # Training uncertainty estimation.
         self.recon_loss_logvar = torch.nn.Parameter(torch.zeros(1))
@@ -190,43 +180,44 @@ class AutoencoderKL_EDM2(DualDiffusionVAE):
         
         # Encoder.
         self.enc = torch.nn.ModuleDict()
-        cout = in_channels + 2 # 1 extra const channel, 1 pos embedding channel
+        cout = config.in_channels + 2 # 1 extra const channel, 1 pos embedding channel
         for level, channels in enumerate(cblock):
             
             if level == 0:
                 cin = cout
                 cout = channels
-                self.enc[f'conv_in'] = MPConv(cin, cout, kernel=[3,3])
+                self.enc[f"conv_in"] = MPConv(cin, cout, kernel=(3,3))
             else:
-                self.enc[f'block{level}_down'] = Block(cout, cout, cemb, 0,
-                                                       flavor='enc', resample_mode='down', **block_kwargs)
-            for idx in range(num_layers_per_block):
+                self.enc[f"block{level}_down"] = Block(level, cout, cout, cemb, use_attention=False,
+                                                       flavor="enc", resample_mode="down", **block_kwargs)
+            
+            for idx in range(config.num_layers_per_block):
                 cin = cout
                 cout = channels
-                self.enc[f'block{level}_layer{idx}'] = Block(cin, cout, cemb, 0,
-                                                             flavor='enc', attention=(level in attn_levels), **block_kwargs)
+                self.enc[f"block{level}_layer{idx}"] = Block(level, cin, cout, cemb, use_attention=False,
+                                                             flavor="enc", **block_kwargs)
 
-        self.conv_latents_out = MPConv(cout, latent_channels, kernel=[3,3])
-        self.conv_latents_in = MPConv(latent_channels + 2, cout, kernel=[3,3]) # 1 extra const channel, 1 pos embedding channel
+        self.conv_latents_out = MPConv(cout, config.latent_channels, kernel=(3,3))
+        self.conv_latents_in = MPConv(config.latent_channels + 2, cout, kernel=(3,3)) # 1 extra const channel, 1 pos embedding channel
 
         # Decoder.
         self.dec = torch.nn.ModuleDict()
         for level, channels in reversed(list(enumerate(cblock))):
             
             if level == len(cblock) - 1:
-                self.dec[f'block{level}_in0'] = Block(cout, cout, cemb, 0,
-                                                      flavor='dec',attention=midblock_decoder_attn, **block_kwargs)
-                self.dec[f'block{level}_in1'] = Block(cout, cout, cemb, 0,
-                                                      flavor='dec', **block_kwargs)
+                self.dec[f"block{level}_in0"] = Block(level, cout, cout, cemb, flavor="dec",
+                                                      attention=config.add_mid_block_attention, **block_kwargs)
+                self.dec[f"block{level}_in1"] = Block(level, cout, cout, cemb, flavor="dec",
+                                                      attention=config.add_mid_block_attention, **block_kwargs)
             else:
-                self.dec[f'block{level}_up'] = Block(cout, cout, cemb, 0,
-                                                     flavor='dec', resample_mode='up', **block_kwargs)
-            for idx in range(num_layers_per_block + 1):
+                self.dec[f"block{level}_up"] = Block(level, cout, cout, cemb, flavor="dec",
+                                                     resample_mode="up", **block_kwargs)
+            for idx in range(config.num_layers_per_block + 1):
                 cin = cout
                 cout = channels
-                self.dec[f'block{level}_layer{idx}'] = Block(cin, cout, cemb, 0,
-                                                             flavor='dec', attention=(level in attn_levels), **block_kwargs)
-        self.conv_out = MPConv(cout, out_channels, kernel=[3,3])
+                self.dec[f"block{level}_layer{idx}"] = Block(level, cin, cout, cemb, flavor="dec",
+                                                             attention=False, **block_kwargs)
+        self.conv_out = MPConv(cout, config.out_channels, kernel=(3,3))
 
     def get_class_embeddings(self, class_labels: torch.Tensor) -> torch.Tensor:
         return mp_silu(self.emb_label(normalize(class_labels).to(device=self.device, dtype=self.dtype)))
@@ -241,8 +232,8 @@ class AutoencoderKL_EDM2(DualDiffusionVAE):
         if len(sample_shape) == 4:
             return (sample_shape[0],
                     self.config.latent_channels,
-                    sample_shape[2] // 2 ** (self.config.num_levels-1),
-                    sample_shape[3] // 2 ** (self.config.num_levels-1))
+                    sample_shape[2] // 2 ** (self.num_levels-1),
+                    sample_shape[3] // 2 ** (self.num_levels-1))
         else:
             raise ValueError(f"Invalid sample shape: {sample_shape}")
         
@@ -252,7 +243,7 @@ class AutoencoderKL_EDM2(DualDiffusionVAE):
         
         x = torch.cat((x, torch.ones_like(x[:, :1]), format.get_ln_freqs(x)), dim=1)
         for name, block in self.enc.items():
-            x = block(x) if 'conv' in name else block(x, class_embeddings, None, None)
+            x = block(x) if "conv" in name else block(x, class_embeddings)
 
         latents = self.conv_latents_out(x, gain=self.latents_out_gain)
         noise_logvar = torch.tensor(np.log(1 / (self.config.target_snr**2 + 1)), device=x.device, dtype=x.dtype)

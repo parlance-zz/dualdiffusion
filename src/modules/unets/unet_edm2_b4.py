@@ -61,7 +61,7 @@ class UNetConfig(DualDiffusionUNetConfig):
 class Block(torch.nn.Module):
 
     def __init__(self,
-        level: int,
+        level: int,                             # Resolution level.
         in_channels: int,                       # Number of input channels.
         out_channels: int,                      # Number of output channels.
         emb_channels: int,                      # Number of embedding channels.
@@ -190,7 +190,7 @@ class UNet(DualDiffusionUNet):
 
         # Encoder.
         self.enc = torch.nn.ModuleDict()
-        cout = config.in_channels + 2
+        cout = config.in_channels + 2 # 1 extra const channel, 1 pos embedding channel
         for level, channels in enumerate(cblock):
             
             if level == 0:

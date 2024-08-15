@@ -33,7 +33,6 @@ import platform
 from datetime import datetime
 from typing import Optional, Literal, Type
 from dataclasses import dataclass
-from abc import ABC, abstractmethod
 
 import datasets
 import torch
@@ -50,7 +49,8 @@ from diffusers.utils import is_tensorboard_available
 
 from pipelines.dual_diffusion_pipeline import DualDiffusionPipeline
 from utils.dual_diffusion_utils import dict_str
-from .ema_edm2 import PowerFunctionEMA
+from training.module_trainers.module_trainer import ModuleTrainerConfig
+from .ema import PowerFunctionEMA
 from .dataset import DatasetConfig, DualDiffusionDataset
 
 class TrainLogger():
@@ -116,29 +116,6 @@ class LoggingConfig:
     logging_dir: Optional[str] = None
     tensorboard_http_port:   Optional[int] = 6006
     tensorboard_num_scalars: Optional[int] = 2000
-
-@dataclass
-class ModuleTrainerConfig(ABC):
-    pass
-
-class ModuleTrainer(ABC):
-
-    @staticmethod
-    @abstractmethod
-    def get_config_class():
-        return ModuleTrainerConfig
-    
-    @abstractmethod
-    def init_batch(self) -> None:
-        pass
-    
-    @abstractmethod
-    def train_batch(self, batch: dict, grad_accum_steps: int) -> dict[str, torch.Tensor]:
-        pass
-    
-    @abstractmethod
-    def finish_batch(self) -> dict[str, torch.Tensor]:
-        pass
 
 @dataclass
 class DualDiffusionTrainerConfig:
@@ -258,8 +235,8 @@ class DualDiffusionTrainer:
 
         if self.accelerator.is_main_process and self.config.logging.tensorboard_http_port is not None:
 
-            if not is_tensorboard_available():
-                raise ImportError("Make sure to install tensorboard if you want to use it for logging during training.")
+            if shutil.which("tensorboard") is None:
+                self.logger.warning("Make sure to install tensorboard if you want to use it for logging during training.")
 
             tensorboard_args = [
                 "tensorboard",
@@ -277,7 +254,7 @@ class DualDiffusionTrainer:
                 try:
                     tensorboard_monitor_process.terminate()
                 except Exception:
-                    self.logger.warn("Failed to terminate tensorboard process")
+                    self.logger.warning("Failed to terminate tensorboard process")
 
             atexit.register(cleanup_process)
 
