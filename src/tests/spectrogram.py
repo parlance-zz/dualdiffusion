@@ -27,7 +27,7 @@ import timeit
 
 import torch
 
-from modules.formats.spectrogram import SpectrogramFormat
+from modules.formats.spectrogram import SpectrogramFormat, SpectrogramFormatConfig
 from utils.dual_diffusion_utils import (
     load_audio, tensor_to_img, save_img, save_audio,
     save_tensor_raw, init_cuda, quantize_tensor
@@ -39,7 +39,7 @@ def spectrogram_test() -> None:
     test_params = config.load_json(os.path.join(config.CONFIG_PATH, "tests", "spectrogram_test.json"))
     format_params = config.load_json(os.path.join(config.CONFIG_PATH, "tests", test_params["format_cfg_file"]))
 
-    spectrogram_format = SpectrogramFormat(**format_params).to(device=test_params["device"])
+    spectrogram_format = SpectrogramFormat(SpectrogramFormatConfig(**format_params)).to(device=test_params["device"])
     crop_width = spectrogram_format.get_raw_crop_width(length=test_params["audio_len"])
     test_output_path = os.path.join(config.DEBUG_PATH, "spectrogram_test") if config.DEBUG_PATH is not None else None
 
@@ -50,7 +50,7 @@ def spectrogram_test() -> None:
 
         if test_output_path is not None:
             base_filename = os.path.splitext(os.path.basename(sample_filename))[0]
-            save_audio(audio, spectrogram_format.config["sample_rate"],
+            save_audio(audio, spectrogram_format.config.sample_rate,
                        os.path.join(test_output_path, f"{base_filename}_original.flac"))
 
         audios.append(audio)
@@ -83,7 +83,7 @@ def spectrogram_test() -> None:
     if test_output_path is not None:
         for audio, sample_filename in zip(audio.unbind(0), test_params["sample_filenames"]):
             base_filename = os.path.splitext(os.path.basename(sample_filename))[0]
-            save_audio(audio, spectrogram_format.config["sample_rate"],
+            save_audio(audio, spectrogram_format.config.sample_rate,
                        os.path.join(test_output_path, f"{base_filename}_reconstructed.flac"))
 
         save_tensor_raw(spectrogram_format.spectrogram_converter.spectrogram_func.window,

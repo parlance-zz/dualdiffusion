@@ -1,28 +1,23 @@
 {
-  "_class_name": "SpectrogramFormat",
-  "_diffusers_version": "0.29.1",
   "noise_floor": 2e-05,
   "sample_rate": 32000,
   "sample_raw_channels": 2,
   "sample_raw_length": 1057570,
   "t_scale": null,
-  
-  "spectrogram_params": {
-    "stereo": true,
-    "abs_exponent": 0.25,
-    "freq_scale_type": "mel",
-    "freq_scale_norm": null,
-    "num_frequencies": 256,
-    "min_frequency": 20,
-    "max_frequency": 16000,
-    "fgla_momentum": 0.99,
-    "num_fgla_iters": 200,
-    "window_duration_ms": 200,
-    "padded_duration_ms": 200,
-    "step_size_ms": 8,
-    "stereo_coherence": 0.67,
-    "window_exponent": 32,
-    "window_periodic": true
-  }
+
+  "abs_exponent": 0.25,
+  "freq_scale_type": "mel",
+  "freq_scale_norm": null,
+  "num_frequencies": 256,
+  "min_frequency": 20,
+  "max_frequency": 16000,
+  "fgla_momentum": 0.99,
+  "num_fgla_iters": 200,
+  "window_duration_ms": 200,
+  "padded_duration_ms": 200,
+  "step_size_ms": 8,
+  "stereo_coherence": 0.67,
+  "window_exponent": 32,
+  "window_periodic": true
 }
   

@@ -63,6 +63,10 @@ class SpectrogramFormatConfig(DualDiffusionFormatConfig):
     stereo_coherence: float = 0.67
 
     @property
+    def stereo(self) -> bool:
+        return self.sample_raw_channels == 2
+    
+    @property
     def num_stft_bins(self) -> int:
         return self.padded_length // 2 + 1
     
