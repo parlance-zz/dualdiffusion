@@ -104,7 +104,11 @@ class EMAConfig:
 @dataclass
 class DataLoaderConfig:
     use_pre_encoded_latents: bool = False
-    dataloader_num_workers: int   = 0
+    filter_invalid_samples: bool = False
+    dataset_num_proc: Optional[int] = None
+    dataloader_num_workers: Optional[int] = None
+    pin_memory: bool = False
+    prefetch_factor: Optional[int] = None
 
 @dataclass
 class LoggingConfig:
@@ -411,7 +415,8 @@ class DualDiffusionTrainer:
         dataset_config = DatasetConfig(
             data_dir=data_dir,
             cache_dir=config.CACHE_PATH,
-            num_proc=self.config.dataloader.dataloader_num_workers if self.config.dataloader.dataloader_num_workers > 0 else None,
+            num_proc=self.config.dataloader.dataset_num_proc,
+            filter_invalid_samples=self.config.dataloader.filter_invalid_samples,
             sample_crop_width=sample_crop_width,
             use_pre_encoded_latents=self.config.dataloader.use_pre_encoded_latents,
             t_scale=getattr(self.pipeline.unet.config, "t_scale", None) if self.config.module_name == "unet" else None,
@@ -424,9 +429,9 @@ class DualDiffusionTrainer:
             shuffle=True,
             batch_size=self.config.train_batch_size,
             num_workers=self.config.dataloader.dataloader_num_workers,
-            pin_memory=True,
-            persistent_workers=True if self.config.dataloader.dataloader_num_workers > 0 else False,
-            prefetch_factor=2 if self.config.dataloader.dataloader_num_workers > 0 else None,
+            pin_memory=self.config.dataloader.pin_memory,
+            persistent_workers=True if self.config.dataloader.dataloader_num_workers is not None else False,
+            prefetch_factor=self.config.dataloader.prefetch_factor,
             drop_last=True,
         )
 
@@ -436,12 +441,13 @@ class DualDiffusionTrainer:
             drop_last=False,
         )
 
-        self.logger.info((
-            f"Using dataset path {data_dir}",
-            f"{len(self.dataset['train'])} train samples ({self.dataset.num_filtered_samples['train']} filtered)",
-            f"{len(self.dataset['validation'])} validation samples ({self.dataset.num_filtered_samples['validation']} filtered)"))
-        if self.config.dataloader.dataloader_num_workers > 0:
-            self.logger.info(f"Using train dataloader with {self.config.dataloader.dataloader_num_workers} workers - prefetch factor = 2")
+        self.logger.info(f"Using dataset path {data_dir} with {dataset_config.num_proc} dataset processes")
+        self.logger.info(f"  {len(self.dataset['train'])} train samples ({self.dataset.num_filtered_samples['train']} filtered)")
+        self.logger.info(f"  {len(self.dataset['validation'])} validation samples ({self.dataset.num_filtered_samples['validation']} filtered)")
+
+        self.logger.info(f"Using train dataloader with {self.config.dataloader.dataloader_num_workers or 0} workers")
+        self.logger.info(f"  prefetch_factor = {self.config.dataloader.prefetch_factor}")
+        self.logger.info(f"  pin_memory = {self.config.dataloader.pin_memory}")
 
         num_process_steps_per_epoch = math.floor(len(self.train_dataloader) / self.accelerator.num_processes)
         self.num_update_steps_per_epoch = math.ceil(num_process_steps_per_epoch / self.config.gradient_accumulation_steps)

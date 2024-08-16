@@ -23,7 +23,6 @@
 import utils.config as config
 
 import os
-import math
 from datetime import datetime
 
 import torch
@@ -50,7 +49,7 @@ def dataloader_test():
     dataset_config = DatasetConfig(
         data_dir=data_dir,
         cache_dir=config.CACHE_PATH,
-        num_proc=test_params["dataset_num_proc"] if test_params["dataset_num_proc"] > 0 else None,
+        num_proc=test_params["dataset_num_proc"],
         sample_crop_width=sample_crop_width,
         use_pre_encoded_latents=test_params["use_pre_encoded_latents"],
         t_scale=test_params["t_scale"],
@@ -66,37 +65,31 @@ def dataloader_test():
         shuffle=True,
         batch_size=test_params["batch_size"],
         num_workers=test_params["dataloader_num_workers"],
-        pin_memory=True,
+        pin_memory=test_params["pin_memory"],
         persistent_workers=True if test_params["dataloader_num_workers"] > 0 else False,
-        prefetch_factor=2 if test_params["dataloader_num_workers"] > 0 else None,
+        prefetch_factor=test_params["prefetch_factor"],
         drop_last=True,
     )
 
     print(f"Using dataset path {data_dir} with split '{test_params['split']}' and batch size {test_params['batch_size']}")
-    print(f"{len(dataset['train'])} train samples ({dataset.num_filtered_samples['train']} filtered)")
-    print(f"{len(dataset['validation'])} validation samples ({dataset.num_filtered_samples['validation']} filtered)")
+    print(f"  {len(dataset['train'])} train samples ({dataset.num_filtered_samples['train']} filtered)")
+    print(f"  {len(dataset['validation'])} validation samples ({dataset.num_filtered_samples['validation']} filtered)")
 
-    if test_params["dataloader_num_workers"] > 0:
-        print(f"Using train dataloader with {test_params['dataloader_num_workers']} workers - prefetch factor = 2")
-
-    num_processes = 1 #self.accelerator.num_processes
-    gradient_accumulation_steps = 1
-    num_process_steps_per_epoch = math.floor(len(test_dataloader) / num_processes)
-    num_update_steps_per_epoch = math.ceil(num_process_steps_per_epoch / gradient_accumulation_steps)
+    print(f"Using train dataloader with {test_params['dataloader_num_workers'] or 0} workers")
+    print(f"  prefetch_factor = {test_params['prefetch_factor']}")
+    print(f"  pin_memory = {test_params['pin_memory']}")
 
     loading_start = datetime.now()
+    progress_bar = tqdm(total=len(test_dataloader))
+
     for epoch in range(test_params["num_epochs"]):
-        progress_bar = tqdm(total=num_update_steps_per_epoch)#, disable=not self.accelerator.is_local_main_process)
         progress_bar.set_description(f"Epoch {epoch}")
-
-        for _ in test_dataloader:
-            progress_bar.update(1)
-
-        progress_bar.close()
+        for _ in test_dataloader: progress_bar.update(1)
+        progress_bar.reset()
 
     print(f"Total loading time: {datetime.now() - loading_start}")
     print("Effective examples per second: {:.2f}".format(
-        num_process_steps_per_epoch * test_params["batch_size"] / (datetime.now() - loading_start).total_seconds()))
+        len(test_dataloader) * test_params["batch_size"] / (datetime.now() - loading_start).total_seconds()))
     
 if __name__ == "__main__":
 

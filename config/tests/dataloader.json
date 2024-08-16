@@ -3,10 +3,12 @@
   "latents_crop_width": 512,
   "sample_crop_width": 1057570,
   "filter_invalid_samples": false,
-  "dataset_num_proc": 0,
+  "dataset_num_proc": null,
   "t_scale": null,
   "split": "train",
   "batch_size": 32,
-  "dataloader_num_workers": 32,
+  "dataloader_num_workers": 8,
+  "pin_memory": false,
+  "prefetch_factor": 4,
   "num_epochs": 5
 }

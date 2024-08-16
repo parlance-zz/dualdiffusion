@@ -36,7 +36,11 @@
   },
   "dataloader": {
     "use_pre_encoded_latents": true,
-    "dataloader_num_workers": 8
+    "filter_invalid_samples": false,
+    "dataset_num_proc": null,
+    "dataloader_num_workers": 8,
+    "pin_memory": false,
+    "prefetch_factor": 4
   },
   "logging": {
     "logging_dir": null,
