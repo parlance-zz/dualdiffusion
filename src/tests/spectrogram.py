@@ -36,12 +36,15 @@ from utils.dual_diffusion_utils import (
 @torch.inference_mode()
 def spectrogram_test() -> None:
 
+    torch.manual_seed(0)
+    
     test_params = config.load_json(os.path.join(config.CONFIG_PATH, "tests", "spectrogram_test.json"))
     format_params = config.load_json(os.path.join(config.CONFIG_PATH, "tests", test_params["format_cfg_file"]))
 
     spectrogram_format = SpectrogramFormat(SpectrogramFormatConfig(**format_params)).to(device=test_params["device"])
     crop_width = spectrogram_format.get_raw_crop_width(length=test_params["audio_len"])
     test_output_path = os.path.join(config.DEBUG_PATH, "spectrogram_test") if config.DEBUG_PATH is not None else None
+    print("Test output path:", test_output_path)
 
     audios = []
     for sample_filename in test_params["sample_filenames"]:
@@ -50,8 +53,9 @@ def spectrogram_test() -> None:
 
         if test_output_path is not None:
             base_filename = os.path.splitext(os.path.basename(sample_filename))[0]
-            save_audio(audio, spectrogram_format.config.sample_rate,
-                       os.path.join(test_output_path, f"{base_filename}_original.flac"))
+            output_flac_file_path = os.path.join(test_output_path, f"{base_filename}_original.flac")
+            save_audio(audio, spectrogram_format.config.sample_rate, output_flac_file_path)
+            print(f"Saved flac output to {output_flac_file_path}")
 
         audios.append(audio)
     audio = torch.stack(audios, dim=0)
@@ -90,8 +94,9 @@ def spectrogram_test() -> None:
     if test_output_path is not None:
         for decoded_audio, sample_filename in zip(decoded_audio.unbind(0), test_params["sample_filenames"]):
             base_filename = os.path.splitext(os.path.basename(sample_filename))[0]
-            save_audio(decoded_audio, spectrogram_format.config.sample_rate,
-                       os.path.join(test_output_path, f"{base_filename}_reconstructed.flac"))
+            output_flac_file_path = os.path.join(test_output_path, f"{base_filename}_reconstructed.flac")
+            save_audio(decoded_audio, spectrogram_format.config.sample_rate, output_flac_file_path)
+            print(f"Saved flac output to {output_flac_file_path}")
 
         save_tensor_raw(spectrogram_format.spectrogram_converter.spectrogram_func.window,
                         os.path.join(test_output_path, "phase_reconstruction_window.raw"))
@@ -104,6 +109,4 @@ def spectrogram_test() -> None:
 if __name__ == "__main__":
 
     init_cuda()
-    torch.manual_seed(0)
-
     spectrogram_test()

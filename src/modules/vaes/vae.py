@@ -45,13 +45,8 @@ class IsotropicGaussianDistribution:
             self.std = torch.exp(0.5 * self.logvar)
             self.var = torch.exp(self.logvar)
     
-    def sample(self, noise_fn: Optional[Callable[..., torch.Tensor]] = None, **kwargs) -> torch.Tensor:
-        noise_fn = noise_fn or torch.randn
-        noise = noise_fn(self.mean.shape,
-                         device=self.parameters.device,
-                         dtype=self.parameters.dtype,
-                         **kwargs)
-        return self.mean + self.std * noise
+    def sample(self) -> torch.Tensor:
+        return self.mean + self.std * torch.randn_like(self.mean)
 
     def mode(self) -> torch.Tensor:
         return self.mean

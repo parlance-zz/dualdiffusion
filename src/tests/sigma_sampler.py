@@ -145,8 +145,10 @@ if __name__ == "__main__":
     print(f"avg batch     mean: {avg_batch_mean:{5}f}, min: {avg_batch_min:{5}f}, max: {avg_batch_max:{5}f}")
     print(f"avg reference mean: {avg_reference_mean:{5}f}, min: {avg_reference_min:{5}f}, max: {avg_reference_max:{5}f}")
 
-    batch_center = ((batch_sigma_histo**2 * torch.linspace(np.log(sigma_min), np.log(sigma_max), n_histo_bins)).sum() / (batch_sigma_histo**2).sum()).item()
-    reference_center = ((reference_sigma_histo**2 * torch.linspace(np.log(sigma_min), np.log(sigma_max), n_histo_bins)).sum() / (reference_sigma_histo**2).sum()).item()
+    #batch_center = ((batch_sigma_histo**2 * torch.linspace(np.log(sigma_min), np.log(sigma_max), n_histo_bins)).sum() / (batch_sigma_histo**2).sum()).item()
+    batch_center = batch_sigma_histo.argmax() / n_histo_bins * (np.log(sigma_max) - np.log(sigma_min)) + np.log(sigma_min)
+    #reference_center = ((reference_sigma_histo**2 * torch.linspace(np.log(sigma_min), np.log(sigma_max), n_histo_bins)).sum() / (reference_sigma_histo**2).sum()).item()
+    reference_center = reference_sigma_histo.argmax() / n_histo_bins * (np.log(sigma_max) - np.log(sigma_min)) + np.log(sigma_min)
     print(f"batch center: {batch_center:{5}f}, reference center: {reference_center:{5}f}")
 
     multi_plot((batch_sigma_histo, "batch sigma"), (batch_example, "batch example"), (reference_example, "reference example"),

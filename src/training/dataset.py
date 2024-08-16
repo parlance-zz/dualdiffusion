@@ -26,6 +26,7 @@ class DatasetConfig:
      use_pre_encoded_latents: bool
      num_proc: Optional[int] = None
      t_scale: Optional[float] = None
+     filter_invalid_samples: Optional[bool] = False
 
 class DatasetTransform(torch.nn.Module):
 
@@ -73,7 +74,7 @@ class DatasetTransform(torch.nn.Module):
             else:
                 sample, t_offset = load_audio(file_path,
                                             start=-1,
-                                            count=self.sample_crop_width,
+                                            count=self.config.sample_crop_width,
                                             return_start=True)
             
             samples.append(sample)
@@ -133,9 +134,9 @@ class DualDiffusionDataset:
             def min_length_filter(example):          
                 return torchaudio.info(example["file_name"]).num_frames >= self.config.sample_crop_width
         
-        pre_filter_n_samples = {split: len(ds) for split, ds in self.dataset_dict}
-        self.dataset_dict = self.dataset_dict.filter(min_length_filter)
-        self.num_filtered_samples = {split: (len(ds) - pre_filter_n_samples[split]) for split, ds in self.dataset_dict}
+        pre_filter_n_samples = {split: len(ds) for split, ds in self.dataset_dict.items()}
+        if self.config.filter_invalid_samples: self.dataset_dict = self.dataset_dict.filter(min_length_filter)
+        self.num_filtered_samples = {split: (len(ds) - pre_filter_n_samples[split]) for split, ds in self.dataset_dict.items()}
 
         dataset_transform_config = DatasetTransformConfig(
             use_pre_encoded_latents=self.config.use_pre_encoded_latents,

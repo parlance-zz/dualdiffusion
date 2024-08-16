@@ -27,67 +27,60 @@ import os
 import numpy as np
 import torch
 
-from modules.unet_edm2 import MPFourier
-from utils.dual_diffusion_utils import save_raw, save_raw_img
+from modules.mp_tools import MPFourier
+from utils.dual_diffusion_utils import (
+    tensor_to_img, save_img, save_tensor_raw, init_cuda, show_img
+)
 
+@torch.inference_mode()
+def mp_fourier_test():
 
-if __name__ == "__main__": # fourier embedding inner product test
+    torch.manual_seed(0)
 
-    steps = 512
-    cnoise = 128#192*4
-    target_snr = 32
-    sigma_data = 1
-    sigma_max = 200
-    sigma_min = sigma_data / target_snr
+    test_params = config.load_json(
+        os.path.join(config.CONFIG_PATH, "tests", "mp_fourier.json"))
     
+    steps = test_params["steps"]
+    emb_dim = test_params["emb_dim"]
+    emb_scale = test_params["emb_scale"]
+    softmax = test_params["softmax"]
+    sigma_data = test_params["sigma_data"]
+    sigma_max = test_params["sigma_max"]
+    sigma_min = test_params["sigma_min"]
+    bandwidth = test_params["bandwidth"]
+    sigma_scale = test_params["sigma_scale"]
 
-    #emb_fourier = MPFourier(cnoise, bandwidth=100)
-    emb_fourier = MPFourier(cnoise, bandwidth=512, flavor="pos")
+    emb_fourier = MPFourier(emb_dim, bandwidth=bandwidth, flavor="pos")
     
-    sigma = torch.linspace(np.log(sigma_min), np.log(sigma_max), steps).exp()
-    a = 1
-    theta1 = np.arctan(a / sigma_max); theta0 = np.arctan(a / sigma_min)
-    theta = torch.linspace(1, 0, steps) * (theta0 - theta1) + theta1
-    sigma = theta.cos() / theta.sin() * a
+    if sigma_scale == "log_linear":
+        sigma = torch.linspace(np.log(sigma_min), np.log(sigma_max), steps).exp()
+    elif sigma_scale == "log_sech":
+        theta1 = np.arctan(sigma_data / sigma_max); theta0 = np.arctan(sigma_data / sigma_min)
+        theta = torch.linspace(1, 0, steps) * (theta0 - theta1) + theta1
+        sigma = theta.cos() / theta.sin() * sigma_data
     
-    #noise_label = sigma.log() / 4
-    noise_label = torch.arange(steps) / steps - 0.5#torch.linspace(-0.5, 0.5, steps)
-    #noise_label = (sigma_data / sigma).atan()
-    #noise_label = torch.arange(steps) / steps #torch.linspace(-0.5, 0.5, steps)
-
-    c_skip = sigma_data ** 2 / (sigma ** 2 + sigma_data ** 2)
-    c_out = sigma * sigma_data / (sigma ** 2 + sigma_data ** 2).sqrt()
-
-    c_skip *= (sigma_data **2 + sigma ** 2).sqrt()
-    emb = emb_fourier(noise_label)
-    print(emb.shape)
-    print(emb.std())
-    emb = normalize(emb, dim=1)#*1.414
-    print(emb.std())
-    inner_products = (emb.view(1, steps, cnoise) * emb.view(steps, 1, cnoise)).sum(dim=2) / cnoise**0.5
+    emb = emb_fourier(sigma.log() / 4) * emb_scale / emb_dim**0.5
+    inner_products = (emb.view(1, steps, emb_dim) * emb.view(steps, 1, emb_dim)).sum(dim=2)
     
-    
-    inner_products -= inner_products.amax()
-    #inner_products /= inner_products.std()
-    
-    print(inner_products.amin())
-    #inner_products /= 128
-
-    inner_products = inner_products.exp()
-    inner_products /= inner_products.amax()
-
-    d_c_skip = c_skip[1:] - c_skip[:-1]
-    d_c_out = c_out[1:] - c_out[:-1]
-    #multi_plot((c_skip, "c_skip"), (d_c_skip.abs() + d_c_out.abs(), "c_skip*c_out"), added_plots={0: (c_out, "c_out")}, x_axis_range=(np.log(sigma_min), np.log(sigma_max)))
-    #multi_plot((c_skip, "c_skip"), (c_skip.log() + c_out.log(), "c_skip*c_out"), added_plots={0: (c_out, "c_out")}, x_axis_range=(np.log(sigma_min), np.log(sigma_max)))
+    if softmax:
+        inner_products -= inner_products.amax()
+        inner_products = inner_products.exp()
+    else:
+        inner_products /= inner_products.amax()
 
     debug_path = config.DEBUG_PATH
     if debug_path is not None:    
-        save_raw(inner_products / inner_products.amax(), os.path.join(debug_path, "fourier_inner_products.raw"))
-        inner_products_img = save_raw_img(inner_products, os.path.join(debug_path, "fourier_inner_products.png"))
+        test_output_path = os.path.join(debug_path, "mp_fourier_test")
 
         coverage = inner_products.sum(dim=0)
-        save_raw(coverage / coverage.amax(), os.path.join(debug_path, "fourier_inner_products_coverage.raw"))
+        save_tensor_raw(coverage / coverage.amax(), os.path.join(test_output_path, "coverage.raw"))
 
-        cv2.imshow("sample / output", inner_products_img)
-        cv2.waitKey(0)
+        save_tensor_raw(inner_products, os.path.join(test_output_path, "inner_products.raw"))
+        inner_products_img = tensor_to_img(inner_products)
+        save_img(inner_products_img, os.path.join(test_output_path, "inner_products.png"))
+        show_img(inner_products_img, "inner_products.png")
+
+if __name__ == "__main__":
+
+    init_cuda()
+    mp_fourier_test()

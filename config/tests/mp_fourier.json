@@ -1,0 +1,11 @@
+{
+  "steps": 512,
+  "emb_dim": 128,
+  "emb_scale": 1,
+  "softmax": false,
+  "sigma_max": 200,
+  "sigma_min": 0.03,
+  "sigma_data": 1,
+  "bandwidth": 1,
+  "sigma_scale": "log_linear"
+}

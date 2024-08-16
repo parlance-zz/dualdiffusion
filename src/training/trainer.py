@@ -438,8 +438,8 @@ class DualDiffusionTrainer:
 
         self.logger.info((
             f"Using dataset path {data_dir}",
-            f"{len(self.dataset["train"])} train samples ({self.dataset.num_filtered_samples["train"]} filtered)",
-            f"{len(self.dataset["validation"])} validation samples ({self.dataset.num_filtered_samples["validation"]} filtered)"))
+            f"{len(self.dataset['train'])} train samples ({self.dataset.num_filtered_samples['train']} filtered)",
+            f"{len(self.dataset['validation'])} validation samples ({self.dataset.num_filtered_samples['validation']} filtered)"))
         if self.config.dataloader.dataloader_num_workers > 0:
             self.logger.info(f"Using train dataloader with {self.config.dataloader.dataloader_num_workers} workers - prefetch factor = 2")
 
