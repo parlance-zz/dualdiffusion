@@ -22,9 +22,9 @@ class DatasetConfig:
      
      data_dir: str
      cache_dir: str
-     num_proc: Optional[int] = None
      sample_crop_width: int
      use_pre_encoded_latents: bool
+     num_proc: Optional[int] = None
      t_scale: Optional[float] = None
 
 class DatasetTransform(torch.nn.Module):
