@@ -34,7 +34,6 @@ from datetime import datetime
 from typing import Optional, Literal, Type
 from dataclasses import dataclass
 
-import datasets
 import torch
 import torch.utils.checkpoint
 from torch.optim.lr_scheduler import LambdaLR
@@ -42,10 +41,6 @@ from accelerate import Accelerator
 from accelerate.logging import get_logger
 from accelerate.utils import ProjectConfiguration, set_seed
 from tqdm.auto import tqdm
-
-import diffusers
-from diffusers.optimization import get_scheduler
-from diffusers.utils import is_tensorboard_available
 
 from pipelines.dual_diffusion_pipeline import DualDiffusionPipeline
 from utils.dual_diffusion_utils import dict_str
@@ -85,8 +80,7 @@ class TrainLogger():
 
 @dataclass
 class LRScheduleConfig:
-    lr_schedule: Literal["edm2", "linear", "cosine", "cosine_with_restarts",
-                         "polynomial", "constant", "constant_with_warmup"] = "edm2"
+    lr_schedule: Literal["edm2", "constant"] = "edm2"
     learning_rate: float     = 1e-2
     lr_warmup_steps: int     = 5000
     lr_reference_steps: int  = 5000
@@ -94,11 +88,12 @@ class LRScheduleConfig:
 
 @dataclass
 class OptimizerConfig:
-    adam_beta1: float       = 0.9
-    adam_beta2: float       = 0.99
-    adam_epsilon: float     = 1e-8
-    max_grad_norm: float    = 10.
-    add_grad_noise: float   = 0.
+    adam_beta1: float        = 0.9
+    adam_beta2: float        = 0.99
+    adam_epsilon: float      = 1e-8
+    adam_weight_decay: float = 0.
+    max_grad_norm: float     = 10.
+    add_grad_noise: float    = 0.
 
 @dataclass
 class EMAConfig:
@@ -146,7 +141,8 @@ class DualDiffusionTrainerConfig:
     strict_checkpoint_time: bool        = False
 
     enable_anomaly_detection: bool      = False
-    compile_full_graph: bool            = True
+    enable_model_compilation: bool      = True
+    compile_params: Optional[dict]      = None
 
     @staticmethod
     def from_json(json_path, **kwargs) -> "DualDiffusionTrainerConfig":
@@ -209,11 +205,7 @@ class DualDiffusionTrainer:
             datefmt="%m/%d/%Y %H:%M:%S",
             level=logging.INFO,
         )
-        
         self.logger.info(f"Logging to {log_path}")
-
-        datasets.utils.logging.set_verbosity_warning()
-        diffusers.utils.logging.set_verbosity_info()
 
     def init_accelerator(self) -> None:
 
@@ -304,9 +296,15 @@ class DualDiffusionTrainer:
         self.logger.info(f"Module class: {self.module_class.__name__}")
         self.logger.info(f"Module trainer class: {self.config.module_trainer_class.__name__}")
         
-        if self.config.compile_params is not None and platform.system() == "Linux":
-            self.logger.info(f"Compiling model with options: {dict_str(self.config.compile_params)}")
-            self.module.forward = torch.compile(self.module.forward, **self.config.compile_params)
+        if self.config.enable_model_compilation:
+            if platform.system() == "Linux":
+                self.config.compile_params = self.config.compile_params or {"fullgraph": True}
+                self.logger.info(f"Compiling model with options: {dict_str(self.config.compile_params)}")
+                self.module.forward = torch.compile(self.module.forward, **self.config.compile_params)
+            else:
+                self.logger.warning("PyTorch model compilation is currently only supported on Linux - skipping compilation")
+        else:
+            self.logger.info("PyTorch model compilation is disabled")
 
     def init_ema_module(self) -> None:
         
@@ -326,14 +324,15 @@ class DualDiffusionTrainer:
             self.module.parameters(),
             lr=self.config.lr_schedule.learning_rate,
             betas=(self.config.optimizer.adam_beta1, self.config.optimizer.adam_beta2),
-            weight_decay=0,
+            weight_decay=self.config.optimizer.adam_weight_decay,
             eps=self.config.optimizer.adam_epsilon,
             foreach=True,
             fused=True,
         )
 
-        self.logger.info(f"Using Adam optimiser with learning rate {self.config.lr_schedule.learning_rate}")
-        self.logger.info(f"AdamW beta1: {self.config.optimizer.adam_beta1} beta2: {self.config.optimizer.adam_beta2} eps: {self.config.optimizer.adam_epsilon}")
+        self.logger.info(f"Using AdamW optimiser with learning rate {self.config.lr_schedule.learning_rate}")
+        self.logger.info(f"AdamW beta1: {self.config.optimizer.adam_beta1} beta2: {self.config.optimizer.adam_beta2}")
+        self.logger.info(f"AdamW eps: {self.config.optimizer.adam_epsilon} weight decay: {self.config.optimizer.adam_weight_decay}")
 
         return optimizer
 
@@ -427,9 +426,10 @@ class DualDiffusionTrainer:
             drop_last=False,
         )
 
-        self.logger.info(f"Using dataset path {data_dir}")
-        self.logger.info(f"{len(self.dataset["train"])} train samples ({self.dataset.num_filtered_samples["train"]} filtered)")
-        self.logger.info(f"{len(self.dataset["validation"])} validation samples ({self.dataset.num_filtered_samples["validation"]} filtered)")
+        self.logger.info((
+            f"Using dataset path {data_dir}",
+            f"{len(self.dataset["train"])} train samples ({self.dataset.num_filtered_samples["train"]} filtered)",
+            f"{len(self.dataset["validation"])} validation samples ({self.dataset.num_filtered_samples["validation"]} filtered)"))
         if self.config.dataloader.dataloader_num_workers > 0:
             self.logger.info(f"Using train dataloader with {self.config.dataloader.dataloader_num_workers} workers - prefetch factor = 2")
 
@@ -440,37 +440,36 @@ class DualDiffusionTrainer:
  
     def init_lr_scheduler(self) -> None:
 
-        if self.config.lr_schedule.lr_schedule == "edm2":
-            self.logger.info((
-                f"Using learning rate schedule {self.config.lr_schedule.lr_schedule}",
-                f" with warmup steps = {self.config.lr_schedule.lr_warmup_steps},",
-                f" reference steps = {self.config.lr_schedule.lr_reference_steps},",
-                f" decay exponent = {self.config.lr_schedule.lr_decay_exponent}"))
-        else:
-            self.logger.info((f"Using learning rate schedule {self.config.lr_schedule.lr_schedule}",
-                              f"with warmup steps = {self.config.lr_schedule.lr_warmup_steps}"))
+        self.logger.info((
+            f"Using learning rate schedule {self.config.lr_schedule.lr_schedule}",
+            f" with warmup steps = {self.config.lr_schedule.lr_warmup_steps},",
+            f" reference steps = {self.config.lr_schedule.lr_reference_steps},",
+            f" decay exponent = {self.config.lr_schedule.lr_decay_exponent}"))
         
         scaled_lr_warmup_steps = self.config.lr_schedule.lr_warmup_steps * self.accelerator.num_processes
         scaled_lr_reference_steps = self.config.lr_schedule.lr_reference_steps * self.accelerator.num_processes
-        scaled_max_train_steps = self.max_train_steps * self.accelerator.num_processes
 
         if self.config.lr_schedule.lr_schedule == "edm2":
-            def edm2_lr_lambda(current_step: int):
+
+            def lr_schedule(current_step: int):
                 lr = 1.
                 if current_step < scaled_lr_warmup_steps:
                     lr *= current_step / scaled_lr_warmup_steps
                 if current_step > scaled_lr_reference_steps:
                     lr *= (scaled_lr_reference_steps / current_step) ** self.config.lr_schedule.lr_decay_exponent
                 return lr
-                
-            self.lr_scheduler = LambdaLR(self.optimizer, edm2_lr_lambda)
+            
+        elif self.config.lr_schedule.lr_schedule == "constant":
+
+            def lr_schedule(current_step: int):
+                if current_step < scaled_lr_warmup_steps:
+                    return current_step / scaled_lr_warmup_steps
+                return 1.
+
         else:
-            self.lr_scheduler = get_scheduler(
-                self.config.lr_schedule.lr_schedule,
-                optimizer=self.optimizer,
-                num_warmup_steps=scaled_lr_warmup_steps,
-                num_training_steps=scaled_max_train_steps,
-            )
+            raise ValueError(f"Unsupported learning rate schedule: {self.config.lr_schedule.lr_schedule}")
+        
+        self.lr_scheduler = LambdaLR(self.optimizer, lr_schedule)
    
     def save_checkpoint(self, global_step) -> None:
         

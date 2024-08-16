@@ -9,7 +9,7 @@
   "min_validation_time": 3600,
   "num_validation_epochs": 100,
   "enable_anomaly_detection": false,
-
+  "enable_model_compilation": true,
   "compile_params": {
     "fullgraph": true,
     "dynamic": false
@@ -25,6 +25,7 @@
     "adam_beta1": 0.9,
     "adam_beta2": 0.99,
     "adam_epsilon": 1e-8,
+    "adam_weight_decay": 0.0,
     "max_grad_norm": 10.0,
     "add_grad_noise": 0.0
   },
