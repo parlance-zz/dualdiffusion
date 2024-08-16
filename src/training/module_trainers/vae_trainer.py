@@ -1,5 +1,11 @@
 
+
 """
+
+            self.module.encode = torch.compile(self.module.encode, **self.config.compile_params)
+            self.module.decode = torch.compile(self.module.decode, **self.config.compile_params)
+            # todo: ideally compile format.raw_to_sample here as well, but complex operators are currently unsupported
+            
             latent_shape = module.get_latent_shape(sample_shape)
             channel_kl_loss_weight = model_params["vae_training_params"]["channel_kl_loss_weight"]
             recon_loss_weight = model_params["vae_training_params"]["recon_loss_weight"]

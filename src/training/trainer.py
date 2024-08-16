@@ -181,6 +181,7 @@ class DualDiffusionTrainer:
         self.init_checkpointing()
         self.init_lr_scheduler()
         self.init_dataloader()
+        self.init_torch_compile()
 
         self.module, self.optimizer, self.train_dataloader, self.validation_dataloader, self.lr_scheduler = self.accelerator.prepare(
             self.module, self.optimizer, self.train_dataloader, self.validation_dataloader, self.lr_scheduler
@@ -273,47 +274,14 @@ class DualDiffusionTrainer:
         self.module = getattr(self.pipeline, self.config.module_name).requires_grad_(True).train()
         self.module_class = type(self.module)
 
-        if self.config.module_name == "unet":
-            if not self.config.dataloader.use_pre_encoded_latents:
-
-                self.pipeline.vae = self.pipeline.vae.to(self.accelerator.device).requires_grad_(False).eval()
-                if self.accelerator.state.mixed_precision in ["fp16", "bf16"]:
-                    self.pipeline.vae = self.pipeline.vae.to(self.accelerator.state.mixed_precision)
-
-                self.logger.info(f"Training diffusion model with VAE")
-            else:
-                self.logger.info(f"Training diffusion model with pre-encoded latents")
-
-        elif self.config.module_name == "vae":
-            self.pipeline.unet = self.pipeline.unet.to("cpu").requires_grad_(False).eval()
-
-        self.vae = self.pipeline.vae
-        self.pipeline.format = self.pipeline.format.to(self.accelerator.device)
         self.sample_shape = self.pipeline.format.get_sample_shape(bsz=self.config.train_batch_size)
-        self.latent_shape = self.vae.get_latent_shape(self.sample_shape)
+        if hasattr(self.pipeline, "vae"):
+            self.latent_shape = self.pipeline.vae.get_latent_shape(self.sample_shape)
+        else:
+            self.latent_shape = None
 
         self.logger.info(f"Module class: {self.module_class.__name__}")
         self.logger.info(f"Module trainer class: {self.config.module_trainer_class.__name__}")
-        
-        if self.config.enable_model_compilation:
-            if platform.system() == "Linux":
-                self.config.compile_params = self.config.compile_params or {"fullgraph": True}
-                self.logger.info(f"Compiling model(s) with options: {dict_str(self.config.compile_params)}")
-            else:
-                self.config.enable_model_compilation = False
-                self.logger.warning("PyTorch model compilation is currently only supported on Linux - skipping compilation")
-        else:
-            self.logger.info("PyTorch model compilation is disabled")
-
-        if self.config.module_name == "unet":
-            self.module.forward = torch.compile(self.module.forward, **self.config.compile_params)
-            if not self.config.dataloader.use_pre_encoded_latents:
-                self.vae.encode = torch.compile(self.vae.encode, **self.config.compile_params)
-                # todo: ideally compile format.raw_to_sample here as well, but complex operators are currently unsupported
-        elif self.config.model_name == "vae":
-            self.module.encode = torch.compile(self.module.encode, **self.config.compile_params)
-            self.module.decode = torch.compile(self.module.decode, **self.config.compile_params)
-            # todo: ideally compile format.raw_to_sample here as well, but complex operators are currently unsupported
 
     def init_ema_module(self) -> None:
         
@@ -398,6 +366,39 @@ class DualDiffusionTrainer:
             if self.config.train_config_path is not None:
                 shutil.copy(self.config.train_config_path, tmp_path)
 
+    def init_lr_scheduler(self) -> None:
+
+        self.logger.info((
+            f"Using learning rate schedule {self.config.lr_schedule.lr_schedule}",
+            f" with warmup steps = {self.config.lr_schedule.lr_warmup_steps},",
+            f" reference steps = {self.config.lr_schedule.lr_reference_steps},",
+            f" decay exponent = {self.config.lr_schedule.lr_decay_exponent}"))
+        
+        scaled_lr_warmup_steps = self.config.lr_schedule.lr_warmup_steps * self.accelerator.num_processes
+        scaled_lr_reference_steps = self.config.lr_schedule.lr_reference_steps * self.accelerator.num_processes
+
+        if self.config.lr_schedule.lr_schedule == "edm2":
+
+            def lr_schedule(current_step: int):
+                lr = 1.
+                if current_step < scaled_lr_warmup_steps:
+                    lr *= current_step / scaled_lr_warmup_steps
+                if current_step > scaled_lr_reference_steps:
+                    lr *= (scaled_lr_reference_steps / current_step) ** self.config.lr_schedule.lr_decay_exponent
+                return lr
+            
+        elif self.config.lr_schedule.lr_schedule == "constant":
+
+            def lr_schedule(current_step: int):
+                if current_step < scaled_lr_warmup_steps:
+                    return current_step / scaled_lr_warmup_steps
+                return 1.
+
+        else:
+            raise ValueError(f"Unsupported learning rate schedule: {self.config.lr_schedule.lr_schedule}")
+        
+        self.lr_scheduler = LambdaLR(self.optimizer, lr_schedule)
+   
     def init_dataloader(self) -> None:
         
         if self.config.module_name == "unet" and self.config.dataloader.use_pre_encoded_latents:
@@ -446,40 +447,19 @@ class DualDiffusionTrainer:
         self.num_update_steps_per_epoch = math.ceil(num_process_steps_per_epoch / self.config.gradient_accumulation_steps)
         self.max_train_steps = self.config.num_train_epochs * self.num_update_steps_per_epoch
         self.total_batch_size = self.config.train_batch_size * self.accelerator.num_processes * self.config.gradient_accumulation_steps
- 
-    def init_lr_scheduler(self) -> None:
 
-        self.logger.info((
-            f"Using learning rate schedule {self.config.lr_schedule.lr_schedule}",
-            f" with warmup steps = {self.config.lr_schedule.lr_warmup_steps},",
-            f" reference steps = {self.config.lr_schedule.lr_reference_steps},",
-            f" decay exponent = {self.config.lr_schedule.lr_decay_exponent}"))
-        
-        scaled_lr_warmup_steps = self.config.lr_schedule.lr_warmup_steps * self.accelerator.num_processes
-        scaled_lr_reference_steps = self.config.lr_schedule.lr_reference_steps * self.accelerator.num_processes
+    def init_torch_compile(self) -> None:
 
-        if self.config.lr_schedule.lr_schedule == "edm2":
-
-            def lr_schedule(current_step: int):
-                lr = 1.
-                if current_step < scaled_lr_warmup_steps:
-                    lr *= current_step / scaled_lr_warmup_steps
-                if current_step > scaled_lr_reference_steps:
-                    lr *= (scaled_lr_reference_steps / current_step) ** self.config.lr_schedule.lr_decay_exponent
-                return lr
-            
-        elif self.config.lr_schedule.lr_schedule == "constant":
-
-            def lr_schedule(current_step: int):
-                if current_step < scaled_lr_warmup_steps:
-                    return current_step / scaled_lr_warmup_steps
-                return 1.
-
+        if self.config.enable_model_compilation:
+            if platform.system() == "Linux":
+                self.config.compile_params = self.config.compile_params or {"fullgraph": True}
+                self.logger.info(f"Compiling model(s) with options: {dict_str(self.config.compile_params)}")
+            else:
+                self.config.enable_model_compilation = False
+                self.logger.warning("PyTorch model compilation is currently only supported on Linux - skipping compilation")
         else:
-            raise ValueError(f"Unsupported learning rate schedule: {self.config.lr_schedule.lr_schedule}")
-        
-        self.lr_scheduler = LambdaLR(self.optimizer, lr_schedule)
-   
+            self.logger.info("PyTorch model compilation is disabled")
+
     def save_checkpoint(self, global_step) -> None:
         
         # save model checkpoint and training / optimizer state
@@ -579,12 +559,14 @@ class DualDiffusionTrainer:
         resume_dataloader = self.accelerator.skip_first_batches(self.train_dataloader, resume_step) if resume_step > 0 else None
 
         self.module_trainer = self.config.module_trainer_class(self.config.module_trainer_config, self)
+
         train_logger = TrainLogger()
         sample_logger = TrainLogger()
 
         if not self.config.dataloader.use_pre_encoded_latents:
             self.logger.info(f"Sample shape: {self.sample_shape}")
-        self.logger.info(f"Latent shape: {self.latent_shape}")
+        if self.latent_shape is not None:
+            self.logger.info(f"Latent shape: {self.latent_shape}")
 
         if hasattr(self.module, "normalize_weights"):
             self.module.normalize_weights()

@@ -28,11 +28,31 @@ class UNetTrainer(ModuleTrainer):
 
         self.config = config
         self.trainer = trainer
-        self.logger = self.trainer.logger
-        self.module = self.trainer.module
+        self.logger = trainer.logger
+        self.module = trainer.module
 
-        self.logger.info("Training UNet model:")
+        self.module.forward = torch.compile(self.module.forward, **trainer.config.compile_params)
 
+        if not trainer.config.dataloader.use_pre_encoded_latents:
+            trainer.pipeline.format = trainer.pipeline.format.to(self.accelerator.device)
+            trainer.pipeline.format.raw_to_sample = torch.compile(trainer.pipeline.format.raw_to_sample,
+                                                                  **trainer.config.compile_params)
+            if hasattr(trainer.pipeline, "vae"):
+                if trainer.pipeline.vae.config.last_global_step == 0:
+                    self.logger.error("VAE model has not been trained, aborting training..."); exit(1)
+                    
+                trainer.pipeline.vae = trainer.pipeline.vae.to(trainer.accelerator.device).requires_grad_(False).eval()
+                if trainer.accelerator.state.mixed_precision in ["fp16", "bf16"]:
+                    trainer.pipeline.vae = trainer.pipeline.vae.to(trainer.accelerator.state.mixed_precision)
+                trainer.pipeline.vae.encode = torch.compile(trainer.pipeline.vae.encode,
+                                                            **trainer.config.compile_params)
+                
+                self.logger.info(f"Training diffusion model with VAE")
+            else:
+                self.logger.info(f"Training diffusion model without VAE")
+        else:
+            self.logger.info(f"Training diffusion model with pre-encoded latents")
+        
         if self.config.num_loss_buckets > 0:
             self.logger.info(f"Using {self.config.num_loss_buckets} loss buckets")
             self.unet_loss_buckets = torch.zeros(
@@ -41,9 +61,6 @@ class UNetTrainer(ModuleTrainer):
                 self.config.num_loss_buckets, device="cpu", dtype=torch.float32)
         else:
             self.logger.info("UNet loss buckets are disabled")
-
-        if self.trainer.vae.config.last_global_step == 0 and self.trainer.config.dataloader.use_pre_encoded_latents == False:
-            self.logger.error("VAE model has not been trained, aborting training..."); exit(1)
 
         if self.config.input_perturbation > 0:
             self.logger.info(f"Using input perturbation of {self.config.input_perturbation}")
@@ -111,10 +128,10 @@ class UNetTrainer(ModuleTrainer):
             assert samples.shape == self.trainer.latent_shape
         else:
             samples = self.trainer.pipeline.format.raw_to_sample(raw_samples)
-            vae_class_embeddings = self.trainer.vae.get_class_embeddings(class_labels)
-            samples = self.trainer.vae.encode(samples.to(self.trainer.vae.dtype),
-                                              vae_class_embeddings,
-                                              self.trainer.pipeline.format).mode().detach()
+            vae_class_embeddings = self.trainer.pipeline.vae.get_class_embeddings(class_labels)
+            samples = self.trainer.pipeline.vae.encode(samples.to(self.trainer.pipeline.vae.dtype),
+                                                       vae_class_embeddings,
+                                                       self.trainer.pipeline.format).mode().detach()
             samples = normalize(samples).float()
 
         process_sigma = self.global_sigma[self.trainer.accelerator.local_process_index::self.trainer.accelerator.num_processes]
