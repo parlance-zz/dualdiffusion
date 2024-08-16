@@ -273,22 +273,21 @@ class DualDiffusionTrainer:
         self.module = getattr(self.pipeline, self.config.module_name).requires_grad_(True).train()
         self.module_class = type(self.module)
 
-        self.vae = self.pipeline.vae
-
         if self.config.module_name == "unet":
             if not self.config.dataloader.use_pre_encoded_latents:
 
-                self.vae = self.vae.to(self.accelerator.device).requires_grad_(False).eval()
+                self.pipeline.vae = self.pipeline.vae.to(self.accelerator.device).requires_grad_(False).eval()
                 if self.accelerator.state.mixed_precision in ["fp16", "bf16"]:
-                    self.vae = self.vae.to(self.accelerator.state.mixed_precision)
+                    self.pipeline.vae = self.pipeline.vae.to(self.accelerator.state.mixed_precision)
 
                 self.logger.info(f"Training diffusion model with VAE")
             else:
                 self.logger.info(f"Training diffusion model with pre-encoded latents")
 
         elif self.config.module_name == "vae":
-            self.pipeline.unet = self.pipeline.unet.to("cpu")
-       
+            self.pipeline.unet = self.pipeline.unet.to("cpu").requires_grad_(False).eval()
+
+        self.vae = self.pipeline.vae
         self.pipeline.format = self.pipeline.format.to(self.accelerator.device)
         self.sample_shape = self.pipeline.format.get_sample_shape(bsz=self.config.train_batch_size)
         self.latent_shape = self.vae.get_latent_shape(self.sample_shape)
@@ -299,12 +298,22 @@ class DualDiffusionTrainer:
         if self.config.enable_model_compilation:
             if platform.system() == "Linux":
                 self.config.compile_params = self.config.compile_params or {"fullgraph": True}
-                self.logger.info(f"Compiling model with options: {dict_str(self.config.compile_params)}")
-                self.module.forward = torch.compile(self.module.forward, **self.config.compile_params)
+                self.logger.info(f"Compiling model(s) with options: {dict_str(self.config.compile_params)}")
             else:
+                self.config.enable_model_compilation = False
                 self.logger.warning("PyTorch model compilation is currently only supported on Linux - skipping compilation")
         else:
             self.logger.info("PyTorch model compilation is disabled")
+
+        if self.config.module_name == "unet":
+            self.module.forward = torch.compile(self.module.forward, **self.config.compile_params)
+            if not self.config.dataloader.use_pre_encoded_latents:
+                self.vae.encode = torch.compile(self.vae.encode, **self.config.compile_params)
+                # todo: ideally compile format.raw_to_sample here as well, but complex operators are currently unsupported
+        elif self.config.model_name == "vae":
+            self.module.encode = torch.compile(self.module.encode, **self.config.compile_params)
+            self.module.decode = torch.compile(self.module.decode, **self.config.compile_params)
+            # todo: ideally compile format.raw_to_sample here as well, but complex operators are currently unsupported
 
     def init_ema_module(self) -> None:
         
@@ -654,6 +663,7 @@ class DualDiffusionTrainer:
                         if os.path.exists(_save_checkpoint): _save_checkpoint = True
                         if _save_checkpoint: self.save_checkpoint(global_step)
                         if os.path.exists(_save_checkpoint_path): os.remove(_save_checkpoint_path)
+                        _save_checkpoint = False
 
                 if global_step >= self.max_train_steps:
                     self.logger.info(f"Reached max train steps ({self.max_train_steps})")
@@ -680,7 +690,7 @@ class DualDiffusionTrainer:
             if self.config.num_validation_epochs > 0:
                 if (datetime.now() - self.last_validation_time).total_seconds() >= self.config.min_validation_time:
                     self.run_validation(global_step)
-                    
+        
         self.logger.info("Training complete")
         self.accelerator.end_training()
 
