@@ -303,6 +303,7 @@ def tensor_to_img(x: torch.Tensor,
     
     x = x.clone().detach().real.float().resolve_conj().cpu()
     while x.ndim < 4: x.unsqueeze_(0)
+    if x.ndim == 5: x = x.view(x.shape[0], x.shape[1], x.shape[2] * x.shape[3], x.shape[4])
     x = x.permute(0, 2, 3, 1).contiguous().view(x.shape[0] * x.shape[2], x.shape[3], x.shape[1])
 
     if recenter: x -= x.amin(dim=(-3,-2,-1), keepdim=True)
