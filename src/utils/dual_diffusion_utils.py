@@ -20,6 +20,8 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
+from utils import config
+
 import os
 from io import BytesIO
 from typing import Optional, Union
@@ -54,6 +56,8 @@ def multi_plot(*args, layout: Optional[tuple[int, int]] = None,
                y_log_scale: bool = False,
                x_axis_range: Optional[tuple] = None) -> None:
 
+    if config.NO_GUI: return
+    
     layout = layout or (len(args), 1)
     axes = np.atleast_2d(plt.subplots(layout[0],
                                       layout[1],
@@ -338,10 +342,12 @@ def open_img_window(name: str,
         cv2.setWindowProperty(name, cv2.WND_PROP_TOPMOST, 1)
 
 def show_img(np_img: np.ndarray, name: str, wait: int = 1) -> None:
+    if config.NO_GUI: return
     cv2.imshow(name, np_img)
     cv2.waitKey(wait)
 
 def close_img_window(name: str) -> None:
+    if config.NO_GUI: return
     cv2.destroyWindow(name)
     
 def slerp(start: torch.Tensor,

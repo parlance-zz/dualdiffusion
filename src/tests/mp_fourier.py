@@ -50,7 +50,7 @@ def mp_fourier_test():
     bandwidth = test_params["bandwidth"]
     sigma_scale = test_params["sigma_scale"]
 
-    emb_fourier = MPFourier(emb_dim, bandwidth=bandwidth, flavor="pos")
+    emb_fourier = MPFourier(emb_dim, bandwidth=bandwidth)
     
     if sigma_scale == "log_linear":
         sigma = torch.linspace(np.log(sigma_min), np.log(sigma_max), steps).exp()
@@ -71,12 +71,13 @@ def mp_fourier_test():
     debug_path = config.DEBUG_PATH
     if debug_path is not None:    
         test_output_path = os.path.join(debug_path, "mp_fourier_test")
+        print(f"Saving test output to {test_output_path}")
 
         coverage = inner_products.sum(dim=0)
         save_tensor_raw(coverage / coverage.amax(), os.path.join(test_output_path, "coverage.raw"))
 
         save_tensor_raw(inner_products, os.path.join(test_output_path, "inner_products.raw"))
-        inner_products_img = tensor_to_img(inner_products)
+        inner_products_img = tensor_to_img(inner_products, colormap=True)
         save_img(inner_products_img, os.path.join(test_output_path, "inner_products.png"))
         show_img(inner_products_img, "inner_products.png")
 
