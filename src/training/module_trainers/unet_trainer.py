@@ -1,3 +1,25 @@
+# MIT License
+#
+# Copyright (c) 2023 Christopher Friesen
+#
+# Permission is hereby granted, free of charge, to any person obtaining a copy
+# of this software and associated documentation files (the "Software"), to deal
+# in the Software without restriction, including without limitation the rights
+# to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+# copies of the Software, and to permit persons to whom the Software is
+# furnished to do so, subject to the following conditions:
+# 
+# The above copyright notice and this permission notice shall be included in all
+# copies or substantial portions of the Software.
+# 
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+# SOFTWARE.
+
 from dataclasses import dataclass
 from typing import Literal, Optional
 
@@ -31,12 +53,14 @@ class UNetTrainer(ModuleTrainer):
         self.logger = trainer.logger
         self.module = trainer.module
 
-        self.module.forward = torch.compile(self.module.forward, **trainer.config.compile_params)
+        if trainer.config.enable_model_compilation:
+            self.module.forward = torch.compile(self.module.forward, **trainer.config.compile_params)
 
         if not trainer.config.dataloader.use_pre_encoded_latents:
             trainer.pipeline.format = trainer.pipeline.format.to(self.accelerator.device)
-            trainer.pipeline.format.raw_to_sample = torch.compile(trainer.pipeline.format.raw_to_sample,
-                                                                  **trainer.config.compile_params)
+            #if trainer.config.enable_model_compilation: # todo: complex operators are not currently supported in compile
+            #    trainer.pipeline.format.raw_to_sample = torch.compile(trainer.pipeline.format.raw_to_sample,
+            #                                                        **trainer.config.compile_params)
             if hasattr(trainer.pipeline, "vae"):
                 if trainer.pipeline.vae.config.last_global_step == 0:
                     self.logger.error("VAE model has not been trained, aborting training..."); exit(1)
@@ -44,8 +68,9 @@ class UNetTrainer(ModuleTrainer):
                 trainer.pipeline.vae = trainer.pipeline.vae.to(trainer.accelerator.device).requires_grad_(False).eval()
                 if trainer.accelerator.state.mixed_precision in ["fp16", "bf16"]:
                     trainer.pipeline.vae = trainer.pipeline.vae.to(trainer.accelerator.state.mixed_precision)
-                trainer.pipeline.vae.encode = torch.compile(trainer.pipeline.vae.encode,
-                                                            **trainer.config.compile_params)
+                if trainer.config.enable_model_compilation:
+                    trainer.pipeline.vae.encode = torch.compile(trainer.pipeline.vae.encode,
+                                                                **trainer.config.compile_params)
                 
                 self.logger.info(f"Training diffusion model with VAE")
             else:
@@ -120,25 +145,28 @@ class UNetTrainer(ModuleTrainer):
         sample_t_ranges = batch["t_ranges"] if self.trainer.dataset.config.t_scale is not None else None
         #sample_author_ids = batch["author_ids"]
 
-        class_labels = self.trainer.pipeline.get_class_labels(sample_game_ids)
+        class_labels = self.trainer.pipeline.get_class_labels(sample_game_ids, module="unet")
         unet_class_embeddings = self.module.get_class_embeddings(class_labels)
 
         if self.trainer.config.dataloader.use_pre_encoded_latents:
-            samples = normalize(raw_samples).float()
+            samples = raw_samples
             assert samples.shape == self.trainer.latent_shape
         else:
             samples = self.trainer.pipeline.format.raw_to_sample(raw_samples)
             vae_class_embeddings = self.trainer.pipeline.vae.get_class_embeddings(class_labels)
             samples = self.trainer.pipeline.vae.encode(samples.to(self.trainer.pipeline.vae.dtype),
                                                        vae_class_embeddings,
-                                                       self.trainer.pipeline.format).mode().detach()
-            samples = normalize(samples).float()
+                                                       self.trainer.pipeline.format).mode()
+        
+        if self.config.input_perturbation is not None:
+            samples += torch.randn_like(samples) * self.config.input_perturbation
+        samples = normalize(samples).float()
 
         process_sigma = self.global_sigma[self.trainer.accelerator.local_process_index::self.trainer.accelerator.num_processes]
         batch_sigma = process_sigma[grad_accum_steps * self.trainer.config.train_batch_size:(grad_accum_steps+1) * self.trainer.config.train_batch_size]
 
         noise = torch.randn_like(samples) * batch_sigma.view(-1, 1, 1, 1)
-        samples = samples * self.module.config.sigma_data
+        samples = (samples * self.module.config.sigma_data).detach()
 
         denoised, error_logvar = self.module(samples + noise,
                                              batch_sigma,
@@ -162,7 +190,7 @@ class UNetTrainer(ModuleTrainer):
         return {"loss": batch_loss}
 
     @torch.no_grad()
-    def finish_batch(self) -> None:    
+    def finish_batch(self) -> dict[str, torch.Tensor]:
         logs = {}
 
         if self.config.num_loss_buckets > 0:
