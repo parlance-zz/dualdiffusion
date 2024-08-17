@@ -38,7 +38,7 @@ def spectrogram_test() -> None:
 
     torch.manual_seed(0)
     
-    test_params = config.load_json(os.path.join(config.CONFIG_PATH, "tests", "spectrogram_test.json"))
+    test_params = config.load_json(os.path.join(config.CONFIG_PATH, "tests", "spectrogram.json"))
     format_params = config.load_json(os.path.join(config.CONFIG_PATH, "tests", test_params["format_cfg_file"]))
 
     spectrogram_format = SpectrogramFormat(SpectrogramFormatConfig(**format_params)).to(device=test_params["device"])

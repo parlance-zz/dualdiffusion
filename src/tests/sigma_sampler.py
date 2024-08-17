@@ -29,33 +29,33 @@ import torch
 
 from training.sigma_sampler import SigmaSampler, SigmaSamplerConfig
 from pipelines.dual_diffusion_pipeline import DualDiffusionPipeline
-from utils.dual_diffusion_utils import multi_plot
+from utils.dual_diffusion_utils import multi_plot, init_cuda
 
-if __name__ == "__main__":
+@torch.inference_mode()
+def sigma_sampler_test():
 
-    reference_model_name = "edm2_vae_test7_12"
-    target_snr = 32.
-    sigma_max = 200.
-    sigma_data = 1.
-    sigma_min = sigma_data / target_snr
+    test_params = config.load_json(os.path.join(config.CONFIG_PATH, "tests", "sigma_sampler.json"))
 
-    training_batch_size = 384
-    batch_distribution = "ln_pdf"
-    batch_dist_scale = 1.
-    batch_dist_offset = 0.
-    batch_stratified_sampling = True
+    reference_model_name = test_params["reference_model_name"]
+    sigma_max = test_params["sigma_max"]
+    sigma_min = test_params["sigma_min"]
+    sigma_data = test_params["sigma_data"]
 
-    reference_batch_size = 384
-    reference_distribution = "log_sech"
-    reference_dist_scale = 1.
-    reference_dist_offset = 0.1
-    reference_stratified_sampling = True
+    training_batch_size = test_params["training_batch_size"]
+    batch_distribution = test_params["batch_distribution"]
+    batch_dist_scale = test_params["batch_dist_scale"]
+    batch_dist_offset = test_params["batch_dist_offset"]
+    batch_stratified_sampling = test_params["batch_stratified_sampling"]
 
-    n_iter = 10000
-    n_histo_bins = 200
-    use_y_log_scale = False
+    reference_batch_size = test_params["reference_batch_size"]
+    reference_distribution = test_params["reference_distribution"]
+    reference_dist_scale = test_params["reference_dist_scale"]
+    reference_dist_offset = test_params["reference_dist_offset"]
+    reference_stratified_sampling = test_params["reference_stratified_sampling"]
 
-    # ***********************************
+    n_iter = test_params["n_iter"]
+    n_histo_bins = test_params["n_histo_bins"]
+    use_y_log_scale = test_params["use_y_log_scale"]
 
     batch_distribution_pdf = None
     reference_distribution_pdf = None
@@ -154,3 +154,9 @@ if __name__ == "__main__":
     multi_plot((batch_sigma_histo, "batch sigma"), (batch_example, "batch example"), (reference_example, "reference example"),
             added_plots={0: (reference_sigma_histo, "reference_sigma")},
             y_log_scale=use_y_log_scale, x_axis_range=(np.log(sigma_min), np.log(sigma_max)))
+    
+if __name__ == "__main__":
+
+    init_cuda()
+    sigma_sampler_test()
+    
