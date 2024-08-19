@@ -51,7 +51,7 @@ class DualDiffusionModule(torch.nn.Module, ABC):
         
         module_name = type(self).module_name or os.path.basename(module_path)
 
-        config.save_json(self.config.asdict(), os.path.join(module_path, f"{module_name}.json"))
+        config.save_json(self.config.__dict__, os.path.join(module_path, f"{module_name}.json"))
         if type(self).has_trainable_parameters:
             save_safetensors(self.state_dict(), os.path.join(module_path, f"{module_name}.safetensors"))
 

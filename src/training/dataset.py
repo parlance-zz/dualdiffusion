@@ -13,8 +13,10 @@ from utils.dual_diffusion_utils import load_audio, dequantize_tensor
 @dataclass
 class DatasetTransformConfig:
 
-    use_pre_encoded_latents: bool
+    sample_rate: int
+    sample_raw_channels: int
     sample_crop_width: int
+    use_pre_encoded_latents: bool
     t_scale: Optional[float] = None
 
 @dataclass
@@ -22,6 +24,8 @@ class DatasetConfig:
      
      data_dir: str
      cache_dir: str
+     sample_rate: int
+     sample_raw_channels: int
      sample_crop_width: int
      use_pre_encoded_latents: bool
      num_proc: Optional[int] = None
@@ -33,6 +37,7 @@ class DatasetTransform(torch.nn.Module):
     def __init__(self, dataset_transform_config: DatasetTransformConfig) -> None:
         super(DatasetTransform, self).__init__()
         self.config = dataset_transform_config
+        self.resamplers: dict[int, torch.nn.Module] = {}
     
     @torch.no_grad()
     def get_t(self, t: float) -> float:
@@ -72,10 +77,25 @@ class DatasetTransform(torch.nn.Module):
                     except Exception as _:
                         pass
             else:
-                sample, t_offset = load_audio(file_path,
-                                            start=-1,
-                                            count=self.config.sample_crop_width,
-                                            return_start=True)
+                sample, sample_rate, t_offset = load_audio(file_path, start=-1,
+                                                           count=self.config.sample_crop_width,
+                                                           return_sample_rate=True,
+                                                           return_start=True)
+                
+                """
+                if sample.shape[0] < self.config.sample_raw_channels:
+                    repeat_channel = sample.mean(dim=0, keepdim=True).repeat(
+                        self.config.sample_raw_channels - sample.shape[0], 1)
+                    sample = torch.cat((sample, repeat_channel), dim=0)
+                elif sample.shape[0] > self.config.sample_raw_channels:
+                    sample = sample[:self.config.sample_raw_channels]
+
+                if sample_rate != self.config.sample_rate:
+                    if sample_rate not in self.resamplers:
+                        self.resamplers[sample_rate] = torchaudio.transforms.Resample(
+                            orig_freq=sample_rate, new_freq=self.config.sample_rate)
+                    sample = self.resamplers[sample_rate](sample)
+                """
             
             samples.append(sample)
             paths.append(file_path)
@@ -139,8 +159,10 @@ class DualDiffusionDataset:
         self.num_filtered_samples = {split: (len(ds) - pre_filter_n_samples[split]) for split, ds in self.dataset_dict.items()}
 
         dataset_transform_config = DatasetTransformConfig(
-            use_pre_encoded_latents=self.config.use_pre_encoded_latents,
+            sample_rate=self.config.sample_rate,
+            sample_raw_channels=self.config.sample_raw_channels,
             sample_crop_width=self.config.sample_crop_width,
+            use_pre_encoded_latents=self.config.use_pre_encoded_latents,
             t_scale=self.config.t_scale
         )
         dataset_transform = DatasetTransform(dataset_transform_config)

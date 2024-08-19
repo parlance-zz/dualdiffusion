@@ -1,4 +1,5 @@
 {
+  "format_cfg_file": "spectrogram_format.json",
   "use_pre_encoded_latents": false,
   "latents_crop_width": 512,
   "sample_crop_width": 1057570,

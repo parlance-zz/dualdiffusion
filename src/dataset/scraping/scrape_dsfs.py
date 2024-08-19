@@ -28,14 +28,14 @@ import time
 import zipfile
 
 base_game_url = "https://www.zophar.net"
-base_page_url = "https://www.zophar.net/music/nintendo-snes-spc?page="
-game_page_pattern = re.compile(r'href=["\'](/music/nintendo-snes-spc/[^"\']*)["\']')
-zip_link_pattern = re.compile(r'href=["\'](https://[^"\']*EMU[^"\']*\.zip)["\']')
+base_page_url = "https://www.zophar.net/music/sega-dreamcast-dsf?page="
+game_page_pattern = re.compile(r'href=["\'](/music/sega-dreamcast-dsf/[^"\']*)["\']')
+zip_link_pattern = re.compile(r'href=["\'](https://[^"\']*MP3[^"\']*\.zip)["\']')
 request_throttle_delay_seconds = 0.1
-target_zip_dir = "./dataset/spc/zip"
-target_spc_dir = "./dataset/spc"
+target_zip_dir = "./dataset/dsf/zip"
+target_spc_dir = "./dataset/dsf"
 start_page = 1
-end_page = 9
+end_page = 3
 
 # re-extract zip files
 """
@@ -55,8 +55,7 @@ for dirpath, _, filenames in os.walk(target_zip_dir):
 exit()
 """
 
-if not os.path.exists(target_zip_dir):
-    os.makedirs(target_zip_dir)
+os.makedirs(target_zip_dir, exist_ok=True)
 
 for page_number in range(start_page, end_page + 1):
     
@@ -79,12 +78,12 @@ for page_number in range(start_page, end_page + 1):
                 for zip_url in zip_links:
                     
                     zip_filename = urllib.parse.unquote(os.path.basename(zip_url))
-                    zip_filename = zip_filename.replace(".zophar", "").replace(" (EMU)", "").replace("(EMU)", "")
+                    zip_filename = zip_filename.replace(".zophar", "").replace(" (EMU)", "").replace("(EMU)", "").replace(" (MP3)", "").replace("(MP3)", "")
                     zip_save_path = os.path.join(target_zip_dir, zip_filename)
 
                     try:
+                        print(f"Downloading: {zip_filename}")
                         urllib.request.urlretrieve(zip_url, zip_save_path)
-                        print(f"Downloaded: {zip_filename}")
                     except Exception as e:
                         print(f"Failed to download {zip_filename}: {e}")
                         continue
@@ -92,8 +91,7 @@ for page_number in range(start_page, end_page + 1):
                     try:
                         game_name = os.path.splitext(zip_filename)[0]
                         game_dir = os.path.join(target_spc_dir, game_name)
-                        if not os.path.exists(game_dir):
-                            os.makedirs(game_dir)
+                        os.makedirs(game_dir, exist_ok=True)
                         with zipfile.ZipFile(zip_save_path, 'r') as zip_ref:
                             zip_ref.extractall(game_dir)
                         print(f"Extracted '{zip_save_path}' to '{game_dir}'")

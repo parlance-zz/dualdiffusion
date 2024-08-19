@@ -21,6 +21,7 @@
 # SOFTWARE.
 
 import utils.config as config
+
 import os
 import argparse
 

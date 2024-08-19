@@ -415,11 +415,12 @@ class DualDiffusionTrainer:
         dataset_config = DatasetConfig(
             data_dir=data_dir,
             cache_dir=config.CACHE_PATH,
-            num_proc=self.config.dataloader.dataset_num_proc,
-            filter_invalid_samples=self.config.dataloader.filter_invalid_samples,
             sample_crop_width=sample_crop_width,
+            sample_raw_channels=self.pipeline.format.config.sample_raw_channels,
             use_pre_encoded_latents=self.config.dataloader.use_pre_encoded_latents,
+            num_proc=self.config.dataloader.dataset_num_proc,
             t_scale=getattr(self.pipeline.unet.config, "t_scale", None) if self.config.module_name == "unet" else None,
+            filter_invalid_samples=self.config.dataloader.filter_invalid_samples,
         )
         
         self.dataset = DualDiffusionDataset(dataset_config)

@@ -1,10 +1,8 @@
 {
-  "datasource_formats": [".spc"],
-  "dataset_format": ".flac",
-  "dataset_sample_rate": 32000,
-  "dataset_num_channels": 2,
-  "dataset_min_sample_length": 1442048,
-  "dataset_max_sample_length": "00:02:30",
-  "dataset_hf_repository": "parlance/spc_audio",
-  "latents_hf_repository": "parlance/spc_audio_latents"
+  "formats": [".flac", ".mp3"],
+  "sample_rate": 32000,
+  "num_channels": 2,
+  "min_sample_length": 1442048,
+  "max_sample_length": null,
+  "pre_encoded_latents_vae": null
 }

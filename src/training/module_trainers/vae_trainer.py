@@ -64,7 +64,7 @@ class VAETrainer(ModuleTrainer):
         self.target_noise_std = (1 / (self.target_snr**2 + 1))**0.5
 
         self.logger.info("Training VAE model:")
-        self.logger.info(f"VAE Training params: {dict_str(config.asdict())}")
+        self.logger.info(f"VAE Training params: {dict_str(config.__dict__)}")
         self.logger.info(f"Dropout: {self.module.config.dropout}")
         self.logger.info(f"Target SNR: {self.target_snr:{8}f}")
     

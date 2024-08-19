@@ -39,6 +39,9 @@ def dataloader_test():
     test_params = config.load_json(
         os.path.join(config.CONFIG_PATH, "tests", "dataloader.json"))
     
+    format_config = config.load_json(
+        os.path.join(config.CONFIG_PATH, "tests", test_params["format_cfg_file"]))
+
     if test_params["use_pre_encoded_latents"]:
         data_dir = config.LATENTS_DATASET_PATH
         sample_crop_width = test_params["latents_crop_width"]
@@ -49,9 +52,11 @@ def dataloader_test():
     dataset_config = DatasetConfig(
         data_dir=data_dir,
         cache_dir=config.CACHE_PATH,
-        num_proc=test_params["dataset_num_proc"],
+        sample_rate=format_config["sample_rate"],
+        sample_raw_channels=format_config["sample_raw_channels"],
         sample_crop_width=sample_crop_width,
         use_pre_encoded_latents=test_params["use_pre_encoded_latents"],
+        num_proc=test_params["dataset_num_proc"],
         t_scale=test_params["t_scale"],
         filter_invalid_samples=test_params["filter_invalid_samples"]
     )
