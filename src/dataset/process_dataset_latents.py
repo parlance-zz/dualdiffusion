@@ -35,7 +35,7 @@ from pipelines.dual_diffusion_pipeline import DualDiffusionPipeline
 from formats.spectrogram import SpectrogramFormat
 from utils.dual_diffusion_utils import (
     init_cuda, load_audio, save_safetensors, load_safetensors,
-    quantize_tensor, dequantize_tensor, save_raw_img, save_audio
+    quantize_tensor, dequantize_tensor, save_img, save_audio
 )
 
 @torch.no_grad()

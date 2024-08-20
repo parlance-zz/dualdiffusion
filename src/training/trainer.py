@@ -193,7 +193,7 @@ class DualDiffusionTrainer:
 
     def init_logging(self) -> None:
         
-        self.logger = get_logger("dual_diffusion_training", log_level="INFO")
+        self.logger = get_logger("dualdiffusion_training", log_level="INFO")
 
         if self.config.logging.logging_dir is None:
             self.config.logging.logging_dir = os.path.join(self.config.model_path, f"logs_{self.config.module_name}")
