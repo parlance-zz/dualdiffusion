@@ -1,8 +1,10 @@
 {
-  "formats": [".flac", ".mp3"],
+  "dataset_formats": [".flac", ".mp3"],
+  "source_formats": [".flac", ".mp3", ".wav", ".ogg", ".m4a"],
   "sample_rate": 32000,
   "num_channels": 2,
   "min_sample_length": 1442048,
   "max_sample_length": null,
-  "pre_encoded_latents_vae": null
+  "pre_encoded_latents_vae": null,
+  "show_debug_info": true
 }
