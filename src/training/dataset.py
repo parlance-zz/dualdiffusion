@@ -60,7 +60,7 @@ class DatasetTransform(torch.nn.Module):
             #author_id = train_sample["author_id"]
 
             if self.config.use_pre_encoded_latents:
-                file_path = train_sample["latents_file_path"]
+                file_path = train_sample["latents_file_name"]
                 with ST.safe_open(file_path, framework="pt") as f:
                     latents_slice = f.get_slice("latents")
                     latents_shape = latents_slice.get_shape()
@@ -74,6 +74,8 @@ class DatasetTransform(torch.nn.Module):
                         sample = dequantize_tensor(sample, offset_and_range[latents_idx])
                     except Exception as _:
                         pass
+
+                assert sample.shape[2] == self.config.sample_crop_width
             else:
                 file_path = train_sample["file_name"]
                 sample, sample_rate, t_offset = load_audio(file_path, start=-1,
@@ -83,8 +85,7 @@ class DatasetTransform(torch.nn.Module):
                 
                 assert sample_rate == self.config.sample_rate
                 assert sample.shape[0] == self.config.sample_raw_channels
-
-            assert sample.shape[1] == self.config.sample_crop_width
+                assert sample.shape[1] == self.config.sample_crop_width
             
             samples.append(sample)
             paths.append(file_path)
