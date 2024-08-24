@@ -75,22 +75,22 @@ class DualDiffusionPipeline(torch.nn.Module):
                         torch_dtype: torch.dtype = torch.float32,
                         device: Optional[torch.device] = None,
                         load_latest_checkpoints: bool = False,
-                        load_emas: Optional[dict] = None ) -> "DualDiffusionPipeline":
+                        load_emas: Optional[dict[str, str]] = None ) -> "DualDiffusionPipeline":
         
         model_index = config.load_json(os.path.join(model_path, "model_index.json"))
-        model_modules = {}
+        model_modules: dict[str, DualDiffusionModule] = {}
         load_emas = load_emas or {}
         
         # load pipeline modules
         for module_name, module_import_dict in model_index["modules"].items():
             
             module_package = importlib.import_module(module_import_dict["package"])
-            module_class = getattr(module_package, module_import_dict["class"])
+            module_class: type[DualDiffusionModule] = getattr(module_package, module_import_dict["class"])
             
             module_path = os.path.join(model_path, module_name)
             if load_latest_checkpoints:
 
-                module_checkpoints = []
+                module_checkpoints: list[str] = []
                 for path in os.listdir(model_path):
                     if os.path.isdir(path) and path.startswith(f"{module_name}_checkpoint"):
                         module_checkpoints.append(path)
@@ -130,7 +130,7 @@ class DualDiffusionPipeline(torch.nn.Module):
             model_path = os.path.join(model_path, subfolder)
         os.makedirs(model_path, exist_ok=True)
         
-        model_modules = {}
+        model_modules: dict[str, dict[str, str]] = {}
         for module_name, module in self.named_children():
             if not isinstance(module, DualDiffusionModule):
                 continue

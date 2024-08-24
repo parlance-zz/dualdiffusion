@@ -26,7 +26,6 @@ import os
 import shutil
 import importlib
 import inspect
-import textwrap
 
 import torch
 
@@ -35,7 +34,7 @@ from pipelines.dual_diffusion_pipeline import DualDiffusionPipeline
 
 def print_module_info(module: DualDiffusionModule, module_name: str) -> None:
 
-    module_params = {}
+    module_params: dict[str, int] = {}
     num_emb_params = num_conv_params = num_attn_params = num_other_params = num_total_params = 0
     for name, param in module.named_parameters():
 
@@ -75,7 +74,7 @@ if __name__ == "__main__":
         raise FileNotFoundError(f"Model config path '{model_config_source_path}' not found")
     
     # load and initialize model modules
-    model_modules = {}
+    model_modules: dict[str, DualDiffusionModule] = {}
     model_index = config.load_json(os.path.join(model_config_source_path, "model_index.json"))
 
     for module_name, module_import_dict in model_index["modules"].items():

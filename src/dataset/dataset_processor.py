@@ -733,7 +733,9 @@ class DatasetProcessor:
             if sample["game_id"] is not None: used_game_ids.add(sample["game_id"])
             if sample["author_id"] is not None: used_author_ids.update(id for id in sample["author_id"])
 
-        unused_system_ids, unused_game_ids, unused_author_ids = {}, {}, {}
+        unused_system_ids: dict[str, int] = {}
+        unused_game_ids: dict[str, int] = {}
+        unused_author_ids: dict[str, int] = {}
         for system, system_id in self.dataset_info["system_id"].items():
             if system_id not in used_system_ids:
                 unused_system_ids[system] = system_id
