@@ -43,14 +43,12 @@ def dataloader_test():
         os.path.join(config.CONFIG_PATH, "tests", test_params["format_cfg_file"]))
 
     if test_params["use_pre_encoded_latents"]:
-        data_dir = config.LATENTS_DATASET_PATH
         sample_crop_width = test_params["latents_crop_width"]
     else:
-        data_dir = config.DATASET_PATH
         sample_crop_width = test_params["sample_crop_width"]
     
     dataset_config = DatasetConfig(
-        data_dir=data_dir,
+        data_dir=config.DATASET_PATH,
         cache_dir=config.CACHE_PATH,
         sample_rate=format_config["sample_rate"],
         sample_raw_channels=format_config["sample_raw_channels"],
@@ -76,7 +74,7 @@ def dataloader_test():
         drop_last=True,
     )
 
-    print(f"Using dataset path {data_dir} with split '{test_params['split']}' and batch size {test_params['batch_size']}")
+    print(f"Using dataset path {config.DATASET_PATH} with split '{test_params['split']}' and batch size {test_params['batch_size']}")
     print(f"  {len(dataset['train'])} train samples ({dataset.num_filtered_samples['train']} filtered)")
     print(f"  {len(dataset['validation'])} validation samples ({dataset.num_filtered_samples['validation']} filtered)")
 

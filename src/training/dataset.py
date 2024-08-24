@@ -35,9 +35,8 @@ class DatasetConfig:
 class DatasetTransform(torch.nn.Module):
 
     def __init__(self, dataset_transform_config: DatasetTransformConfig) -> None:
-        super(DatasetTransform, self).__init__()
+        super().__init__()
         self.config = dataset_transform_config
-        self.resamplers: dict[int, torch.nn.Module] = {}
     
     @torch.no_grad()
     def get_t(self, t: float) -> float:
@@ -57,12 +56,11 @@ class DatasetTransform(torch.nn.Module):
 
         for train_sample in examples:
             
-            file_path = train_sample["file_name"]
             game_id = train_sample["game_id"]
             #author_id = train_sample["author_id"]
 
             if self.config.use_pre_encoded_latents:
-
+                file_path = train_sample["latents_file_path"]
                 with ST.safe_open(file_path, framework="pt") as f:
                     latents_slice = f.get_slice("latents")
                     latents_shape = latents_slice.get_shape()
@@ -77,25 +75,16 @@ class DatasetTransform(torch.nn.Module):
                     except Exception as _:
                         pass
             else:
+                file_path = train_sample["file_name"]
                 sample, sample_rate, t_offset = load_audio(file_path, start=-1,
                                                            count=self.config.sample_crop_width,
                                                            return_sample_rate=True,
                                                            return_start=True)
                 
-                """
-                if sample.shape[0] < self.config.sample_raw_channels:
-                    repeat_channel = sample.mean(dim=0, keepdim=True).repeat(
-                        self.config.sample_raw_channels - sample.shape[0], 1)
-                    sample = torch.cat((sample, repeat_channel), dim=0)
-                elif sample.shape[0] > self.config.sample_raw_channels:
-                    sample = sample[:self.config.sample_raw_channels]
+                assert sample_rate == self.config.sample_rate
+                assert sample.shape[0] == self.config.sample_raw_channels
 
-                if sample_rate != self.config.sample_rate:
-                    if sample_rate not in self.resamplers:
-                        self.resamplers[sample_rate] = torchaudio.transforms.Resample(
-                            orig_freq=sample_rate, new_freq=self.config.sample_rate)
-                    sample = self.resamplers[sample_rate](sample)
-                """
+            assert sample.shape[1] == self.config.sample_crop_width
             
             samples.append(sample)
             paths.append(file_path)
@@ -137,25 +126,33 @@ class DualDiffusionDataset:
     def preprocess_dataset(self) -> None:
         
         def resolve_absolute_path(example):
-            relative_path = example['file_name']
-            absolute_path = os.path.join(self.config.data_dir, relative_path)
-            example['file_name'] = absolute_path
+            if example["file_name"] is not None:
+                example["file_name"] = os.path.join(self.config.data_dir, example["file_name"])
+            if example["latents_file_name"] is not None:
+                example["latents_file_name"] = os.path.join(self.config.data_dir, example["latents_file_name"])
             return example
         
         self.dataset_dict = self.dataset_dict.map(resolve_absolute_path)
         
         if self.config.use_pre_encoded_latents:
-            def min_length_filter(example):          
-                with ST.safe_open(example["file_name"], framework="pt") as f:
+            def invalid_sample_filter(example):
+                if example["latents_file_name"] is None:
+                    return False
+                with ST.safe_open(example["latents_file_name"], framework="pt") as f:
                     latents_slice = f.get_slice("latents")
                     latents_shape = latents_slice.get_shape()
                     return latents_shape[-1] >= self.config.sample_crop_width
         else:
-            def min_length_filter(example):          
-                return torchaudio.info(example["file_name"]).num_frames >= self.config.sample_crop_width
+            def invalid_sample_filter(example):
+                if example["file_name"] is None:
+                    return False
+                if example["sample_length"] is not None and example["num_channels"] is not None:
+                    return example["sample_length"] >= self.config.sample_crop_width and example["num_channels"] == self.config.sample_raw_channels
+                else:
+                    return False
         
         pre_filter_n_samples = {split: len(ds) for split, ds in self.dataset_dict.items()}
-        if self.config.filter_invalid_samples: self.dataset_dict = self.dataset_dict.filter(min_length_filter)
+        if self.config.filter_invalid_samples: self.dataset_dict = self.dataset_dict.filter(invalid_sample_filter)
         self.num_filtered_samples = {split: (len(ds) - pre_filter_n_samples[split]) for split, ds in self.dataset_dict.items()}
 
         dataset_transform_config = DatasetTransformConfig(

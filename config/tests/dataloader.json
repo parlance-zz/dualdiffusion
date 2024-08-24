@@ -10,6 +10,6 @@
   "batch_size": 32,
   "dataloader_num_workers": 8,
   "pin_memory": false,
-  "prefetch_factor": 4,
+  "prefetch_factor": 2,
   "num_epochs": 5
 }
