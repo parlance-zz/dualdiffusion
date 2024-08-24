@@ -4,7 +4,6 @@ from typing import Optional
 
 import numpy as np
 import torch
-import torchaudio
 import safetensors.torch as ST
 from datasets import load_dataset
 
@@ -17,6 +16,7 @@ class DatasetTransformConfig:
     sample_raw_channels: int
     sample_crop_width: int
     use_pre_encoded_latents: bool
+    latents_crop_width: int
     t_scale: Optional[float] = None
 
 @dataclass
@@ -28,6 +28,7 @@ class DatasetConfig:
      sample_raw_channels: int
      sample_crop_width: int
      use_pre_encoded_latents: bool
+     latents_crop_width: int
      num_proc: Optional[int] = None
      t_scale: Optional[float] = None
      filter_invalid_samples: Optional[bool] = False
@@ -65,9 +66,9 @@ class DatasetTransform(torch.nn.Module):
                     latents_slice = f.get_slice("latents")
                     latents_shape = latents_slice.get_shape()
 
-                    latents_idx = np.random.randint(0, latents_shape[0])
-                    t_offset = np.random.randint(0, latents_shape[-1] - self.config.sample_crop_width + 1)
-                    sample = latents_slice[latents_idx, ..., t_offset:t_offset + self.config.sample_crop_width]
+                    latents_idx = np.random.randint(0, latents_shape[0]) # get random variation
+                    t_offset = np.random.randint(0, latents_shape[-1] - self.config.latents_crop_width + 1)
+                    sample = latents_slice[latents_idx, ..., t_offset:t_offset + self.config.latents_crop_width]
 
                     try:
                         offset_and_range = f.get_slice("offset_and_range")
@@ -75,7 +76,7 @@ class DatasetTransform(torch.nn.Module):
                     except Exception as _:
                         pass
 
-                assert sample.shape[2] == self.config.sample_crop_width
+                assert sample.shape[2] == self.config.latents_crop_width
             else:
                 file_path = train_sample["file_name"]
                 sample, sample_rate, t_offset = load_audio(file_path, start=-1,
@@ -94,7 +95,7 @@ class DatasetTransform(torch.nn.Module):
 
             if self.config.t_scale is not None:
                 t_ranges.append(torch.tensor([self.get_t(t_offset),
-                                              self.get_t(t_offset + self.config.sample_crop_width)]))
+                    self.get_t(t_offset + self.config.sample_crop_width)]))
         
         batch_data = {
             "input": samples,
@@ -135,23 +136,21 @@ class DualDiffusionDataset:
         
         self.dataset_dict = self.dataset_dict.map(resolve_absolute_path)
         
-        if self.config.use_pre_encoded_latents:
-            def invalid_sample_filter(example):
+        def invalid_sample_filter(example):
+            if self.config.use_pre_encoded_latents:
                 if example["latents_file_name"] is None:
                     return False
-                with ST.safe_open(example["latents_file_name"], framework="pt") as f:
-                    latents_slice = f.get_slice("latents")
-                    latents_shape = latents_slice.get_shape()
-                    return latents_shape[-1] >= self.config.sample_crop_width
-        else:
-            def invalid_sample_filter(example):
+                if example["latents_length"] is not None:
+                    return example["latents_length"] >= self.config.latents_crop_width
+                return False
+            else:
                 if example["file_name"] is None:
                     return False
                 if example["sample_length"] is not None and example["num_channels"] is not None:
-                    return example["sample_length"] >= self.config.sample_crop_width and example["num_channels"] == self.config.sample_raw_channels
+                    return (example["sample_length"] >= self.config.sample_crop_width) and (example["num_channels"] == self.config.sample_raw_channels)
                 else:
                     return False
-        
+
         pre_filter_n_samples = {split: len(ds) for split, ds in self.dataset_dict.items()}
         if self.config.filter_invalid_samples: self.dataset_dict = self.dataset_dict.filter(invalid_sample_filter)
         self.num_filtered_samples = {split: (len(ds) - pre_filter_n_samples[split]) for split, ds in self.dataset_dict.items()}
@@ -161,6 +160,7 @@ class DualDiffusionDataset:
             sample_raw_channels=self.config.sample_raw_channels,
             sample_crop_width=self.config.sample_crop_width,
             use_pre_encoded_latents=self.config.use_pre_encoded_latents,
+            latents_crop_width=self.config.latents_crop_width,
             t_scale=self.config.t_scale
         )
         dataset_transform = DatasetTransform(dataset_transform_config)

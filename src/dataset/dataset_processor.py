@@ -22,9 +22,6 @@
 
 import utils.config as config
 
-import mutagen
-from tqdm.auto import tqdm
-
 import os
 import json
 import logging
@@ -33,7 +30,12 @@ from dataclasses import dataclass
 from typing import Generator, Optional
 from datetime import datetime
 
+import mutagen
+import safetensors.torch as ST
+from tqdm.auto import tqdm
+
 from utils.dual_diffusion_utils import dict_str
+
 
 @dataclass
 class DatasetProcessorConfig:
@@ -63,10 +65,9 @@ class DatasetSplit:
             "file_name": None,
             "file_size": None,
             "system": None,
-            "song": None,
             "game": None,
+            "song": None,
             "author": None,
-            "latents_file_name": None,
             "system_id": None,
             "game_id": None,
             "author_id": None,
@@ -74,7 +75,12 @@ class DatasetSplit:
             "num_channels": None,
             "sample_length": None,
             "bit_rate": None,
-            "pre_encoded_latents_vae": None,
+            "latents_file_name": None,
+            "latents_file_size": None,
+            "latents_length": None,
+            "latents_num_variations": None,
+            "latents_quantized": None,
+            "latents_vae_model": None,
         }
         if os.path.isfile(self.path):
             logging.getLogger().info(f"Loading split from {self.path}")
@@ -182,13 +188,12 @@ class DatasetProcessor:
         self.dataset_info = {
             "features": {
                 "system": {"type": "string"},
-                "song": {"type": "string"},
                 "game": {"type": "string"},
+                "song": {"type": "string"},
                 "author": {
                     "type": "list",
                     "value_type": {"type": "string"},
                 },
-                "latents_file_name": {"type": "string"},
                 "system_id": {
                     "type": "int",
                     "num_classes": 0,
@@ -207,8 +212,14 @@ class DatasetProcessor:
                 "sample_rate": {"type": "int"},
                 "num_channels": {"type": "int"},
                 "sample_length": {"type": "int"},
+                "file_size": {"type": "int"},
                 "bit_rate": {"type": "int"},
-                "pre_encoded_latents_vae": {"type": "string"},
+                "latents_file_name": {"type": "string"},
+                "latent_file_size": {"type": "int"},
+                "latents_length": {"type": "int"},
+                "latents_num_variations": {"type": "int"},
+                "latents_quantized": {"type": "bool"},
+                "latents_vae_model": {"type": "string"},
             },
             "system_id": {},
             "game_id": {},
@@ -216,20 +227,19 @@ class DatasetProcessor:
             "num_total_samples": 0,
             "num_train_samples": 0,
             "num_validation_samples": 0,
-            "processor_config": self.config.__dict__,
+            "processor_config": None,
         }
 
-        self.dataset_info_path = os.path.join(
-            config.DATASET_PATH, "dataset_infos", "dataset_info.json")
+        self.dataset_info_path = os.path.join(config.DATASET_PATH, "dataset_infos", "dataset_info.json")
         if os.path.isfile(self.dataset_info_path):
             self.logger.info(f"Loading dataset info from {self.dataset_info_path}")
-
             dataset_info = self.dataset_info | config.load_json(self.dataset_info_path)
             dataset_info["features"] = self.dataset_info["features"] | dataset_info["features"]
-            dataset_info["processor_config"] = self.config.__dict__
-            self.dataset_info = dataset_info
         else:
             self.logger.warning(f"Dataset info not found at {self.dataset_info_path}, creating new dataset")
+
+        dataset_info["processor_config"] = self.config.__dict__
+        self.dataset_info = dataset_info
 
         # load / create splits
         splits = [
@@ -315,7 +325,11 @@ class DatasetProcessor:
             if input(f"Clear latents metadata for {num_missing_latents} samples? (y/n): ").lower() == "y":
                 for _, _, sample in missing_latents_samples:
                     sample["latents_file_name"] = None
-                    sample["pre_encoded_latents_vae"] = None
+                    sample["latents_file_size"] = None
+                    sample["latents_length"] = None
+                    sample["latents_num_variations"] = None
+                    sample["latents_quantized"] = None
+                    sample["latents_vae_model"] = None
                 self.logger.info(f"Cleared latents metadata for {num_missing_latents} samples")
             self.logger.info("")
 
@@ -358,7 +372,7 @@ class DatasetProcessor:
 
     def scan(self) -> None:
 
-        # search for any files (excluding dataset metadata files) that are not in the source formats list
+        # search for any files (excluding dataset metadata and latents files) that are not in the source formats list
         # if any found, prompt to permanently delete them
         invalid_format_files = []
         valid_dataset_file_formats = self.config.dataset_formats + self.config.source_formats + [".jsonl", ".json", ".safetensors", ".md"]
@@ -434,10 +448,25 @@ class DatasetProcessor:
         # search for any samples in splits that have any null audio metadata fields
         # if any found, prompt to extract audio metadata
         need_metadata_samples = SampleList()
-        metadata_check_keys = ["sample_rate", "num_channels", "sample_length", "file_size", "bit_rate"]
+        metadata_check_keys = ["file_size", "sample_rate", "num_channels", "sample_length", "bit_rate"]
         for split, index, sample in self.all_samples():
             if any(sample[key] is None for key in metadata_check_keys):
                 need_metadata_samples.add_sample(split, index)
+
+        def get_audio_metadata(sample: dict) -> None:
+            if sample["file_name"] is None:
+                sample["file_size"] = None
+                sample["sample_rate"] = None
+                sample["num_channels"] = None
+                sample["sample_length"] = None
+                sample["bit_rate"] = None
+                return
+            audio_info = mutagen.File(os.path.join(config.DATASET_PATH, sample["file_name"])).info
+            sample["file_size"] = os.path.getsize(os.path.join(config.DATASET_PATH, sample["file_name"]))
+            sample["sample_rate"] = audio_info.sample_rate
+            sample["num_channels"] = audio_info.channels
+            sample["sample_length"] = int(audio_info.length * sample["sample_rate"])
+            sample["bit_rate"] = int(sample["file_size"] / 128 / audio_info.length)
 
         num_need_metadata = len(need_metadata_samples)
         if num_need_metadata > 0:
@@ -447,12 +476,7 @@ class DatasetProcessor:
                 failed_metadata_extraction_samples = SampleList()
                 for split, index, sample in tqdm(need_metadata_samples, total=num_need_metadata, mininterval=1):
                     try:
-                        audio_info = mutagen.File(os.path.join(config.DATASET_PATH, sample["file_name"])).info
-                        sample["sample_rate"] = audio_info.sample_rate
-                        sample["num_channels"] = audio_info.channels
-                        sample["sample_length"] = int(audio_info.length * sample["sample_rate"])
-                        sample["file_size"] = os.path.getsize(os.path.join(config.DATASET_PATH, sample["file_name"]))
-                        sample["bit_rate"] = int(sample["file_size"] / 128 / audio_info.length)
+                        get_audio_metadata(sample)
                     except Exception as e:
                         failed_metadata_extraction_samples.add_sample(split, index, str(e))
                         continue
@@ -528,8 +552,30 @@ class DatasetProcessor:
                 for _, _, sample in tqdm(transcode_samples, total=num_transcode, mininterval=1):
                     try:
                         sample_file_path = os.path.join(config.DATASET_PATH, sample["file_name"])
-                        transcoded_coded_file_path = os.path.splitext(sample_file_path)[0] + self.config.dataset_formats[0]
+                        transcoded_file_path = os.path.splitext(sample_file_path)[0] + self.config.dataset_formats[0]
+                        temporary_transcode_path = f"{transcoded_file_path}.tmp"
+                        if os.path.isfile(temporary_transcode_path):
+                            os.remove(temporary_transcode_path)
+
                         # todo: transcode sample
+
+                        # get file size of temporary file
+                        assert os.path.getsize(temporary_transcode_path) > 0
+                        shutil.move(temporary_transcode_path, transcoded_file_path)
+                        sample["file_name"] = os.path.relpath(transcoded_file_path, config.DATASET_PATH)
+                        get_audio_metadata(sample)
+
+                        if transcoded_file_path != sample_file_path:
+                            os.remove(sample_file_path)
+                        if sample["latents_file_name"] is not None:
+                            os.remove(os.path.join(config.DATASET_PATH, sample["latents_file_name"]))
+                        sample["latents_file_name"] = None
+                        sample["latent_file_size"] = None
+                        sample["latents_length"] = None
+                        sample["latents_num_variations"] = None
+                        sample["latents_quantized"] = None
+                        sample["latents_vae_model"] = None
+
                     except Exception as e:
                         failed_transcode_samples.add_sample(split, index, str(e))
                         continue
@@ -547,6 +593,48 @@ class DatasetProcessor:
         pass
     
     def validate_metadata(self) -> None:
+        
+        # search for any samples in splits that have a latents_file_name and any null latents metadata fields
+        # if any found, prompt to extract latents metadata
+        need_metadata_samples = SampleList()
+        metadata_check_keys = ["latents_file_size", "latents_length", "latents_num_variations", "latents_quantized"]
+        for split, index, sample in self.all_samples():
+            if sample["latents_file_name"] is not None:
+                if any(sample[key] is None for key in metadata_check_keys):
+                    need_metadata_samples.add_sample(split, index)
+
+        num_need_metadata = len(need_metadata_samples)
+        if num_need_metadata > 0:
+            self.logger.warning(f"Found {num_need_metadata} samples with missing latents metadata")
+            need_metadata_samples.show_samples()
+            if input(f"Extract missing latents metadata for {num_need_metadata} samples? (y/n): ").lower() == "y":
+                failed_metadata_extraction_samples = SampleList()
+                for split, index, sample in tqdm(need_metadata_samples, total=num_need_metadata, mininterval=1):
+                    try:
+                        latents_file_path = os.path.join(config.DATASET_PATH, sample["latents_file_name"])
+                        sample["latents_file_size"] = os.path.getsize(latents_file_path)
+
+                        with ST.safe_open(latents_file_path, framework="pt") as f:
+                            latents_shape = f.get_slice("latents").get_shape()
+                            sample["latents_length"] = latents_shape[-1]
+                            sample["latents_num_variations"] = latents_shape[0]
+                            try:
+                                _ = f.get_slice("offset_and_range")
+                                sample["latents_quantized"] = True
+                            except Exception as _:
+                                sample["latents_quantized"] = False
+                                                       
+                    except Exception as e:
+                        failed_metadata_extraction_samples.add_sample(split, index, str(e))
+                        continue
+
+                num_failed_metadata = len(failed_metadata_extraction_samples)
+                if num_failed_metadata > 0:
+                    self.logger.warning(f"Failed to extract latents metadata for {len(failed_metadata_extraction_samples)} samples")
+                    failed_metadata_extraction_samples.show_samples()
+                self.logger.info(f"Extracted missing latents metadata for {num_need_metadata - num_failed_metadata} samples")
+
+            self.logger.info("")
 
         # search for any system, game, or author ids that don't match the dataset_info
         # if any found, prompt to clear invalid metadata
@@ -690,10 +778,12 @@ class DatasetProcessor:
 
     def encode_latents(self) -> None:
 
-        # todo: if self.config.pre_encoded_latents_vae is null skip encode_latents step
+        # if self.config.pre_encoded_latents_vae is null skip encode_latents step
+        if self.config.pre_encoded_latents_vae is None:
+            self.logger.warning("Skipping encode_latents because config.pre_encoded_latents_vae is not defined")
 
-        # todo: search for any samples with a null pre_encoded_latents_vae, or
-        # a pre_encoded_latents_vae that doesn't match the config vae model name
+        # todo: search for any samples with a null latents_vae_model, or
+        # a latents_vae_model that doesn't match the config vae model name
         # or a null latents_file_name
         # if any found, prompt to encode them with configured vae and update metadata
         # will need to launch subprocess to use accelerate
@@ -733,7 +823,7 @@ class DatasetProcessor:
             self.logger.info(f"Finished without saving changes")
 
     def process_dataset(self) -> None:
-
+        
         self.validate_files()
         self.scan()
         self.transcode()

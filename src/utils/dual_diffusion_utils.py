@@ -206,21 +206,22 @@ def load_audio(input_path: Union[str, bytes],
     else:
         return return_vals
 
-def save_safetensors(tensors_dict:torch.Tensor , output_path: str) -> None:
+def save_safetensors(tensors_dict: dict[str, torch.Tensor], output_path: str,
+                     metadata: Optional[dict[str, str]] = None) -> None:
     directory = os.path.dirname(output_path)
     os.makedirs(directory, exist_ok=True)
 
     for key in tensors_dict:
         val = tensors_dict[key]
         if torch.is_tensor(val):
-            val = val.detach().resolve_conj().cpu()
+            val = val.detach().resolve_conj().contiguous().cpu()
         else:
             val = torch.tensor(val)
         tensors_dict[key] = val
 
-    ST.save_file(tensors_dict, output_path)
+    ST.save_file(tensors_dict, output_path, metadata=metadata)
 
-def load_safetensors(input_path: str, device: Optional[torch.device] = None) -> torch.Tensor:
+def load_safetensors(input_path: str, device: Optional[torch.device] = None) -> dict[str, torch.Tensor]:
     return ST.load_file(input_path, device=device)
 
 def get_expected_max_normal(n: int) -> float:

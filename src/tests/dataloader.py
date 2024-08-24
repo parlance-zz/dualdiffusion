@@ -31,6 +31,7 @@ from tqdm.auto import tqdm
 from utils.dual_diffusion_utils import init_cuda
 from training.dataset import DatasetConfig, DualDiffusionDataset
 
+
 @torch.inference_mode()
 def dataloader_test():
 
@@ -42,18 +43,14 @@ def dataloader_test():
     format_config = config.load_json(
         os.path.join(config.CONFIG_PATH, "tests", test_params["format_cfg_file"]))
 
-    if test_params["use_pre_encoded_latents"]:
-        sample_crop_width = test_params["latents_crop_width"]
-    else:
-        sample_crop_width = test_params["sample_crop_width"]
-    
     dataset_config = DatasetConfig(
         data_dir=config.DATASET_PATH,
         cache_dir=config.CACHE_PATH,
         sample_rate=format_config["sample_rate"],
         sample_raw_channels=format_config["sample_raw_channels"],
-        sample_crop_width=sample_crop_width,
+        sample_crop_width=test_params["sample_crop_width"],
         use_pre_encoded_latents=test_params["use_pre_encoded_latents"],
+        latents_crop_width=test_params["latents_crop_width"],
         num_proc=test_params["dataset_num_proc"],
         t_scale=test_params["t_scale"],
         filter_invalid_samples=test_params["filter_invalid_samples"]
