@@ -32,7 +32,7 @@ accelerate config
 # *install python vscode extension and set interpreter to dualdiffusion env*
 
 # dataset config
-nano ./config/dataset.json
+nano ./config/dataset/dataset.json
 
 # dataset upload / download
 # huggingface-cli download hf_user/dataset_repo --repo-type dataset --local-dir /path/to/dataset

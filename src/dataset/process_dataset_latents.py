@@ -84,7 +84,7 @@ if __name__ == "__main__":
     pitch_augmentation_formats = [get_pitch_augmentation_format(pipeline.format, shift).to(device) for shift in pitch_shifts]
     formats = [pipeline.format] + pitch_augmentation_formats
     
-    dataset_cfg = config.load_json(os.path.join(config.CONFIG_PATH, "dataset.json"))
+    dataset_cfg = config.load_json(os.path.join(config.CONFIG_PATH, "dataset", "dataset.json"))
     dataset_path = config.DATASET_PATH
     debug_path = config.DEBUG_PATH
     dataset_format = dataset_cfg["dataset_format"]

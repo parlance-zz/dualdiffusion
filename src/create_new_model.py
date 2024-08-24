@@ -137,9 +137,7 @@ if __name__ == "__main__":
             """)
 
     # copy dataset info to model path if available
-    dataset_info_path = os.path.join(config.LATENTS_DATASET_PATH, "dataset_infos", "dataset_info.json")
-    if not os.path.isfile(dataset_info_path):
-        dataset_info_path = os.path.join(config.DATASET_PATH, "dataset_infos", "dataset_info.json")
+    dataset_info_path = os.path.join(config.DATASET_PATH, "dataset_infos", "dataset_info.json")
     if not os.path.isfile(dataset_info_path):
         print(f"Warning: Unable to copy dataset info to model, file not found at '{dataset_info_path}'")
     else:

@@ -110,7 +110,7 @@ if __name__ == "__main__":
     SOURCE_DIR = config.DATASOURCE_PATH
     OUTPUT_SAMPLE_DIR = config.DATASET_PATH
 
-    dataset_cfg = config.load_json(os.path.join(config.CONFIG_PATH, "dataset.json"))
+    dataset_cfg = config.load_json(os.path.join(config.CONFIG_PATH, "dataset", "dataset.json"))
     SOURCE_FORMATS = dataset_cfg["datasource_formats"]
     OUTPUT_SAMPLE_FORMAT = dataset_cfg["dataset_format"]
     OUTPUT_SAMPLE_RATE = dataset_cfg["dataset_sample_rate"]

@@ -234,7 +234,7 @@ def organize_dataset(): # organize samples into directories of 10,000 samples ea
 
 if __name__ == "__main__":
 
-    dataset_cfg = config.load_json(os.path.join(config.CONFIG_PATH, "dataset.json"))
+    dataset_cfg = config.load_json(os.path.join(config.CONFIG_PATH, "dataset", "dataset.json"))
 
     FFMPEG_PATH = config.FFMPEG_PATH
     OUTPUT_SAMPLE_DIR = config.DATASET_PATH

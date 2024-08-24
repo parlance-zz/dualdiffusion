@@ -43,8 +43,6 @@ SRC_PATH = os.getenv("PYTHON_PATH")
 CACHE_PATH = os.getenv("CACHE_PATH")
 
 FFMPEG_PATH = os.getenv("FFMPEG_PATH")
-DATASOURCE_PATH = os.getenv("DATASOURCE_PATH")
 DATASET_PATH = os.getenv("DATASET_PATH")
-LATENTS_DATASET_PATH = os.getenv("LATENTS_DATASET_PATH")
 
 NO_GUI = int(os.getenv("NO_GUI") or 0) == 1
