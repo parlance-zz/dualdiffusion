@@ -58,5 +58,5 @@ class DualDiffusionModule(torch.nn.Module, ABC):
     @torch.no_grad()
     def normalize_weights(self) -> None:
         for module in self.modules():
-            if hasattr(module, "normalize_weights"):
+            if hasattr(module, "normalize_weights") and module != self:
                 module.normalize_weights()

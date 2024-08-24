@@ -42,21 +42,21 @@ from modules.formats.format import DualDiffusionFormat
 @dataclass
 class UNetConfig(DualDiffusionUNetConfig):
 
-    model_channels: int  = 256,               # Base multiplier for the number of channels.
-    logvar_channels: int = 128,               # Number of channels for training uncertainty estimation.
-    channel_mult: list[int]    = (1,2,3,4,5), # Per-resolution multipliers for the number of channels.
-    channel_mult_noise: Optional[int] = None, # Multiplier for noise embedding dimensionality.
-    channel_mult_emb: Optional[int]   = None, # Multiplier for final embedding dimensionality.
-    channels_per_head: int    = 64,           # Number of channels per attention head.
-    num_layers_per_block: int = 2,            # Number of resnet blocks per resolution.
-    label_balance: float      = 0.5,          # Balance between noise embedding (0) and class embedding (1).
-    concat_balance: float     = 0.5,          # Balance between skip connections (0) and main path (1).
-    res_balance: float        = 0.3,          # Balance between main branch (0) and residual branch (1).
-    attn_balance: float       = 0.3,          # Balance between main branch (0) and self-attention (1).
-    attn_levels: list[int]    = (3,4),        # List of resolution levels to use self-attention.
-    mlp_multiplier: int = 2,                  # Multiplier for the number of channels in the MLP.
-    mlp_groups: int     = 8,                  # Number of groups for the MLPs.
-    qk_attn_gain_exponent: float = 0.5,       # Controls amount of modulation for attention qk gain / "sharpness"
+    model_channels: int  = 256               # Base multiplier for the number of channels.
+    logvar_channels: int = 128               # Number of channels for training uncertainty estimation.
+    channel_mult: list[int]    = (1,2,3,4,5) # Per-resolution multipliers for the number of channels.
+    channel_mult_noise: Optional[int] = None # Multiplier for noise embedding dimensionality.
+    channel_mult_emb: Optional[int]   = None # Multiplier for final embedding dimensionality.
+    channels_per_head: int    = 64           # Number of channels per attention head.
+    num_layers_per_block: int = 2            # Number of resnet blocks per resolution.
+    label_balance: float      = 0.5          # Balance between noise embedding (0) and class embedding (1).
+    concat_balance: float     = 0.5          # Balance between skip connections (0) and main path (1).
+    res_balance: float        = 0.3          # Balance between main branch (0) and residual branch (1).
+    attn_balance: float       = 0.3          # Balance between main branch (0) and self-attention (1).
+    attn_levels: list[int]    = (3,4)        # List of resolution levels to use self-attention.
+    mlp_multiplier: int = 2                  # Multiplier for the number of channels in the MLP.
+    mlp_groups: int     = 8                  # Number of groups for the MLPs.
+    qk_attn_gain_exponent: float = 0.5       # Controls amount of modulation for attention qk gain / "sharpness"
 
 class Block(torch.nn.Module):
 

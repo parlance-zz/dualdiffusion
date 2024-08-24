@@ -109,6 +109,8 @@ class MPConv(torch.nn.Module):
                  kernel: tuple[int, int], disable_weight_norm: bool = False, groups: int = 1) -> None:
         super().__init__()
 
+        self.in_channels = in_channels
+        self.out_channels = out_channels
         self.disable_weight_norm = disable_weight_norm
         self.groups = groups
 

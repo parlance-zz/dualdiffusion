@@ -405,10 +405,8 @@ class DualDiffusionTrainer:
    
     def init_dataloader(self) -> None:
         
-        if self.config.module_name == "unet" and self.config.dataloader.use_pre_encoded_latents:
-            sample_crop_width = self.latent_shape[-1]
-        else:
-            sample_crop_width = self.pipeline.format.get_sample_crop_width()
+        latents_crop_width = self.latent_shape[-1] if self.latent_shape is not None else 0
+        sample_crop_width = self.pipeline.format.get_sample_crop_width()
         
         dataset_config = DatasetConfig(
             data_dir=config.DATASET_PATH,
@@ -416,6 +414,7 @@ class DualDiffusionTrainer:
             sample_crop_width=sample_crop_width,
             sample_raw_channels=self.pipeline.format.config.sample_raw_channels,
             use_pre_encoded_latents=self.config.dataloader.use_pre_encoded_latents,
+            latents_crop_width=latents_crop_width,
             num_proc=self.config.dataloader.dataset_num_proc,
             t_scale=getattr(self.pipeline.unet.config, "t_scale", None) if self.config.module_name == "unet" else None,
             filter_invalid_samples=self.config.dataloader.filter_invalid_samples,

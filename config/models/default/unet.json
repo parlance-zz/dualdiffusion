@@ -20,7 +20,7 @@
   "label_balance": 0.5,
   "label_dim": 1612,
   "label_dropout": 0.1,
-  "last_global_step": 170970,
+  "last_global_step": 178350,
   "logvar_channels": 128,
   "mlp_groups": 8,
   "mlp_multiplier": 2,
@@ -29,7 +29,7 @@
   "out_channels": 4,
   "qk_attn_gain_exponent": 0.0,
   "res_balance": 0.3,
-  "sigma_data": 1,
+  "sigma_data": 1.0,
   "sigma_max": 200.0,
   "sigma_min": 0.03,
   "use_t_ranges": false

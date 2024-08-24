@@ -32,15 +32,15 @@ from modules.formats.format import DualDiffusionFormat
 @dataclass
 class DualDiffusionUNetConfig(DualDiffusionModuleConfig, ABC):
 
-    in_channels:  int = 4,
-    out_channels: int = 4,
-    use_t_ranges: bool = False,
-    label_dim: int = 1,
-    label_dropout: float = 0.1,
-    dropout:    float = 0.,
-    sigma_max:  float = 200.,
-    sigma_min:  float = 0.03,
-    sigma_data: float = 1., 
+    in_channels:  int = 4
+    out_channels: int = 4
+    use_t_ranges: bool = False
+    label_dim: int = 1
+    label_dropout: float = 0.1
+    dropout:    float = 0.
+    sigma_max:  float = 200.
+    sigma_min:  float = 0.03
+    sigma_data: float = 1.
 
 class DualDiffusionUNet(DualDiffusionModule, ABC):
 

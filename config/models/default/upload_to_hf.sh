@@ -29,4 +29,4 @@ last_checkpoint=$(find_last_checkpoint)
 #read -e upload_path
 #echo $last_checkpoint
 
-huggingface-cli upload --repo-type=model --delete="*" $repo $last_checkpoint $last_checkpoint
+huggingface-cli upload --repo-type=model $repo $last_checkpoint $last_checkpoint

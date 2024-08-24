@@ -169,7 +169,7 @@ class SpectrogramConverter(torch.nn.Module):
 class SpectrogramFormat(DualDiffusionFormat):
 
     @torch.no_grad()
-    def __init__(self, config: DualDiffusionFormatConfig) -> None:
+    def __init__(self, config: SpectrogramFormatConfig) -> None:
         super().__init__()
         self.config = config
         self.spectrogram_converter = SpectrogramConverter(config)

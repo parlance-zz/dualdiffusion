@@ -25,6 +25,8 @@ from utils import config
 import os
 import shutil
 import importlib
+import inspect
+import textwrap
 
 import torch
 
@@ -80,13 +82,13 @@ if __name__ == "__main__":
 
         module_package = importlib.import_module(module_import_dict["package"])
         module_class = getattr(module_package, module_import_dict["class"])
-
+        module_config_class = module_class.config_class or inspect.signature(module_class.__init__).parameters["config"].annotation
         module_config_path = os.path.join(model_config_source_path, f"{module_name}.json")
         if not os.path.isfile(module_config_path):
             raise FileNotFoundError(f"Module config '{module_config_path}' not found")
-        module_config = config.load_json(module_config_path)
+        module_config = module_config_class(**config.load_json(module_config_path))
 
-        model_modules[module_name] = module_class(**module_config)
+        model_modules[module_name] = module_class(module_config)
         print_module_info(model_modules[module_name], module_name)
 
         if hasattr(model_modules[module_name], "normalize_weights"):
@@ -129,12 +131,12 @@ if __name__ == "__main__":
         module_train_sh_path = os.path.join(model_train_config_path, f"{module_name}_train.sh")
         with open(module_train_sh_path, "w") as f:
             f.write(f"""#!/bin/bash
-                    accelerate launch \
-                    --config_file "{module_accelerate_config_dest_path}" \
-                    "{module_train_sh_path}" \
-                    --model_path="{new_model_path}" \
-                    --train_config_path="{module_train_config_dest_path}"
-            """)
+accelerate launch \
+--config_file "{module_accelerate_config_dest_path}" \
+"{os.path.join(config.SRC_PATH, "train.py")}" \
+--model_path="{new_model_path}" \
+--train_config_path="{module_train_config_dest_path}"
+""")
 
     # copy dataset info to model path if available
     dataset_info_path = os.path.join(config.DATASET_PATH, "dataset_infos", "dataset_info.json")

@@ -1,15 +1,15 @@
 {
   "modules": {
     "unet": {
-      "package": "models.unet_edm2_b4",
+      "package": "modules.unets.unet_edm2_b4",
       "class": "UNet"
     },
     "vae": {
-      "package": "models.vae_edm2",
+      "package": "modules.vaes.vae_edm2",
       "class": "AutoencoderKL_EDM2"
     },
     "format": {
-      "package": "formats.spectrogram",
+      "package": "modules.formats.spectrogram",
       "class": "SpectrogramFormat"
     }
   }

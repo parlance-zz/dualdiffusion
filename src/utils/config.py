@@ -39,7 +39,7 @@ load_dotenv(override=True)
 CONFIG_PATH = os.getenv("CONFIG_PATH")
 MODELS_PATH = os.getenv("MODELS_PATH")
 DEBUG_PATH = os.getenv("DEBUG_PATH")
-SRC_PATH = os.getenv("PYTHON_PATH")
+SRC_PATH = os.getenv("PYTHONPATH")
 CACHE_PATH = os.getenv("CACHE_PATH")
 
 FFMPEG_PATH = os.getenv("FFMPEG_PATH")

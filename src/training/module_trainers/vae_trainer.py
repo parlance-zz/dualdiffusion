@@ -32,11 +32,11 @@ from utils.dual_diffusion_utils import dict_str
 @dataclass
 class VAETrainerConfig(ModuleTrainerConfig):
 
-    block_overlap: int = 8,
+    block_overlap: int = 8
     block_widths: tuple = (8, 16, 32, 64)
-    channel_kl_loss_weight: float = 0.1,
-    imag_loss_weight: float = 0.1,
-    point_loss_weight: float = 0,
+    channel_kl_loss_weight: float = 0.1
+    imag_loss_weight: float = 0.1
+    point_loss_weight: float = 0
     recon_loss_weight: float = 0.1
 
 class VAETrainer(ModuleTrainer):

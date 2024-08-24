@@ -33,17 +33,16 @@ from modules.mp_tools import MPConv, normalize, resample, mp_silu, mp_sum
 @dataclass
 class DualDiffusionVAE_EDM2Config(DualDiffusionVAEConfig):
 
-    model_channels: int  = 256,               # Base multiplier for the number of channels.
-    channel_mult: list[int]   = (1,2,3,4),    # Per-resolution multipliers for the number of channels.
-    channel_mult_emb: Optional[int] = None,   # Multiplier for final embedding dimensionality.
-    channels_per_head: int    = 64,           # Number of channels per attention head.
-    num_layers_per_block: int = 2,            # Number of resnet blocks per resolution.
-    res_balance: float        = 0.3,          # Balance between main branch (0) and residual branch (1).
-    attn_balance: float       = 0.3,          # Balance between main branch (0) and self-attention (1).
-    mlp_multiplier: int = 1,                  # Multiplier for the number of channels in the MLP.
-    mlp_groups: int     = 1,                  # Number of groups for the MLPs.
-    add_mid_block_attention: bool = False     # Add attention layers in decoder mid-block
-    target_snr: float   = 32.                 # Sets SNR for isotropic gaussian latent decoder
+    model_channels: int       = 256          # Base multiplier for the number of channels.
+    channel_mult: list[int]   = (1,2,3,4)    # Per-resolution multipliers for the number of channels.
+    channel_mult_emb: Optional[int] = None   # Multiplier for final embedding dimensionality.
+    channels_per_head: int    = 64           # Number of channels per attention head.
+    num_layers_per_block: int = 2            # Number of resnet blocks per resolution.
+    res_balance: float        = 0.3          # Balance between main branch (0) and residual branch (1).
+    attn_balance: float       = 0.3          # Balance between main branch (0) and self-attention (1).
+    mlp_multiplier: int = 1                  # Multiplier for the number of channels in the MLP.
+    mlp_groups: int     = 1                  # Number of groups for the MLPs.
+    add_mid_block_attention: bool = False    # Add attention layers in decoder mid-block
 
 class Block(torch.nn.Module):
 
@@ -206,9 +205,9 @@ class AutoencoderKL_EDM2(DualDiffusionVAE):
             
             if level == len(cblock) - 1:
                 self.dec[f"block{level}_in0"] = Block(level, cout, cout, cemb, flavor="dec",
-                                                      attention=config.add_mid_block_attention, **block_kwargs)
+                                                      use_attention=config.add_mid_block_attention, **block_kwargs)
                 self.dec[f"block{level}_in1"] = Block(level, cout, cout, cemb, flavor="dec",
-                                                      attention=config.add_mid_block_attention, **block_kwargs)
+                                                      use_attention=config.add_mid_block_attention, **block_kwargs)
             else:
                 self.dec[f"block{level}_up"] = Block(level, cout, cout, cemb, flavor="dec",
                                                      resample_mode="up", **block_kwargs)
@@ -216,7 +215,7 @@ class AutoencoderKL_EDM2(DualDiffusionVAE):
                 cin = cout
                 cout = channels
                 self.dec[f"block{level}_layer{idx}"] = Block(level, cin, cout, cemb, flavor="dec",
-                                                             attention=False, **block_kwargs)
+                                                             use_attention=False, **block_kwargs)
         self.conv_out = MPConv(cout, config.out_channels, kernel=(3,3))
 
     def get_class_embeddings(self, class_labels: torch.Tensor) -> torch.Tensor:

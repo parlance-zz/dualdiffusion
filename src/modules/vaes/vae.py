@@ -20,7 +20,7 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
-from typing import Optional, Callable, Union
+from typing import Optional, Union
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 
@@ -68,12 +68,12 @@ class IsotropicGaussianDistribution:
 @dataclass
 class DualDiffusionVAEConfig(DualDiffusionModuleConfig, ABC):
 
-    in_channels:     int = 2,
-    out_channels:    int = 2,
-    latent_channels: int = 4,
-    label_dim:    int = 1,
-    dropout:    float = 0.,
-    target_snr: float = 16.,
+    in_channels:     int = 2
+    out_channels:    int = 2
+    latent_channels: int = 4
+    label_dim:    int = 1
+    dropout:    float = 0.
+    target_snr: float = 16.
 
 class DualDiffusionVAE(DualDiffusionModule, ABC):
 
