@@ -198,7 +198,7 @@ class DualDiffusionPipeline(torch.nn.Module):
         else:
             raise ValueError(f"Unknown labels dtype '{type(labels)}'")
         
-        return class_labels.float()
+        return class_labels.to(device=self.device, dtype=self.dtype)
 
     @torch.inference_mode()
     def __call__(self, params: SamplingParams) -> torch.Tensor:

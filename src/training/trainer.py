@@ -435,10 +435,10 @@ class DualDiffusionTrainer:
         self.validation_dataloader = torch.utils.data.DataLoader(
             self.dataset["validation"],
             batch_size=self.config.train_batch_size,
-            drop_last=False,
+            drop_last=True,
         )
 
-        self.logger.info(f"Using dataset path {config.DATASET_PATH} with {dataset_config.num_proc} dataset processes")
+        self.logger.info(f"Using dataset path {config.DATASET_PATH} with {dataset_config.num_proc or 1} dataset processes)")
         self.logger.info(f"  {len(self.dataset['train'])} train samples ({self.dataset.num_filtered_samples['train']} filtered)")
         self.logger.info(f"  {len(self.dataset['validation'])} validation samples ({self.dataset.num_filtered_samples['validation']} filtered)")
 
@@ -524,6 +524,14 @@ class DualDiffusionTrainer:
 
         if path is None:
             self.logger.warning(f"No existing checkpoints found, starting a new training run.")
+            if self.module.config.last_global_step > 0:
+                self.logger.warning(f"Last global step in module config is {self.module.config.last_global_step}, but no checkpoint found")
+                #global_step = self.module.config.last_global_step
+                
+                #print("optimizer step:", self.optimizer.state[self.optimizer.param_groups[0]["params"][-1]]["step"])
+                #print("optimizer state:", self.optimizer.state)
+                #for g in self.optimizer.param_groups:
+                #    print(g) 
         else:
             global_step = int(path.split("-")[1])
             self.logger.info(f"Resuming from checkpoint {path} (global step: {global_step})")
@@ -577,7 +585,7 @@ class DualDiffusionTrainer:
         for epoch in range(first_epoch, self.config.num_train_epochs):
             
             progress_bar = tqdm(total=self.num_update_steps_per_epoch, disable=not self.accelerator.is_local_main_process)
-            if resume_step > 0: progress_bar.update(resume_step // self.config.gradient_accumulation_steps)
+            if resume_dataloader is not None: progress_bar.update(resume_step // self.config.gradient_accumulation_steps)
             progress_bar.set_description(f"Epoch {epoch}")
 
             grad_accum_steps = 0
@@ -638,7 +646,7 @@ class DualDiffusionTrainer:
                     logs = train_logger.get_logs()
                     self.accelerator.log(logs, step=global_step)
                     progress_bar.set_postfix(loss=logs["loss"], grad_norm=logs["grad_norm"], global_step=global_step)
-                        
+                    
                     if self.accelerator.is_main_process:
                         _save_checkpoint = False
                         if self.config.strict_checkpoint_time:
@@ -655,21 +663,21 @@ class DualDiffusionTrainer:
                     break
             
             progress_bar.close()
-            resume_dataloader = None
-
             self.accelerator.wait_for_everyone()
+            resume_dataloader = None
+            
             if self.accelerator.is_main_process:
                 
-                if not self.config.strict_checkpoint_time:
-                    if (datetime.now() - self.last_checkpoint_time).total_seconds() >= self.config.min_checkpoint_time:
-                        self.save_checkpoint(global_step)
-                        
                 sample_log_path = os.path.join(self.config.model_path, "tmp", "sample_loss.json")
                 try:
                     sorted_sample_logs = dict(sorted(sample_logger.get_logs().items(), key=lambda item: item[1]))
                     config.save_json(sorted_sample_logs, sample_log_path)
                 except Exception as e:
                     self.logger.warning(f"Error saving sample logs to {sample_log_path}: {e}")
+
+                if not self.config.strict_checkpoint_time:
+                    if (datetime.now() - self.last_checkpoint_time).total_seconds() >= self.config.min_checkpoint_time:
+                        self.save_checkpoint(global_step)
 
             self.accelerator.wait_for_everyone()
             if self.config.num_validation_epochs > 0:
@@ -686,6 +694,7 @@ class DualDiffusionTrainer:
         self.logger.info(f"  Num examples = {len(self.dataset['validation'])}")
         self.logger.info(f"  Num Epochs = {self.config.num_validation_epochs}")
 
+        start_validation_time = datetime.now()
         num_validation_process_steps_per_epoch = math.floor(len(self.validation_dataloader) / self.accelerator.num_processes)
         num_validation_update_steps_per_epoch = math.ceil(num_validation_process_steps_per_epoch / self.config.gradient_accumulation_steps)
 
@@ -696,7 +705,7 @@ class DualDiffusionTrainer:
             progress_bar = tqdm(total=num_validation_update_steps_per_epoch, disable=not self.accelerator.is_local_main_process)
             progress_bar.set_description(f"Validation Epoch {epoch}")
 
-            for step, batch in enumerate(self.validation_dataloader):        
+            for step, batch in enumerate(self.validation_dataloader):
                 if step % self.config.gradient_accumulation_steps == 0:
                     self.module_trainer.init_batch()
                 
@@ -711,20 +720,22 @@ class DualDiffusionTrainer:
             
             progress_bar.close()
 
-            validation_logs = {}
-            for key, value in validation_logger.get_logs().items():
-                key = key.replace("/", "_validation/", 1) if "/" in key else key + "_validation"
-                validation_logs[key] = value
-            self.accelerator.log(validation_logs, step=global_step)
+        validation_logs = {}
+        for key, value in validation_logger.get_logs().items():
+            key = key.replace("/", "_validation/", 1) if "/" in key else key + "_validation"
+            validation_logs[key] = value
+        self.accelerator.log(validation_logs, step=global_step)
 
-            self.accelerator.wait_for_everyone()
-            if self.accelerator.is_main_process:                   
-                sample_log_path = os.path.join(self.config.model_path, "tmp", "sample_loss_validation.json")
-                try:
-                    sorted_sample_logs = dict(sorted(sample_logger.get_logs().items(), key=lambda item: item[1]))
-                    config.save_json(sorted_sample_logs, sample_log_path)
-                except Exception as e:
-                    self.logger.warning(f"Error saving validation sample logs to {sample_log_path}: {e}")
+        self.accelerator.wait_for_everyone()
+        if self.accelerator.is_main_process:                   
+            sample_log_path = os.path.join(self.config.model_path, "tmp", "sample_loss_validation.json")
+            try:
+                sorted_sample_logs = dict(sorted(sample_logger.get_logs().items(), key=lambda item: item[1]))
+                config.save_json(sorted_sample_logs, sample_log_path)
+            except Exception as e:
+                self.logger.warning(f"Error saving validation sample logs to {sample_log_path}: {e}")
 
-        self.logger.info(f"Validation complete (runtime: {(datetime.now() - self.last_validation_time).total_seconds()}s")
+        self.logger.info(f"Validation complete (runtime: {(datetime.now() - start_validation_time).total_seconds()}s)")
         self.last_validation_time = datetime.now()
+
+        #self.accelerator.optimizer_step_was_skipped

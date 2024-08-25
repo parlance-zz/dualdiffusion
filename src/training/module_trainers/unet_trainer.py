@@ -90,7 +90,6 @@ class UNetTrainer(ModuleTrainer):
         if self.config.input_perturbation > 0:
             self.logger.info(f"Using input perturbation of {self.config.input_perturbation}")
         else: self.logger.info("Input perturbation is disabled")
-
         self.logger.info(f"Dropout: {self.module.config.dropout} Conditioning dropout: {self.module.config.label_dropout}")
 
         sigma_sampler_config = SigmaSamplerConfig(
@@ -109,7 +108,8 @@ class UNetTrainer(ModuleTrainer):
 
         if self.config.num_loss_buckets > 0:
             bucket_ln_sigma = (1 / torch.linspace(torch.pi/2, 0, self.config.num_loss_buckets+1).tan()).log()
-            self.bucket_names = [f"unet_loss_buckets/b{i} s:{bucket_ln_sigma[i]:.3f} ~ {bucket_ln_sigma[i+1]:.3f}"
+            bucket_ln_sigma[0] = float("-inf"); bucket_ln_sigma[-1] = float("inf")
+            self.bucket_names = [f"unet_buckets_loss/b{i} s:{bucket_ln_sigma[i]:.3f} ~ {bucket_ln_sigma[i+1]:.3f}"
                                  for i in range(self.config.num_loss_buckets)]
 
     @staticmethod
@@ -150,13 +150,14 @@ class UNetTrainer(ModuleTrainer):
 
         if self.trainer.config.dataloader.use_pre_encoded_latents:
             samples = raw_samples
-            assert samples.shape == self.trainer.latent_shape
+            assert samples.shape == self.trainer.latent_shape, f"Expected shape {self.trainer.latent_shape}, got {samples.shape}"
         else:
             samples = self.trainer.pipeline.format.raw_to_sample(raw_samples)
             vae_class_embeddings = self.trainer.pipeline.vae.get_class_embeddings(class_labels)
             samples = self.trainer.pipeline.vae.encode(samples.to(self.trainer.pipeline.vae.dtype),
                                                        vae_class_embeddings,
                                                        self.trainer.pipeline.format).mode()
+            assert samples.shape == self.trainer.sample_shape, f"Expected shape {self.trainer.sample_shape}, got {samples.shape}"
         
         if self.config.input_perturbation > 0:
             samples += torch.randn_like(samples) * self.config.input_perturbation
