@@ -45,7 +45,7 @@ class DualMCLTFormat(DualDiffusionFormat):
         in_channels = out_channels = self.config.sample_raw_channels
         return (in_channels, out_channels)
     
-    def get_raw_crop_width(self, length: Optional[int] = None) -> int:
+    def sample_raw_crop_width(self, length: Optional[int] = None) -> int:
         block_width = self.config.window_len
         length = length or self.config.sample_raw_length
         return length // block_width // 64 * 64 * block_width + block_width
@@ -53,7 +53,7 @@ class DualMCLTFormat(DualDiffusionFormat):
     def get_sample_shape(self, bsz: int = 1, length: Optional[int] = None):
         _, num_output_channels = self.get_num_channels()
 
-        crop_width = self.get_raw_crop_width(length=length)
+        crop_width = self.sample_raw_crop_width(length=length)
         num_mclt_bins = self.config.window_len // 2
         chunk_len = crop_width // num_mclt_bins - 2
 

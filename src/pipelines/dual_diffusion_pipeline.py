@@ -70,6 +70,20 @@ class DualDiffusionPipeline(torch.nn.Module):
             
             self.add_module(module_name, module)
 
+        self.dtype = torch.get_default_dtype()
+        self.device = torch.device("cpu")
+
+    def to(self, device: Optional[torch.device] = None,
+           dtype: Optional[torch.dtype] = None, **kwargs) -> "DualDiffusionPipeline":
+        super().to(device=device, dtype=dtype, **kwargs)
+
+        self.dtype = dtype or self.dtype
+        self.device = device or self.device
+        return self
+    
+    def half(self) -> "DualDiffusionModule":
+        return self.to(dtype=torch.bfloat16)
+    
     @staticmethod
     def from_pretrained(model_path: str,
                         torch_dtype: torch.dtype = torch.float32,
@@ -105,7 +119,7 @@ class DualDiffusionPipeline(torch.nn.Module):
         # load and merge ema weights
         for module_name in load_emas:
             ema_module_path = os.path.join(module_path, f"{module_name}_ema", load_emas[module_name])
-            if os.path.exists(ema_module_path):
+            if os.path.isfile(ema_module_path):
                 model_modules[module_name].load_state_dict(load_safetensors(ema_module_path))
 
                 if hasattr(model_modules[module_name], "normalize_weights"):
@@ -113,7 +127,7 @@ class DualDiffusionPipeline(torch.nn.Module):
             else:
                 raise FileNotFoundError(f"EMA checkpoint '{load_emas[module_name]}' not found in '{os.path.dirname(ema_module_path)}'")
         
-        pipeline = DualDiffusionPipeline(**model_modules).to(device=device)
+        pipeline = DualDiffusionPipeline(model_modules).to(device=device)
 
         # load optional dataset info
         dataset_info_path = os.path.join(model_path, "dataset_info.json")
@@ -161,9 +175,9 @@ class DualDiffusionPipeline(torch.nn.Module):
     def get_class_labels(self, labels: Union[int, torch.Tensor, list[int], dict[str, float]],
                          module: str = "unet") -> torch.Tensor:
 
-        label_dim = getattr(self, module).label_dim
+        label_dim = getattr(self, module).config.label_dim
         assert label_dim > 0, f"{module} label dim must be > 0, got {label_dim}"
-
+        
         if isinstance(labels, int):
             class_labels = torch.tensor([labels])
         
@@ -184,7 +198,7 @@ class DualDiffusionPipeline(torch.nn.Module):
         else:
             raise ValueError(f"Unknown labels dtype '{type(labels)}'")
         
-        return class_labels.to(device=self.device, dtype=self.dtype)
+        return class_labels.float()
 
     @torch.inference_mode()
     def __call__(self, params: SamplingParams) -> torch.Tensor:

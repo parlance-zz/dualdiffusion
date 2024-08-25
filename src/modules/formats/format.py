@@ -47,7 +47,7 @@ class DualDiffusionFormat(DualDiffusionModule, ABC):
         pass
     
     @abstractmethod
-    def get_raw_crop_width(self, length: Optional[int] = None) -> int:
+    def sample_raw_crop_width(self, length: Optional[int] = None) -> int:
         pass
     
     @abstractmethod

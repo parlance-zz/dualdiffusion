@@ -149,7 +149,7 @@ class SpectrogramConverter(torch.nn.Module):
         audio_len = (spectrogram_shape[-1] - 1) * self.config.hop_length + self.config.win_length - self.config.padded_length
         return torch.Size(spectrogram_shape[:-2] + (audio_len,))
 
-    def get_raw_crop_width(self, audio_len: int) -> int:
+    def sample_raw_crop_width(self, audio_len: int) -> int:
         spectrogram_len = self.get_spectrogram_shape(torch.Size((1, audio_len)))[-1] // 64 * 64
         return self.get_audio_shape(torch.Size((1, spectrogram_len)))[-1]
 
@@ -163,7 +163,11 @@ class SpectrogramConverter(torch.nn.Module):
         amplitudes_linear = self.freq_scale.unscale(spectrogram ** (1 / self.config.abs_exponent))
         return self.inverse_spectrogram_func(amplitudes_linear, n_fgla_iter=self.config.num_fgla_iters)
     
-    def half(self) -> "SpectrogramConverter": # prevent casting to fp16/bf16
+    def to(self, device: Optional[torch.device] = None,
+           dtype: Optional[torch.dtype] = None, **kwargs) -> "SpectrogramConverter":
+        
+        dtype = torch.float32
+        super().to(device=device, dtype=dtype, **kwargs)
         return self
 
 class SpectrogramFormat(DualDiffusionFormat):
@@ -178,13 +182,13 @@ class SpectrogramFormat(DualDiffusionFormat):
         in_channels = out_channels = self.config.sample_raw_channels
         return (in_channels, out_channels)
     
-    def get_raw_crop_width(self, length: Optional[int] = None) -> int:
-        return self.spectrogram_converter.get_raw_crop_width(length or self.config.sample_raw_length)
+    def sample_raw_crop_width(self, length: Optional[int] = None) -> int:
+        return self.spectrogram_converter.sample_raw_crop_width(length or self.config.sample_raw_length)
     
     def get_sample_shape(self, bsz: int = 1, length: Optional[int] = None) -> tuple:
 
         _, num_output_channels = self.get_num_channels()
-        crop_width = self.get_raw_crop_width(length=length)
+        crop_width = self.sample_raw_crop_width(length=length)
         audio_shape = torch.Size((bsz, num_output_channels, crop_width))
         
         spectrogram_shape = self.spectrogram_converter.get_spectrogram_shape(audio_shape)

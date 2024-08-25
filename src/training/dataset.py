@@ -14,7 +14,7 @@ class DatasetTransformConfig:
 
     sample_rate: int
     sample_raw_channels: int
-    sample_crop_width: int
+    sample_raw_crop_width: int
     use_pre_encoded_latents: bool
     latents_crop_width: int
     t_scale: Optional[float] = None
@@ -26,7 +26,7 @@ class DatasetConfig:
      cache_dir: str
      sample_rate: int
      sample_raw_channels: int
-     sample_crop_width: int
+     sample_raw_crop_width: int
      use_pre_encoded_latents: bool
      latents_crop_width: int
      num_proc: Optional[int] = None
@@ -41,7 +41,7 @@ class DatasetTransform(torch.nn.Module):
     
     @torch.no_grad()
     def get_t(self, t: float) -> float:
-        return t / self.config.sample_crop_width * self.config.t_scale - self.config.t_scale/2
+        return t / self.config.sample_raw_crop_width * self.config.t_scale - self.config.t_scale/2
     
     @torch.no_grad()
     def __call__(self, examples: dict) -> dict:
@@ -80,13 +80,13 @@ class DatasetTransform(torch.nn.Module):
             else:
                 file_path = train_sample["file_name"]
                 sample, sample_rate, t_offset = load_audio(file_path, start=-1,
-                                                           count=self.config.sample_crop_width,
+                                                           count=self.config.sample_raw_crop_width,
                                                            return_sample_rate=True,
                                                            return_start=True)
                 
                 assert sample_rate == self.config.sample_rate
                 assert sample.shape[0] == self.config.sample_raw_channels
-                assert sample.shape[1] == self.config.sample_crop_width
+                assert sample.shape[1] == self.config.sample_raw_crop_width
             
             samples.append(sample)
             paths.append(file_path)
@@ -95,7 +95,7 @@ class DatasetTransform(torch.nn.Module):
 
             if self.config.t_scale is not None:
                 t_ranges.append(torch.tensor([self.get_t(t_offset),
-                    self.get_t(t_offset + self.config.sample_crop_width)]))
+                    self.get_t(t_offset + self.config.sample_raw_crop_width)]))
         
         batch_data = {
             "input": samples,
@@ -147,7 +147,7 @@ class DualDiffusionDataset:
                 if example["file_name"] is None:
                     return False
                 if example["sample_length"] is not None and example["num_channels"] is not None:
-                    return (example["sample_length"] >= self.config.sample_crop_width) and (example["num_channels"] == self.config.sample_raw_channels)
+                    return (example["sample_length"] >= self.config.sample_raw_crop_width) and (example["num_channels"] == self.config.sample_raw_channels)
                 else:
                     return False
 
@@ -158,7 +158,7 @@ class DualDiffusionDataset:
         dataset_transform_config = DatasetTransformConfig(
             sample_rate=self.config.sample_rate,
             sample_raw_channels=self.config.sample_raw_channels,
-            sample_crop_width=self.config.sample_crop_width,
+            sample_raw_crop_width=self.config.sample_raw_crop_width,
             use_pre_encoded_latents=self.config.use_pre_encoded_latents,
             latents_crop_width=self.config.latents_crop_width,
             t_scale=self.config.t_scale

@@ -158,7 +158,7 @@ class PowerFunctionEMA:
         load_errors = []
         for std, ema in zip(self.stds, self.emas):
             ema_load_path = os.path.join(ema_path, f"pf_ema_std-{std:.3f}.safetensors")
-            if os.path.exists(ema_load_path):
+            if os.path.isfile(ema_load_path):
                 ema.load_state_dict(load_safetensors(ema_load_path))
             else:
                 error_str = f"Could not find PowerFunctionEMA model for std={std:.3f} at {ema_load_path}"

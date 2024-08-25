@@ -63,7 +63,7 @@ def vae_test():
     pipeline.format.config.num_fgla_iters = num_fgla_iters
     noise_floor = pipeline.format.config.noise_floor
     sample_rate = pipeline.format.config.sample_rate
-    crop_width = pipeline.format.get_sample_crop_width(length=length)
+    crop_width = pipeline.format.sample_raw_crop_width(length=length)
     last_global_step = pipeline.vae.config.last_global_step
 
     dataset_path = config.DATASET_PATH

@@ -19,7 +19,13 @@ class DualDiffusionModule(torch.nn.Module, ABC):
     config_class: Optional[Type[DualDiffusionModuleConfig]] = None
     module_name: Optional[str] = None
     has_trainable_parameters: bool = True
+    
+    def __init__(self):
+        super().__init__()
         
+        self.dtype = torch.get_default_dtype()
+        self.device = torch.device("cpu")
+
     @classmethod
     def from_pretrained(cls: Type["DualDiffusionModule"],
                         module_path: str,
@@ -55,6 +61,17 @@ class DualDiffusionModule(torch.nn.Module, ABC):
         if type(self).has_trainable_parameters:
             save_safetensors(self.state_dict(), os.path.join(module_path, f"{module_name}.safetensors"))
 
+    def to(self, device: Optional[torch.device] = None,
+           dtype: Optional[torch.dtype] = None, **kwargs) -> "DualDiffusionModule":
+        super().to(device=device, dtype=dtype, **kwargs)
+
+        self.dtype = dtype or self.dtype
+        self.device = device or self.device
+        return self
+    
+    def half(self) -> "DualDiffusionModule":
+        return self.to(dtype=torch.bfloat16)
+    
     @torch.no_grad()
     def normalize_weights(self) -> None:
         for module in self.modules():

@@ -41,7 +41,7 @@ class UNetTrainerConfig(ModuleTrainerConfig):
     sigma_pdf_resolution: Optional[int] = 127
 
     num_loss_buckets: int = 10
-    input_perturbation: Optional[float] = None
+    input_perturbation: float = 0.
 
 class UNetTrainer(ModuleTrainer):
     
@@ -98,14 +98,14 @@ class UNetTrainer(ModuleTrainer):
             sigma_min=self.module.config.sigma_min,
             sigma_data=self.module.config.sigma_data,
             distribution=self.config.sigma_distribution,
-            sigma_dist_scale=self.config.sigma_dist_scale,
-            sigma_dist_offset=self.config.sigma_dist_offset,
+            dist_scale=self.config.sigma_dist_scale,
+            dist_offset=self.config.sigma_dist_offset,
             use_stratified_sigma_sampling=self.config.use_stratified_sigma_sampling,
             sigma_pdf_resolution=self.config.sigma_pdf_resolution,
         )
         self.sigma_sampler = SigmaSampler(sigma_sampler_config)
-        self.logger("Sigma sampler config:")
-        self.logger(dict_str(sigma_sampler_config))
+        self.logger.info("Sigma sampler config:")
+        self.logger.info(dict_str(sigma_sampler_config.__dict__))
 
         if self.config.num_loss_buckets > 0:
             bucket_ln_sigma = (1 / torch.linspace(torch.pi/2, 0, self.config.num_loss_buckets+1).tan()).log()
@@ -158,7 +158,7 @@ class UNetTrainer(ModuleTrainer):
                                                        vae_class_embeddings,
                                                        self.trainer.pipeline.format).mode()
         
-        if self.config.input_perturbation is not None:
+        if self.config.input_perturbation > 0:
             samples += torch.randn_like(samples) * self.config.input_perturbation
         samples = normalize(samples).float()
 
@@ -168,13 +168,9 @@ class UNetTrainer(ModuleTrainer):
         noise = torch.randn_like(samples) * batch_sigma.view(-1, 1, 1, 1)
         samples = (samples * self.module.config.sigma_data).detach()
 
-        denoised, error_logvar = self.module(samples + noise,
-                                             batch_sigma,
-                                             unet_class_embeddings,
-                                             sample_t_ranges,
-                                             self.trainer.pipeline.format,
-                                             return_logvar=True)
-        
+        denoised = self.module(samples + noise, batch_sigma, self.trainer.pipeline.format, unet_class_embeddings, sample_t_ranges)
+        error_logvar = self.module.get_sigma_loss_logvar(batch_sigma)
+
         batch_loss_weight = (batch_sigma ** 2 + self.module.config.sigma_data ** 2) / (batch_sigma * self.module.config.sigma_data) ** 2
         batch_weighted_loss = torch.nn.functional.mse_loss(denoised, samples, reduction="none").mean(dim=(1,2,3)) * batch_loss_weight
         batch_loss = batch_weighted_loss / error_logvar.exp() + error_logvar

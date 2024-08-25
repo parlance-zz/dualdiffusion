@@ -48,7 +48,7 @@ def dataloader_test():
         cache_dir=config.CACHE_PATH,
         sample_rate=format_config["sample_rate"],
         sample_raw_channels=format_config["sample_raw_channels"],
-        sample_crop_width=test_params["sample_crop_width"],
+        sample_raw_crop_width=test_params["sample_raw_crop_width"],
         use_pre_encoded_latents=test_params["use_pre_encoded_latents"],
         latents_crop_width=test_params["latents_crop_width"],
         num_proc=test_params["dataset_num_proc"],
@@ -64,10 +64,10 @@ def dataloader_test():
         dataset[test_params["split"]],
         shuffle=True,
         batch_size=test_params["batch_size"],
-        num_workers=test_params["dataloader_num_workers"],
+        num_workers=test_params["dataloader_num_workers"] or 0,
         pin_memory=test_params["pin_memory"],
         persistent_workers=True if test_params["dataloader_num_workers"] > 0 else False,
-        prefetch_factor=test_params["prefetch_factor"],
+        prefetch_factor=test_params["prefetch_factor"] if test_params["dataloader_num_workers"] else None,
         drop_last=True,
     )
 

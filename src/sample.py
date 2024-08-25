@@ -259,7 +259,7 @@ if __name__ == "__main__":
         print(f"Using EMA checkpoint {load_ema}")
 
     if img2img_input_path is not None:
-        crop_width = pipeline.format.get_sample_crop_width(length=length)
+        crop_width = pipeline.format.sample_raw_crop_width(length=length)
         input_audio = load_audio(os.path.join(config.DATASET_PATH, img2img_input_path), start=0, count=crop_width)
     else:
         input_audio = None

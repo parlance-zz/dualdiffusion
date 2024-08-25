@@ -136,7 +136,7 @@ if __name__ == "__main__":
 
                 file_ext = os.path.splitext(file_name)[1]
                 input_raw_sample = load_audio(os.path.join(dataset_path, file_name))
-                crop_width = pipeline.format.get_sample_crop_width(length=input_raw_sample.shape[-1] - encode_offset_padding)
+                crop_width = pipeline.format.sample_raw_crop_width(length=input_raw_sample.shape[-1] - encode_offset_padding)
 
                 input_raw_samples = []
                 for offset in encode_offsets:

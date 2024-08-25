@@ -31,8 +31,8 @@ class ModuleTrainerConfig(ABC):
 
 class ModuleTrainer(ABC):
 
-    @abstractmethod
     @staticmethod
+    @abstractmethod
     def get_config_class():
         return ModuleTrainerConfig
     

@@ -42,7 +42,7 @@ def spectrogram_test() -> None:
     format_params = config.load_json(os.path.join(config.CONFIG_PATH, "tests", test_params["format_cfg_file"]))
 
     spectrogram_format = SpectrogramFormat(SpectrogramFormatConfig(**format_params)).to(device=test_params["device"])
-    crop_width = spectrogram_format.get_raw_crop_width(length=test_params["audio_len"])
+    crop_width = spectrogram_format.sample_raw_crop_width(length=test_params["audio_len"])
     test_output_path = os.path.join(config.DEBUG_PATH, "spectrogram_test") if config.DEBUG_PATH is not None else None
     print("Test output path:", test_output_path)
 

@@ -83,7 +83,8 @@ class SigmaSampler():
 
     @torch.no_grad()
     def sample_ln_normal(self, n_samples: Optional[int] = None, quantiles: Optional[torch.Tensor] = None) -> torch.Tensor:
-        quantiles = quantiles or torch.rand(n_samples)
+        if quantiles is None:
+            quantiles = torch.rand(n_samples)
         
         ln_sigma = self.config.dist_offset + (self.config.dist_scale * 2**0.5) * (quantiles * 2 - 1).erfinv().clip(min=-5, max=5)
         ln_sigma[ln_sigma < self.config.ln_sigma_min] += self.config.ln_sigma_max - self.config.ln_sigma_min
@@ -92,7 +93,8 @@ class SigmaSampler():
     
     @torch.no_grad()
     def sample_ln_sech(self, n_samples: Optional[int] = None, quantiles: Optional[torch.Tensor] = None) -> torch.Tensor:
-        quantiles = quantiles or torch.rand(n_samples)
+        if quantiles is None:
+            quantiles = torch.rand(n_samples)
 
         theta_min = np.arctan(1 / self.config.sigma_max * np.exp(self.config.dist_offset))
         theta_max = np.arctan(1 / self.config.sigma_min * np.exp(self.config.dist_offset))
@@ -103,7 +105,8 @@ class SigmaSampler():
     
     @torch.no_grad()
     def sample_ln_sech2(self, n_samples: Optional[int] = None, quantiles: Optional[torch.Tensor] = None) -> torch.Tensor:
-        quantiles = quantiles or torch.rand(n_samples)
+        if quantiles is None:
+            quantiles = torch.rand(n_samples)
 
         low = np.tanh(self.config.ln_sigma_min); high = np.tanh(self.config.ln_sigma_max)
         ln_sigma = (quantiles * (high - low) + low).atanh() * self.config.dist_scale + self.config.dist_offset
@@ -113,7 +116,8 @@ class SigmaSampler():
     
     @torch.no_grad()
     def sample_ln_linear(self, n_samples: Optional[int] = None, quantiles: Optional[torch.Tensor] = None) -> torch.Tensor:
-        quantiles = quantiles or torch.rand(n_samples)
+        if quantiles is None:
+            quantiles = torch.rand(n_samples)
         
         ln_sigma = quantiles * (self.config.ln_sigma_max - self.config.ln_sigma_min) + self.config.ln_sigma_min
         return ln_sigma.exp().clip(self.config.sigma_min, self.config.sigma_max)
@@ -136,7 +140,8 @@ class SigmaSampler():
 
     @torch.no_grad()
     def sample_ln_pdf(self, n_samples: Optional[int] = None, quantiles: Optional[torch.Tensor] = None) -> torch.Tensor:
-        quantiles = quantiles or torch.rand(n_samples)
+        if quantiles is None:
+            quantiles = torch.rand(n_samples)
 
         ln_sigma = self._sample_pdf(quantiles) * (self.config.ln_sigma_max - self.config.ln_sigma_min) + self.config.ln_sigma_min
         return ln_sigma.exp().clip(min=self.config.sigma_min, max=self.config.sigma_max)
