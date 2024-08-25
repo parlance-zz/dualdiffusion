@@ -146,8 +146,14 @@ class DualDiffusionDataset:
             else:
                 if example["file_name"] is None:
                     return False
-                if example["sample_length"] is not None and example["num_channels"] is not None:
-                    return (example["sample_length"] >= self.config.sample_raw_crop_width) and (example["num_channels"] == self.config.sample_raw_channels)
+                if example["sample_length"] is not None and example["num_channels"] is not None and example["sample_rate"] is not None:
+                    if example["sample_length"] < self.config.sample_raw_crop_width:
+                        return False
+                    if example["num_channels"] != self.config.sample_raw_channels:
+                        return False
+                    if example["sample_rate"] != self.config.sample_rate:
+                        return False
+                    return True
                 else:
                     return False
 
