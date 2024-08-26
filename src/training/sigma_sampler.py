@@ -36,6 +36,7 @@ class SigmaSamplerConfig:
     dist_offset: float = 0.1
     dist_pdf: Optional[torch.Tensor] = None
     use_stratified_sigma_sampling: bool = True
+    use_static_sigma_sampling: bool = False
     sigma_pdf_resolution: Optional[int] = 127
 
     @property
@@ -77,8 +78,18 @@ class SigmaSampler():
         return (torch.arange(n_samples) + 0.5) / n_samples + (torch.rand(1) - 0.5) / n_samples
     
     @torch.no_grad()
+    def _sample_static_stratified(self, n_samples: int) -> torch.Tensor:
+        return (torch.arange(n_samples) + 0.5) / n_samples
+    
+    @torch.no_grad()
     def sample(self, n_samples: int, device: Optional[torch.device] = None) -> torch.Tensor:
-        quantiles = self._sample_uniform_stratified(n_samples) if self.config.use_stratified_sigma_sampling else None
+        if self.config.use_static_sigma_sampling:
+            quantiles = self._sample_static_stratified(n_samples)
+        elif self.config.use_stratified_sigma_sampling:
+            quantiles = self._sample_uniform_stratified(n_samples)
+        else:
+            quantiles = None
+
         return self.sample_fn(n_samples, quantiles).to(device)
 
     @torch.no_grad()

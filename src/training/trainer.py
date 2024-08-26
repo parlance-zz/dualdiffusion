@@ -39,7 +39,7 @@ import torch.utils.checkpoint
 from torch.optim.lr_scheduler import LambdaLR
 from accelerate import Accelerator
 from accelerate.logging import get_logger
-from accelerate.utils import ProjectConfiguration, set_seed
+from accelerate.utils import ProjectConfiguration, GradientAccumulationPlugin, set_seed
 from tqdm.auto import tqdm
 
 from pipelines.dual_diffusion_pipeline import DualDiffusionPipeline
@@ -135,12 +135,11 @@ class DualDiffusionTrainerConfig:
     model_src_path: str
     train_config_path: Optional[str]    = None
     seed: Optional[int]                 = None
-    train_batch_size: int               = 1
+    device_batch_size: int               = 1
     gradient_accumulation_steps: int    = 1
 
     num_train_epochs: int               = 500000
-    num_validation_epochs: int          = 100
-    min_validation_time: int            = 3600
+    num_validation_epochs: int          = 10
     min_checkpoint_time: int            = 3600
     checkpoints_total_limit: int        = 1
     strict_checkpoint_time: bool        = False
@@ -187,9 +186,6 @@ class DualDiffusionTrainer:
         self.init_dataloader()
         self.init_torch_compile()
 
-        #self.module, self.optimizer, self.train_dataloader, self.validation_dataloader, self.lr_scheduler = self.accelerator.prepare(
-        #    self.module, self.optimizer, self.train_dataloader, self.validation_dataloader, self.lr_scheduler
-        #)
         self.optimizer, self.train_dataloader, self.validation_dataloader, self.lr_scheduler = self.accelerator.prepare(
             self.optimizer, self.train_dataloader, self.validation_dataloader, self.lr_scheduler
         )
@@ -202,10 +198,12 @@ class DualDiffusionTrainer:
 
         accelerator_project_config = ProjectConfiguration(project_dir=self.config.model_path,
                                                           logging_dir=self.config.logging.logging_dir)
+        gradient_accumulation_plugin = GradientAccumulationPlugin(
+            num_steps=self.config.gradient_accumulation_steps, sync_with_dataloader=False)
         self.accelerator = Accelerator(
-            gradient_accumulation_steps=self.config.gradient_accumulation_steps,
             log_with="tensorboard",
             project_config=accelerator_project_config,
+            gradient_accumulation_plugin=gradient_accumulation_plugin,
         )
 
         self.logger = get_logger("training", log_level="INFO")
@@ -277,7 +275,7 @@ class DualDiffusionTrainer:
         self.module = getattr(self.pipeline, self.config.module_name).requires_grad_(True).train()
         self.module_class = type(self.module)
 
-        self.sample_shape = self.pipeline.format.get_sample_shape(bsz=self.config.train_batch_size)
+        self.sample_shape = self.pipeline.format.get_sample_shape(bsz=self.config.device_batch_size)
         if hasattr(self.pipeline, "vae"):
             self.latent_shape = self.pipeline.vae.get_latent_shape(self.sample_shape)
         else:
@@ -403,6 +401,10 @@ class DualDiffusionTrainer:
    
     def init_dataloader(self) -> None:
         
+        self.local_batch_size = self.config.device_batch_size * self.config.gradient_accumulation_steps
+        self.total_batch_size = self.local_batch_size * self.accelerator.num_processes
+        self.validation_batch_size = self.config.device_batch_size * self.accelerator.num_processes
+
         latents_crop_width = self.latent_shape[-1] if self.latent_shape is not None else 0
         sample_raw_crop_width = self.pipeline.format.sample_raw_crop_width()
         
@@ -424,7 +426,7 @@ class DualDiffusionTrainer:
         self.train_dataloader = torch.utils.data.DataLoader(
             self.dataset["train"],
             shuffle=True,
-            batch_size=self.config.train_batch_size,
+            batch_size=self.local_batch_size,
             num_workers=self.config.dataloader.dataloader_num_workers or 0,
             pin_memory=self.config.dataloader.pin_memory,
             persistent_workers=True if self.config.dataloader.dataloader_num_workers else False,
@@ -434,8 +436,8 @@ class DualDiffusionTrainer:
 
         self.validation_dataloader = torch.utils.data.DataLoader(
             self.dataset["validation"],
-            batch_size=self.config.train_batch_size,
-            drop_last=True,
+            batch_size=1,
+            drop_last=False,
         )
 
         self.logger.info(f"Using dataset path {config.DATASET_PATH} with {dataset_config.num_proc or 1} dataset processes)")
@@ -446,10 +448,10 @@ class DualDiffusionTrainer:
         self.logger.info(f"  prefetch_factor = {self.config.dataloader.prefetch_factor}")
         self.logger.info(f"  pin_memory = {self.config.dataloader.pin_memory}")
 
-        num_process_steps_per_epoch = math.floor(len(self.train_dataloader) / self.accelerator.num_processes)
-        self.num_update_steps_per_epoch = math.ceil(num_process_steps_per_epoch / self.config.gradient_accumulation_steps)
-        self.max_train_steps = self.config.num_train_epochs * self.num_update_steps_per_epoch
-        self.total_batch_size = self.config.train_batch_size * self.accelerator.num_processes * self.config.gradient_accumulation_steps
+        #num_process_steps_per_epoch = math.floor(len(self.train_dataloader) * self.config.gradient_accumulation_steps / self.accelerator.num_processes)
+        #self.num_update_steps_per_epoch = math.ceil(num_process_steps_per_epoch / self.config.gradient_accumulation_steps)
+        self.num_update_steps_per_epoch = len(self.train_dataloader) // self.accelerator.num_processes
+        self.max_train_steps = self.num_update_steps_per_epoch * self.config.num_train_epochs
 
     def init_torch_compile(self) -> None:
 
@@ -548,9 +550,8 @@ class DualDiffusionTrainer:
                 self.logger.info(f"Using updated learning rate: {self.config.lr_schedule.learning_rate}")
 
         if global_step > 0:
-            resume_global_step = global_step * self.config.gradient_accumulation_steps
             first_epoch = global_step // self.num_update_steps_per_epoch
-            resume_step = resume_global_step % (self.num_update_steps_per_epoch * self.config.gradient_accumulation_steps)
+            resume_step = global_step % self.num_update_steps_per_epoch
 
         return global_step, resume_step, first_epoch
 
@@ -559,14 +560,14 @@ class DualDiffusionTrainer:
         self.logger.info("***** Running training *****")
         self.logger.info(f"  Num examples = {len(self.dataset['train'])}")
         self.logger.info(f"  Num Epochs = {self.config.num_train_epochs}")
-        self.logger.info(f"  Instantaneous batch size per device = {self.config.train_batch_size}")
+        self.logger.info(f"  Instantaneous batch size per device = {self.config.device_batch_size}")
         self.logger.info(f"  Gradient Accumulation steps = {self.config.gradient_accumulation_steps}")
         self.logger.info(f"  Total train batch size (w. parallel, distributed & accumulation) = {self.total_batch_size}")
         self.logger.info(f"  Total optimization steps for full run = {self.max_train_steps}")
         self.logger.info(f"  Path to save/load checkpoints = {self.config.model_path}")
 
-        self.last_validation_time = datetime.now()
         global_step, resume_step, first_epoch = self.load_checkpoint()
+
         resume_dataloader = self.accelerator.skip_first_batches(self.train_dataloader, resume_step) if resume_step > 0 else None
 
         self.module_trainer = self.config.module_trainer_class(self.config.module_trainer_config, self)
@@ -585,46 +586,54 @@ class DualDiffusionTrainer:
         for epoch in range(first_epoch, self.config.num_train_epochs):
             
             progress_bar = tqdm(total=self.num_update_steps_per_epoch, disable=not self.accelerator.is_local_main_process)
-            if resume_dataloader is not None: progress_bar.update(resume_step // self.config.gradient_accumulation_steps)
+            if resume_dataloader is not None: progress_bar.update(resume_step)
             progress_bar.set_description(f"Epoch {epoch}")
 
-            grad_accum_steps = 0
-
             for batch in (resume_dataloader or self.train_dataloader):
+
+                train_logger.clear()
+                self.module_trainer.init_batch()
                 
-                if grad_accum_steps == 0:                        
-                    train_logger.clear()
-                    self.module_trainer.init_batch()
+                for grad_accum_steps in range(self.config.gradient_accumulation_steps):
 
-                with self.accelerator.accumulate(self.module):
+                    grad_accum_step_batch = {
+                        key: value[grad_accum_steps * self.config.device_batch_size: (grad_accum_steps+1) * self.config.device_batch_size]
+                        for key, value in batch.items()
+                    }
 
-                    module_logs = self.module_trainer.train_batch(batch, grad_accum_steps)
-                    train_logger.add_logs(module_logs)
-                    for i, sample_path in enumerate(batch["sample_paths"]):
-                        sample_logger.add_log(sample_path, module_logs["loss"][i])
+                    with self.accelerator.accumulate(self.module):
 
-                    grad_accum_steps += 1
-                    self.accelerator.backward(module_logs["loss"].mean())
+                        module_logs = self.module_trainer.train_batch(grad_accum_step_batch, grad_accum_steps)
+                        train_logger.add_logs(module_logs)
+                        for i, sample_path in enumerate(grad_accum_step_batch["sample_paths"]):
+                            sample_logger.add_log(sample_path, module_logs["loss"][i])
 
-                    if self.accelerator.sync_gradients:   
-                        grad_norm = self.accelerator.clip_grad_norm_(self.module.parameters(),
-                                                                     self.config.optimizer.max_grad_norm)
-                        train_logger.add_log("grad_norm", grad_norm)
+                        self.accelerator.backward(module_logs["loss"].mean())
 
-                        if math.isinf(grad_norm) or math.isnan(grad_norm):
-                            self.logger.warning(f"Warning: grad norm is {grad_norm} step={global_step}")
-                        if math.isnan(grad_norm):
-                            self.logger.error(f"Error: grad norm is {grad_norm}, aborting...")
-                            import pdb; pdb.set_trace()
+                        if self.accelerator.sync_gradients:
+                            assert grad_accum_steps == (self.config.gradient_accumulation_steps - 1), \
+                                f"grad_accum_steps out of sync with sync_gradients - {grad_accum_steps} != {self.config.gradient_accumulation_steps - 1}"
+                            
+                            grad_norm = self.accelerator.clip_grad_norm_(self.module.parameters(), self.config.optimizer.max_grad_norm)
+                            train_logger.add_log("grad_norm", grad_norm)
 
-                        if self.config.optimizer.add_grad_noise > 0:
-                            for p in self.module.parameters():
-                                p_noise = torch.randn_like(p) * (torch.linalg.vector_norm(p.grad) / p.grad.numel() ** 0.5)
-                                p.grad += p_noise * self.config.optimizer.add_grad_noise * self.lr_scheduler.get_last_lr()[0]
+                            if math.isinf(grad_norm) or math.isnan(grad_norm):
+                                self.logger.warning(f"Warning: grad norm is {grad_norm} step={global_step}")
+                            if math.isnan(grad_norm):
+                                self.logger.error(f"Error: grad norm is {grad_norm}, aborting...")
+                                import pdb; pdb.set_trace()
 
-                    self.optimizer.step()
-                    self.lr_scheduler.step()
-                    self.optimizer.zero_grad()
+                            if self.config.optimizer.add_grad_noise > 0:
+                                for p in self.module.parameters():
+                                    p_noise = torch.randn_like(p) * (torch.linalg.vector_norm(p.grad) / p.grad.numel() ** 0.5)
+                                    p.grad += p_noise * self.config.optimizer.add_grad_noise * self.lr_scheduler.get_last_lr()[0]
+                        else:
+                            assert grad_accum_steps != (self.config.gradient_accumulation_steps - 1), \
+                                f"grad_accum_steps out of sync, no sync_gradients but {grad_accum_steps} == {self.config.gradient_accumulation_steps - 1}"
+                            
+                        self.optimizer.step()
+                        self.lr_scheduler.step()
+                        self.optimizer.zero_grad()
 
                 if self.accelerator.sync_gradients:
                 
@@ -634,7 +643,6 @@ class DualDiffusionTrainer:
                     train_logger.add_logs({"lr": self.lr_scheduler.get_last_lr()[0], "step": global_step})
                     progress_bar.update(1)
                     global_step += 1
-                    grad_accum_steps = 0
                     
                     if self.config.ema.use_ema:
                         std_betas = self.ema_module.update(global_step * self.total_batch_size, self.total_batch_size)
@@ -657,7 +665,9 @@ class DualDiffusionTrainer:
                         if os.path.isfile(_save_checkpoint_path): _save_checkpoint = True
                         if _save_checkpoint: self.save_checkpoint(global_step)
                         if os.path.isfile(_save_checkpoint_path): os.remove(_save_checkpoint_path)
-
+                else:
+                    assert False, "finished local_batch but accelerator.sync_gradients isn't True"
+                
                 if global_step >= self.max_train_steps:
                     self.logger.info(f"Reached max train steps ({self.max_train_steps})")
                     break
@@ -681,7 +691,7 @@ class DualDiffusionTrainer:
 
             self.accelerator.wait_for_everyone()
             if self.config.num_validation_epochs > 0:
-                if (datetime.now() - self.last_validation_time).total_seconds() >= self.config.min_validation_time:
+                if epoch % self.config.num_validation_epochs == 0:
                     self.run_validation(global_step)
         
         self.logger.info("Training complete")
@@ -692,33 +702,36 @@ class DualDiffusionTrainer:
 
         self.logger.info("***** Running validation *****")
         self.logger.info(f"  Num examples = {len(self.dataset['validation'])}")
-        self.logger.info(f"  Num Epochs = {self.config.num_validation_epochs}")
 
         start_validation_time = datetime.now()
-        num_validation_process_steps_per_epoch = math.floor(len(self.validation_dataloader) / self.accelerator.num_processes)
-        num_validation_update_steps_per_epoch = math.ceil(num_validation_process_steps_per_epoch / self.config.gradient_accumulation_steps)
 
         validation_logger = TrainLogger(self.accelerator)
         sample_logger = TrainLogger(self.accelerator)
 
-        for epoch in range(self.config.num_validation_epochs):
-            progress_bar = tqdm(total=num_validation_update_steps_per_epoch, disable=not self.accelerator.is_local_main_process)
-            progress_bar.set_description(f"Validation Epoch {epoch}")
+        progress_bar = tqdm(total=len(self.validation_dataloader), disable=not self.accelerator.is_local_main_process)
+        progress_bar.set_description(f"Validation")
 
-            for step, batch in enumerate(self.validation_dataloader):
-                if step % self.config.gradient_accumulation_steps == 0:
-                    self.module_trainer.init_batch()
-                
-                module_logs = self.module_trainer.train_batch(batch, step % self.config.gradient_accumulation_steps)
-                validation_logger.add_logs(module_logs)
-                for i, sample_path in enumerate(batch["sample_paths"]):
-                    sample_logger.add_log(sample_path, module_logs["loss"][i])
-
-                if (step + 1) % self.config.gradient_accumulation_steps == 0:
-                    validation_logger.add_logs(self.module_trainer.finish_batch())
-                    progress_bar.update(1)
+        for _, batch in enumerate(self.validation_dataloader):
             
-            progress_bar.close()
+            validation_batch = {}
+            for key, value in batch.items():
+                if torch.is_tensor(value):
+                    validation_batch[key] = value.repeat((self.config.device_batch_size,) + (1,) * (value.ndim - 1))
+                elif isinstance(value, list):
+                    validation_batch[key] = value * self.config.device_batch_size
+                else:
+                    raise ValueError(f"Unsupported validation batch value type: {type(value)} '{key}': '{value}'")
+
+            self.module_trainer.init_batch(total_batch_size=self.validation_batch_size, validation=True)
+            module_logs = self.module_trainer.train_batch(validation_batch, 0)
+            validation_logger.add_logs(module_logs)
+            for i, sample_path in enumerate(validation_batch["sample_paths"]):
+                sample_logger.add_log(sample_path, module_logs["loss"][i])
+
+            validation_logger.add_logs(self.module_trainer.finish_batch())
+            progress_bar.update(1)
+        
+        progress_bar.close()
 
         validation_logs = {}
         for key, value in validation_logger.get_logs().items():
@@ -736,6 +749,3 @@ class DualDiffusionTrainer:
                 self.logger.warning(f"Error saving validation sample logs to {sample_log_path}: {e}")
 
         self.logger.info(f"Validation complete (runtime: {(datetime.now() - start_validation_time).total_seconds()}s)")
-        self.last_validation_time = datetime.now()
-
-        #self.accelerator.optimizer_step_was_skipped

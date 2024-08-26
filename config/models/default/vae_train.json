@@ -1,6 +1,6 @@
 {
   "seed": 2000,
-  "train_batch_size": 128,
+  "device_batch_size": 128,
   "gradient_accumulation_steps": 4,
   "num_train_epochs": 500000,
   "min_checkpoint_time": 3600,

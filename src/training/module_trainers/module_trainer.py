@@ -21,6 +21,7 @@
 # SOFTWARE.
 
 from dataclasses import dataclass
+from typing import Optional
 from abc import ABC, abstractmethod
 
 import torch
@@ -37,7 +38,7 @@ class ModuleTrainer(ABC):
         return ModuleTrainerConfig
     
     @abstractmethod
-    def init_batch(self) -> None:
+    def init_batch(self, total_batch_size: Optional[int] = None, validation: bool = False) -> None:
         pass
     
     @abstractmethod

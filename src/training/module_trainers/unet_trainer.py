@@ -40,6 +40,11 @@ class UNetTrainerConfig(ModuleTrainerConfig):
     use_stratified_sigma_sampling: bool = True
     sigma_pdf_resolution: Optional[int] = 127
 
+    validation_sigma_distribution: Literal["ln_normal", "ln_sech", "ln_sech^2",
+                                            "ln_linear", "ln_pdf"] = "ln_linear"
+    validation_sigma_dist_scale: float = 1.0
+    validation_sigma_dist_offset: float = 0.3
+
     num_loss_buckets: int = 10
     input_perturbation: float = 0.
 
@@ -103,8 +108,22 @@ class UNetTrainer(ModuleTrainer):
             sigma_pdf_resolution=self.config.sigma_pdf_resolution,
         )
         self.sigma_sampler = SigmaSampler(sigma_sampler_config)
-        self.logger.info("Sigma sampler config:")
+        self.logger.info("SigmaSampler config:")
         self.logger.info(dict_str(sigma_sampler_config.__dict__))
+
+        validation_sigma_sampler_config = SigmaSamplerConfig(
+            sigma_max=self.module.config.sigma_max,
+            sigma_min=self.module.config.sigma_min,
+            sigma_data=self.module.config.sigma_data,
+            distribution=self.config.validation_sigma_distribution,
+            dist_scale=self.config.validation_sigma_dist_scale,
+            dist_offset=self.config.validation_sigma_dist_offset,
+            use_static_sigma_sampling=True,
+            sigma_pdf_resolution=self.config.sigma_pdf_resolution,
+        )
+        self.validation_sigma_sampler = SigmaSampler(validation_sigma_sampler_config)
+        self.logger.info("Validation SigmaSampler config:")
+        self.logger.info(dict_str(validation_sigma_sampler_config.__dict__))
 
         if self.config.num_loss_buckets > 0:
             bucket_ln_sigma = (1 / torch.linspace(torch.pi/2, 0, self.config.num_loss_buckets+1).tan()).log()
@@ -117,13 +136,16 @@ class UNetTrainer(ModuleTrainer):
         return UNetTrainerConfig
     
     @torch.no_grad()
-    def init_batch(self) -> None:
+    def init_batch(self, total_batch_size: Optional[int] = None, validation: bool = False) -> None:
         
+        total_batch_size = total_batch_size or self.trainer.total_batch_size
+        sigma_sampler = self.validation_sigma_sampler if validation == True else self.sigma_sampler
+
         if self.config.num_loss_buckets > 0:
             self.unet_loss_buckets.zero_()
             self.unet_loss_bucket_counts.zero_()
 
-        if self.config.sigma_distribution == "ln_pdf":
+        if self.config.sigma_distribution == "ln_pdf" and validation == False:
             sigma_sample_temperature = 1 / self.config.sigma_dist_scale
             ln_sigma = torch.linspace(self.sigma_sampler.config.ln_sigma_min,
                                       self.sigma_sampler.config.ln_sigma_max,
@@ -134,8 +156,7 @@ class UNetTrainer(ModuleTrainer):
             sigma_distribution_pdf = (-sigma_sample_temperature * ln_sigma_error).exp()
             self.sigma_sampler.update_pdf(sigma_distribution_pdf)
         
-        self.global_sigma = self.sigma_sampler.sample(self.trainer.total_batch_size,
-                                                      device=self.trainer.accelerator.device)
+        self.global_sigma = sigma_sampler.sample(total_batch_size, device=self.trainer.accelerator.device)
         self.global_sigma = self.trainer.accelerator.gather(self.global_sigma.unsqueeze(0))[0] # sync sigma across all ranks / processes
 
     def train_batch(self, batch: dict, grad_accum_steps: int) -> dict[str, torch.Tensor]:
@@ -163,8 +184,8 @@ class UNetTrainer(ModuleTrainer):
             samples += torch.randn_like(samples) * self.config.input_perturbation
         samples = normalize(samples).float()
 
-        process_sigma = self.global_sigma[self.trainer.accelerator.local_process_index::self.trainer.accelerator.num_processes]
-        batch_sigma = process_sigma[grad_accum_steps * self.trainer.config.train_batch_size:(grad_accum_steps+1) * self.trainer.config.train_batch_size]
+        local_sigma = self.global_sigma[self.trainer.accelerator.local_process_index::self.trainer.accelerator.num_processes]
+        batch_sigma = local_sigma[grad_accum_steps * self.trainer.config.device_batch_size:(grad_accum_steps+1) * self.trainer.config.device_batch_size]
 
         noise = torch.randn_like(samples) * batch_sigma.view(-1, 1, 1, 1)
         samples = (samples * self.module.config.sigma_data).detach()
