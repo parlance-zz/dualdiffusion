@@ -354,7 +354,8 @@ class DualDiffusionTrainer:
         self.accelerator.register_load_state_pre_hook(load_model_hook)
         self.logger.info("Registered accelerator hooks for model load/save")
 
-        if self.accelerator.is_main_process: # make temporary copy of source code, model_index and train config to be copied to saved checkpoints
+        # make temporary copy of source code, model_index and train config to be copied to saved checkpoints
+        if self.accelerator.is_main_process:
             
             tmp_path = os.path.join(self.config.model_path, "tmp")
             if os.path.isdir(tmp_path):
@@ -515,7 +516,8 @@ class DualDiffusionTrainer:
         global_step = 0
         resume_step = 0
         first_epoch = 0
-              
+        
+        # get lasted checkpoint path
         dirs = os.listdir(self.config.model_path)
         dirs = [d for d in dirs if d.startswith(f"{self.config.module_name}_checkpoint")]
         dirs = sorted(dirs, key=lambda x: int(x.split("-")[1]))
@@ -525,12 +527,7 @@ class DualDiffusionTrainer:
             self.logger.warning(f"No existing checkpoints found, starting a new training run.")
             if self.module.config.last_global_step > 0:
                 self.logger.warning(f"Last global step in module config is {self.module.config.last_global_step}, but no checkpoint found")
-                #global_step = self.module.config.last_global_step
-                
-                #print("optimizer step:", self.optimizer.state[self.optimizer.param_groups[0]["params"][-1]]["step"])
-                #print("optimizer state:", self.optimizer.state)
-                #for g in self.optimizer.param_groups:
-                #    print(g) 
+                # todo: set global_step/resume_step/first_epoch and override step counts in optimizer / lr scheduler
         else:
             global_step = int(path.split("-")[1])
             self.logger.info(f"Resuming from checkpoint {path} (global step: {global_step})")
