@@ -94,7 +94,8 @@ class DualDiffusionPipeline(torch.nn.Module):
         model_index = config.load_json(os.path.join(model_path, "model_index.json"))
         model_modules: dict[str, DualDiffusionModule] = {}
         load_emas = load_emas or {}
-        
+        model_path_contents = os.listdir(model_path)
+
         # load pipeline modules
         for module_name, module_import_dict in model_index["modules"].items():
             
@@ -103,9 +104,9 @@ class DualDiffusionPipeline(torch.nn.Module):
             
             module_path = os.path.join(model_path, module_name)
             if load_latest_checkpoints:
-
+                
                 module_checkpoints: list[str] = []
-                for path in os.listdir(model_path):
+                for path in model_path_contents:
                     if os.path.isdir(path) and path.startswith(f"{module_name}_checkpoint"):
                         module_checkpoints.append(path)
 
@@ -115,17 +116,16 @@ class DualDiffusionPipeline(torch.nn.Module):
 
             model_modules[module_name] = module_class.from_pretrained(
                 module_path, torch_dtype=torch_dtype, device=device, load_config_only=module_name in load_emas)
-        
-        # load and merge ema weights
-        for module_name in load_emas:
-            ema_module_path = os.path.join(module_path, f"{module_name}_ema", load_emas[module_name])
-            if os.path.isfile(ema_module_path):
-                model_modules[module_name].load_state_dict(load_safetensors(ema_module_path))
+            
+            if module_name in load_emas: # load and merge ema weights
+                ema_module_path = os.path.join(module_path, load_emas[module_name])
+                if os.path.isfile(ema_module_path):
+                    model_modules[module_name].load_state_dict(load_safetensors(ema_module_path))
 
-                if hasattr(model_modules[module_name], "normalize_weights"):
-                    model_modules[module_name].normalize_weights()
-            else:
-                raise FileNotFoundError(f"EMA checkpoint '{load_emas[module_name]}' not found in '{os.path.dirname(ema_module_path)}'")
+                    if hasattr(model_modules[module_name], "normalize_weights"):
+                        model_modules[module_name].normalize_weights()
+                else:
+                    raise FileNotFoundError(f"EMA checkpoint '{load_emas[module_name]}' not found in '{os.path.dirname(ema_module_path)}'")
         
         pipeline = DualDiffusionPipeline(model_modules).to(device=device)
 
@@ -179,7 +179,7 @@ class DualDiffusionPipeline(torch.nn.Module):
         assert label_dim > 0, f"{module} label dim must be > 0, got {label_dim}"
         
         if isinstance(labels, int):
-            class_labels = torch.tensor([labels])
+            labels = torch.tensor([labels])
         
         if isinstance(labels, torch.Tensor):
             if labels.ndim < 1: labels = labels.unsqueeze(0)

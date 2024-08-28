@@ -47,6 +47,8 @@ from utils.dual_diffusion_utils import dict_str
 from training.module_trainers.module_trainer import ModuleTrainerConfig
 from .ema import PowerFunctionEMA
 from .dataset import DatasetConfig, DualDiffusionDataset
+from modules.module import DualDiffusionModule
+
 
 class TrainLogger():
 
@@ -321,17 +323,21 @@ class DualDiffusionTrainer:
         self.last_checkpoint_time = datetime.now()
         self.logger.info(f"Saving checkpoints every {self.config.min_checkpoint_time}s")
 
-        def save_model_hook(models, weights, output_dir):
+        def save_model_hook(models: list[DualDiffusionModule],
+                            weights: list[dict[str, torch.Tensor]], output_dir: str) -> None:
             if self.accelerator.is_main_process:
-                assert len(models) == 1
-                model = models.pop()
-                model.save_pretrained(os.path.join(output_dir, self.config.module_name))
-                weights.pop() # not sure if this is needed
+                
+                if len(models) != 1:
+                    self.logger.warning(f"Found {len(models)} models in save_model_hook, expected 1")
+
+                for model in models:
+                    model.save_pretrained(output_dir, subfolder=self.config.module_name)
+                    weights.pop() # accelerate documentation says we need to do this, not sure why
 
                 if self.ema_module is not None:
-                    self.ema_module.save(os.path.join(output_dir, f"{self.config.module_name}_ema"))
+                    self.ema_module.save(output_dir, subfolder=self.config.module_name)
 
-        def load_model_hook(models, input_dir):
+        def load_model_hook(models: list[DualDiffusionModule], input_dir: str) -> None:
             assert len(models) == 1
             model = models.pop()
 
@@ -341,8 +347,11 @@ class DualDiffusionTrainer:
             model.load_state_dict(load_model.state_dict())
             del load_model
             
+            if hasattr(model, "normalize_weights"):
+                model.normalize_weights()
+                
             if self.ema_module is not None: # load / create EMA models
-                ema_model_dir = os.path.join(input_dir, f"{self.config.module_name}_ema")
+                ema_model_dir = os.path.join(input_dir, self.config.module_name)
                 ema_load_errors = self.ema_module.load(ema_model_dir, target_module=model)
                 if len(ema_load_errors) > 0:
                     self.logger.warning(f"Errors loading EMA model(s) - Missing EMA(s) initialized from checkpoint model:")
@@ -358,12 +367,10 @@ class DualDiffusionTrainer:
         if self.accelerator.is_main_process:
             
             tmp_path = os.path.join(self.config.model_path, "tmp")
-            if os.path.isdir(tmp_path):
-                shutil.rmtree(tmp_path)
+            if os.path.isdir(tmp_path): shutil.rmtree(tmp_path)
             os.makedirs(tmp_path)
 
-            shutil.copytree(self.config.model_src_path,
-                            os.path.join(tmp_path, "src"),
+            shutil.copytree(self.config.model_src_path, os.path.join(tmp_path, "src"),
                             ignore=shutil.ignore_patterns("*.pyc", "__pycache__"),
                             dirs_exist_ok=True)
             shutil.copy(os.path.join(self.config.model_path, "model_index.json"), tmp_path)
@@ -382,7 +389,7 @@ class DualDiffusionTrainer:
 
         if self.config.lr_schedule.lr_schedule == "edm2":
 
-            def lr_schedule(current_step: int):
+            def lr_schedule(current_step: int) -> float:
                 lr = 1.
                 if current_step < scaled_lr_warmup_steps:
                     lr *= current_step / scaled_lr_warmup_steps
@@ -392,7 +399,7 @@ class DualDiffusionTrainer:
             
         elif self.config.lr_schedule.lr_schedule == "constant":
 
-            def lr_schedule(current_step: int):
+            def lr_schedule(current_step: int) -> float:
                 if current_step < scaled_lr_warmup_steps:
                     return current_step / scaled_lr_warmup_steps
                 return 1.

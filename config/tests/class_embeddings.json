@@ -1,0 +1,8 @@
+{
+    "model_name": "edm2_vae_test7_12d",
+    "device": "cpu",
+    "load_ema": "pf_ema_std-0.020.safetensors",
+    "module_name": "unet",
+    "remove_embedding_mean": false,
+    "normalize_embeddings": true
+}

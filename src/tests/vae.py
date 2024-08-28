@@ -34,7 +34,7 @@ from utils.dual_diffusion_utils import (
 )
 
 @torch.inference_mode()
-def vae_test():
+def vae_test() -> None:
 
     torch.manual_seed(0)
 

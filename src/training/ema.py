@@ -143,17 +143,24 @@ class PowerFunctionEMA:
             betas.append(beta)
         return zip(self.stds, betas)
 
-    def save(self, save_directory: str) -> None:
+    def save(self, save_directory: str, subfolder: Optional[str] = None) -> None:
+
+        if subfolder is not None:
+            save_directory = os.path.join(save_directory, subfolder)
         os.makedirs(save_directory, exist_ok=True)
+
         for std, ema in zip(self.stds, self.emas):
             ema_save_path = os.path.join(save_directory, f"pf_ema_std-{std:.3f}.safetensors")
             save_safetensors(ema.state_dict(), ema_save_path)
 
     @torch.no_grad()
-    def load(self, ema_path: str, target_module: Optional[torch.nn.Module] = None) -> list[str]:
+    def load(self, ema_path: str, subfolder: Optional[str] = None,
+             target_module: Optional[torch.nn.Module] = None) -> list[str]:
         
-        if target_module is not None:
-            self.module = target_module
+        if subfolder is not None:
+            ema_path = os.path.join(ema_path, subfolder)
+            
+        self.module = target_module or self.module
 
         load_errors = []
         for std, ema in zip(self.stds, self.emas):
