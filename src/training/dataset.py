@@ -161,6 +161,8 @@ class DualDiffusionDataset:
         self.dataset_dict = self.dataset_dict.map(resolve_absolute_path)
         
         def invalid_sample_filter(example):
+            if example["game_id"] is None:
+                return False
             if self.config.use_pre_encoded_latents:
                 if example["latents_file_name"] is None:
                     return False
