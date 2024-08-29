@@ -136,10 +136,14 @@ class UNetTrainer(ModuleTrainer):
         return UNetTrainerConfig
     
     @torch.no_grad()
-    def init_batch(self, total_batch_size: Optional[int] = None, validation: bool = False) -> None:
+    def init_batch(self, validation: bool = False) -> None:
         
-        total_batch_size = total_batch_size or self.trainer.total_batch_size
-        sigma_sampler = self.validation_sigma_sampler if validation == True else self.sigma_sampler
+        if validation == True:
+            total_batch_size = self.trainer.validation_total_batch_size
+            sigma_sampler = self.validation_sigma_sampler
+        else:
+            total_batch_size = self.trainer.total_batch_size
+            sigma_sampler = self.sigma_sampler
 
         if self.config.num_loss_buckets > 0:
             self.unet_loss_buckets.zero_()

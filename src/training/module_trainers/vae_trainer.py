@@ -74,7 +74,7 @@ class VAETrainer(ModuleTrainer):
         return VAETrainerConfig
     
     @torch.no_grad()
-    def init_batch(self, total_batch_size: Optional[int] = None, validation: bool = False) -> None:
+    def init_batch(self, validation: bool = False) -> None:
         pass
 
     def train_batch(self, batch: dict, grad_accum_steps: int) -> dict[str, torch.Tensor]:

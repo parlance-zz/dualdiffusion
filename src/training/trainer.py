@@ -715,6 +715,7 @@ class DualDiffusionTrainer:
 
         self.logger.info("***** Running validation *****")
         self.logger.info(f"  Num examples = {len(self.dataset['validation'])}")
+        self.logger.info(f"  Total validation batch size (w. parallel, distributed & accumulation) = {self.validation_total_batch_size}")
 
         start_validation_time = datetime.now()
 
@@ -735,7 +736,7 @@ class DualDiffusionTrainer:
                 else:
                     raise ValueError(f"Unsupported validation batch value type: {type(value)} '{key}': '{value}'")
 
-            self.module_trainer.init_batch(total_batch_size=self.validation_total_batch_size, validation=True)
+            self.module_trainer.init_batch(validation=True)
             module_logs = self.module_trainer.train_batch(validation_batch, 0)
             validation_logger.add_logs(module_logs)
             for i, sample_path in enumerate(validation_batch["sample_paths"]):

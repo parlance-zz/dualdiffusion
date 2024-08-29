@@ -38,7 +38,7 @@ class ModuleTrainer(ABC):
         return ModuleTrainerConfig
     
     @abstractmethod
-    def init_batch(self, total_batch_size: Optional[int] = None, validation: bool = False) -> None:
+    def init_batch(self, validation: bool = False) -> None:
         pass
     
     @abstractmethod
