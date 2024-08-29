@@ -540,15 +540,33 @@ class DualDiffusionTrainer:
             self.logger.info(f"Resuming from checkpoint {path} (global step: {global_step})")
             self.accelerator.load_state(os.path.join(self.config.model_path, path))
 
-            # update learning rate in case we've changed it, todo: update other optimizer params as well
-            updated_learn_rate = False
+            # update any optimizer params that have changed
+            updated_learn_rate = False; updated_adam_betas = False
+            updated_weight_decay = False; updated_adam_eps = False
             for g in self.optimizer.param_groups:
-                if g["lr"] != self.config.lr_schedule.learning_rate:
-                    g["lr"] = self.config.lr_schedule.learning_rate
+
+                if g["initial_lr"] != self.config.lr_schedule.learning_rate:
+                    g["initial_lr"] = self.config.lr_schedule.learning_rate
                     updated_learn_rate = True
+                if g["betas"] != (self.config.optimizer.adam_beta1, self.config.optimizer.adam_beta2):
+                    g["betas"] = (self.config.optimizer.adam_beta1, self.config.optimizer.adam_beta2)
+                    updated_adam_betas = True
+                if g["weight_decay"] != self.config.optimizer.adam_weight_decay:
+                    g["weight_decay"] = self.config.optimizer.adam_weight_decay
+                    updated_weight_decay = True
+                if g["eps"] != self.config.optimizer.adam_epsilon:
+                    g["eps"] = self.config.optimizer.adam_epsilon
+                    updated_adam_eps = True
+                
             if updated_learn_rate:
                 self.lr_scheduler.scheduler.base_lrs = [self.config.lr_schedule.learning_rate]
                 self.logger.info(f"Using updated learning rate: {self.config.lr_schedule.learning_rate}")
+            if updated_adam_betas:
+                self.logger.info(f"Using updated Adam beta1: {self.config.optimizer.adam_beta1} beta2: {self.config.optimizer.adam_beta2}")
+            if updated_weight_decay:
+                self.logger.info(f"Using updated Adam weight decay: {self.config.optimizer.adam_weight_decay}")
+            if updated_adam_eps:
+                self.logger.info(f"Using updated Adam epsilon: {self.config.optimizer.adam_epsilon}")
 
         if global_step > 0:
             first_epoch = global_step // self.num_update_steps_per_epoch
