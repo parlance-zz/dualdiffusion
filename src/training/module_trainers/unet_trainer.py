@@ -28,6 +28,7 @@ import torch
 from training.sigma_sampler import SigmaSamplerConfig, SigmaSampler
 from training.trainer import DualDiffusionTrainer
 from .module_trainer import ModuleTrainerConfig, ModuleTrainer
+from modules.mp_tools import mp_sum
 from utils.dual_diffusion_utils import normalize, dict_str
 
 @dataclass
@@ -47,6 +48,7 @@ class UNetTrainerConfig(ModuleTrainerConfig):
 
     num_loss_buckets: int = 10
     input_perturbation: float = 0.
+    conditioning_perturbation: float = 0.
 
 class UNetTrainer(ModuleTrainer):
     
@@ -57,6 +59,7 @@ class UNetTrainer(ModuleTrainer):
         self.trainer = trainer
         self.logger = trainer.logger
         self.module = trainer.module
+        self.is_validation_batch = False
 
         if trainer.config.enable_model_compilation:
             self.module.forward = torch.compile(self.module.forward, **trainer.config.compile_params)
@@ -93,8 +96,12 @@ class UNetTrainer(ModuleTrainer):
             self.logger.info("UNet loss buckets are disabled")
 
         if self.config.input_perturbation > 0:
-            self.logger.info(f"Using input perturbation of {self.config.input_perturbation}")
+            self.logger.info(f"Using input perturbation: {self.config.input_perturbation}")
         else: self.logger.info("Input perturbation is disabled")
+        if self.config.conditioning_perturbation > 0:
+            self.config.conditioning_perturbation = min(self.config.conditioning_perturbation, 1)
+            self.logger.info(f"Using conditioning perturbation: {self.config.conditioning_perturbation}")
+        else: self.logger.info("Conditioning perturbation is disabled")
         self.logger.info(f"Dropout: {self.module.config.dropout} Conditioning dropout: {self.module.config.label_dropout}")
 
         sigma_sampler_config = SigmaSamplerConfig(
@@ -141,9 +148,11 @@ class UNetTrainer(ModuleTrainer):
         if validation == True:
             total_batch_size = self.trainer.validation_total_batch_size
             sigma_sampler = self.validation_sigma_sampler
+            self.is_validation_batch = True
         else:
             total_batch_size = self.trainer.total_batch_size
             sigma_sampler = self.sigma_sampler
+            self.is_validation_batch = False
 
         if self.config.num_loss_buckets > 0:
             self.unet_loss_buckets.zero_()
@@ -172,7 +181,11 @@ class UNetTrainer(ModuleTrainer):
 
         class_labels = self.trainer.pipeline.get_class_labels(sample_game_ids, module="unet")
         unet_class_embeddings = self.module.get_class_embeddings(class_labels)
-
+        if self.config.conditioning_perturbation > 0:
+            unet_class_embeddings = mp_sum(unet_class_embeddings,
+                                           torch.randn_like(unet_class_embeddings),
+                                           self.config.conditioning_perturbation)
+            
         if self.trainer.config.dataloader.use_pre_encoded_latents:
             samples = raw_samples
             assert samples.shape == self.trainer.latent_shape, f"Expected shape {self.trainer.latent_shape}, got {samples.shape}"
