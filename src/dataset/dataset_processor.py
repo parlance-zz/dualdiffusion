@@ -48,6 +48,7 @@ class DatasetProcessorConfig:
     min_kbps: Optional[int] = None
     min_sample_length: Optional[int] = None
     max_sample_length: Optional[int] = None
+    min_num_class_samples: Optional[int] = None
     pre_encoded_latents_vae: Optional[str] = None
     dataset_processor_verbose: bool = False
 
@@ -292,6 +293,29 @@ class DatasetProcessor:
     def num_samples(self) -> int:
         return sum(len(split.samples) for split in self.splits.values())
 
+    def get_unused_ids(self) -> tuple[dict[str, int]]:
+
+        used_system_ids, used_game_ids, used_author_ids = set(), set(), set()
+        for _, _, sample in self.all_samples():
+            if sample["system_id"] is not None: used_system_ids.add(sample["system_id"])
+            if sample["game_id"] is not None: used_game_ids.add(sample["game_id"])
+            if sample["author_id"] is not None: used_author_ids.update(id for id in sample["author_id"])
+
+        unused_system_ids: dict[str, int] = {}
+        unused_game_ids: dict[str, int] = {}
+        unused_author_ids: dict[str, int] = {}
+        for system, system_id in self.dataset_info["system_id"].items():
+            if system_id not in used_system_ids:
+                unused_system_ids[system] = system_id
+        for game, game_id in self.dataset_info["game_id"].items():
+            if game_id not in used_game_ids:
+                unused_game_ids[game] = game_id
+        for author, author_id in self.dataset_info["author_id"].items():
+            if author_id not in used_author_ids:
+                unused_author_ids[author] = author_id
+
+        return unused_system_ids, unused_game_ids, unused_author_ids
+
     def validate_files(self) -> None:
 
         # search for any sample file_name in splits that no longer exists (or null file_name)
@@ -391,6 +415,38 @@ class DatasetProcessor:
                     os.remove(file)
                 self.logger.info(f"Deleted {num_invalid_format_files} files with invalid formats")
             self.logger.info("")
+    
+        # search for any valid new source audio files not currently dataset
+        # if any found, prompt to add them to train split
+        sample_files = set()
+        for _, _, sample in self.all_samples():
+            sample_files.add(os.path.normpath(sample["file_name"]))
+
+        new_audio_files = []
+        valid_sample_formats = self.config.source_formats + self.config.dataset_formats
+        for root, _, files in os.walk(config.DATASET_PATH):
+            for file in files:
+                if os.path.splitext(file)[1].lower() in valid_sample_formats:
+                    rel_path = os.path.normpath(os.path.relpath(os.path.join(root, file), config.DATASET_PATH))
+                    if rel_path not in sample_files:
+                        new_audio_files.append(rel_path)
+
+        num_new_audio_files = len(new_audio_files)
+        if num_new_audio_files > 0:
+            self.logger.info(f"Found {num_new_audio_files} new audio files not currently in the dataset")
+            for file in new_audio_files:
+                self.logger.debug(f'"{file}"')
+            if input(f"Add {num_new_audio_files} new audio files to train split? (y/n): ").lower() == "y":
+                new_samples = []
+                for file in new_audio_files:
+                    new_sample = {"file_name": file}
+                    new_sample_latents_file = os.path.join(config.DATASET_PATH, os.path.splitext(file)[0] + ".safetensors")
+                    if os.path.isfile(new_sample_latents_file):
+                        new_sample["latents_file_name"] = os.path.relpath(new_sample_latents_file, config.DATASET_PATH)
+                    new_samples.append(new_sample)
+                self.splits["train"].add_samples(new_samples)
+                self.logger.info(f"Added {num_new_audio_files} new audio files to train split")
+            self.logger.info("")
 
         # search for any .safetensors file that isn't referenced as a latents_file_name in the dataset
         # if any found, prompt to delete them
@@ -417,30 +473,21 @@ class DatasetProcessor:
                     os.remove(file)
                 self.logger.info(f"Deleted {num_unreferenced_latents_files} unreferenced .safetensors (latents) files")
             self.logger.info("")
-    
-        # search for any valid new source audio files not currently dataset
-        # if any found, prompt to add them to train split
-        sample_files = set()
-        for _, _, sample in self.all_samples():
-            sample_files.add(os.path.normpath(sample["file_name"]))
 
-        new_audio_files = []
-        valid_sample_formats = self.config.source_formats + self.config.dataset_formats
-        for root, _, files in os.walk(config.DATASET_PATH):
-            for file in files:
-                if os.path.splitext(file)[1].lower() in valid_sample_formats:
-                    rel_path = os.path.normpath(os.path.relpath(os.path.join(root, file), config.DATASET_PATH))
-                    if rel_path not in sample_files:
-                        new_audio_files.append(rel_path)
-
-        num_new_audio_files = len(new_audio_files)
-        if num_new_audio_files > 0:
-            self.logger.info(f"Found {num_new_audio_files} new audio files not currently in the dataset")
-            for file in new_audio_files:
-                self.logger.debug(f'"{file}"')
-            if input(f"Add {num_new_audio_files} new audio files to train split? (y/n): ").lower() == "y":
-                self.splits["train"].add_samples([{"file_name": file} for file in new_audio_files])
-                self.logger.info(f"Added {num_new_audio_files} new audio files to train split")
+        # search for any empty folders, if any found prompt to delete
+        empty_folders = []
+        for root, dirs, files in os.walk(config.DATASET_PATH):
+            if len(dirs) == 0 and len(files) == 0:
+                empty_folders.append(root)
+        
+        if len(empty_folders) > 0:
+            self.logger.warning(f"Found {len(empty_folders)} empty folders in dataset ({config.DATASET_PATH})")
+            for folder in empty_folders:
+                self.logger.debug(f'"{folder}"')
+            if input(f"Delete {len(empty_folders)} empty folders? (WARNING: this is permanent and cannot be undone) (type 'delete' to confirm): ").lower() == "delete":
+                for folder in empty_folders:
+                    os.rmdir(folder)
+                self.logger.info(f"Deleted {len(empty_folders)} empty folders")
             self.logger.info("")
 
     def transcode(self) -> None:
@@ -587,6 +634,34 @@ class DatasetProcessor:
                 self.logger.info(f"Successfully transcoded {num_transcode - num_failed_transcode} samples")
 
     def filter(self) -> None:
+
+        # find any game ids with a low number of samples
+        # if any found, prompt to merge them into a "misc" game id
+        # else prompt to remove them
+        if self.config.min_num_class_samples is not None:
+            game_id_to_name = {v: k for k, v in self.dataset_info["game_id"].items()}
+            game_id_counts = {game_id: 0 for game_id in self.dataset_info["game_id"].values()}
+            for _, _, sample in self.all_samples():
+                if sample["game_id"] is not None:
+                    game_id_counts[sample["game_id"]] += 1
+
+            low_sample_game_ids = {}
+            total_low_samples = 0
+            for game_id, count in game_id_counts.items():
+                if count < self.config.min_num_class_samples and count > 0:
+                    low_sample_game_ids[game_id] = count
+                    total_low_samples += count
+
+            if len(low_sample_game_ids) > 0:
+                self.logger.warning(f"Found {len(low_sample_game_ids)} game ids with fewer than {self.config.min_num_class_samples} samples")
+                sorted_game_ids = dict(sorted(low_sample_game_ids.items(), key=lambda x: x[1]))
+                for game_id, count in sorted_game_ids.items():
+                    self.logger.debug(f"Game id '{game_id_to_name[game_id]}' has only {count} samples")
+                self.logger.debug(f"Total sample count in low_sample_game_ids: {total_low_samples}")
+
+                input("")
+                #if input(f"Remove {len(low_sample_game_ids)} game ids with fewer than {self.config.min_class_samples} samples? (y/n): ").lower() == "y":
+
         # todo: detect any duplicate / highly similar samples in splits,
         # detect any abnormal / anomalous samples in splits
         # if any found, prompt to remove them
@@ -727,25 +802,7 @@ class DatasetProcessor:
 
         # search for any unused system, game, or author ids
         # if any found, prompt to rebuild dataset_info / ids from current metadata
-        used_system_ids, used_game_ids, used_author_ids = set(), set(), set()
-        for _, _, sample in self.all_samples():
-            if sample["system_id"] is not None: used_system_ids.add(sample["system_id"])
-            if sample["game_id"] is not None: used_game_ids.add(sample["game_id"])
-            if sample["author_id"] is not None: used_author_ids.update(id for id in sample["author_id"])
-
-        unused_system_ids: dict[str, int] = {}
-        unused_game_ids: dict[str, int] = {}
-        unused_author_ids: dict[str, int] = {}
-        for system, system_id in self.dataset_info["system_id"].items():
-            if system_id not in used_system_ids:
-                unused_system_ids[system] = system_id
-        for game, game_id in self.dataset_info["game_id"].items():
-            if game_id not in used_game_ids:
-                unused_game_ids[game] = game_id
-        for author, author_id in self.dataset_info["author_id"].items():
-            if author_id not in used_author_ids:
-                unused_author_ids[author] = author_id
-        
+        unused_system_ids, unused_game_ids, unused_author_ids = self.get_unused_ids()
         if len(unused_system_ids) > 0 or len(unused_game_ids) > 0 or len(unused_author_ids) > 0:
             self.logger.warning("Found unused system, game, or author ids in dataset info")
             if len(unused_system_ids) > 0:

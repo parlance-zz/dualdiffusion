@@ -7,6 +7,7 @@
   "min_kbps": 32,
   "min_sample_length": 1442048,
   "max_sample_length": 4800000,
+  "min_num_class_samples": 6,
   "pre_encoded_latents_vae": "edm2_vae_test7_4",
   "dataset_processor_verbose": true
 }
