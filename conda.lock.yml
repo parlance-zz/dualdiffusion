@@ -231,7 +231,6 @@ dependencies:
       - async-timeout==4.0.3
       - attrs==23.2.0
       - datasets==2.20.0
-      - diffusers==0.29.1
       - dill==0.3.8
       - exceptiongroup==1.2.1
       - frozenlist==1.4.1
@@ -262,7 +261,6 @@ dependencies:
       - tensorboard-data-server==0.7.2
       - tokenizers==0.19.1
       - tqdm==4.66.4
-      - transformers==4.41.2
       - tzdata==2024.1
       - websockets==11.0.3
       - werkzeug==3.0.3
