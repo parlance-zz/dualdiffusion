@@ -1,9 +1,16 @@
 {
-  "attn_balance": 0.3,
-  "attn_levels": [
-    3,
-    4
-  ],
+  "last_global_step": 330103,
+  "in_channels": 4,
+  "out_channels": 4,
+  "use_t_ranges": false,
+  "label_dim": 1612,
+  "label_dropout": 0.1,
+  "dropout": 0.0,
+  "sigma_max": 200.0,
+  "sigma_min": 0.03,
+  "sigma_data": 1.0,
+  "model_channels": 256,
+  "logvar_channels": 128,
   "channel_mult": [
     1,
     2,
@@ -11,26 +18,19 @@
     4,
     5
   ],
-  "channel_mult_emb": null,
   "channel_mult_noise": null,
+  "channel_mult_emb": null,
   "channels_per_head": 64,
-  "concat_balance": 0.5,
-  "dropout": 0.0,
-  "in_channels": 4,
-  "label_balance": 0.5,
-  "label_dim": 1612,
-  "label_dropout": 0.1,
-  "last_global_step": 178350,
-  "logvar_channels": 128,
-  "mlp_groups": 8,
-  "mlp_multiplier": 2,
-  "model_channels": 256,
   "num_layers_per_block": 2,
-  "out_channels": 4,
-  "qk_attn_gain_exponent": 0.0,
+  "label_balance": 0.5,
+  "concat_balance": 0.5,
   "res_balance": 0.3,
-  "sigma_data": 1.0,
-  "sigma_max": 200.0,
-  "sigma_min": 0.03,
-  "use_t_ranges": false
+  "attn_balance": 0.3,
+  "attn_levels": [
+    3,
+    4
+  ],
+  "mlp_multiplier": 2,
+  "mlp_groups": 8,
+  "qk_attn_gain_exponent": 0.0
 }
