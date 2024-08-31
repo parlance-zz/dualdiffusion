@@ -1,0 +1,13 @@
+{
+  "device": "cuda",
+  "audio_len": 1024000,
+  "quantize_level": 0,
+  "noise_level": 0,
+  "format_cfg_file": "spectrogram_format.json",
+  "sample_filenames": [
+    "1/Kirby Super Star  [Kirby's Fun Pak] - 41 Halberd ~ Nightmare Warship.flac",
+    "2/Mario no Super Picross - 109 Mario Puzzle 3.flac",
+    "2/Mega Man X3 - 09 Blast Hornet.flac",
+    "2/Pilotwings - 04 Light Plane.flac"
+  ]
+}

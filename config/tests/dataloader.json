@@ -1,0 +1,15 @@
+{
+  "format_cfg_file": "spectrogram_format.json",
+  "use_pre_encoded_latents": true,
+  "latents_crop_width": 512,
+  "sample_raw_crop_width": 1057570,
+  "filter_invalid_samples": true,
+  "dataset_num_proc": null,
+  "t_scale": null,
+  "split": "train",
+  "batch_size": 32,
+  "dataloader_num_workers": 8,
+  "pin_memory": false,
+  "prefetch_factor": 2,
+  "num_epochs": 5
+}

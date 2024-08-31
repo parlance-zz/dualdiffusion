@@ -1,0 +1,19 @@
+{
+    "reference_model_name": "edm2_vae_test7_12d",
+    "sigma_max": 200.0,
+    "sigma_min": 0.03,
+    "sigma_data": 1.0,
+    "training_batch_size": 384,
+    "batch_distribution": "ln_pdf",
+    "batch_dist_scale": 4.0,
+    "batch_dist_offset": 0.0,
+    "batch_stratified_sampling": true,
+    "reference_batch_size": 384,
+    "reference_distribution": "log_sech",
+    "reference_dist_scale": 1.0,
+    "reference_dist_offset": 0.5,
+    "reference_stratified_sampling": true,
+    "n_iter": 10000,
+    "n_histo_bins": 200,
+    "use_y_log_scale": false
+  }

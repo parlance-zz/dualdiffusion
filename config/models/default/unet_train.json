@@ -1,0 +1,68 @@
+{
+  "seed": 2000,
+  "device_batch_size": 12,
+  "gradient_accumulation_steps": 2,
+  "num_train_epochs": 500000,
+  "min_checkpoint_time": 3600,
+  "strict_checkpoint_time": false,
+  "checkpoints_total_limit": 1,
+  "num_validation_epochs": 1,
+  "enable_anomaly_detection": false,
+  "enable_model_compilation": true,
+  "compile_params": {
+    "fullgraph": true,
+    "dynamic": false
+  },
+  "lr_schedule": {
+    "learning_rate": 1e-2,
+    "lr_schedule": "edm2",
+    "lr_warmup_steps": 5000,
+    "lr_reference_steps": 60000,
+    "lr_decay_exponent": 0.5
+  },
+  "optimizer": {
+    "adam_beta1": 0.9,
+    "adam_beta2": 0.99,
+    "adam_epsilon": 1e-8,
+    "adam_weight_decay": 1e-2,
+    "max_grad_norm": 10.0,
+    "add_grad_noise": 2.0
+  },
+  "ema": {
+    "use_ema": true,
+    "ema_stds": [0.1, 0.2],
+    "ema_cpu_offload": false
+  },
+  "dataloader": {
+    "use_pre_encoded_latents": true,
+    "filter_invalid_samples": true,
+    "dataset_num_proc": null,
+    "dataloader_num_workers": 6,
+    "pin_memory": false,
+    "prefetch_factor": 2
+  },
+  "logging": {
+    "logging_dir": null,
+    "tensorboard_http_port": 6006,
+    "tensorboard_num_scalars": 2000
+  },
+  
+  "module_name": "unet",
+  "module_trainer_class": [
+    "training.module_trainers.unet_trainer",
+    "UNetTrainer"
+  ],
+  "module_trainer_config": {
+    "sigma_distribution": "ln_sech",
+    "sigma_dist_scale": 1.0,
+    "sigma_dist_offset": 0.375,
+    "use_stratified_sigma_sampling": true,
+    "sigma_pdf_resolution": 127,
+    "input_perturbation": 0.0,
+    "conditioning_perturbation": 0.1,
+    "num_loss_buckets": 10,
+    "validation_sigma_distribution": "ln_linear",
+    "validation_sigma_dist_scale": 1.0,
+    "validation_sigma_dist_offset": 0.3
+  }
+}

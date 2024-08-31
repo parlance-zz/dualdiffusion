@@ -6,6 +6,7 @@ dataset/*/
 debug/*/
 output/
 backup/
+old/
 
 *.raw
 *.mp3
