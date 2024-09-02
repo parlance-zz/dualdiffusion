@@ -122,11 +122,8 @@ class Block(torch.nn.Module):
         c = self.emb_linear(emb, gain=self.emb_gain) + 1.
         y = mp_silu(y * c)
 
-        if self.dropout != 0: # magnitude preserving fix for dropout
-            if self.training:
-                y = torch.nn.functional.dropout(y, p=self.dropout)
-            else:
-                y *= 1. - self.dropout
+        if self.dropout != 0 and self.training == True: # magnitude preserving fix for dropout
+            y = torch.nn.functional.dropout(y, p=self.dropout) * (1. - self.dropout)**0.5
 
         y = self.conv_res1(y)
 
