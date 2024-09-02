@@ -181,7 +181,7 @@ class UNetTrainer(ModuleTrainer):
 
         class_labels = self.trainer.pipeline.get_class_labels(sample_game_ids, module="unet")
         unet_class_embeddings = self.module.get_class_embeddings(class_labels)
-        if self.config.conditioning_perturbation > 0:
+        if self.config.conditioning_perturbation > 0 and self.is_validation_batch == False:
             unet_class_embeddings = mp_sum(unet_class_embeddings,
                                            torch.randn_like(unet_class_embeddings),
                                            self.config.conditioning_perturbation)
@@ -197,7 +197,7 @@ class UNetTrainer(ModuleTrainer):
                                                        self.trainer.pipeline.format).mode()
             assert samples.shape == self.trainer.sample_shape, f"Expected shape {self.trainer.sample_shape}, got {samples.shape}"
         
-        if self.config.input_perturbation > 0:
+        if self.config.input_perturbation > 0 and self.is_validation_batch == False:
             samples += torch.randn_like(samples) * self.config.input_perturbation
         samples = normalize(samples).float()
 
