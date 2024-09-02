@@ -672,7 +672,8 @@ class DatasetProcessor:
         # search for any samples in splits that have a latents_file_name and any null latents metadata fields
         # if any found, prompt to extract latents metadata
         need_metadata_samples = SampleList()
-        metadata_check_keys = ["latents_file_size", "latents_length", "latents_num_variations", "latents_quantized"]
+        metadata_check_keys = ["latents_file_size", "latents_length", "latents_num_variations",
+                               "latents_quantized", "latents_vae_model"]
         for split, index, sample in self.all_samples():
             if sample["latents_file_name"] is not None:
                 if any(sample[key] is None for key in metadata_check_keys):
@@ -693,11 +694,16 @@ class DatasetProcessor:
                             latents_shape = f.get_slice("latents").get_shape()
                             sample["latents_length"] = latents_shape[-1]
                             sample["latents_num_variations"] = latents_shape[0]
+                            
                             try:
                                 _ = f.get_slice("offset_and_range")
                                 sample["latents_quantized"] = True
                             except Exception as _:
                                 sample["latents_quantized"] = False
+
+                            st_metadata = f.metadata()
+                            if st_metadata is not None:
+                                sample["latents_vae_model"] = st_metadata.get("latents_vae_model", None)
                                                        
                     except Exception as e:
                         failed_metadata_extraction_samples.add_sample(split, index, str(e))
