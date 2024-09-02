@@ -725,6 +725,8 @@ class DualDiffusionTrainer:
         progress_bar = tqdm(total=len(self.validation_dataloader), disable=not self.accelerator.is_local_main_process)
         progress_bar.set_description(f"Validation")
 
+        self.module.eval()
+
         for _, batch in enumerate(self.validation_dataloader):
             
             validation_batch = {} # expand each individual validation sample to device_batch_size
@@ -763,3 +765,4 @@ class DualDiffusionTrainer:
                 self.logger.warning(f"Error saving validation sample logs to {sample_log_path}: {e}")
 
         self.logger.info(f"Validation complete (runtime: {(datetime.now() - start_validation_time).total_seconds()}s)")
+        self.module.train()
