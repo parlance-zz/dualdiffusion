@@ -29,6 +29,7 @@ from training.sigma_sampler import SigmaSamplerConfig, SigmaSampler
 from training.trainer import DualDiffusionTrainer
 from .module_trainer import ModuleTrainerConfig, ModuleTrainer
 from modules.mp_tools import mp_sum
+from modules.unets.unet import DualDiffusionUNet
 from utils.dual_diffusion_utils import normalize, dict_str
 
 @dataclass
@@ -58,7 +59,7 @@ class UNetTrainer(ModuleTrainer):
         self.config = config
         self.trainer = trainer
         self.logger = trainer.logger
-        self.module = trainer.module
+        self.module: DualDiffusionUNet = trainer.module
         self.is_validation_batch = False
 
         if trainer.config.enable_model_compilation:
