@@ -43,7 +43,7 @@ class UNetTrainerConfig(ModuleTrainerConfig):
     sigma_pdf_resolution: Optional[int] = 127
 
     validation_sigma_distribution: Literal["ln_normal", "ln_sech", "ln_sech^2",
-                                            "ln_linear", "ln_pdf"] = "ln_linear"
+                                            "ln_linear", "ln_pdf"] = "ln_sech"
     validation_sigma_dist_scale: float = 1.0
     validation_sigma_dist_offset: float = 0.3
 
@@ -173,7 +173,7 @@ class UNetTrainer(ModuleTrainer):
         self.global_sigma = sigma_sampler.sample(total_batch_size, device=self.trainer.accelerator.device)
         self.global_sigma = self.trainer.accelerator.gather(self.global_sigma.unsqueeze(0))[0] # sync sigma across all ranks / processes
 
-    def train_batch(self, batch: dict, grad_accum_steps: int) -> dict[str, torch.Tensor]:
+    def train_batch(self, batch: dict, accum_step: int) -> dict[str, torch.Tensor]:
 
         raw_samples = batch["input"]
         sample_game_ids = batch["game_ids"]
@@ -203,7 +203,7 @@ class UNetTrainer(ModuleTrainer):
         samples = normalize(samples).float()
 
         local_sigma = self.global_sigma[self.trainer.accelerator.local_process_index::self.trainer.accelerator.num_processes]
-        batch_sigma = local_sigma[grad_accum_steps * self.trainer.config.device_batch_size:(grad_accum_steps+1) * self.trainer.config.device_batch_size]
+        batch_sigma = local_sigma[accum_step * self.trainer.config.device_batch_size:(accum_step+1) * self.trainer.config.device_batch_size]
 
         noise = torch.randn_like(samples) * batch_sigma.view(-1, 1, 1, 1)
         samples = (samples * self.module.config.sigma_data).detach()

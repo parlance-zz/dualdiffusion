@@ -42,7 +42,7 @@ class ModuleTrainer(ABC):
         pass
     
     @abstractmethod
-    def train_batch(self, batch: dict, grad_accum_steps: int) -> dict[str, torch.Tensor]:
+    def train_batch(self, batch: dict, accum_step: int) -> dict[str, torch.Tensor]:
         pass
     
     @abstractmethod

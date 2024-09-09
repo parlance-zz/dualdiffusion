@@ -137,8 +137,9 @@ class DualDiffusionTrainerConfig:
     model_src_path: str
     train_config_path: Optional[str]    = None
     seed: Optional[int]                 = None
-    device_batch_size: int               = 1
+    device_batch_size: int              = 1
     gradient_accumulation_steps: int    = 1
+    validation_accumulation_steps: int  = 1
 
     num_train_epochs: int               = 500000
     num_validation_epochs: int          = 10
@@ -413,7 +414,9 @@ class DualDiffusionTrainer:
         
         self.local_batch_size = self.config.device_batch_size * self.config.gradient_accumulation_steps
         self.total_batch_size = self.local_batch_size * self.accelerator.num_processes
-        self.validation_total_batch_size = self.config.device_batch_size * self.accelerator.num_processes
+        self.validation_total_batch_size = (
+            self.config.device_batch_size * self.accelerator.num_processes * self.config.validation_accumulation_steps
+        )
 
         latents_crop_width = self.latent_shape[-1] if self.latent_shape is not None else 0
         sample_raw_crop_width = self.pipeline.format.sample_raw_crop_width()
@@ -607,16 +610,16 @@ class DualDiffusionTrainer:
                 train_logger.clear()
                 self.module_trainer.init_batch()
                 
-                for grad_accum_steps in range(self.config.gradient_accumulation_steps):
+                for accum_step in range(self.config.gradient_accumulation_steps):
 
                     device_batch = { # get sub-batch of device batch size from local batch for each grad_accum_step
-                        key: value[grad_accum_steps * self.config.device_batch_size: (grad_accum_steps+1) * self.config.device_batch_size]
+                        key: value[accum_step * self.config.device_batch_size: (accum_step+1) * self.config.device_batch_size]
                         for key, value in local_batch.items()
                     }
 
                     with self.accelerator.accumulate(self.module):
 
-                        module_logs = self.module_trainer.train_batch(device_batch, grad_accum_steps)
+                        module_logs = self.module_trainer.train_batch(device_batch, accum_step)
                         train_logger.add_logs(module_logs)
                         for i, sample_path in enumerate(device_batch["sample_paths"]):
                             sample_logger.add_log(sample_path, module_logs["loss"][i])
@@ -624,8 +627,8 @@ class DualDiffusionTrainer:
                         self.accelerator.backward(module_logs["loss"].mean())
 
                         if self.accelerator.sync_gradients:
-                            assert grad_accum_steps == (self.config.gradient_accumulation_steps - 1), \
-                                f"grad_accum_steps out of sync with sync_gradients - {grad_accum_steps} != {self.config.gradient_accumulation_steps - 1}"
+                            assert accum_step == (self.config.gradient_accumulation_steps - 1), \
+                                f"accum_step out of sync with sync_gradients - {accum_step} != {self.config.gradient_accumulation_steps - 1}"
                             
                             grad_norm = self.accelerator.clip_grad_norm_(self.module.parameters(), self.config.optimizer.max_grad_norm)
                             train_logger.add_log("grad_norm", grad_norm)
@@ -641,8 +644,8 @@ class DualDiffusionTrainer:
                                     p_noise = torch.randn_like(p) * (torch.linalg.vector_norm(p.grad) / p.grad.numel() ** 0.5)
                                     p.grad += p_noise * self.config.optimizer.add_grad_noise * self.lr_scheduler.get_last_lr()[0]
                         else:
-                            assert grad_accum_steps != (self.config.gradient_accumulation_steps - 1), \
-                                f"grad_accum_steps out of sync, no sync_gradients but {grad_accum_steps} == {self.config.gradient_accumulation_steps - 1}"
+                            assert accum_step != (self.config.gradient_accumulation_steps - 1), \
+                                f"accum_step out of sync, no sync_gradients but {accum_step} == {self.config.gradient_accumulation_steps - 1}"
                             
                         self.optimizer.step()
                         self.lr_scheduler.step()
@@ -739,10 +742,11 @@ class DualDiffusionTrainer:
                     raise ValueError(f"Unsupported validation batch value type: {type(value)} '{key}': '{value}'")
 
             self.module_trainer.init_batch(validation=True)
-            module_logs = self.module_trainer.train_batch(validation_batch, 0)
-            validation_logger.add_logs(module_logs)
-            for i, sample_path in enumerate(validation_batch["sample_paths"]):
-                sample_logger.add_log(sample_path, module_logs["loss"][i])
+            for accum_step in range(self.config.validation_accumulation_steps):
+                module_logs = self.module_trainer.train_batch(validation_batch, accum_step)
+                validation_logger.add_logs(module_logs)
+                for i, sample_path in enumerate(validation_batch["sample_paths"]):
+                    sample_logger.add_log(sample_path, module_logs["loss"][i])
 
             validation_logger.add_logs(self.module_trainer.finish_batch())
             progress_bar.update(1)
