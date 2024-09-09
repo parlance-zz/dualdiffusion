@@ -209,11 +209,14 @@ class UNetTrainer(ModuleTrainer):
         samples = (samples * self.module.config.sigma_data).detach()
 
         denoised = self.module(samples + noise, batch_sigma, self.trainer.pipeline.format, unet_class_embeddings, sample_t_ranges)
-        error_logvar = self.module.get_sigma_loss_logvar(batch_sigma)
-
         batch_loss_weight = (batch_sigma ** 2 + self.module.config.sigma_data ** 2) / (batch_sigma * self.module.config.sigma_data) ** 2
         batch_weighted_loss = torch.nn.functional.mse_loss(denoised, samples, reduction="none").mean(dim=(1,2,3)) * batch_loss_weight
-        batch_loss = batch_weighted_loss / error_logvar.exp() + error_logvar
+
+        if self.is_validation_batch == True:
+            batch_loss = batch_weighted_loss
+        else:
+            error_logvar = self.module.get_sigma_loss_logvar(batch_sigma)
+            batch_loss = batch_weighted_loss / error_logvar.exp() + error_logvar
         
         if self.config.num_loss_buckets > 0:
             global_weighted_loss = self.trainer.accelerator.gather(batch_weighted_loss.detach().cpu())
