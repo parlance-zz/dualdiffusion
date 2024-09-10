@@ -268,7 +268,20 @@ class DatasetProcessor:
         self.logger.info(f"  {len(self.dataset_info['system_id'])} system id(s)")
         self.logger.info(f"  {len(self.dataset_info['game_id'])} game id(s)")
         self.logger.info(f"  {len(self.dataset_info['author_id'])} author id(s)")
-        self.logger.info("")
+
+        min_sample_length = min(sample["sample_length"] for _, _, sample in self.all_samples() if sample["sample_length"] is not None)
+        max_sample_length = max(sample["sample_length"] for _, _, sample in self.all_samples() if sample["sample_length"] is not None)
+        min_sample_length_seconds = min(sample["sample_length"] / sample["sample_rate"]
+            for _, _, sample in self.all_samples() if sample["sample_length"] is not None and sample["sample_rate"] is not None)
+        max_sample_length_seconds = max(sample["sample_length"] / sample["sample_rate"]
+            for _, _, sample in self.all_samples() if sample["sample_length"] is not None and sample["sample_rate"] is not None)
+                                        
+        min_latents_length = min(sample["latents_length"] for _, _, sample in self.all_samples() if sample["latents_length"] is not None)
+        max_latents_length = max(sample["latents_length"] for _, _, sample in self.all_samples() if sample["latents_length"] is not None)
+        self.logger.info(f"  min sample_length: {min_sample_length} ({min_sample_length_seconds:.2f}s)")
+        self.logger.info(f"  max sample_length: {max_sample_length} ({max_sample_length_seconds:.2f}s)")
+        self.logger.info(f"  min latents_length: {min_latents_length}")
+        self.logger.info(f"  max latents_length: {max_latents_length}")
 
     def get_id(self, id_type: str, name: str) -> int:
 
