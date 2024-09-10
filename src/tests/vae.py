@@ -68,8 +68,9 @@ def vae_test() -> None:
 
     dataset_path = config.DATASET_PATH
     test_samples = test_params["test_samples"]
-    sample_shape = pipeline.format.get_sample_shape(length=length)
-    print(f"Sample shape: {sample_shape}  Latent shape: {pipeline.vae.get_latent_shape(sample_shape)}")
+    sample_shape = pipeline.get_sample_shape(length=length)
+    latent_shape = pipeline.get_latent_shape(sample_shape)
+    print(f"Sample shape: {sample_shape}  Latent shape: {latent_shape}")
     
     output_path = os.path.join(model_path, "output", "vae", f"step_{last_global_step}")
     os.makedirs(output_path, exist_ok=True)

@@ -96,6 +96,10 @@ class DualDiffusionVAE(DualDiffusionModule, ABC):
         pass
 
     @abstractmethod
+    def get_sample_shape(self, latent_shape: Union[torch.Size, tuple[int, int, int, int]]) -> torch.Size:
+        pass
+
+    @abstractmethod
     def encode(self, x: torch.Tensor,
                class_embeddings: torch.Tensor,
                format: DualDiffusionFormat) -> IsotropicGaussianDistribution:

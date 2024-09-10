@@ -36,13 +36,14 @@ from utils.dual_diffusion_utils import (
     open_img_window, close_img_window, show_img, tensor_to_img, save_img,
     multi_plot, normalize, get_cos_angle, load_safetensors
 )
-from .sampling_schedule import SamplingSchedule
+from sampling.sampling_schedule import SamplingSchedule
 
 @dataclass
-class SamplingParams:
+class SampleParams:
     steps: int                  = 100
     seed: Optional[int]         = None
     batch_size: int             = 1
+    num_batches: int            = 1
     length: Optional[int]       = None
     cfg_scale: float            = 1.5
     sigma_max: Optional[float]  = None
@@ -53,11 +54,12 @@ class SamplingParams:
     game_ids: Optional[dict]              = None
     generator: Optional[torch.Generator]  = None
     use_midpoint_integration: bool        = True
-    add_sample_noise: Optional[float]     = None
-    add_class_noise: Optional[float]      = None
-    img2img_strength: Optional[float]     = None
-    img2img_input: Optional[torch.Tensor] = None
-    show_debug_plots: bool                = False
+    input_perturbation: Optional[float]   = None
+    conditioning_perturbation: Optional[float] = None
+    img2img_strength: Optional[float]          = None
+    img2img_input: Optional[Union[str, torch.Tensor]] = None
+    num_fgla_iterations: Optional[int]                = None
+    
 
 class DualDiffusionPipeline(torch.nn.Module):
 
@@ -133,8 +135,10 @@ class DualDiffusionPipeline(torch.nn.Module):
         dataset_info_path = os.path.join(model_path, "dataset_info.json")
         if os.path.isfile(dataset_info_path):
             pipeline.dataset_info = config.load_json(dataset_info_path)
+            pipeline.dataset_game_names = {value: key for key, value in pipeline.dataset_info["game_id"].items()}
         else:
             pipeline.dataset_info = None
+            pipeline.dataset_game_names = None
         
         return pipeline
     
@@ -200,15 +204,24 @@ class DualDiffusionPipeline(torch.nn.Module):
         
         return class_labels.to(device=self.device, dtype=self.dtype)
 
+    def get_latent_shape(self, sample_shape: Union[torch.Size, tuple[int, int, int, int]]) -> torch.Size:
+        latent_shape = self.vae.get_latent_shape(sample_shape)
+        return self.unet.get_latent_shape(latent_shape)
+    
+    def get_sample_shape(self, bsz: int = 1, length: Optional[int] = None) -> tuple:
+        sample_shape = self.format.get_sample_shape(bsz=bsz, length=length)
+        latent_shape = self.get_latent_shape(sample_shape)
+        return self.vae.get_sample_shape(latent_shape)
+    
     @torch.inference_mode()
-    def __call__(self, params: SamplingParams) -> torch.Tensor:
+    def __call__(self, params: SampleParams) -> torch.Tensor:
         
         params.seed = params.seed or np.random.randint(100000, 999999)
         params.generator = params.generator or torch.Generator(
             device=self.device).manual_seed(params.seed)
 
-        sample_shape = self.format.get_sample_shape(bsz=params.batch_size, length=params.length)
-        latent_shape = self.vae.get_latent_shape(sample_shape)
+        sample_shape = self.get_sample_shape(bsz=params.batch_size, length=params.length)
+        latent_shape = self.get_latent_shape(sample_shape)
         print(f"Sample shape: {sample_shape} Latent shape: {latent_shape}")
 
         params.game_ids = params.game_ids or torch.randint(0, self.unet.label_dim, 1,

@@ -31,7 +31,7 @@
 # SOFTWARE.
 
 from dataclasses import dataclass
-from typing import Optional, Literal
+from typing import Union, Optional, Literal
 
 import torch
 
@@ -175,6 +175,8 @@ class UNet(DualDiffusionUNet):
         cnoise = config.model_channels * config.channel_mult_noise if config.channel_mult_noise is not None else max(cblock)
         cemb = config.model_channels * config.channel_mult_emb if config.channel_mult_emb is not None else max(cblock)
         
+        self.num_levels = len(config.channel_mult)
+
         # Embedding.
         self.emb_fourier = MPFourier(cnoise)
         self.emb_noise = MPConv(cnoise, cemb, kernel=())
@@ -233,6 +235,10 @@ class UNet(DualDiffusionUNet):
     def get_sigma_loss_logvar(self, sigma: torch.Tensor) -> torch.Tensor:
         return self.logvar_linear(self.logvar_fourier(sigma.flatten().log() / 4)).view(-1, 1, 1, 1).float()
     
+    def get_latent_shape(self, latent_shape: Union[torch.Size, tuple[int, int, int, int]]) -> torch.Size:
+        return latent_shape[0:2] + ((latent_shape[2] // 2**(self.num_levels-1)) * 2**(self.num_levels-1),
+                                    (latent_shape[3] // 2**(self.num_levels-1)) * 2**(self.num_levels-1))
+
     def forward(self, x_in: torch.Tensor,
                 sigma: torch.Tensor,
                 format: DualDiffusionFormat,

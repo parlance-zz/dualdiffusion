@@ -20,7 +20,7 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
-from typing import Optional
+from typing import Union, Optional
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 
@@ -54,6 +54,10 @@ class DualDiffusionUNet(DualDiffusionModule, ABC):
     def get_sigma_loss_logvar(self, sigma: torch.Tensor) -> torch.Tensor:
         pass
     
+    @abstractmethod
+    def get_latent_shape(self, latent_shape: Union[torch.Size, tuple[int, int, int, int]]) -> torch.Size:
+        pass
+
     @abstractmethod
     def forward(self, x_in: torch.Tensor,
                 sigma: torch.Tensor,

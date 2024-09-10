@@ -233,6 +233,15 @@ class AutoencoderKL_EDM2(DualDiffusionVAE):
         else:
             raise ValueError(f"Invalid sample shape: {sample_shape}")
         
+    def get_sample_shape(self, latent_shape: Union[torch.Size, tuple[int, int, int, int]]) -> torch.Size:
+        if len(latent_shape) == 4:
+            return (latent_shape[0],
+                    self.config.out_channels,
+                    latent_shape[2] * 2 ** (self.num_levels-1),
+                    latent_shape[3] * 2 ** (self.num_levels-1))
+        else:
+            raise ValueError(f"Invalid latent shape: {latent_shape}")
+        
     def encode(self, x: torch.Tensor,
                class_embeddings: torch.Tensor,
                format: DualDiffusionFormat) -> IsotropicGaussianDistribution:

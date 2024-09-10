@@ -35,15 +35,15 @@ class SamplingSchedule:
     
     @staticmethod
     @torch.no_grad()
-    def linear(t: torch.Tensor, sigma_max: float, sigma_min: float, **kwargs) -> torch.Tensor:
+    def linear(t: torch.Tensor, sigma_max: float, sigma_min: float, **_) -> torch.Tensor:
         return sigma_min + (sigma_max - sigma_min) * t
     
     @staticmethod
     @torch.no_grad()
-    def edm2(t: torch.Tensor, sigma_max: float, sigma_min: float, rho: float = 7., **kwargs) -> torch.Tensor:
+    def edm2(t: torch.Tensor, sigma_max: float, sigma_min: float, rho: float = 7., **_) -> torch.Tensor:
         return (sigma_max ** (1 / rho) + (1 - t) * (sigma_min ** (1 / rho) - sigma_max ** (1 / rho))) ** rho
     
     @staticmethod
     @torch.no_grad()
-    def scale_invariant(t: torch.Tensor, sigma_max: float, sigma_min: float, rho: float = 1., **kwargs) -> torch.Tensor:
+    def scale_invariant(t: torch.Tensor, sigma_max: float, sigma_min: float, rho: float = 1., **_) -> torch.Tensor:
         return sigma_min / ((1 - t)**rho + sigma_min / sigma_max)
