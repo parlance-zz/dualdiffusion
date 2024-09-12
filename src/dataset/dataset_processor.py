@@ -483,7 +483,7 @@ class DatasetProcessor:
                 self.logger.debug(f'"{file}"')
             if input(f"Delete {num_unreferenced_latents_files} unreferenced .safetensors (latents) files? (WARNING: this is permanent and cannot be undone) (type 'delete' to confirm): ").lower() == "delete":
                 for file in unreferenced_latents_files:
-                    os.remove(file)
+                    os.remove(os.path.join(config.DATASET_PATH, file))
                 self.logger.info(f"Deleted {num_unreferenced_latents_files} unreferenced .safetensors (latents) files")
             self.logger.info("")
 
