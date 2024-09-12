@@ -105,11 +105,11 @@ class DualDiffusionPipeline(torch.nn.Module):
             module_class: type[DualDiffusionModule] = getattr(module_package, module_import_dict["class"])
             
             module_path = os.path.join(model_path, module_name)
-            if load_latest_checkpoints:
+            if load_latest_checkpoints == True:
                 
                 module_checkpoints: list[str] = []
                 for path in model_path_contents:
-                    if os.path.isdir(path) and path.startswith(f"{module_name}_checkpoint"):
+                    if os.path.isdir(os.path.join(model_path, path)) and path.startswith(f"{module_name}_checkpoint"):
                         module_checkpoints.append(path)
 
                 if len(module_checkpoints) > 0:
