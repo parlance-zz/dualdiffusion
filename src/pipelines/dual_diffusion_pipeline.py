@@ -135,6 +135,7 @@ class DualDiffusionPipeline(torch.nn.Module):
         dataset_info_path = os.path.join(model_path, "dataset_info.json")
         if os.path.isfile(dataset_info_path):
             pipeline.dataset_info = config.load_json(dataset_info_path)
+            pipeline.dataset_game_ids = pipeline.dataset_info["game_id"]
             pipeline.dataset_game_names = {value: key for key, value in pipeline.dataset_info["game_id"].items()}
         else:
             pipeline.dataset_info = None

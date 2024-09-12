@@ -1,7 +1,8 @@
 {
     "model_name": "edm2_vae_test7_12d",
+    "load_ema": "pf_ema_std-0.100.safetensors",
+    "load_latest_checkpoints": true,
     "device": "cpu",
-    "load_ema": "pf_ema_std-0.020.safetensors",
     "module_name": "unet",
     "remove_embedding_mean": false,
     "normalize_embeddings": true

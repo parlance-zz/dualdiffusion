@@ -38,6 +38,8 @@ def class_embeddings_test() -> None:
         os.path.join(config.CONFIG_PATH, "tests", "class_embeddings.json"))
     
     model_name = test_params["model_name"]
+    load_ema = test_params["load_ema"]
+    load_latest_checkpoints = test_params["load_latest_checkpoints"]
     module_name = test_params["module_name"]
     remove_embedding_mean = test_params["remove_embedding_mean"]
     normalize_embeddings = test_params["normalize_embeddings"]
@@ -52,8 +54,8 @@ def class_embeddings_test() -> None:
     pipeline = DualDiffusionPipeline.from_pretrained(model_path,
                                                      torch_dtype=model_dtype,
                                                      device=device,
-                                                     load_latest_checkpoints=True,
-                                                     load_emas={"unet": "pf_ema_std-0.020.safetensors"})
+                                                     load_latest_checkpoints=load_latest_checkpoints,
+                                                     load_emas={"unet": load_ema} if load_ema is not None else None)
     module: DualDiffusionModule = getattr(pipeline, module_name)
 
     num_classes = module.config.label_dim
@@ -70,8 +72,7 @@ def class_embeddings_test() -> None:
     inner_products.diagonal().zero_()
 
     game_scores = inner_products.mean(dim=0).tolist()
-    game_id_to_name = {v: k for k, v in pipeline.dataset_info["game_id"].items()}
-    game_scores = {game_id_to_name[i]: game_scores[i] for i in range(num_classes)}
+    game_scores = {pipeline.dataset_game_names[i]: game_scores[i] for i in range(num_classes)}
     game_scores = dict(sorted(game_scores.items(), key=lambda item: item[1]))
     name_padding = max(len(name) for name in game_scores)
     for game, game_score in game_scores.items():
@@ -83,6 +84,23 @@ def class_embeddings_test() -> None:
         inner_products_img_path = os.path.join(test_output_path, "inner_products.png")
         print(f"Saving '{inner_products_img_path}'...")
         save_img(tensor_to_img(inner_products, colormap=True), inner_products_img_path)
+
+    print("Show classes with high cosine similarity:")
+    while True:
+        try:
+            class_id = int(input("Enter class ID: "))
+            print(f"{pipeline.dataset_game_names[class_id]}:")
+
+            class_scores = inner_products[class_id].tolist()
+            class_scores = {pipeline.dataset_game_names[i]: class_scores[i] for i in range(num_classes)}
+            class_scores = dict(sorted(class_scores.items(), key=lambda item: item[1])[-10:][::-1])
+            name_padding = max(len(name) for name in class_scores)
+            for game, class_score in class_scores.items():
+                game_id = pipeline.dataset_game_ids[game]
+                print(f"  {game:<{name_padding}}: {class_score:.4f}  (ID: {game_id})")
+
+        except ValueError:
+            print("Invalid input.")
 
 
 if __name__ == "__main__":
