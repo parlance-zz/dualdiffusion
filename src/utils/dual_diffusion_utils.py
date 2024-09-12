@@ -37,6 +37,19 @@ import matplotlib.pyplot as plt
 from scipy.special import erfinv
 from mutagen import File as MTAudioFile
 
+
+class TF32_Disabled:
+    def __enter__(self):
+        self.original_matmul_allow_tf32 = torch.backends.cuda.matmul.allow_tf32
+        self.original_cudnn_allow_tf32 = torch.backends.cudnn.allow_tf32
+        torch.backends.cuda.matmul.allow_tf32 = False
+        torch.backends.cudnn.allow_tf32 = False
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        torch.backends.cuda.matmul.allow_tf32 = self.original_matmul_allow_tf32
+        torch.backends.cudnn.allow_tf32 = self.original_cudnn_allow_tf32
+
+
 def init_cuda(default_device: Optional[torch.device] = None) -> None:
 
     if not torch.cuda.is_available():

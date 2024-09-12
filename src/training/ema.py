@@ -37,7 +37,7 @@ from typing import Optional
 import torch
 import numpy as np
 
-from utils.dual_diffusion_utils import save_safetensors, load_safetensors
+from utils.dual_diffusion_utils import TF32_Disabled, save_safetensors, load_safetensors
 
 #----------------------------------------------------------------------------
 # Convert power function exponent to relative standard deviation
@@ -135,13 +135,17 @@ class PowerFunctionEMA:
 
     @torch.no_grad()
     def update(self, cur_nimg: int, batch_size: int) -> list[tuple[float, float]]:
-        betas = []
-        net_parameters = tuple(self.module.parameters())
-        for std, ema in zip(self.stds, self.emas):
-            beta = float(power_function_beta(std=std, t_next=cur_nimg, t_delta=batch_size))
-            torch._foreach_lerp_(tuple(ema.parameters()), net_parameters, 1 - beta)
-            betas.append(beta)
-        return zip(self.stds, betas)
+        with torch.cuda.amp.autocast(enabled=False), TF32_Disabled():
+
+            betas = []
+            net_parameters = tuple(self.module.parameters())
+
+            for std, ema in zip(self.stds, self.emas):
+                beta = float(power_function_beta(std=std, t_next=cur_nimg, t_delta=batch_size))
+                torch._foreach_lerp_(tuple(ema.parameters()), net_parameters, 1 - beta)
+                betas.append(beta)
+                
+            return zip(self.stds, betas)
 
     def save(self, save_directory: str, subfolder: Optional[str] = None) -> None:
 
