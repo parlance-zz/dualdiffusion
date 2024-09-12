@@ -55,6 +55,8 @@ def init_cuda(default_device: Optional[torch.device] = None) -> None:
     if not torch.cuda.is_available():
         raise ValueError("Error: PyTorch not compiled with CUDA support or CUDA unavailable")
     else:
+        torch.backends.cuda.matmul.allow_fp16_reduced_precision_reduction = False
+        torch.backends.cuda.matmul.allow_bf16_reduced_precision_reduction = False
         torch.backends.cuda.matmul.allow_tf32 = True
         torch.backends.cudnn.allow_tf32 = True
         torch.backends.cuda.cufft_plan_cache[0].max_size = 250 # cufft memory leak

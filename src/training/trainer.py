@@ -225,6 +225,16 @@ class DualDiffusionTrainer:
         if self.accelerator.is_main_process:
             self.accelerator.init_trackers(self.config.model_name)
 
+        if self.accelerator.mixed_precision == "bf16":
+            self.mixed_precision_enabled = True
+            self.mixed_precision_dtype = torch.bfloat16
+        elif self.accelerator.mixed_precision == "fp16":
+            self.mixed_precision_enabled = True
+            self.mixed_precision_dtype = torch.float16
+        else:
+            self.mixed_precision_enabled = False
+            self.mixed_precision_dtype = torch.float32
+
         self.logger.info(self.accelerator.state, main_process_only=False, in_order=True)
         self.accelerator.wait_for_everyone()
 

@@ -75,8 +75,8 @@ class UNetTrainer(ModuleTrainer):
                     self.logger.error("VAE model has not been trained, aborting training..."); exit(1)
                     
                 trainer.pipeline.vae = trainer.pipeline.vae.to(trainer.accelerator.device).requires_grad_(False).eval()
-                if trainer.accelerator.state.mixed_precision in ["fp16", "bf16"]:
-                    trainer.pipeline.vae = trainer.pipeline.vae.to(trainer.accelerator.state.mixed_precision)
+                if trainer.mixed_precision_enabled == True:
+                    trainer.pipeline.vae = trainer.pipeline.vae.to(dtype=trainer.mixed_precision_dtype)
                 if trainer.config.enable_model_compilation:
                     trainer.pipeline.vae.encode = torch.compile(trainer.pipeline.vae.encode,
                                                                 **trainer.config.compile_params)
@@ -194,8 +194,7 @@ class UNetTrainer(ModuleTrainer):
             samples = self.trainer.pipeline.format.raw_to_sample(raw_samples)
             vae_class_embeddings = self.trainer.pipeline.vae.get_class_embeddings(class_labels)
             samples = self.trainer.pipeline.vae.encode(samples.to(self.trainer.pipeline.vae.dtype),
-                                                       vae_class_embeddings,
-                                                       self.trainer.pipeline.format).mode()
+                                                       vae_class_embeddings, self.trainer.pipeline.format).mode()
             assert samples.shape == self.trainer.sample_shape, f"Expected shape {self.trainer.sample_shape}, got {samples.shape}"
         
         if self.config.input_perturbation > 0 and self.is_validation_batch == False:

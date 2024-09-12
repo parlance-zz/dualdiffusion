@@ -87,15 +87,16 @@ class VAETrainer(ModuleTrainer):
         vae_class_embeddings = self.module.get_class_embeddings(class_labels)
 
         samples = self.trainer.pipeline.format.raw_to_sample(raw_samples)
-        
-        posterior = self.module.encode(samples, vae_class_embeddings, self.trainer.pipeline.format)
+        with torch.cuda.amp.autocast(enabled=self.trainer.mixed_precision_enabled, dtype=self.trainer.mixed_precision_dtype):
+            posterior = self.module.encode(samples, vae_class_embeddings, self.trainer.pipeline.format)
         latents = posterior.sample()
         latents_mean = latents.mean()
         latents_std = latents.std()
 
         measured_sample_std = (latents_std**2 - self.target_noise_std**2).clip(min=0)**0.5
         latents_snr = measured_sample_std / self.target_noise_std
-        recon_samples = self.module.decode(latents, vae_class_embeddings, self.trainer.pipeline.format)
+        with torch.cuda.amp.autocast(enabled=self.trainer.mixed_precision_enabled, dtype=self.trainer.mixed_precision_dtype):
+            recon_samples = self.module.decode(latents, vae_class_embeddings, self.trainer.pipeline.format)
 
         point_similarity_loss = (samples - recon_samples).abs().mean()
         
