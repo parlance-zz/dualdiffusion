@@ -28,7 +28,7 @@ import torch
 
 from pipelines.dual_diffusion_pipeline import DualDiffusionPipeline
 from modules.module import DualDiffusionModule
-from utils.dual_diffusion_utils import init_cuda, tensor_to_img, save_img
+from utils.dual_diffusion_utils import init_cuda, tensor_to_img, save_img, dict_str
 
 
 @torch.inference_mode()
@@ -36,6 +36,8 @@ def class_embeddings_test() -> None:
 
     test_params = config.load_json(
         os.path.join(config.CONFIG_PATH, "tests", "class_embeddings.json"))
+    print("Test parameters:")
+    print(dict_str(test_params))
     
     model_name = test_params["model_name"]
     load_ema = test_params["load_ema"]

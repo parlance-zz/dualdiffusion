@@ -5,5 +5,5 @@
     "device": "cpu",
     "module_name": "unet",
     "remove_embedding_mean": false,
-    "normalize_embeddings": true
+    "normalize_embeddings": false
 }
