@@ -183,23 +183,20 @@ class UNetTrainer(ModuleTrainer):
         class_labels = self.trainer.pipeline.get_class_labels(sample_game_ids, module="unet")
         unet_class_embeddings = self.module.get_class_embeddings(class_labels)
         if self.config.conditioning_perturbation > 0 and self.is_validation_batch == False:
-            unet_class_embeddings = mp_sum(unet_class_embeddings,
-                                           torch.randn_like(unet_class_embeddings),
-                                           self.config.conditioning_perturbation)
+            unet_class_embeddings = unet_class_embeddings + torch.randn_like(unet_class_embeddings) * self.config.conditioning_perturbation
             
         if self.trainer.config.dataloader.use_pre_encoded_latents:
-            samples = raw_samples
+            samples = raw_samples.float()
             assert samples.shape == self.trainer.latent_shape, f"Expected shape {self.trainer.latent_shape}, got {samples.shape}"
         else:
             samples = self.trainer.pipeline.format.raw_to_sample(raw_samples)
             vae_class_embeddings = self.trainer.pipeline.vae.get_class_embeddings(class_labels)
             samples = self.trainer.pipeline.vae.encode(samples.to(self.trainer.pipeline.vae.dtype),
-                                                       vae_class_embeddings, self.trainer.pipeline.format).mode()
+                                                       vae_class_embeddings, self.trainer.pipeline.format).mode().float()
             assert samples.shape == self.trainer.sample_shape, f"Expected shape {self.trainer.sample_shape}, got {samples.shape}"
         
         if self.config.input_perturbation > 0 and self.is_validation_batch == False:
             samples += torch.randn_like(samples) * self.config.input_perturbation
-        samples = normalize(samples).float()
 
         local_sigma = self.global_sigma[self.trainer.accelerator.local_process_index::self.trainer.accelerator.num_processes]
         batch_sigma = local_sigma[accum_step * self.trainer.config.device_batch_size:(accum_step+1) * self.trainer.config.device_batch_size]
