@@ -115,15 +115,15 @@ class MPConv(torch.nn.Module):
         self.groups = groups
 
         self.weight = torch.nn.Parameter(torch.randn(out_channels, in_channels // groups, *kernel))
-        self.weight_gain = self.weight[0].numel() ** 0.5
 
-    def forward(self, x: torch.Tensor, gain: Optional[torch.Tensor] = None) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, gain: Union[float, torch.Tensor] = 1.) -> torch.Tensor:
         
-        if gain is None:
-            w = self.weight / self.weight_gain
+        if self.disable_weight_norm == False:
+            w = self.weight.float()
         else:
-            w = self.weight * (gain / self.weight_gain)
-            
+            w = normalize(self.weight.float())
+        w = (w * (gain / w[0].numel()**0.5)).to(x.dtype)
+
         if w.ndim == 2:
             return x @ w.t()
         
