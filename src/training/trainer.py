@@ -328,7 +328,9 @@ class DualDiffusionTrainer:
         self.logger.info(f"Using AdamW optimiser with learning rate {self.config.lr_schedule.learning_rate}")
         self.logger.info(f"  AdamW beta1: {self.config.optimizer.adam_beta1} beta2: {self.config.optimizer.adam_beta2}")
         self.logger.info(f"  AdamW eps: {self.config.optimizer.adam_epsilon} weight decay: {self.config.optimizer.adam_weight_decay}")
-
+        self.logger.info(f"  Gradient clipping max norm: {self.config.optimizer.max_grad_norm}")
+        self.logger.info(f"  Add gradient noise: {self.config.optimizer.add_grad_noise}")
+        
     def init_checkpointing(self) -> None:
 
         self.last_checkpoint_time = datetime.now()
