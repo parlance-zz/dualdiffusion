@@ -56,7 +56,6 @@ class UNetConfig(DualDiffusionUNetConfig):
     attn_levels: list[int]    = (3,4)        # List of resolution levels to use self-attention.
     mlp_multiplier: int = 2                  # Multiplier for the number of channels in the MLP.
     mlp_groups: int     = 8                  # Number of groups for the MLPs.
-    qk_attn_gain_exponent: float = 0.5       # Controls amount of modulation for attention qk gain / "sharpness"
 
 class Block(torch.nn.Module):
 
@@ -108,7 +107,7 @@ class Block(torch.nn.Module):
             self.attn_v = MPConv(out_channels, out_channels, kernel=(1,1))
             self.attn_proj = MPConv(out_channels, out_channels, kernel=(1,1))
 
-    def forward(self, x: torch.Tensor, emb: torch.Tensor, attn_qk_gain: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, emb: torch.Tensor) -> torch.Tensor:
         
         x = resample(x, mode=self.resample_mode)
 
@@ -137,7 +136,7 @@ class Block(torch.nn.Module):
 
             qk = self.attn_qk(x * c)
             qk = qk.reshape(qk.shape[0], self.num_heads, -1, 2, y.shape[2] * y.shape[3])
-            q, k = (normalize(qk, dim=2) * attn_qk_gain.unsqueeze(-2)).unbind(3)
+            q, k = normalize(qk, dim=2).unbind(3)
 
             v = self.attn_v(x)
             v = v.reshape(v.shape[0], self.num_heads, -1, y.shape[2] * y.shape[3])
@@ -190,6 +189,8 @@ class UNet(DualDiffusionUNet):
         # Encoder.
         self.enc = torch.nn.ModuleDict()
         cout = config.in_channels + 2 # 1 extra const channel, 1 pos embedding channel
+        if config.inpainting: cout += config.in_channels + 1 # reference image/latents and mask channel
+
         for level, channels in enumerate(cblock):
             
             if level == 0:
@@ -239,11 +240,25 @@ class UNet(DualDiffusionUNet):
         return latent_shape[0:2] + ((latent_shape[2] // 2**(self.num_levels-1)) * 2**(self.num_levels-1),
                                     (latent_shape[3] // 2**(self.num_levels-1)) * 2**(self.num_levels-1))
 
+    def convert_to_inpainting(self) -> None:
+        if self.config.inpainting == True:
+            raise ValueError("Model is already configured for inpainting.")
+        self.config.inpainting = True
+
+        assert self.enc[f"conv_in"].groups == 1
+        existing_conv_in_shape = self.enc[f"conv_in"].weight.shape
+        inpainting_conv_in_weight = torch.zeros((existing_conv_in_shape[0], self.config.in_channels + 1,
+                                                 existing_conv_in_shape[2], existing_conv_in_shape[3]))
+        inpainting_conv_in_weight = inpainting_conv_in_weight.to(self.device, self.dtype)
+        self.enc[f"conv_in"].weight.data = torch.cat((self.enc[f"conv_in"].weight, inpainting_conv_in_weight), dim=1)
+        self.enc[f"conv_in"].in_channels += self.config.in_channels + 1
+
     def forward(self, x_in: torch.Tensor,
                 sigma: torch.Tensor,
                 format: DualDiffusionFormat,
                 class_embeddings: Optional[torch.Tensor] = None,
-                t_ranges: Optional[torch.Tensor] = None) -> torch.Tensor:
+                t_ranges: Optional[torch.Tensor] = None,
+                x_ref: Optional[torch.Tensor] = None) -> torch.Tensor:
 
         with torch.no_grad():
             sigma = sigma.view(-1, 1, 1, 1)
@@ -254,8 +269,6 @@ class UNet(DualDiffusionUNet):
             c_in = 1 / (self.config.sigma_data ** 2 + sigma ** 2).sqrt()
             c_noise = (sigma.flatten().log() / 4).to(self.dtype)
 
-            attn_qk_gain = ((self.config.sigma_data / (sigma.square() + self.config.sigma_data ** 2).sqrt())
-                             ** self.config.qk_attn_gain_exponent).to(self.dtype)
             x = (c_in * x_in).to(self.dtype)
  
         # Embedding.
@@ -277,16 +290,18 @@ class UNet(DualDiffusionUNet):
 
         # Encoder.
         x = torch.cat((x, torch.ones_like(x[:, :1]), format.get_ln_freqs(x)), dim=1)
+        if self.config.inpainting: x = torch.cat((x, x_ref), dim=1)
+
         skips = []
         for name, block in self.enc.items():
-            x = block(x) if "conv" in name else block(x, emb, attn_qk_gain)
+            x = block(x) if "conv" in name else block(x, emb)
             skips.append(x)
 
         # Decoder.
         for name, block in self.dec.items():
             if "layer" in name:
                 x = mp_cat(x, skips.pop(), t=self.config.concat_balance)
-            x = block(x, emb, attn_qk_gain)
+            x = block(x, emb)
 
         x = self.conv_out(x, gain=self.out_gain)
         D_x = c_skip * x_in + c_out * x.float()
