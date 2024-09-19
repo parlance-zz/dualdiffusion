@@ -35,6 +35,7 @@ class DualDiffusionUNetConfig(DualDiffusionModuleConfig, ABC):
     in_channels:  int = 4
     out_channels: int = 4
     use_t_ranges: bool = False
+    inpainting:   bool = False
     label_dim: int = 1
     label_dropout: float = 0.1
     dropout:    float = 0.
@@ -59,9 +60,14 @@ class DualDiffusionUNet(DualDiffusionModule, ABC):
         pass
 
     @abstractmethod
+    def convert_to_inpainting(self) -> None:
+        pass
+
+    @abstractmethod
     def forward(self, x_in: torch.Tensor,
                 sigma: torch.Tensor,
                 format: DualDiffusionFormat,
                 class_embeddings: Optional[torch.Tensor] = None,
-                t_ranges: Optional[torch.Tensor] = None) -> torch.Tensor:
+                t_ranges: Optional[torch.Tensor] = None,
+                x_ref: Optional[torch.Tensor] = None) -> torch.Tensor:
         pass
