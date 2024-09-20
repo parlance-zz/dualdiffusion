@@ -22,4 +22,4 @@ dependencies:
     - python-dotenv
     - gradio_client
     - mutagen
-    
+    - gradio
