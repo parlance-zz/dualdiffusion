@@ -1,0 +1,16 @@
+{
+    "model_name": "edm2_vt7_12d_i",
+    "load_latest_checkpoints": true,
+    "load_ema": null,
+    "device": "cpu",
+    "fp16": false,
+    "web_server_host": "192.168.1.81",
+    "web_server_port": 3001,
+    "web_server_share": false,
+    "web_server_default_concurrency_limit": 4,
+    "web_server_max_queue_size": 10,
+    "compile_params": {
+      "fullgraph": true,
+      "dynamic": false
+    }
+  }

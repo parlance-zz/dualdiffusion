@@ -36,7 +36,7 @@ from utils.dual_diffusion_utils import (
     open_img_window, close_img_window, show_img, tensor_to_img, save_img,
     multi_plot, normalize, get_cos_angle, load_safetensors
 )
-from sampling.sampling_schedule import SamplingSchedule
+from sampling.schedule import SamplingSchedule
 
 @dataclass
 class SampleParams:

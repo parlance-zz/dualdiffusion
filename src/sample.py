@@ -30,14 +30,24 @@ import argparse
 import numpy as np
 import torch
 
+from sampling.gradio_app import GradioApp
+
 from pipelines.dual_diffusion_pipeline import DualDiffusionPipeline, SampleParams
 from utils.dual_diffusion_utils import init_cuda, save_audio, load_audio, dict_str
-
 
 @torch.inference_mode()
 def sample(args: argparse.Namespace) -> None:
 
-    # load sampling config
+    if args.interactive == True:
+        return GradioApp().run()
+
+    if args.sample_cfg_file is None:
+        raise ValueError("Must either launch with interactive enabled or provide a sampling configuration file.")
+    
+    raise NotImplementedError("Non-interactive sampling is not yet implemented.")
+    """
+
+    # load sampling model server config
     sampling_config = config.load_json(
         os.path.join(config.CONFIG_PATH, "sampling", "sampling.json"))
     
@@ -46,19 +56,6 @@ def sample(args: argparse.Namespace) -> None:
     load_ema: str = sampling_config["load_ema"]
     device: torch.device = sampling_config["device"]
     fp16: bool = sampling_config["fp16"]
-    show_debug_plots: bool = sampling_config["show_debug_plots"]
-    web_server_port: int = sampling_config["web_server_port"]
-
-    if args.interactive == True:
-        raise NotImplementedError("Interactive sampling is not yet implemented.")
-    if args.sample_cfg_file is None:
-        raise ValueError("Must either launch with interactive enabled or provide a sampling configuration file.")
-    
-    # load sampling params
-    sample_params_path = os.path.join(config.CONFIG_PATH, "sampling", args.sample_cfg_file)
-    if not os.path.exists(sample_params_path):
-        raise FileNotFoundError(f"Sampling configuration file '{sample_params_path}' not found.")
-    sample_params = SampleParams(**config.load_json(sample_params_path))
 
     # load model
     model_dtype = torch.bfloat16 if fp16 else torch.float32
@@ -69,7 +66,13 @@ def sample(args: argparse.Namespace) -> None:
                                                      device=device,
                                                      load_latest_checkpoints=load_latest_checkpoints,
                                                      load_emas={"unet": load_ema})
+    # load sampling params
     last_global_step = pipeline.unet.config["last_global_step"]
+
+    sample_params_path = os.path.join(config.CONFIG_PATH, "sampling", args.sample_cfg_file)
+    if not os.path.exists(sample_params_path):
+        raise FileNotFoundError(f"Sampling configuration file '{sample_params_path}' not found.")
+    sample_params = SampleParams(**config.load_json(sample_params_path))
 
     # validate / pre-process sampling params
     if sample_params.seed is None:
@@ -139,6 +142,7 @@ def sample(args: argparse.Namespace) -> None:
         seed += batch_size
 
     print(f"Finished in: {datetime.datetime.now() - start_time}")
+    """
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="DualDiffusion sampling script.")
@@ -151,7 +155,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--interactive",
         type=bool,
-        default=False,
+        default=True,
         help="Start a local web interface for interactive sampling (TBD)",
     )
     return parser.parse_args()
@@ -160,6 +164,4 @@ def parse_args() -> argparse.Namespace:
 if __name__ == "__main__":
 
     init_cuda()
-    args = parse_args()
-
-    sample(args)
+    sample(parse_args())
