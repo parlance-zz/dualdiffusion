@@ -89,7 +89,7 @@ class DatasetSplit:
                 self.samples = [self.empty_sample | json.loads(line) for line in f]
         else:
             logging.getLogger().warning(f"Split not found at {self.path}, creating new split")
-            self.samples = []
+            self.samples: list[dict] = []
 
     def remove_samples(self, indices: list[int]) -> None:
         self.samples = [sample for index, sample in enumerate(self.samples) if index not in indices]
@@ -228,6 +228,10 @@ class DatasetProcessor:
             "num_total_samples": 0,
             "num_train_samples": 0,
             "num_validation_samples": 0,
+            "system_id_train_sample_counts": {},
+            "game_id_train_sample_counts": {},
+            "author_id_train_sample_counts": {},
+            ""
             "processor_config": None,
         }
 
@@ -869,14 +873,31 @@ class DatasetProcessor:
         pass
  
     def save(self, dataset_path: Optional[str] = None) -> None:
+    
+        dataset_path = dataset_path or config.DATASET_PATH
 
+        # add total number of samples in train / validation splits to dataset_info
         self.dataset_info["num_total_samples"] = self.num_samples()
         self.dataset_info["num_train_samples"] = len(self.splits["train"].samples)
         self.dataset_info["num_validation_samples"] = len(self.splits["validation"].samples)
         
-        dataset_path = dataset_path or config.DATASET_PATH
+        # add number of samples in training set for each system / game / author id to dataset_info
+        game_id_train_sample_counts = {game_id: 0 for game_id in self.dataset_info["game_id"].values()}
+        system_id_train_sample_counts = {system_id: 0 for system_id in self.dataset_info["system_id"].values()}
+        author_id_train_sample_counts = {author_id: 0 for author_id in self.dataset_info["author_id"].values()}
+        for sample in self.splits["train"].samples:
+            if sample["system_id"] is not None: system_id_train_sample_counts[sample["system_id"]] += 1
+            if sample["game_id"] is not None: game_id_train_sample_counts[sample["game_id"]] += 1
+            if sample["author_id"] is not None:
+                for author_id in sample["author_id"]:
+                    author_id_train_sample_counts[author_id] += 1
+        
+        self.dataset_info["game_id_train_sample_counts"] = game_id_train_sample_counts
+        self.dataset_info["system_id_train_sample_counts"] = system_id_train_sample_counts
+        self.dataset_info["author_id_train_sample_counts"] = author_id_train_sample_counts
 
         # prompt to save and backup existing metadata files to config.DEBUG_PATH
+
         if self.backup_path is None:
             backup_warning = " (WARNING: Dataset metadata backup is NOT enabled)"
         else:
@@ -910,3 +931,13 @@ class DatasetProcessor:
         self.train_validation_split()
         self.encode_latents()
         self.save()
+
+
+if __name__ == "__main__":
+
+    from utils.dual_diffusion_utils import init_cuda
+
+    init_cuda()
+
+    processor = DatasetProcessor()
+    processor.process_dataset()
