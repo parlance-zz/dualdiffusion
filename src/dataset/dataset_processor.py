@@ -228,9 +228,9 @@ class DatasetProcessor:
             "num_total_samples": 0,
             "num_train_samples": 0,
             "num_validation_samples": 0,
-            "system_id_train_sample_counts": {},
-            "game_id_train_sample_counts": {},
-            "author_id_train_sample_counts": {},
+            "system_train_sample_counts": {},
+            "game_train_sample_counts": {},
+            "author_train_sample_counts": {},
             ""
             "processor_config": None,
         }
@@ -882,19 +882,19 @@ class DatasetProcessor:
         self.dataset_info["num_validation_samples"] = len(self.splits["validation"].samples)
         
         # add number of samples in training set for each system / game / author id to dataset_info
-        game_id_train_sample_counts = {game_id: 0 for game_id in self.dataset_info["game_id"].values()}
-        system_id_train_sample_counts = {system_id: 0 for system_id in self.dataset_info["system_id"].values()}
-        author_id_train_sample_counts = {author_id: 0 for author_id in self.dataset_info["author_id"].values()}
+        game_train_sample_counts = {game: 0 for game in self.dataset_info["game_id"].keys()}
+        system_train_sample_counts = {system: 0 for system in self.dataset_info["system_id"].keys()}
+        author_train_sample_counts = {author: 0 for author in self.dataset_info["author_id"].keys()}
         for sample in self.splits["train"].samples:
-            if sample["system_id"] is not None: system_id_train_sample_counts[sample["system_id"]] += 1
-            if sample["game_id"] is not None: game_id_train_sample_counts[sample["game_id"]] += 1
-            if sample["author_id"] is not None:
-                for author_id in sample["author_id"]:
-                    author_id_train_sample_counts[author_id] += 1
+            if sample["system"] is not None: system_train_sample_counts[sample["system"]] += 1
+            if sample["game"] is not None: game_train_sample_counts[sample["game"]] += 1
+            if sample["author"] is not None:
+                for author in sample["author"]:
+                    author_train_sample_counts[author] += 1
         
-        self.dataset_info["game_id_train_sample_counts"] = game_id_train_sample_counts
-        self.dataset_info["system_id_train_sample_counts"] = system_id_train_sample_counts
-        self.dataset_info["author_id_train_sample_counts"] = author_id_train_sample_counts
+        self.dataset_info["game_train_sample_counts"] = game_train_sample_counts
+        self.dataset_info["system_train_sample_counts"] = system_train_sample_counts
+        self.dataset_info["author_train_sample_counts"] = author_train_sample_counts
 
         # prompt to save and backup existing metadata files to config.DEBUG_PATH
 
