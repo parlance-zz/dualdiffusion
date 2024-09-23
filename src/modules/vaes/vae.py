@@ -110,3 +110,7 @@ class DualDiffusionVAE(DualDiffusionModule, ABC):
                class_embeddings: torch.Tensor,
                format: DualDiffusionFormat) -> torch.Tensor:
         pass
+
+    def compile(self, compile_options: dict) -> None:
+        self.encode = torch.compile(self.encode, **compile_options)
+        self.decode = torch.compile(self.decode, **compile_options)
