@@ -74,8 +74,8 @@ class DualDiffusionModule(torch.nn.Module, ABC):
     def half(self) -> "DualDiffusionModule":
         return self.to(dtype=torch.bfloat16)
     
-    def compile(self, compile_options: dict) -> None:
-        self.forward = torch.compile(self.forward, **compile_options)
+    def compile(self, **kwargs) -> None:
+        self.forward = torch.compile(self.forward, **kwargs)
 
     def load_ema(self, ema_path: str) -> None:
         self.load_state_dict(load_safetensors(ema_path))

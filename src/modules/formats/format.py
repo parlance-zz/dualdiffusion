@@ -74,7 +74,7 @@ class DualDiffusionFormat(DualDiffusionModule, ABC):
         pass
 
     # format compilation disabled for now as torch.compile does not support complex operators
-    def compile(self, compile_options: dict) -> None:
+    def compile(self, **kwargs) -> None:
         #self.raw_to_sample = torch.compile(self.raw_to_sample, **compile_options)
         #self.sample_to_raw = torch.compile(self.sample_to_raw, **compile_options)
         return
