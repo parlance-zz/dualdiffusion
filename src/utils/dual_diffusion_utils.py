@@ -184,6 +184,14 @@ def save_audio(raw_samples: torch.Tensor,
             audio_file[key] = metadata[key]
         audio_file.save()
 
+def torch_dtype(dtype: Union[str, torch.dtype]) -> torch.dtype:
+    if isinstance(dtype, torch.dtype):
+        return dtype
+    elif isinstance(dtype, str):
+        return getattr(torch, dtype)
+    else:
+        raise ValueError(f"Unsupported dtype type: {dtype} ({type(dtype)})")
+
 def load_audio(input_path: Union[str, bytes],
                start: int = 0, count: int = -1,
                return_sample_rate: bool = False,
