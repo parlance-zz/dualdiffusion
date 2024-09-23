@@ -100,6 +100,17 @@ class DualDiffusionPipeline(torch.nn.Module):
     def half(self) -> "DualDiffusionModule":
         return self.to(dtype=torch.bfloat16)
     
+    def compile(self, compile_options: dict) -> None:
+        # ugly way to check if compile_options is a per-module dict
+        if (all(isinstance(value, dict) for value in compile_options.values()) and
+                    not any(key=="options" for key in compile_options.keys())):
+            for module_name, module in self.named_children():
+                if module_name in compile_options:
+                    module.compile(**compile_options[module_name])
+        else:
+            for module_name, module in self.named_children():
+                module.compile(**compile_options)
+                
     @staticmethod
     def get_model_inventory(model_path: str) -> dict[str, ModuleInventory]:
         
@@ -192,15 +203,7 @@ class DualDiffusionPipeline(torch.nn.Module):
         pipeline = DualDiffusionPipeline(model_modules).to(device=device, dtype=torch_dtype)
 
         if compile_options is not None:
-            # ugly way to check if compile_options is a per-module dict
-            if (all(isinstance(value, dict) for value in compile_options.values()) and
-                        not any(key=="options" for key in compile_options.keys())):
-                for module_name, module in pipeline.named_children():
-                    if module_name in compile_options:
-                        module.compile(**compile_options[module_name])
-            else:
-                for module_name, module in pipeline.named_children():
-                    module.compile(**compile_options)
+            pipeline.compile(compile_options)
 
         # load dataset info
         dataset_info_path = os.path.join(model_path, "dataset_info.json")
