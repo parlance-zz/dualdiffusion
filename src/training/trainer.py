@@ -477,7 +477,7 @@ class DualDiffusionTrainer:
 
         if self.config.enable_model_compilation:
             if platform.system() == "Linux":
-                self.config.compile_params = self.config.compile_params or {"fullgraph": True}
+                self.config.compile_params = self.config.compile_params or {"fullgraph": True, "dynamic": False}
                 self.logger.info(f"Compiling model(s) with options: {dict_str(self.config.compile_params)}")
             else:
                 self.config.enable_model_compilation = False
