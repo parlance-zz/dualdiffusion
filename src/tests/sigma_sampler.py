@@ -37,6 +37,7 @@ def sigma_sampler_test():
     test_params = config.load_json(os.path.join(config.CONFIG_PATH, "tests", "sigma_sampler.json"))
 
     reference_model_name = test_params["reference_model_name"]
+    model_load_options = test_params["model_load_options"]
     sigma_max = test_params["sigma_max"]
     sigma_min = test_params["sigma_min"]
     sigma_data = test_params["sigma_data"]
@@ -64,7 +65,7 @@ def sigma_sampler_test():
 
         model_path = os.path.join(config.MODELS_PATH, reference_model_name)
         print(f"Loading DualDiffusion model from '{model_path}'...")
-        pipeline = DualDiffusionPipeline.from_pretrained(model_path, load_latest_checkpoints=True)
+        pipeline = DualDiffusionPipeline.from_pretrained(model_path, **model_load_options)
 
         ln_sigma = torch.linspace(np.log(sigma_min), np.log(sigma_max), n_histo_bins)
         ln_sigma_error = pipeline.unet.logvar_linear(pipeline.unet.logvar_fourier(ln_sigma/4)).float().flatten()

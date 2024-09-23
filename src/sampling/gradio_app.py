@@ -2,6 +2,7 @@ from utils import config
 
 from typing import Optional
 from dataclasses import dataclass
+import importlib
 import random
 import time
 import os
@@ -11,6 +12,7 @@ import numpy as np
 import gradio as gr
 
 from utils.dual_diffusion_utils import init_cuda, save_audio, load_audio, dict_str
+from modules.module import DualDiffusionModule
 from pipelines.dual_diffusion_pipeline import DualDiffusionPipeline
 
 
@@ -45,21 +47,85 @@ class GradioApp:
         print(f"Loading DualDiffusion model from '{model_path}'...")
         pipeline = DualDiffusionPipeline.from_pretrained(
             model_path, torch_dtype=model_dtype, device=app_config.device,
-            load_latest_checkpoints=app_config.load_latest_checkpoints, load_emas=load_emas)
+            load_checkpoints=True, load_emas=True)
+
+        # remove games with no samples in training set as they were merged or deleted
+        for game_name, count in pipeline.dataset_info["game_train_sample_counts"].items():
+            if count == 0: pipeline.dataset_game_ids.pop(game_name)
 
         self.pipeline = pipeline
         self.config = app_config
 
     def run(self) -> None:
 
-        with gr.Blocks() as self.gradio_interface:
+        with gr.Blocks() as self.settings_interface:
+
+            with gr.Row():
+                # get all folders under config.MODELS_PATH
+                model_list = [model_name for model_name in os.listdir(config.MODELS_PATH) if os.path.isdir(os.path.join(config.MODELS_PATH, model_name))]
+                model_dropdown = gr.Dropdown(
+                    choices=model_list,
+                    label="Select a model",
+                    value=self.config.model_name,
+                    interactive=True,
+                    scale=3
+                )
+
+                load_latest_checkpoints_checkbox = gr.Checkbox(label="Load Latest Checkpoints", value=self.config.load_latest_checkpoints, interactive=True)
+                fp16_checkbox = gr.Checkbox(label="fp16", value=self.config.fp16, interactive=True)
+
+                available_devices = ["cpu"]
+                if torch.cuda.is_available():
+                    for i in range(torch.cuda.device_count()):
+                        available_devices.append(f"cuda{i}" if i > 0 else "cuda")
+
+                if torch.backends.mps.is_available():
+                    available_devices.append("mps")
+
+                device_dropdown = gr.Dropdown(
+                    choices=available_devices,
+                    label="Device",
+                    value=self.config.device,
+                    interactive=True,
+                    scale=1
+                )
+
+            with gr.Row():
+                
+                module_classes: dict[str, type[DualDiffusionModule]] = {}
+                model_index = config.load_json(os.path.join(config.MODELS_PATH, model_dropdown.value, "model_index.json"))
+                for module_name, module_import_dict in model_index["modules"].items():
+                    module_package = importlib.import_module(module_import_dict["package"])
+                    module_classes[module_name] = getattr(module_package, module_import_dict["class"])
+
+                model_inventory = DualDiffusionPipeline.get_model_inventory(os.path.join(config.MODELS_PATH, model_dropdown.value))
+                for module_name, module_inventory in model_inventory.items():
+                    with gr.Column():
+
+                        if module_classes[module_name].has_trainable_parameters:
+                            checkpoint_dropdown = gr.Dropdown(
+                                choices=["None"] + module_inventory.checkpoints,
+                                label=f"Select a {module_name} Checkpoint",
+                                value=module_inventory.checkpoints[-1] if len(module_inventory.checkpoints) > 0 else "None",
+                                interactive=True,
+                            )
+
+                            current_checkpoint = "" if checkpoint_dropdown.value == "None" else checkpoint_dropdown.value
+                            ema_dropdown = gr.Dropdown(
+                                choices=["None"] + module_inventory.emas[current_checkpoint],
+                                label="Select an EMA",
+                                value="None",
+                                interactive=True,
+                            )
+
+        with gr.Blocks() as self.generation_interface:
 
             # ********** parameter editor **********
 
             with gr.Row():
 
                 # general params
-                
+
                 with gr.Column(min_width=100):
                     seed = gr.Number(label="Seed", value=42, minimum=0, maximum=99900, precision=0)
                     with gr.Row():
@@ -120,14 +186,22 @@ class GradioApp:
             # ********** prompt editor **********
 
             with gr.Row():
+                game_list = (f"({self.pipeline.dataset_info['game_train_sample_counts'][game]}) {game}"
+                             for game in list(self.pipeline.dataset_game_ids.keys()))
                 game_dropdown = gr.Dropdown(
-                    choices=list(self.pipeline.dataset_game_ids.keys()),
+                    choices=game_list,
                     label="Select a game",
                     value="spc/Gundam Wing - Endless Duel",  
                     scale=4
                 )
+                #game_sample_count = gr.Number(label="Sample Count", interactive=False)
                 game_weight = gr.Number(label="Weight", value=1, minimum=-100, maximum=100, precision=2)
                 add_game_button = gr.Button("Add Game")
+
+                #game_dropdown.change(lambda game_dropdown : self.pipeline.dataset_info["game_train_sample_counts"][game_dropdown],
+                #                     inputs=[game_dropdown],
+                #                     outputs=[game_sample_count],
+                #                     show_progress="hidden")
             
             prompt = {}
 
@@ -167,12 +241,15 @@ class GradioApp:
                                "sigma_max": sigma_max, "sigma_min": sigma_min, "rho": rho, "input_perturbation": input_perturbation,
                                "use_midpoint": use_midpoint, "num_fgla_iters": num_fgla_iters, "img2img_strength": img2img_strength}
                 
+                stripped_prompt = {game.split(" ", 1)[1]: weight for game, weight in prompt.items()}
                 if auto_increment_seed == True: seed += 1
-                return str(params_dict) + "\n" + str(prompt), seed
+                return str(params_dict) + "\n" + str(stripped_prompt), seed
                 
             def generate(seed, num_samples, batch_size, num_steps, cfg_scale, sigma_max, sigma_min, rho, input_perturbation,
                          use_midpoint, num_fgla_iters, img2img_strength, img2img_input):
                 
+                stripped_prompt = {game.split(" ", 1)[1]: weight for game, weight in prompt.items()}
+
                 progress = gr.Progress()
                 for i in range(num_steps):
                     progress((i+1)/num_steps)
@@ -202,10 +279,17 @@ class GradioApp:
                 outputs=[latents_output, audio_output]
             )
 
-        self.gradio_interface.queue(default_concurrency_limit=self.config.web_server_default_concurrency_limit,
-                                    max_size=self.config.web_server_max_queue_size)
+        self.generation_interface.queue(default_concurrency_limit=self.config.web_server_default_concurrency_limit,
+                                        max_size=self.config.web_server_max_queue_size)
         
-        self.gradio_interface.launch(server_name=self.config.web_server_host,
+
+
+
+        self.tabbed_interface = gr.TabbedInterface(interface_list=[self.generation_interface, self.settings_interface],
+                                                   title="Dual Diffusion - Generative Diffusion SNES/SFC Music Model",
+                                                   tab_names=["Generator", "Model Settings"], analytics_enabled=False)
+        
+        self.tabbed_interface.launch(server_name=self.config.web_server_host,
                                      server_port=self.config.web_server_port,
                                      share=self.config.web_server_share,
                                      show_error=True, debug=True)

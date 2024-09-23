@@ -34,7 +34,7 @@ from modules.module import DualDiffusionModule
 from modules.mp_tools import mp_sum
 from utils.dual_diffusion_utils import (
     open_img_window, close_img_window, show_img, tensor_to_img, save_img,
-    multi_plot, normalize, get_cos_angle, load_safetensors
+    multi_plot, normalize, get_cos_angle, load_safetensors, torch_dtype
 )
 from sampling.schedule import SamplingSchedule
 
@@ -60,6 +60,11 @@ class SampleParams:
     img2img_input: Optional[Union[str, torch.Tensor]] = None
     num_fgla_iterations: Optional[int]                = None
     
+@dataclass
+class ModuleInventory:
+    name: str
+    checkpoints: list[str]
+    emas: dict[str, list[str]]
 
 class DualDiffusionPipeline(torch.nn.Module):
 
@@ -72,66 +77,132 @@ class DualDiffusionPipeline(torch.nn.Module):
             
             self.add_module(module_name, module)
 
-        self.dtype = torch.get_default_dtype()
-        self.device = torch.device("cpu")
+    def to(self, device: Optional[Union[dict[str, torch.device], torch.device]] = None,
+                 dtype:  Optional[Union[dict[str, torch.dtype],  torch.dtype]]  = None,
+                 **kwargs) -> "DualDiffusionPipeline":
+        
+        if device is not None:
+            if isinstance(device, dict):
+                for module_name, device in device.items():
+                    getattr(self, module_name).to(device=device)
+            else:
+                super().to(device=device)
 
-    def to(self, device: Optional[torch.device] = None,
-           dtype: Optional[torch.dtype] = None, **kwargs) -> "DualDiffusionPipeline":
-        super().to(device=device, dtype=dtype, **kwargs)
+        if dtype is not None:
+            if isinstance(dtype, dict):
+                for module_name, module_dtype in dtype.items():
+                    getattr(self, module_name).to(dtype=torch_dtype(module_dtype))
+            else:
+                super().to(dtype=torch_dtype(dtype))
 
-        self.dtype = dtype or self.dtype
-        self.device = device or self.device
-        return self
+        return super().to(**kwargs)
     
     def half(self) -> "DualDiffusionModule":
         return self.to(dtype=torch.bfloat16)
     
     @staticmethod
-    def from_pretrained(model_path: str,
-                        torch_dtype: torch.dtype = torch.float32,
-                        device: Optional[torch.device] = None,
-                        load_latest_checkpoints: bool = False,
-                        load_emas: Optional[dict[str, str]] = None ) -> "DualDiffusionPipeline":
+    def get_model_inventory(model_path: str) -> dict[str, ModuleInventory]:
         
         model_index = config.load_json(os.path.join(model_path, "model_index.json"))
-        model_modules: dict[str, DualDiffusionModule] = {}
-        load_emas = load_emas or {}
-        model_path_contents = os.listdir(model_path)
+        model_inventory: dict[str, ModuleInventory] = {}
 
-        # load pipeline modules
-        for module_name, module_import_dict in model_index["modules"].items():
+        def get_ema_list(module_path: str) -> list[str]:
+            ema_list = []
+            for path in os.listdir(module_path):
+                if os.path.isfile(os.path.join(module_path, path)) and path.startswith("pf_ema"):
+                    ema_list.append(path)
+            return sorted(ema_list)
+        
+        for module_name, _ in model_index["modules"].items():
+            module_inventory = ModuleInventory(module_name, [], {})
             
+            # get and sort module checkpoints
+            for path in os.listdir(model_path):
+                if os.path.isdir(os.path.join(model_path, path)):
+                    if path.startswith(f"{module_name}_checkpoint"):
+                        module_inventory.checkpoints.append(path)
+
+            module_inventory.checkpoints = sorted(module_inventory.checkpoints, key=lambda x: int(x.split("-")[1]))
+
+            # get ema list for each checkpoint
+            module_inventory.emas[""] = get_ema_list(os.path.join(model_path, module_name))
+            for checkpoint in module_inventory.checkpoints:
+                module_inventory.emas[checkpoint] = get_ema_list(os.path.join(model_path, checkpoint, module_name))
+
+            model_inventory[module_name] = module_inventory
+
+        return model_inventory
+
+    @staticmethod
+    def get_model_module_classes(model_path: str) -> dict[str, type[DualDiffusionModule]]:
+        
+        model_index = config.load_json(os.path.join(model_path, "model_index.json"))
+        model_module_classes: dict[str, type[DualDiffusionModule]] = {}
+        
+        for module_name, module_import_dict in model_index["modules"].items():
             module_package = importlib.import_module(module_import_dict["package"])
             module_class: type[DualDiffusionModule] = getattr(module_package, module_import_dict["class"])
-            
-            module_path = os.path.join(model_path, module_name)
-            if load_latest_checkpoints == True:
-                
-                module_checkpoints: list[str] = []
-                for path in model_path_contents:
-                    if os.path.isdir(os.path.join(model_path, path)) and path.startswith(f"{module_name}_checkpoint"):
-                        module_checkpoints.append(path)
-
-                if len(module_checkpoints) > 0:
-                    module_checkpoints = sorted(module_checkpoints, key=lambda x: int(x.split("-")[1]))
-                    module_path = os.path.join(model_path, module_checkpoints[-1], module_name)
-
-            model_modules[module_name] = module_class.from_pretrained(
-                module_path, torch_dtype=torch_dtype, device=device, load_config_only=module_name in load_emas)
-            
-            if module_name in load_emas: # load and merge ema weights
-                ema_module_path = os.path.join(module_path, load_emas[module_name])
-                if os.path.isfile(ema_module_path):
-                    model_modules[module_name].load_state_dict(load_safetensors(ema_module_path))
-
-                    if hasattr(model_modules[module_name], "normalize_weights"):
-                        model_modules[module_name].normalize_weights()
-                else:
-                    raise FileNotFoundError(f"EMA checkpoint '{load_emas[module_name]}' not found in '{os.path.dirname(ema_module_path)}'")
+            model_module_classes[module_name] = module_class
         
-        pipeline = DualDiffusionPipeline(model_modules).to(device=device)
+        return model_module_classes
+    
+    @staticmethod
+    def from_pretrained(model_path: str,
+                        torch_dtype: Union[dict[str, torch.dtype], torch.dtype] = torch.float32,
+                        device: Optional[Union[dict[str, torch.device], torch.device]] = None,
+                        load_checkpoints: Optional[Union[dict[str, str], bool]] = False,
+                        load_emas: Optional[Union[dict[str, str], bool]] = False,
+                        compile_options: Optional[Union[dict[str, dict], dict]] = None) -> "DualDiffusionPipeline":
+        
+        model_module_classes = DualDiffusionPipeline.get_model_module_classes(model_path)
+        model_inventory = DualDiffusionPipeline.get_model_inventory(model_path)
 
-        # load optional dataset info
+        load_checkpoints = load_checkpoints or False
+        if isinstance(load_checkpoints, bool):
+            load_checkpoints = {}
+            if load_checkpoints == True:
+                for module_name, module_inventory in model_inventory.items():
+                    if len(module_inventory.checkpoints) > 0:
+                        load_checkpoints[module_name] = module_inventory.checkpoints[-1]
+
+        load_emas = load_emas or False
+        if isinstance(load_emas, bool):
+            load_emas = {}
+            if load_emas == True:
+                for module_name, module_inventory in model_inventory.items():
+                    module_checkpoint = load_checkpoints.get(module_name, "")
+                    if len(module_inventory.emas[module_checkpoint]) > 0:
+                        load_emas[module_name] = module_inventory.emas[module_checkpoint][-1]
+
+        # load pipeline modules
+        model_modules: dict[str, DualDiffusionModule] = {}
+        for module_name, module_class in model_module_classes.items():
+
+            # load module weights / checkpoint
+            module_checkpoint = load_checkpoints.get(module_name, "")
+            module_path = os.path.join(model_path, module_checkpoint, module_name)
+            model_modules[module_name] = module_class.from_pretrained(
+                module_path, device=device, load_config_only=module_name in load_emas)
+            
+            # load and merge ema weights
+            if module_name in load_emas:
+                ema_module_path = os.path.join(module_path, load_emas[module_name])                
+                model_modules[module_name].load_ema(ema_module_path)
+        
+        pipeline = DualDiffusionPipeline(model_modules).to(device=device, dtype=torch_dtype)
+
+        if compile_options is not None:
+            # ugly way to check if compile_options is a per-module dict
+            if (all(isinstance(value, dict) for value in compile_options.values()) and
+                        not any(key=="options" for key in compile_options.keys())):
+                for module_name, module in pipeline.named_children():
+                    if module_name in compile_options:
+                        module.compile(**compile_options[module_name])
+            else:
+                for module_name, module in pipeline.named_children():
+                    module.compile(**compile_options)
+
+        # load dataset info
         dataset_info_path = os.path.join(model_path, "dataset_info.json")
         if os.path.isfile(dataset_info_path):
             pipeline.dataset_info = config.load_json(dataset_info_path)
@@ -178,10 +249,11 @@ class DualDiffusionPipeline(torch.nn.Module):
         
     @torch.no_grad()
     def get_class_labels(self, labels: Union[int, torch.Tensor, list[int], dict[str, float]],
-                         module: str = "unet") -> torch.Tensor:
+                         module_name: str = "unet") -> torch.Tensor:
 
-        label_dim = getattr(self, module).config.label_dim
-        assert label_dim > 0, f"{module} label dim must be > 0, got {label_dim}"
+        module: DualDiffusionModule = getattr(self, module_name)
+        label_dim = module.config.label_dim
+        assert label_dim > 0, f"{module_name} label dim must be > 0, got {label_dim}"
         
         if isinstance(labels, int):
             labels = torch.tensor([labels])
@@ -203,7 +275,7 @@ class DualDiffusionPipeline(torch.nn.Module):
         else:
             raise ValueError(f"Unknown labels dtype '{type(labels)}'")
         
-        return class_labels.to(device=self.device, dtype=self.dtype)
+        return class_labels.to(device=module.device, dtype=module.dtype)
 
     def get_latent_shape(self, sample_shape: Union[torch.Size, tuple[int, int, int, int]]) -> torch.Size:
         latent_shape = self.vae.get_latent_shape(sample_shape)
@@ -227,9 +299,9 @@ class DualDiffusionPipeline(torch.nn.Module):
 
         params.game_ids = params.game_ids or torch.randint(0, self.unet.label_dim, 1,
                                             device=self.device, generator=params.generator)
-        vae_class_labels = self.get_class_labels(params.game_ids, module="vae")
+        vae_class_labels = self.get_class_labels(params.game_ids, module_name="vae")
         vae_class_embeddings = self.vae.get_class_embeddings(vae_class_labels)
-        unet_class_labels = self.get_class_labels(params.game_ids, module="unet")
+        unet_class_labels = self.get_class_labels(params.game_ids, module_name="unet")
         unet_class_embeddings = self.unet.get_class_embeddings(unet_class_labels)
 
         if params.add_class_noise > 0:

@@ -40,28 +40,21 @@ def class_embeddings_test() -> None:
     print(dict_str(test_params))
     
     model_name = test_params["model_name"]
-    load_ema = test_params["load_ema"]
-    load_latest_checkpoints = test_params["load_latest_checkpoints"]
+    model_load_options = test_params["model_load_options"]
     module_name = test_params["module_name"]
     remove_embedding_mean = test_params["remove_embedding_mean"]
     normalize_embeddings = test_params["normalize_embeddings"]
-    device = test_params["device"]
 
     test_output_path = os.path.join(config.DEBUG_PATH, "class_embeddings") if config.DEBUG_PATH is not None else None
     print("Test output path:", test_output_path)
 
     model_path = os.path.join(config.MODELS_PATH, model_name)
-    model_dtype = torch.float32
-    print(f"Loading DualDiffusion model from '{model_path}' (dtype={model_dtype})...")
-    pipeline = DualDiffusionPipeline.from_pretrained(model_path,
-                                                     torch_dtype=model_dtype,
-                                                     device=device,
-                                                     load_latest_checkpoints=load_latest_checkpoints,
-                                                     load_emas={"unet": load_ema} if load_ema is not None else None)
+    print(f"Loading DualDiffusion model from '{model_path}'...")
+    pipeline = DualDiffusionPipeline.from_pretrained(model_path, **model_load_options)
     module: DualDiffusionModule = getattr(pipeline, module_name)
 
     num_classes = module.config.label_dim
-    class_labels = pipeline.get_class_labels(torch.arange(num_classes, device=device))
+    class_labels = pipeline.get_class_labels(torch.arange(num_classes, device=module.device))
     class_embeddings = module.get_class_embeddings(class_labels)
 
     if remove_embedding_mean:

@@ -50,14 +50,11 @@ class VAETrainer(ModuleTrainer):
         self.logger = trainer.logger
         self.module = trainer.module
 
-        if trainer.config.enable_model_compilation:
-            self.module.encode = torch.compile(self.module.encode, **trainer.config.compile_params)
-            self.module.decode = torch.compile(self.module.decode, **trainer.config.compile_params)
-
         trainer.pipeline.format = trainer.pipeline.format.to(self.accelerator.device)
-        #if trainer.config.enable_model_compilation: # todo: complex operators are not currently supported in compile
-        #    trainer.pipeline.format.raw_to_sample = torch.compile(trainer.pipeline.format.raw_to_sample,
-        #                                                        **trainer.config.compile_params)
+
+        if trainer.config.enable_model_compilation:
+            self.module.compile(**trainer.config.compile_params)
+            trainer.pipeline.format.compile(**trainer.config.compile_params)
 
         self.loss = DualMultiscaleSpectralLoss2D(DualMultiscaleSpectralLoss2DConfig(block_widths=config.block_widths,
                                                                                      block_overlap=config.block_overlap))
@@ -83,7 +80,7 @@ class VAETrainer(ModuleTrainer):
         sample_game_ids = batch["game_ids"]
         #sample_author_ids = batch["author_ids"]
 
-        class_labels = self.trainer.pipeline.get_class_labels(sample_game_ids, module="vae")
+        class_labels = self.trainer.pipeline.get_class_labels(sample_game_ids, module_name="vae")
         vae_class_embeddings = self.module.get_class_embeddings(class_labels)
 
         samples = self.trainer.pipeline.format.raw_to_sample(raw_samples)

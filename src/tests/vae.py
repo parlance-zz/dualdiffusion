@@ -42,8 +42,7 @@ def vae_test() -> None:
         os.path.join(config.CONFIG_PATH, "tests", "vae_test.json"))
     
     model_name = test_params["model_name"]
-    device = test_params["device"]
-    fp16 = test_params["fp16"]
+    model_load_options = test_params["model_load_options"]
     length = test_params["length"]
     num_fgla_iters = test_params["fgla_iterations"]
     sample_latents = test_params["sample_latents"]
@@ -53,12 +52,8 @@ def vae_test() -> None:
     add_latent_noise = test_params["add_latent_noise"]
 
     model_path = os.path.join(config.MODELS_PATH, model_name)
-    model_dtype = torch.bfloat16 if fp16 else torch.float32
-    print(f"Loading DualDiffusion model from '{model_path}' (dtype={model_dtype})...")
-    pipeline = DualDiffusionPipeline.from_pretrained(model_path,
-                                                     torch_dtype=model_dtype,
-                                                     device=device,
-                                                     load_latest_checkpoints=True)
+    print(f"Loading DualDiffusion model from '{model_path}'...")
+    pipeline = DualDiffusionPipeline.from_pretrained(model_path, **model_load_options)
     
     pipeline.format.config.num_fgla_iters = num_fgla_iters
     noise_floor = pipeline.format.config.noise_floor
@@ -81,13 +76,13 @@ def vae_test() -> None:
 
         file_ext = os.path.splitext(filename)[1]
         input_raw_sample = load_audio(os.path.join(dataset_path, filename), count=crop_width)
-        input_raw_sample = input_raw_sample.unsqueeze(0).to(device)
+        input_raw_sample = input_raw_sample.unsqueeze(0).to(pipeline.format.device)
 
         class_labels = pipeline.get_class_labels(sample_game_id)
         vae_class_embeddings = pipeline.vae.get_class_embeddings(class_labels)
         input_sample = pipeline.format.raw_to_sample(input_raw_sample)
 
-        posterior = pipeline.vae.encode(input_sample.type(model_dtype),
+        posterior = pipeline.vae.encode(input_sample.type(pipeline.vae.dtype),
                                         vae_class_embeddings, pipeline.format)
         latents = posterior.sample() if sample_latents else posterior.mode()
 
