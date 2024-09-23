@@ -58,6 +58,9 @@ class VAETrainer(ModuleTrainer):
 
         self.loss = DualMultiscaleSpectralLoss2D(DualMultiscaleSpectralLoss2DConfig(block_widths=config.block_widths,
                                                                                      block_overlap=config.block_overlap))
+        if trainer.config.enable_model_compilation:
+            self.loss.__call__ = torch.compile(self.loss.__call__, **trainer.config.compile_params)
+        
         self.target_snr = self.module.get_target_snr()
         self.target_noise_std = (1 / (self.target_snr**2 + 1))**0.5
 
