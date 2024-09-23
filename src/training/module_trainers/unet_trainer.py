@@ -75,13 +75,14 @@ class UNetTrainer(ModuleTrainer):
             self.logger.error(f"UNet model does not support inpainting, aborting training..."); exit(1)
 
         if trainer.config.enable_model_compilation:
-            self.module.forward = torch.compile(self.module.forward, **trainer.config.compile_params)
+            self.module.compile(**trainer.config.compile_params)
 
         if not trainer.config.dataloader.use_pre_encoded_latents:
+            
             trainer.pipeline.format = trainer.pipeline.format.to(self.accelerator.device)
-            #if trainer.config.enable_model_compilation: # todo: complex operators are not currently supported in compile
-            #    trainer.pipeline.format.raw_to_sample = torch.compile(trainer.pipeline.format.raw_to_sample,
-            #                                                        **trainer.config.compile_params)
+            if trainer.config.enable_model_compilation:
+                trainer.pipeline.format.compile(**trainer.config.compile_params)
+
             if hasattr(trainer.pipeline, "vae"):
                 if trainer.pipeline.vae.config.last_global_step == 0:
                     self.logger.error("VAE model has not been trained, aborting training..."); exit(1)
@@ -90,8 +91,7 @@ class UNetTrainer(ModuleTrainer):
                 if trainer.mixed_precision_enabled == True:
                     trainer.pipeline.vae = trainer.pipeline.vae.to(dtype=trainer.mixed_precision_dtype)
                 if trainer.config.enable_model_compilation:
-                    trainer.pipeline.vae.encode = torch.compile(trainer.pipeline.vae.encode,
-                                                                **trainer.config.compile_params)
+                    trainer.pipeline.vae.compile(**trainer.config.compile_params)
                 
                 self.logger.info(f"Training diffusion model with VAE")
             else:
@@ -223,7 +223,7 @@ class UNetTrainer(ModuleTrainer):
         sample_t_ranges = batch["t_ranges"] if self.trainer.dataset.config.t_scale is not None else None
         #sample_author_ids = batch["author_ids"]
 
-        class_labels = self.trainer.pipeline.get_class_labels(sample_game_ids, module="unet")
+        class_labels = self.trainer.pipeline.get_class_labels(sample_game_ids, module_name="unet")
         unet_class_embeddings = self.module.get_class_embeddings(class_labels)
         if self.config.conditioning_perturbation > 0 and self.is_validation_batch == False:
             conditioning_perturbation = torch.randn(unet_class_embeddings.shape, device=unet_class_embeddings.device, generator=self.device_generator)
