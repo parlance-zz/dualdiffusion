@@ -192,6 +192,17 @@ def torch_dtype(dtype: Union[str, torch.dtype]) -> torch.dtype:
     else:
         raise ValueError(f"Unsupported dtype type: {dtype} ({type(dtype)})")
 
+def get_available_torch_devices() -> list[str]:
+    available_devices = ["cpu"]
+    if torch.cuda.is_available():
+        for i in range(torch.cuda.device_count()):
+            available_devices.append(f"cuda{i}" if i > 0 else "cuda")
+
+    if torch.backends.mps.is_available():
+        available_devices.append("mps")
+
+    return available_devices
+        
 def load_audio(input_path: Union[str, bytes],
                start: int = 0, count: int = -1,
                return_sample_rate: bool = False,
