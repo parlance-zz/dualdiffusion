@@ -8,7 +8,7 @@ from dataclasses import dataclass
 
 import torch
 
-from utils.dual_diffusion_utils import load_safetensors, save_safetensors
+from utils.dual_diffusion_utils import load_safetensors, save_safetensors, torch_dtype
 
 @dataclass
 class DualDiffusionModuleConfig(ABC):
@@ -63,6 +63,8 @@ class DualDiffusionModule(torch.nn.Module, ABC):
 
     def to(self, device: Optional[torch.device] = None,
            dtype: Optional[torch.dtype] = None, **kwargs) -> "DualDiffusionModule":
+        
+        if dtype is not None: dtype = torch_dtype(dtype)
         super().to(device=device, dtype=dtype, **kwargs)
 
         self.dtype = dtype or self.dtype
@@ -72,6 +74,13 @@ class DualDiffusionModule(torch.nn.Module, ABC):
     def half(self) -> "DualDiffusionModule":
         return self.to(dtype=torch.bfloat16)
     
+    def compile(self, compile_options: dict) -> None:
+        self.forward = torch.compile(self.forward, **compile_options)
+
+    def load_ema(self, ema_path: str) -> None:
+        self.load_state_dict(load_safetensors(ema_path))
+        self.normalize_weights()
+
     @torch.no_grad()
     def normalize_weights(self) -> None:
         if self.has_trainable_parameters == False: return
