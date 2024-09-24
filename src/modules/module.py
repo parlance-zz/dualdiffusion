@@ -19,7 +19,9 @@ class DualDiffusionModule(torch.nn.Module, ABC):
     config_class: Optional[Type[DualDiffusionModuleConfig]] = None
     module_name: Optional[str] = None
     has_trainable_parameters: bool = True
-    
+    supports_half_precision: bool = True
+    supports_compile: bool = True
+
     def __init__(self):
         super().__init__()
         
@@ -64,7 +66,12 @@ class DualDiffusionModule(torch.nn.Module, ABC):
     def to(self, device: Optional[torch.device] = None,
            dtype: Optional[torch.dtype] = None, **kwargs) -> "DualDiffusionModule":
         
-        if dtype is not None: dtype = torch_dtype(dtype)
+        if dtype is not None:
+            if type(self).supports_half_precision == True:
+                dtype = torch_dtype(dtype)
+            else:
+                dtype = torch.float32
+
         super().to(device=device, dtype=dtype, **kwargs)
 
         self.dtype = dtype or self.dtype
@@ -72,11 +79,15 @@ class DualDiffusionModule(torch.nn.Module, ABC):
         return self
     
     def half(self) -> "DualDiffusionModule":
-        self.dtype = torch.bfloat16
-        return self.to(dtype=torch.bfloat16)
+        if type(self).supports_half_precision == True:
+            self.dtype = torch.bfloat16
+            return self.to(dtype=torch.bfloat16)
+        else:
+            return self
     
     def compile(self, **kwargs) -> None:
-        self.forward = torch.compile(self.forward, **kwargs)
+        if type(self).supports_compile == True:
+            self.forward = torch.compile(self.forward, **kwargs)
 
     def load_ema(self, ema_path: str) -> None:
         self.load_state_dict(load_safetensors(ema_path))

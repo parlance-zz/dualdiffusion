@@ -41,7 +41,9 @@ class DualDiffusionFormat(DualDiffusionModule, ABC):
 
     module_name: str = "format"
     has_trainable_parameters: bool = False
-
+    supports_half_precision: bool = False
+    supports_compile: bool = False
+    
     @abstractmethod
     def get_num_channels(self) -> tuple[int, int]:
         pass
@@ -78,14 +80,3 @@ class DualDiffusionFormat(DualDiffusionModule, ABC):
         #self.raw_to_sample = torch.compile(self.raw_to_sample, **compile_options)
         #self.sample_to_raw = torch.compile(self.sample_to_raw, **compile_options)
         return
-    
-    # prevent casting format to half precision
-    def to(self, device: Optional[torch.device] = None,
-           dtype: Optional[torch.dtype] = None, **kwargs) -> "DualDiffusionFormat":
-        
-        dtype = torch.float32
-        super().to(device=device, dtype=dtype, **kwargs)
-        return self
-    
-    def half(self) -> "DualDiffusionFormat":
-        return self
