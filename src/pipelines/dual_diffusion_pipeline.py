@@ -86,14 +86,16 @@ class DualDiffusionPipeline(torch.nn.Module):
                 for module_name, device in device.items():
                     getattr(self, module_name).to(device=device)
             else:
-                super().to(device=device)
+                for module in self.children():
+                    module.to(device=device)
 
         if dtype is not None:
             if isinstance(dtype, dict):
                 for module_name, module_dtype in dtype.items():
                     getattr(self, module_name).to(dtype=torch_dtype(module_dtype))
             else:
-                super().to(dtype=torch_dtype(dtype))
+                for module in self.children():
+                    module.to(dtype=torch_dtype(dtype))
 
         return super().to(**kwargs)
     
