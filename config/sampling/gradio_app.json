@@ -1,16 +1,24 @@
 {
     "model_name": "edm2_vt7_12d_i",
-    "load_latest_checkpoints": true,
-    "load_ema": null,
-    "fp16": false,
-    "device": "cpu",
-    "web_server_host": "192.168.1.81",
+    "model_load_options": {
+      "torch_dtype": "bfloat16",
+      "device": "cpu",
+      "load_checkpoints": true,
+      "load_emas": true,
+      "compile_options": {
+        "fullgraph": true,
+        "dynamic": false
+      }
+    },
+
+    "gpu_concurrency_limit": 1,
+    "gpu_max_queue_size": 10,
+
+    "web_server_host": "localhost",
     "web_server_port": 3001,
     "web_server_share": false,
-    "web_server_default_concurrency_limit": 4,
-    "web_server_max_queue_size": 10,
-    "compile_params": {
-      "fullgraph": true,
-      "dynamic": false
-    }
+    "web_server_default_concurrency_limit": 10,
+    "web_server_max_queue_size": 20,
+
+    "enable_debug_logging": true
   }
