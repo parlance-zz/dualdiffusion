@@ -72,6 +72,7 @@ class DualDiffusionModule(torch.nn.Module, ABC):
         return self
     
     def half(self) -> "DualDiffusionModule":
+        self.dtype = torch.bfloat16
         return self.to(dtype=torch.bfloat16)
     
     def compile(self, **kwargs) -> None:

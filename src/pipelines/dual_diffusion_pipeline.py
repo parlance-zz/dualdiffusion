@@ -97,10 +97,16 @@ class DualDiffusionPipeline(torch.nn.Module):
                 for module in self.children():
                     module.to(dtype=torch_dtype(dtype))
 
-        return super().to(**kwargs)
+        if len(kwargs) > 0:
+            for module in self.children():
+                module.to(**kwargs)
+        
+        return self
     
     def half(self) -> "DualDiffusionModule":
-        return self.to(dtype=torch.bfloat16)
+        for module in self.children():
+            module.to(dtype=torch.bfloat16)
+        return self
     
     def compile(self, compile_options: dict) -> None:
         # ugly way to check if compile_options is a per-module dict
