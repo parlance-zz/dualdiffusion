@@ -162,13 +162,6 @@ class SpectrogramConverter(torch.nn.Module):
     def spectrogram_to_audio(self, spectrogram: torch.Tensor) -> torch.Tensor:
         amplitudes_linear = self.freq_scale.unscale(spectrogram ** (1 / self.config.abs_exponent))
         return self.inverse_spectrogram_func(amplitudes_linear, n_fgla_iter=self.config.num_fgla_iters)
-    
-    def to(self, device: Optional[torch.device] = None,
-           dtype: Optional[torch.dtype] = None, **kwargs) -> "SpectrogramConverter":
-        
-        dtype = torch.float32
-        super().to(device=device, dtype=dtype, **kwargs)
-        return self
 
 class SpectrogramFormat(DualDiffusionFormat):
 
