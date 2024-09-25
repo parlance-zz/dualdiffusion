@@ -122,6 +122,10 @@ def multi_plot(*args, layout: Optional[tuple[int, int]] = None,
 def dict_str(d: dict, indent: int = 4) -> str:
     return json_dumps(d, indent=indent)
 
+def sanitize_filename(filename: str) -> str:
+    return ("".join(c for c in filename
+        if c.isalnum() or c in (" ",".","_"))).strip()
+
 def save_tensor_raw(tensor: torch.Tensor, output_path: str) -> None:
 
     directory = os.path.dirname(output_path)
