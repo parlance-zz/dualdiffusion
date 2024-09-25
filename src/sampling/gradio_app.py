@@ -4,7 +4,6 @@ from typing import Optional
 from dataclasses import dataclass
 from datetime import datetime
 import logging
-import importlib
 import random
 import time
 import os
@@ -13,8 +12,10 @@ import torch
 import numpy as np
 import gradio as gr
 
-from utils.dual_diffusion_utils import init_cuda, save_audio, load_audio, dict_str, get_available_torch_devices
-from modules.module import DualDiffusionModule
+from utils.dual_diffusion_utils import (
+    init_cuda, save_audio, load_audio, dict_str,
+    get_available_torch_devices, sanitize_filename
+)
 from pipelines.dual_diffusion_pipeline import DualDiffusionPipeline
 
 
@@ -88,30 +89,34 @@ class GradioApp:
 
         with gr.Blocks() as self.log_interface:
             
-            last_log_modified_time = gr.State(value=os.path.getmtime(self.log_path) if self.log_path is not None else 0)
-
-            def read_logs(logs, last_log_modified_time):
-
-                log_modified_time = os.path.getmtime(self.log_path)
-                if log_modified_time > last_log_modified_time:
-                    last_log_modified_time = log_modified_time
-                    
-                    print("read_logs()")
-                    
-                    try:
-                        with open(self.log_path, "r") as f:
-                            logs = f.read()
-                    except Exception as e:
-                        self.logger.error(f"Error reading logs at '{self.log_path}': {e}")
-
-                return logs, last_log_modified_time
-                
+            last_log_modified_time = gr.State(value=os.path.getmtime(self.log_path)
+                                              if self.log_path is not None else 0)
             with gr.Row():
-                logs = gr.Textbox(label="Debug Log", value="", lines=30, max_lines=30, interactive=False, show_copy_button=True)
-
+                logs = gr.Textbox(
+                    label="Debug Log", value="", lines=30, max_lines=30,
+                    interactive=False, show_copy_button=True)
+                
             if self.log_path is not None:
-                self.log_interface.load(read_logs, inputs=[logs, last_log_modified_time], every=1,
-                                        outputs=[logs, last_log_modified_time], show_progress="hidden")
+
+                def read_logs(logs, last_log_modified_time):
+
+                    log_modified_time = os.path.getmtime(self.log_path)
+                    
+                    if log_modified_time > last_log_modified_time:
+                        last_log_modified_time = log_modified_time
+
+                        try:
+                            with open(self.log_path, "r") as f:
+                                logs = f.read()
+                        except Exception as e:
+                            self.logger.error(f"Error reading logs at '{self.log_path}': {e}")
+
+                    return logs, last_log_modified_time
+                            
+                self.log_interface.load(
+                    read_logs, every=1, show_progress="hidden",
+                    inputs=[logs, last_log_modified_time], 
+                    outputs=[logs, last_log_modified_time])
             else:
                 logs.value = "WARNING: DEBUG_PATH not defined, logging disabled"
 
@@ -121,24 +126,20 @@ class GradioApp:
                 
                 def get_model_list():
                     return [model_name for model_name in os.listdir(config.MODELS_PATH)
-                            if os.path.isdir(os.path.join(config.MODELS_PATH, model_name))]
+                        if os.path.isdir(os.path.join(config.MODELS_PATH, model_name))]
                 
                 with gr.Column(scale=4):
                     model_dropdown = gr.Dropdown(
-                        choices=get_model_list(),
-                        label="Select a model",
-                        value=self.config.model_name,
-                        interactive=True,
-                    )
+                        choices=get_model_list(), label="Select a model",
+                        value=self.config.model_name, interactive=True)
                 
                 with gr.Column(min_width=50):
                     refresh_model_list_button = gr.Button("Refresh Model List")
                     refresh_model_list_button.click(
                         lambda: gr.update(choices=get_model_list()),
-                        outputs=model_dropdown,
-                        show_progress="hidden"
-                    )
+                        outputs=model_dropdown, show_progress="hidden")
 
+                    # todo: load model
                     load_model_button = gr.Button("Load Model")
 
             with gr.Row():
@@ -152,23 +153,24 @@ class GradioApp:
                 for module_name, module_inventory in model_module_inventory.items():
                     with gr.Column():
 
-                        class_name_textbox = gr.Textbox(value=f"Module Class: {model_module_classes[module_name].__name__}", interactive=False, show_label=False, lines=1, max_lines=1)
+                        class_name_textbox = gr.Textbox(
+                            value=f"Module Class: {model_module_classes[module_name].__name__}",
+                            interactive=False, show_label=False, lines=1, max_lines=1)
 
                         if model_module_classes[module_name].has_trainable_parameters:
                             checkpoint_dropdown = gr.Dropdown(
                                 choices=["None"] + module_inventory.checkpoints,
                                 label=f"Select a {module_name} Checkpoint",
-                                value=module_inventory.checkpoints[-1] if len(module_inventory.checkpoints) > 0 else "None",
-                                interactive=True,
-                            )
+                                value=(module_inventory.checkpoints[-1]
+                                       if len(module_inventory.checkpoints) > 0 else "None"),
+                                interactive=True)
 
                             current_checkpoint = "" if checkpoint_dropdown.value == "None" else checkpoint_dropdown.value
                             ema_dropdown = gr.Dropdown(
                                 choices=["None"] + module_inventory.emas[current_checkpoint],
                                 label="Select an EMA",
                                 value="None",
-                                interactive=True,
-                            )
+                                interactive=True)
 
                         with gr.Row():
                             
@@ -183,40 +185,48 @@ class GradioApp:
                                 label="Device",
                                 value=self.config.model_load_options["device"],
                                 interactive=True,
-                                min_width=50,
-                            )
+                                min_width=50)
                             
         with gr.Blocks() as self.generation_interface:
 
             # ********** parameter editor **********
 
-            prompt_state = gr.State(value={})
+            def get_saved_presets():
+                preset_files = os.listdir(os.path.join(config.CONFIG_PATH, "sampling", "presets"))
+                saved_presets = []
+                for file in preset_files:
+                    if os.path.splitext(file)[1] == ".json":
+                        saved_presets.append(os.path.splitext(file)[0])
 
+                return saved_presets
+
+            saved_presets_state = gr.State(value=get_saved_presets())
+            last_loaded_preset_state = gr.State(value="default")
+            current_preset_state = gr.State(value="default")
+
+            prompt_state = gr.State(value={})
             gen_param_components = {}
             gen_param_state = gr.State(value={})
-            gen_param_state_modified = gr.State(value=False)
+            gen_param_state_modified_state = gr.State(value=False)
 
-            with gr.Row() as self.parameter_editor:
-                
+            with gr.Row():
                 with gr.Column(scale=2):
-                    with gr.Row():
-                        # general params
+
+                    with gr.Row() as self.gen_param_editor:
                         with gr.Column(min_width=50):
                             gen_param_components["seed"] = gr.Number(label="Seed", value=42, minimum=0, maximum=99900, precision=0, step=1)
                             gen_param_components["auto_increment_seed"] = gr.Checkbox(label="Auto Increment Seed", interactive=True, value=True)
-
                             with gr.Row():
-                                gr.Button("Randomize Seed").click(lambda: random.randint(0, 99900), outputs=gen_param_components["seed"], show_progress="hidden")
+                                gr.Button("Randomize Seed").click(
+                                    lambda: random.randint(0, 99900),
+                                    outputs=gen_param_components["seed"],
+                                    show_progress="hidden")
                                 gr.Button("Generate")
-
-                        # diffusion params
                         with gr.Column(min_width=50):
                             gen_param_components["num_steps"] = gr.Number(label="Number of Steps", value=100, minimum=10, maximum=1000, precision=0, step=10)
                             gen_param_components["cfg_scale"] = gr.Number(label="CFG Scale", value=1.5, minimum=0, maximum=100, precision=2, step=0.1)
                             gen_param_components["use_midpoint"] = gr.Checkbox(label="Use Midpoint Integration", value=True)
                             gen_param_components["num_fgla_iters"] = gr.Number(label="Number of FGLA Iterations", value=250, minimum=50, maximum=1000, precision=0, step=50)
-                        
-                        # schedule / noise params
                         with gr.Column(min_width=50):
                             gen_param_components["sigma_max"] = gr.Number(label="Sigma Max", value=200, minimum=10, maximum=1000, precision=2, step=10)
                             gen_param_components["sigma_min"] = gr.Number(label="Sigma Min", value=0.15, minimum=0.05, maximum=2, precision=2, step=0.05)
@@ -225,56 +235,61 @@ class GradioApp:
 
                     with gr.Row() as self.preset_editor:
                         
-                        preset_files = os.listdir(os.path.join(config.CONFIG_PATH, "sampling", "presets"))
-                        saved_presets = []
-                        for file in preset_files:
-                            if os.path.splitext(file)[1] == ".json":
-                                saved_presets.append(os.path.splitext(file)[0])
+                        def save_preset(preset, saved_presets, prompt, gen_params):
+                            preset = sanitize_filename(preset)
 
-                        preset = gr.Dropdown(
-                            choices=saved_presets,
-                            label=f"Select a Preset - (loaded preset: default)",
-                            value="default",
-                            interactive=True,
-                            allow_custom_value=True,
-                            scale=3,
-                        )
+                            if preset not in saved_presets:
+                                saved_presets += [preset]
 
-                        last_loaded_preset_state = gr.State(value="default")
-                        def update_preset_label(last_loaded_preset_state, gen_param_state_modified):
-                            preset_label = f"Select a Preset - (loaded preset: {last_loaded_preset_state})"
-                            if gen_param_state_modified: preset_label += " *"
-                            return gr.update(label=preset_label)
-                        last_loaded_preset_state.change(update_preset_label,
-                                                        inputs=[last_loaded_preset_state, gen_param_state_modified],
-                                                        outputs=preset, show_progress="hidden")
+                            return False, preset, saved_presets
                         
-                        def save_preset(preset, prompt_state, gen_param_state):
-                            return False, preset
-
                         def load_preset(preset):
-                            return False, preset, gr.update(interactive=False)
+                            preset = sanitize_filename(preset)
+                            return False, preset
                         
-                        with gr.Column(min_width=50):
-                            save_preset_button = gr.Button("Save Changes", interactive=False)
-                            save_preset_button.click(save_preset, show_progress="hidden", inputs=[preset, prompt_state, gen_param_state],
-                                                    outputs=[gen_param_state_modified, last_loaded_preset_state])
+                        @gr.render(inputs=[saved_presets_state, last_loaded_preset_state,
+                                           current_preset_state, gen_param_state_modified_state])
+                        def _(saved_presets, last_loaded_preset,
+                              current_preset, gen_param_state_modified):
                             
-                            load_preset_button = gr.Button("Load Preset", interactive=False)
-                            load_preset_button.click(load_preset, show_progress="hidden", inputs=preset,
-                                                     outputs=[gen_param_state_modified, last_loaded_preset_state, load_preset_button])
-                        
-                        preset.change(lambda preset, last_loaded_preset_state: (preset.strip(), gr.update(interactive=(preset.strip() != last_loaded_preset_state.strip()))),
-                                      inputs=[preset, last_loaded_preset_state], outputs=[preset, load_preset_button], show_progress="hidden")
+                            current_preset = sanitize_filename(current_preset)
+
+                            loaded_preset_label = f"loaded preset: {last_loaded_preset}"
+                            if gen_param_state_modified == True: loaded_preset_label += "*"
+
+                            preset_dropdown = gr.Dropdown(
+                                choices=saved_presets,
+                                label=f"Select a Preset - ({loaded_preset_label})",
+                                value=current_preset,
+                                interactive=True,
+                                allow_custom_value=True,
+                                scale=3)
+                            preset_dropdown.change(lambda preset: sanitize_filename(preset),
+                                                   inputs=preset_dropdown, 
+                                                   outputs=current_preset_state, show_progress="hidden")
+                            
+                            save_button_enabled = (current_preset != last_loaded_preset
+                                                    or gen_param_state_modified == True)
+                            load_button_enabled = (save_button_enabled
+                                                   and current_preset in saved_presets)
+                                                   
+                            with gr.Column(min_width=50):
+                                save_preset_button = gr.Button("Save Changes", interactive=save_button_enabled)
+                                load_preset_button = gr.Button("Load Preset", interactive=load_button_enabled)
+
+                                save_preset_button.click(save_preset, inputs=[current_preset_state, saved_presets_state, prompt_state, gen_param_state],
+                                    outputs=[gen_param_state_modified_state, last_loaded_preset_state, saved_presets_state], show_progress="hidden")
+                                load_preset_button.click(load_preset, inputs=current_preset_state,
+                                    outputs=[gen_param_state_modified_state, last_loaded_preset_state], show_progress="hidden")
                         
                 # inpainting / img2img params
-
-                with gr.Column():
+                with gr.Column() as self.input_audio_editor:
                     input_audio_mode = gr.Radio(label="Input Audio Mode", interactive=True, value="None",
                                                 choices=["None", "Img2Img", "Inpaint", "Outpaint"])
                     img2img_strength = gr.Slider(label="Img2Img Strength", visible=False,
                                                  minimum=0.01, maximum=0.99, step=0.01, value=0.5)
                     with gr.Row():
+                        #todo: sample_len needs to come from selected input audio
                         sample_len = self.pipeline.format.config.sample_raw_length / self.pipeline.format.config.sample_rate
 
                         inpaint_begin = gr.Slider(label="Inpaint Begin (Seconds)", interactive=True, visible=False, minimum=0, maximum=sample_len, step=0.1, value=sample_len/2)
@@ -313,22 +328,14 @@ class GradioApp:
             def update_gen_param_state(gen_param_state, name, component):
                 gen_param_state[name] = component
                 self.logger.debug(f"update_gen_param_state() gen_param_state: {gen_param_state}")
-                return gen_param_state, True
-            
+                return gen_param_state, True  
+               
             for name, component in gen_param_components.items():
                 component.change(update_gen_param_state, inputs=[gen_param_state, gr.State(value=name), component],
-                                 outputs=[gen_param_state, gen_param_state_modified], show_progress="hidden")
+                                 outputs=[gen_param_state, gen_param_state_modified_state], show_progress="hidden")
                 gen_param_state.value[name] = component.value
             
             self.logger.debug(f"initial gen_param_state: {gen_param_state.value}")
-
-            def gen_param_state_modified_change(gen_param_state_modified, last_loaded_preset_state):
-                return (gr.update(interactive=gen_param_state_modified),
-                        gr.update(interactive=gen_param_state_modified),
-                        last_loaded_preset_state + " ")
-            gen_param_state_modified.change(gen_param_state_modified_change, show_progress="hidden",
-                                            inputs=[gen_param_state_modified, last_loaded_preset_state],
-                                            outputs=[save_preset_button, load_preset_button, last_loaded_preset_state])
 
             # ********** prompt editor **********
 
@@ -359,10 +366,10 @@ class GradioApp:
 
             add_game_button.click(fn=add_game, inputs=[prompt_state, game_dropdown, game_weight],
                                   outputs=prompt_state, show_progress="hidden")
-            prompt_state.change(lambda: True, outputs=gen_param_state_modified, show_progress="hidden")
+            prompt_state.change(lambda: True, outputs=gen_param_state_modified_state, show_progress="hidden")
 
             @gr.render(inputs=prompt_state)
-            def render_prompt(prompt_input):
+            def _(prompt_input):
                 rendered_label = False
                 with gr.Group():
                     for prompt_game, prompt_weight in prompt_input.items():
@@ -379,8 +386,6 @@ class GradioApp:
                             rendered_label = True
             
             # ********** sample generation **********
-
-
 
             def get_output_label(prompt, seed, num_steps, cfg_scale, sigma_max, sigma_min, rho, input_perturbation,
                                  use_midpoint, num_fgla_iters, img2img_strength, img2img_input, auto_increment_seed):
