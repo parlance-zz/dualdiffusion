@@ -23,8 +23,7 @@ class GradioAppConfig:
     model_name: str
     model_load_options: dict
     gpu_concurrency_limit: int = 1
-    gpu_max_queue_size: int = 10
-    
+
     web_server_host: Optional[str] = None
     web_server_port: int = 3001
     web_server_share: bool = False
@@ -87,44 +86,75 @@ class GradioApp:
 
     def run(self) -> None:
 
+        with gr.Blocks() as self.log_interface:
+            
+            last_log_modified_time = gr.State(value=os.path.getmtime(self.log_path) if self.log_path is not None else 0)
+
+            def read_logs(logs, last_log_modified_time):
+
+                log_modified_time = os.path.getmtime(self.log_path)
+                if log_modified_time > last_log_modified_time:
+                    last_log_modified_time = log_modified_time
+                    
+                    print("read_logs()")
+                    
+                    try:
+                        with open(self.log_path, "r") as f:
+                            logs = f.read()
+                    except Exception as e:
+                        self.logger.error(f"Error reading logs at '{self.log_path}': {e}")
+
+                return logs, last_log_modified_time
+                
+            with gr.Row():
+                logs = gr.Textbox(label="Debug Log", value="", lines=30, max_lines=30, interactive=False, show_copy_button=True)
+
+            if self.log_path is not None:
+                self.log_interface.load(read_logs, inputs=[logs, last_log_modified_time], every=1,
+                                        outputs=[logs, last_log_modified_time], show_progress="hidden")
+            else:
+                logs.value = "WARNING: DEBUG_PATH not defined, logging disabled"
+
         with gr.Blocks() as self.settings_interface:
 
             with gr.Row():
                 
-                model_list = [model_name for model_name in os.listdir(config.MODELS_PATH)
-                              if os.path.isdir(os.path.join(config.MODELS_PATH, model_name))]
-                model_dropdown = gr.Dropdown(
-                    choices=model_list,
-                    label="Select a model",
-                    value=self.config.model_name,
-                    interactive=True,
-                    scale=3
-                )
+                def get_model_list():
+                    return [model_name for model_name in os.listdir(config.MODELS_PATH)
+                            if os.path.isdir(os.path.join(config.MODELS_PATH, model_name))]
+                
+                with gr.Column(scale=4):
+                    model_dropdown = gr.Dropdown(
+                        choices=get_model_list(),
+                        label="Select a model",
+                        value=self.config.model_name,
+                        interactive=True,
+                    )
+                
+                with gr.Column(min_width=50):
+                    refresh_model_list_button = gr.Button("Refresh Model List")
+                    refresh_model_list_button.click(
+                        lambda: gr.update(choices=get_model_list()),
+                        outputs=model_dropdown,
+                        show_progress="hidden"
+                    )
 
-                #load_latest_checkpoints_checkbox = gr.Checkbox(label="Load Latest Checkpoints", value=self.config.load_latest_checkpoints, interactive=True)
-                #fp16_checkbox = gr.Checkbox(label="fp16", value=self.config.fp16, interactive=True)
-
-                device_dropdown = gr.Dropdown(
-                    choices=get_available_torch_devices(),
-                    label="Device",
-                    value=self.config.model_load_options["device"],
-                    interactive=True,
-                    scale=1
-                )
+                    load_model_button = gr.Button("Load Model")
 
             with gr.Row():
                 
-                module_classes: dict[str, type[DualDiffusionModule]] = {}
-                model_index = config.load_json(os.path.join(config.MODELS_PATH, model_dropdown.value, "model_index.json"))
-                for module_name, module_import_dict in model_index["modules"].items():
-                    module_package = importlib.import_module(module_import_dict["package"])
-                    module_classes[module_name] = getattr(module_package, module_import_dict["class"])
+                available_torch_devices = get_available_torch_devices()
 
-                model_inventory = DualDiffusionPipeline.get_model_inventory(os.path.join(config.MODELS_PATH, model_dropdown.value))
-                for module_name, module_inventory in model_inventory.items():
+                model_path = os.path.join(config.MODELS_PATH, model_dropdown.value)
+                model_module_classes = DualDiffusionPipeline.get_model_module_classes(model_path)
+                model_module_inventory = DualDiffusionPipeline.get_model_module_inventory(model_path)
+                
+                for module_name, module_inventory in model_module_inventory.items():
                     with gr.Column():
 
-                        if module_classes[module_name].has_trainable_parameters:
+                        class_name_textbox = gr.Textbox(value=f"Module Class: {model_module_classes[module_name].__name__}", interactive=False, show_label=False, lines=1, max_lines=1)
+
+                        if model_module_classes[module_name].has_trainable_parameters:
                             checkpoint_dropdown = gr.Dropdown(
                                 choices=["None"] + module_inventory.checkpoints,
                                 label=f"Select a {module_name} Checkpoint",
@@ -140,53 +170,103 @@ class GradioApp:
                                 interactive=True,
                             )
 
+                        with gr.Row():
+                            
+                            if model_module_classes[module_name].supports_half_precision:                                
+                                fp16_checkbox = gr.Checkbox(label="Use 16-bit Precision", value=True, interactive=True, min_width=50)
+
+                            if model_module_classes[module_name].supports_compile:
+                                compile_checkbox = gr.Checkbox(label="Compile Module", value=True, interactive=True, min_width=50)
+
+                            device_dropdown = gr.Dropdown(
+                                choices=available_torch_devices,
+                                label="Device",
+                                value=self.config.model_load_options["device"],
+                                interactive=True,
+                                min_width=50,
+                            )
+                            
         with gr.Blocks() as self.generation_interface:
 
             # ********** parameter editor **********
 
+            prompt_state = gr.State(value={})
+
+            gen_param_components = {}
+            gen_param_state = gr.State(value={})
+            gen_param_state_modified = gr.State(value=False)
+
             with gr.Row() as self.parameter_editor:
                 
-                # general params
-
-                with gr.Column(min_width=100):
-                    seed = gr.Number(label="Seed", value=42, minimum=0, maximum=99900, precision=0)
+                with gr.Column(scale=2):
                     with gr.Row():
-                        random_seed_button = gr.Button("Randomize Seed")
-                        random_seed_button.click(lambda: random.randint(0, 99900), outputs=seed, show_progress="hidden")
-                        auto_increment_seed_checkbox = gr.Checkbox(label="Auto Increment Seed", interactive=True, value=True)
-                    #num_samples = gr.Number(label="Number of Samples", value=1, minimum=1, maximum=100, precision=0)
-                    #batch_size = gr.Number(label="Batch Size", value=1, minimum=1, maximum=100, precision=0)
+                        # general params
+                        with gr.Column(min_width=50):
+                            gen_param_components["seed"] = gr.Number(label="Seed", value=42, minimum=0, maximum=99900, precision=0, step=1)
+                            gen_param_components["auto_increment_seed"] = gr.Checkbox(label="Auto Increment Seed", interactive=True, value=True)
 
-                # diffusion params
+                            with gr.Row():
+                                gr.Button("Randomize Seed").click(lambda: random.randint(0, 99900), outputs=gen_param_components["seed"], show_progress="hidden")
+                                gr.Button("Generate")
 
-                with gr.Column(min_width=100):
-                    num_steps = gr.Number(label="Number of Steps", value=100, minimum=1, maximum=1000, precision=0)
-                    cfg_scale = gr.Number(label="CFG Scale", value=1.5, minimum=0, maximum=100, precision=2)
-                    use_midpoint = gr.Checkbox(label="Use Midpoint Integration", value=True)
-                    num_fgla_iters = gr.Number(label="Number of FGLA Iterations", value=250, minimum=10, maximum=1000, precision=0)
-                
-                # schedule / noise params
+                        # diffusion params
+                        with gr.Column(min_width=50):
+                            gen_param_components["num_steps"] = gr.Number(label="Number of Steps", value=100, minimum=10, maximum=1000, precision=0, step=10)
+                            gen_param_components["cfg_scale"] = gr.Number(label="CFG Scale", value=1.5, minimum=0, maximum=100, precision=2, step=0.1)
+                            gen_param_components["use_midpoint"] = gr.Checkbox(label="Use Midpoint Integration", value=True)
+                            gen_param_components["num_fgla_iters"] = gr.Number(label="Number of FGLA Iterations", value=250, minimum=50, maximum=1000, precision=0, step=50)
+                        
+                        # schedule / noise params
+                        with gr.Column(min_width=50):
+                            gen_param_components["sigma_max"] = gr.Number(label="Sigma Max", value=200, minimum=10, maximum=1000, precision=2, step=10)
+                            gen_param_components["sigma_min"] = gr.Number(label="Sigma Min", value=0.15, minimum=0.05, maximum=2, precision=2, step=0.05)
+                            gen_param_components["rho"] = gr.Number(label="Rho", value=7, minimum=0.05, maximum=1000, precision=2, step=0.05)
+                            gen_param_components["input_perturbation"] = gr.Slider(label="Input Perturbation", value=1, minimum=0, maximum=1, step=0.01)
 
-                with gr.Column(min_width=100):
-                    #sigma_max = gr.Number(label="Sigma Max", value=self.pipeline.unet.config.sigma_max, minimum=10, maximum=1000, precision=2)
-                    #sigma_min = gr.Number(label="Sigma Min", value=self.pipeline.unet.config.sigma_min, minimum=0.01, maximum=1, precision=2)
-                    sigma_max = gr.Number(label="Sigma Max", value=200, minimum=10, maximum=1000, precision=2)
-                    sigma_min = gr.Number(label="Sigma Min", value=0.15, minimum=0.01, maximum=1, precision=2)
-                    rho = gr.Number(label="Rho", value=7, minimum=0.01, maximum=1000, precision=2)
-                    input_perturbation = gr.Slider(label="Input Perturbation", minimum=0., maximum=1, step=0.01, value=1)
+                    with gr.Row() as self.preset_editor:
+                        
+                        preset_files = os.listdir(os.path.join(config.CONFIG_PATH, "sampling", "presets"))
+                        saved_presets = []
+                        for file in preset_files:
+                            if os.path.splitext(file)[1] == ".json":
+                                saved_presets.append(os.path.splitext(file)[0])
+                        
+                        preset = gr.Dropdown(
+                            choices=saved_presets,
+                            label="Select a Preset",
+                            value="default",
+                            interactive=True,
+                            allow_custom_value=True,
+                            scale=3,
+                        )
 
+                        def save_preset(preset, prompt_state, gen_param_state):
+                            return False
+
+                        def load_preset(preset):
+                            return False
+                        
+                        with gr.Column(min_width=50):
+                            save_preset_button = gr.Button("Save Changes", interactive=False)
+                            save_preset_button.click(save_preset, inputs=[preset, prompt_state, gen_param_state],
+                                                    outputs=gen_param_state_modified, show_progress="hidden")
+                            
+                            load_preset_button = gr.Button("Load Preset", interactive=False)
+                            load_preset_button.click(load_preset, inputs=preset,
+                                                     outputs=gen_param_state_modified, show_progress="hidden")
+                        
                 # inpainting / img2img params
 
-                with gr.Column(scale=2):
+                with gr.Column():
                     input_audio_mode = gr.Radio(label="Input Audio Mode", interactive=True, value="None",
-                                                choices=["None", "Img2Img", "Inpaint", "Extend"])
+                                                choices=["None", "Img2Img", "Inpaint", "Outpaint"])
                     img2img_strength = gr.Slider(label="Img2Img Strength", visible=False,
                                                  minimum=0.01, maximum=0.99, step=0.01, value=0.5)
                     with gr.Row():
                         sample_len = self.pipeline.format.config.sample_raw_length / self.pipeline.format.config.sample_rate
 
-                        inpaint_begin = gr.Slider(label="Inpaint Begin (Seconds)", interactive=True, visible=False, minimum=0, maximum=sample_len, step=0.01, value=sample_len/2)
-                        inpaint_end = gr.Slider(label="Inpaint End (Seconds)", interactive=True, visible=False, minimum=0, maximum=sample_len, step=0.01, value=sample_len)
+                        inpaint_begin = gr.Slider(label="Inpaint Begin (Seconds)", interactive=True, visible=False, minimum=0, maximum=sample_len, step=0.1, value=sample_len/2)
+                        inpaint_end = gr.Slider(label="Inpaint End (Seconds)", interactive=True, visible=False, minimum=0, maximum=sample_len, step=0.1, value=sample_len)
                         inpaint_begin.release(lambda begin, end: min(begin, end),
                                               inputs=[inpaint_begin, inpaint_end],
                                               outputs=[inpaint_begin],
@@ -196,10 +276,10 @@ class GradioApp:
                                             outputs=[inpaint_end],
                                             show_progress="hidden")
                         
-                        extend_prepend = gr.Radio(label="Extend Mode", interactive=True, visible=False, value="Extend",
+                        extend_prepend = gr.Radio(label="Outpaint Mode", interactive=True, visible=False, value="Extend",
                                                   choices=["Extend", "Prepend"])
-                        extend_overlap = gr.Slider(label="Overlap (%)", interactive=True, visible=False, minimum=0, maximum=100, step=0.01, value=50)
-                        
+                        extend_overlap = gr.Slider(label="Overlap (%)", interactive=True, visible=False, minimum=0, maximum=100, step=1, value=50)
+                    
                     input_audio = gr.Audio(label="Input Audio", visible=False, type="filepath")
 
                     def change_input_audio_mode(input_audio_mode):
@@ -218,41 +298,33 @@ class GradioApp:
                                                      input_audio],
                                             show_progress="hidden")
 
-            # ********** preset editor **********
+            def update_gen_param_state(gen_param_state, name, component):
+                gen_param_state[name] = component
+                self.logger.debug(f"update_gen_param_state() gen_param_state: {gen_param_state}")
+                return gen_param_state, True
+            
+            for name, component in gen_param_components.items():
+                component.change(update_gen_param_state, inputs=[gen_param_state, gr.State(value=name), component],
+                                 outputs=[gen_param_state, gen_param_state_modified], show_progress="hidden")
+                gen_param_state.value[name] = component.value
+            
+            def gen_param_state_modified_change(gen_param_state_modified):
+                return gr.update(interactive=gen_param_state_modified), gr.update(interactive=gen_param_state_modified)
+            gen_param_state_modified.change(gen_param_state_modified_change, inputs=gen_param_state_modified,
+                                            outputs=[save_preset_button, load_preset_button], show_progress="hidden")
 
-            with gr.Row() as self.preset_editor:
-                
-                preset_files = os.listdir(os.path.join(config.CONFIG_PATH, "sampling", "presets"))
-                saved_presets = []
-                for file in preset_files:
-                    if os.path.splitext(file)[1] == ".json":
-                        saved_presets.append(os.path.splitext(file)[0])
-                
-                preset = gr.Dropdown(
-                    choices=saved_presets,
-                    label="Select a Preset",
-                    value="default",
-                    interactive=True,
-                    allow_custom_value=True,
-                    scale=4,
-                )
-
-                save_preset = gr.Button("Save")
-                load_preset = gr.Button("Load")
-
+            self.logger.debug(f"initial gen_param_state: {gen_param_state.value}")
 
             # ********** prompt editor **********
 
-            prompt = gr.State(value={})
-
-            with gr.Row() as self.prompt_editor:
-
-                game_list = list(f"({self.pipeline.dataset_info['game_train_sample_counts'][game]}) {game}"
-                             for game in list(self.pipeline.dataset_game_ids.keys()))
-                
-                game_dropdown = gr.Dropdown(choices=game_list, label="Select a game", value=game_list[0], scale=4)
-                game_weight = gr.Number(label="Weight", value=1, minimum=-100, maximum=100, precision=2)
-                add_game_button = gr.Button("Add Game")
+            with gr.Group():
+                with gr.Row():
+                    game_list = list((f"({self.pipeline.dataset_info['game_train_sample_counts'][game]}) {game}", game)
+                                    for game in list(self.pipeline.dataset_game_ids.keys()))
+                    
+                    game_dropdown = gr.Dropdown(choices=game_list, label="Select a game", value=game_list[0][1], scale=8)
+                    game_weight = gr.Number(label="Weight", value=1, minimum=-100, maximum=100, precision=2)
+                    add_game_button = gr.Button("Add Game")
 
             def add_game(prompt, game, weight):
                 prompt[game] = weight
@@ -270,38 +342,42 @@ class GradioApp:
                 self.logger.debug(f"change_game() prompt state: {prompt}")
                 return prompt
 
-            add_game_button.click(fn=add_game, inputs=[prompt, game_dropdown, game_weight], outputs=prompt, show_progress="hidden")
+            add_game_button.click(fn=add_game, inputs=[prompt_state, game_dropdown, game_weight],
+                                  outputs=prompt_state, show_progress="hidden")
+            prompt_state.change(lambda: True, outputs=gen_param_state_modified, show_progress="hidden")
 
-            @gr.render(inputs=prompt)
+            @gr.render(inputs=prompt_state)
             def render_prompt(prompt_input):
+                rendered_label = False
+                with gr.Group():
+                    for prompt_game, prompt_weight in prompt_input.items():
+                        with gr.Row():
+                            game = gr.Dropdown(choices=game_list, value=prompt_game, show_label=(rendered_label == False), scale=8, label="Selected Games:")
+                            weight = gr.Number(interactive=True, show_label=(rendered_label == False), value=prompt_weight, minimum=-100, maximum=100, precision=2, label="Weight:", min_width=50)
+                            game.change(change_game, inputs=[prompt_state, game, gr.State(value=prompt_game), weight], outputs=prompt_state, show_progress="hidden")
+                            weight.change(add_game, inputs=[prompt_state, game, weight], outputs=prompt_state, show_progress="hidden")
 
-                for prompt_game, prompt_weight in prompt_input.items():
-                    with gr.Row():
-
-                        game = gr.Dropdown(choices=game_list, value=prompt_game, show_label=False, scale=4)
-                        weight = gr.Number(interactive=True, show_label=False, value=prompt_weight, minimum=-100, maximum=100, precision=2)
-
-                        game.change(change_game, inputs=[prompt, game, gr.State(value=prompt_game), weight], outputs=prompt, show_progress="hidden")
-                        weight.change(add_game, inputs=[prompt, game, weight], outputs=prompt, show_progress="hidden")
-
-                        gr.Button("Remove").click(fn=remove_game, inputs=[prompt, game], outputs=prompt, show_progress="hidden")
+                            if rendered_label == True:
+                                gr.Button("Remove").click(fn=remove_game, inputs=[prompt_state, game], outputs=prompt_state, show_progress="hidden")
+                            else:
+                                gr.Button("")
+                            rendered_label = True
             
             # ********** sample generation **********
 
-            def get_output_label(seed, num_steps, cfg_scale, sigma_max, sigma_min, rho, input_perturbation,
+
+
+            def get_output_label(prompt, seed, num_steps, cfg_scale, sigma_max, sigma_min, rho, input_perturbation,
                                  use_midpoint, num_fgla_iters, img2img_strength, img2img_input, auto_increment_seed):
                 params_dict = {"seed": seed, "num_steps": num_steps, "cfg_scale": cfg_scale,
                                "sigma_max": sigma_max, "sigma_min": sigma_min, "rho": rho, "input_perturbation": input_perturbation,
                                "use_midpoint": use_midpoint, "num_fgla_iters": num_fgla_iters, "img2img_strength": img2img_strength}
                 
-                stripped_prompt = {game.split(" ", 1)[1]: weight for game, weight in prompt.items()}
                 if auto_increment_seed == True: seed += 1
-                return str(params_dict) + "\n" + str(stripped_prompt), seed
+                return str(params_dict) + "\n" + str(prompt), seed
                 
-            def generate(seed, num_steps, cfg_scale, sigma_max, sigma_min, rho, input_perturbation,
+            def generate(prompt, seed, num_steps, cfg_scale, sigma_max, sigma_min, rho, input_perturbation,
                          use_midpoint, num_fgla_iters, img2img_strength, img2img_input):
-                
-                stripped_prompt = {game.split(" ", 1)[1]: weight for game, weight in prompt.items()}
 
                 progress = gr.Progress()
                 for i in range(num_steps):
@@ -312,43 +388,27 @@ class GradioApp:
                 audio = (np.random.randn(45 * 32000) * 10000).astype(np.int16)
                 return latent, (self.pipeline.format.config.sample_rate, audio)
 
-            generate_button = gr.Button("Generate")
-
             with gr.Group():
                 output_label = gr.Textbox(value="", lines=2, max_lines=2, interactive=False, show_label=False)
                 latents_output = gr.Image(label="Latents")
                 audio_output = gr.Audio(label="Audio", type="numpy")
 
+            """
             generate_button.click(
                 fn=get_output_label,
-                inputs=[seed, num_steps, cfg_scale, sigma_max, sigma_min, rho, input_perturbation,
+                inputs=[prompt_state, seed, num_steps, cfg_scale, sigma_max, sigma_min, rho, input_perturbation,
                         use_midpoint, num_fgla_iters, img2img_strength, input_audio, auto_increment_seed_checkbox],
                 outputs=[output_label, seed],
                 show_progress="hidden",
             ).then(
                 fn=generate,
-                inputs=[seed, num_steps, cfg_scale, sigma_max, sigma_min, rho, input_perturbation,
+                inputs=[prompt_state, seed, num_steps, cfg_scale, sigma_max, sigma_min, rho, input_perturbation,
                         use_midpoint, num_fgla_iters, img2img_strength, input_audio],
                 outputs=[latents_output, audio_output],
                 concurrency_limit=self.config.gpu_concurrency_limit,
-                max_size=self.config.gpu_max_queue_size,
                 concurrency_id="gpu",
             )
-
-        with gr.Blocks() as self.log_interface:
-
-            def read_logs():
-                if self.log_path is not None:
-                    try:
-                        with open(self.log_path, "r") as f:
-                            return f.read()
-                    except Exception as e:
-                        self.logger.error(f"Error reading logs at '{self.log_path}': {e}")
-                
-            with gr.Row():
-                logs = gr.Textbox(label="Debug Log", value="", lines=30, max_lines=30, interactive=False, show_copy_button=True)
-
-            self.log_interface.load(read_logs, None, logs, every=1)
+            """
 
         self.generation_interface.queue(default_concurrency_limit=self.config.web_server_default_concurrency_limit,
                                         max_size=self.config.web_server_max_queue_size)

@@ -120,7 +120,7 @@ class DualDiffusionPipeline(torch.nn.Module):
                 module.compile(**compile_options)
                 
     @staticmethod
-    def get_model_inventory(model_path: str) -> dict[str, ModuleInventory]:
+    def get_model_module_inventory(model_path: str) -> dict[str, ModuleInventory]:
         
         model_index = config.load_json(os.path.join(model_path, "model_index.json"))
         model_inventory: dict[str, ModuleInventory] = {}
@@ -160,7 +160,7 @@ class DualDiffusionPipeline(torch.nn.Module):
         
         for module_name, module_import_dict in model_index["modules"].items():
             module_package = importlib.import_module(module_import_dict["package"])
-            module_class: type[DualDiffusionModule] = getattr(module_package, module_import_dict["class"])
+            module_class = getattr(module_package, module_import_dict["class"])
             model_module_classes[module_name] = module_class
         
         return model_module_classes
@@ -174,7 +174,7 @@ class DualDiffusionPipeline(torch.nn.Module):
                         compile_options: Optional[Union[dict[str, dict], dict]] = None) -> "DualDiffusionPipeline":
         
         model_module_classes = DualDiffusionPipeline.get_model_module_classes(model_path)
-        model_inventory = DualDiffusionPipeline.get_model_inventory(model_path)
+        model_inventory = DualDiffusionPipeline.get_model_module_inventory(model_path)
 
         load_checkpoints = load_checkpoints or False
         if isinstance(load_checkpoints, bool):

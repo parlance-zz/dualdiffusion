@@ -12,7 +12,6 @@
     },
 
     "gpu_concurrency_limit": 1,
-    "gpu_max_queue_size": 10,
 
     "web_server_host": "localhost",
     "web_server_port": 3001,
