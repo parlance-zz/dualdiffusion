@@ -230,30 +230,42 @@ class GradioApp:
                         for file in preset_files:
                             if os.path.splitext(file)[1] == ".json":
                                 saved_presets.append(os.path.splitext(file)[0])
-                        
+
                         preset = gr.Dropdown(
                             choices=saved_presets,
-                            label="Select a Preset",
+                            label=f"Select a Preset - (loaded preset: default)",
                             value="default",
                             interactive=True,
                             allow_custom_value=True,
                             scale=3,
                         )
 
+                        last_loaded_preset_state = gr.State(value="default")
+                        def update_preset_label(last_loaded_preset_state, gen_param_state_modified):
+                            preset_label = f"Select a Preset - (loaded preset: {last_loaded_preset_state})"
+                            if gen_param_state_modified: preset_label += " *"
+                            return gr.update(label=preset_label)
+                        last_loaded_preset_state.change(update_preset_label,
+                                                        inputs=[last_loaded_preset_state, gen_param_state_modified],
+                                                        outputs=preset, show_progress="hidden")
+                        
                         def save_preset(preset, prompt_state, gen_param_state):
-                            return False
+                            return False, preset
 
                         def load_preset(preset):
-                            return False
+                            return False, preset, gr.update(interactive=False)
                         
                         with gr.Column(min_width=50):
                             save_preset_button = gr.Button("Save Changes", interactive=False)
-                            save_preset_button.click(save_preset, inputs=[preset, prompt_state, gen_param_state],
-                                                    outputs=gen_param_state_modified, show_progress="hidden")
+                            save_preset_button.click(save_preset, show_progress="hidden", inputs=[preset, prompt_state, gen_param_state],
+                                                    outputs=[gen_param_state_modified, last_loaded_preset_state])
                             
                             load_preset_button = gr.Button("Load Preset", interactive=False)
-                            load_preset_button.click(load_preset, inputs=preset,
-                                                     outputs=gen_param_state_modified, show_progress="hidden")
+                            load_preset_button.click(load_preset, show_progress="hidden", inputs=preset,
+                                                     outputs=[gen_param_state_modified, last_loaded_preset_state, load_preset_button])
+                        
+                        preset.change(lambda preset, last_loaded_preset_state: (preset.strip(), gr.update(interactive=(preset.strip() != last_loaded_preset_state.strip()))),
+                                      inputs=[preset, last_loaded_preset_state], outputs=[preset, load_preset_button], show_progress="hidden")
                         
                 # inpainting / img2img params
 
@@ -308,12 +320,15 @@ class GradioApp:
                                  outputs=[gen_param_state, gen_param_state_modified], show_progress="hidden")
                 gen_param_state.value[name] = component.value
             
-            def gen_param_state_modified_change(gen_param_state_modified):
-                return gr.update(interactive=gen_param_state_modified), gr.update(interactive=gen_param_state_modified)
-            gen_param_state_modified.change(gen_param_state_modified_change, inputs=gen_param_state_modified,
-                                            outputs=[save_preset_button, load_preset_button], show_progress="hidden")
-
             self.logger.debug(f"initial gen_param_state: {gen_param_state.value}")
+
+            def gen_param_state_modified_change(gen_param_state_modified, last_loaded_preset_state):
+                return (gr.update(interactive=gen_param_state_modified),
+                        gr.update(interactive=gen_param_state_modified),
+                        last_loaded_preset_state + " ")
+            gen_param_state_modified.change(gen_param_state_modified_change, show_progress="hidden",
+                                            inputs=[gen_param_state_modified, last_loaded_preset_state],
+                                            outputs=[save_preset_button, load_preset_button, last_loaded_preset_state])
 
             # ********** prompt editor **********
 
