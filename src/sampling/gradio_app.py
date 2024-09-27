@@ -375,6 +375,13 @@ class GradioApp:
                 next_seed = (gen_params["seed"]
                     if gen_params["auto_increment_seed"] == False else gen_params["seed"] + 1)
 
+                self.logger.debug(f"add_sample() output_state: {output}")
+
+                #progress = gr.Progress()
+                #for i in range(gen_params["num_steps"]):
+                #    progress((i+1)/gen_params["num_steps"])
+                #    time.sleep(0.03)
+                    
                 return output, next_seed
             
             def remove_sample(output, sample_name):
@@ -387,9 +394,9 @@ class GradioApp:
                     if sample["status"] == "queued":
                         
                         
-                        prompt = output_state["prompt"]
-                        gen_params = output_state["gen_params"]
-                        #input_audio = output_state["input_audio"]
+                        prompt = output["prompt"]
+                        gen_params = output["gen_params"]
+                        #input_audio = output["input_audio"]
 
                         progress = gr.Progress()
                         for i in range(gen_params["num_steps"]):
@@ -402,10 +409,10 @@ class GradioApp:
 
                         return output, latents
             
-            def decode_latents(output_state):
+            def decode_latents(output):
                 pass
 
-            def synthesize_waveform(output_state):
+            def synthesize_waveform(output):
                 pass
 
             # ********** prompt editor **********
@@ -484,14 +491,9 @@ class GradioApp:
                                     gr.Textbox(label="Name", value=sample_name, interactive=False, container=True, show_label=False, lines=1, max_lines=1, scale=6)
                                     gr.Slider(label="Rating", interactive=True, container=True, value=0, minimum=0, maximum=10, step=1)
                                 
-                                latents_value = generate_latents if np.all(sample["latents"] == 0) else sample["latents"]
-                                gr.Image(label="Latents", interactive=False, container=False, show_fullscreen_button=False, value=latents_value, inputs=[output_state, sample_name_state])
-
-                                spectrogram_value = decode_latents if np.all(sample["spectrogram"] == 0) and np.any(sample["latents"] != 0) else sample["spectrogram"]
-                                gr.Image(label="Spectrogram", interactive=False, container=False, show_fullscreen_button=False, value=spectrogram_value, inputs=[output_state, sample_name_state])
-
-                                audio_value = synthesize_waveform if np.all(sample["audio"][1] == 0) and np.any(sample["spectrogram"] != 0) else sample["audio"]
-                                gr.Audio(label="Audio", interactive=False, type="filepath", container=False, value=audio_value, inputs=[output_state, sample_name_state])
+                                gr.Image(label="Latents", interactive=False, container=False, show_fullscreen_button=False, value=sample["latents"])
+                                gr.Image(label="Spectrogram", interactive=False, container=False, show_fullscreen_button=False, value=sample["spectrogram"])
+                                gr.Audio(label="Audio", interactive=False, type="filepath", container=False, value=sample["audio"])
 
                             with gr.Column(min_width=50):
                                 gr.Button("Remove").click(remove_sample, show_progress="hidden",
