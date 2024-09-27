@@ -1,0 +1,19 @@
+{
+  "prompt": {
+    "spc/Megaman X": 4,
+    "spc/Megaman X2": 2,
+    "spc/Megaman X3": 3
+  },
+  "gen_params": {
+    "seed": 42,
+    "auto_increment_seed": true,
+    "num_steps": 200,
+    "cfg_scale": 1.5,
+    "use_heun": true,
+    "num_fgla_iters": 250,
+    "sigma_max": 200,
+    "sigma_min": 0.15,
+    "rho": 7,
+    "input_perturbation": 1
+  }
+}

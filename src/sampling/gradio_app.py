@@ -93,7 +93,7 @@ class GradioApp:
                                               if self.log_path is not None else 0)
             with gr.Row():
                 logs = gr.Textbox(
-                    label="Debug Log", value="", lines=30, max_lines=30,
+                    label="Debug Log", value="", lines=20, max_lines=20,
                     interactive=False, show_copy_button=True)
                 
             if self.log_path is not None:
@@ -198,16 +198,18 @@ class GradioApp:
                     if os.path.splitext(file)[1] == ".json":
                         saved_presets.append(os.path.splitext(file)[0])
 
-                return saved_presets
+                return sorted(saved_presets)
 
             saved_presets_state = gr.State(value=get_saved_presets())
             last_loaded_preset_state = gr.State(value="default")
             current_preset_state = gr.State(value="default")
+            loading_preset_state = gr.State(value=False)
 
             prompt_state = gr.State(value={})
             gen_param_components = {}
             gen_param_state = gr.State(value={})
             gen_param_state_modified_state = gr.State(value=False)
+            generate_buttons = []
 
             with gr.Row():
                 with gr.Column(scale=2):
@@ -217,15 +219,13 @@ class GradioApp:
                             gen_param_components["seed"] = gr.Number(label="Seed", value=42, minimum=0, maximum=99900, precision=0, step=1)
                             gen_param_components["auto_increment_seed"] = gr.Checkbox(label="Auto Increment Seed", interactive=True, value=True)
                             with gr.Row():
-                                gr.Button("Randomize Seed").click(
-                                    lambda: random.randint(0, 99900),
-                                    outputs=gen_param_components["seed"],
-                                    show_progress="hidden")
-                                gr.Button("Generate")
+                                gr.Button("Randomize Seed").click(lambda: random.randint(0, 99900),
+                                    outputs=gen_param_components["seed"], show_progress="hidden")
+                                generate_buttons += [gr.Button("Generate")]
                         with gr.Column(min_width=50):
                             gen_param_components["num_steps"] = gr.Number(label="Number of Steps", value=100, minimum=10, maximum=1000, precision=0, step=10)
                             gen_param_components["cfg_scale"] = gr.Number(label="CFG Scale", value=1.5, minimum=0, maximum=100, precision=2, step=0.1)
-                            gen_param_components["use_midpoint"] = gr.Checkbox(label="Use Midpoint Integration", value=True)
+                            gen_param_components["use_heun"] = gr.Checkbox(label="Use Heun's Method", value=True)
                             gen_param_components["num_fgla_iters"] = gr.Number(label="Number of FGLA Iterations", value=250, minimum=50, maximum=1000, precision=0, step=50)
                         with gr.Column(min_width=50):
                             gen_param_components["sigma_max"] = gr.Number(label="Sigma Max", value=200, minimum=10, maximum=1000, precision=2, step=10)
@@ -237,105 +237,176 @@ class GradioApp:
                         
                         def save_preset(preset, saved_presets, prompt, gen_params):
                             preset = sanitize_filename(preset)
+                            save_preset_path = os.path.join(
+                                config.CONFIG_PATH, "sampling", "presets", f"{preset}.json")
+                            config.save_json({"prompt": prompt, "gen_params": gen_params}, save_preset_path)
 
-                            if preset not in saved_presets:
-                                saved_presets += [preset]
-
-                            return False, preset, saved_presets
+                            return False, preset, get_saved_presets()
                         
                         def load_preset(preset):
                             preset = sanitize_filename(preset)
-                            return False, preset
+                            load_preset_path = os.path.join(
+                                config.CONFIG_PATH, "sampling", "presets", f"{preset}.json")
+                            loaded_preset_dict = config.load_json(load_preset_path)
+
+                            gen_params = ()
+                            for name in gen_param_components.keys():
+                                gen_params += (loaded_preset_dict["gen_params"][name],)
+
+                            return (False, True, preset, loaded_preset_dict["prompt"],
+                                    loaded_preset_dict["gen_params"]) + gen_params
+                        
+                        def delete_preset(preset):
+                            preset = sanitize_filename(preset)
+                            delete_preset_path = os.path.join(
+                                config.CONFIG_PATH, "sampling", "presets", f"{preset}.json")
+                            os.remove(delete_preset_path)
+
+                            return get_saved_presets()
                         
                         @gr.render(inputs=[saved_presets_state, last_loaded_preset_state,
-                                           current_preset_state, gen_param_state_modified_state])
-                        def _(saved_presets, last_loaded_preset,
-                              current_preset, gen_param_state_modified):
+                            current_preset_state, gen_param_state_modified_state])
+                        def _(saved_presets, last_loaded_preset, current_preset, gen_param_state_modified):
                             
                             current_preset = sanitize_filename(current_preset)
-
                             loaded_preset_label = f"loaded preset: {last_loaded_preset}"
                             if gen_param_state_modified == True: loaded_preset_label += "*"
 
                             preset_dropdown = gr.Dropdown(
-                                choices=saved_presets,
-                                label=f"Select a Preset - ({loaded_preset_label})",
-                                value=current_preset,
-                                interactive=True,
-                                allow_custom_value=True,
-                                scale=3)
+                                choices=saved_presets, label=f"Select a Preset - ({loaded_preset_label})",
+                                value=current_preset, interactive=True, allow_custom_value=True, scale=3)
                             preset_dropdown.change(lambda preset: sanitize_filename(preset),
-                                                   inputs=preset_dropdown, 
-                                                   outputs=current_preset_state, show_progress="hidden")
+                                inputs=preset_dropdown, outputs=current_preset_state, show_progress="hidden")
                             
-                            save_button_enabled = (current_preset != last_loaded_preset
-                                                    or gen_param_state_modified == True)
-                            load_button_enabled = (save_button_enabled
-                                                   and current_preset in saved_presets)
-                                                   
                             with gr.Column(min_width=50):
-                                save_preset_button = gr.Button("Save Changes", interactive=save_button_enabled)
-                                load_preset_button = gr.Button("Load Preset", interactive=load_button_enabled)
 
-                                save_preset_button.click(save_preset, inputs=[current_preset_state, saved_presets_state, prompt_state, gen_param_state],
-                                    outputs=[gen_param_state_modified_state, last_loaded_preset_state, saved_presets_state], show_progress="hidden")
-                                load_preset_button.click(load_preset, inputs=current_preset_state,
-                                    outputs=[gen_param_state_modified_state, last_loaded_preset_state], show_progress="hidden")
+                                def reset_loading_preset_state():
+                                    time.sleep(0.3) # gradio pls :(
+                                    return False, False
+                                
+                                save_button_enabled = current_preset != last_loaded_preset or gen_param_state_modified == True
+                                save_preset_button = gr.Button("Save Changes", interactive=save_button_enabled)
+                                load_button_enabled = save_button_enabled and current_preset in saved_presets
+                                load_preset_button = gr.Button("Load Preset", interactive=load_button_enabled)
+                                delete_button_enabled = current_preset in saved_presets and current_preset != "default"
+                                delete_preset_button = gr.Button("Delete Preset", interactive=delete_button_enabled)
+
+                                save_preset_button.click(save_preset, show_progress="hidden",
+                                    inputs=[current_preset_state, saved_presets_state, prompt_state, gen_param_state],
+                                    outputs=[gen_param_state_modified_state, last_loaded_preset_state, saved_presets_state])
+                                load_preset_button.click(load_preset, inputs=current_preset_state, show_progress="hidden",
+                                    outputs=[gen_param_state_modified_state, loading_preset_state, last_loaded_preset_state,
+                                prompt_state, gen_param_state] + list(gen_param_components.values())).then(
+                                    reset_loading_preset_state, show_progress="hidden",
+                                    outputs=[loading_preset_state, gen_param_state_modified_state])
+                                delete_preset_button.click(delete_preset, inputs=current_preset_state,
+                                    outputs=saved_presets_state, show_progress="hidden")
                         
                 # inpainting / img2img params
                 with gr.Column() as self.input_audio_editor:
-                    input_audio_mode = gr.Radio(label="Input Audio Mode", interactive=True, value="None",
-                                                choices=["None", "Img2Img", "Inpaint", "Outpaint"])
-                    img2img_strength = gr.Slider(label="Img2Img Strength", visible=False,
-                                                 minimum=0.01, maximum=0.99, step=0.01, value=0.5)
+                    input_audio_mode = gr.Radio(label="Audio Input Mode", interactive=True,
+                        value="None", choices=["None", "Img2Img", "Inpaint", "Outpaint"])
+
                     with gr.Row():
                         #todo: sample_len needs to come from selected input audio
-                        sample_len = self.pipeline.format.config.sample_raw_length / self.pipeline.format.config.sample_rate
+                        sample_len = (self.pipeline.format.config.sample_raw_length
+                                      / self.pipeline.format.config.sample_rate)
 
-                        inpaint_begin = gr.Slider(label="Inpaint Begin (Seconds)", interactive=True, visible=False, minimum=0, maximum=sample_len, step=0.1, value=sample_len/2)
-                        inpaint_end = gr.Slider(label="Inpaint End (Seconds)", interactive=True, visible=False, minimum=0, maximum=sample_len, step=0.1, value=sample_len)
-                        inpaint_begin.release(lambda begin, end: min(begin, end),
-                                              inputs=[inpaint_begin, inpaint_end],
-                                              outputs=[inpaint_begin],
-                                              show_progress="hidden")
-                        inpaint_end.release(lambda begin, end: max(begin, end),
-                                            inputs=[inpaint_begin, inpaint_end],
-                                            outputs=[inpaint_end],
-                                            show_progress="hidden")
+                        img2img_strength = gr.Slider(label="Img2Img Strength", interactive=True,
+                            visible=False, minimum=0.01, maximum=0.99, step=0.01, value=0.5)
                         
-                        extend_prepend = gr.Radio(label="Outpaint Mode", interactive=True, visible=False, value="Extend",
-                                                  choices=["Extend", "Prepend"])
-                        extend_overlap = gr.Slider(label="Overlap (%)", interactive=True, visible=False, minimum=0, maximum=100, step=1, value=50)
+                        inpaint_begin = gr.Slider(label="Inpaint Begin (Seconds)", interactive=True,
+                            visible=False, minimum=0, maximum=sample_len, step=0.1, value=sample_len/2)
+                        inpaint_end = gr.Slider(label="Inpaint End (Seconds)", interactive=True,
+                            visible=False, minimum=0, maximum=sample_len, step=0.1, value=sample_len)
+                        inpaint_begin.release(lambda begin, end: min(begin, end),
+                            inputs=[inpaint_begin, inpaint_end], outputs=[inpaint_begin], show_progress="hidden")
+                        inpaint_end.release(lambda begin, end: max(begin, end),
+                            inputs=[inpaint_begin, inpaint_end], outputs=[inpaint_end], show_progress="hidden")
+                        
+                        extend_prepend = gr.Radio(label="Outpaint Mode", interactive=True,
+                            value="Extend", choices=["Extend", "Prepend"], visible=False)
+                        extend_overlap = gr.Slider(label="Overlap (%)", interactive=True,
+                            minimum=0, maximum=100, step=1, value=50, visible=False)
                     
-                    input_audio = gr.Audio(label="Input Audio", visible=False, type="filepath")
+                    input_audio = gr.Audio(label="Input Audio", visible=False, type="filepath", interactive=True, editable=True)
 
                     def change_input_audio_mode(input_audio_mode):
                         return (gr.update(visible=input_audio_mode == "Img2Img"),
                                 gr.update(visible=input_audio_mode == "Inpaint"),
                                 gr.update(visible=input_audio_mode == "Inpaint"),
-                                gr.update(visible=input_audio_mode == "Extend"),
-                                gr.update(visible=input_audio_mode == "Extend"),
+                                gr.update(visible=input_audio_mode == "Outpaint"),
+                                gr.update(visible=input_audio_mode == "Outpaint"),
                                 gr.update(visible=input_audio_mode != "None"))
 
-                    input_audio_mode.change(change_input_audio_mode,
-                                            inputs=[input_audio_mode],
-                                            outputs=[img2img_strength,
-                                                     inpaint_begin, inpaint_end,
-                                                     extend_prepend, extend_overlap,
-                                                     input_audio],
-                                            show_progress="hidden")
+                    input_audio_mode.change(change_input_audio_mode, inputs=[input_audio_mode],
+                        outputs=[img2img_strength, inpaint_begin, inpaint_end, extend_prepend,
+                                 extend_overlap, input_audio], show_progress="hidden")
 
-            def update_gen_param_state(gen_param_state, name, component):
+            def update_gen_param_state(loading_preset, gen_param_state, name, component, gen_param_state_modified):
                 gen_param_state[name] = component
                 self.logger.debug(f"update_gen_param_state() gen_param_state: {gen_param_state}")
-                return gen_param_state, True  
+
+                if name not in ["seed", "auto_increment_seed"]:
+                    gen_param_state_modified = loading_preset == False
+                return gen_param_state, gen_param_state_modified
                
             for name, component in gen_param_components.items():
-                component.change(update_gen_param_state, inputs=[gen_param_state, gr.State(value=name), component],
-                                 outputs=[gen_param_state, gen_param_state_modified_state], show_progress="hidden")
+                component.change(update_gen_param_state,
+                    inputs=[loading_preset_state, gen_param_state, gr.State(value=name), component, gen_param_state_modified_state],
+                    outputs=[gen_param_state, gen_param_state_modified_state], show_progress="hidden")
                 gen_param_state.value[name] = component.value
             
             self.logger.debug(f"initial gen_param_state: {gen_param_state.value}")
+
+            def add_sample(prompt, gen_params, output):
+                
+                sample_name = f"test{gen_params['seed']}"
+                if not sample_name in output:
+                    output[sample_name] = {}
+
+                output[sample_name]["latents"] = np.zeros((32*2, 688*2, 3))
+                output[sample_name]["spectrogram"] = np.zeros((32*8, 688*8, 3))
+                output[sample_name]["audio"] = 32000, np.zeros(45 * 32000).astype(np.int16)
+                output[sample_name]["prompt"] = prompt
+                output[sample_name]["gen_params"] = gen_params
+                output[sample_name]["params_str"] = f"{dict_str(gen_params)}\n{dict_str(prompt)}"
+
+                next_seed = (gen_params["seed"]
+                    if gen_params["auto_increment_seed"] == False else gen_params["seed"] + 1)
+
+                return output, next_seed
+            
+            def remove_sample(output, sample_name):
+                del output[sample_name]
+                return output
+            
+            def generate_latents(output):
+                
+                for sample_name, sample in output.items():
+                    if sample["status"] == "queued":
+                        
+                        
+                        prompt = output_state["prompt"]
+                        gen_params = output_state["gen_params"]
+                        #input_audio = output_state["input_audio"]
+
+                        progress = gr.Progress()
+                        for i in range(gen_params["num_steps"]):
+                            progress((i+1)/gen_params["num_steps"])
+                            time.sleep(0.03)
+                            latents = np.random.randn((32*2, 688*2, 3))
+                            yield latents
+
+                        sample["status"] = "generating_latents"
+
+                        return output, latents
+            
+            def decode_latents(output_state):
+                pass
+
+            def synthesize_waveform(output_state):
+                pass
 
             # ********** prompt editor **********
 
@@ -365,8 +436,9 @@ class GradioApp:
                 return prompt
 
             add_game_button.click(fn=add_game, inputs=[prompt_state, game_dropdown, game_weight],
-                                  outputs=prompt_state, show_progress="hidden")
-            prompt_state.change(lambda: True, outputs=gen_param_state_modified_state, show_progress="hidden")
+                outputs=prompt_state, show_progress="hidden")
+            prompt_state.change(lambda loading_preset: loading_preset == False, inputs=loading_preset_state,
+                outputs=gen_param_state_modified_state, show_progress="hidden")
 
             @gr.render(inputs=prompt_state)
             def _(prompt_input):
@@ -374,44 +446,61 @@ class GradioApp:
                 with gr.Group():
                     for prompt_game, prompt_weight in prompt_input.items():
                         with gr.Row():
-                            game = gr.Dropdown(choices=game_list, value=prompt_game, show_label=(rendered_label == False), scale=8, label="Selected Games:")
-                            weight = gr.Number(interactive=True, show_label=(rendered_label == False), value=prompt_weight, minimum=-100, maximum=100, precision=2, label="Weight:", min_width=50)
-                            game.change(change_game, inputs=[prompt_state, game, gr.State(value=prompt_game), weight], outputs=prompt_state, show_progress="hidden")
-                            weight.change(add_game, inputs=[prompt_state, game, weight], outputs=prompt_state, show_progress="hidden")
+                            game = gr.Dropdown(choices=game_list, show_label=(rendered_label == False),
+                                value=prompt_game, label="Selected Games:", scale=8)
+                            weight = gr.Number(interactive=True, show_label=(rendered_label == False),
+                                value=prompt_weight, minimum=-100, maximum=100, precision=2, label="Weight:", min_width=50)
+                            
+                            game.change(change_game, inputs=[prompt_state, game, gr.State(value=prompt_game), weight],
+                                outputs=prompt_state, show_progress="hidden")
+                            weight.change(add_game, inputs=[prompt_state, game, weight],
+                                outputs=prompt_state, show_progress="hidden")
 
                             if rendered_label == True:
-                                gr.Button("Remove").click(fn=remove_game, inputs=[prompt_state, game], outputs=prompt_state, show_progress="hidden")
-                            else:
-                                gr.Button("")
+                                gr.Button("Remove").click(fn=remove_game, inputs=[prompt_state, game],
+                                    outputs=prompt_state, show_progress="hidden")
+                            else: gr.Button("Generate")
                             rendered_label = True
             
             # ********** sample generation **********
 
-            def get_output_label(prompt, seed, num_steps, cfg_scale, sigma_max, sigma_min, rho, input_perturbation,
-                                 use_midpoint, num_fgla_iters, img2img_strength, img2img_input, auto_increment_seed):
-                params_dict = {"seed": seed, "num_steps": num_steps, "cfg_scale": cfg_scale,
-                               "sigma_max": sigma_max, "sigma_min": sigma_min, "rho": rho, "input_perturbation": input_perturbation,
-                               "use_midpoint": use_midpoint, "num_fgla_iters": num_fgla_iters, "img2img_strength": img2img_strength}
-                
-                if auto_increment_seed == True: seed += 1
-                return str(params_dict) + "\n" + str(prompt), seed
-                
-            def generate(prompt, seed, num_steps, cfg_scale, sigma_max, sigma_min, rho, input_perturbation,
-                         use_midpoint, num_fgla_iters, img2img_strength, img2img_input):
+            output_state = gr.State(value={})
 
-                progress = gr.Progress()
-                for i in range(num_steps):
-                    progress((i+1)/num_steps)
-                    time.sleep(0.1)
+            for button in generate_buttons:
+                button.click(add_sample, inputs=[prompt_state, gen_param_state, output_state],
+                    outputs=[output_state, gen_param_components["seed"]], show_progress="hidden")
+            
+            @gr.render(inputs=output_state)
+            def _(output):
+
+                for sample_name, sample in reversed(output.items()):
                     
-                latent = np.random.rand(32, 512, 3)
-                audio = (np.random.randn(45 * 32000) * 10000).astype(np.int16)
-                return latent, (self.pipeline.format.config.sample_rate, audio)
+                    with gr.Group():
+                        with gr.Row():
+                            with gr.Column(scale=6):
+                                sample_name_state = gr.State(value=sample_name)
 
-            with gr.Group():
-                output_label = gr.Textbox(value="", lines=2, max_lines=2, interactive=False, show_label=False)
-                latents_output = gr.Image(label="Latents")
-                audio_output = gr.Audio(label="Audio", type="numpy")
+                                with gr.Row():
+                                    gr.Textbox(label="Name", value=sample_name, interactive=False, container=True, show_label=False, lines=1, max_lines=1, scale=6)
+                                    gr.Slider(label="Rating", interactive=True, container=True, value=0, minimum=0, maximum=10, step=1)
+                                
+                                latents_value = generate_latents if np.all(sample["latents"] == 0) else sample["latents"]
+                                gr.Image(label="Latents", interactive=False, container=False, show_fullscreen_button=False, value=latents_value, inputs=[output_state, sample_name_state])
+
+                                spectrogram_value = decode_latents if np.all(sample["spectrogram"] == 0) and np.any(sample["latents"] != 0) else sample["spectrogram"]
+                                gr.Image(label="Spectrogram", interactive=False, container=False, show_fullscreen_button=False, value=spectrogram_value, inputs=[output_state, sample_name_state])
+
+                                audio_value = synthesize_waveform if np.all(sample["audio"][1] == 0) and np.any(sample["spectrogram"] != 0) else sample["audio"]
+                                gr.Audio(label="Audio", interactive=False, type="filepath", container=False, value=audio_value, inputs=[output_state, sample_name_state])
+
+                            with gr.Column(min_width=50):
+                                gr.Button("Remove").click(remove_sample, show_progress="hidden",
+                                    inputs=[output_state, sample_name_state], outputs=output_state)
+                                gr.Button("Copy to Audio Input")
+                                gr.Button("Copy to Params")
+                                gr.Textbox(value=sample["params_str"], interactive=False, container=False,
+                                    show_label=False, lines=11, max_lines=11, show_copy_button=True)
+
 
             """
             generate_button.click(

@@ -300,34 +300,66 @@ class DualDiffusionPipeline(torch.nn.Module):
     @torch.inference_mode()
     def __call__(self, params: SampleParams) -> torch.Tensor:
         
-        params.seed = params.seed or np.random.randint(100000, 999999)
-        params.generator = params.generator or torch.Generator(
-            device=self.device).manual_seed(params.seed)
+        if steps <= 0:
+            raise ValueError(f"Steps must be > 0, got {steps}")
+        if length < 0:
+            raise ValueError(f"Length must be greater than or equal to 0, got {length}")
+        
+        if isinstance(seed, int):
+            if seed == 0: seed = np.random.randint(100000, 999999)
+            generator = torch.Generator(device=self.device).manual_seed(seed)
+        elif isinstance(seed, torch.Generator):
+            generator = seed
 
-        sample_shape = self.get_sample_shape(bsz=params.batch_size, length=params.length)
-        latent_shape = self.get_latent_shape(sample_shape)
-        print(f"Sample shape: {sample_shape} Latent shape: {latent_shape}")
+        debug_path = os.environ.get("DEBUG_PATH", None)
+        model_params = self.config["model_params"]
 
-        params.game_ids = params.game_ids or torch.randint(0, self.unet.label_dim, 1,
-                                            device=self.device, generator=params.generator)
-        vae_class_labels = self.get_class_labels(params.game_ids, module_name="vae")
-        vae_class_embeddings = self.vae.get_class_embeddings(vae_class_labels)
-        unet_class_labels = self.get_class_labels(params.game_ids, module_name="unet")
-        unet_class_embeddings = self.unet.get_class_embeddings(unet_class_labels)
+        sample_shape = self.format.get_sample_shape(bsz=batch_size, length=length)
+        if getattr(self, "vae", None) is not None:    
+            sample_shape = self.vae.get_latent_shape(sample_shape)
+        print(f"Sample shape: {sample_shape}")
 
-        if params.add_class_noise > 0:
-            class_noise = torch.randn((params.batch_size,) + unet_class_embeddings.shape[1:],
-                generator=params.generator, device=unet_class_embeddings.device, dtype=unet_class_embeddings.dtype)
-            unet_class_embeddings = mp_sum(unet_class_embeddings, class_noise, t=params.add_class_noise)
-            
-        if params.img2img_input is not None:
-            if params.img2img_input.ndim < 2: params.img2img_input = params.img2img_input.unsqueeze(0)
-            img2img_sample = self.format.raw_to_sample(params.img2img_input.to(self.device).float())
+        sigma_max = sigma_max or self.unet.sigma_max
+        sigma_min = sigma_min or self.unet.sigma_min
+        sigma_data = self.unet.sigma_data
 
-            start_data = self.vae.encode(
-                img2img_sample.type(self.unet.dtype), vae_class_embeddings, self.format).mode().float()
+        temperature_scale = max(min(temperature_scale, 1), 0)
+
+        game_ids = game_ids or torch.randint(0, self.unet.label_dim, 1, device=self.device, generator=generator)
+        original_game_ids = {**game_ids}
+        class_labels = self.get_class_labels(game_ids)
+        vae_class_embeddings = self.vae.get_class_embeddings(class_labels)
+        unet_class_embeddings = self.unet.get_class_embeddings(class_labels)
+        
+        #unet_class_embeddings = normalize(unet_class_embeddings).float() * 1.17
+        """
+        unet_class_embeddings = []
+        for g in game_ids:
+            l = self.unet.get_class_embeddings(self.get_class_labels(g))
+            unet_class_embeddings.append(l)
+        unet_class_embeddings = torch.cat(unet_class_embeddings, dim=0)
+        #mask = (torch.randn(unet_class_embeddings.shape, generator=generator, device=unet_class_embeddings.device)*0.5).sigmoid()
+        mask = (torch.rand(unet_class_embeddings.shape, generator=generator, device=unet_class_embeddings.device) > 0.5).float()
+        print(mask)
+        unet_class_embeddings = normalize(unet_class_embeddings[0:1].repeat(batch_size,1) * mask**0.5 + unet_class_embeddings[1:2].repeat(batch_size,1) * (1-mask)**0.5).to(dtype=self.unet.dtype)
+        print(unet_class_embeddings.shape, unet_class_embeddings.dtype, unet_class_embeddings.std())
+        """
+        print("unet_class_embeddings mean:", unet_class_embeddings.mean().item(), unet_class_embeddings.dtype, "std:", unet_class_embeddings.std().item())
+        
+        #conditioning_perturbation = max(1.08 - unet_class_embeddings.std().item(), 0)**0.5
+        #print("conditioning_perturbation", conditioning_perturbation)
+
+        #if static_conditioning_perturbation > 0:
+        #    perturbation = torch.randn((batch_size,) + unet_class_embeddings.shape[1:], generator=generator,
+        #                               device=unet_class_embeddings.device, dtype=unet_class_embeddings.dtype)
+        #    unet_class_embeddings = mp_sum(unet_class_embeddings, perturbation, t=static_conditioning_perturbation)
+
+        if img2img_input is not None:
+            img2img_sample = self.format.raw_to_sample(img2img_input.unsqueeze(0).to(self.device).float())
+            start_data = self.vae.encode(img2img_sample.type(self.unet.dtype), vae_class_embeddings, self.format).mode().float()
             start_data = normalize(start_data).float()
-            start_timestep = params.img2img_strength
+            #start_timestep = img2img_strength
+            start_timestep = 1
         else:
             start_data = 0
             start_timestep = 1
@@ -336,77 +368,225 @@ class DualDiffusionPipeline(torch.nn.Module):
             t_ranges = None
         else:
             t_scale = model_params["t_scale"]
-            t_ranges = torch.zeros((params.batch_size, 2), device=self.device)
+            t_ranges = torch.zeros((batch_size, 2), device=self.device)
             t_ranges[:, 1] = 1
             t_ranges = t_ranges * t_scale - t_scale/2
 
-        params.sigma_max  = params.sigma_max  or self.unet.sigma_max
-        params.sigma_min  = params.sigma_min  or self.unet.sigma_min
-        params.sigma_data = params.sigma_data or self.unet.sigma_data
-        sigma_schedule_params = {
-            "sigma_max": params.sigma_max,
-            "sigma_min": params.sigma_min,
-            **params.schedule_params,
-        }
-        sigma_schedule = SamplingSchedule.get_schedule(
-            params.schedule, params.steps + 1, start_timestep, **sigma_schedule_params)
+        def get_timestep_sigma(timesteps):
+            return (sigma_max ** (1 / rho) + (1 - timesteps) * (sigma_min ** (1 / rho) - sigma_max ** (1 / rho))) ** rho
+  
+        t_schedule = torch.linspace(start_timestep, 0, steps+1)
+        sigma_schedule = get_timestep_sigma(t_schedule)
+
+        #sigma_schedule = (torch.rand(steps+1, device=self.device, generator=generator) * (np.log(sigma_max) - np.log(sigma_min)) + np.log(sigma_min)).exp()
+        #sigma_schedule = sigma_schedule.cumsum(dim=0).flip(dims=(0,))
+        #sigma_schedule /= sigma_schedule.amax() / sigma_max
+        #sigma_schedule -= sigma_schedule.amin() - sigma_min
+        
+        #sigma_schedule -= sigma_schedule.amin() - sigma_min
+        #sigma_schedule /= sigma_schedule.amax() / sigma_max
+
+        #sigma_schedule[0] = sigma_max
+        #sigma_schedule = sigma_data / torch.linspace(np.arctan(sigma_data / sigma_max), np.arctan(sigma_data / sigma_min), steps+1).tan()
+        #sigma_schedule = torch.linspace(np.log(sigma_max), np.log(sigma_min), steps+1).exp()
+        #a = 1#sigma_min#np.e**0.5
+        #a = 0.5 ##3.125#np.exp(-0.54)#torch.pi#torch.pi#4.48
+        theta1 = np.arctan(1 / sigma_max); theta0 = np.arctan(1 / sigma_min)
+        #theta1 = np.arctan(sigma_min/sigma_max); theta0 = np.arctan(1)
+        theta = (1-t_schedule) * (theta0 - theta1) + theta1
+        #sigma_schedule = theta.cos() / theta.sin() #* sigma_min
+
+        ln_sigma = torch.linspace(np.log(sigma_min), np.log(sigma_max), steps, device=self.unet.device, dtype=self.unet.dtype)
+        ln_sigma_error = self.unet.logvar_linear(self.unet.logvar_fourier(ln_sigma/4)).float().flatten()
+        batch_distribution_pdf = ((-6 * ln_sigma_error) + 0).exp()
+        from sigma_sampler import SigmaSampler
+        sigma_sampler = SigmaSampler(sigma_max=sigma_max, sigma_min=sigma_min, sigma_data=sigma_data, distribution="ln_data", dist_offset=0., dist_scale=1., distribution_pdf=batch_distribution_pdf)
+        #sigma_schedule = sigma_sampler.sample(0, quantiles = t_schedule)#.flip(dims=(0,))
+
+        #sigma_schedule = sigma_min/( (1 - t_schedule) +sigma_min / sigma_max)
+
+        print("sigma_schedule:", sigma_schedule[0].item(), "-", sigma_schedule[-1].item(), sigma_schedule[::10])
+        #exit()
+        
+        noise = torch.randn(sample_shape, device=self.device, generator=generator)
+        initial_noise = noise * sigma_max
+        sample = noise * sigma_schedule[0] + start_data * sigma_data
+
+        normalized_theta_schedule = (sigma_data / sigma_schedule).atan() / (torch.pi/2)
         sigma_schedule_list = sigma_schedule.tolist()
 
-        start_noise = torch.randn(latent_shape, device=self.device, generator=params.generator)
-        sample = start_noise * sigma_schedule[0] + start_data * params.sigma_data
+        
+        sigma_schedule_error_logvar = self.unet.logvar_linear(self.unet.logvar_fourier(sigma_schedule.log().to(self.unet.device, self.unet.dtype)/4)).float().cpu()
 
-        ln_sigma_error = self.unet.logvar_linear(
-            self.unet.logvar_fourier((sigma_schedule.to(self.unet.device).log()/4).to(self.unet.dtype))).float().flatten()
+        #perturbation_gain = (-4 * ln_sigma_error).exp(); perturbation_gain /= perturbation_gain.amax()
 
+        cfg_fn = slerp if slerp_cfg else torch.lerp
+    
         debug_v_list = []
         debug_a_list = []
         debug_d_list = []
         debug_s_list = []
         debug_m_list = []
+        debug_ip_list = []
 
-        if params.show_debug_plots:
-            window_h, window_w = int(latent_shape.shape[2]*3 * 2), int(latent_shape.shape[3]*3)
-            open_img_window("x(t) / x(0)", width=window_w, height=window_h, topmost=True)
+        if show_debug_plots:
+            window_size_x = sample.shape[3]*3
+            window_size_y = sample.shape[2]*3 * (2 + int(img2img_input is not None))
+            cv2.namedWindow('sample / output', cv2.WINDOW_KEEPRATIO)
+            cv2.resizeWindow('sample / output', window_size_x, window_size_y)
+            cv2.moveWindow('sample / output', 0, 700)
+            cv2.setWindowProperty('sample / output', cv2.WND_PROP_TOPMOST, 1)
 
-        cfg_model_output = torch.zeros_like(sample)
-
+        cfg_model_output = torch.rand_like(sample)
+        #x = torch.zeros_like(cfg_model_output)
+        #sample = normalize(sample) * 2**0.5#***
         i = 0
+        self.set_progress_bar_config(disable=True)
         for sigma_curr, sigma_next in self.progress_bar(zip(sigma_schedule_list[:-1],
                                                             sigma_schedule_list[1:]),
                                                             total=len(sigma_schedule_list)-1):
+            """
+            if input_perturbation > 0:
 
-            if params.add_sample_noise > 0:
-                added_noise_sigma = params.add_sample_noise * sigma_curr
-                sample += torch.randn(sample.shape, generator=params.generator,
-                                      device=sample.device, dtype=sample.dtype) * added_noise_sigma
-                sigma_curr = (sigma_curr**2 + added_noise_sigma**2)**0.5
+                p = input_perturbation * sigma_curr
+
+                added_noise = torch.randn(sample.shape, generator=generator, device=sample.device, dtype=sample.dtype) * p
+                sample += added_noise
+                initial_noise += added_noise
+                sigma_curr = (sigma_curr**2 + p**2)**0.5
+                if i == 0: print("effective sigma_max:", sigma_curr)
+            """
+
+            """
+            old_sigma_next = sigma_next
+            sigma_next = max(sigma_next / (sigma_curr / sigma_next), 0)
+            """
+
+            old_sigma_next = sigma_next
+            #effective_input_perturbation = (sigma_schedule_error_logvar[i]/4).exp().item() * input_perturbation
+            effective_input_perturbation = input_perturbation
+            debug_ip_list.append(effective_input_perturbation)
+            
+            sigma_next *= (1 - (max(min(effective_input_perturbation, 1), 0)))
 
             sigma = torch.tensor([sigma_curr], device=self.device)
             model_input = sample.to(self.unet.dtype)
+            #print(model_input.std().item(), sigma_curr)
             
-            model_output = self.unet(model_input, sigma, unet_class_embeddings, t_ranges, self.format).float()
             u_model_output = self.unet(model_input, sigma, None, t_ranges, self.format).float()
+            #model_output = self.unet(model_input, sigma, unet_class_embeddings, t_ranges, self.format).float()
+            
+            if static_conditioning_perturbation > 0:
+                p_unet_class_embeddings = mp_sum(unet_class_embeddings, -self.unet.u_class_embeddings, static_conditioning_perturbation)
+                #p_unet_class_embeddings = unet_class_embeddings - self.unet.u_class_embeddings * static_conditioning_perturbation
+                #p_unet_class_embeddings = unet_class_embeddings - self.unet.u_class_embeddings * static_conditioning_perturbation
+                #p_unet_class_embeddings -= p_unet_class_embeddings.mean()
+                #a = p_unet_class_embeddings.mean()
+                #p_unet_class_embeddings -= a
+                #p_unet_class_embeddings /= p_unet_class_embeddings.std() / 1.7
+                #p_unet_class_embeddings += a
+                #p_unet_class_embeddings /=  1.382
+            else:
+                p_unet_class_embeddings = unet_class_embeddings
+
+            if i == 0:
+                print("p_unet_class_embeddings mean:", p_unet_class_embeddings.mean().item(), "std:", p_unet_class_embeddings.std())
+
+            if dynamic_conditioning_perturbation > 0:
+                perturbation = torch.randn((batch_size,) + p_unet_class_embeddings.shape[1:], generator=generator,
+                                           device=p_unet_class_embeddings.device, dtype=p_unet_class_embeddings.dtype)
+                p_unet_class_embeddings = mp_sum(p_unet_class_embeddings, perturbation, dynamic_conditioning_perturbation)#*1.35
+                print("p_unet_class_embeddings mean:", p_unet_class_embeddings.mean().item(), "std:", p_unet_class_embeddings.std())
+                #p_unet_class_embeddings = p_unet_class_embeddings + perturbation * dynamic_conditioning_perturbation
+                #for game_id in game_ids:
+                #    game_ids[game_id] = original_game_ids[game_id] * np.random.uniform()**dynamic_conditioning_perturbation
+                #class_labels = self.get_class_labels(game_ids)
+                #unet_class_embeddings = self.unet.get_class_embeddings(class_labels)
+                #p_unet_class_embeddings = unet_class_embeddings
+
+            #p_unet_class_embeddings = normalize(p_unet_class_embeddings).to(dtype=p_unet_class_embeddings.dtype)
+            model_output = self.unet(model_input, sigma, p_unet_class_embeddings, t_ranges, self.format).float()
+            #model_output = self.unet(model_input, sigma, self.unet.u_class_embeddings.lerp(unet_class_embeddings, conditioning_perturbation+1), t_ranges, self.format).float()
+            #model_output = self.unet(model_input, sigma, unet_class_embeddings - self.unet.u_class_embeddings * conditioning_perturbation, t_ranges, self.format).float()
+            
+            #model_output = self.unet(model_input, sigma, unet_class_embeddings_a, unet_class_embeddings_b, t_ranges, self.format).float()
+            #u_model_output = self.unet(model_input, sigma, None, None, t_ranges, self.format).float()
 
             last_cfg_model_output = cfg_model_output
-            cfg_model_output = torch.lerp(u_model_output, model_output, params.cfg_scale).float()
-    
+            cfg_model_output = cfg_fn(u_model_output, model_output, cfg_scale).float()
+
+            """
+            if i == 0:
+                for game_id1 in game_ids.keys():
+                    for game_id2 in game_ids.keys():
+                        if game_id1 != game_id2:
+                            emb1 = self.unet.get_class_embeddings(self.get_class_labels([game_id1]))
+                            emb2 = self.unet.get_class_embeddings(self.get_class_labels([game_id2]))
+                            print(game_id1, game_id2, get_cos_angle(emb1, emb2)/ (torch.pi/2))
+                            print(game_id1, "u", get_cos_angle(emb1, -self.unet.u_class_embeddings.unsqueeze(0))/ (torch.pi/2))
+                            print(game_id1, "m", get_cos_angle(emb1, mp_sum(unet_class_embeddings, -self.unet.u_class_embeddings, conditioning_perturbation))/ (torch.pi/2))
+            """
             #last_x = x
             #x = self.unet.last_x
                 
-            if params.use_midpoint_integration:
-                t_hat = sigma_next / sigma_curr
-                sample_hat = (t_hat * sample + (1 - t_hat) * cfg_model_output)
+            if use_midpoint_integration:
+                #sigma_hat = (sigma_next * sigma_curr)**0.5
+                #sigma_hat = sigma_min #* 0.9 #************************************ best as of aug 29/2024
+                #sigma_hat = old_sigma_next
+                #sigma_hat = max(sigma_next, sigma_min) # !!!
+                sigma_hat = max(sigma_next, sigma_min)
+                #sigma_hat = np.e**0.55
+                #sigma_hat = max(sigma_next, sigma_min)
+                #sigma_hat = (sigma_next * sigma_min)**0.5
+                t_hat = sigma_hat / sigma_curr
+                #t_hat = sigma_next / sigma_curr
+                #t_hat = max(sigma_next, 0.03) / sigma_curr
+                #t_hat = (old_sigma_next*0.5) / sigma_curr
+                #t_hat = sigma_min / sigma_curr
+                #t_hat = (sigma_next * sigma_curr)**0.5 / sigma_curr
+                #t_hat = sigma_curr**0.5 / sigma_curr #best
+                #t_hat = 0.5 #best
+                #t_hat = (sigma_curr * sigma_next)**0.5 / sigma_curr
+                #t_hat = (sigma_curr * old_sigma_next)**0.5 / sigma_curr
 
-                sigma_hat = torch.tensor([sigma_next], device=self.device)
+                sample_hat = (t_hat * sample + (1 - t_hat) * cfg_model_output)
+                #sample_hat = sample
+                sigma_hat = torch.tensor([t_hat * sigma_curr], device=self.device)
+
+                """
+                if static_conditioning_perturbation > 0:
+                    p_unet_class_embeddings = mp_sum(unet_class_embeddings, -self.unet.u_class_embeddings, static_conditioning_perturbation)
+                else:
+                    p_unet_class_embeddings = unet_class_embeddings
+                if dynamic_conditioning_perturbation > 0:
+                    perturbation = torch.randn((batch_size,) + p_unet_class_embeddings.shape[1:], generator=generator,
+                                            device=p_unet_class_embeddings.device, dtype=p_unet_class_embeddings.dtype)
+                    p_unet_class_embeddings = mp_sum(p_unet_class_embeddings, perturbation, dynamic_conditioning_perturbation)
+                """
+
+                #p = max(sigma_curr**2 - old_sigma_next**2, 0)**0.5
+                #added_noise = torch.randn(sample.shape, generator=generator, device=sample.device, dtype=sample.dtype)
+                #sample_hat = sample_hat + added_noise * p
+                #sigma_hat = torch.tensor([(old_sigma_next**2 + p**2)**0.5], device=self.device)
+
+                #sigma_hat = torch.tensor([sigma_next], device=self.device)
                 model_input_hat = sample_hat.to(self.unet.dtype)
-                model_output_hat = self.unet(model_input_hat, sigma_hat, unet_class_embeddings, t_ranges, self.format).float()
                 u_model_output_hat = self.unet(model_input_hat, sigma_hat, None, t_ranges, self.format).float()
-                cfg_model_output_hat = torch.lerp(u_model_output_hat, model_output_hat, params.cfg_scale).float()
+                #model_output_hat = self.unet(model_input_hat, sigma_hat, unet_class_embeddings, t_ranges, self.format).float()
+                model_output_hat = self.unet(model_input_hat, sigma_hat, p_unet_class_embeddings, t_ranges, self.format).float()
+                #model_output_hat = self.unet(model_input_hat, sigma_hat, self.unet.u_class_embeddings.lerp(unet_class_embeddings, conditioning_perturbation+1), t_ranges, self.format).float()
+                #model_output_hat = self.unet(model_input_hat, sigma_hat, unet_class_embeddings - self.unet.u_class_embeddings * conditioning_perturbation, t_ranges, self.format).float()
                 
+                cfg_model_output_hat = cfg_fn(u_model_output_hat, model_output_hat, cfg_scale).float()
+                
+                #print(torch.linalg.vector_norm(cfg_model_output).item(), torch.linalg.vector_norm(cfg_model_output_hat).item())
                 cfg_model_output = (cfg_model_output + cfg_model_output_hat) / 2
+                #cfg_model_output = (cfg_model_output + normalize(cfg_model_output_hat) * torch.linalg.vector_norm(cfg_model_output, dim=(1,2,3), keepdim=True)) / 2
+                
 
             debug_v_list.append(get_cos_angle(sample, cfg_model_output) / (torch.pi/2))
             debug_a_list.append(get_cos_angle(cfg_model_output, last_cfg_model_output) / (torch.pi/2))
+            #debug_a_list.append(get_cos_angle(x, last_x) / (torch.pi/2))
             debug_d_list.append(get_cos_angle(initial_noise, sample) / (torch.pi/2))
             debug_s_list.append(cfg_model_output.square().mean(dim=(1,2,3)).sqrt())
             debug_m_list.append(cfg_model_output.mean(dim=(1,2,3)))
@@ -417,14 +597,49 @@ class DualDiffusionPipeline(torch.nn.Module):
             #      f"d:{debug_d_list[-1][0].item():{8}f}",
             #      f"s:{debug_s_list[-1][0].item():{8}f}",
             #      f"m:{debug_m_list[-1][0].item():{8}f}")
+
+            original_cfg_model_output = cfg_model_output
+            if isinstance(start_data, torch.Tensor):
+                if (i+1) < steps:
+                    #print("cfg_model_output std:", cfg_model_output.std().item(), " start_data std:", start_data.std().item())
+                    #t = sigma_next / sigma_curr if (i+1) < steps else 0
+                    cfg_model_output = mp_sum(start_data * cfg_model_output.std(dim=(1,2,3), keepdim=True),
+                                              cfg_model_output, img2img_strength)
+                    #print("cfg_model_output std:", cfg_model_output.std().item())
+                    #cfg_model_output = mp_sum(start_data, cfg_model_output, old_sigma_next / (old_sigma_next**2 + 1)**0.5)
+                    #t = sigma_next / sigma_curr if (i+1) < steps else 0
+                    #cfg_model_output = start_data * t + cfg_model_output * (1 - t)
+                original_cfg_model_output = torch.cat((start_data, original_cfg_model_output[0:1]), dim=2)
             
             t = sigma_next / sigma_curr if (i+1) < steps else 0
-            #sample = (t * sample + (1 - t) * cfg_model_output)
-            alpha = (sigma_next**2 + sigma_data**2)**0.5
-            sample = (t * sample + (1 - t) * cfg_model_output)#.clip(min=-3*alpha, max=3*alpha)
+            #t /= 0.9
+            #t *= 0
+            #t *= 0.5#0.786#0.618#0.99
+            #old_sample = sample
+            sample = (t * sample + (1 - t) * cfg_model_output)
+            
+            #sample = normalize(sample).float() * (sigma_next**2 + sigma_data**2)**0.5
+            if temperature_scale < 1:
+                ideal_norm = (sigma_next**2 + sigma_data**2)**0.5
+                measured_norm = sample.square().mean(dim=(1,2,3), keepdim=True).sqrt()
+                sample = sample / (measured_norm / ideal_norm)**(1 - temperature_scale)
+
+            #"""
+            if i+1 < steps:
+                p = max(old_sigma_next**2 - sigma_next**2, 0)**0.5 #* input_perturbation #* 0.94 # * 0.96#0.95
+                added_noise = torch.randn(sample.shape, generator=generator, device=sample.device, dtype=sample.dtype)
+                #diff = (normalize(old_sample) - normalize(cfg_model_output)).abs().pow(0.25).float()
+                #added_noise *= diff
+                #added_noise /= added_noise.std()
+
+                #if isinstance(start_data, torch.Tensor):
+                #    added_noise = mp_sum(start_data, added_noise, img2img_strength)
+                sample += added_noise * p
+                #print(p / old_sigma_next)
+            #"""
 
             sample0 = sample[0]
-            output0 = cfg_model_output[0]
+            output0 = original_cfg_model_output[0]
             #output0 = self.unet.last_x[0]
 
             sample0_img = save_raw_img(sample0, os.path.join(debug_path, f"debug_sample_{i:03}.png"), no_save=True)
@@ -435,6 +650,7 @@ class DualDiffusionPipeline(torch.nn.Module):
                 #cv2_img = output0_img.astype(np.float32); cv2.resizeWindow('sample / output', int(output0.shape[2]*2), int(output0.shape[1]*2*2))
                 cv2_img = (cv2_img[:, :, :3] * cv2_img[:, :, 3:4] / 255).astype(np.uint8)
                 cv2.imshow("sample / output", cv2_img)
+                #save_img(cv2_img, os.path.join(debug_path, f"debug_sample_{i:03}.png"))
                 cv2.waitKey(1)
 
             i += 1
@@ -456,6 +672,8 @@ class DualDiffusionPipeline(torch.nn.Module):
         print(f"Final distance: ", get_cos_angle(initial_noise, sample)[0].item() / (torch.pi/2), "  Final mean:", m_measured[-1, 0].item())
 
         sigma_schedule_error_logvar = self.unet.logvar_linear(self.unet.logvar_fourier(sigma_schedule.log().to(self.unet.device, self.unet.dtype)/4)).float()
+        #effective_input_perturbation = (sigma_schedule_error_logvar/4).exp()
+        debug_input_perturbation = torch.tensor(debug_ip_list)
 
         if debug_path is not None:
             save_raw(sample, os.path.join(debug_path, "debug_sampled_latents.raw"))
@@ -483,11 +701,12 @@ class DualDiffusionPipeline(torch.nn.Module):
                        (a_measured, "path_curvature"),
                        (s_measured, "output_norm"),
                        (m_measured, "output_mean"),
-                       (d_measured, "normalized_distance"),
-                       (sigma_schedule_error_logvar, "timestep_error_logvar"),
+                       (normalized_theta_schedule, "normalized_distance"),
+                       (debug_input_perturbation, "input_perturbation"),
+                       #(sigma_schedule_error_logvar, "sigma_schedule_error_logvar"),
                        layout=(2, 3), figsize=(12, 5),
                        added_plots={4: (normalized_theta_schedule, "theta_schedule")})
             
             cv2.destroyAllWindows()
             
-        return raw_sample
+        return raw_sample 
