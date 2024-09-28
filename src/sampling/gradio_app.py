@@ -359,61 +359,30 @@ class GradioApp:
             
             self.logger.debug(f"initial gen_param_state: {gen_param_state.value}")
 
+            def get_new_sample(prompt, gen_params):
+                return {
+                    "name": f"test{gen_params['seed']}",
+                    "latents": np.zeros((32*2, 688*2, 3)),
+                    "spectrogram": np.zeros((32*8, 688*8, 3)),
+                    "audio": (32000, np.zeros(45 * 32000).astype(np.int16)),
+                    "prompt": prompt,
+                    "gen_params": gen_params,
+                    "params_str": f"{dict_str(gen_params)}\n{dict_str(prompt)}"
+                }
+            
             def add_sample(prompt, gen_params, output):
-                
-                sample_name = f"test{gen_params['seed']}"
-                if not sample_name in output:
-                    output[sample_name] = {}
-
-                output[sample_name]["latents"] = np.zeros((32*2, 688*2, 3))
-                output[sample_name]["spectrogram"] = np.zeros((32*8, 688*8, 3))
-                output[sample_name]["audio"] = 32000, np.zeros(45 * 32000).astype(np.int16)
-                output[sample_name]["prompt"] = prompt
-                output[sample_name]["gen_params"] = gen_params
-                output[sample_name]["params_str"] = f"{dict_str(gen_params)}\n{dict_str(prompt)}"
+                new_sample = get_new_sample(prompt, gen_params)
+                output[new_sample["name"]] = new_sample
 
                 next_seed = (gen_params["seed"]
                     if gen_params["auto_increment_seed"] == False else gen_params["seed"] + 1)
 
                 self.logger.debug(f"add_sample() output_state: {output}")
-
-                #progress = gr.Progress()
-                #for i in range(gen_params["num_steps"]):
-                #    progress((i+1)/gen_params["num_steps"])
-                #    time.sleep(0.03)
-                    
                 return output, next_seed
             
             def remove_sample(output, sample_name):
                 del output[sample_name]
                 return output
-            
-            def generate_latents(output):
-                
-                for sample_name, sample in output.items():
-                    if sample["status"] == "queued":
-                        
-                        
-                        prompt = output["prompt"]
-                        gen_params = output["gen_params"]
-                        #input_audio = output["input_audio"]
-
-                        progress = gr.Progress()
-                        for i in range(gen_params["num_steps"]):
-                            progress((i+1)/gen_params["num_steps"])
-                            time.sleep(0.03)
-                            latents = np.random.randn((32*2, 688*2, 3))
-                            yield latents
-
-                        sample["status"] = "generating_latents"
-
-                        return output, latents
-            
-            def decode_latents(output):
-                pass
-
-            def synthesize_waveform(output):
-                pass
 
             # ********** prompt editor **********
 
@@ -471,39 +440,165 @@ class GradioApp:
             
             # ********** sample generation **********
 
-            output_state = gr.State(value={})
+            queued_samples_state = gr.State(value={})
+            generated_samples_state = gr.State(value={})
 
             for button in generate_buttons:
-                button.click(add_sample, inputs=[prompt_state, gen_param_state, output_state],
-                    outputs=[output_state, gen_param_components["seed"]], show_progress="hidden")
+                button.click(add_sample, inputs=[prompt_state, gen_param_state, queued_samples_state],
+                    outputs=[queued_samples_state, gen_param_components["seed"]], show_progress="hidden")
+            gr.__cached__
+            def render_output_sample(sample, samples_state=None, visible=True, interactive=True):
+                components = {
+                    "prompt_state": gr.State(value=sample["prompt"]),
+                    "gen_params_state": gr.State(value=sample["gen_params"]),
+                }
+
+                with gr.Group(visible=visible) as group:
+                    with gr.Row():
+                        with gr.Column(scale=6):
+                            with gr.Row():
+                                components["name"] = gr.Textbox(label="Name", value=sample["name"], interactive=False, container=True, show_label=False, lines=1, max_lines=1, scale=6)
+                                components["rating"] = gr.Slider(label="Rating", interactive=interactive, container=True, value=0, minimum=0, maximum=10, step=1)
+                            
+                            components["latents"] = gr.Image(label="Latents", interactive=False, container=False, show_fullscreen_button=False, value=sample["latents"])
+                            components["spectrogram"] = gr.Image(label="Spectrogram", interactive=False, container=False, show_fullscreen_button=False, value=sample["spectrogram"])
+                            components["audio"] = gr.Audio(label="Audio", interactive=False, type="filepath", container=False, value=sample["audio"])
+
+                        with gr.Column(min_width=50):
+                            remove_button = gr.Button("Remove", interactive=interactive)
+                            if interactive:
+                                remove_button.click(remove_sample, show_progress="hidden",
+                                    inputs=[samples_state, components["name"]], outputs=samples_state)
+                            gr.Button("Copy to Audio Input", interactive=interactive)
+                            gr.Button("Copy to Params", interactive=interactive)
+                            components["params_text"] = gr.Textbox(value=sample["params_str"], interactive=False, container=False,
+                                show_label=False, lines=11, max_lines=11, show_copy_button=True)
+
+                return group, components
+        
+            @gr.render(inputs=queued_samples_state)
+            def _(samples):
+                for sample in reversed(samples.values()):
+                    render_output_sample(sample, samples_state=queued_samples_state, interactive=False)
+
+            generating_sample_group, generating_sample_components = render_output_sample(
+                get_new_sample(prompt_state.value, gen_param_state.value), visible=False, interactive=False)
             
-            @gr.render(inputs=output_state)
-            def _(output):
+            generating_sample_components["status_state"] = gr.State(value="idle")
+            #generating_idle_state = gr.State(value=True)
+            #start_generation_state = gr.State(value=False)
+            #generating_latents_state = gr.State(value=False)
+            #decoding_latents_state = gr.State(value=False)
+            #synthesizing_waveform_state = gr.State(value=False)
+            #generating_sample_components["status_state"].change(lambda status: gr.update(visible=True) if status == "generating" else gr.update(visible=False),
+            #    inputs=generating_sample_components["status_state"], outputs=generating_sample_group, show_progress="hidden")
 
-                for sample_name, sample in reversed(output.items()):
+            @gr.render(inputs=generated_samples_state)
+            def _(samples):
+                for sample in reversed(samples.values()):
+                    render_output_sample(sample, samples_state=generated_samples_state, interactive=True)
+
+            def process_queued_samples(queued_samples, status):
+                if len(queued_samples) > 0 and status == "idle":
+                    queued_samples = {**queued_samples}
+                    sample_key = list(queued_samples.keys())[0]
+                    sample = queued_samples[sample_key]
+                    name = sample["name"]
+                    prompt = sample["prompt"]
+                    gen_params = sample["gen_params"]
+                    rating = 0
+                    params_str = sample["params_str"]
+                    status = "generating"
+                    name += " generating..."
+                    del queued_samples[sample_key]
+                    return queued_samples, prompt, gen_params, name, rating, params_str, status, gr.update(visible=True)
+                return gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update()
+            
+            #gr.Timer().tick(process_queued_samples, inputs=[queued_samples_state, *list(generating_sample_components.values())],
+            #queued_samples_state.change(process_queued_samples, inputs=[queued_samples_state, generating_sample_components["status_state"]],
+            gr.Timer().tick(process_queued_samples, inputs=[queued_samples_state, generating_sample_components["status_state"]],
+                outputs=[queued_samples_state, generating_sample_components["prompt_state"], generating_sample_components["gen_params_state"], generating_sample_components["name"],
+                         generating_sample_components["rating"], generating_sample_components["params_text"], generating_sample_components["status_state"],
+                         generating_sample_group], show_progress="hidden",
+                concurrency_limit=1, concurrency_id="generation")
+
+            def generate_latents(prompt, gen_params, status):
+                
+                if status == "idle":
+                    return gr.update()
                     
-                    with gr.Group():
-                        with gr.Row():
-                            with gr.Column(scale=6):
-                                sample_name_state = gr.State(value=sample_name)
+                progress = gr.Progress()
+                for i in range(gen_params["num_steps"]):
+                    progress((i+1)/gen_params["num_steps"])
+                    time.sleep(0.02)
+                    latents = np.random.rand(32*2, 688*2, 3)
+                    #yield latents
 
-                                with gr.Row():
-                                    gr.Textbox(label="Name", value=sample_name, interactive=False, container=True, show_label=False, lines=1, max_lines=1, scale=6)
-                                    gr.Slider(label="Rating", interactive=True, container=True, value=0, minimum=0, maximum=10, step=1)
-                                
-                                gr.Image(label="Latents", interactive=False, container=False, show_fullscreen_button=False, value=sample["latents"])
-                                gr.Image(label="Spectrogram", interactive=False, container=False, show_fullscreen_button=False, value=sample["spectrogram"])
-                                gr.Audio(label="Audio", interactive=False, type="filepath", container=False, value=sample["audio"])
+                return latents
+            
+            def decode_latents(prompt, latents, status):
+                
+                if status == "idle":
+                    return gr.update()
+                
+                progress = gr.Progress()
+                for i in range(100):
+                    progress((i+1)/100)
+                    time.sleep(0.01)
 
-                            with gr.Column(min_width=50):
-                                gr.Button("Remove").click(remove_sample, show_progress="hidden",
-                                    inputs=[output_state, sample_name_state], outputs=output_state)
-                                gr.Button("Copy to Audio Input")
-                                gr.Button("Copy to Params")
-                                gr.Textbox(value=sample["params_str"], interactive=False, container=False,
-                                    show_label=False, lines=11, max_lines=11, show_copy_button=True)
+                spectrogram = np.random.rand(32*8, 688*8, 3)
+                return spectrogram
 
+            def synthesize_waveform(prompt, gen_params, name, rating, latents, spectrogram, audio, params_str, status, generated_samples):
+                
+                if status == "idle":
+                    return gr.update(), gr.update()
+                
+                progress = gr.Progress()
+                for i in range(gen_params["num_steps"]):
+                    progress((i+1)/gen_params["num_steps"])
+                    time.sleep(0.02)
 
+                audio = (32000, (np.random.randn(45 * 32000) * 2000).astype(np.int16))
+
+                sample = {
+                    "name": name,
+                    "latents": latents,
+                    "spectrogram": spectrogram,
+                    "audio": audio,
+                    "prompt": prompt,
+                    "gen_params": gen_params,
+                    "params_str": params_str
+                }
+                generated_samples[name] = sample
+
+                return audio, generated_samples
+            
+            def reset_generating_sample(latents, spectrogram):
+                latents[:] = 0
+                spectrogram[:] = 0
+                return "idle", gr.update(visible=False), latents, spectrogram, (32000, np.zeros(45 * 32000).astype(np.int16))
+            
+            generating_sample_components["status_state"].change(generate_latents,
+                inputs=[generating_sample_components["prompt_state"], generating_sample_components["gen_params_state"], generating_sample_components["status_state"]],
+                outputs=generating_sample_components["latents"],
+                concurrency_limit=1, concurrency_id="generation")
+            
+            generating_sample_components["latents"].change(decode_latents,
+                inputs=[generating_sample_components["prompt_state"], generating_sample_components["latents"], generating_sample_components["status_state"]],
+                outputs=generating_sample_components["spectrogram"],
+                concurrency_limit=1, concurrency_id="generation")
+            
+            generating_sample_components["spectrogram"].change(synthesize_waveform,
+                inputs=[*list(generating_sample_components.values()), generated_samples_state],
+                outputs=[generating_sample_components["audio"], generated_samples_state],
+                #outputs=[*list(generating_sample_components.values()), generated_samples_state],
+                concurrency_limit=1, concurrency_id="generation")
+            
+            generating_sample_components["audio"].change(reset_generating_sample,
+                inputs=[generating_sample_components["latents"], generating_sample_components["spectrogram"]],
+                outputs=[generating_sample_components["status_state"], generating_sample_group, generating_sample_components["latents"], generating_sample_components["spectrogram"], generating_sample_components["audio"]],
+                show_progress="hidden", concurrency_limit=1, concurrency_id="generation")
             """
             generate_button.click(
                 fn=get_output_label,
