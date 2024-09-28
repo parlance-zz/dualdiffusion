@@ -50,6 +50,8 @@ class GradioApp:
         self.logger.info(f"Loading DualDiffusion model from '{model_path}'...")
         pipeline = DualDiffusionPipeline.from_pretrained(model_path, **model_load_options)
 
+        self.logger.debug(f"Model metadata:\n{dict_str(pipeline.model_metadata)}")
+
         # remove games with no samples in training set
         for game_name, count in pipeline.dataset_info["game_train_sample_counts"].items():
             if count == 0: pipeline.dataset_game_ids.pop(game_name)
