@@ -61,12 +61,15 @@ class SampleParams:
     num_fgla_iters: int                   = 250
     img2img_strength: float               = 0.5
     input_audio: Optional[Union[str, torch.Tensor]] = None
+    inpainting_mask: Optional[torch.Tensor]         = None
 
     def get_metadata(self) -> dict[str, Any]:
         metadata = self.__dict__.copy()
 
         if metadata["input_audio"] is not None and (not isinstance(metadata["input_audio"], str)):
             metadata["input_audio"] = True
+        if metadata["inpainting_mask"] is not None:
+            metadata["inpainting_mask"] = True
         if metadata["generator"] is not None:
             metadata["generator"] = True
 
@@ -377,8 +380,15 @@ class DualDiffusionPipeline(torch.nn.Module):
                     input_audio_sample.type(self.vae.dtype), vae_class_embeddings, self.format).mode().float()
             start_timestep = 1
         else:
-            input_audio_sample = 0
+            input_audio_sample = torch.zeros(sample_shape, device=self.unet.device, dtype=self.unet.dtype)
             start_timestep = 1
+
+        if params.inpainting_mask is not None:
+            ref_sample = torch.cat([input_audio_sample * (1 - params.inpainting_mask), params.inpainting_mask], dim=1)
+        else:
+            ref_sample = torch.cat((torch.zeros_like(input_audio_sample[0:1]),
+                                    torch.ones_like(input_audio_sample[0:1])), dim=1)
+        input_ref_sample = ref_sample.to(self.unet.dtype).repeat(2, 1, 1, 1)
 
         if self.unet.config.use_t_ranges == True:
             raise NotImplementedError("sampling with unet.config.use_t_ranges=True not implemented")
@@ -403,7 +413,6 @@ class DualDiffusionPipeline(torch.nn.Module):
 
             input_sigma = torch.tensor([sigma_curr], device=self.unet.device)
             input_sample = sample.to(self.unet.dtype).repeat(2, 1, 1, 1)
-            input_ref_sample = None # todo: tbd
             
             #if params.static_conditioning_perturbation > 0:
             #    p_unet_class_embeddings = mp_sum(unet_class_embeddings, -self.unet.u_class_embeddings, static_conditioning_perturbation)
