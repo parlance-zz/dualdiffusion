@@ -37,7 +37,7 @@ class DualDiffusionUNetConfig(DualDiffusionModuleConfig, ABC):
     use_t_ranges: bool = False
     inpainting:   bool = False
     label_dim: int = 1
-    label_dropout: float = 0.1
+    label_dropout: float = 0.1 #todo: remove, unused
     dropout:    float = 0.
     sigma_max:  float = 200.
     sigma_min:  float = 0.03
