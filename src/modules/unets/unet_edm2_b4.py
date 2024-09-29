@@ -234,8 +234,7 @@ class UNet(DualDiffusionUNet):
         u_embedding = self.emb_label_unconditional(torch.ones(1, device=self.device, dtype=self.dtype))
         if self.config.label_dim != 0:
             c_embedding = self.emb_label(normalize(class_labels).to(device=self.device, dtype=self.dtype))
-            conditioning_mask = conditioning_mask.unsqueeze(1)
-            return mp_sum(u_embedding, c_embedding, t=conditioning_mask)
+            return mp_sum(u_embedding, c_embedding, t=conditioning_mask.unsqueeze(1).to(self.device, self.dtype))
         else:
             return u_embedding
     
