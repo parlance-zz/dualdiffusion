@@ -230,8 +230,14 @@ class UNet(DualDiffusionUNet):
         self.out_gain = torch.nn.Parameter(torch.zeros([]))
         self.conv_out = MPConv(cout, config.out_channels, kernel=(3,3))
 
-    def get_class_embeddings(self, class_labels: torch.Tensor) -> torch.Tensor:
-        return self.emb_label(normalize(class_labels).to(device=self.device, dtype=self.dtype))
+    def get_class_embeddings(self, class_labels: torch.Tensor, conditioning_mask: torch.Tensor) -> torch.Tensor:
+        u_embedding = self.emb_label_unconditional(torch.ones(1, device=self.device, dtype=self.dtype))
+        if self.config.label_dim != 0:
+            c_embedding = self.emb_label(normalize(class_labels).to(device=self.device, dtype=self.dtype))
+            conditioning_mask = conditioning_mask.unsqueeze(1)
+            return mp_sum(u_embedding, c_embedding, t=conditioning_mask)
+        else:
+            return u_embedding
     
     def get_sigma_loss_logvar(self, sigma: torch.Tensor) -> torch.Tensor:
         return self.logvar_linear(self.logvar_fourier(sigma.flatten().log() / 4)).view(-1, 1, 1, 1).float()
@@ -256,7 +262,7 @@ class UNet(DualDiffusionUNet):
     def forward(self, x_in: torch.Tensor,
                 sigma: torch.Tensor,
                 format: DualDiffusionFormat,
-                class_embeddings: Optional[torch.Tensor] = None,
+                class_embeddings: tuple[torch.Tensor],
                 t_ranges: Optional[torch.Tensor] = None,
                 x_ref: Optional[torch.Tensor] = None) -> torch.Tensor:
 
@@ -274,17 +280,6 @@ class UNet(DualDiffusionUNet):
         # Embedding.
         emb = self.emb_noise(self.emb_fourier(c_noise))
         if self.config.label_dim != 0:
-            if class_embeddings is None or (self.training and self.config.label_dropout != 0):
-                unconditional_embedding = self.emb_label_unconditional(torch.ones(1, device=self.device, dtype=self.dtype))
-            if class_embeddings is not None:
-                if self.training and self.config.label_dropout != 0:
-                    conditioning_mask = torch.nn.functional.dropout(torch.ones(class_embeddings.shape[0],
-                                                                                device=self.device,
-                                                                                dtype=self.dtype),
-                                                                                p=self.config.label_dropout).unsqueeze(1)
-                    class_embeddings = class_embeddings * conditioning_mask + unconditional_embedding * (1 - conditioning_mask)
-            else:
-                class_embeddings = unconditional_embedding 
             emb = mp_sum(emb, class_embeddings.to(emb.dtype), t=self.config.label_balance)
         emb = mp_silu(emb).unsqueeze(2).unsqueeze(3).to(x.dtype)
 

@@ -49,6 +49,7 @@ class UNetTrainerConfig(ModuleTrainerConfig):
     num_loss_buckets: int = 10
     input_perturbation: float = 0.
     conditioning_perturbation: float = 0.
+    conditioning_dropout: float = 0.1
 
     inpainting_probability: float = 0.
     inpainting_extend_probability: float = 0.2
@@ -224,7 +225,9 @@ class UNetTrainer(ModuleTrainer):
         #sample_author_ids = batch["author_ids"]
 
         class_labels = self.trainer.pipeline.get_class_labels(sample_game_ids, module_name="unet")
-        unet_class_embeddings = self.module.get_class_embeddings(class_labels)
+        conditioning_mask = torch.nn.functional.dropout(torch.ones(self.trainer.config.device_batch_size,
+            device=self.trainer.accelerator.device), p=self.config.conditioning_dropout)
+        unet_class_embeddings = self.module.get_class_embeddings(class_labels, conditioning_mask)
         if self.config.conditioning_perturbation > 0 and self.is_validation_batch == False:
             conditioning_perturbation = torch.randn(unet_class_embeddings.shape, device=unet_class_embeddings.device, generator=self.device_generator)
             unet_class_embeddings = unet_class_embeddings + conditioning_perturbation * self.config.conditioning_perturbation

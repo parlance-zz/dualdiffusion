@@ -48,7 +48,7 @@ class DualDiffusionUNet(DualDiffusionModule, ABC):
     module_name: str = "unet"
 
     @abstractmethod
-    def get_class_embeddings(self, class_labels: torch.Tensor) -> torch.Tensor:
+    def get_class_embeddings(self, class_labels: torch.Tensor, conditioning_mask: torch.Tensor) -> torch.Tensor:
         pass
     
     @abstractmethod
