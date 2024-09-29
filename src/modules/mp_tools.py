@@ -116,8 +116,11 @@ class MPConv(torch.nn.Module):
         self.weight = torch.nn.Parameter(torch.randn(out_channels, in_channels // groups, *kernel))
 
     def forward(self, x: torch.Tensor, gain: Union[float, torch.Tensor] = 1.) -> torch.Tensor:
-
-        w = normalize(self.weight.float()) # traditional weight normalization
+        
+        w = self.weight.float()
+        if self.training == True:
+            w = normalize(w) # traditional weight normalization
+            
         w = w * (gain / w[0].numel()**0.5) # magnitude-preserving scaling
         w = w.to(x.dtype)
 
