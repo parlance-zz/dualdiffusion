@@ -362,11 +362,10 @@ class DualDiffusionPipeline(torch.nn.Module):
         debug_info["sample_shape"] = tuple(sample_shape)
         debug_info["latent_diffusion"] = latent_diffusion
 
-        #todo:
-        #game_ids = game_ids or torch.randint(0, self.unet.label_dim, 1, device=self.device, generator=generator)
-        #class_labels = self.get_class_labels(game_ids)
-        #vae_class_embeddings = self.vae.get_class_embeddings(class_labels)
-        #unet_class_embeddings = self.unet.get_class_embeddings(class_labels)
+        vae_class_embeddings = self.vae.get_class_embeddings(self.get_class_labels(params.prompt, module_name="vae"))
+        conditioning_mask = torch.cat(torch.ones(params.batch_size), torch.zeros(params.batch_size))
+        unet_class_embeddings = self.unet.get_class_embeddings(
+            self.get_class_labels(params.prompt, module_name="unet"), conditioning_mask)
         debug_info["unet_class_embeddings mean"] = unet_class_embeddings.mean().item()
         debug_info["unet_class_embeddings std"] = unet_class_embeddings.std().item()
 
@@ -403,7 +402,7 @@ class DualDiffusionPipeline(torch.nn.Module):
             sigma_next *= (1 - (max(min(effective_input_perturbation, 1), 0)))
 
             input_sigma = torch.tensor([sigma_curr], device=self.unet.device)
-            input_sample = sample.to(self.unet.dtype)
+            input_sample = sample.to(self.unet.dtype).repeat(2, 1, 1, 1)
             input_ref_sample = None # todo: tbd
             
             #if params.static_conditioning_perturbation > 0:
@@ -417,21 +416,18 @@ class DualDiffusionPipeline(torch.nn.Module):
             #    p_unet_class_embeddings = mp_sum(p_unet_class_embeddings, perturbation, dynamic_conditioning_perturbation)#*1.35
             #    print("p_unet_class_embeddings mean:", p_unet_class_embeddings.mean().item(), "std:", p_unet_class_embeddings.std())
 
-            u_model_output = self.unet(input_sample, input_sigma, self.format, None, t_ranges, input_ref_sample).float()
-            c_model_output = self.unet(input_sample, input_sigma, self.format, unet_class_embeddings, t_ranges, input_ref_sample).float()
-            cfg_model_output = u_model_output.lerp(c_model_output, params.cfg_scale).float()
+            model_output = self.unet(input_sample, input_sigma, self.format, unet_class_embeddings, t_ranges, input_ref_sample).float()
+            cfg_model_output = model_output[params.batch_size:].lerp(model_output[:params.batch_size], params.cfg_scale)
                 
             if params.use_heun:
                 sigma_hat = max(sigma_next, params.sigma_min)
                 t_hat = sigma_hat / sigma_curr
 
-                input_sample_hat = (t_hat * sample + (1 - t_hat) * cfg_model_output).to(self.unet.dtype)
+                input_sample_hat = (t_hat * sample + (1 - t_hat) * cfg_model_output).to(self.unet.dtype).repeat(2, 1, 1, 1)
                 input_sigma_hat = torch.tensor([t_hat * sigma_curr], device=self.device)
 
-                u_model_output_hat = self.unet(input_sample_hat, input_sigma_hat, self.format, None, t_ranges, input_ref_sample).float()
-                c_model_output_hat = self.unet(input_sample_hat, input_sigma_hat, self.format, unet_class_embeddings, t_ranges, input_ref_sample).float()
-                cfg_model_output_hat = u_model_output_hat.lerp(c_model_output_hat, params.cfg_scale).float()
-                
+                model_output_hat = self.unet(input_sample_hat, input_sigma_hat, self.format, unet_class_embeddings, t_ranges, input_ref_sample).float()
+                cfg_model_output_hat = model_output_hat[params.batch_size:].lerp(model_output_hat[:params.batch_size], params.cfg_scale)
                 cfg_model_output = (cfg_model_output + cfg_model_output_hat) / 2
             
             t = sigma_next / sigma_curr if (i+1) < params.num_steps else 0
