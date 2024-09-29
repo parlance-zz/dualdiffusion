@@ -59,7 +59,7 @@ def mp_silu(x: torch.Tensor) -> torch.Tensor:
 #----------------------------------------------------------------------------
 # Magnitude-preserving sum (Equation 88).
 
-def mp_sum(a: torch.Tensor, b: torch.Tensor, t: float = 0.5) -> torch.Tensor:
+def mp_sum(a: torch.Tensor, b: torch.Tensor, t: Union[torch.Tensor, float] = 0.5) -> torch.Tensor:
     return a.lerp(b, t) / ((1 - t) ** 2 + t ** 2) ** 0.5
 
 #----------------------------------------------------------------------------
