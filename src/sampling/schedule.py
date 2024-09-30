@@ -20,7 +20,8 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
-from typing import Optional
+from typing import Optional, Any
+import inspect
 
 import torch
 
@@ -32,6 +33,27 @@ class SamplingSchedule:
         schedule_fn = getattr(SamplingSchedule, name)
         t = torch.linspace(t_start, 0, steps, device=device)
         return schedule_fn(t, **kwargs)
+    
+    @staticmethod
+    def get_schedule_params(name: str) -> dict[str, type[Any]]:
+        params = {param_name: param_type.annotation
+            for param_name, param_type in inspect.signature(getattr(SamplingSchedule, name)).parameters.items()}
+        if "t" in params: del params["t"]
+        if "_" in params: del params["_"]
+        if "sigma_max" in params: del params["sigma_max"]
+        if "sigma_min" in params: del params["sigma_min"]
+        return params
+    
+    @classmethod
+    def get_schedules_list(cls) -> list[str]:
+        schedules = []
+        for name in dir(cls):
+            if (callable(getattr(cls, name))
+                and not name.startswith("__")
+                and name not in ["get_schedule", "get_schedules_list", "get_schedule_params"]):
+
+                schedules.append(name)
+        return schedules
     
     @staticmethod
     @torch.no_grad()
@@ -47,3 +69,9 @@ class SamplingSchedule:
     @torch.no_grad()
     def scale_invariant(t: torch.Tensor, sigma_max: float, sigma_min: float, rho: float = 1., **_) -> torch.Tensor:
         return sigma_min / ((1 - t)**rho + sigma_min / sigma_max)
+    
+
+if __name__ == "__main__":
+    schedule_list = SamplingSchedule.get_schedules_list()
+    for schedule in schedule_list:
+        print(schedule, ":", SamplingSchedule.get_schedule_params(schedule))
