@@ -61,6 +61,7 @@ class SampleParams:
     num_fgla_iters: int                   = 250
     img2img_strength: float               = 0.5
     input_audio: Optional[Union[str, torch.Tensor]] = None
+    input_audio_pre_encoded: bool                   = False
     inpainting_mask: Optional[torch.Tensor]         = None
 
     def get_metadata(self) -> dict[str, Any]:
@@ -75,6 +76,14 @@ class SampleParams:
 
         metadata["timestamp"] = datetime.now().strftime(r"%m/%d/%Y %I:%M:%S %p")
         return metadata
+
+@dataclass
+class SampleOutput:
+    raw_sample: torch.Tensor
+    spectrogram: torch.Tensor
+    params: SampleParams
+    debug_info: dict[str, Any]
+    latents: Optional[torch.Tensor] = None
 
 @dataclass
 class ModuleInventory:
@@ -334,6 +343,7 @@ class DualDiffusionPipeline(torch.nn.Module):
     def __call__(self, params: SampleParams) -> torch.Tensor:
         
         debug_info = {}
+        params = SampleParams(**params.__dict__)
 
         params.seed = params.seed or int(np.random.randint(100000, 999999))
         params.length = params.length or self.format.config.sample_raw_length
@@ -344,11 +354,14 @@ class DualDiffusionPipeline(torch.nn.Module):
         params.prompt = params.prompt or {}
         
         if isinstance(params.input_audio, str):
-            input_audio_sample_rate, input_audio = load_audio(
-                params.input_audio, count=params.length, return_sample_rate=True)
-            if input_audio_sample_rate != self.format.config.sample_rate:
-                input_audio = torchaudio.functional.resample(
-                    input_audio, input_audio_sample_rate, self.format.config.sample_rate)
+            if params.input_audio_pre_encoded == True:
+                input_audio = load_safetensors(params.input_audio)["latents"][0:1]
+            else:
+                input_audio_sample_rate, input_audio = load_audio(
+                    params.input_audio, count=params.length, return_sample_rate=True)
+                if input_audio_sample_rate != self.format.config.sample_rate:
+                    input_audio = torchaudio.functional.resample(
+                        input_audio, input_audio_sample_rate, self.format.config.sample_rate)
         else:
             input_audio = params.input_audio
 
@@ -373,15 +386,16 @@ class DualDiffusionPipeline(torch.nn.Module):
         debug_info["unet_class_embeddings std"] = unet_class_embeddings.std().item()
 
         if input_audio is not None:
-            while input_audio.ndim < 3: input_audio.unsqueeze_(0)
-            input_audio_sample = self.format.raw_to_sample(input_audio.float())
-            if latent_diffusion:
-                input_audio_sample = self.vae.encode(
-                    input_audio_sample.type(self.vae.dtype), vae_class_embeddings, self.format).mode().float()
-            start_timestep = 1
+            if params.input_audio_pre_encoded == True:
+                input_audio_sample = input_audio
+            else:
+                while input_audio.ndim < 3: input_audio.unsqueeze_(0)
+                input_audio_sample = self.format.raw_to_sample(input_audio.float())
+                if latent_diffusion:
+                    input_audio_sample = self.vae.encode(
+                        input_audio_sample.type(self.vae.dtype), vae_class_embeddings, self.format).mode().float()
         else:
             input_audio_sample = torch.zeros(sample_shape, device=self.unet.device, dtype=self.unet.dtype)
-            start_timestep = 1
 
         if params.inpainting_mask is not None:
             ref_sample = torch.cat([input_audio_sample * (1 - params.inpainting_mask), params.inpainting_mask], dim=1)
@@ -395,6 +409,7 @@ class DualDiffusionPipeline(torch.nn.Module):
         else:
             t_ranges = None
 
+        start_timestep = 1
         sigma_schedule = SamplingSchedule.get_schedule(params.schedule,
             params.num_steps, start_timestep, device=self.unet.device, **params.schedule_kwargs)
         sigma_schedule_list = sigma_schedule.tolist()
@@ -465,7 +480,11 @@ class DualDiffusionPipeline(torch.nn.Module):
         sample = normalize(sample).float() * params.sigma_data
 
         if latent_diffusion == True:
-            sample = self.vae.decode(sample.to(self.vae.dtype), vae_class_embeddings, self.format).float()
-        raw_sample = self.format.sample_to_raw(sample)
-            
-        return raw_sample
+            latents = sample
+            spectrogram = self.vae.decode(sample.to(self.vae.dtype), vae_class_embeddings, self.format).float()
+        else:
+            latents = None
+            spectrogram = sample
+        raw_sample = self.format.sample_to_raw(spectrogram)
+        
+        return SampleOutput(raw_sample, spectrogram, params, debug_info, latents)
