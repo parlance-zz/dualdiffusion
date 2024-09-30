@@ -1,0 +1,17 @@
+{
+    "model_name": "edm2_vt7_12d_i",
+    "model_load_options": {
+      "torch_dtype": "bfloat16",
+      "device": "cpu",
+      "load_checkpoints": true,
+      "load_emas": true,
+      "compile_options": {
+        "fullgraph": true,
+        "dynamic": false
+      }
+    },
+
+    "web_server_host": "localhost",
+    "web_server_port": 3001,
+    "enable_debug_logging": true
+  }

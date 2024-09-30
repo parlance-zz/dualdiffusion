@@ -3,6 +3,7 @@ from utils import config
 from typing import Optional
 from dataclasses import dataclass
 from datetime import datetime
+import threading
 import logging
 import random
 import time
@@ -372,19 +373,29 @@ class GradioApp:
                     "params_str": f"{dict_str(gen_params)}\n{dict_str(prompt)}"
                 }
             
+            queued_samples_state_lock = threading.Lock()
+            generated_samples_state_lock = threading.Lock()
+
             def add_sample(prompt, gen_params, output):
-                new_sample = get_new_sample(prompt, gen_params)
-                output[new_sample["name"]] = new_sample
+                with queued_samples_state_lock:
+                    new_sample = get_new_sample(prompt, gen_params)
+                    output[new_sample["name"]] = new_sample
 
-                next_seed = (gen_params["seed"]
-                    if gen_params["auto_increment_seed"] == False else gen_params["seed"] + 1)
+                    next_seed = (gen_params["seed"]
+                        if gen_params["auto_increment_seed"] == False else gen_params["seed"] + 1)
 
-                self.logger.debug(f"add_sample() output_state: {output}")
-                return output, next_seed
+                    self.logger.debug(f"add_sample() output_state: {output}")
+                    return output, next_seed
             
-            def remove_sample(output, sample_name):
-                del output[sample_name]
-                return output
+            def remove_queue_sample(output, sample_name):
+                with queued_samples_state_lock:                    
+                    del output[sample_name]
+                    return output
+            
+            def remove_generated_sample(output, sample_name):
+                with generated_samples_state_lock:
+                    del output[sample_name]
+                    return output
 
             # ********** prompt editor **********
 
@@ -448,7 +459,7 @@ class GradioApp:
             for button in generate_buttons:
                 button.click(add_sample, inputs=[prompt_state, gen_param_state, queued_samples_state],
                     outputs=[queued_samples_state, gen_param_components["seed"]], show_progress="hidden")
-            gr.__cached__
+            
             def render_output_sample(sample, samples_state=None, visible=True, interactive=True):
                 components = {
                     "prompt_state": gr.State(value=sample["prompt"]),
@@ -469,7 +480,7 @@ class GradioApp:
                         with gr.Column(min_width=50):
                             remove_button = gr.Button("Remove", interactive=interactive)
                             if interactive:
-                                remove_button.click(remove_sample, show_progress="hidden",
+                                remove_button.click(remove_queue_sample if samples_state == queued_samples_state else remove_generated_sample, show_progress="hidden",
                                     inputs=[samples_state, components["name"]], outputs=samples_state)
                             gr.Button("Copy to Audio Input", interactive=interactive)
                             gr.Button("Copy to Params", interactive=interactive)
@@ -501,20 +512,21 @@ class GradioApp:
                     render_output_sample(sample, samples_state=generated_samples_state, interactive=True)
 
             def process_queued_samples(queued_samples, status):
-                if len(queued_samples) > 0 and status == "idle":
-                    queued_samples = {**queued_samples}
-                    sample_key = list(queued_samples.keys())[0]
-                    sample = queued_samples[sample_key]
-                    name = sample["name"]
-                    prompt = sample["prompt"]
-                    gen_params = sample["gen_params"]
-                    rating = 0
-                    params_str = sample["params_str"]
-                    status = "generating"
-                    name += " generating..."
-                    del queued_samples[sample_key]
-                    return queued_samples, prompt, gen_params, name, rating, params_str, status, gr.update(visible=True)
-                return gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update()
+                with queued_samples_state_lock:
+                    if len(queued_samples) > 0 and status == "idle":
+                        queued_samples = {**queued_samples}
+                        sample_key = list(queued_samples.keys())[0]
+                        sample = queued_samples[sample_key]
+                        name = sample["name"]
+                        prompt = sample["prompt"]
+                        gen_params = sample["gen_params"]
+                        rating = 0
+                        params_str = sample["params_str"]
+                        status = "generating"
+                        name += " generating..."
+                        del queued_samples[sample_key]
+                        return queued_samples, prompt, gen_params, name, rating, params_str, status, gr.update(visible=True)
+                    return gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update()
             
             #gr.Timer().tick(process_queued_samples, inputs=[queued_samples_state, *list(generating_sample_components.values())],
             #queued_samples_state.change(process_queued_samples, inputs=[queued_samples_state, generating_sample_components["status_state"]],
@@ -572,9 +584,10 @@ class GradioApp:
                     "gen_params": gen_params,
                     "params_str": params_str
                 }
-                generated_samples[name] = sample
+                with generated_samples_state_lock:
+                    generated_samples[name] = sample
 
-                return audio, generated_samples
+                    return audio, generated_samples
             
             def reset_generating_sample(latents, spectrogram):
                 latents[:] = 0
@@ -601,22 +614,6 @@ class GradioApp:
                 inputs=[generating_sample_components["latents"], generating_sample_components["spectrogram"]],
                 outputs=[generating_sample_components["status_state"], generating_sample_group, generating_sample_components["latents"], generating_sample_components["spectrogram"], generating_sample_components["audio"]],
                 show_progress="hidden", concurrency_limit=1, concurrency_id="generation")
-            """
-            generate_button.click(
-                fn=get_output_label,
-                inputs=[prompt_state, seed, num_steps, cfg_scale, sigma_max, sigma_min, rho, input_perturbation,
-                        use_midpoint, num_fgla_iters, img2img_strength, input_audio, auto_increment_seed_checkbox],
-                outputs=[output_label, seed],
-                show_progress="hidden",
-            ).then(
-                fn=generate,
-                inputs=[prompt_state, seed, num_steps, cfg_scale, sigma_max, sigma_min, rho, input_perturbation,
-                        use_midpoint, num_fgla_iters, img2img_strength, input_audio],
-                outputs=[latents_output, audio_output],
-                concurrency_limit=self.config.gpu_concurrency_limit,
-                concurrency_id="gpu",
-            )
-            """
 
         self.generation_interface.queue(default_concurrency_limit=self.config.web_server_default_concurrency_limit,
                                         max_size=self.config.web_server_max_queue_size)
