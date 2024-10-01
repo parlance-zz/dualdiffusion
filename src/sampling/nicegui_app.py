@@ -136,6 +136,7 @@ class NiceGUIApp:
                     with ui.card().classes("flex-grow-[1]"): # seed params
                         ui.label("General:")
                         self.seed = ui.number(label="Seed", value=10042, min=10000, max=99999, step=1).classes("w-full")
+                        self.seed.on("wheel", lambda: None)
                         self.auto_increment_seed = ui.checkbox("Auto Increment Seed", value=True).classes("w-full")
                         ui.button("Randomize Seed").classes("w-full").on_click(lambda: self.seed.set_value(random.randint(0, 99999)))
                         self.generate_button = ui.button("Generate").classes("w-full")
@@ -158,6 +159,7 @@ class NiceGUIApp:
                         def on_params_changed():
                             self.preset_select._props['label']=f"Select a Preset - (loaded preset: {self.last_loaded_preset}*)"
                             self.preset_select.update()
+                            self.preset_load_button.enable()
                             self.preset_save_button.enable()
 
                         for param in self.gen_params:
@@ -183,6 +185,7 @@ class NiceGUIApp:
 
                             self.preset_load_button.disable()
                             self.preset_save_button.disable()
+                            self.preset_delete_button.disable()
 
             with ui.card().classes("flex-grow-[10]"): # prompt editor
                 ui.label("Prompt Editor:")
@@ -220,7 +223,6 @@ class NiceGUIApp:
 
         # queued / output samples go here
 
-
         self.sigma_schedule_dialog = ui.dialog()
 
         def show_sigma_schedule_dialog():
@@ -245,8 +247,6 @@ class NiceGUIApp:
                 ui.button("Close").classes("ml-auto").on_click(lambda: self.sigma_schedule_dialog.close())
         
         self.show_schedule_button.on_click(show_sigma_schedule_dialog)
-
-            
             
     def get_saved_presets(self) -> None:
         preset_files = os.listdir(os.path.join(config.CONFIG_PATH, "sampling", "presets"))
