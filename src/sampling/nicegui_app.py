@@ -12,7 +12,7 @@ import torch
 import numpy as np
 import nicegui
 import asyncio
-from nicegui import ui
+from nicegui import ui, app
 
 from utils.dual_diffusion_utils import (
     init_cuda, save_audio, load_audio, dict_str,
@@ -61,7 +61,6 @@ class NiceGUIApp:
         self.init_logging()
         self.logger.debug(f"NiceGUIAppConfig:\n{dict_str(self.config.__dict__)}")
 
-        """
         # load model
         model_path = os.path.join(config.MODELS_PATH, self.config.model_name)
         model_load_options = self.config.model_load_options
@@ -73,7 +72,10 @@ class NiceGUIApp:
         # remove games with no samples in training set
         for game_name, count in self.pipeline.dataset_info["game_train_sample_counts"].items():
             if count == 0: self.pipeline.dataset_game_ids.pop(game_name)
-        """
+
+        self.dataset_games_dict = {} # keys are actual game names, values are display strings
+        for game_name in self.pipeline.dataset_game_ids.keys():
+            self.dataset_games_dict[game_name] = f"({self.pipeline.dataset_info['game_train_sample_counts'][game_name]}) {game_name}"
 
         self.init_layout()
 
@@ -173,6 +175,8 @@ class NiceGUIApp:
 
                 with ui.card().classes("w-full"): # preset editor
                     #ui.label("Preset Editor").classes(self.heading_label_classes)
+                    app.on_startup(lambda: self.load_preset())
+                    
                     with ui.row().classes("w-full"):
                         with ui.column().classes("flex-grow-[4]"):
 
@@ -203,9 +207,8 @@ class NiceGUIApp:
                 #ui.label("Prompt Editor").classes(self.heading_label_classes)
                 self.prompt = {}
                 with ui.row().classes("w-full flex items-center"):
-                    self.game_select = ui.select(label="Select a game", with_input=True,
-                        options=["(10) spc/3 Ninjas Kick Back", "(20) spc/Megaman X", "(30) spc/Chrono Trigger"],
-                        value="(10) spc/3 Ninjas Kick Back").classes("flex-grow-[1000]")
+                    self.game_select = ui.select(label="Select a game", value=next(iter(self.dataset_games_dict)), with_input=True,
+                        options=self.dataset_games_dict).classes("flex-grow-[1000]")
                     self.game_weight = ui.number(label="Weight", value=1, min=0, max=100, step=1).classes("flex-grow-[1]")
                     self.game_weight.on("wheel", lambda: None)
                     self.game_add_button = ui.button("Add Game").classes("flex-grow-[1]")
@@ -244,17 +247,22 @@ class NiceGUIApp:
         self.prompt_games_column.clear()
         with self.prompt_games_column:
             for game_name, game_weight in self.prompt.items():
-                with ui.row().classes("w-full"):
-                    ui.label(f"{game_name} - {game_weight}")
-                    ui.button("Remove").on_click(lambda g=game_name: self.on_click_game_remove_button(g))
+                with ui.row().classes("w-full flex items-center"):
+                    ui.select(label="Select a game", value=game_name, with_input=True, options=self.dataset_games_dict,
+                        on_change=lambda: self.on_change_gen_param()).classes("flex-grow-[1000]")
+                    ui.number(label="Weight", value=game_weight, min=0, max=100, step=1,
+                        on_change=lambda: self.on_change_gen_param()).classes("flex-grow-[1]").on("wheel", lambda: None)
+                    ui.button("Remove").on_click(lambda g=game_name: self.on_click_game_remove_button(g)).classes("flex-grow-[1]")
 
     def on_click_game_remove_button(self, game_name: str) -> None:
         self.prompt.pop(game_name)
         self.refresh_game_prompt_elements()
+        self.on_change_gen_param()
         
     def on_click_game_add_button(self):
         self.prompt.update({self.game_select.value: self.game_weight.value})
         self.refresh_game_prompt_elements()
+        self.on_change_gen_param()
 
     def on_click_show_schedule_button(self) -> None:
 
@@ -354,6 +362,7 @@ class NiceGUIApp:
 
         self.prompt.clear()
         self.prompt.update(loaded_preset_dict["prompt"])
+        self.refresh_game_prompt_elements()
         self.gen_params.update(loaded_preset_dict["gen_params"])
         self.preset_load_button.disable()
         self.preset_save_button.disable()

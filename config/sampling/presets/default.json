@@ -1,6 +1,7 @@
 {
   "prompt": {
-    "spc/3 Ninjas Kick Back": 2
+    "spc/3 Ninjas Kick Back": 2,
+    "spc/A Ressha de Ikou 3": 1
   },
   "gen_params": {
     "num_steps": 100,
