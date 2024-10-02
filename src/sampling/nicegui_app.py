@@ -69,10 +69,9 @@ class NiceGUIApp:
         self.pipeline = DualDiffusionPipeline.from_pretrained(model_path, **model_load_options)
         self.logger.debug(f"Model metadata:\n{dict_str(self.pipeline.model_metadata)}")
 
-        # remove games with no samples in training set
+        # setup dataset games list
         for game_name, count in self.pipeline.dataset_info["game_train_sample_counts"].items():
             if count == 0: self.pipeline.dataset_game_ids.pop(game_name)
-
         self.dataset_games_dict = {} # keys are actual game names, values are display strings
         for game_name in self.pipeline.dataset_game_ids.keys():
             self.dataset_games_dict[game_name] = f"({self.pipeline.dataset_info['game_train_sample_counts'][game_name]}) {game_name}"
@@ -176,7 +175,7 @@ class NiceGUIApp:
                 with ui.card().classes("w-full"): # preset editor
                     #ui.label("Preset Editor").classes(self.heading_label_classes)
                     app.on_startup(lambda: self.load_preset())
-                    
+
                     with ui.row().classes("w-full"):
                         with ui.column().classes("flex-grow-[4]"):
 
@@ -297,6 +296,8 @@ class NiceGUIApp:
     
     def on_input_value_preset_select(self, preset_name: str) -> None:
         self.new_preset_name = preset_name
+        if preset_name != "default":
+            self.preset_save_button.enable()
 
     def on_blur_preset_select(self, _) -> None:
         if self.new_preset_name != "" and self.new_preset_name not in self.saved_preset_list:
@@ -305,9 +306,9 @@ class NiceGUIApp:
             
     def on_value_change_preset_select(self, preset_name: str) -> None:
         self.logger.debug(f"Selected preset: {preset_name}")
-        self.preset_load_button.enable()
         self.preset_save_button.enable()
         if preset_name in self.saved_preset_list:
+            self.preset_load_button.enable()
             self.preset_select.set_options(self.saved_preset_list)
             if preset_name != "default":
                 self.preset_delete_button.enable()
@@ -315,6 +316,7 @@ class NiceGUIApp:
                 self.preset_delete_button.disable()
         else:
             self.preset_delete_button.disable()
+            self.preset_load_button.disable()
             
     def get_saved_presets(self) -> list[str]:
         preset_files = os.listdir(os.path.join(config.CONFIG_PATH, "sampling", "presets"))
