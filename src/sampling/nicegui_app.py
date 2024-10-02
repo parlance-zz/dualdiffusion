@@ -10,6 +10,8 @@ import os
 
 import torch
 import numpy as np
+import nicegui
+import asyncio
 from nicegui import ui
 
 from utils.dual_diffusion_utils import (
@@ -107,6 +109,8 @@ class NiceGUIApp:
 
     def init_layout(self) -> None:
 
+        #self.heading_label_classes = "uppercase font-bold p-0 w-full text-center"
+
         with ui.tabs() as self.interface_tabs:
             self.generation_tab = ui.tab("Generation")
             self.model_settings_tab = ui.tab("Model Settings")
@@ -130,125 +134,181 @@ class NiceGUIApp:
 
     def init_generation_layout(self) -> None:
             
-        with ui.row().classes("w-full"): # params, preset, and prompt editor
-            with ui.card().classes("flex-grow-[1]"): # params and preset editor
-                with ui.row().classes("w-full"): # gen param controls
+        with ui.row().classes("w-full"): # gen params, preset, and prompt editor
+            with ui.card().classes("flex-grow-[1]"):
+                with ui.row().classes("w-full"): # gen params and seed
                     with ui.card().classes("flex-grow-[1]"): # seed params
-                        ui.label("General:")
+                        #ui.label("General").classes(self.heading_label_classes)
                         self.seed = ui.number(label="Seed", value=10042, min=10000, max=99999, step=1).classes("w-full")
                         self.seed.on("wheel", lambda: None)
                         self.auto_increment_seed = ui.checkbox("Auto Increment Seed", value=True).classes("w-full")
                         ui.button("Randomize Seed").classes("w-full").on_click(lambda: self.seed.set_value(random.randint(0, 99999)))
                         self.generate_button = ui.button("Generate").classes("w-full")
 
-                    with ui.card().classes("flex-grow-[5]"): # gen params
-                        ui.label("Parameters:")
-                        with ui.grid(columns=2).classes("w-full") as self.gen_params:
-                            self.num_steps = ui.number(label="Number of Steps", value=100, min=10, max=1000, precision=0, step=10).classes("w-full")
-                            self.cfg_scale = ui.number(label="CFG Scale", value=1.5, min=0, max=10, step=0.1).classes("w-full")
-                            self.use_heun = ui.checkbox("Use Heun's Method", value=True).classes("w-full")
-                            self.num_fgla_iters = ui.number(label="Number of FGLA Iterations", value=250, min=50, max=1000, precision=0, step=50).classes("w-full")
+                    with ui.card().classes("flex-grow-[3]"): # gen params
+                        #ui.label("Parameters").classes(self.heading_label_classes)
+                        self.gen_param_elements = {}
+                        with ui.grid(columns=2).classes("w-full"):
+                            self.gen_param_elements["num_steps"] = ui.number(label="Number of Steps", value=100, min=10, max=1000, precision=0, step=10).classes("w-full")
+                            self.gen_param_elements["cfg_scale"] = ui.number(label="CFG Scale", value=1.5, min=0, max=10, step=0.1).classes("w-full")
+                            self.gen_param_elements["use_heun"] = ui.checkbox("Use Heun's Method", value=True).classes("w-full")
+                            self.gen_param_elements["num_fgla_iters"] = ui.number(label="Number of FGLA Iterations", value=250, min=50, max=1000, precision=0, step=50).classes("w-full")
 
-                            self.sigma_max = ui.number(label="Sigma Max", value=200, min=10, max=1000, step=10).classes("w-full")
-                            self.sigma_min = ui.number(label="Sigma Min", value=0.15, min=0.05, max=2, step=0.05).classes("w-full")
-                            self.rho = ui.number(label="Rho", value=7, min=0.5, max=1000, precision=2, step=0.5).classes("w-full")
-                            self.input_perturbation = ui.number(label="Input Perturbation", value=1, min=0, max=1, step=0.05).classes("w-full")
+                            self.gen_param_elements["sigma_max"] = ui.number(label="Sigma Max", value=200, min=10, max=1000, step=10).classes("w-full")
+                            self.gen_param_elements["sigma_min"] = ui.number(label="Sigma Min", value=0.15, min=0.05, max=2, step=0.05).classes("w-full")
+                            self.gen_param_elements["rho"] = ui.number(label="Rho", value=7, min=0.5, max=1000, precision=2, step=0.5).classes("w-full")
+                            self.gen_param_elements["input_perturbation"] = ui.number(label="Input Perturbation", value=1, min=0, max=1, step=0.05).classes("w-full")
                             
+                            self.sigma_schedule_dialog = ui.dialog()
                             self.show_schedule_button = ui.button("Show Schedule").classes("w-full")
+                            self.show_schedule_button.on_click(lambda: self.on_click_show_schedule_button())
 
-                        def on_params_changed():
-                            self.preset_select._props['label']=f"Select a Preset - (loaded preset: {self.last_loaded_preset}*)"
-                            self.preset_select.update()
-                            self.preset_load_button.enable()
-                            self.preset_save_button.enable()
-
-                        for param in self.gen_params:
-                            if not isinstance(param, ui.button):
-                                param.on_value_change(on_params_changed)
-                            if isinstance(param, ui.number):
-                                param.on("wheel", lambda: None)
+                        self.gen_params = {}
+                        for param_name, param_element in self.gen_param_elements.items():
+                            self.gen_params[param_name] = param_element.value
+                            param_element.bind_value(self.gen_params, param_name)
+                            param_element.on_value_change(lambda: self.on_change_gen_param())
+                            if isinstance(param_element, ui.number):
+                                param_element.on("wheel", lambda: None)
 
                 with ui.card().classes("w-full"): # preset editor
-                    ui.label("Preset Editor:")
+                    #ui.label("Preset Editor").classes(self.heading_label_classes)
                     with ui.row().classes("w-full"):
                         with ui.column().classes("flex-grow-[4]"):
+
                             self.last_loaded_preset = "default"
+                            self.new_preset_name = ""
+                            self.loading_preset = False
+                            self.saved_preset_list = self.get_saved_presets()
+
                             self.preset_select = ui.select(
                                 label=f"Select a Preset - (loaded preset: {self.last_loaded_preset})",
-                                options=["default", "preset1", "megaman x"],
-                                value="default", new_value_mode="add-unique").classes("w-full")
+                                options=self.saved_preset_list,
+                                value="default", with_input=True).classes("w-full")
+                            
+                            self.preset_select.on("input-value", lambda e: self.on_input_value_preset_select(e.args))
+                            self.preset_select.on("blur", lambda e: self.on_blur_preset_select(e))
+                            self.preset_select.on_value_change(lambda e: self.on_value_change_preset_select(e.value))     
 
                         with ui.column().classes("flex-grow-[1] flex items-center"):
-                            self.preset_load_button = ui.button("Load Preset").classes("w-full")
-                            self.preset_save_button = ui.button("Save Changes").classes("w-full")
-                            self.preset_delete_button = ui.button("Delete Preset").classes("w-full")
+                            self.preset_load_button = ui.button("Load Preset", on_click=lambda: self.load_preset()).classes("w-full")
+                            self.preset_save_button = ui.button("Save Changes", on_click=lambda: self.save_preset()).classes("w-full")
+                            self.preset_delete_button = ui.button("Delete Preset", on_click=lambda: self.delete_preset()).classes("w-full")
 
                             self.preset_load_button.disable()
                             self.preset_save_button.disable()
                             self.preset_delete_button.disable()
 
-            with ui.card().classes("flex-grow-[10]"): # prompt editor
-                ui.label("Prompt Editor:")
+            with ui.card().classes("flex-grow-[50]"): # prompt editor                    
+                #ui.label("Prompt Editor").classes(self.heading_label_classes)
+                self.prompt = {}
                 with ui.row().classes("w-full flex items-center"):
-                    self.game_select = ui.select(label="Select a game",
-                        options=["(10) spc/3 Ninjas Kick Back"],
+                    self.game_select = ui.select(label="Select a game", with_input=True,
+                        options=["(10) spc/3 Ninjas Kick Back", "(20) spc/Megaman X", "(30) spc/Chrono Trigger"],
                         value="(10) spc/3 Ninjas Kick Back").classes("flex-grow-[1000]")
                     self.game_weight = ui.number(label="Weight", value=1, min=0, max=100, step=1).classes("flex-grow-[1]")
                     self.game_weight.on("wheel", lambda: None)
                     self.game_add_button = ui.button("Add Game").classes("flex-grow-[1]")
+                    self.game_add_button.on_click(lambda: self.on_click_game_add_button())
 
                 ui.separator()
+                with ui.column().classes("w-full") as self.prompt_games_column:
+                    pass # added prompt game elements will be created in this container
 
-                # selected games go here
+                """
+                with ui.tab_panel(audio_input_tab):
+                    #with ui.row().classes("w-full"):
+                    #    ui.label("Audio Input Mode:")
+                    with ui.row().classes("w-full"):
+                        with ui.tabs() as input_audio_tabs:
+                            no_input_audio = ui.tab("None")
+                            img2img = ui.tab("Img2Img")
+                            inpaint = ui.tab("Inpaint")
+                            outpaint = ui.tab("Outpaint")
 
-            with ui.card().classes("w-1/4"): # audio input editor
-                with ui.row().classes("w-full"):
-                    ui.label("Audio Input Mode:")
-                with ui.row().classes("w-full"):
-                    with ui.tabs().classes("w-full") as input_audio_tabs:
-                        no_input_audio = ui.tab("None")
-                        img2img = ui.tab("Img2Img")
-                        inpaint = ui.tab("Inpaint")
-                        outpaint = ui.tab("Outpaint")
+                        with ui.tab_panels(input_audio_tabs, value=no_input_audio).classes("w-full"):
+                            with ui.tab_panel(img2img):
+                                ui.label("img2img stuff")
+                            with ui.tab_panel(inpaint):
+                                ui.label("inpaint stuff")
+                            with ui.tab_panel(outpaint):
+                                ui.label("outpaint stuff")
+                """
 
-                    with ui.tab_panels(input_audio_tabs, value=no_input_audio).classes("w-full"):
-                        with ui.tab_panel(img2img):
-                            ui.label("img2img stuff")
-                        with ui.tab_panel(inpaint):
-                            ui.label("inpaint stuff")
-                        with ui.tab_panel(outpaint):
-                            ui.label("outpaint stuff")
-        
         ui.separator()
 
         # queued / output samples go here
 
-        self.sigma_schedule_dialog = ui.dialog()
+    def refresh_game_prompt_elements(self) -> None:
+        self.logger.debug(f"refresh_game_prompt_elements: {dict_str(self.prompt)}")
+        self.prompt_games_column.clear()
+        with self.prompt_games_column:
+            for game_name, game_weight in self.prompt.items():
+                with ui.row().classes("w-full"):
+                    ui.label(f"{game_name} - {game_weight}")
+                    ui.button("Remove").on_click(lambda g=game_name: self.on_click_game_remove_button(g))
 
-        def show_sigma_schedule_dialog():
-
-            self.sigma_schedule_dialog.clear()
-            with self.sigma_schedule_dialog, ui.card():
-                ui.label("Sigma Schedule:")
-                sigma_schedule = SamplingSchedule.get_schedule(
-                    "edm2", int(self.num_steps.value) + 1,
-                    sigma_max=self.sigma_max.value, sigma_min=self.sigma_min.value, rho=self.rho.value).log()
-
-                x = np.arange(int(self.num_steps.value) + 1)
-                y = sigma_schedule.log().numpy()
-                
-                with ui.matplotlib(figsize=(5, 4)).figure as fig:
-                    ax = fig.gca()
-                    ax.plot(x, y, '-')
-                    ax.set_xlabel("step")
-                    ax.set_ylabel("ln(sigma)")
-
-                self.sigma_schedule_dialog.open()
-                ui.button("Close").classes("ml-auto").on_click(lambda: self.sigma_schedule_dialog.close())
+    def on_click_game_remove_button(self, game_name: str) -> None:
+        self.prompt.pop(game_name)
+        self.refresh_game_prompt_elements()
         
-        self.show_schedule_button.on_click(show_sigma_schedule_dialog)
+    def on_click_game_add_button(self):
+        self.prompt.update({self.game_select.value: self.game_weight.value})
+        self.refresh_game_prompt_elements()
+
+    def on_click_show_schedule_button(self) -> None:
+
+        self.sigma_schedule_dialog.clear()
+        with self.sigma_schedule_dialog, ui.card():
+            ui.label("Sigma Schedule:")
+            sigma_schedule = SamplingSchedule.get_schedule(
+                "edm2", int(self.gen_params["num_steps"]) + 1,
+                sigma_max=self.gen_params["sigma_max"],
+                sigma_min=self.gen_params["sigma_min"],
+                rho=self.gen_params["rho"]).log()
+
+            x = np.arange(int(self.gen_params["num_steps"]) + 1)
+            y = sigma_schedule.log().numpy()
             
-    def get_saved_presets(self) -> None:
+            with ui.matplotlib(figsize=(5, 4)).figure as fig:
+                ax = fig.gca()
+                ax.plot(x, y, "-")
+                ax.set_xlabel("step")
+                ax.set_ylabel("ln(sigma)")
+
+            self.sigma_schedule_dialog.open()
+            ui.button("Close").classes("ml-auto").on_click(lambda: self.sigma_schedule_dialog.close())
+            
+    def on_change_gen_param(self) -> None:
+        if self.loading_preset == False:
+            self.preset_select._props["label"] = f"Select a Preset - (loaded preset: {self.last_loaded_preset}*)"
+            self.preset_select.update()
+            self.preset_load_button.enable()
+            self.preset_save_button.enable()
+        self.logger.debug(f"updated gen_params loading_preset: {self.loading_preset}")
+    
+    def on_input_value_preset_select(self, preset_name: str) -> None:
+        self.new_preset_name = preset_name
+
+    def on_blur_preset_select(self, _) -> None:
+        if self.new_preset_name != "" and self.new_preset_name not in self.saved_preset_list:
+            self.preset_select.options = self.saved_preset_list + [self.new_preset_name]
+            self.preset_select.set_value(self.new_preset_name)
+            
+    def on_value_change_preset_select(self, preset_name: str) -> None:
+        self.logger.debug(f"Selected preset: {preset_name}")
+        self.preset_load_button.enable()
+        self.preset_save_button.enable()
+        if preset_name in self.saved_preset_list:
+            self.preset_select.set_options(self.saved_preset_list)
+            if preset_name != "default":
+                self.preset_delete_button.enable()
+            else:
+                self.preset_delete_button.disable()
+        else:
+            self.preset_delete_button.disable()
+            
+    def get_saved_presets(self) -> list[str]:
         preset_files = os.listdir(os.path.join(config.CONFIG_PATH, "sampling", "presets"))
         saved_presets = []
         for file in preset_files:
@@ -256,29 +316,63 @@ class NiceGUIApp:
                 saved_presets.append(os.path.splitext(file)[0])
         saved_presets = sorted(saved_presets)
         self.logger.debug(f"Found saved presets: {saved_presets}")
+        self.saved_preset_list = saved_presets
         return saved_presets
 
-    def save_preset(self, preset_name: str) -> None:
+    def save_preset(self) -> None:
+        preset_name = self.preset_select.value
         save_preset_path = os.path.join(
             config.CONFIG_PATH, "sampling", "presets", f"{sanitize_filename(preset_name)}.json")
         self.logger.debug(f"Saving preset '{save_preset_path}'")
-        config.save_json({"prompt": self.prompt, "gen_params": self.gen_params}, save_preset_path)
+
+        save_preset_dict = {"prompt": self.prompt, "gen_params": self.gen_params}
+        config.save_json(save_preset_dict, save_preset_path)
+        self.logger.info(f"Saved preset {preset_name}: {dict_str(save_preset_dict)}")
+
+        self.preset_select.options = self.get_saved_presets()
+        self.last_loaded_preset = preset_name
+        self.preset_select._props["label"] = f"Select a Preset - (loaded preset: {self.last_loaded_preset})"
+        self.preset_select.update()
+        self.preset_load_button.disable()
+        self.preset_save_button.disable()
     
-    def load_preset(self, preset_name: str) -> None:
+    async def reset_preset_loading_state(self) -> None:
+        await asyncio.sleep(0.25)
+        self.loading_preset = False
+        self.logger.debug("reset loading state")
+
+    def load_preset(self) -> None:
+        preset_name = self.preset_select.value
         load_preset_path = os.path.join(
             config.CONFIG_PATH, "sampling", "presets", f"{sanitize_filename(preset_name)}.json")
         self.logger.debug(f"Loading preset '{load_preset_path}'")
 
         loaded_preset_dict = config.load_json(load_preset_path)
-        self.prompt = loaded_preset_dict["prompt"]
-        self.gen_params = loaded_preset_dict["gen_params"]
-        #...
+        self.logger.info(f"Loaded preset {preset_name}: {dict_str(loaded_preset_dict)}")
+        self.loading_preset = True
+        asyncio.create_task(self.reset_preset_loading_state())
+
+        self.prompt.clear()
+        self.prompt.update(loaded_preset_dict["prompt"])
+        self.gen_params.update(loaded_preset_dict["gen_params"])
+        self.preset_load_button.disable()
+        self.preset_save_button.disable()
+        self.last_loaded_preset = preset_name
+        self.preset_select._props["label"] = f"Select a Preset - (loaded preset: {self.last_loaded_preset})"
+        self.preset_select.update()
     
-    def delete_preset(self, preset_name: str):
+    def delete_preset(self) -> None:
+        preset_name = self.preset_select.value
         delete_preset_path = os.path.join(
             config.CONFIG_PATH, "sampling", "presets", f"{sanitize_filename(preset_name)}.json")
-        self.logger.debug(f"Deleting preset '{delete_preset_path}'")
+        self.logger.info(f"Deleting preset '{delete_preset_path}'")
+
         os.remove(delete_preset_path)
+        self.preset_select.options = self.get_saved_presets()
+        self.preset_select.set_value("default")
+        self.preset_load_button.enable()
+        self.preset_save_button.enable()
+        self.preset_delete_button.disable()
 
     def run(self) -> None:
         ui.run(dark=self.config.enable_dark_mode, title="Dual-Diffusion WebUI",
