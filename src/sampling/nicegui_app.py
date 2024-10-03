@@ -18,8 +18,17 @@ from utils.dual_diffusion_utils import (
     init_cuda, save_audio, load_audio, dict_str,
     get_available_torch_devices, sanitize_filename
 )
-from pipelines.dual_diffusion_pipeline import DualDiffusionPipeline
+from pipelines.dual_diffusion_pipeline import DualDiffusionPipeline, SampleParams, SampleOutput
 from sampling.schedule import SamplingSchedule
+
+@dataclass
+class OutputSample:
+    name: str
+    seed: int
+    prompt: dict
+    gen_params: dict
+    sample_output: SampleOutput
+    audio_path: Optional[str] = None
 
 @dataclass
 class NiceGUIAppConfig:
@@ -62,6 +71,7 @@ class NiceGUIApp:
         self.logger.debug(f"NiceGUIAppConfig:\n{dict_str(self.config.__dict__)}")
 
         # load model
+        """
         model_path = os.path.join(config.MODELS_PATH, self.config.model_name)
         model_load_options = self.config.model_load_options
 
@@ -75,8 +85,16 @@ class NiceGUIApp:
         self.dataset_games_dict = {} # keys are actual game names, values are display strings
         for game_name in self.pipeline.dataset_game_ids.keys():
             self.dataset_games_dict[game_name] = f"({self.pipeline.dataset_info['game_train_sample_counts'][game_name]}) {game_name}"
+        """
+
+        #config.save_json(self.dataset_games_dict, os.path.join(config.DEBUG_PATH, "nicegui_app", "dataset_games_dict.json"))
+        self.dataset_games_dict = config.load_json(os.path.join(config.DEBUG_PATH, "nicegui_app", "dataset_games_dict.json"))
 
         self.init_layout()
+        
+        app.on_startup(lambda: self.on_startup_app())
+
+
 
     def init_logging(self) -> None:
         self.logger = logging.getLogger(name="nicegui_app")
@@ -161,7 +179,7 @@ class NiceGUIApp:
                             self.gen_param_elements["input_perturbation"] = ui.number(label="Input Perturbation", value=1, min=0, max=1, step=0.05).classes("w-full")
                             
                             self.sigma_schedule_dialog = ui.dialog()
-                            self.show_schedule_button = ui.button("Show Schedule").classes("w-full")
+                            self.show_schedule_button = ui.button("Show σ Schedule").classes("w-full")
                             self.show_schedule_button.on_click(lambda: self.on_click_show_schedule_button())
 
                         self.gen_params = {}
@@ -174,7 +192,6 @@ class NiceGUIApp:
 
                 with ui.card().classes("w-full"): # preset editor
                     #ui.label("Preset Editor").classes(self.heading_label_classes)
-                    app.on_startup(lambda: self.load_preset())
 
                     with ui.row().classes("w-full"):
                         with ui.column().classes("flex-grow-[4]"):
@@ -194,9 +211,19 @@ class NiceGUIApp:
                             self.preset_select.on_value_change(lambda e: self.on_value_change_preset_select(e.value))     
 
                         with ui.column().classes("flex-grow-[1] flex items-center"):
-                            self.preset_load_button = ui.button("Load Preset", on_click=lambda: self.load_preset()).classes("w-full")
-                            self.preset_save_button = ui.button("Save Changes", on_click=lambda: self.save_preset()).classes("w-full")
-                            self.preset_delete_button = ui.button("Delete Preset", on_click=lambda: self.delete_preset()).classes("w-full")
+                            #self.preset_load_button = ui.button("Load Preset", on_click=lambda: self.load_preset()).classes("w-full")
+                            #self.preset_save_button = ui.button("Save Changes", on_click=lambda: self.save_preset()).classes("w-full")
+                            #self.preset_delete_button = ui.button("Delete Preset", on_click=lambda: self.delete_preset()).classes("w-full")
+                            with ui.button_group().classes():
+                                self.preset_load_button = ui.button(icon="source", on_click=lambda: self.load_preset()).classes("w-full")
+                                self.preset_save_button = ui.button(icon="save", color="green", on_click=lambda: self.save_preset()).classes("w-full")
+                                self.preset_delete_button = ui.button(icon="delete", color="red", on_click=lambda: self.delete_preset()).classes("w-full")
+                                with self.preset_load_button:
+                                    ui.tooltip("Load selected preset").props('delay=1000')
+                                with self.preset_save_button:
+                                    ui.tooltip("Save current parameters to selected preset").props('delay=1000')
+                                with self.preset_delete_button:
+                                    ui.tooltip("Delete selected preset").props('delay=1000')
 
                             self.preset_load_button.disable()
                             self.preset_save_button.disable()
@@ -208,9 +235,9 @@ class NiceGUIApp:
                 with ui.row().classes("w-full flex items-center"):
                     self.game_select = ui.select(label="Select a game", value=next(iter(self.dataset_games_dict)), with_input=True,
                         options=self.dataset_games_dict).classes("flex-grow-[1000]")
-                    self.game_weight = ui.number(label="Weight", value=1, min=0, max=100, step=1).classes("flex-grow-[1]")
+                    self.game_weight = ui.number(label="Weight", value=10, min=0, max=100, step=1).classes("flex-grow-[1]")
                     self.game_weight.on("wheel", lambda: None)
-                    self.game_add_button = ui.button("Add Game").classes("flex-grow-[1]")
+                    self.game_add_button = ui.button(icon='add', color='green').classes("w-1")
                     self.game_add_button.on_click(lambda: self.on_click_game_add_button())
 
                 ui.separator()
@@ -240,6 +267,103 @@ class NiceGUIApp:
         ui.separator()
 
         # queued / output samples go here
+        self.output_samples = []
+        with ui.column().classes("w-full") as self.output_samples_container:
+            with ui.card().classes("w-full"):
+                with ui.row().classes("w-full"):
+                    with ui.column().classes("flex-grow-[50] gap-0"):
+                        ui.label("step_178350_1000_ema0.020_lcfg1.5_sgm200-1_r1000_g1488_s91936_b0").classes("w-full")
+                        #ui.image(source=os.path.join(config.DEBUG_PATH, "nicegui_app", "test_latents.png")).classes("w-full gap-0").style("image-rendering: pixelated")
+                        #ui.image(source=os.path.join(config.DEBUG_PATH, "nicegui_app", "test_spectrogram.png")).classes("w-full gap-0")
+                        #ui.audio(src=os.path.join(config.DEBUG_PATH, "nicegui_app", "test_audio.flac")).classes("w-full")
+                        ui.add_body_html("<div id='waveform'></div>")
+                        #ui.element('div').props('id="waveform"')
+                        #ui.html("<div id='waveform'></div>")
+                    with ui.column().classes("flex-grow-[1] gap-0"):
+                        #with ui.button_group().props('vertical'):
+                        remove_button = ui.button('✕').classes("w-1 rounded-b-none").props("color='red'")
+                        move_up_button = ui.button('▲').classes("w-1 rounded-none")
+                        
+                        with remove_button:
+                            ui.tooltip("Remove sample from output list").props('delay=1000')
+                        move_down_button = ui.button('▼').classes("w-1 rounded-t-none")
+
+                        
+                        
+    def on_startup_app(self) -> None:
+        self.load_preset()
+
+        app.add_static_file(local_file=os.path.join(config.DEBUG_PATH, "nicegui_app", "test_audio.flac"), url_path="/audio.flac")
+        #app.add_static_files(...)
+        ui.add_body_html('''
+<script type="module">
+import WaveSurfer from 'https://cdn.jsdelivr.net/npm/wavesurfer.js@7/dist/wavesurfer.esm.js'
+import Spectrogram from 'https://cdn.jsdelivr.net/npm/wavesurfer.js@7.8/dist/plugins/spectrogram.esm.js'
+import TimelinePlugin from 'https://cdn.jsdelivr.net/npm/wavesurfer.js@7.8/dist/plugins/timeline.esm.js'
+import RegionsPlugin from 'https://cdn.jsdelivr.net/npm/wavesurfer.js@7.8/dist/plugins/regions.esm.js'
+
+const wavesurfer = WaveSurfer.create({
+  container: '#waveform',
+  waveColor: '#4F4A85',
+  progressColor: '#383351',
+  url: '/audio.flac',
+  sampleRate: 32000,
+  height: 0,
+  cursorColor: 'white',
+  dragToSeek: true,
+})
+
+// Create a timeline plugin instance with custom options
+const topTimeline = TimelinePlugin.create({
+  height: 20,
+  timeInterval: 0.2,
+  primaryLabelInterval: 5,
+  //secondaryLabelInterval: 1,
+  style: {
+    fontSize: '10px',
+    color: '#FFFFFF',
+  },
+})
+wavesurfer.registerPlugin(topTimeline)
+
+/*
+// Initialize the Regions plugin
+const regions = RegionsPlugin.create()
+wavesurfer.registerPlugin(regions)
+
+// Create some regions at specific time ranges
+wavesurfer.on('decode', () => {
+  regions.addRegion({
+    start: 9,
+    end: 10,
+    content: 'Cramped region',
+    color: randomColor(),
+    minLength: 1,
+    maxLength: 10,
+  })
+})
+*/
+
+// Initialize the Spectrogram plugin
+wavesurfer.registerPlugin(
+  Spectrogram.create({
+    labels: false,
+    height: 200,
+    splitChannels: false,
+    scale: 'mel',
+    frequencyMax: 16000,
+    windowFunc: 'blackman',
+  }),
+)
+
+wavesurfer.on('interaction', () => {
+  wavesurfer.playPause()
+})
+</script>
+''')
+
+    def refresh_output_sample_elements(self) -> None:
+        pass
 
     def refresh_game_prompt_elements(self) -> None:
         self.logger.debug(f"refresh_game_prompt_elements: {dict_str(self.prompt)}")
@@ -247,11 +371,11 @@ class NiceGUIApp:
         with self.prompt_games_column:
             for game_name, game_weight in self.prompt.items():
                 with ui.row().classes("w-full flex items-center"):
-                    ui.select(label="Select a game", value=game_name, with_input=True, options=self.dataset_games_dict,
+                    ui.select(value=game_name, with_input=True, options=self.dataset_games_dict,
                         on_change=lambda: self.on_change_gen_param()).classes("flex-grow-[1000]")
                     ui.number(label="Weight", value=game_weight, min=0, max=100, step=1,
                         on_change=lambda: self.on_change_gen_param()).classes("flex-grow-[1]").on("wheel", lambda: None)
-                    ui.button("Remove").on_click(lambda g=game_name: self.on_click_game_remove_button(g)).classes("flex-grow-[1]")
+                    ui.button(icon="remove").classes("w-1 top-0 right-0").props("color='red'").on_click(lambda g=game_name: self.on_click_game_remove_button(g))
 
     def on_click_game_remove_button(self, game_name: str) -> None:
         self.prompt.pop(game_name)
