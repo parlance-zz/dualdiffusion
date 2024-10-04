@@ -31,7 +31,7 @@ class SamplingSchedule:
     @torch.no_grad()
     def get_schedule(name: str, steps: int, t_start: float = 1., device: Optional[torch.device] = None, **kwargs) -> torch.Tensor:
         schedule_fn = getattr(SamplingSchedule, name)
-        t = torch.linspace(t_start, 0, steps, device=device)
+        t = torch.linspace(t_start, 0, int(steps), device=device)
         return schedule_fn(t, **kwargs)
     
     @staticmethod
