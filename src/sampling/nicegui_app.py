@@ -40,6 +40,7 @@ class NiceGUIAppConfig:
 
     enable_dark_mode: bool = True
     enable_debug_logging: bool = False
+    max_debug_log_length: int = 10000
 
 class NiceGUILogHandler(logging.Handler):
     def __init__(self, log_control: Optional[ui.log] = None) -> None:
@@ -143,7 +144,7 @@ class NiceGUIApp:
 
     def init_debug_logs_layout(self) -> None:
         ui.label("Debug Log:")
-        self.debug_log = ui.log(max_lines=50).style("height: 500px")
+        self.debug_log = ui.log(max_lines=self.config.max_debug_log_length).style("height: 500px")
         self.log_handler.set_log_control(self.debug_log)
 
     def init_generation_layout(self) -> None:
@@ -285,7 +286,7 @@ class NiceGUIApp:
                         
     def on_startup_app(self) -> None:
         self.load_preset()
-
+        return
         app.add_static_file(local_file=os.path.join(config.DEBUG_PATH, "nicegui_app", "test_audio.flac"), url_path="/audio.flac")
         #app.add_static_files(...)
         ui.add_body_html('''
@@ -375,7 +376,8 @@ wavesurfer.on('interaction', () => {
         self.logger.info(f"Saved audio output to {audio_output_path}")
         
         Popen(["c:/program files/audacity/audacity.exe", audio_output_path])
-
+        #Popen(["C:/Program Files (x86)/VideoLAN/VLC/vlc.exe", audio_output_path])
+        
     def refresh_output_sample_elements(self) -> None:
         pass
 
