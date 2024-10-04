@@ -358,14 +358,19 @@ wavesurfer.on('interaction', () => {
 
     async def on_click_generate_button(self) -> None:
         
+        if len(self.prompt) == 0:
+            self.logger.error("No prompt games selected")
+            ui.notify("No prompt games selected", type="warning", color="red", close_button=True)
+            return
+        
         params: SampleParams = SampleParams(seed=self.seed.value, prompt=self.prompt, **self.gen_params)
         if self.auto_increment_seed.value == True: self.seed.set_value(self.seed.value + 1)
         self.logger.debug(f"generate_button clicked - params:{dict_str(params.__dict__)}")
         await asyncio.sleep(0)
 
-        #params.input_audio = load_audio(os.path.join(config.DEBUG_PATH, "nicegui_app", "test_audio.flac"))
-        #params.inpainting_mask = torch.zeros(size=self.pipeline.get_latent_shape(self.pipeline.get_sample_shape(length=params.length))[2:])
-        #params.inpainting_mask[:, params.inpainting_mask.shape[-1]//2:] = 1.
+        params.input_audio = load_audio(os.path.join(config.DEBUG_PATH, "nicegui_app", "test_audio.flac"))
+        params.inpainting_mask = torch.zeros(size=self.pipeline.get_latent_shape(self.pipeline.get_sample_shape(length=params.length))[2:])
+        params.inpainting_mask[:, params.inpainting_mask.shape[-1]//2:] = 1.
         
         sample_output: SampleOutput = await self.pipeline(params)
 
