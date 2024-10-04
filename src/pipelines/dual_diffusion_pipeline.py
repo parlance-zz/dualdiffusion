@@ -34,10 +34,8 @@ import torchaudio
 from tqdm.auto import tqdm
 
 from modules.module import DualDiffusionModule
-from modules.mp_tools import mp_sum
 from utils.dual_diffusion_utils import (
-    tensor_to_img, save_img, multi_plot, normalize, get_cos_angle,
-    load_safetensors, torch_dtype, load_audio
+    normalize, load_safetensors, torch_dtype, load_audio
 )
 from sampling.schedule import SamplingSchedule
 
@@ -51,8 +49,9 @@ class SampleParams:
     sigma_max: Optional[float]  = None
     sigma_min: Optional[float]  = None
     sigma_data: Optional[float] = None
+    rho: float                  = 7.
     schedule: Optional[str]               = "edm2"
-    schedule_kwargs: Optional[dict]       = None
+    #schedule_kwargs: Optional[dict]       = None
     prompt: Optional[dict]                = None
     generator: Optional[torch.Generator]  = None
     use_heun: bool                        = True
@@ -75,7 +74,22 @@ class SampleParams:
             metadata["generator"] = True
 
         metadata["timestamp"] = datetime.now().strftime(r"%m/%d/%Y %I:%M:%S %p")
-        return metadata
+        return {str(key): str(value) for key, value in metadata.items()}
+    
+    def get_label(self, pipeline: "DualDiffusionPipeline") -> str:
+
+        last_global_step = pipeline.model_metadata["last_global_step"]["unet"]
+        if "unet" in pipeline.model_metadata["load_emas"]:
+            ema = pipeline.model_metadata["load_emas"]["unet"].replace("pf_ema_std-", "").replace(".safetensors", "")
+        else:
+            ema = None
+        top_game_name = sorted(self.prompt.items(), key=lambda x:x[1])[-1][0]
+        top_game_id = pipeline.dataset_game_ids[top_game_name]
+
+        label = f"step_{last_global_step}_{self.num_steps}_{'ema'+ema+'_' if ema else ''}cfg{self.cfg_scale}"
+        label += f"_sgm{self.sigma_max}-{self.sigma_min}_ip{self.input_perturbation}_r{self.rho}_g{top_game_id}_s{self.seed}"
+        
+        return label
 
 @dataclass
 class SampleOutput:
@@ -296,7 +310,7 @@ class DualDiffusionPipeline(torch.nn.Module):
             if self.dataset_info is None:
                 raise ValueError("Unable to retrieve class label, pipeline.dataset_info not found")
             else:
-                return self.dataset_info["games"][label_name]
+                return self.dataset_game_ids[label_name]
         else:
             raise ValueError(f"Unknown label type '{type(label_name)}'")
         
@@ -350,7 +364,7 @@ class DualDiffusionPipeline(torch.nn.Module):
         params.sigma_max = params.sigma_max or self.unet.config.sigma_max
         params.sigma_min = params.sigma_min or self.unet.config.sigma_min
         params.sigma_data = params.sigma_data or self.unet.config.sigma_data
-        params.schedule_kwargs = params.schedule_kwargs or {}
+        #params.schedule_kwargs = params.schedule_kwargs or {}
         params.prompt = params.prompt or {}
         
         if isinstance(params.input_audio, str):
@@ -379,7 +393,7 @@ class DualDiffusionPipeline(torch.nn.Module):
         debug_info["latent_diffusion"] = latent_diffusion
 
         vae_class_embeddings = self.vae.get_class_embeddings(self.get_class_labels(params.prompt, module_name="vae"))
-        conditioning_mask = torch.cat(torch.ones(params.batch_size), torch.zeros(params.batch_size))
+        conditioning_mask = torch.cat((torch.ones(params.batch_size), torch.zeros(params.batch_size)))
         unet_class_embeddings = self.unet.get_class_embeddings(
             self.get_class_labels(params.prompt, module_name="unet"), conditioning_mask)
         debug_info["unet_class_embeddings mean"] = unet_class_embeddings.mean().item()
@@ -400,8 +414,8 @@ class DualDiffusionPipeline(torch.nn.Module):
         if params.inpainting_mask is not None:
             ref_sample = torch.cat([input_audio_sample * (1 - params.inpainting_mask), params.inpainting_mask], dim=1)
         else:
-            ref_sample = torch.cat((torch.zeros_like(input_audio_sample[0:1]),
-                                    torch.ones_like(input_audio_sample[0:1])), dim=1)
+            ref_sample = torch.cat((torch.zeros_like(input_audio_sample),
+                                    torch.ones_like(input_audio_sample[:, :1])), dim=1)
         input_ref_sample = ref_sample.to(self.unet.dtype).repeat(2, 1, 1, 1)
 
         if self.unet.config.use_t_ranges == True:
@@ -411,7 +425,8 @@ class DualDiffusionPipeline(torch.nn.Module):
 
         start_timestep = 1
         sigma_schedule = SamplingSchedule.get_schedule(params.schedule,
-            params.num_steps, start_timestep, device=self.unet.device, **params.schedule_kwargs)
+            params.num_steps, start_timestep, device=self.unet.device,
+            sigma_max=params.sigma_max, sigma_min=params.sigma_min, rho=params.rho)#**params.schedule_kwargs)
         sigma_schedule_list = sigma_schedule.tolist()
         debug_info["sigma_schedule"] = sigma_schedule_list
 
@@ -419,16 +434,15 @@ class DualDiffusionPipeline(torch.nn.Module):
         sample = noise * sigma_schedule[0] + input_audio_sample * params.sigma_data
 
         progress_bar = tqdm(total=params.num_steps)
-        for i, sigma_curr, sigma_next in enumerate(zip(sigma_schedule_list[:-1], sigma_schedule_list[1:])):
+        for i, (sigma_curr, sigma_next) in enumerate(zip(sigma_schedule_list[:-1], sigma_schedule_list[1:])):
 
             old_sigma_next = sigma_next
             #effective_input_perturbation = (sigma_schedule_error_logvar[i]/4).exp().item() * input_perturbation
-            effective_input_perturbation = params.input_perturbation
+            effective_input_perturbation = params.input_perturbation * (1 - (i/params.num_steps)*(1 - i/params.num_steps))
             sigma_next *= (1 - (max(min(effective_input_perturbation, 1), 0)))
 
             input_sigma = torch.tensor([sigma_curr], device=self.unet.device)
             input_sample = sample.to(self.unet.dtype).repeat(2, 1, 1, 1)
-            
             #if params.static_conditioning_perturbation > 0:
             #    p_unet_class_embeddings = mp_sum(unet_class_embeddings, -self.unet.u_class_embeddings, static_conditioning_perturbation)
             #else:
@@ -448,7 +462,7 @@ class DualDiffusionPipeline(torch.nn.Module):
                 t_hat = sigma_hat / sigma_curr
 
                 input_sample_hat = (t_hat * sample + (1 - t_hat) * cfg_model_output).to(self.unet.dtype).repeat(2, 1, 1, 1)
-                input_sigma_hat = torch.tensor([t_hat * sigma_curr], device=self.device)
+                input_sigma_hat = torch.tensor([t_hat * sigma_curr], device=self.unet.device)
 
                 model_output_hat = self.unet(input_sample_hat, input_sigma_hat, self.format, unet_class_embeddings, t_ranges, input_ref_sample).float()
                 cfg_model_output_hat = model_output_hat[params.batch_size:].lerp(model_output_hat[:params.batch_size], params.cfg_scale)
