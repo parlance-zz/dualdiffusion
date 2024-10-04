@@ -2,13 +2,10 @@
     "model_name": "edm2_vt7_12d_i",
     "model_load_options": {
       "torch_dtype": "bfloat16",
-      "device": "cpu",
+      "device": "cuda",
       "load_checkpoints": true,
       "load_emas": true,
-      "compile_options": {
-        "fullgraph": true,
-        "dynamic": false
-      }
+      "compile_options": null
     },
 
     "web_server_host": "localhost",

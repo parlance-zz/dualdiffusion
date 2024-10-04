@@ -3,15 +3,15 @@ from utils import config
 from typing import Optional
 from dataclasses import dataclass
 from datetime import datetime
+from functools import partial
+from subprocess import Popen
+import asyncio
 import logging
 import random
-import time
 import os
 
 import torch
 import numpy as np
-import nicegui
-import asyncio
 from nicegui import ui, app
 
 from utils.dual_diffusion_utils import (
@@ -71,7 +71,7 @@ class NiceGUIApp:
         self.logger.debug(f"NiceGUIAppConfig:\n{dict_str(self.config.__dict__)}")
 
         # load model
-        """
+        #"""
         model_path = os.path.join(config.MODELS_PATH, self.config.model_name)
         model_load_options = self.config.model_load_options
 
@@ -85,16 +85,11 @@ class NiceGUIApp:
         self.dataset_games_dict = {} # keys are actual game names, values are display strings
         for game_name in self.pipeline.dataset_game_ids.keys():
             self.dataset_games_dict[game_name] = f"({self.pipeline.dataset_info['game_train_sample_counts'][game_name]}) {game_name}"
-        """
-
-        #config.save_json(self.dataset_games_dict, os.path.join(config.DEBUG_PATH, "nicegui_app", "dataset_games_dict.json"))
-        self.dataset_games_dict = config.load_json(os.path.join(config.DEBUG_PATH, "nicegui_app", "dataset_games_dict.json"))
+        #"""
+        #self.dataset_games_dict = config.load_json(os.path.join(config.DEBUG_PATH, "nicegui_app", "dataset_games_dict.json"))
 
         self.init_layout()
-        
         app.on_startup(lambda: self.on_startup_app())
-
-
 
     def init_logging(self) -> None:
         self.logger = logging.getLogger(name="nicegui_app")
@@ -161,13 +156,13 @@ class NiceGUIApp:
                         self.seed = ui.number(label="Seed", value=10042, min=10000, max=99999, step=1).classes("w-full")
                         self.seed.on("wheel", lambda: None)
                         self.auto_increment_seed = ui.checkbox("Auto Increment Seed", value=True).classes("w-full")
-                        ui.button("Randomize Seed").classes("w-full").on_click(lambda: self.seed.set_value(random.randint(0, 99999)))
-                        self.generate_button = ui.button("Generate").classes("w-full")
+                        ui.button("Randomize Seed", on_click=lambda: self.seed.set_value(random.randint(0, 99999))).classes("w-full")
+                        self.generate_button = ui.button("Generate", on_click=partial(self.on_click_generate_button)).classes("w-full")
 
                     with ui.card().classes("flex-grow-[3]"): # gen params
                         #ui.label("Parameters").classes(self.heading_label_classes)
                         self.gen_param_elements = {}
-                        with ui.grid(columns=2).classes("w-full"):
+                        with ui.grid(columns=2).classes("w-full items-center"):
                             self.gen_param_elements["num_steps"] = ui.number(label="Number of Steps", value=100, min=10, max=1000, precision=0, step=10).classes("w-full")
                             self.gen_param_elements["cfg_scale"] = ui.number(label="CFG Scale", value=1.5, min=0, max=10, step=0.1).classes("w-full")
                             self.gen_param_elements["use_heun"] = ui.checkbox("Use Heun's Method", value=True).classes("w-full")
@@ -178,9 +173,9 @@ class NiceGUIApp:
                             self.gen_param_elements["rho"] = ui.number(label="Rho", value=7, min=0.5, max=1000, precision=2, step=0.5).classes("w-full")
                             self.gen_param_elements["input_perturbation"] = ui.number(label="Input Perturbation", value=1, min=0, max=1, step=0.05).classes("w-full")
                             
+                            self.gen_param_elements["schedule"] = ui.select(label="Σ Schedule", options=SamplingSchedule.get_schedules_list(), value="edm2").classes("w-full")
                             self.sigma_schedule_dialog = ui.dialog()
-                            self.show_schedule_button = ui.button("Show σ Schedule").classes("w-full")
-                            self.show_schedule_button.on_click(lambda: self.on_click_show_schedule_button())
+                            self.show_schedule_button = ui.button("Show σ Schedule", on_click=lambda: self.on_click_show_schedule_button()).classes("w-full h-1")
 
                         self.gen_params = {}
                         for param_name, param_element in self.gen_param_elements.items():
@@ -235,7 +230,7 @@ class NiceGUIApp:
                 with ui.row().classes("w-full flex items-center"):
                     self.game_select = ui.select(label="Select a game", value=next(iter(self.dataset_games_dict)), with_input=True,
                         options=self.dataset_games_dict).classes("flex-grow-[1000]")
-                    self.game_weight = ui.number(label="Weight", value=10, min=0, max=100, step=1).classes("flex-grow-[1]")
+                    self.game_weight = ui.number(label="Weight", value=10, min=-100, max=100, step=1).classes("flex-grow-[1]")
                     self.game_weight.on("wheel", lambda: None)
                     self.game_add_button = ui.button(icon='add', color='green').classes("w-1")
                     self.game_add_button.on_click(lambda: self.on_click_game_add_button())
@@ -286,9 +281,7 @@ class NiceGUIApp:
                         
                         with remove_button:
                             ui.tooltip("Remove sample from output list").props('delay=1000')
-                        move_down_button = ui.button('▼').classes("w-1 rounded-t-none")
-
-                        
+                        move_down_button = ui.button('▼').classes("w-1 rounded-t-none")         
                         
     def on_startup_app(self) -> None:
         self.load_preset()
@@ -362,6 +355,27 @@ wavesurfer.on('interaction', () => {
 </script>
 ''')
 
+    async def on_click_generate_button(self) -> None:
+        
+        params: SampleParams = SampleParams(seed=self.seed.value, prompt=self.prompt, **self.gen_params)
+        self.seed.set_value(self.seed.value + 1)
+        self.logger.debug(f"generate_button clicked - params:{dict_str(params.__dict__)}")
+        await asyncio.sleep(0)
+
+        #params.input_audio = load_audio(os.path.join(config.DEBUG_PATH, "nicegui_app", "test_audio.flac"))
+        #params.inpainting_mask = torch.zeros(size=self.pipeline.get_latent_shape(self.pipeline.get_sample_shape(length=params.length))[2:])
+        #params.inpainting_mask[:, params.inpainting_mask.shape[-1]//2:] = 1.
+        
+        sample_output: SampleOutput = await self.pipeline(params)
+
+        metadata = sample_output.params.get_metadata()
+        audio_output_filename = f"{sample_output.params.get_label(self.pipeline)}.flac"
+        audio_output_path = os.path.join(config.MODELS_PATH, self.config.model_name, "output", audio_output_filename)
+        save_audio(sample_output.raw_sample.squeeze(0), self.pipeline.format.config.sample_rate, audio_output_path, metadata=metadata)
+        self.logger.info(f"Saved audio output to {audio_output_path}")
+        
+        Popen(["c:/program files/audacity/audacity.exe", audio_output_path])
+
     def refresh_output_sample_elements(self) -> None:
         pass
 
@@ -373,8 +387,8 @@ wavesurfer.on('interaction', () => {
                 with ui.row().classes("w-full flex items-center"):
                     ui.select(value=game_name, with_input=True, options=self.dataset_games_dict,
                         on_change=lambda: self.on_change_gen_param()).classes("flex-grow-[1000]")
-                    ui.number(label="Weight", value=game_weight, min=0, max=100, step=1,
-                        on_change=lambda: self.on_change_gen_param()).classes("flex-grow-[1]").on("wheel", lambda: None)
+                    ui.number(label="Weight", value=game_weight, min=-100, max=100, step=1,
+                        on_change=lambda: self.on_change_gen_param()).classes("flex-grow-[1]").on("wheel", lambda: None).bind_value(self.prompt, game_name)
                     ui.button(icon="remove").classes("w-1 top-0 right-0").props("color='red'").on_click(lambda g=game_name: self.on_click_game_remove_button(g))
 
     def on_click_game_remove_button(self, game_name: str) -> None:
