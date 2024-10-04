@@ -24,6 +24,7 @@ from typing import Optional, Callable
 
 import torch
 from torch import Tensor
+from tqdm.auto import tqdm
 
 def _get_complex_dtype(real_dtype: torch.dtype):
     if real_dtype == torch.double:
@@ -48,6 +49,7 @@ def griffinlim(
     stereo: bool,
     stereo_coherence: float,
     manual_init: Optional[Tensor] = None,
+    show_tqdm: bool = True,
 ) -> Tensor:
 
     if not 0 <= momentum < 1:
@@ -71,6 +73,7 @@ def griffinlim(
         
     tprev = torch.tensor(0.0, dtype=specgram.dtype, device=specgram.device)
 
+    progress_bar = tqdm(total=n_iter) if show_tqdm else None
     for i in range(n_iter):
         
         if stereo:
@@ -103,11 +106,16 @@ def griffinlim(
         angles = angles.div(angles.abs().add(1e-16))
 
         tprev = rebuilt
+        if progress_bar is not None:
+            progress_bar.update(1)
 
     waveform = torch.istft(
         angles * specgram, n_fft=n_fft, hop_length=hop_length,
         win_length=win_length, window=window, length=length
     )
+
+    if progress_bar is not None:
+        progress_bar.close()
 
     return waveform.reshape(shape[:-2] + waveform.shape[-1:])
 
@@ -146,7 +154,7 @@ class PhaseRecovery(torch.nn.Module):
         self.register_buffer("window", window, persistent=False)
 
     @torch.inference_mode()
-    def forward(self, specgram: Tensor, n_fgla_iter: Optional[int] = None) -> Tensor:
+    def forward(self, specgram: Tensor, n_fgla_iter: Optional[int] = None, show_tqdm: bool = True) -> Tensor:
 
         n_fgla_iter = n_fgla_iter or self.n_fgla_iter
 
@@ -164,6 +172,7 @@ class PhaseRecovery(torch.nn.Module):
                 self.stereo,
                 self.stereo_coherence,
                 manual_init=None,
+                show_tqdm=show_tqdm,
             )
         else:
             wave_shape = wave.size()
