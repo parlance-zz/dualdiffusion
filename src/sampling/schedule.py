@@ -24,6 +24,8 @@ from typing import Optional, Any
 import inspect
 
 import torch
+import numpy as np
+
 
 class SamplingSchedule:
 
@@ -58,7 +60,7 @@ class SamplingSchedule:
     @staticmethod
     @torch.no_grad()
     def linear(t: torch.Tensor, sigma_max: float, sigma_min: float, **_) -> torch.Tensor:
-        return sigma_min + (sigma_max - sigma_min) * t
+        return (np.log(sigma_min) + (np.log(sigma_max) - np.log(sigma_min)) * t).exp()
     
     @staticmethod
     @torch.no_grad()
