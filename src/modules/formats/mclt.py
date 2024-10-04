@@ -59,6 +59,7 @@ class DualMCLTFormat(DualDiffusionFormat):
 
         return (bsz, num_output_channels, num_mclt_bins, chunk_len,)
 
+    @torch.inference_mode()
     def raw_to_sample(self, raw_samples: torch.Tensor,
                       return_dict: bool = False) -> Union[torch.Tensor, dict]:
 
@@ -89,7 +90,8 @@ class DualMCLTFormat(DualDiffusionFormat):
         else:
             return samples
 
-    def sample_to_raw(self, samples: torch.Tensor,
+    @torch.inference_mode()
+    async def sample_to_raw(self, samples: torch.Tensor,
                       return_dict: bool = False) -> Union[torch.Tensor, dict]:
         
         samples_abs, samples_phase1 = samples.chunk(2, dim=1)

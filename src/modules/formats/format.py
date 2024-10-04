@@ -62,12 +62,14 @@ class DualDiffusionFormat(DualDiffusionModule, ABC):
         pass
 
     @abstractmethod
+    @torch.inference_mode()
     def raw_to_sample(self, raw_samples: torch.Tensor,
                       return_dict: bool = False) -> Union[torch.Tensor, dict]:
         pass
 
     @abstractmethod
-    def sample_to_raw(self, samples: torch.Tensor,
+    @torch.inference_mode()
+    async def sample_to_raw(self, samples: torch.Tensor,
                       return_dict: bool = False) -> Union[torch.Tensor, dict]:
         pass
     
