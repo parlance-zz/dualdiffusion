@@ -1,17 +1,17 @@
 {
   "prompt": {
-    "spc/Megaman X": 4,
-    "spc/Megaman X2": 2,
-    "spc/Megaman X3": 3
+    "spc/Megaman X": 10.0,
+    "spc/Gundam Wing - Endless Duel": 10
   },
   "gen_params": {
-    "num_steps": 200,
+    "num_steps": 180.0,
     "cfg_scale": 1.5,
     "use_heun": true,
     "num_fgla_iters": 250,
     "sigma_max": 200,
-    "sigma_min": 0.15,
-    "rho": 7,
-    "input_perturbation": 1
+    "sigma_min": 0.1,
+    "rho": 7.0,
+    "input_perturbation": 1,
+    "schedule": "edm2"
   }
 }

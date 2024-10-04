@@ -1,16 +1,16 @@
 {
   "prompt": {
-    "spc/3 Ninjas Kick Back": 2,
-    "spc/A Ressha de Ikou 3": 1
+    "spc/Front Mission": 1.0
   },
   "gen_params": {
-    "num_steps": 100,
+    "num_steps": 180.0,
     "cfg_scale": 1.5,
-    "use_heun": true,
+    "use_heun": false,
     "num_fgla_iters": 250,
     "sigma_max": 200,
-    "sigma_min": 0.15,
-    "rho": 7,
-    "input_perturbation": 1
+    "sigma_min": 0.1,
+    "rho": 7.0,
+    "input_perturbation": 0.85,
+    "schedule": "edm2"
   }
 }
