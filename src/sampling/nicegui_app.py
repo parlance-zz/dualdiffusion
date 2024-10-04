@@ -154,7 +154,7 @@ class NiceGUIApp:
                 with ui.row().classes("w-full"): # gen params and seed
                     with ui.card().classes("flex-grow-[1]"): # seed params
                         #ui.label("General").classes(self.heading_label_classes)
-                        self.seed = ui.number(label="Seed", value=10042, min=10000, max=99999, step=1).classes("w-full")
+                        self.seed = ui.number(label="Seed", value=10042, min=10000, max=99999, precision=0, step=1).classes("w-full")
                         self.seed.on("wheel", lambda: None)
                         self.auto_increment_seed = ui.checkbox("Auto Increment Seed", value=True).classes("w-full")
                         ui.button("Randomize Seed", on_click=lambda: self.seed.set_value(random.randint(0, 99999))).classes("w-full")
@@ -359,7 +359,7 @@ wavesurfer.on('interaction', () => {
     async def on_click_generate_button(self) -> None:
         
         params: SampleParams = SampleParams(seed=self.seed.value, prompt=self.prompt, **self.gen_params)
-        self.seed.set_value(self.seed.value + 1)
+        if self.auto_increment_seed.value == True: self.seed.set_value(self.seed.value + 1)
         self.logger.debug(f"generate_button clicked - params:{dict_str(params.__dict__)}")
         await asyncio.sleep(0)
 

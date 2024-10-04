@@ -64,6 +64,15 @@ class SampleParams:
     input_audio_pre_encoded: bool                   = False
     inpainting_mask: Optional[torch.Tensor]         = None
 
+    def sanitize(self) -> "SampleParams":
+        self.seed = int(self.seed) if self.seed is not None else None
+        self.length = int(self.length) if self.length is not None else None
+        self.num_steps = int(self.num_steps)
+        self.batch_size = int(self.batch_size)
+        self.num_fgla_iters = int(self.num_fgla_iters)
+        # todo: additional sanitization (clip values like input perturb, etc.)
+        return self
+
     def get_metadata(self) -> dict[str, Any]:
         metadata = self.__dict__.copy()
 
@@ -358,7 +367,7 @@ class DualDiffusionPipeline(torch.nn.Module):
     async def __call__(self, params: SampleParams) -> torch.Tensor:
         
         debug_info = {}
-        params = SampleParams(**params.__dict__) # todo: this should be properly deepcopied because of tensor params
+        params = SampleParams(**params.__dict__).sanitize() # todo: this should be properly deepcopied because of tensor params
 
         params.seed = params.seed or int(np.random.randint(100000, 999999))
         params.length = params.length or self.format.config.sample_raw_length
