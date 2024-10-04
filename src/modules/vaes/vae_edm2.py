@@ -106,7 +106,7 @@ class Block(torch.nn.Module):
         y = self.conv_res0(mp_silu(x))
 
         c = self.emb_linear(emb, gain=self.emb_gain) + 1.
-        y = mp_silu(y * c)
+        y = mp_silu(y * c.unsqueeze(-1).unsqueeze(-1))
 
         if self.dropout != 0 and self.training == True: # magnitude preserving fix for dropout
             y = torch.nn.functional.dropout(y, p=self.dropout) * (1. - self.dropout)**0.5
@@ -216,7 +216,8 @@ class AutoencoderKL_EDM2(DualDiffusionVAE):
         self.conv_out = MPConv(cout, config.out_channels, kernel=(3,3))
 
     def get_class_embeddings(self, class_labels: torch.Tensor) -> torch.Tensor:
-        return mp_silu(self.emb_label(normalize(class_labels).to(device=self.device, dtype=self.dtype)))
+        return mp_silu(self.emb_label(
+            normalize(class_labels).to(device=self.device, dtype=self.dtype)))
 
     def get_recon_loss_logvar(self) -> torch.Tensor:
         return self.recon_loss_logvar
@@ -261,6 +262,6 @@ class AutoencoderKL_EDM2(DualDiffusionVAE):
         x = torch.cat((x, torch.ones_like(x[:, :1]), format.get_ln_freqs(x)), dim=1)
         x = self.conv_latents_in(x)
         for _, block in self.dec.items():
-            x = block(x, class_embeddings, None, None)
+            x = block(x, class_embeddings)
 
         return self.conv_out(x, gain=self.out_gain)
