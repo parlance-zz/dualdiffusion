@@ -24,6 +24,7 @@ import utils.config as config
 
 import os
 import importlib
+import asyncio
 from dataclasses import dataclass
 from typing import Optional, Union, Any
 from datetime import datetime
@@ -248,7 +249,7 @@ class DualDiffusionPipeline(torch.nn.Module):
             
             # load and merge ema weights
             if module_name in load_emas:
-                ema_module_path = os.path.join(module_path, load_emas[module_name])                
+                ema_module_path = os.path.join(module_path, load_emas[module_name])
                 model_modules[module_name].load_ema(ema_module_path)
         
         pipeline = DualDiffusionPipeline(model_modules).to(device=device, dtype=torch_dtype)
@@ -354,10 +355,10 @@ class DualDiffusionPipeline(torch.nn.Module):
         return self.vae.get_sample_shape(latent_shape)
     
     @torch.inference_mode()
-    def __call__(self, params: SampleParams) -> torch.Tensor:
+    async def __call__(self, params: SampleParams) -> torch.Tensor:
         
         debug_info = {}
-        params = SampleParams(**params.__dict__)
+        params = SampleParams(**params.__dict__) # todo: this should be properly deepcopied because of tensor params
 
         params.seed = params.seed or int(np.random.randint(100000, 999999))
         params.length = params.length or self.format.config.sample_raw_length
@@ -371,8 +372,9 @@ class DualDiffusionPipeline(torch.nn.Module):
             if params.input_audio_pre_encoded == True:
                 input_audio = load_safetensors(params.input_audio)["latents"][0:1]
             else:
+                input_sample_shape = self.get_sample_shape(bsz=1, length=params.length)
                 input_audio_sample_rate, input_audio = load_audio(
-                    params.input_audio, count=params.length, return_sample_rate=True)
+                    params.input_audio, count=self.format.get_audio_shape(input_sample_shape), return_sample_rate=True)
                 if input_audio_sample_rate != self.format.config.sample_rate:
                     input_audio = torchaudio.functional.resample(
                         input_audio, input_audio_sample_rate, self.format.config.sample_rate)
@@ -404,14 +406,18 @@ class DualDiffusionPipeline(torch.nn.Module):
                 input_audio_sample = input_audio
             else:
                 while input_audio.ndim < 3: input_audio.unsqueeze_(0)
-                input_audio_sample = self.format.raw_to_sample(input_audio.float())
+                input_audio_sample = self.format.raw_to_sample(input_audio.float().to(self.format.device))
                 if latent_diffusion:
                     input_audio_sample = self.vae.encode(
-                        input_audio_sample.type(self.vae.dtype), vae_class_embeddings, self.format).mode().float()
+                        input_audio_sample.to(device=self.vae.device, dtype=self.vae.dtype),
+                        vae_class_embeddings, self.format).mode().float()[..., :688] #***
+                    await asyncio.sleep(0)
         else:
-            input_audio_sample = torch.zeros(sample_shape, device=self.unet.device, dtype=self.unet.dtype)
+            input_audio_sample = torch.zeros(sample_shape, device=self.unet.device)
 
         if params.inpainting_mask is not None:
+            while params.inpainting_mask.ndim < input_audio_sample.ndim: params.inpainting_mask.unsqueeze_(0)
+            params.inpainting_mask = (params.inpainting_mask.to(self.unet.device) > 0.5).float()
             ref_sample = torch.cat([input_audio_sample * (1 - params.inpainting_mask), params.inpainting_mask], dim=1)
         else:
             ref_sample = torch.cat((torch.zeros_like(input_audio_sample),
@@ -438,7 +444,8 @@ class DualDiffusionPipeline(torch.nn.Module):
 
             old_sigma_next = sigma_next
             #effective_input_perturbation = (sigma_schedule_error_logvar[i]/4).exp().item() * input_perturbation
-            effective_input_perturbation = params.input_perturbation * (1 - (i/params.num_steps)*(1 - i/params.num_steps))
+            #effective_input_perturbation = params.input_perturbation
+            effective_input_perturbation = params.input_perturbation * (1 - (i/params.num_steps)*(1 - i/params.num_steps)) #***
             sigma_next *= (1 - (max(min(effective_input_perturbation, 1), 0)))
 
             input_sigma = torch.tensor([sigma_curr], device=self.unet.device)
@@ -458,10 +465,13 @@ class DualDiffusionPipeline(torch.nn.Module):
             cfg_model_output = model_output[params.batch_size:].lerp(model_output[:params.batch_size], params.cfg_scale)
                 
             if params.use_heun:
+                await asyncio.sleep(0)
+
                 sigma_hat = max(sigma_next, params.sigma_min)
                 t_hat = sigma_hat / sigma_curr
 
                 input_sample_hat = (t_hat * sample + (1 - t_hat) * cfg_model_output).to(self.unet.dtype).repeat(2, 1, 1, 1)
+                input_sample_hat = normalize(input_sample_hat).to(self.unet.dtype) * (sigma_next**2 + params.sigma_data**2)**0.5 #***
                 input_sigma_hat = torch.tensor([t_hat * sigma_curr], device=self.unet.device)
 
                 model_output_hat = self.unet(input_sample_hat, input_sigma_hat, self.format, unet_class_embeddings, t_ranges, input_ref_sample).float()
@@ -471,6 +481,7 @@ class DualDiffusionPipeline(torch.nn.Module):
             t = sigma_next / sigma_curr if (i+1) < params.num_steps else 0
             sample = (t * sample + (1 - t) * cfg_model_output)
             
+            sample = normalize(sample).float() * (sigma_next**2 + params.sigma_data**2)**0.5 #***
             #if params.temperature_scale < 1:
             #    ideal_norm = (sigma_next**2 + sigma_data**2)**0.5
             #    measured_norm = sample.square().mean(dim=(1,2,3), keepdim=True).sqrt()
@@ -484,6 +495,7 @@ class DualDiffusionPipeline(torch.nn.Module):
                 sample += added_noise * p
 
             progress_bar.update(1)
+            await asyncio.sleep(0)
         
         progress_bar.close()
 
@@ -496,9 +508,10 @@ class DualDiffusionPipeline(torch.nn.Module):
         if latent_diffusion == True:
             latents = sample
             spectrogram = self.vae.decode(sample.to(self.vae.dtype), vae_class_embeddings, self.format).float()
+            await asyncio.sleep(0)
         else:
             latents = None
             spectrogram = sample
-        raw_sample = self.format.sample_to_raw(spectrogram)
+        raw_sample = await self.format.sample_to_raw(spectrogram)
         
         return SampleOutput(raw_sample, spectrogram, params, debug_info, latents)
