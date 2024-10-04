@@ -42,7 +42,8 @@ class DualDiffusionFormat(DualDiffusionModule, ABC):
     module_name: str = "format"
     has_trainable_parameters: bool = False
     supports_half_precision: bool = False
-    supports_compile: bool = False
+    supports_compile: bool = False # format compilation disabled for now
+                                   # as torch.compile does not support complex operators
     
     @abstractmethod
     def get_num_channels(self) -> tuple[int, int]:
@@ -77,8 +78,8 @@ class DualDiffusionFormat(DualDiffusionModule, ABC):
     def get_ln_freqs(self, x: torch.Tensor) -> torch.Tensor:
         pass
 
-    # format compilation disabled for now as torch.compile does not support complex operators
     def compile(self, **kwargs) -> None:
-        #self.raw_to_sample = torch.compile(self.raw_to_sample, **compile_options)
-        #self.sample_to_raw = torch.compile(self.sample_to_raw, **compile_options)
+        if type(self).supports_compile == True:
+            self.raw_to_sample = torch.compile(self.raw_to_sample, **kwargs)
+            self.sample_to_raw = torch.compile(self.sample_to_raw, **kwargs)
         return
