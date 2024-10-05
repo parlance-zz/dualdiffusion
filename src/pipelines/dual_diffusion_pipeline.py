@@ -365,7 +365,7 @@ class DualDiffusionPipeline(torch.nn.Module):
     
     @torch.inference_mode()
     async def __call__(self, params: SampleParams,
-            progress_callback: Optional[Callable[[str, float], Any]] = None) -> torch.Tensor:
+            progress_callback: Optional[Callable[[str, Union[float, torch.Tensor]], Any]] = None) -> torch.Tensor:
         
         debug_info = {}
         params = SampleParams(**params.__dict__).sanitize() # todo: this should be properly deepcopied because of tensor params
@@ -496,6 +496,9 @@ class DualDiffusionPipeline(torch.nn.Module):
             #    ideal_norm = (sigma_next**2 + sigma_data**2)**0.5
             #    measured_norm = sample.square().mean(dim=(1,2,3), keepdim=True).sqrt()
             #    sample = sample / (measured_norm / ideal_norm)**(1 - temperature_scale)
+
+            if progress_callback is not None:
+                progress_callback("latents", sample.cpu())
 
             if i+1 < params.num_steps:
                 p = max(old_sigma_next**2 - sigma_next**2, 0)**0.5
