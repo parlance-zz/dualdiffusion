@@ -26,7 +26,7 @@ import os
 import importlib
 import asyncio
 from dataclasses import dataclass
-from typing import Optional, Union, Any
+from typing import Callable, Optional, Union, Any
 from datetime import datetime
 
 import numpy as np
@@ -364,7 +364,8 @@ class DualDiffusionPipeline(torch.nn.Module):
         return self.vae.get_sample_shape(latent_shape)
     
     @torch.inference_mode()
-    async def __call__(self, params: SampleParams) -> torch.Tensor:
+    async def __call__(self, params: SampleParams,
+            progress_callback: Optional[Callable[[str, float], Any]] = None) -> torch.Tensor:
         
         debug_info = {}
         params = SampleParams(**params.__dict__).sanitize() # todo: this should be properly deepcopied because of tensor params
@@ -454,7 +455,7 @@ class DualDiffusionPipeline(torch.nn.Module):
             old_sigma_next = sigma_next
             #effective_input_perturbation = (sigma_schedule_error_logvar[i]/4).exp().item() * input_perturbation
             #effective_input_perturbation = params.input_perturbation
-            effective_input_perturbation = params.input_perturbation * (1 - (i/params.num_steps)*(1 - i/params.num_steps)) #***
+            effective_input_perturbation = params.input_perturbation * (1 - (i/params.num_steps)*(1 - i/params.num_steps))**2 #***
             sigma_next *= (1 - (max(min(effective_input_perturbation, 1), 0)))
 
             input_sigma = torch.tensor([sigma_curr], device=self.unet.device)
@@ -480,7 +481,7 @@ class DualDiffusionPipeline(torch.nn.Module):
                 t_hat = sigma_hat / sigma_curr
 
                 input_sample_hat = (t_hat * sample + (1 - t_hat) * cfg_model_output).to(self.unet.dtype).repeat(2, 1, 1, 1)
-                input_sample_hat = normalize(input_sample_hat).to(self.unet.dtype) * (sigma_next**2 + params.sigma_data**2)**0.5 #***
+                #input_sample_hat = normalize(input_sample_hat).to(self.unet.dtype) * (sigma_next**2 + params.sigma_data**2)**0.5 #***
                 input_sigma_hat = torch.tensor([t_hat * sigma_curr], device=self.unet.device)
 
                 model_output_hat = self.unet(input_sample_hat, input_sigma_hat, self.format, unet_class_embeddings, t_ranges, input_ref_sample).float()
@@ -490,7 +491,7 @@ class DualDiffusionPipeline(torch.nn.Module):
             t = sigma_next / sigma_curr if (i+1) < params.num_steps else 0
             sample = (t * sample + (1 - t) * cfg_model_output)
             
-            sample = normalize(sample).float() * (sigma_next**2 + params.sigma_data**2)**0.5 #***
+            #sample = normalize(sample).float() * (sigma_next**2 + params.sigma_data**2)**0.5 #***
             #if params.temperature_scale < 1:
             #    ideal_norm = (sigma_next**2 + sigma_data**2)**0.5
             #    measured_norm = sample.square().mean(dim=(1,2,3), keepdim=True).sqrt()
@@ -503,6 +504,8 @@ class DualDiffusionPipeline(torch.nn.Module):
 
                 sample += added_noise * p
 
+            if progress_callback is not None:
+                progress_callback("sampling", (i+1) / params.num_steps)
             progress_bar.update(1)
             await asyncio.sleep(0)
         
