@@ -34,6 +34,7 @@ class OutputSample:
     audio_path: Optional[str] = None
 
     card_element: Optional[ui.card] = None
+    name_label_element: Optional[ui.label] = None
     sampling_progress_element: Optional[ui.linear_progress] = None
     latents_image_element: Optional[ui.interactive_image] = None
     spectrogram_image_element: Optional[ui.image] = None
@@ -358,8 +359,8 @@ class NiceGUIApp:
         audio_output_path = os.path.join(
             config.MODELS_PATH, self.config.model_name, "output", f"step_{last_global_step}", audio_output_filename)
         
-        save_audio(sample_output.raw_sample.squeeze(0),
-            self.pipeline.format.config.sample_rate, audio_output_path, metadata=metadata)
+        audio_output_path = save_audio(sample_output.raw_sample.squeeze(0),
+            self.pipeline.format.config.sample_rate, audio_output_path, metadata=metadata, no_clobber=True)
         self.logger.info(f"Saved audio output to {audio_output_path}")
         return audio_output_path
 
@@ -398,7 +399,9 @@ class NiceGUIApp:
             output_sample.sample_output = await self.pipeline(sample_params, lambda stage,
                 progress: sampling_progress_callback(stage, progress))
         output_sample.audio_path = self.save_output_sample(output_sample.sample_output)
-
+        
+        output_sample.name = os.path.splitext(os.path.basename(output_sample.audio_path))[0]
+        output_sample.name_label_element.set_text(output_sample.name)
         spectrogram_image = output_sample.sample_output.spectrogram.mean(dim=(0,1))
         spectrogram_image = tensor_to_img(spectrogram_image, colormap=True, flip_y=True)
         spectrogram_image = Image.fromarray(spectrogram_image)
@@ -428,7 +431,11 @@ class NiceGUIApp:
         with ui.card().classes("w-full") as output_sample.card_element:
             with ui.row().classes("w-full"):
                 with ui.column().classes("flex-grow-[50] gap-0"):
-                    ui.label(output_sample.name).classes("w-full")
+                    with ui.row().classes("gap-0 items-center"):
+                        output_sample.name_label_element = ui.label(output_sample.name).classes("p-2").style(
+                            "border: 1px solid grey; border-bottom: none; border-radius: 10px 10px 0 0;")
+                        #ui.label("Rating:")
+                        #ui.slider(min=0, max=5, step=1, value=0).props("label-always").classes("h-10 top-0")
                     output_sample.latents_image_element = ui.interactive_image().classes(
                         "w-full gap-0").style("image-rendering: pixelated; width: 100%; height: auto;").props("fit=scale-down")
                     output_sample.sampling_progress_element = ui.linear_progress(
@@ -437,7 +444,7 @@ class NiceGUIApp:
                     output_sample.spectrogram_image_element.set_visibility(False)
 
                     dummy_audio_path = os.path.join(config.DEBUG_PATH, "nicegui_app", "test_audio.flac")
-                    output_sample.audio_element = ui.audio(dummy_audio_path).classes("w-full").style("filter: invert(1) hue-rotate(180deg);")
+                    output_sample.audio_element = ui.audio(dummy_audio_path).classes("w-full").props("preload='auto'").style("filter: invert(1) hue-rotate(180deg);")
                     output_sample.audio_element.set_visibility(False)
                     """
                     ui.html("<div id='waveform'></div>")

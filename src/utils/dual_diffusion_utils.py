@@ -141,7 +141,7 @@ def save_tensor_raw(tensor: torch.Tensor, output_path: str) -> None:
 @torch.inference_mode()
 def normalize_lufs(raw_samples: torch.Tensor,
                    sample_rate: int,
-                   target_lufs: float = -16.,
+                   target_lufs: float = -12.,
                    max_clip:float = 0.15) -> torch.Tensor:
     
     original_shape = raw_samples.shape
@@ -165,11 +165,27 @@ def normalize_lufs(raw_samples: torch.Tensor,
 
     return normalized_raw_samples.view(original_shape)
 
+def get_no_clobber_filepath(filepath):
+
+    directory, filename = os.path.split(filepath)
+    name, ext = os.path.splitext(filename)
+    
+    unique_filepath = filepath
+    counter = 0
+    
+    while os.path.exists(unique_filepath):
+        new_filename = f"{name}_{counter}{ext}"
+        unique_filepath = os.path.join(directory, new_filename)
+        counter += 1
+    
+    return unique_filepath
+
 def save_audio(raw_samples: torch.Tensor,
                sample_rate: int,
                output_path: str,
-               target_lufs: float = -16.,
-               metadata: Optional[dict] = None) -> None:
+               target_lufs: float = -12.,
+               metadata: Optional[dict] = None,
+               no_clobber: bool = False) -> str:
     
     raw_samples = raw_samples.detach().real.float()
     if raw_samples.ndim == 1:
@@ -181,6 +197,9 @@ def save_audio(raw_samples: torch.Tensor,
     directory = os.path.dirname(output_path)
     os.makedirs(directory, exist_ok=True)
     
+    if no_clobber == True:
+        output_path = get_no_clobber_filepath(output_path)
+
     torchaudio.save(output_path, raw_samples.cpu(), sample_rate, bits_per_sample=16)
 
     if metadata is not None:
@@ -188,6 +207,8 @@ def save_audio(raw_samples: torch.Tensor,
         for key in metadata:
             audio_file[key] = metadata[key]
         audio_file.save()
+
+    return output_path
 
 def torch_dtype(dtype: Union[str, torch.dtype]) -> torch.dtype:
     if isinstance(dtype, torch.dtype):
