@@ -96,8 +96,8 @@ class SampleParams:
         top_game_name = sorted(self.prompt.items(), key=lambda x:x[1])[-1][0]
         top_game_id = pipeline.dataset_game_ids[top_game_name]
 
-        label = f"step_{last_global_step}_{self.num_steps}_{'ema'+ema+'_' if ema else ''}cfg{self.cfg_scale}"
-        label += f"_sgm{self.sigma_max}-{self.sigma_min}_ip{self.input_perturbation}_r{self.rho}_g{top_game_id}_s{self.seed}"
+        label = f"step_{last_global_step}_{int(self.num_steps)}_{'ema'+ema+'_' if ema else ''}cfg{self.cfg_scale}"
+        label += f"_sgm{self.sigma_max}-{self.sigma_min}_ip{self.input_perturbation}_r{self.rho}_g{top_game_id}_s{int(self.seed)}"
         
         return label
 
