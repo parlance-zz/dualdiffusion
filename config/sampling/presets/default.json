@@ -1,10 +1,11 @@
 {
   "prompt": {
-    "spc/Gundam Wing - Endless Duel": 10,
-    "spc/Megaman 7": 10
+    "spc/Megaman 7": 8.0,
+    "spc/Megaman X": 10,
+    "spc/Sonic Wings": 10.0
   },
   "gen_params": {
-    "num_steps": 180.0,
+    "num_steps": 100.0,
     "cfg_scale": 1.5,
     "use_heun": true,
     "num_fgla_iters": 250,

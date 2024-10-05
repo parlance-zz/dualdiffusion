@@ -42,6 +42,7 @@ class OutputSample:
 class NiceGUIAppConfig:
     model_name: str
     model_load_options: dict
+    max_gpu_concurrency: int = 1
 
     web_server_host: Optional[str] = None
     web_server_port: int = 3001
@@ -96,6 +97,8 @@ class NiceGUIApp:
             self.dataset_games_dict[game_name] = f"({self.pipeline.dataset_info['game_train_sample_counts'][game_name]}) {game_name}"
         #"""
         #self.dataset_games_dict = config.load_json(os.path.join(config.DEBUG_PATH, "nicegui_app", "dataset_games_dict.json"))
+
+        self.gpu_lock = asyncio.Semaphore(self.config.max_gpu_concurrency)
 
         self.init_layout()
         app.on_startup(lambda: self.on_startup_app())
@@ -384,8 +387,10 @@ wavesurfer.on('interaction', () => {
         #params.inpainting_mask = torch.zeros(size=self.pipeline.get_latent_shape(self.pipeline.get_sample_shape(length=params.length))[2:])
         #params.inpainting_mask[:, params.inpainting_mask.shape[-1]//2:] = 1.
         
-        output_sample.sample_output = await self.pipeline(sample_params, lambda stage,
-            progress: output_sample.sampling_progress_element.set_value(f"{int(progress*100)}%"))
+        async with self.gpu_lock:
+            if output_sample not in self.output_samples: return
+            output_sample.sample_output = await self.pipeline(sample_params, lambda stage,
+                progress: output_sample.sampling_progress_element.set_value(f"{int(progress*100)}%"))
         output_sample.audio_path = self.save_output_sample(output_sample.sample_output)
 
         spectrogram_image = -output_sample.sample_output.spectrogram.mean(dim=(0,1))
@@ -427,7 +432,7 @@ wavesurfer.on('interaction', () => {
                     output_sample.spectrogram_image_element.set_visibility(False)
 
                     dummy_audio_path = os.path.join(config.DEBUG_PATH, "nicegui_app", "test_audio.flac")
-                    output_sample.audio_element = ui.audio(dummy_audio_path).classes("w-full")
+                    output_sample.audio_element = ui.audio(dummy_audio_path).classes("w-full").style('filter: invert(1) hue-rotate(180deg);')
                     output_sample.audio_element.set_visibility(False)
 
                 with ui.column().classes("flex-grow-[1] gap-0 items-center"):

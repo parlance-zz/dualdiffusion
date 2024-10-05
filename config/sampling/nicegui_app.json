@@ -5,8 +5,12 @@
       "device": "cuda",
       "load_checkpoints": true,
       "load_emas": true,
-      "compile_options": null
+      "compile_options": {
+        "fullgraph": true,
+        "dynamic": false
+      }
     },
+    "max_gpu_concurrency": 1,
 
     "web_server_host": "localhost",
     "web_server_port": 3001,
