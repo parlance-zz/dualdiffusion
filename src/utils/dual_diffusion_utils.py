@@ -37,6 +37,7 @@ import matplotlib.pyplot as plt
 from scipy.special import erfinv
 from mutagen import File as MTAudioFile
 
+from utils.roseus_colormap import ROSEUS_COLORMAP
 
 class TF32_Disabled:
     def __enter__(self):
@@ -362,7 +363,7 @@ def tensor_to_img(x: torch.Tensor,
 
     if flip_x: img = cv2.flip(img, 1)
     if flip_y: img = cv2.flip(img, 0)
-    if colormap: img = cv2.applyColorMap(img, cv2.COLORMAP_JET)
+    if colormap: img = ROSEUS_COLORMAP[img]
 
     return img
 
