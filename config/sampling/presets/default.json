@@ -1,8 +1,9 @@
 {
   "prompt": {
-    "spc/Megaman 7": 8.0,
-    "spc/Megaman X": 10,
-    "spc/Sonic Wings": 10.0
+    "spc/Final Fantasy USA - Mystic Quest": 10,
+    "spc/Megaman X3": 10,
+    "spc/Sonic Wings": 10,
+    "spc/Megaman X": 10
   },
   "gen_params": {
     "num_steps": 100.0,

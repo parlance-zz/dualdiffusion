@@ -378,7 +378,6 @@ wavesurfer.on('interaction', () => {
 
         output_sample = OutputSample(name=f"{sample_params.get_label(self.pipeline)}",
             seed=sample_params.seed, prompt=sample_params.prompt, gen_params={**self.gen_params}, sample_params=sample_params)
-        self.output_samples.insert(0, output_sample)
         self.add_output_sample(output_sample)
 
         await asyncio.sleep(0.1) # ensure the seed increment event is processed before beginning sampling
@@ -417,6 +416,8 @@ wavesurfer.on('interaction', () => {
             if new_index != current_index:
                 output_sample.card_element.move(self.output_samples_column, target_index=new_index)
 
+        self.output_samples.insert(0, output_sample)
+
         with ui.card().classes("w-full") as output_sample.card_element:
             with ui.row().classes("w-full"):
                 with ui.column().classes("flex-grow-[50] gap-0"):
@@ -427,7 +428,7 @@ wavesurfer.on('interaction', () => {
                     #ui.add_body_html("<div id='waveform'></div>")
                     #ui.element('div').props('id="waveform"')
                     #ui.html("<div id='waveform'></div>")
-                    output_sample.sampling_progress_element = ui.linear_progress(value=0, size="128px").classes("w-full").props("instant-feedback")
+                    output_sample.sampling_progress_element = ui.linear_progress(value="0%", size="128px").classes("w-full font-bold text-xl").props("instant-feedback")
                     output_sample.spectrogram_image_element = ui.image().classes("w-full gap-0").style("height: 128px")
                     output_sample.spectrogram_image_element.set_visibility(False)
 
