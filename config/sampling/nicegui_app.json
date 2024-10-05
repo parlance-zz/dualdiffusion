@@ -1,5 +1,5 @@
 {
-    "model_name": "edm2_vt7_12d_i",
+    "model_name": "edm2_vae_test7_12d",
     "model_load_options": {
       "torch_dtype": "bfloat16",
       "device": "cuda",

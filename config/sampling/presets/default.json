@@ -1,16 +1,17 @@
 {
   "prompt": {
-    "spc/Front Mission": 1.0
+    "spc/Gundam Wing - Endless Duel": 10,
+    "spc/Megaman 7": 10
   },
   "gen_params": {
     "num_steps": 180.0,
     "cfg_scale": 1.5,
-    "use_heun": false,
+    "use_heun": true,
     "num_fgla_iters": 250,
     "sigma_max": 200,
-    "sigma_min": 0.1,
+    "sigma_min": 0.6,
     "rho": 7.0,
-    "input_perturbation": 0.85,
+    "input_perturbation": 1.0,
     "schedule": "edm2"
   }
 }

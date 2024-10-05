@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from functools import partial
 from subprocess import Popen
+from PIL import Image
 import asyncio
 import logging
 import random
@@ -15,11 +16,12 @@ import numpy as np
 from nicegui import ui, app
 
 from utils.dual_diffusion_utils import (
-    init_cuda, save_audio, load_audio, dict_str,
+    init_cuda, save_audio, load_audio, dict_str, tensor_to_img,
     get_available_torch_devices, sanitize_filename
 )
 from pipelines.dual_diffusion_pipeline import DualDiffusionPipeline, SampleParams, SampleOutput
 from sampling.schedule import SamplingSchedule
+from sampling.scrollable_log import ScrollableLog
 
 @dataclass
 class OutputSample:
@@ -27,8 +29,14 @@ class OutputSample:
     seed: int
     prompt: dict
     gen_params: dict
-    sample_output: SampleOutput
+    sample_params: SampleParams
+    sample_output: Optional[SampleOutput] = None
     audio_path: Optional[str] = None
+
+    card_element: Optional[ui.card] = None
+    sampling_progress_element: Optional[ui.linear_progress] = None
+    spectrogram_image_element: Optional[ui.image] = None
+    audio_element: Optional[ui.audio] = None
 
 @dataclass
 class NiceGUIAppConfig:
@@ -138,13 +146,17 @@ class NiceGUIApp:
                 self.init_model_settings_layout()
             with ui.tab_panel(self.debug_logs_tab):
                 self.init_debug_logs_layout()
+                def on_debug_logs_tab_focus():  
+                    self.debug_log.scroll_to(pixels=100)      
+                self.debug_logs_tab.on("focus", on_debug_logs_tab_focus)             
 
     def init_model_settings_layout(self) -> None:
         ui.label("model settings stuff")
 
     def init_debug_logs_layout(self) -> None:
         ui.label("Debug Log:")
-        self.debug_log = ui.log(max_lines=self.config.max_debug_log_length).style("height: 500px")
+        #self.debug_log = ui.log(max_lines=self.config.max_debug_log_length).style("height: 500px")
+        self.debug_log = ScrollableLog(max_lines=self.config.max_debug_log_length).style("height: 500px")
         self.log_handler.set_log_control(self.debug_log)
 
     def init_generation_layout(self) -> None:
@@ -263,26 +275,8 @@ class NiceGUIApp:
         ui.separator()
 
         # queued / output samples go here
-        self.output_samples = []
-        with ui.column().classes("w-full") as self.output_samples_container:
-            with ui.card().classes("w-full"):
-                with ui.row().classes("w-full"):
-                    with ui.column().classes("flex-grow-[50] gap-0"):
-                        ui.label("step_178350_1000_ema0.020_lcfg1.5_sgm200-1_r1000_g1488_s91936_b0").classes("w-full")
-                        #ui.image(source=os.path.join(config.DEBUG_PATH, "nicegui_app", "test_latents.png")).classes("w-full gap-0").style("image-rendering: pixelated")
-                        #ui.image(source=os.path.join(config.DEBUG_PATH, "nicegui_app", "test_spectrogram.png")).classes("w-full gap-0")
-                        #ui.audio(src=os.path.join(config.DEBUG_PATH, "nicegui_app", "test_audio.flac")).classes("w-full")
-                        ui.add_body_html("<div id='waveform'></div>")
-                        #ui.element('div').props('id="waveform"')
-                        #ui.html("<div id='waveform'></div>")
-                    with ui.column().classes("flex-grow-[1] gap-0"):
-                        #with ui.button_group().props('vertical'):
-                        remove_button = ui.button('✕').classes("w-1 rounded-b-none").props("color='red'")
-                        move_up_button = ui.button('▲').classes("w-1 rounded-none")
-                        
-                        with remove_button:
-                            ui.tooltip("Remove sample from output list").props('delay=1000')
-                        move_down_button = ui.button('▼').classes("w-1 rounded-t-none")         
+        self.output_samples: list[OutputSample] = []
+        self.output_samples_column = ui.column().classes("w-full")      
                         
     def on_startup_app(self) -> None:
         self.load_preset()
@@ -356,6 +350,18 @@ wavesurfer.on('interaction', () => {
 </script>
 ''')
 
+    def save_output_sample(self, sample_output: SampleOutput) -> str:
+        metadata = {"diffusion_metadata": dict_str(sample_output.params.get_metadata())}
+        last_global_step = self.pipeline.model_metadata["last_global_step"]["unet"]
+        audio_output_filename = f"{sample_output.params.get_label(self.pipeline)}.flac"
+        audio_output_path = os.path.join(
+            config.MODELS_PATH, self.config.model_name, "output", f"step_{last_global_step}", audio_output_filename)
+        
+        save_audio(sample_output.raw_sample.squeeze(0),
+            self.pipeline.format.config.sample_rate, audio_output_path, metadata=metadata)
+        self.logger.info(f"Saved audio output to {audio_output_path}")
+        return audio_output_path
+
     async def on_click_generate_button(self) -> None:
         
         if len(self.prompt) == 0:
@@ -363,37 +369,88 @@ wavesurfer.on('interaction', () => {
             ui.notify("No prompt games selected", type="warning", color="red", close_button=True)
             return
         
-        params: SampleParams = SampleParams(seed=self.seed.value, prompt=self.prompt, **self.gen_params)
+        sample_params: SampleParams = SampleParams(seed=self.seed.value, prompt={**self.prompt}, **self.gen_params)
         if self.auto_increment_seed.value == True: self.seed.set_value(self.seed.value + 1)
-        self.logger.debug(f"generate_button clicked - params:{dict_str(params.__dict__)}")
-        await asyncio.sleep(0)
+        self.logger.info(f"on_click_generate_button - params:{dict_str(sample_params.__dict__)}")
 
-        params.input_audio = load_audio(os.path.join(config.DEBUG_PATH, "nicegui_app", "test_audio.flac"))
-        params.inpainting_mask = torch.zeros(size=self.pipeline.get_latent_shape(self.pipeline.get_sample_shape(length=params.length))[2:])
-        params.inpainting_mask[:, params.inpainting_mask.shape[-1]//2:] = 1.
-        
-        sample_output: SampleOutput = await self.pipeline(params)
+        output_sample = OutputSample(name=f"{sample_params.get_label(self.pipeline)}",
+            seed=sample_params.seed, prompt=sample_params.prompt, gen_params={**self.gen_params}, sample_params=sample_params)
+        self.output_samples.insert(0, output_sample)
+        self.add_output_sample(output_sample)
 
-        metadata = sample_output.params.get_metadata()
-        audio_output_filename = f"{sample_output.params.get_label(self.pipeline)}.flac"
-        audio_output_path = os.path.join(config.MODELS_PATH, self.config.model_name, "output", audio_output_filename)
-        save_audio(sample_output.raw_sample.squeeze(0), self.pipeline.format.config.sample_rate, audio_output_path, metadata=metadata)
-        self.logger.info(f"Saved audio output to {audio_output_path}")
+        await asyncio.sleep(0.1) # ensure the seed increment event is processed before beginning sampling
+
+        #params.input_audio = load_audio(os.path.join(config.DEBUG_PATH, "nicegui_app", "test_audio.flac"))
+        #params.inpainting_mask = torch.zeros(size=self.pipeline.get_latent_shape(self.pipeline.get_sample_shape(length=params.length))[2:])
+        #params.inpainting_mask[:, params.inpainting_mask.shape[-1]//2:] = 1.
         
-        Popen(["c:/program files/audacity/audacity.exe", audio_output_path])
-        #Popen(["C:/Program Files (x86)/VideoLAN/VLC/vlc.exe", audio_output_path])
+        output_sample.sample_output = await self.pipeline(sample_params, lambda stage,
+            progress: output_sample.sampling_progress_element.set_value(f"{int(progress*100)}%"))
+        output_sample.audio_path = self.save_output_sample(output_sample.sample_output)
+
+        spectrogram_image = -output_sample.sample_output.spectrogram.mean(dim=(0,1))
+        spectrogram_image -= spectrogram_image.amin()
+        spectrogram_image = (spectrogram_image + 10).log()
+        spectrogram_image = tensor_to_img(spectrogram_image, colormap=True, flip_y=True)
+        spectrogram_image = Image.fromarray(spectrogram_image)
+        output_sample.spectrogram_image_element.set_source(spectrogram_image)
+        output_sample.spectrogram_image_element.set_visibility(True)
+        output_sample.audio_element.set_source(output_sample.audio_path)
+        output_sample.audio_element.set_visibility(True)
+        output_sample.sampling_progress_element.set_visibility(False)
+        #Popen(["c:/program files/audacity/audacity.exe", audio_output_path])
         
-    def refresh_output_sample_elements(self) -> None:
-        pass
+    def add_output_sample(self, output_sample: OutputSample) -> None:
+        
+        def remove_output_sample(output_sample: OutputSample) -> None:
+            self.output_samples_column.remove(output_sample.card_element)
+            self.output_samples.remove(output_sample)
+
+        def move_output_sample(output_sample: OutputSample, direction: int) -> None:
+            current_index = output_sample.card_element.parent_slot.children.index(output_sample.card_element)
+            new_index = min(max(current_index + direction, 0), len(output_sample.card_element.parent_slot.children) - 1)
+            if new_index != current_index:
+                output_sample.card_element.move(self.output_samples_column, target_index=new_index)
+
+        with ui.card().classes("w-full") as output_sample.card_element:
+            with ui.row().classes("w-full"):
+                with ui.column().classes("flex-grow-[50] gap-0"):
+                    ui.label(output_sample.name).classes("w-full")
+                    #ui.image(source=os.path.join(config.DEBUG_PATH, "nicegui_app", "test_latents.png")).classes("w-full gap-0").style("image-rendering: pixelated")
+                    #ui.image(source=os.path.join(config.DEBUG_PATH, "nicegui_app", "test_spectrogram.png")).classes("w-full gap-0")
+                    #ui.audio(src=os.path.join(config.DEBUG_PATH, "nicegui_app", "test_audio.flac")).classes("w-full")
+                    #ui.add_body_html("<div id='waveform'></div>")
+                    #ui.element('div').props('id="waveform"')
+                    #ui.html("<div id='waveform'></div>")
+                    output_sample.sampling_progress_element = ui.linear_progress(value=0, size="128px").classes("w-full").props("instant-feedback")
+                    output_sample.spectrogram_image_element = ui.image().classes("w-full gap-0").style("height: 128px")
+                    output_sample.spectrogram_image_element.set_visibility(False)
+
+                    dummy_audio_path = os.path.join(config.DEBUG_PATH, "nicegui_app", "test_audio.flac")
+                    output_sample.audio_element = ui.audio(dummy_audio_path).classes("w-full")
+                    output_sample.audio_element.set_visibility(False)
+
+                with ui.column().classes("flex-grow-[1] gap-0 items-center"):
+                    ui.button('✕', on_click=lambda: remove_output_sample(output_sample)).classes("w-1 rounded-b-none").props("color='red'")
+                    ui.button('▲', on_click=lambda: move_output_sample(output_sample, direction=-1)).classes("w-1 rounded-none")
+                    ui.button('▼', on_click=lambda: move_output_sample(output_sample, direction=1)).classes("w-1 rounded-t-none")
+
+        output_sample.card_element.move(self.output_samples_column, target_index=0)
 
     def refresh_game_prompt_elements(self) -> None:
+
+        def on_game_select_change(new_game_name: str, old_game_name: str) -> None:
+            self.logger.debug(f"game_select changed {old_game_name} to {new_game_name}")
+            self.prompt[new_game_name] = self.prompt.pop(old_game_name)
+            self.on_change_gen_param()
+            
         self.logger.debug(f"refresh_game_prompt_elements: {dict_str(self.prompt)}")
         self.prompt_games_column.clear()
         with self.prompt_games_column:
             for game_name, game_weight in self.prompt.items():
                 with ui.row().classes("w-full flex items-center"):
                     ui.select(value=game_name, with_input=True, options=self.dataset_games_dict,
-                        on_change=lambda: self.on_change_gen_param()).classes("flex-grow-[1000]")
+                        on_change=lambda e: on_game_select_change(new_game_name=e.value, old_game_name=game_name)).classes("flex-grow-[1000]")
                     ui.number(label="Weight", value=game_weight, min=-100, max=100, step=1,
                         on_change=lambda: self.on_change_gen_param()).classes("flex-grow-[1]").on("wheel", lambda: None).bind_value(self.prompt, game_name)
                     ui.button(icon="remove").classes("w-1 top-0 right-0").props("color='red'").on_click(lambda g=game_name: self.on_click_game_remove_button(g))
@@ -414,10 +471,10 @@ wavesurfer.on('interaction', () => {
         with self.sigma_schedule_dialog, ui.card():
             ui.label("Sigma Schedule:")
             sigma_schedule = SamplingSchedule.get_schedule(
-                "edm2", int(self.gen_params["num_steps"]) + 1,
+                self.gen_params["schedule"], int(self.gen_params["num_steps"]),
                 sigma_max=self.gen_params["sigma_max"],
                 sigma_min=self.gen_params["sigma_min"],
-                rho=self.gen_params["rho"]).log()
+                rho=self.gen_params["rho"])
 
             x = np.arange(int(self.gen_params["num_steps"]) + 1)
             y = sigma_schedule.log().numpy()
