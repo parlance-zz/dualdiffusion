@@ -125,7 +125,7 @@ def dict_str(d: dict, indent: int = 4) -> str:
 
 def sanitize_filename(filename: str) -> str:
     return ("".join(c for c in filename
-        if c.isalnum() or c in (" ",".","_"))).strip()
+        if c.isalnum() or c in (" ",".","_","-","+","(",")","[","]","{","}"))).strip()
 
 def save_tensor_raw(tensor: torch.Tensor, output_path: str) -> None:
 

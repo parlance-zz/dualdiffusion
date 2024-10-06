@@ -570,8 +570,10 @@ class NiceGUIApp:
 
     def save_preset(self) -> None:
         preset_name = self.preset_select.value
+        preset_filename = f"{sanitize_filename(preset_name)}.json"
         save_preset_path = os.path.join(
-            config.CONFIG_PATH, "sampling", "presets", f"{sanitize_filename(preset_name)}.json")
+            config.CONFIG_PATH, "sampling", "presets", preset_filename)
+        preset_name = os.path.splitext(os.path.basename(save_preset_path))[0]
         self.logger.debug(f"Saving preset '{save_preset_path}'")
 
         save_preset_dict = {"prompt": self.prompt, "gen_params": self.gen_params}
@@ -580,6 +582,7 @@ class NiceGUIApp:
 
         self.preset_select.options = self.get_saved_presets()
         self.last_loaded_preset = preset_name
+        self.preset_select.value = preset_name
         self.preset_select._props["label"] = f"Select a Preset - (loaded preset: {self.last_loaded_preset})"
         self.preset_select.update()
         self.preset_load_button.disable()
