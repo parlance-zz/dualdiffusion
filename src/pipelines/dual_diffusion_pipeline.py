@@ -475,8 +475,6 @@ class DualDiffusionPipeline(torch.nn.Module):
             cfg_model_output = model_output[params.batch_size:].lerp(model_output[:params.batch_size], params.cfg_scale)
                 
             if params.use_heun:
-                await asyncio.sleep(0)
-
                 sigma_hat = max(sigma_next, params.sigma_min)
                 t_hat = sigma_hat / sigma_curr
 
@@ -510,7 +508,7 @@ class DualDiffusionPipeline(torch.nn.Module):
             if progress_callback is not None:
                 progress_callback("sampling", (i+1) / params.num_steps)
             progress_bar.update(1)
-            await asyncio.sleep(0)
+            await asyncio.sleep(0.0083)
         
         progress_bar.close()
 

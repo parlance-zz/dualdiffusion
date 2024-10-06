@@ -173,7 +173,7 @@ class NiceGUIApp:
                         self.seed = ui.number(label="Seed", value=10042, min=10000, max=99999, precision=0, step=1).classes("w-full")
                         self.seed.on("wheel", lambda: None)
                         self.auto_increment_seed = ui.checkbox("Auto Increment Seed", value=True).classes("w-full")
-                        ui.button("Randomize Seed", on_click=lambda: self.seed.set_value(random.randint(0, 99999))).classes("w-full")
+                        ui.button("Randomize Seed", on_click=lambda: self.seed.set_value(random.randint(10000, 99999))).classes("w-full")
                         self.generate_button = ui.button("Generate", on_click=partial(self.on_click_generate_button)).classes("w-full")
 
                     with ui.card().classes("flex-grow-[3]"): # gen params
