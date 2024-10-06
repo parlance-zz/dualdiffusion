@@ -506,7 +506,9 @@ class DualDiffusionPipeline(torch.nn.Module):
                 sample += added_noise * p
 
             if progress_callback is not None:
-                progress_callback("sampling", (i+1) / params.num_steps)
+                if progress_callback("sampling", (i+1) / params.num_steps) == False:
+                    progress_bar.close()
+                    return None
             progress_bar.update(1)
             await asyncio.sleep(0.0083)
         

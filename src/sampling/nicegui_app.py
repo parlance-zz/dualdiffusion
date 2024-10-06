@@ -174,8 +174,10 @@ class NiceGUIApp:
                         self.seed = ui.number(label="Seed", value=10042, min=10000, max=99999, precision=0, step=1).classes("w-full")
                         self.seed.on("wheel", lambda: None)
                         self.auto_increment_seed = ui.checkbox("Auto Increment Seed", value=True).classes("w-full")
-                        ui.button("Randomize Seed", on_click=lambda: self.seed.set_value(random.randint(10000, 99999))).classes("w-full")
-                        self.generate_button = ui.button("Generate", on_click=partial(self.on_click_generate_button)).classes("w-full")
+                        ui.button("Randomize Seed", icon="casino", on_click=lambda: self.seed.set_value(random.randint(10000, 99999))).classes("w-full")
+                        self.generate_button = ui.button("Generate", icon="audiotrack", color="green", on_click=partial(self.on_click_generate_button)).classes("w-full")
+                        self.clear_output_button = ui.button("Clear Outputs", icon="delete", color="red", on_click=lambda: self.clear_output_samples()).classes("w-full")
+                        self.clear_output_button.disable()
 
                     with ui.card().classes("flex-grow-[3]"): # gen params
                         self.gen_param_elements = {}
@@ -220,11 +222,12 @@ class NiceGUIApp:
                             self.preset_select.on("blur", lambda e: self.on_blur_preset_select(e))
                             self.preset_select.on_value_change(lambda e: self.on_value_change_preset_select(e.value))     
 
-                        with ui.column().classes("flex-grow-[1] flex items-center"):
-                            with ui.button_group().classes():
-                                self.preset_load_button = ui.button(icon="source", on_click=lambda: self.load_preset()).classes("w-full")
-                                self.preset_save_button = ui.button(icon="save", color="green", on_click=lambda: self.save_preset()).classes("w-full")
-                                self.preset_delete_button = ui.button(icon="delete", color="red", on_click=lambda: self.delete_preset()).classes("w-full")
+                        with ui.column().classes("items-center"):
+                            #with ui.button_group().classes():
+                            with ui.column().classes("gap=0"):
+                                self.preset_load_button = ui.button("Load", icon="source", on_click=lambda: self.load_preset()).classes("w-full gap-0")
+                                self.preset_save_button = ui.button("Save", icon="save", color="green", on_click=lambda: self.save_preset()).classes("w-full gap-0")
+                                self.preset_delete_button = ui.button("Delete", icon="delete", color="red", on_click=lambda: self.delete_preset()).classes("w-full gap-0")
                                 with self.preset_load_button:
                                     ui.tooltip("Load selected preset").props('delay=1000')
                                 with self.preset_save_button:
@@ -246,7 +249,7 @@ class NiceGUIApp:
                     self.game_add_button = ui.button(icon='add', color='green').classes("w-1")
                     self.game_add_button.on_click(lambda: self.on_click_game_add_button())
 
-                ui.separator()
+                ui.separator().classes("bg-primary").style("height: 3px")
                 with ui.column().classes("w-full") as self.prompt_games_column:
                     pass # added prompt game elements will be created in this container
 
@@ -270,7 +273,7 @@ class NiceGUIApp:
                     with ui.tab_panel(outpaint):
                         ui.label("outpaint stuff")
         """
-        ui.separator()
+        ui.separator().classes("bg-primary").style("height: 3px")
 
         # queued / output samples go here
         self.output_samples: list[OutputSample] = []
@@ -387,18 +390,23 @@ class NiceGUIApp:
         #params.inpainting_mask = torch.zeros(size=self.pipeline.get_latent_shape(self.pipeline.get_sample_shape(length=params.length))[2:])
         #params.inpainting_mask[:, params.inpainting_mask.shape[-1]//2:] = 1.
 
-        def sampling_progress_callback(stage: str, progress: Union[float, torch.Tensor]) -> None:
+        def sampling_progress_callback(stage: str, progress: Union[float, torch.Tensor]) -> bool:
+            if output_sample not in self.output_samples:
+                return False
+            
             if stage == "sampling":
                 output_sample.sampling_progress_element.set_value(f"{int(progress*100)}%")
             elif stage == "latents":
                 latents_image = tensor_to_img(progress, flip_y=True)
                 latents_image = Image.fromarray(latents_image)
-                output_sample.latents_image_element.set_source(latents_image)      
+                output_sample.latents_image_element.set_source(latents_image)
+            return True
 
         async with self.gpu_lock:
-            if output_sample not in self.output_samples: return
+            if output_sample not in self.output_samples: return # handle removal from queue
             output_sample.sample_output = await self.pipeline(sample_params, lambda stage,
                 progress: sampling_progress_callback(stage, progress))
+        if output_sample not in self.output_samples: return # handle abort in progress
         output_sample.audio_path = self.save_output_sample(output_sample.sample_output)
         
         output_sample.name = os.path.splitext(os.path.basename(output_sample.audio_path))[0]
@@ -414,12 +422,14 @@ class NiceGUIApp:
 
         # todo: button to open output sample in configured daw
         #Popen(["c:/program files/audacity/audacity.exe", audio_output_path])
-        
+    
     def add_output_sample(self, output_sample: OutputSample) -> None:
         
         def remove_output_sample(output_sample: OutputSample) -> None:
             self.output_samples_column.remove(output_sample.card_element)
             self.output_samples.remove(output_sample)
+            if len(self.output_samples) == 0:
+                self.clear_output_button.disable()
 
         def move_output_sample(output_sample: OutputSample, direction: int) -> None:
             current_index = output_sample.card_element.parent_slot.children.index(output_sample.card_element)
@@ -428,6 +438,7 @@ class NiceGUIApp:
                 output_sample.card_element.move(self.output_samples_column, target_index=new_index)
 
         self.output_samples.insert(0, output_sample)
+        self.clear_output_button.enable()
 
         with ui.card().classes("w-full") as output_sample.card_element:
             with ui.row().classes("w-full"):
@@ -469,6 +480,11 @@ class NiceGUIApp:
                     ui.button('▼', on_click=lambda: move_output_sample(output_sample, direction=1)).classes("w-1 rounded-t-none")
 
         output_sample.card_element.move(self.output_samples_column, target_index=0)
+
+    def clear_output_samples(self) -> None:
+        self.output_samples_column.clear()
+        self.output_samples.clear()
+        self.clear_output_button.disable()
 
     def refresh_game_prompt_elements(self) -> None:
 
