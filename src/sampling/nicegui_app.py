@@ -630,8 +630,9 @@ class NiceGUIApp:
         self.preset_delete_button.disable()
 
     def run(self) -> None:
+        on_air_token = os.getenv("ON_AIR_TOKEN", None)
         ui.run(dark=self.config.enable_dark_mode, title="Dual-Diffusion WebUI",
-            host=self.config.web_server_host, port=self.config.web_server_port)
+            host=self.config.web_server_host, port=self.config.web_server_port, on_air=on_air_token)
 
 
 if __name__ in {"__main__", "__mp_main__"}:

@@ -9,7 +9,7 @@
     "spc/Gekisou Sentai Car Rangers": 10
   },
   "gen_params": {
-    "num_steps": 80.0,
+    "num_steps": 100.0,
     "cfg_scale": 1.5,
     "use_heun": true,
     "num_fgla_iters": 250,
