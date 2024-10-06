@@ -96,6 +96,7 @@ class NiceGUIApp:
         self.dataset_games_dict = {} # keys are actual game names, values are display strings
         for game_name in self.pipeline.dataset_game_ids.keys():
             self.dataset_games_dict[game_name] = f"({self.pipeline.dataset_info['game_train_sample_counts'][game_name]}) {game_name}"
+        self.dataset_games_dict = dict(sorted(self.dataset_games_dict.items()))
 
         self.gpu_lock = asyncio.Semaphore(self.config.max_gpu_concurrency)
 
