@@ -587,6 +587,7 @@ class NiceGUIApp:
         self.preset_select.update()
         self.preset_load_button.disable()
         self.preset_save_button.disable()
+        self.preset_delete_button.enable()
     
     async def reset_preset_loading_state(self) -> None:
         await asyncio.sleep(0.25)
