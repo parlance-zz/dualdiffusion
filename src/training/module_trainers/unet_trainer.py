@@ -51,10 +51,11 @@ class UNetTrainerConfig(ModuleTrainerConfig):
     conditioning_perturbation: float = 0.
     conditioning_dropout: float = 0.1
 
-    inpainting_probability: float = 0.
+    inpainting_probability: float = 0.7
     inpainting_extend_probability: float = 0.2
-    inpainting_extend_min_width: int = 172
-    inpainting_extend_max_width: int = 516
+    inpainting_prepend_probability: float = 0.1
+    inpainting_outpaint_min_width: int = 172
+    inpainting_outpaint_max_width: int = 516
     inpainting_min_width: int = 8
     inpainting_max_width: int = 516
 
@@ -165,10 +166,17 @@ class UNetTrainer(ModuleTrainer):
             if torch.rand(1, generator=self.cpu_generator).item() < self.config.inpainting_probability:
                 # extension / out-painting
                 if torch.rand(1, generator=self.cpu_generator).item() < self.config.inpainting_extend_probability:
-                    mask_start = samples.shape[-1] - torch.randint(self.config.inpainting_extend_min_width,
-                                                                   self.config.inpainting_extend_max_width + 1,
+                    mask_start = samples.shape[-1] - torch.randint(self.config.inpainting_outpaint_min_width,
+                                                                   self.config.inpainting_outpaint_max_width + 1,
                                                                    (1,), generator=self.cpu_generator).item()
                     mask_end = samples.shape[-1]
+                elif torch.rand(1, generator=self.cpu_generator).item() < self.config.inpainting_prepend_probability:
+                    # prepend / out-painting
+                    mask_end = torch.randint(self.config.inpainting_outpaint_min_width,
+                                             self.config.inpainting_outpaint_max_width + 1,
+                                             (1,), generator=self.cpu_generator).item()
+                    mask_start = 0
+                    
                 else: # normal inpainting
                     mask_width = torch.randint(self.config.inpainting_min_width,
                                                self.config.inpainting_max_width + 1,
