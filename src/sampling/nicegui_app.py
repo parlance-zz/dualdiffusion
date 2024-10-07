@@ -175,6 +175,7 @@ class NiceGUIApp:
                         self.seed.on("wheel", lambda: None)
                         self.auto_increment_seed = ui.checkbox("Auto Increment Seed", value=True).classes("w-full")
                         ui.button("Randomize Seed", icon="casino", on_click=lambda: self.seed.set_value(random.randint(10000, 99999))).classes("w-full")
+                        self.generate_length = ui.number(label="Length (seconds)", value=0, min=0, max=300, precision=0, step=5).classes("w-full")
                         self.generate_button = ui.button("Generate", icon="audiotrack", color="green", on_click=partial(self.on_click_generate_button)).classes("w-full")
                         self.clear_output_button = ui.button("Clear Outputs", icon="delete", color="red", on_click=lambda: self.clear_output_samples()).classes("w-full")
                         self.clear_output_button.disable()
@@ -375,7 +376,9 @@ class NiceGUIApp:
             ui.notify("No prompt games selected", type="warning", color="red", close_button=True)
             return
         
-        sample_params: SampleParams = SampleParams(seed=self.seed.value, prompt={**self.prompt}, **self.gen_params)
+        sample_params: SampleParams = SampleParams(seed=self.seed.value,
+            length=int(self.generate_length.value) * self.pipeline.format.config.sample_rate,
+            prompt={**self.prompt}, **self.gen_params)
         if self.auto_increment_seed.value == True: self.seed.set_value(self.seed.value + 1)
         self.logger.info(f"on_click_generate_button - params:{dict_str(sample_params.__dict__)}")
 
@@ -474,7 +477,7 @@ class NiceGUIApp:
                     ''')
                     """
 
-                with ui.column().classes("flex-grow-[1] gap-0 items-center"):
+                with ui.column().classes("w-8 gap-0 items-center"):
                     ui.button('✕', on_click=lambda: remove_output_sample(output_sample)).classes("w-1 rounded-b-none").props("color='red'")
                     ui.button('▲', on_click=lambda: move_output_sample(output_sample, direction=-1)).classes("w-1 rounded-none")
                     ui.button('▼', on_click=lambda: move_output_sample(output_sample, direction=1)).classes("w-1 rounded-t-none")
