@@ -449,7 +449,7 @@ class NiceGUIApp:
                     with ui.row().classes("gap-0 items-center"):
                         output_sample.name_label_element = ui.label(output_sample.name).classes("p-2").style(
                             "border: 1px solid grey; border-bottom: none; border-radius: 10px 10px 0 0;")
-                        #ui.label("Rating:")
+                        #ui.label("Rating:") 
                         #ui.slider(min=0, max=5, step=1, value=0).props("label-always").classes("h-10 top-0")
                     output_sample.latents_image_element = ui.interactive_image().classes(
                         "w-full gap-0").style("image-rendering: pixelated; width: 100%; height: auto;").props("fit=scale-down")
