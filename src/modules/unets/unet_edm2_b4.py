@@ -261,7 +261,7 @@ class UNet(DualDiffusionUNet):
     def forward(self, x_in: torch.Tensor,
                 sigma: torch.Tensor,
                 format: DualDiffusionFormat,
-                class_embeddings: tuple[torch.Tensor],
+                class_embeddings: torch.Tensor,
                 t_ranges: Optional[torch.Tensor] = None,
                 x_ref: Optional[torch.Tensor] = None) -> torch.Tensor:
 

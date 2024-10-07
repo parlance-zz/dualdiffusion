@@ -296,6 +296,7 @@ class DualDiffusionTrainer:
 
         self.logger.info(f"Module class: {self.module_class.__name__}")
         self.logger.info(f"Module trainer class: {self.config.module_trainer_class.__name__}")
+        self.logger.info(f"Model metadata: {dict_str(self.pipeline.model_metadata)}")
 
         self.module = self.accelerator.prepare(self.module)
 

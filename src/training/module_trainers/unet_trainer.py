@@ -118,6 +118,16 @@ class UNetTrainer(ModuleTrainer):
             self.logger.info(f"Using conditioning perturbation: {self.config.conditioning_perturbation}")
         else: self.logger.info("Conditioning perturbation is disabled")
         self.logger.info(f"Dropout: {self.module.config.dropout} Conditioning dropout: {self.module.config.label_dropout}")
+        if self.config.inpainting_probability > 0:
+            self.logger.info(f"Using inpainting (probability: {self.config.inpainting_probability})")
+            self.logger.info(f"  extend probability: {self.config.inpainting_extend_probability}")
+            self.logger.info(f"  prepend probability: {self.config.inpainting_prepend_probability}")
+            self.logger.info(f"  outpaint min width: {self.config.inpainting_outpaint_min_width}")
+            self.logger.info(f"  outpaint max width: {self.config.inpainting_outpaint_max_width}")
+            self.logger.info(f"  inpainting min width: {self.config.inpainting_min_width}")
+            self.logger.info(f"  inpainting max width: {self.config.inpainting_max_width}")
+        else:
+            self.logger.info("Inpainting training is disabled")
 
         sigma_sampler_config = SigmaSamplerConfig(
             sigma_max=self.module.config.sigma_max,
