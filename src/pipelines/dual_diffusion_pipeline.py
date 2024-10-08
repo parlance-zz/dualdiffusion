@@ -496,7 +496,7 @@ class DualDiffusionPipeline(torch.nn.Module):
             #    sample = sample / (measured_norm / ideal_norm)**(1 - temperature_scale)
 
             if progress_callback is not None:
-                progress_callback("latents", sample.cpu())
+                progress_callback("latents", cfg_model_output.cpu())
 
             if i+1 < params.num_steps:
                 p = max(old_sigma_next**2 - sigma_next**2, 0)**0.5
