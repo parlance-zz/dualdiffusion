@@ -94,7 +94,7 @@ class SampleParams:
         #    if getattr(pipeline, "unet_inpainting", None) is not None:
         #        module_name = "unet_inpainting"
 
-        last_global_step = pipeline.model_metadata["last_global_step"]["module_name"]
+        last_global_step = pipeline.model_metadata["last_global_step"][module_name]
         if module_name in pipeline.model_metadata["load_emas"]:
             ema = pipeline.model_metadata["load_emas"][module_name].replace("pf_ema_std-", "").replace(".safetensors", "")
         else:
@@ -467,7 +467,9 @@ class DualDiffusionPipeline(torch.nn.Module):
             old_sigma_next = sigma_next
             #effective_input_perturbation = (sigma_schedule_error_logvar[i]/4).exp().item() * input_perturbation
             #effective_input_perturbation = params.input_perturbation
-            effective_input_perturbation = params.input_perturbation * (1 - (i/params.num_steps)*(1 - i/params.num_steps))#**2 #***
+            effective_input_perturbation = params.input_perturbation * (1 - (i/params.num_steps)*(1 - i/params.num_steps))**2 #***
+            if params.inpainting_mask is not None:
+                effective_input_perturbation *= (1 - (i/params.num_steps))**5
             sigma_next *= (1 - (max(min(effective_input_perturbation, 1), 0)))
 
             input_sigma = torch.tensor([sigma_curr], device=unet.device)
