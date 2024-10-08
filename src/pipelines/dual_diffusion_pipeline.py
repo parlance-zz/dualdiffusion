@@ -455,7 +455,7 @@ class DualDiffusionPipeline(torch.nn.Module):
             old_sigma_next = sigma_next
             #effective_input_perturbation = (sigma_schedule_error_logvar[i]/4).exp().item() * input_perturbation
             #effective_input_perturbation = params.input_perturbation
-            effective_input_perturbation = params.input_perturbation * (1 - (i/params.num_steps)*(1 - i/params.num_steps))**2 #***
+            effective_input_perturbation = params.input_perturbation * (1 - (i/params.num_steps)*(1 - i/params.num_steps))#**2 #***
             sigma_next *= (1 - (max(min(effective_input_perturbation, 1), 0)))
 
             input_sigma = torch.tensor([sigma_curr], device=self.unet.device)

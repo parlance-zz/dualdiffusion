@@ -32,6 +32,7 @@ class OutputSample:
     sample_params: SampleParams
     sample_output: Optional[SampleOutput] = None
     audio_path: Optional[str] = None
+    is_input_audio: bool = False
 
     card_element: Optional[ui.card] = None
     name_label_element: Optional[ui.label] = None
@@ -39,6 +40,8 @@ class OutputSample:
     latents_image_element: Optional[ui.interactive_image] = None
     spectrogram_image_element: Optional[ui.image] = None
     audio_element: Optional[ui.audio] = None
+    use_as_input_button: Optional[ui.button] = None
+    select_range: Optional[ui.range] = None
 
 @dataclass
 class NiceGUIAppConfig:
@@ -99,6 +102,7 @@ class NiceGUIApp:
         self.dataset_games_dict = dict(sorted(self.dataset_games_dict.items()))
 
         self.gpu_lock = asyncio.Semaphore(self.config.max_gpu_concurrency)
+        self.input_audio_sample: OutputSample = None
 
         self.init_layout()
         app.on_startup(lambda: self.on_startup_app())
@@ -174,11 +178,16 @@ class NiceGUIApp:
                         self.seed = ui.number(label="Seed", value=10042, min=10000, max=99999, precision=0, step=1).classes("w-full")
                         self.seed.on("wheel", lambda: None)
                         self.auto_increment_seed = ui.checkbox("Auto Increment Seed", value=True).classes("w-full")
-                        ui.button("Randomize Seed", icon="casino", on_click=lambda: self.seed.set_value(random.randint(10000, 99999))).classes("w-full")
+                        with ui.button("Randomize Seed", icon="casino", on_click=lambda: self.seed.set_value(random.randint(10000, 99999))).classes("w-full"):
+                            ui.tooltip("Choose new seed at random").props('delay=1000')
                         self.generate_length = ui.number(label="Length (seconds)", value=0, min=0, max=300, precision=0, step=5).classes("w-full")
                         self.generate_button = ui.button("Generate", icon="audiotrack", color="green", on_click=partial(self.on_click_generate_button)).classes("w-full")
+                        with self.generate_button:
+                            ui.tooltip("Generate new sample with current settings").props('delay=1000')
                         self.clear_output_button = ui.button("Clear Outputs", icon="delete", color="red", on_click=lambda: self.clear_output_samples()).classes("w-full")
                         self.clear_output_button.disable()
+                        with self.clear_output_button:
+                            ui.tooltip("Clear all output samples in workspace").props('delay=1000')
 
                     with ui.card().classes("flex-grow-[3]"): # gen params
                         self.gen_param_elements = {}
@@ -196,6 +205,8 @@ class NiceGUIApp:
                             self.gen_param_elements["schedule"] = ui.select(label="Σ Schedule", options=SamplingSchedule.get_schedules_list(), value="edm2").classes("w-full")
                             self.sigma_schedule_dialog = ui.dialog()
                             self.show_schedule_button = ui.button("Show σ Schedule", on_click=lambda: self.on_click_show_schedule_button()).classes("w-full h-1")
+                            with self.show_schedule_button:
+                                ui.tooltip("Show noise schedule with current settings").props('delay=1000')
 
                         self.gen_params = {}
                         for param_name, param_element in self.gen_param_elements.items():
@@ -249,31 +260,13 @@ class NiceGUIApp:
                     self.game_weight.on("wheel", lambda: None)
                     self.game_add_button = ui.button(icon='add', color='green').classes("w-1")
                     self.game_add_button.on_click(lambda: self.on_click_game_add_button())
+                    with self.game_add_button:
+                        ui.tooltip("Add selected game to prompt").props('delay=1000')
 
                 ui.separator().classes("bg-primary").style("height: 3px")
                 with ui.column().classes("w-full") as self.prompt_games_column:
                     pass # added prompt game elements will be created in this container
 
-        # todo: audio input mode / inpainting options should go in a vertical drawer element here
-        """
-        with ui.tab_panel(audio_input_tab):
-            #with ui.row().classes("w-full"):
-            #    ui.label("Audio Input Mode:")
-            with ui.row().classes("w-full"):
-                with ui.tabs() as input_audio_tabs:
-                    no_input_audio = ui.tab("None")
-                    img2img = ui.tab("Img2Img")
-                    inpaint = ui.tab("Inpaint")
-                    outpaint = ui.tab("Outpaint")
-
-                with ui.tab_panels(input_audio_tabs, value=no_input_audio).classes("w-full"):
-                    with ui.tab_panel(img2img):
-                        ui.label("img2img stuff")
-                    with ui.tab_panel(inpaint):
-                        ui.label("inpaint stuff")
-                    with ui.tab_panel(outpaint):
-                        ui.label("outpaint stuff")
-        """
         ui.separator().classes("bg-primary").style("height: 3px")
 
         # queued / output samples go here
@@ -282,7 +275,6 @@ class NiceGUIApp:
                         
     def on_startup_app(self) -> None:
         self.load_preset()
-        app.add_static_file(local_file=os.path.join(config.DEBUG_PATH, "nicegui_app", "test_audio.flac"), url_path="/audio.flac")
         #app.add_static_files(...)
         ui.add_body_html('''
         <script type="module">
@@ -388,10 +380,11 @@ class NiceGUIApp:
 
         await asyncio.sleep(0.1) # ensure the seed increment event is processed before beginning sampling
 
-        # todo: inpainting support
-        #params.input_audio = load_audio(os.path.join(config.DEBUG_PATH, "nicegui_app", "test_audio.flac"))
-        #params.inpainting_mask = torch.zeros(size=self.pipeline.get_latent_shape(self.pipeline.get_sample_shape(length=params.length))[2:])
-        #params.inpainting_mask[:, params.inpainting_mask.shape[-1]//2:] = 1.
+        if self.input_audio_sample is not None: # setup inpainting input
+            sample_params.input_audio = self.input_audio_sample.sample_output.latents
+            sample_params.input_audio_pre_encoded = True
+            sample_params.inpainting_mask = torch.zeros_like(sample_params.input_audio[:, 0:1])
+            sample_params.inpainting_mask[..., self.input_audio_sample.select_range.value["min"]:self.input_audio_sample.select_range.value["max"]] = 1.
 
         def sampling_progress_callback(stage: str, progress: Union[float, torch.Tensor]) -> bool:
             if output_sample not in self.output_samples:
@@ -411,7 +404,7 @@ class NiceGUIApp:
                 progress: sampling_progress_callback(stage, progress))
         if output_sample not in self.output_samples: return # handle abort in progress
         output_sample.audio_path = self.save_output_sample(output_sample.sample_output)
-        
+
         output_sample.name = os.path.splitext(os.path.basename(output_sample.audio_path))[0]
         output_sample.name_label_element.set_text(output_sample.name)
         spectrogram_image = output_sample.sample_output.spectrogram.mean(dim=(0,1))
@@ -422,6 +415,9 @@ class NiceGUIApp:
         output_sample.audio_element.set_source(output_sample.audio_path)
         output_sample.audio_element.set_visibility(True)
         output_sample.sampling_progress_element.set_visibility(False)
+        output_sample.select_range.max = output_sample.sample_output.latents.shape[-1]
+        output_sample.select_range.update()
+        output_sample.use_as_input_button.enable()
 
         # todo: button to open output sample in configured daw
         #Popen(["c:/program files/audacity/audacity.exe", audio_output_path])
@@ -429,6 +425,8 @@ class NiceGUIApp:
     def add_output_sample(self, output_sample: OutputSample) -> None:
         
         def remove_output_sample(output_sample: OutputSample) -> None:
+            if self.input_audio_sample == output_sample:
+                self.input_audio_sample = None
             self.output_samples_column.remove(output_sample.card_element)
             self.output_samples.remove(output_sample)
             if len(self.output_samples) == 0:
@@ -439,6 +437,28 @@ class NiceGUIApp:
             new_index = min(max(current_index + direction, 0), len(output_sample.card_element.parent_slot.children) - 1)
             if new_index != current_index:
                 output_sample.card_element.move(self.output_samples_column, target_index=new_index)
+
+        def use_output_sample_as_input(output_sample: OutputSample) -> None:
+            if self.input_audio_sample == output_sample:
+                self.input_audio_sample = None
+                output_sample.is_input_audio = False
+                output_sample.use_as_input_button.classes(remove="border-4", add="border-none")
+                output_sample.select_range.set_visibility(False)
+                self.logger.debug("use_output_sample_as_input - removed input")
+            elif self.input_audio_sample is not None:
+                self.input_audio_sample.use_as_input_button.classes(remove="border-4", add="border-none")
+                self.input_audio_sample.select_range.set_visibility(False)
+                self.input_audio_sample = output_sample
+                output_sample.is_input_audio = True
+                output_sample.use_as_input_button.classes(remove="border-none", add="border-4")
+                output_sample.select_range.set_visibility(True)
+                self.logger.debug("use_output_sample_as_input - changed input")
+            else:
+                self.input_audio_sample = output_sample
+                output_sample.is_input_audio = True
+                output_sample.use_as_input_button.classes(add="border-4", remove="border-none")
+                output_sample.select_range.set_visibility(True)
+                self.logger.debug("use_output_sample_as_input - set input")
 
         self.output_samples.insert(0, output_sample)
         self.clear_output_button.enable()
@@ -457,6 +477,9 @@ class NiceGUIApp:
                         value="0%").classes("w-full font-bold gap-0").props("instant-feedback")
                     output_sample.spectrogram_image_element = ui.image().classes("w-full gap-0").style("width: 100%; height: 200px;").props("fit=fill")
                     output_sample.spectrogram_image_element.set_visibility(False)
+
+                    output_sample.select_range = ui.range(min=0, max=688, step=1, value={"min": 0, "max": 0}).classes("w-full").props("step snap color='orange' label='Inpaint Selection'")
+                    output_sample.select_range.set_visibility(False)
 
                     dummy_audio_path = os.path.join(config.DEBUG_PATH, "nicegui_app", "test_audio.flac")
                     output_sample.audio_element = ui.audio(dummy_audio_path).classes("w-full").props("preload='auto'").style("filter: invert(1) hue-rotate(180deg);")
@@ -478,9 +501,17 @@ class NiceGUIApp:
                     """
 
                 with ui.column().classes("w-8 gap-0 items-center"):
-                    ui.button('✕', on_click=lambda: remove_output_sample(output_sample)).classes("w-1 rounded-b-none").props("color='red'")
-                    ui.button('▲', on_click=lambda: move_output_sample(output_sample, direction=-1)).classes("w-1 rounded-none")
-                    ui.button('▼', on_click=lambda: move_output_sample(output_sample, direction=1)).classes("w-1 rounded-t-none")
+                    with ui.button('✕', on_click=lambda: remove_output_sample(output_sample)).classes("w-1 rounded-b-none").props("color='red'"):
+                        ui.tooltip("Remove sample from workspace").props('delay=1000')
+                    output_sample.use_as_input_button = ui.button(
+                        icon="format_color_fill", color="orange", on_click=lambda: use_output_sample_as_input(output_sample)).classes("w-1 rounded-none border-none border-double")
+                    with output_sample.use_as_input_button:
+                        ui.tooltip("Use this sample as inpainting input").props('delay=1000')
+                    output_sample.use_as_input_button.disable()
+                    with ui.button('▲', on_click=lambda: move_output_sample(output_sample, direction=-1)).classes("w-1 rounded-none"):
+                        ui.tooltip("Move sample up").props('delay=1000')
+                    with ui.button('▼', on_click=lambda: move_output_sample(output_sample, direction=1)).classes("w-1 rounded-t-none"):
+                        ui.tooltip("Move sample down").props('delay=1000')
 
         output_sample.card_element.move(self.output_samples_column, target_index=0)
 
@@ -488,6 +519,7 @@ class NiceGUIApp:
         self.output_samples_column.clear()
         self.output_samples.clear()
         self.clear_output_button.disable()
+        self.input_audio_sample = None
 
     def refresh_game_prompt_elements(self) -> None:
 
@@ -510,7 +542,8 @@ class NiceGUIApp:
                     game_select_element.on_value_change(
                         lambda e: on_game_select_change(new_game_name=e.value, old_game_name=game_name, weight_element=weight_element))
                     weight_element.bind_value(self.prompt, game_name)
-                    ui.button(icon="remove").classes("w-1 top-0 right-0").props("color='red'").on_click(lambda g=game_name: self.on_click_game_remove_button(g))
+                    with ui.button(icon="remove").classes("w-1 top-0 right-0").props("color='red'").on_click(lambda g=game_name: self.on_click_game_remove_button(g)):
+                        ui.tooltip("Remove game from prompt").props('delay=1000')
 
     def on_click_game_remove_button(self, game_name: str) -> None:
         self.prompt.pop(game_name)
@@ -607,7 +640,8 @@ class NiceGUIApp:
         self.preset_select.update()
         self.preset_load_button.disable()
         self.preset_save_button.disable()
-        self.preset_delete_button.enable()
+        if preset_name != "default":
+            self.preset_delete_button.enable()
     
     async def reset_preset_loading_state(self) -> None:
         await asyncio.sleep(0.25)
