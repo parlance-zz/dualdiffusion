@@ -9,7 +9,7 @@
     },
     "max_gpu_concurrency": 1,
 
-    "web_server_host": "192.168.1.81",
+    "web_server_host": "localhost",
     "web_server_port": 3001,
     "enable_debug_logging": true,
     "max_debug_log_length": 10000

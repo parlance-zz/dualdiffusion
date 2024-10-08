@@ -1,8 +1,14 @@
 {
   "prompt": {
-    "spc/Terranigma": 10,
     "spc/Final Fantasy 5": 10,
-    "spc/Bahamut Lagoon": 10
+    "spc/Final Fantasy USA - Mystic Quest": 10,
+    "spc/Fire Emblem 4": 10,
+    "spc/Final Fantasy 4": 10,
+    "spc/Final Fantasy 6": 10,
+    "spc/Fire Emblem 3": 10,
+    "spc/Bahamut Lagoon": 10,
+    "spc/Secret of Mana": 10,
+    "spc/Seiken Densetsu 3": 10
   },
   "gen_params": {
     "num_steps": 100.0,
@@ -12,7 +18,7 @@
     "sigma_max": 200,
     "sigma_min": 0.6,
     "rho": 7.0,
-    "input_perturbation": 1.0,
+    "input_perturbation": 0.95,
     "schedule": "edm2"
   }
 }

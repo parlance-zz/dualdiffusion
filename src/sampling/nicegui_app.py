@@ -374,17 +374,17 @@ class NiceGUIApp:
         if self.auto_increment_seed.value == True: self.seed.set_value(self.seed.value + 1)
         self.logger.info(f"on_click_generate_button - params:{dict_str(sample_params.__dict__)}")
 
-        output_sample = OutputSample(name=f"{sample_params.get_label(self.pipeline)}",
-            seed=sample_params.seed, prompt=sample_params.prompt, gen_params={**self.gen_params}, sample_params=sample_params)
-        self.add_output_sample(output_sample)
-
-        await asyncio.sleep(0.1) # ensure the seed increment event is processed before beginning sampling
-
         if self.input_audio_sample is not None: # setup inpainting input
             sample_params.input_audio = self.input_audio_sample.sample_output.latents
             sample_params.input_audio_pre_encoded = True
             sample_params.inpainting_mask = torch.zeros_like(sample_params.input_audio[:, 0:1])
             sample_params.inpainting_mask[..., self.input_audio_sample.select_range.value["min"]:self.input_audio_sample.select_range.value["max"]] = 1.
+
+        output_sample = OutputSample(name=f"{sample_params.get_label(self.pipeline)}",
+            seed=sample_params.seed, prompt=sample_params.prompt, gen_params={**self.gen_params}, sample_params=sample_params)
+        self.add_output_sample(output_sample)
+
+        await asyncio.sleep(0.1) # ensure the seed increment event is processed before beginning sampling
 
         def sampling_progress_callback(stage: str, progress: Union[float, torch.Tensor]) -> bool:
             if output_sample not in self.output_samples:

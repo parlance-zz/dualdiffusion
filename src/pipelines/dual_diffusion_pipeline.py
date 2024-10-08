@@ -35,8 +35,9 @@ import torchaudio
 from tqdm.auto import tqdm
 
 from modules.module import DualDiffusionModule
+from modules.unets.unet import DualDiffusionUNet
 from utils.dual_diffusion_utils import (
-    normalize, load_safetensors, torch_dtype, load_audio
+    normalize, load_safetensors, torch_dtype, load_audio, get_cos_angle
 )
 from sampling.schedule import SamplingSchedule
 
@@ -87,10 +88,15 @@ class SampleParams:
         return {str(key): str(value) for key, value in metadata.items()}
     
     def get_label(self, pipeline: "DualDiffusionPipeline") -> str:
+        
+        module_name = "unet"
+        #if self.inpainting_mask is not None: # I prefer having the step label from the main unet for now
+        #    if getattr(pipeline, "unet_inpainting", None) is not None:
+        #        module_name = "unet_inpainting"
 
-        last_global_step = pipeline.model_metadata["last_global_step"]["unet"]
-        if "unet" in pipeline.model_metadata["load_emas"]:
-            ema = pipeline.model_metadata["load_emas"]["unet"].replace("pf_ema_std-", "").replace(".safetensors", "")
+        last_global_step = pipeline.model_metadata["last_global_step"]["module_name"]
+        if module_name in pipeline.model_metadata["load_emas"]:
+            ema = pipeline.model_metadata["load_emas"][module_name].replace("pf_ema_std-", "").replace(".safetensors", "")
         else:
             ema = None
         top_game_name = sorted(self.prompt.items(), key=lambda x:x[1])[-1][0]
@@ -369,12 +375,18 @@ class DualDiffusionPipeline(torch.nn.Module):
         
         debug_info = {}
         params = SampleParams(**params.__dict__).sanitize() # todo: this should be properly deepcopied because of tensor params
+        
+        # automatically substitute dedicated inpainting unet if it exists and we have an inpainting mask
+        unet: DualDiffusionUNet = self.unet
+        if params.inpainting_mask is not None:
+            inpainting_unet: DualDiffusionUNet = getattr(self, "unet_inpainting", None)
+            unet = inpainting_unet or unet
 
         params.seed = params.seed or int(np.random.randint(100000, 999999))
         params.length = params.length or self.format.config.sample_raw_length
-        params.sigma_max = params.sigma_max or self.unet.config.sigma_max
-        params.sigma_min = params.sigma_min or self.unet.config.sigma_min
-        params.sigma_data = params.sigma_data or self.unet.config.sigma_data
+        params.sigma_max = params.sigma_max or unet.config.sigma_max
+        params.sigma_min = params.sigma_min or unet.config.sigma_min
+        params.sigma_data = params.sigma_data or unet.config.sigma_data
         #params.schedule_kwargs = params.schedule_kwargs or {}
         params.prompt = params.prompt or {}
         
@@ -393,7 +405,7 @@ class DualDiffusionPipeline(torch.nn.Module):
 
         self.format.config.num_fgla_iters = params.num_fgla_iters
         generator = params.generator or torch.Generator(
-            device=self.unet.device).manual_seed(params.seed)
+            device=unet.device).manual_seed(params.seed)
 
         sample_shape = self.get_sample_shape(bsz=params.batch_size, length=params.length)
         if getattr(self, "vae", None) is not None:
@@ -406,7 +418,7 @@ class DualDiffusionPipeline(torch.nn.Module):
 
         vae_class_embeddings = self.vae.get_class_embeddings(self.get_class_labels(params.prompt, module_name="vae"))
         conditioning_mask = torch.cat((torch.ones(params.batch_size), torch.zeros(params.batch_size)))
-        unet_class_embeddings = self.unet.get_class_embeddings(
+        unet_class_embeddings = unet.get_class_embeddings(
             self.get_class_labels(params.prompt, module_name="unet"), conditioning_mask)
         debug_info["unet_class_embeddings mean"] = unet_class_embeddings.mean().item()
         debug_info["unet_class_embeddings std"] = unet_class_embeddings.std().item()
@@ -423,30 +435,30 @@ class DualDiffusionPipeline(torch.nn.Module):
                         vae_class_embeddings, self.format).mode().float()[..., :688] #***
                     await asyncio.sleep(0)
         else:
-            input_audio_sample = torch.zeros(sample_shape, device=self.unet.device)
+            input_audio_sample = torch.zeros(sample_shape, device=unet.device)
 
         if params.inpainting_mask is not None:
             while params.inpainting_mask.ndim < input_audio_sample.ndim: params.inpainting_mask.unsqueeze_(0)
-            params.inpainting_mask = (params.inpainting_mask.to(self.unet.device) > 0.5).float()
+            params.inpainting_mask = (params.inpainting_mask.to(unet.device) > 0.5).float()
             ref_sample = torch.cat([input_audio_sample * (1 - params.inpainting_mask), params.inpainting_mask], dim=1)
         else:
             ref_sample = torch.cat((torch.zeros_like(input_audio_sample),
                                     torch.ones_like(input_audio_sample[:, :1])), dim=1)
-        input_ref_sample = ref_sample.to(self.unet.dtype).repeat(2, 1, 1, 1)
+        input_ref_sample = ref_sample.to(unet.dtype).repeat(2, 1, 1, 1)
 
-        if self.unet.config.use_t_ranges == True:
+        if unet.config.use_t_ranges == True:
             raise NotImplementedError("sampling with unet.config.use_t_ranges=True not implemented")
         else:
             t_ranges = None
 
         start_timestep = 1
         sigma_schedule = SamplingSchedule.get_schedule(params.schedule,
-            params.num_steps, start_timestep, device=self.unet.device,
+            params.num_steps, start_timestep, device=unet.device,
             sigma_max=params.sigma_max, sigma_min=params.sigma_min, rho=params.rho)#**params.schedule_kwargs)
         sigma_schedule_list = sigma_schedule.tolist()
         debug_info["sigma_schedule"] = sigma_schedule_list
 
-        noise = torch.randn(sample_shape, device=self.unet.device, generator=generator)
+        noise = torch.randn(sample_shape, device=unet.device, generator=generator)
         sample = noise * sigma_schedule[0] + input_audio_sample * params.sigma_data
 
         progress_bar = tqdm(total=params.num_steps)
@@ -458,10 +470,10 @@ class DualDiffusionPipeline(torch.nn.Module):
             effective_input_perturbation = params.input_perturbation * (1 - (i/params.num_steps)*(1 - i/params.num_steps))#**2 #***
             sigma_next *= (1 - (max(min(effective_input_perturbation, 1), 0)))
 
-            input_sigma = torch.tensor([sigma_curr], device=self.unet.device)
-            input_sample = sample.to(self.unet.dtype).repeat(2, 1, 1, 1)
+            input_sigma = torch.tensor([sigma_curr], device=unet.device)
+            input_sample = sample.to(unet.dtype).repeat(2, 1, 1, 1)
             #if params.static_conditioning_perturbation > 0:
-            #    p_unet_class_embeddings = mp_sum(unet_class_embeddings, -self.unet.u_class_embeddings, static_conditioning_perturbation)
+            #    p_unet_class_embeddings = mp_sum(unet_class_embeddings, -unet.u_class_embeddings, static_conditioning_perturbation)
             #else:
             #    p_unet_class_embeddings = unet_class_embeddings
 
@@ -471,18 +483,18 @@ class DualDiffusionPipeline(torch.nn.Module):
             #    p_unet_class_embeddings = mp_sum(p_unet_class_embeddings, perturbation, dynamic_conditioning_perturbation)#*1.35
             #    print("p_unet_class_embeddings mean:", p_unet_class_embeddings.mean().item(), "std:", p_unet_class_embeddings.std())
 
-            model_output = self.unet(input_sample, input_sigma, self.format, unet_class_embeddings, t_ranges, input_ref_sample).float()
+            model_output = unet(input_sample, input_sigma, self.format, unet_class_embeddings, t_ranges, input_ref_sample).float()
             cfg_model_output = model_output[params.batch_size:].lerp(model_output[:params.batch_size], params.cfg_scale)
                 
             if params.use_heun:
                 sigma_hat = max(sigma_next, params.sigma_min)
                 t_hat = sigma_hat / sigma_curr
 
-                input_sample_hat = (t_hat * sample + (1 - t_hat) * cfg_model_output).to(self.unet.dtype).repeat(2, 1, 1, 1)
-                #input_sample_hat = normalize(input_sample_hat).to(self.unet.dtype) * (sigma_next**2 + params.sigma_data**2)**0.5 #***
-                input_sigma_hat = torch.tensor([t_hat * sigma_curr], device=self.unet.device)
+                input_sample_hat = (t_hat * sample + (1 - t_hat) * cfg_model_output).to(unet.dtype).repeat(2, 1, 1, 1)
+                #input_sample_hat = normalize(input_sample_hat).to(unet.dtype) * (sigma_next**2 + params.sigma_data**2)**0.5 #***
+                input_sigma_hat = torch.tensor([t_hat * sigma_curr], device=unet.device)
 
-                model_output_hat = self.unet(input_sample_hat, input_sigma_hat, self.format, unet_class_embeddings, t_ranges, input_ref_sample).float()
+                model_output_hat = unet(input_sample_hat, input_sigma_hat, self.format, unet_class_embeddings, t_ranges, input_ref_sample).float()
                 cfg_model_output_hat = model_output_hat[params.batch_size:].lerp(model_output_hat[:params.batch_size], params.cfg_scale)
                 cfg_model_output = (cfg_model_output + cfg_model_output_hat) / 2
             

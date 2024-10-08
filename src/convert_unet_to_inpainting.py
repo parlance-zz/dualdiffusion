@@ -49,3 +49,6 @@ if __name__ == "__main__":
     if input(prompt).lower() not in ["y","yes"]: exit()
 
     unet.save_pretrained(inpainting_unet_path)
+
+    # todo: maybe prompt to automatially update model_index.json, make copies of unet_train.json
+    # and unet_train.sh (and change the module_name in both to unet_inpainting)

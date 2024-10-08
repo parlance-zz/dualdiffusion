@@ -41,7 +41,8 @@ class DualDiffusionModule(torch.nn.Module, ABC):
             module_path = os.path.join(module_path, subfolder)
         
         config_class = cls.config_class or inspect.signature(cls.__init__).parameters["config"].annotation
-        module_name = cls.module_name or os.path.basename(module_path)
+        #module_name = cls.module_name or os.path.basename(module_path)
+        module_name = os.path.basename(module_path)
         module_config = config_class(**config.load_json(os.path.join(module_path, f"{module_name}.json")))
 
         module = cls(module_config).requires_grad_(False).train(False)
@@ -57,7 +58,8 @@ class DualDiffusionModule(torch.nn.Module, ABC):
             module_path = os.path.join(module_path, subfolder)
         os.makedirs(module_path, exist_ok=True)
         
-        module_name = type(self).module_name or os.path.basename(module_path)
+        #module_name = type(self).module_name or os.path.basename(module_path)
+        module_name = os.path.basename(module_path)
 
         config.save_json(self.config.__dict__, os.path.join(module_path, f"{module_name}.json"))
         if type(self).has_trainable_parameters:
