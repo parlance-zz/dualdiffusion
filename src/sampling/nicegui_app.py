@@ -416,6 +416,9 @@ class NiceGUIApp:
         output_sample.audio_element.set_visibility(True)
         output_sample.sampling_progress_element.set_visibility(False)
         output_sample.select_range.max = output_sample.sample_output.latents.shape[-1]
+        output_sample.select_range.value = {
+            "min": output_sample.select_range.max//2 - output_sample.select_range.max//4,
+            "max": output_sample.select_range.max//2 + output_sample.select_range.max//4}
         output_sample.select_range.update()
         output_sample.use_as_input_button.enable()
 
