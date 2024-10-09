@@ -37,7 +37,7 @@ class DualDiffusionUNetConfig(DualDiffusionModuleConfig, ABC):
     use_t_ranges: bool = False
     inpainting:   bool = False
     label_dim: int = 1
-    label_dropout: float = 0.1 #todo: remove, unused
+    #label_dropout: float = 0.1 #todo: remove, unused
     dropout:    float = 0.
     sigma_max:  float = 200.
     sigma_min:  float = 0.03
@@ -52,7 +52,8 @@ class DualDiffusionUNet(DualDiffusionModule, ABC):
         pass
     
     @abstractmethod
-    def get_sigma_loss_logvar(self, sigma: torch.Tensor) -> torch.Tensor:
+    def get_sigma_loss_logvar(self, sigma: Optional[torch.Tensor] = None,
+            class_embeddings: Optional[torch.Tensor] = None) -> torch.Tensor:
         pass
     
     @abstractmethod

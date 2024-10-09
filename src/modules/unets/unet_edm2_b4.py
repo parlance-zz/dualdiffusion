@@ -238,7 +238,7 @@ class UNet(DualDiffusionUNet):
         else:
             return u_embedding
     
-    def get_sigma_loss_logvar(self, sigma: torch.Tensor) -> torch.Tensor:
+    def get_sigma_loss_logvar(self, sigma: Optional[torch.Tensor] = None, class_embeddings: Optional[torch.Tensor] = None) -> torch.Tensor:
         return self.logvar_linear(self.logvar_fourier(sigma.flatten().log() / 4)).view(-1, 1, 1, 1).float()
     
     def get_latent_shape(self, latent_shape: Union[torch.Size, tuple[int, int, int, int]]) -> torch.Size:

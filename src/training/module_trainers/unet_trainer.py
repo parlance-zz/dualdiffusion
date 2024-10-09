@@ -117,7 +117,7 @@ class UNetTrainer(ModuleTrainer):
             self.config.conditioning_perturbation = min(self.config.conditioning_perturbation, 1)
             self.logger.info(f"Using conditioning perturbation: {self.config.conditioning_perturbation}")
         else: self.logger.info("Conditioning perturbation is disabled")
-        self.logger.info(f"Dropout: {self.module.config.dropout} Conditioning dropout: {self.module.config.label_dropout}")
+        self.logger.info(f"Dropout: {self.module.config.dropout} Conditioning dropout: {self.config.conditioning_dropout}")
         if self.config.inpainting_probability > 0:
             self.logger.info(f"Using inpainting (probability: {self.config.inpainting_probability})")
             self.logger.info(f"  extend probability: {self.config.inpainting_extend_probability}")
@@ -282,7 +282,7 @@ class UNetTrainer(ModuleTrainer):
         if self.is_validation_batch == True:
             batch_loss = batch_weighted_loss
         else:
-            error_logvar = self.module.get_sigma_loss_logvar(batch_sigma)
+            error_logvar = self.module.get_sigma_loss_logvar(sigma=batch_sigma, class_embeddings=unet_class_embeddings)
             batch_loss = batch_weighted_loss / error_logvar.exp() + error_logvar
         
         if self.config.num_loss_buckets > 0:
