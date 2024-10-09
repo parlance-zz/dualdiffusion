@@ -11,6 +11,7 @@ import logging
 import random
 import os
 
+import cv2
 import torch
 import numpy as np
 from nicegui import ui, app
@@ -38,10 +39,12 @@ class OutputSample:
     name_label_element: Optional[ui.label] = None
     sampling_progress_element: Optional[ui.linear_progress] = None
     latents_image_element: Optional[ui.interactive_image] = None
-    spectrogram_image_element: Optional[ui.image] = None
+    spectrogram_image_element: Optional[ui.interactive_image] = None
     audio_element: Optional[ui.audio] = None
     use_as_input_button: Optional[ui.button] = None
     select_range: Optional[ui.range] = None
+    move_up_button: Optional[ui.button] = None
+    move_down_button: Optional[ui.button] = None
 
 @dataclass
 class NiceGUIAppConfig:
@@ -102,7 +105,8 @@ class NiceGUIApp:
         self.dataset_games_dict = dict(sorted(self.dataset_games_dict.items()))
 
         self.gpu_lock = asyncio.Semaphore(self.config.max_gpu_concurrency)
-        self.input_audio_sample: OutputSample = None
+        self.input_output_sample: OutputSample = None
+        self.playing_output_sample: OutputSample = None
 
         self.init_layout()
         app.on_startup(lambda: self.on_startup_app())
@@ -174,24 +178,35 @@ class NiceGUIApp:
         with ui.row().classes("w-full"): # gen params, preset, and prompt editor
             with ui.card().classes("flex-grow-[1]"):
                 with ui.row().classes("w-full"): # gen params and seed
-                    with ui.card().classes("flex-grow-[1]"): # seed params
+                    with ui.card().classes("flex-grow-[1] items-center"): # general (non-saved) params
+                        self.generate_length = ui.number(label="Length (seconds)", value=0, min=0, max=300, precision=0, step=5).classes("w-full")
+                        self.generate_length.on("wheel", lambda: None)
                         self.seed = ui.number(label="Seed", value=10042, min=10000, max=99999, precision=0, step=1).classes("w-full")
                         self.seed.on("wheel", lambda: None)
                         self.auto_increment_seed = ui.checkbox("Auto Increment Seed", value=True).classes("w-full")
-                        with ui.button("Randomize Seed", icon="casino", on_click=lambda: self.seed.set_value(random.randint(10000, 99999))).classes("w-full"):
-                            ui.tooltip("Choose new seed at random").props('delay=1000')
-                        self.generate_length = ui.number(label="Length (seconds)", value=0, min=0, max=300, precision=0, step=5).classes("w-full")
-                        self.generate_button = ui.button("Generate", icon="audiotrack", color="green", on_click=partial(self.on_click_generate_button)).classes("w-full")
-                        with self.generate_button:
-                            ui.tooltip("Generate new sample with current settings").props('delay=1000')
-                        self.clear_output_button = ui.button("Clear Outputs", icon="delete", color="red", on_click=lambda: self.clear_output_samples()).classes("w-full")
-                        self.clear_output_button.disable()
-                        with self.clear_output_button:
-                            ui.tooltip("Clear all output samples in workspace").props('delay=1000')
+
+                        with ui.column().classes("w-full gap-0 items-center"):
+                            with ui.button("Randomize Seed", icon="casino", on_click=lambda: self.seed.set_value(random.randint(10000, 99999))).classes("w-52 rounded-b-none"):
+                                ui.tooltip("Choose new seed at random").props('delay=1000')
+                            self.generate_button = ui.button("Generate", icon="audiotrack", color="green", on_click=partial(self.on_click_generate_button)).classes("w-52 rounded-none")
+                            with self.generate_button:
+                                ui.tooltip("Generate new sample with current settings").props('delay=1000')
+                            self.clear_output_button = ui.button("Clear Outputs", icon="delete", color="red", on_click=lambda: self.clear_output_samples()).classes("w-52 rounded-t-none")
+                            self.clear_output_button.disable()
+                            with self.clear_output_button:
+                                ui.tooltip("Clear all output samples in workspace").props('delay=1000')
 
                     with ui.card().classes("flex-grow-[3]"): # gen params
                         self.gen_param_elements = {}
                         with ui.grid(columns=2).classes("w-full items-center"):
+
+                            self.gen_params_lock_button = ui.button(icon="lock_open", on_click=lambda: self.toggle_gen_params_lock()).style(
+                                'position: absolute; top: 5px; right: 5px; z-index: 2; background-color: transparent; '
+                                'border: none; width: 20px; height: 20px; padding: 0;'
+                            ).classes("bg-transparent")
+                            with self.gen_params_lock_button:
+                                ui.tooltip("Lock to freeze parameters when loading presets").props('delay=1000')
+
                             self.gen_param_elements["num_steps"] = ui.number(label="Number of Steps", value=100, min=10, max=1000, precision=0, step=10).classes("w-full")
                             self.gen_param_elements["cfg_scale"] = ui.number(label="CFG Scale", value=1.5, min=0, max=10, step=0.1).classes("w-full")
                             self.gen_param_elements["use_heun"] = ui.checkbox("Use Heun's Method", value=True).classes("w-full")
@@ -204,7 +219,7 @@ class NiceGUIApp:
                             
                             self.gen_param_elements["schedule"] = ui.select(label="Σ Schedule", options=SamplingSchedule.get_schedules_list(), value="edm2").classes("w-full")
                             self.sigma_schedule_dialog = ui.dialog()
-                            self.show_schedule_button = ui.button("Show σ Schedule", on_click=lambda: self.on_click_show_schedule_button()).classes("w-full h-1")
+                            self.show_schedule_button = ui.button("Show σ Schedule", on_click=lambda: self.on_click_show_schedule_button()).classes("w-44 items-center")
                             with self.show_schedule_button:
                                 ui.tooltip("Show noise schedule with current settings").props('delay=1000')
 
@@ -234,26 +249,24 @@ class NiceGUIApp:
                             self.preset_select.on("blur", lambda e: self.on_blur_preset_select(e))
                             self.preset_select.on_value_change(lambda e: self.on_value_change_preset_select(e.value))     
 
-                        with ui.column().classes("items-center"):
-                            #with ui.button_group().classes():
-                            with ui.column().classes("gap=0"):
-                                self.preset_load_button = ui.button("Load", icon="source", on_click=lambda: self.load_preset()).classes("w-full gap-0")
-                                self.preset_save_button = ui.button("Save", icon="save", color="green", on_click=lambda: self.save_preset()).classes("w-full gap-0")
-                                self.preset_delete_button = ui.button("Delete", icon="delete", color="red", on_click=lambda: self.delete_preset()).classes("w-full gap-0")
-                                with self.preset_load_button:
-                                    ui.tooltip("Load selected preset").props('delay=1000')
-                                with self.preset_save_button:
-                                    ui.tooltip("Save current parameters to selected preset").props('delay=1000')
-                                with self.preset_delete_button:
-                                    ui.tooltip("Delete selected preset").props('delay=1000')
+                        with ui.column().classes("gap-0 items-center"):
+                            self.preset_load_button = ui.button("Load", icon="source", on_click=lambda: self.load_preset()).classes("w-36 rounded-b-none")
+                            self.preset_save_button = ui.button("Save", icon="save", color="green", on_click=lambda: self.save_preset()).classes("w-36 rounded-none")
+                            self.preset_delete_button = ui.button("Delete", icon="delete", color="red", on_click=lambda: self.delete_preset()).classes("w-36 rounded-t-none")
+                            with self.preset_load_button:
+                                ui.tooltip("Load selected preset").props('delay=1000')
+                            with self.preset_save_button:
+                                ui.tooltip("Save current parameters to selected preset").props('delay=1000')
+                            with self.preset_delete_button:
+                                ui.tooltip("Delete selected preset").props('delay=1000')
 
-                            self.preset_load_button.disable()
-                            self.preset_save_button.disable()
-                            self.preset_delete_button.disable()
+                        self.preset_load_button.disable()
+                        self.preset_save_button.disable()
+                        self.preset_delete_button.disable()
 
             with ui.card().classes("flex-grow-[50]"): # prompt editor                    
                 self.prompt = {}
-                with ui.row().classes("w-full flex items-center"):
+                with ui.row().classes("w-full h-12 flex items-center"):
                     self.game_select = ui.select(label="Select a game", value=next(iter(self.dataset_games_dict)), with_input=True,
                         options=self.dataset_games_dict).classes("flex-grow-[1000]")
                     self.game_weight = ui.number(label="Weight", value=10, min=-100, max=100, step=1).classes("flex-grow-[1]")
@@ -289,66 +302,6 @@ class NiceGUIApp:
         </script>
         ''')
 
-    """                      
-    const wavesurfer = WaveSurfer.create({
-    container: '#waveform',
-    waveColor: '#4F4A85',
-    progressColor: '#383351',
-    url: '/audio.flac',
-    sampleRate: 32000,
-    height: 0,
-    cursorColor: 'white',
-    dragToSeek: true,
-    })
-
-    // Create a timeline plugin instance with custom options
-    const topTimeline = TimelinePlugin.create({
-    height: 20,
-    timeInterval: 0.2,
-    primaryLabelInterval: 5,
-    //secondaryLabelInterval: 1,
-    style: {
-        fontSize: '10px',
-        color: '#FFFFFF',
-    },
-    })
-    wavesurfer.registerPlugin(topTimeline)
-
-    /*
-    // Initialize the Regions plugin
-    const regions = RegionsPlugin.create()
-    wavesurfer.registerPlugin(regions)
-
-    // Create some regions at specific time ranges
-    wavesurfer.on('decode', () => {
-    regions.addRegion({
-        start: 9,
-        end: 10,
-        content: 'Cramped region',
-        color: randomColor(),
-        minLength: 1,
-        maxLength: 10,
-    })
-    })
-    */
-
-    // Initialize the Spectrogram plugin
-    wavesurfer.registerPlugin(
-    Spectrogram.create({
-        labels: false,
-        height: 200,
-        splitChannels: false,
-        scale: 'mel',
-        frequencyMax: 16000,
-        windowFunc: 'blackman',
-    }),
-    )
-
-    wavesurfer.on('interaction', () => {
-    wavesurfer.playPause()
-    })
-    """
-
     def save_output_sample(self, sample_output: SampleOutput) -> str:
         metadata = {"diffusion_metadata": dict_str(sample_output.params.get_metadata())}
         last_global_step = self.pipeline.model_metadata["last_global_step"]["unet"]
@@ -374,11 +327,11 @@ class NiceGUIApp:
         if self.auto_increment_seed.value == True: self.seed.set_value(self.seed.value + 1)
         self.logger.info(f"on_click_generate_button - params:{dict_str(sample_params.__dict__)}")
 
-        if self.input_audio_sample is not None: # setup inpainting input
-            sample_params.input_audio = self.input_audio_sample.sample_output.latents
+        if self.input_output_sample is not None: # setup inpainting input
+            sample_params.input_audio = self.input_output_sample.sample_output.latents
             sample_params.input_audio_pre_encoded = True
             sample_params.inpainting_mask = torch.zeros_like(sample_params.input_audio[:, 0:1])
-            sample_params.inpainting_mask[..., self.input_audio_sample.select_range.value["min"]:self.input_audio_sample.select_range.value["max"]] = 1.
+            sample_params.inpainting_mask[..., self.input_output_sample.select_range.value["min"]:self.input_output_sample.select_range.value["max"]] = 1.
 
         output_sample = OutputSample(name=f"{sample_params.get_label(self.pipeline)}",
             seed=sample_params.seed, prompt=sample_params.prompt, gen_params={**self.gen_params}, sample_params=sample_params)
@@ -409,6 +362,8 @@ class NiceGUIApp:
         output_sample.name_label_element.set_text(output_sample.name)
         spectrogram_image = output_sample.sample_output.spectrogram.mean(dim=(0,1))
         spectrogram_image = tensor_to_img(spectrogram_image, colormap=True, flip_y=True)
+        spectrogram_image = cv2.resize(
+            spectrogram_image, (spectrogram_image.shape[1]//2, spectrogram_image.shape[0]), interpolation=cv2.INTER_AREA)
         spectrogram_image = Image.fromarray(spectrogram_image)
         output_sample.spectrogram_image_element.set_source(spectrogram_image)
         output_sample.spectrogram_image_element.set_visibility(True)
@@ -422,107 +377,112 @@ class NiceGUIApp:
         output_sample.select_range.update()
         output_sample.use_as_input_button.enable()
 
+        #output_sample.audio_element.on("timeupdate", lambda e: self.logger.debug(e))
+        #output_sample.audio_element.seek(10)
+        #output_sample.audio_element.play()
+
         # todo: button to open output sample in configured daw
         #Popen(["c:/program files/audacity/audacity.exe", audio_output_path])
     
+    def refresh_output_samples(self) -> None:
+
+        if len(self.output_samples) == 0:
+            self.clear_output_button.disable()
+        else:
+            self.clear_output_button.enable()
+
+        for i, output_sample in enumerate(self.output_samples):
+            if i == 0: output_sample.move_up_button.disable()
+            else: output_sample.move_up_button.enable()
+            if i == len(self.output_samples) - 1: output_sample.move_down_button.disable()
+            else: output_sample.move_down_button.enable()
+
     def add_output_sample(self, output_sample: OutputSample) -> None:
         
         def remove_output_sample(output_sample: OutputSample) -> None:
-            if self.input_audio_sample == output_sample:
-                self.input_audio_sample = None
+            if self.input_output_sample == output_sample:
+                self.input_output_sample = None
             self.output_samples_column.remove(output_sample.card_element)
             self.output_samples.remove(output_sample)
-            if len(self.output_samples) == 0:
-                self.clear_output_button.disable()
+            self.refresh_output_samples()
 
         def move_output_sample(output_sample: OutputSample, direction: int) -> None:
             current_index = output_sample.card_element.parent_slot.children.index(output_sample.card_element)
             new_index = min(max(current_index + direction, 0), len(output_sample.card_element.parent_slot.children) - 1)
             if new_index != current_index:
                 output_sample.card_element.move(self.output_samples_column, target_index=new_index)
+                self.output_samples.insert(new_index, self.output_samples.pop(current_index))
+                self.refresh_output_samples()
 
         def use_output_sample_as_input(output_sample: OutputSample) -> None:
-            if self.input_audio_sample == output_sample:
-                self.input_audio_sample = None
+            if self.input_output_sample == output_sample:
+                self.input_output_sample = None
                 output_sample.is_input_audio = False
                 output_sample.use_as_input_button.classes(remove="border-4", add="border-none")
                 output_sample.select_range.set_visibility(False)
                 self.logger.debug("use_output_sample_as_input - removed input")
-            elif self.input_audio_sample is not None:
-                self.input_audio_sample.use_as_input_button.classes(remove="border-4", add="border-none")
-                self.input_audio_sample.select_range.set_visibility(False)
-                self.input_audio_sample = output_sample
+            elif self.input_output_sample is not None:
+                self.input_output_sample.use_as_input_button.classes(remove="border-4", add="border-none")
+                self.input_output_sample.select_range.set_visibility(False)
+                self.input_output_sample = output_sample
                 output_sample.is_input_audio = True
                 output_sample.use_as_input_button.classes(remove="border-none", add="border-4")
                 output_sample.select_range.set_visibility(True)
                 self.logger.debug("use_output_sample_as_input - changed input")
             else:
-                self.input_audio_sample = output_sample
+                self.input_output_sample = output_sample
                 output_sample.is_input_audio = True
                 output_sample.use_as_input_button.classes(add="border-4", remove="border-none")
                 output_sample.select_range.set_visibility(True)
                 self.logger.debug("use_output_sample_as_input - set input")
 
-        self.output_samples.insert(0, output_sample)
-        self.clear_output_button.enable()
-
         with ui.card().classes("w-full") as output_sample.card_element:
-            with ui.row().classes("w-full"):
-                with ui.column().classes("flex-grow-[50] gap-0"):
-                    with ui.row().classes("gap-0 items-center"):
+            with ui.column().classes("w-full gap-0"):
+                with ui.row().classes("h-10 justify-between gap-0 w-full"):
+                    with ui.row():
                         output_sample.name_label_element = ui.label(output_sample.name).classes("p-2").style(
                             "border: 1px solid grey; border-bottom: none; border-radius: 10px 10px 0 0;")
+                    with ui.button_group().classes("h-10 gap-0"):
+                        output_sample.use_as_input_button = ui.button(
+                            icon="format_color_fill", color="orange", on_click=lambda: use_output_sample_as_input(output_sample)).classes("w-1 border-none border-double")
+                        with output_sample.use_as_input_button:
+                            ui.tooltip("Use this sample as inpainting input").props('delay=1000')
+                        output_sample.use_as_input_button.disable()
+                        output_sample.move_up_button = ui.button('▲', on_click=lambda: move_output_sample(output_sample, direction=-1)).classes("w-1")
+                        with output_sample.move_up_button:
+                            ui.tooltip("Move sample up").props('delay=1000')
+                        output_sample.move_down_button = ui.button('▼', on_click=lambda: move_output_sample(output_sample, direction=1)).classes("w-1")
+                        with output_sample.move_down_button:
+                            ui.tooltip("Move sample down").props('delay=1000')
+                        with ui.button('✕', color="red", on_click=lambda: remove_output_sample(output_sample)).classes("w-1"):
+                            ui.tooltip("Remove sample from workspace").props('delay=1000')
+
                         #ui.label("Rating:") 
                         #ui.slider(min=0, max=5, step=1, value=0).props("label-always").classes("h-10 top-0")
-                    output_sample.latents_image_element = ui.interactive_image().classes(
-                        "w-full gap-0").style("image-rendering: pixelated; width: 100%; height: auto;").props("fit=scale-down")
-                    output_sample.sampling_progress_element = ui.linear_progress(
-                        value="0%").classes("w-full font-bold gap-0").props("instant-feedback")
-                    output_sample.spectrogram_image_element = ui.image().classes("w-full gap-0").style("width: 100%; height: 200px;").props("fit=fill")
-                    output_sample.spectrogram_image_element.set_visibility(False)
+                output_sample.latents_image_element = ui.interactive_image().classes(
+                    "w-full gap-0").style("image-rendering: pixelated; width: 100%; height: auto;").props("fit=scale-down")
+                output_sample.sampling_progress_element = ui.linear_progress(
+                    value="0%").classes("w-full font-bold gap-0").props("instant-feedback")
+                output_sample.spectrogram_image_element = ui.interactive_image(
+                    cross="white", cross_horizontal=False).classes("w-full gap-0").props(add="fit=fill")
+                output_sample.spectrogram_image_element.set_visibility(False)
 
-                    output_sample.select_range = ui.range(min=0, max=688, step=1, value={"min": 0, "max": 0}).classes("w-full").props("step snap color='orange' label='Inpaint Selection'")
-                    output_sample.select_range.set_visibility(False)
+                output_sample.select_range = ui.range(min=0, max=688, step=1, value={"min": 0, "max": 0}).classes("w-full").props("step snap color='orange' label='Inpaint Selection'")
+                output_sample.select_range.set_visibility(False)
 
-                    dummy_audio_path = os.path.join(config.DEBUG_PATH, "nicegui_app", "test_audio.flac")
-                    output_sample.audio_element = ui.audio(dummy_audio_path).classes("w-full").props("preload='auto'").style("filter: invert(1) hue-rotate(180deg);")
-                    output_sample.audio_element.set_visibility(False)
-                    """
-                    ui.html("<div id='waveform'></div>")
-                    ui.run_javascript('''
-                    const wavesurfer = window.WaveSurfer.create({
-                    container: '#waveform',
-                    waveColor: '#4F4A85',
-                    progressColor: '#383351',
-                    url: '/audio.flac',
-                    sampleRate: 32000,
-                    height: 0,
-                    cursorColor: 'white',
-                    dragToSeek: true,
-                    })
-                    ''')
-                    """
+                dummy_audio_path = os.path.join(config.DEBUG_PATH, "nicegui_app", "test_audio.flac")
+                output_sample.audio_element = ui.audio(dummy_audio_path).classes("w-full").props("preload='auto'").style("filter: invert(1) hue-rotate(180deg);")
+                output_sample.audio_element.set_visibility(False)
 
-                with ui.column().classes("w-8 gap-0 items-center"):
-                    with ui.button('✕', on_click=lambda: remove_output_sample(output_sample)).classes("w-1 rounded-b-none").props("color='red'"):
-                        ui.tooltip("Remove sample from workspace").props('delay=1000')
-                    output_sample.use_as_input_button = ui.button(
-                        icon="format_color_fill", color="orange", on_click=lambda: use_output_sample_as_input(output_sample)).classes("w-1 rounded-none border-none border-double")
-                    with output_sample.use_as_input_button:
-                        ui.tooltip("Use this sample as inpainting input").props('delay=1000')
-                    output_sample.use_as_input_button.disable()
-                    with ui.button('▲', on_click=lambda: move_output_sample(output_sample, direction=-1)).classes("w-1 rounded-none"):
-                        ui.tooltip("Move sample up").props('delay=1000')
-                    with ui.button('▼', on_click=lambda: move_output_sample(output_sample, direction=1)).classes("w-1 rounded-t-none"):
-                        ui.tooltip("Move sample down").props('delay=1000')
-
+        self.output_samples.insert(0, output_sample)
         output_sample.card_element.move(self.output_samples_column, target_index=0)
+        self.refresh_output_samples()
 
     def clear_output_samples(self) -> None:
         self.output_samples_column.clear()
         self.output_samples.clear()
         self.clear_output_button.disable()
-        self.input_audio_sample = None
+        self.input_output_sample = None
 
     def refresh_game_prompt_elements(self) -> None:
 
@@ -538,7 +498,7 @@ class NiceGUIApp:
         self.prompt_games_column.clear()
         with self.prompt_games_column:
             for game_name, game_weight in self.prompt.items():
-                with ui.row().classes("w-full flex items-center"):
+                with ui.row().classes("w-full h-10 flex items-center"):
                     game_select_element = ui.select(value=game_name, with_input=True, options=self.dataset_games_dict).classes("flex-grow-[1000]")
                     weight_element = ui.number(label="Weight", value=game_weight, min=-100, max=100, step=1,
                         on_change=lambda: self.on_change_gen_param()).classes("flex-grow-[1]").on("wheel", lambda: None)
@@ -547,6 +507,8 @@ class NiceGUIApp:
                     weight_element.bind_value(self.prompt, game_name)
                     with ui.button(icon="remove").classes("w-1 top-0 right-0").props("color='red'").on_click(lambda g=game_name: self.on_click_game_remove_button(g)):
                         ui.tooltip("Remove game from prompt").props('delay=1000')
+
+            ui.separator().classes("bg-transparent")
 
     def on_click_game_remove_button(self, game_name: str) -> None:
         self.prompt.pop(game_name)
@@ -580,6 +542,12 @@ class NiceGUIApp:
 
             self.sigma_schedule_dialog.open()
             ui.button("Close").classes("ml-auto").on_click(lambda: self.sigma_schedule_dialog.close())
+    
+    def toggle_gen_params_lock(self):
+        if self.gen_params_lock_button.icon == "lock":
+            self.gen_params_lock_button.icon = "lock_open"
+        else:
+            self.gen_params_lock_button.icon = "lock"
             
     def on_change_gen_param(self) -> None:
         if self.loading_preset == False:
@@ -659,18 +627,31 @@ class NiceGUIApp:
 
         loaded_preset_dict = config.load_json(load_preset_path)
         self.logger.info(f"Loaded preset {preset_name}: {dict_str(loaded_preset_dict)}")
-        self.loading_preset = True
-        asyncio.create_task(self.reset_preset_loading_state())
 
+        self.last_loaded_preset = preset_name
+
+        if self.gen_params_lock_button.icon == "lock_open":
+            self.gen_params.update(loaded_preset_dict["gen_params"])
+            self.preset_load_button.disable()
+            self.preset_save_button.disable()
+            self.preset_select._props["label"] = f"Select a Preset - (loaded preset: {self.last_loaded_preset})"
+            self.loading_preset = True
+            asyncio.create_task(self.reset_preset_loading_state())
+        else:
+            # check if loaded_preset_dict matches current gen_params, even if locked
+            if all([self.gen_params[p] == loaded_preset_dict["gen_params"][p] for p in self.gen_params.keys()]) == True:
+                self.preset_load_button.disable()
+                self.preset_save_button.disable()
+                self.preset_select._props["label"] = f"Select a Preset - (loaded preset: {self.last_loaded_preset})"
+                self.loading_preset = True
+                asyncio.create_task(self.reset_preset_loading_state())
+            else:
+                self.preset_select._props["label"] = f"Select a Preset - (loaded preset: {self.last_loaded_preset}*)"
+
+        self.preset_select.update()
         self.prompt.clear()
         self.prompt.update(loaded_preset_dict["prompt"])
         self.refresh_game_prompt_elements()
-        self.gen_params.update(loaded_preset_dict["gen_params"])
-        self.preset_load_button.disable()
-        self.preset_save_button.disable()
-        self.last_loaded_preset = preset_name
-        self.preset_select._props["label"] = f"Select a Preset - (loaded preset: {self.last_loaded_preset})"
-        self.preset_select.update()
     
     def delete_preset(self) -> None:
         preset_name = self.preset_select.value

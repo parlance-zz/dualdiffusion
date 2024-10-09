@@ -468,8 +468,8 @@ class DualDiffusionPipeline(torch.nn.Module):
             #effective_input_perturbation = (sigma_schedule_error_logvar[i]/4).exp().item() * input_perturbation
             #effective_input_perturbation = params.input_perturbation
             effective_input_perturbation = params.input_perturbation * (1 - (i/params.num_steps)*(1 - i/params.num_steps))**2 #***
-            if params.inpainting_mask is not None:
-                effective_input_perturbation *= (1 - (i/params.num_steps))**5
+            #if params.inpainting_mask is not None:
+            #    effective_input_perturbation *= (1 - (i/params.num_steps))**3
             sigma_next *= (1 - (max(min(effective_input_perturbation, 1), 0)))
 
             input_sigma = torch.tensor([sigma_curr], device=unet.device)
@@ -503,6 +503,7 @@ class DualDiffusionPipeline(torch.nn.Module):
             t = sigma_next / sigma_curr if (i+1) < params.num_steps else 0
             sample = (t * sample + (1 - t) * cfg_model_output)
             
+            #print(sample.std().item(), (sigma_next**2 + params.sigma_data**2)**0.5)
             #sample = normalize(sample).float() * (sigma_next**2 + params.sigma_data**2)**0.5 #***
             #if params.temperature_scale < 1:
             #    ideal_norm = (sigma_next**2 + sigma_data**2)**0.5
