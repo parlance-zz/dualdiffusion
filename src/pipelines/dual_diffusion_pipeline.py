@@ -472,7 +472,7 @@ class DualDiffusionPipeline(torch.nn.Module):
             #    effective_input_perturbation *= (1 - (i/params.num_steps))**3
             sigma_next *= (1 - (max(min(effective_input_perturbation, 1), 0)))
 
-            input_sigma = torch.tensor([sigma_curr], device=unet.device)
+            input_sigma = torch.tensor([sigma_curr] * unet_class_embeddings.shape[0], device=unet.device)
             input_sample = sample.to(unet.dtype).repeat(2, 1, 1, 1)
             #if params.static_conditioning_perturbation > 0:
             #    p_unet_class_embeddings = mp_sum(unet_class_embeddings, -unet.u_class_embeddings, static_conditioning_perturbation)
@@ -494,7 +494,7 @@ class DualDiffusionPipeline(torch.nn.Module):
 
                 input_sample_hat = (t_hat * sample + (1 - t_hat) * cfg_model_output).to(unet.dtype).repeat(2, 1, 1, 1)
                 #input_sample_hat = normalize(input_sample_hat).to(unet.dtype) * (sigma_next**2 + params.sigma_data**2)**0.5 #***
-                input_sigma_hat = torch.tensor([t_hat * sigma_curr], device=unet.device)
+                input_sigma_hat = torch.tensor([t_hat * sigma_curr] * unet_class_embeddings.shape[0], device=unet.device)
 
                 model_output_hat = unet(input_sample_hat, input_sigma_hat, self.format, unet_class_embeddings, t_ranges, input_ref_sample).float()
                 cfg_model_output_hat = model_output_hat[params.batch_size:].lerp(model_output_hat[:params.batch_size], params.cfg_scale)
