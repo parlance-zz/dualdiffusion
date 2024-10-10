@@ -97,9 +97,9 @@ class Block(torch.nn.Module):
         self.emb_gain = torch.nn.Parameter(torch.zeros([]))
         self.emb_linear = MPConv(emb_channels, out_channels * mlp_multiplier,
                                  kernel=(1,1), groups=mlp_groups) if emb_channels != 0 else None
-        self.mask_emb_linear = MPConv(2, out_channels * mlp_multiplier, kernel=(3,3), groups=1) if level == 0 else None
+        self.mask_emb_linear = MPConv(1, out_channels * mlp_multiplier, kernel=(3,3), groups=1) if level == 0 else None
         self.mask_emb_gain = torch.nn.Parameter(torch.zeros([])) if level == 0 else None
-
+        
         if self.use_attention:
             self.emb_gain_qk = torch.nn.Parameter(torch.zeros([]))
             self.emb_gain_v = torch.nn.Parameter(torch.zeros([]))
@@ -277,8 +277,6 @@ class UNet(DualDiffusionUNet):
             x = (c_in * x_in).to(self.dtype)
             x_ref_mask = x_ref[:, -1:]
             x = mp_sum(x_ref[:, :-1], x, t=x_ref_mask)
-
-            x_ref_mask = torch.cat((x_ref_mask, 1 - x_ref_mask), dim=1)
  
         # Embedding.
         emb = self.emb_noise(self.emb_fourier(c_noise))

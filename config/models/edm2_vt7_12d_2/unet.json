@@ -9,16 +9,18 @@
   "sigma_max": 200.0,
   "sigma_min": 0.03,
   "sigma_data": 1.0,
-  "model_channels": 192,
+  "model_channels": 256,
+  "bottleneck_channels": 8,
+  "logvar_channels": 128,
   "channel_mult": [
+    1,
     2,
     2,
-    3,
-    4,
-    5
+    2,
+    2
   ],
   "channel_mult_noise": 1,
-  "channel_mult_emb": 3,
+  "channel_mult_emb": 2,
   "channels_per_head": 64,
   "num_layers_per_block": 2,
   "label_balance": 0.5,

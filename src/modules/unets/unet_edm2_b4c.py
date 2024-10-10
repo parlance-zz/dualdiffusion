@@ -97,8 +97,6 @@ class Block(torch.nn.Module):
         self.emb_gain = torch.nn.Parameter(torch.zeros([]))
         self.emb_linear = MPConv(emb_channels, out_channels * mlp_multiplier,
                                  kernel=(1,1), groups=mlp_groups) if emb_channels != 0 else None
-        self.mask_emb_linear = MPConv(2, out_channels * mlp_multiplier, kernel=(3,3), groups=1) if level == 0 else None
-        self.mask_emb_gain = torch.nn.Parameter(torch.zeros([])) if level == 0 else None
 
         if self.use_attention:
             self.emb_gain_qk = torch.nn.Parameter(torch.zeros([]))
@@ -110,7 +108,7 @@ class Block(torch.nn.Module):
             self.attn_v = MPConv(out_channels, out_channels, kernel=(1,1))
             self.attn_proj = MPConv(out_channels, out_channels, kernel=(1,1))
 
-    def forward(self, x: torch.Tensor, emb: torch.Tensor, x_ref_mask: torch.Tensor)-> torch.Tensor:
+    def forward(self, x: torch.Tensor, emb: torch.Tensor) -> torch.Tensor:
         
         if self.resample_mode != "down":
             x = resample(x, mode=self.resample_mode)
@@ -122,8 +120,6 @@ class Block(torch.nn.Module):
         y = self.conv_res0(mp_silu(x))
 
         c = self.emb_linear(emb, gain=self.emb_gain) + 1.
-        if self.level == 0:
-            c = c + self.mask_emb_linear(x_ref_mask, gain=self.mask_emb_gain)
         y = mp_silu(y * c)
 
         if self.dropout != 0 and self.training == True: # magnitude preserving fix for dropout
@@ -194,6 +190,7 @@ class UNet(DualDiffusionUNet):
         # Encoder.
         self.enc = torch.nn.ModuleDict()
         input_channels = config.in_channels + 2 # 1 extra const channel, 1 pos embedding channel
+        if config.inpainting: input_channels += config.in_channels + 1 # reference image/latents and mask channel
 
         for level, channels in enumerate(cblock):
             
@@ -255,8 +252,17 @@ class UNet(DualDiffusionUNet):
                                     (latent_shape[3] // 2**(self.num_levels-1)) * 2**(self.num_levels-1))
 
     def convert_to_inpainting(self) -> None:
-        if self.config.inpainting != True:
-            raise ValueError("Model requires inpainting to be enabled")
+        if self.config.inpainting == True:
+            raise ValueError("Model is already configured for inpainting.")
+        self.config.inpainting = True
+
+        assert self.enc[f"conv_in"].groups == 1
+        existing_conv_in_shape = self.enc[f"conv_in"].weight.shape
+        inpainting_conv_in_weight = torch.zeros((existing_conv_in_shape[0], self.config.in_channels + 1,
+                                                 existing_conv_in_shape[2], existing_conv_in_shape[3]))
+        inpainting_conv_in_weight = inpainting_conv_in_weight.to(self.device, self.dtype)
+        self.enc[f"conv_in"].weight.data = torch.cat((self.enc[f"conv_in"].weight, inpainting_conv_in_weight), dim=1)
+        self.enc[f"conv_in"].in_channels += self.config.in_channels + 1
 
     def forward(self, x_in: torch.Tensor,
                 sigma: torch.Tensor,
@@ -275,10 +281,6 @@ class UNet(DualDiffusionUNet):
             c_noise = (sigma.flatten().log() / 4).to(self.dtype)
 
             x = (c_in * x_in).to(self.dtype)
-            x_ref_mask = x_ref[:, -1:]
-            x = mp_sum(x_ref[:, :-1], x, t=x_ref_mask)
-
-            x_ref_mask = torch.cat((x_ref_mask, 1 - x_ref_mask), dim=1)
  
         # Embedding.
         emb = self.emb_noise(self.emb_fourier(c_noise))
@@ -288,17 +290,18 @@ class UNet(DualDiffusionUNet):
 
         # Encoder.
         x = torch.cat((x, torch.ones_like(x[:, :1]), format.get_ln_freqs(x)), dim=1)
+        if self.config.inpainting: x = torch.cat((x, x_ref), dim=1)
 
         skips = []
         for name, block in self.enc.items():
-            x = block(x) if "conv" in name else block(x, emb, x_ref_mask)
+            x = block(x) if "conv" in name else block(x, emb)
             skips.append(x)
 
         # Decoder.
         for name, block in self.dec.items():
             if "layer" in name:
                 x = mp_cat(x, skips.pop(), t=self.config.concat_balance)
-            x = block(x, emb, x_ref_mask)
+            x = block(x, emb)
 
         x = self.conv_out(x, gain=self.out_gain)
         D_x = c_skip * x_in + c_out * x.float()

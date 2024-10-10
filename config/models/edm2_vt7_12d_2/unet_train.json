@@ -1,8 +1,8 @@
 {
-  "seed": 2002,
-  "device_batch_size": 10,
+  "seed": 2003,
+  "device_batch_size": 12,
   "gradient_accumulation_steps": 2,
-  "validation_accumulation_steps": 6,
+  "validation_accumulation_steps": 5,
   "num_train_epochs": 500000,
   "min_checkpoint_time": 3600,
   "strict_checkpoint_time": false,
@@ -17,7 +17,7 @@
   "lr_schedule": {
     "learning_rate": 1e-2,
     "lr_schedule": "constant",
-    "lr_warmup_steps": 5000,
+    "lr_warmup_steps": 1000,
     "lr_reference_steps": 50000,
     "lr_decay_exponent": 0.5
   },
@@ -31,7 +31,7 @@
   },
   "ema": {
     "use_ema": true,
-    "ema_stds": [0.1],
+    "ema_stds": [0.05, 0.1],
     "ema_cpu_offload": false
   },
   "dataloader": {
