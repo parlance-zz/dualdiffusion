@@ -486,26 +486,31 @@ class NiceGUIApp:
 
     def refresh_game_prompt_elements(self) -> None:
 
-        def on_game_select_change(new_game_name: str, old_game_name: str, weight_element: ui.number) -> None:
-            self.logger.debug(f"game_select changed {old_game_name} to {new_game_name}")
-            old_weight = self.prompt[old_game_name]
-            self.prompt[new_game_name] = old_weight
-            weight_element.bind_value(self.prompt, new_game_name)
-            self.prompt.pop(old_game_name)
-            self.on_change_gen_param()
-            
         self.logger.debug(f"refresh_game_prompt_elements: {dict_str(self.prompt)}")
         self.prompt_games_column.clear()
         with self.prompt_games_column:
             for game_name, game_weight in self.prompt.items():
+
+                def on_game_select_change(new_game_name: str, old_game_name: str) -> None:
+                    self.logger.debug(f"game_select changed {old_game_name} to {new_game_name}")
+
+                    # ugly hack to replace dict key while preserving order
+                    prompt_list = list(self.prompt.items())
+                    index = prompt_list.index((old_game_name, self.prompt[old_game_name]))
+                    prompt_list[index] = (new_game_name, self.prompt[old_game_name])
+                    self.prompt = dict(prompt_list)
+
+                    self.on_change_gen_param()
+                    self.refresh_game_prompt_elements()
+                    
                 with ui.row().classes("w-full h-10 flex items-center"):
                     game_select_element = ui.select(value=game_name, with_input=True, options=self.dataset_games_dict).classes("flex-grow-[1000]")
                     weight_element = ui.number(label="Weight", value=game_weight, min=-100, max=100, step=1,
                         on_change=lambda: self.on_change_gen_param()).classes("flex-grow-[1]").on("wheel", lambda: None)
-                    game_select_element.on_value_change(
-                        lambda e: on_game_select_change(new_game_name=e.value, old_game_name=game_name, weight_element=weight_element))
                     weight_element.bind_value(self.prompt, game_name)
-                    with ui.button(icon="remove").classes("w-1 top-0 right-0").props("color='red'").on_click(lambda g=game_name: self.on_click_game_remove_button(g)):
+                    game_select_element.on_value_change(
+                        lambda e,g=game_name: on_game_select_change(new_game_name=e.value, old_game_name=g))
+                    with ui.button(icon="remove", on_click=lambda g=game_name: self.on_click_game_remove_button(g)).classes("w-1 top-0 right-0").props("color='red'"):
                         ui.tooltip("Remove game from prompt").props('delay=1000')
 
             ui.separator().classes("bg-transparent")
