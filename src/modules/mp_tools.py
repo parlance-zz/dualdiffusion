@@ -106,13 +106,14 @@ class MPConv(torch.nn.Module):
 
     @torch.no_grad()
     def __init__(self, in_channels: int, out_channels: int,
-                 kernel: tuple[int, int], groups: int = 1) -> None:
+                 kernel: tuple[int, int], groups: int = 1, stride: int = 1) -> None:
         super().__init__()
 
         self.in_channels = in_channels
         self.out_channels = out_channels
         self.groups = groups
-
+        self.stride = stride
+        
         self.weight = torch.nn.Parameter(torch.randn(out_channels, in_channels // groups, *kernel))
 
     def forward(self, x: torch.Tensor, gain: Union[float, torch.Tensor] = 1.) -> torch.Tensor:
@@ -127,7 +128,7 @@ class MPConv(torch.nn.Module):
         if w.ndim == 2:
             return x @ w.t()
         
-        return torch.nn.functional.conv2d(x, w, padding=(w.shape[-2]//2, w.shape[-1]//2), groups=self.groups)
+        return torch.nn.functional.conv2d(x, w, padding=(w.shape[-2]//2, w.shape[-1]//2), groups=self.groups, stride=self.stride)
 
     @torch.no_grad()
     def normalize_weights(self):
