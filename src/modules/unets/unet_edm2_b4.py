@@ -300,7 +300,7 @@ class UNet(DualDiffusionUNet):
         x = self.conv_out(x, gain=self.out_gain)
         D_x = c_skip * x_in + c_out * x.float()
         
-        if self.config.inpainting == False and x_ref is not None:
+        if self.config.inpainting == False and x_ref is not None and self.training == False:
             D_x = mp_sum(x_ref[:, :-1].float(), D_x, t=x_ref[:, -1:].float())
 
         return D_x
