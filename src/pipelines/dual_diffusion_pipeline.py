@@ -112,6 +112,19 @@ class SampleOutput:
     debug_info: dict[str, Any]
     latents: Optional[torch.Tensor] = None
 
+    def cpu(self) -> "SampleOutput":
+        if self.latents is not None:
+            self.latents = self.latents.cpu()
+        if self.raw_sample is not None:
+            self.raw_sample = self.raw_sample.cpu()
+        if self.spectrogram is not None:
+            self.spectrogram = self.spectrogram.cpu()
+        if self.params.input_audio is not None:
+            self.params.input_audio = self.params.input_audio.cpu()
+        if self.params.inpainting_mask is not None:
+            self.params.inpainting_mask = self.params.inpainting_mask.cpu()
+        return self
+
 @dataclass
 class ModuleInventory:
     name: str
@@ -420,14 +433,14 @@ class DualDiffusionPipeline(torch.nn.Module):
 
         if input_audio is not None:
             if params.input_audio_pre_encoded == True:
-                input_audio_sample = input_audio
+                input_audio_sample = input_audio.to(dtype=torch.float32, device=unet.device)
             else:
                 while input_audio.ndim < 3: input_audio.unsqueeze_(0)
                 input_audio_sample = self.format.raw_to_sample(input_audio.float().to(self.format.device))
                 if latent_diffusion:
                     input_audio_sample = self.vae.encode(
                         input_audio_sample.to(device=self.vae.device, dtype=self.vae.dtype),
-                        vae_class_embeddings, self.format).mode().float()[..., :688] #***
+                        vae_class_embeddings, self.format).mode().to(dtype=torch.float32, device=self.unet.device)[..., :688] #***
         else:
             input_audio_sample = torch.zeros(sample_shape, device=unet.device)
 
@@ -536,4 +549,4 @@ class DualDiffusionPipeline(torch.nn.Module):
             spectrogram = sample
         raw_sample = self.format.sample_to_raw(spectrogram)
         
-        return SampleOutput(raw_sample.cpu(), spectrogram.cpu(), params, debug_info, latents.cpu())
+        return SampleOutput(raw_sample, spectrogram, params, debug_info, latents)

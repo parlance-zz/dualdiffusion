@@ -81,8 +81,8 @@ class ModelServer:
         pass
 
     async def generate(self) -> None:
-        self.model_server_state["generate_output"] = self.pipeline(
-            self.model_server_state["sample_params"], self.model_server_state)
+        sample_output = self.pipeline(self.model_server_state["sample_params"], self.model_server_state)
+        self.model_server_state["generate_output"] = sample_output.cpu() if sample_output is not None else None
 
     async def run(self):
         while True:
