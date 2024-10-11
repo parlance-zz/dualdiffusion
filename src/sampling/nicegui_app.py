@@ -1,12 +1,12 @@
 from utils import config
 
-from typing import Optional, Union
+from typing import Optional, Union, Any
 from dataclasses import dataclass
 from datetime import datetime
 from functools import partial
-from subprocess import Popen
 from PIL import Image
 import asyncio
+import multiprocessing
 import logging
 import random
 import os
@@ -21,9 +21,11 @@ from utils.dual_diffusion_utils import (
     get_available_torch_devices, sanitize_filename
 )
 from pipelines.dual_diffusion_pipeline import DualDiffusionPipeline, SampleParams, SampleOutput
+from sampling.model_server import ModelServer
 from sampling.schedule import SamplingSchedule
 from sampling.scrollable_log import ScrollableLog
 
+        
 @dataclass
 class OutputSample:
     name: str
@@ -88,28 +90,19 @@ class NiceGUIApp:
         self.init_logging()
         self.logger.debug(f"NiceGUIAppConfig:\n{dict_str(self.config.__dict__)}")
 
-        # load model
-        model_path = os.path.join(config.MODELS_PATH, self.config.model_name)
-        model_load_options = self.config.model_load_options
-
-        self.logger.info(f"Loading DualDiffusion model from '{model_path}'...")
-        self.pipeline = DualDiffusionPipeline.from_pretrained(model_path, **model_load_options)
-        self.logger.debug(f"Model metadata:\n{dict_str(self.pipeline.model_metadata)}")
-
-        # setup dataset games list
-        for game_name, count in self.pipeline.dataset_info["game_train_sample_counts"].items():
-            if count == 0: self.pipeline.dataset_game_ids.pop(game_name)
-        self.dataset_games_dict = {} # keys are actual game names, values are display strings
-        for game_name in self.pipeline.dataset_game_ids.keys():
-            self.dataset_games_dict[game_name] = f"({self.pipeline.dataset_info['game_train_sample_counts'][game_name]}) {game_name}"
-        self.dataset_games_dict = dict(sorted(self.dataset_games_dict.items()))
+        self.mp_manager = multiprocessing.Manager()
+        self.model_server_state = self.mp_manager.dict()
+        
+        self.model_server_process = multiprocessing.Process(daemon=True, name="model_server",
+            target=ModelServer.start_server, args=(self.model_server_state,))
+        self.model_server_process.start()
 
         self.gpu_lock = asyncio.Semaphore(self.config.max_gpu_concurrency)
         self.input_output_sample: OutputSample = None
         self.playing_output_sample: OutputSample = None
 
         self.init_layout()
-        app.on_startup(lambda: self.on_startup_app())
+        app.on_startup(partial(self.on_startup_app))
 
     def init_logging(self) -> None:
         self.logger = logging.getLogger(name="nicegui_app")
@@ -133,7 +126,7 @@ class NiceGUIApp:
                     logging.StreamHandler(),
                     self.log_handler
                 ],
-                format="",
+                format=r"NiceGUIApp: %(message)s",
             )
             self.logger.info(f"\nStarted nicegui_app at {datetime_str}")
             self.logger.info(f"Logging to {self.log_path}")
@@ -267,8 +260,8 @@ class NiceGUIApp:
             with ui.card().classes("flex-grow-[50]"): # prompt editor                    
                 self.prompt = {}
                 with ui.row().classes("w-full h-12 flex items-center"):
-                    self.game_select = ui.select(label="Select a game", value=next(iter(self.dataset_games_dict)), with_input=True,
-                        options=self.dataset_games_dict).classes("flex-grow-[1000]")
+                    self.game_select = ui.select(label="Select a game", with_input=True,
+                        options={}).classes("flex-grow-[1000]")
                     self.game_weight = ui.number(label="Weight", value=10, min=-100, max=100, step=1).classes("flex-grow-[1]")
                     self.game_weight.on("wheel", lambda: None)
                     self.game_add_button = ui.button(icon='add', color='green').classes("w-1")
@@ -285,32 +278,55 @@ class NiceGUIApp:
         # queued / output samples go here
         self.output_samples: list[OutputSample] = []
         self.output_samples_column = ui.column().classes("w-full")      
-                        
-    def on_startup_app(self) -> None:
+
+    async def wait_for_model_server(self) -> str:
+        while self.model_server_state.get("cmd", None) is not None:
+            await asyncio.sleep(0.1)
+        error = self.model_server_state.get("error", None)
+        if error is not None:
+            self.logger.error(f"wait_for_model_server error: {error}")
+        return error
+    
+    async def model_server_cmd(self, cmd: str, **kwargs) -> None:
+        await self.wait_for_model_server()
+        self.model_server_state.update(kwargs)
+        self.model_server_state["cmd"] = cmd
+
+    async def load_model(self, model_name: str, model_load_options: dict) -> None:
+        async with self.gpu_lock:
+            await self.model_server_cmd("load_model", model_name=model_name, model_load_options=model_load_options)
+            ui.notify(f"Loading model: {model_name}", type="info", color="blue", close_button=True)
+            error = await self.wait_for_model_server()
+
+            if error is not None:
+                ui.notify(f"Error loading model: {self.model_server_state['error']}", type="error", color="red", close_button=True)
+            else:                
+                self.model_metadata = self.model_server_state["model_metadata"]
+                self.format_config = self.model_server_state["format_config"]
+                self.dataset_games_dict = self.model_server_state["dataset_games_dict"]
+                self.dataset_game_ids = self.model_server_state["dataset_game_ids"]
+
+                self.game_select.options = self.dataset_games_dict
+                self.game_select.value = next(iter(self.dataset_games_dict))
+                self.game_select.update()
+                self.refresh_game_prompt_elements()
+
+                if model_load_options["compile_options"] is not None:
+                    self.model_server_cmd("compile_model")
+    
+    async def on_startup_app(self) -> None:
+        await self.load_model(self.config.model_name, self.config.model_load_options)
         self.load_preset()
-        #app.add_static_files(...)
-        ui.add_body_html('''
-        <script type="module">
-            import WaveSurfer from 'https://cdn.jsdelivr.net/npm/wavesurfer.js@7/dist/wavesurfer.esm.js'
-            import Spectrogram from 'https://cdn.jsdelivr.net/npm/wavesurfer.js@7.8/dist/plugins/spectrogram.esm.js'
-            import TimelinePlugin from 'https://cdn.jsdelivr.net/npm/wavesurfer.js@7.8/dist/plugins/timeline.esm.js'
-            import RegionsPlugin from 'https://cdn.jsdelivr.net/npm/wavesurfer.js@7.8/dist/plugins/regions.esm.js'
-            window.WaveSurfer = WaveSurfer;
-            window.Spectrogram = Spectrogram;
-            window.TimelinePlugin = TimelinePlugin;
-            window.RegionsPlugin = RegionsPlugin;
-        </script>
-        ''')
 
     def save_output_sample(self, sample_output: SampleOutput) -> str:
         metadata = {"diffusion_metadata": dict_str(sample_output.params.get_metadata())}
-        last_global_step = self.pipeline.model_metadata["last_global_step"]["unet"]
-        audio_output_filename = f"{sample_output.params.get_label(self.pipeline)}.flac"
+        last_global_step = self.model_metadata["last_global_step"]["unet"]
+        audio_output_filename = f"{sample_output.params.get_label(self.model_metadata, self.dataset_game_ids)}.flac"
         audio_output_path = os.path.join(
             config.MODELS_PATH, self.config.model_name, "output", f"step_{last_global_step}", audio_output_filename)
         
         audio_output_path = save_audio(sample_output.raw_sample.squeeze(0),
-            self.pipeline.format.config.sample_rate, audio_output_path, metadata=metadata, no_clobber=True)
+            self.format_config["sample_rate"], audio_output_path, metadata=metadata, no_clobber=True)
         self.logger.info(f"Saved audio output to {audio_output_path}")
         return audio_output_path
 
@@ -322,7 +338,7 @@ class NiceGUIApp:
             return
         
         sample_params: SampleParams = SampleParams(seed=self.seed.value,
-            length=int(self.generate_length.value) * self.pipeline.format.config.sample_rate,
+            length=int(self.generate_length.value) * self.format_config["sample_rate"],
             prompt={**self.prompt}, **self.gen_params)
         if self.auto_increment_seed.value == True: self.seed.set_value(self.seed.value + 1)
         self.logger.info(f"on_click_generate_button - params:{dict_str(sample_params.__dict__)}")
@@ -332,30 +348,45 @@ class NiceGUIApp:
             sample_params.input_audio_pre_encoded = True
             sample_params.inpainting_mask = torch.zeros_like(sample_params.input_audio[:, 0:1])
             sample_params.inpainting_mask[..., self.input_output_sample.select_range.value["min"]:self.input_output_sample.select_range.value["max"]] = 1.
-
-        output_sample = OutputSample(name=f"{sample_params.get_label(self.pipeline)}",
+        
+        output_sample = OutputSample(name=f"{sample_params.get_label(self.model_metadata, self.dataset_game_ids)}",
             seed=sample_params.seed, prompt=sample_params.prompt, gen_params={**self.gen_params}, sample_params=sample_params)
         self.add_output_sample(output_sample)
 
-        await asyncio.sleep(0.1) # ensure the seed increment event is processed before beginning sampling
-
-        def sampling_progress_callback(stage: str, progress: Union[float, torch.Tensor]) -> bool:
-            if output_sample not in self.output_samples:
-                return False
-            
-            if stage == "sampling":
-                output_sample.sampling_progress_element.set_value(f"{int(progress*100)}%")
-            elif stage == "latents":
-                latents_image = tensor_to_img(progress, flip_y=True)
-                latents_image = Image.fromarray(latents_image)
-                output_sample.latents_image_element.set_source(latents_image)
-            return True
-
         async with self.gpu_lock:
-            if output_sample not in self.output_samples: return # handle removal from queue
-            output_sample.sample_output = await self.pipeline(sample_params, lambda stage,
-                progress: sampling_progress_callback(stage, progress))
-        if output_sample not in self.output_samples: return # handle abort in progress
+            if output_sample not in self.output_samples:
+                return # handle removal from queue
+            self.model_server_state["generate_abort"] = False
+            await self.model_server_cmd("generate", sample_params=sample_params)
+            while self.model_server_state.get("cmd", None) is not None:
+                step = self.model_server_state.get("generate_step", None)
+                if step is not None:
+                    output_sample.sampling_progress_element.set_value(f"{int(step/sample_params.num_steps*100)}%")
+
+                latents = self.model_server_state.get("generate_latents", None)
+                if latents is not None:
+                    latents_image = tensor_to_img(latents, flip_y=True)
+                    latents_image = Image.fromarray(latents_image)
+                    output_sample.latents_image_element.set_source(latents_image)
+
+                if output_sample not in self.output_samples:
+                    self.model_server_state["generate_abort"] = True
+                    return # abort in progress
+                
+                if self.model_server_state.get("cmd", None) is None:
+                    break # finished
+                await asyncio.sleep(0.1)
+
+            error = self.model_server_state.get("error", None)
+            if error is not None:
+                self.logger.error(f"on_click_generate_button error: {error}")
+                ui.notify(f"Error generating sample: {error}", type="error", color="red", close_button=True)
+                self.remove_output_sample(output_sample)
+                return
+            
+            output_sample.sample_output = self.model_server_state["generate_output"]
+        
+        if output_sample not in self.output_samples: return # handle late abort
         output_sample.audio_path = self.save_output_sample(output_sample.sample_output)
 
         output_sample.name = os.path.splitext(os.path.basename(output_sample.audio_path))[0]
@@ -399,13 +430,6 @@ class NiceGUIApp:
 
     def add_output_sample(self, output_sample: OutputSample) -> None:
         
-        def remove_output_sample(output_sample: OutputSample) -> None:
-            if self.input_output_sample == output_sample:
-                self.input_output_sample = None
-            self.output_samples_column.remove(output_sample.card_element)
-            self.output_samples.remove(output_sample)
-            self.refresh_output_samples()
-
         def move_output_sample(output_sample: OutputSample, direction: int) -> None:
             current_index = output_sample.card_element.parent_slot.children.index(output_sample.card_element)
             new_index = min(max(current_index + direction, 0), len(output_sample.card_element.parent_slot.children) - 1)
@@ -454,7 +478,7 @@ class NiceGUIApp:
                         output_sample.move_down_button = ui.button('▼', on_click=lambda: move_output_sample(output_sample, direction=1)).classes("w-1")
                         with output_sample.move_down_button:
                             ui.tooltip("Move sample down").props('delay=1000')
-                        with ui.button('✕', color="red", on_click=lambda: remove_output_sample(output_sample)).classes("w-1"):
+                        with ui.button('✕', color="red", on_click=lambda s=output_sample: self.remove_output_sample(s)).classes("w-1"):
                             ui.tooltip("Remove sample from workspace").props('delay=1000')
 
                         #ui.label("Rating:") 
@@ -484,6 +508,13 @@ class NiceGUIApp:
         self.clear_output_button.disable()
         self.input_output_sample = None
 
+    def remove_output_sample(self, output_sample: OutputSample) -> None:
+        if self.input_output_sample == output_sample:
+            self.input_output_sample = None
+        self.output_samples_column.remove(output_sample.card_element)
+        self.output_samples.remove(output_sample)
+        self.refresh_output_samples()
+        
     def refresh_game_prompt_elements(self) -> None:
 
         self.logger.debug(f"refresh_game_prompt_elements: {dict_str(self.prompt)}")
@@ -502,7 +533,11 @@ class NiceGUIApp:
 
                     self.on_change_gen_param()
                     self.refresh_game_prompt_elements()
-                    
+                
+                if game_name not in self.dataset_games_dict:
+                    ui.notify(f"Error '{game_name}' not found in dataset_games_dict", type="error", color="red", close_button=True)
+                    continue
+
                 with ui.row().classes("w-full h-10 flex items-center"):
                     game_select_element = ui.select(value=game_name, with_input=True, options=self.dataset_games_dict).classes("flex-grow-[1000]")
                     weight_element = ui.number(label="Weight", value=game_weight, min=-100, max=100, step=1,
@@ -673,11 +708,13 @@ class NiceGUIApp:
 
     def run(self) -> None:
         on_air_token = os.getenv("ON_AIR_TOKEN", None)
-        ui.run(dark=self.config.enable_dark_mode, title="Dual-Diffusion WebUI",
+        ui.run(dark=self.config.enable_dark_mode, title="Dual-Diffusion WebUI", reload=False, show=False,
             host=self.config.web_server_host, port=self.config.web_server_port, on_air=on_air_token)
 
 
 if __name__ in {"__main__", "__mp_main__"}:
-
+    
     init_cuda()
-    NiceGUIApp().run()
+    if os.getenv("_IS_NICEGUI_SUBPROCESS", None) is None: # ugly hack
+        os.environ["_IS_NICEGUI_SUBPROCESS"] = "1"
+        NiceGUIApp().run()

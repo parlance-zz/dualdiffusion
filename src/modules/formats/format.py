@@ -70,7 +70,7 @@ class DualDiffusionFormat(DualDiffusionModule, ABC):
 
     @abstractmethod
     @torch.inference_mode()
-    async def sample_to_raw(self, samples: torch.Tensor,
+    def sample_to_raw(self, samples: torch.Tensor,
                       return_dict: bool = False) -> Union[torch.Tensor, dict]:
         pass
     

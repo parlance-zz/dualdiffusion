@@ -159,9 +159,9 @@ class SpectrogramConverter(torch.nn.Module):
         return self.freq_scale.scale(spectrogram_complex.abs()) ** self.config.abs_exponent
 
     @torch.inference_mode()
-    async def spectrogram_to_audio(self, spectrogram: torch.Tensor) -> torch.Tensor:
+    def spectrogram_to_audio(self, spectrogram: torch.Tensor) -> torch.Tensor:
         amplitudes_linear = self.freq_scale.unscale(spectrogram ** (1 / self.config.abs_exponent))
-        return await self.inverse_spectrogram_func(amplitudes_linear, n_fgla_iter=self.config.num_fgla_iters)
+        return self.inverse_spectrogram_func(amplitudes_linear, n_fgla_iter=self.config.num_fgla_iters)
 
 class SpectrogramFormat(DualDiffusionFormat):
 
@@ -201,10 +201,10 @@ class SpectrogramFormat(DualDiffusionFormat):
             return samples
 
     @torch.inference_mode()
-    async def sample_to_raw(self, samples: torch.Tensor, return_dict: bool = False) -> Union[torch.Tensor, dict]:
+    def sample_to_raw(self, samples: torch.Tensor, return_dict: bool = False) -> Union[torch.Tensor, dict]:
         
         with torch.no_grad():
-            raw_samples = await self.spectrogram_converter.spectrogram_to_audio(samples.clip(min=0))
+            raw_samples = self.spectrogram_converter.spectrogram_to_audio(samples.clip(min=0))
 
         if return_dict:
             return {"raw_samples": raw_samples, "samples": samples}

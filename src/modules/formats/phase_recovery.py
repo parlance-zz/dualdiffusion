@@ -20,7 +20,6 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
-import asyncio
 from typing import Optional, Callable
 
 import torch
@@ -37,7 +36,7 @@ def _get_complex_dtype(real_dtype: torch.dtype):
     raise ValueError(f"Unexpected dtype {real_dtype}")
 
 @torch.inference_mode()
-async def griffinlim(
+def griffinlim(
     specgram: Tensor,
     window: Tensor,
     n_fft: int,
@@ -109,7 +108,6 @@ async def griffinlim(
         tprev = rebuilt
         if progress_bar is not None:
             progress_bar.update(1)
-        await asyncio.sleep(0)
 
     waveform = torch.istft(
         angles * specgram, n_fft=n_fft, hop_length=hop_length,
@@ -156,12 +154,12 @@ class PhaseRecovery(torch.nn.Module):
         self.register_buffer("window", window, persistent=False)
 
     @torch.inference_mode()
-    async def forward(self, specgram: Tensor, n_fgla_iter: Optional[int] = None, show_tqdm: bool = True) -> Tensor:
+    def forward(self, specgram: Tensor, n_fgla_iter: Optional[int] = None, show_tqdm: bool = True) -> Tensor:
 
         n_fgla_iter = n_fgla_iter or self.n_fgla_iter
 
         if self.n_fgla_iter > 0:
-            wave = await griffinlim(
+            wave = griffinlim(
                 specgram,
                 self.window,
                 self.n_fft,
