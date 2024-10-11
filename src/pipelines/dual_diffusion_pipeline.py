@@ -24,10 +24,10 @@ import utils.config as config
 
 import os
 import importlib
-import asyncio
 from dataclasses import dataclass
-from typing import Callable, Optional, Union, Any
+from typing import Optional, Union, Any
 from datetime import datetime
+import multiprocessing.managers
 
 import numpy as np
 import torch
@@ -55,7 +55,6 @@ class SampleParams:
     schedule: Optional[str]               = "edm2"
     #schedule_kwargs: Optional[dict]       = None
     prompt: Optional[dict]                = None
-    generator: Optional[torch.Generator]  = None
     use_heun: bool                        = True
     input_perturbation: float             = 1.
     conditioning_perturbation: float      = 0.
@@ -81,26 +80,24 @@ class SampleParams:
             metadata["input_audio"] = True
         if metadata["inpainting_mask"] is not None:
             metadata["inpainting_mask"] = True
-        if metadata["generator"] is not None:
-            metadata["generator"] = True
 
         metadata["timestamp"] = datetime.now().strftime(r"%m/%d/%Y %I:%M:%S %p")
         return {str(key): str(value) for key, value in metadata.items()}
     
-    def get_label(self, pipeline: "DualDiffusionPipeline") -> str:
+    def get_label(self, model_metadata: dict, dataset_game_ids: dict) -> str:
         
         module_name = "unet"
         #if self.inpainting_mask is not None: # I prefer having the step label from the main unet for now
         #    if getattr(pipeline, "unet_inpainting", None) is not None:
         #        module_name = "unet_inpainting"
 
-        last_global_step = pipeline.model_metadata["last_global_step"][module_name]
-        if module_name in pipeline.model_metadata["load_emas"]:
-            ema = pipeline.model_metadata["load_emas"][module_name].replace("pf_ema_std-", "").replace(".safetensors", "")
+        last_global_step = model_metadata["last_global_step"][module_name]
+        if module_name in model_metadata["load_emas"]:
+            ema = model_metadata["load_emas"][module_name].replace("pf_ema_std-", "").replace(".safetensors", "")
         else:
             ema = None
         top_game_name = sorted(self.prompt.items(), key=lambda x:x[1])[-1][0]
-        top_game_id = pipeline.dataset_game_ids[top_game_name]
+        top_game_id = dataset_game_ids[top_game_name]
 
         label = f"step_{last_global_step}_{int(self.num_steps)}_{'ema'+ema+'_' if ema else ''}cfg{self.cfg_scale}"
         label += f"_sgm{self.sigma_max}-{self.sigma_min}_ip{self.input_perturbation}_r{self.rho}_g{top_game_id}_s{int(self.seed)}"
@@ -370,8 +367,7 @@ class DualDiffusionPipeline(torch.nn.Module):
         return self.vae.get_sample_shape(latent_shape)
     
     @torch.inference_mode()
-    async def __call__(self, params: SampleParams,
-            progress_callback: Optional[Callable[[str, Union[float, torch.Tensor]], Any]] = None) -> torch.Tensor:
+    def __call__(self, params: SampleParams, model_server_state: Optional[multiprocessing.managers.DictProxy] = None) -> torch.Tensor:
         
         debug_info = {}
         params = SampleParams(**params.__dict__).sanitize() # todo: this should be properly deepcopied because of tensor params
@@ -404,8 +400,7 @@ class DualDiffusionPipeline(torch.nn.Module):
             input_audio = params.input_audio
 
         self.format.config.num_fgla_iters = params.num_fgla_iters
-        generator = params.generator or torch.Generator(
-            device=unet.device).manual_seed(params.seed)
+        generator = torch.Generator(device=unet.device).manual_seed(params.seed)
 
         sample_shape = self.get_sample_shape(bsz=params.batch_size, length=params.length)
         if getattr(self, "vae", None) is not None:
@@ -433,7 +428,6 @@ class DualDiffusionPipeline(torch.nn.Module):
                     input_audio_sample = self.vae.encode(
                         input_audio_sample.to(device=self.vae.device, dtype=self.vae.dtype),
                         vae_class_embeddings, self.format).mode().float()[..., :688] #***
-                    await asyncio.sleep(0)
         else:
             input_audio_sample = torch.zeros(sample_shape, device=unet.device)
 
@@ -510,9 +504,6 @@ class DualDiffusionPipeline(torch.nn.Module):
             #    measured_norm = sample.square().mean(dim=(1,2,3), keepdim=True).sqrt()
             #    sample = sample / (measured_norm / ideal_norm)**(1 - temperature_scale)
 
-            if progress_callback is not None:
-                progress_callback("latents", cfg_model_output.cpu())
-
             if i+1 < params.num_steps:
                 p = max(old_sigma_next**2 - sigma_next**2, 0)**0.5
                 added_noise = torch.randn(sample.shape,
@@ -520,12 +511,14 @@ class DualDiffusionPipeline(torch.nn.Module):
 
                 sample += added_noise * p
 
-            if progress_callback is not None:
-                if progress_callback("sampling", (i+1) / params.num_steps) == False:
+            if model_server_state is not None:
+                model_server_state["generate_latents"] = cfg_model_output.cpu()
+                model_server_state["generate_step"] = i + 1
+                if model_server_state.get("generate_abort", None) == True:
                     progress_bar.close()
                     return None
+
             progress_bar.update(1)
-            await asyncio.sleep(0.0083)
         
         progress_bar.close()
 
@@ -538,10 +531,9 @@ class DualDiffusionPipeline(torch.nn.Module):
         if latent_diffusion == True:
             latents = sample
             spectrogram = self.vae.decode(sample.to(self.vae.dtype), vae_class_embeddings, self.format).float()
-            await asyncio.sleep(0)
         else:
             latents = None
             spectrogram = sample
-        raw_sample = await self.format.sample_to_raw(spectrogram)
+        raw_sample = self.format.sample_to_raw(spectrogram)
         
-        return SampleOutput(raw_sample, spectrogram, params, debug_info, latents)
+        return SampleOutput(raw_sample.cpu(), spectrogram.cpu(), params, debug_info, latents.cpu())
