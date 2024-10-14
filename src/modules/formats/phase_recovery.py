@@ -77,8 +77,14 @@ def griffinlim(
     for i in range(n_iter):
         
         if stereo:
-            t = max(i / n_iter - stereo_coherence, 0)
-            interp_specgram = specgram * t + merged_specgram * (1 - t)
+            #t = max(i / n_iter - stereo_coherence, 0)
+            #interp_specgram = specgram * t + merged_specgram * (1 - t)
+
+            t = i / n_iter - stereo_coherence
+            if t > 0: # performance / precision improvement over above
+                interp_specgram = torch.lerp(merged_specgram, specgram, t)
+            else:
+                interp_specgram = merged_specgram
         else:
             interp_specgram = specgram
 
@@ -102,8 +108,10 @@ def griffinlim(
 
         angles = rebuilt
         if momentum:
-            angles = angles - tprev.mul_(momentum)
-        angles = angles.div(angles.abs().add(1e-16))
+            #angles = angles - tprev.mul_(momentum)
+            angles.sub_(tprev, alpha=momentum) # performance / precision improvement over above
+        #angles = angles.div(angles.abs().add(1e-16))
+        angles = angles.div(angles.abs().add_(1e-16))
 
         tprev = rebuilt
         if progress_bar is not None:

@@ -451,7 +451,7 @@ class DualDiffusionPipeline(torch.nn.Module):
         else:
             ref_sample = torch.cat((torch.zeros_like(input_audio_sample),
                                     torch.ones_like(input_audio_sample[:, :1])), dim=1)
-        input_ref_sample = ref_sample.to(unet.dtype).repeat(2, 1, 1, 1)
+        input_ref_sample = ref_sample.repeat(2, 1, 1, 1)
 
         if unet.config.use_t_ranges == True:
             raise NotImplementedError("sampling with unet.config.use_t_ranges=True not implemented")
@@ -480,7 +480,7 @@ class DualDiffusionPipeline(torch.nn.Module):
             sigma_next *= (1 - (max(min(effective_input_perturbation, 1), 0)))
 
             input_sigma = torch.tensor([sigma_curr] * unet_class_embeddings.shape[0], device=unet.device)
-            input_sample = sample.to(unet.dtype).repeat(2, 1, 1, 1)
+            input_sample = sample.repeat(2, 1, 1, 1)
             #if params.static_conditioning_perturbation > 0:
             #    p_unet_class_embeddings = mp_sum(unet_class_embeddings, -unet.u_class_embeddings, static_conditioning_perturbation)
             #else:
@@ -499,16 +499,19 @@ class DualDiffusionPipeline(torch.nn.Module):
                 sigma_hat = max(sigma_next, params.sigma_min)
                 t_hat = sigma_hat / sigma_curr
 
-                input_sample_hat = (t_hat * sample + (1 - t_hat) * cfg_model_output).to(unet.dtype).repeat(2, 1, 1, 1)
+                #input_sample_hat = (t_hat * sample + (1 - t_hat) * cfg_model_output).to(unet.dtype).repeat(2, 1, 1, 1)
+                input_sample_hat = torch.lerp(cfg_model_output, sample, t_hat).repeat(2, 1, 1, 1)
                 #input_sample_hat = normalize(input_sample_hat).to(unet.dtype) * (sigma_next**2 + params.sigma_data**2)**0.5 #***
                 input_sigma_hat = torch.tensor([t_hat * sigma_curr] * unet_class_embeddings.shape[0], device=unet.device)
 
                 model_output_hat = unet(input_sample_hat, input_sigma_hat, self.format, unet_class_embeddings, t_ranges, input_ref_sample).float()
                 cfg_model_output_hat = model_output_hat[params.batch_size:].lerp(model_output_hat[:params.batch_size], params.cfg_scale)
-                cfg_model_output = (cfg_model_output + cfg_model_output_hat) / 2
+                #cfg_model_output = (cfg_model_output + cfg_model_output_hat) / 2
+                cfg_model_output = torch.lerp(cfg_model_output, cfg_model_output_hat, 0.5)            
             
             t = sigma_next / sigma_curr if (i+1) < params.num_steps else 0
-            sample = (t * sample + (1 - t) * cfg_model_output)
+            #sample = (t * sample + (1 - t) * cfg_model_output)
+            sample = torch.lerp(cfg_model_output, sample, t)
             
             #print(sample.std().item(), (sigma_next**2 + params.sigma_data**2)**0.5)
             #sample = normalize(sample).float() * (sigma_next**2 + params.sigma_data**2)**0.5 #***
@@ -519,17 +522,15 @@ class DualDiffusionPipeline(torch.nn.Module):
 
             if i+1 < params.num_steps:
                 p = max(old_sigma_next**2 - sigma_next**2, 0)**0.5
-                added_noise = torch.randn(sample.shape,
-                    generator=generator, device=sample.device, dtype=sample.dtype)
-
-                sample += added_noise * p
+                sample.add_(torch.randn(sample.shape, generator=generator,
+                    device=sample.device, dtype=sample.dtype), alpha=p)
 
             if model_server_state is not None:
-                model_server_state["generate_latents"] = cfg_model_output.cpu()
-                model_server_state["generate_step"] = i + 1
                 if model_server_state.get("generate_abort", None) == True:
                     progress_bar.close()
                     return None
+                model_server_state["generate_latents"] = cfg_model_output.cpu()
+                model_server_state["generate_step"] = i + 1
 
             progress_bar.update(1)
         
