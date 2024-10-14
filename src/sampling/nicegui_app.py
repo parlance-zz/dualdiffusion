@@ -17,8 +17,8 @@ import numpy as np
 from nicegui import ui, app
 
 from utils.dual_diffusion_utils import (
-    init_cuda, save_audio, load_audio, dict_str, tensor_to_img,
-    get_available_torch_devices, sanitize_filename
+    init_cuda, save_audio, load_audio, save_safetensors, dict_str,
+    get_available_torch_devices, sanitize_filename, tensor_to_img
 )
 from pipelines.dual_diffusion_pipeline import DualDiffusionPipeline, SampleParams, SampleOutput
 from sampling.model_server import ModelServer
@@ -35,7 +35,7 @@ class OutputSample:
     sample_params: SampleParams
     sample_output: Optional[SampleOutput] = None
     audio_path: Optional[str] = None
-    is_input_audio: bool = False
+    latents_path: Optional[str] = None
 
     card_element: Optional[ui.card] = None
     name_label_element: Optional[ui.label] = None
@@ -53,6 +53,7 @@ class NiceGUIAppConfig:
     model_name: str
     model_load_options: dict
     max_gpu_concurrency: int = 1
+    save_output_latents: bool = True
 
     web_server_host: Optional[str] = None
     web_server_port: int = 3001
@@ -318,7 +319,7 @@ class NiceGUIApp:
         await self.load_model(self.config.model_name, self.config.model_load_options)
         self.load_preset()
 
-    def save_output_sample(self, sample_output: SampleOutput) -> str:
+    def save_output_sample(self, sample_output: SampleOutput) -> tuple[str, Optional[str]]:
         metadata = {"diffusion_metadata": dict_str(sample_output.params.get_metadata())}
         last_global_step = self.model_metadata["last_global_step"]["unet"]
         audio_output_filename = f"{sample_output.params.get_label(self.model_metadata, self.dataset_game_ids)}.flac"
@@ -328,7 +329,16 @@ class NiceGUIApp:
         audio_output_path = save_audio(sample_output.raw_sample.squeeze(0),
             self.format_config["sample_rate"], audio_output_path, metadata=metadata, no_clobber=True)
         self.logger.info(f"Saved audio output to {audio_output_path}")
-        return audio_output_path
+
+        if self.config.save_output_latents and sample_output.latents is not None:
+            latents_output_path = os.path.join(os.path.dirname(audio_output_path), "latents",
+                f"{os.path.splitext(os.path.basename(audio_output_path))[0]}.safetensors")
+            save_safetensors({"latents": sample_output.latents}, latents_output_path, metadata=metadata)
+            self.logger.info(f"Saved latents to {latents_output_path}")
+        else:
+            latents_output_path = None
+
+        return audio_output_path, latents_output_path
 
     async def on_click_generate_button(self) -> None:
         
@@ -387,7 +397,7 @@ class NiceGUIApp:
             output_sample.sample_output = self.model_server_state["generate_output"]
         
         if output_sample not in self.output_samples: return # handle late abort
-        output_sample.audio_path = self.save_output_sample(output_sample.sample_output)
+        output_sample.audio_path, output_sample.latents_path = self.save_output_sample(output_sample.sample_output)
 
         output_sample.name = os.path.splitext(os.path.basename(output_sample.audio_path))[0]
         output_sample.name_label_element.set_text(output_sample.name)
@@ -428,6 +438,13 @@ class NiceGUIApp:
             if i == len(self.output_samples) - 1: output_sample.move_down_button.disable()
             else: output_sample.move_down_button.enable()
 
+            if self.input_output_sample != output_sample:
+                output_sample.use_as_input_button.classes(remove="border-4", add="border-none")
+                output_sample.select_range.set_visibility(False)
+            else:
+                output_sample.use_as_input_button.classes(remove="border-none", add="border-4")
+                output_sample.select_range.set_visibility(True)
+        
     def add_output_sample(self, output_sample: OutputSample) -> None:
         
         def move_output_sample(output_sample: OutputSample, direction: int) -> None:
@@ -441,32 +458,19 @@ class NiceGUIApp:
         def use_output_sample_as_input(output_sample: OutputSample) -> None:
             if self.input_output_sample == output_sample:
                 self.input_output_sample = None
-                output_sample.is_input_audio = False
-                output_sample.use_as_input_button.classes(remove="border-4", add="border-none")
-                output_sample.select_range.set_visibility(False)
-                self.logger.debug("use_output_sample_as_input - removed input")
-            elif self.input_output_sample is not None:
-                self.input_output_sample.use_as_input_button.classes(remove="border-4", add="border-none")
-                self.input_output_sample.select_range.set_visibility(False)
-                self.input_output_sample = output_sample
-                output_sample.is_input_audio = True
-                output_sample.use_as_input_button.classes(remove="border-none", add="border-4")
-                output_sample.select_range.set_visibility(True)
-                self.logger.debug("use_output_sample_as_input - changed input")
             else:
                 self.input_output_sample = output_sample
-                output_sample.is_input_audio = True
-                output_sample.use_as_input_button.classes(add="border-4", remove="border-none")
-                output_sample.select_range.set_visibility(True)
-                self.logger.debug("use_output_sample_as_input - set input")
+            self.refresh_output_samples()
 
         with ui.card().classes("w-full") as output_sample.card_element:
             with ui.column().classes("w-full gap-0"):
                 with ui.row().classes("h-10 justify-between gap-0 w-full"):
-                    with ui.row():
+
+                    with ui.row(): # output sample name label
                         output_sample.name_label_element = ui.label(output_sample.name).classes("p-2").style(
                             "border: 1px solid grey; border-bottom: none; border-radius: 10px 10px 0 0;")
-                    with ui.button_group().classes("h-10 gap-0"):
+                        
+                    with ui.button_group().classes("h-10 gap-0"): # output sample icon toolbar
                         output_sample.use_as_input_button = ui.button(
                             icon="format_color_fill", color="orange", on_click=lambda: use_output_sample_as_input(output_sample)).classes("w-1 border-none border-double")
                         with output_sample.use_as_input_button:
@@ -483,6 +487,7 @@ class NiceGUIApp:
 
                         #ui.label("Rating:") 
                         #ui.slider(min=0, max=5, step=1, value=0).props("label-always").classes("h-10 top-0")
+
                 output_sample.latents_image_element = ui.interactive_image().classes(
                     "w-full gap-0").style("image-rendering: pixelated; width: 100%; height: auto;").props("fit=scale-down")
                 output_sample.sampling_progress_element = ui.linear_progress(
@@ -494,8 +499,7 @@ class NiceGUIApp:
                 output_sample.select_range = ui.range(min=0, max=688, step=1, value={"min": 0, "max": 0}).classes("w-full").props("step snap color='orange' label='Inpaint Selection'")
                 output_sample.select_range.set_visibility(False)
 
-                dummy_audio_path = os.path.join(config.DEBUG_PATH, "nicegui_app", "test_audio.flac")
-                output_sample.audio_element = ui.audio(dummy_audio_path).classes("w-full").props("preload='auto'").style("filter: invert(1) hue-rotate(180deg);")
+                output_sample.audio_element = ui.audio("").classes("w-full").props("preload='auto'").style("filter: invert(1) hue-rotate(180deg);")
                 output_sample.audio_element.set_visibility(False)
 
         self.output_samples.insert(0, output_sample)

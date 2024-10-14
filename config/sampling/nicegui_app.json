@@ -4,11 +4,13 @@
       "torch_dtype": "bfloat16",
       "device": "cuda",
       "load_checkpoints": true,
-      "load_emas": true,
+      "load_emas": {
+        "unet": "pf_ema_std-0.100.safetensors"
+      },
       "compile_options": null
     },
     "max_gpu_concurrency": 1,
-
+    "save_output_latents": true,
     "web_server_host": "localhost",
     "web_server_port": 3001,
     "enable_debug_logging": true,
