@@ -380,7 +380,7 @@ class DualDiffusionPipeline(torch.nn.Module):
         return self.vae.get_sample_shape(latent_shape)
     
     @torch.inference_mode()
-    def __call__(self, params: SampleParams, model_server_state: Optional[multiprocessing.managers.DictProxy] = None) -> torch.Tensor:
+    def __call__(self, params: SampleParams, model_server_state: Optional[multiprocessing.managers.DictProxy] = None, quiet: bool = False) -> SampleOutput:
         
         debug_info = {}
         params = SampleParams(**params.__dict__).sanitize() # todo: this should be properly deepcopied because of tensor params
@@ -468,7 +468,7 @@ class DualDiffusionPipeline(torch.nn.Module):
         noise = torch.randn(sample_shape, device=unet.device, generator=generator)
         sample = noise * sigma_schedule[0] + input_audio_sample * params.sigma_data
 
-        progress_bar = tqdm(total=params.num_steps)
+        progress_bar = tqdm(total=params.num_steps, disable=quiet)
         for i, (sigma_curr, sigma_next) in enumerate(zip(sigma_schedule_list[:-1], sigma_schedule_list[1:])):
 
             old_sigma_next = sigma_next
