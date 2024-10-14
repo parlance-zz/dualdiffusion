@@ -321,6 +321,7 @@ class NiceGUIApp:
 
     def save_output_sample(self, sample_output: SampleOutput) -> tuple[str, Optional[str]]:
         metadata = {"diffusion_metadata": dict_str(sample_output.params.get_metadata())}
+        metadata["model_metadata"] = dict_str(self.model_metadata)
         last_global_step = self.model_metadata["last_global_step"]["unet"]
         audio_output_filename = f"{sample_output.params.get_label(self.model_metadata, self.dataset_game_ids)}.flac"
         audio_output_path = os.path.join(
