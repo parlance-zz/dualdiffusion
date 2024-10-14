@@ -93,7 +93,7 @@ class NiceGUIApp:
         self.mp_manager = multiprocessing.Manager()
         self.model_server_state = self.mp_manager.dict()
         
-        self.model_server_process = multiprocessing.Process(daemon=True, name="model_server",
+        self.model_server_process = multiprocessing.Process(daemon=False, name="model_server",
             target=ModelServer.start_server, args=(self.model_server_state,))
         self.model_server_process.start()
 
@@ -509,7 +509,8 @@ class NiceGUIApp:
                 output_sample.sampling_progress_element = ui.linear_progress(
                     value="0%").classes("w-full font-bold gap-0").props("instant-feedback")
                 output_sample.spectrogram_image_element = ui.interactive_image(
-                    cross="white", cross_horizontal=False).classes("w-full gap-0").props(add="fit=fill")
+                    #cross="white", cross_horizontal=False).classes("w-full gap-0").props(add="fit=fill")
+                    cross="white").classes("w-full gap-0").props(add="fit=fill")
                 output_sample.spectrogram_image_element.set_visibility(False)
 
                 output_sample.select_range = ui.range(min=0, max=688, step=1, value={"min": 0, "max": 0}).classes("w-full").props("step snap color='orange' label='Inpaint Selection'")
@@ -727,7 +728,6 @@ class NiceGUIApp:
 
 if __name__ in {"__main__", "__mp_main__"}:
     
-    init_cuda()
     if os.getenv("_IS_NICEGUI_SUBPROCESS", None) is None: # ugly hack
         os.environ["_IS_NICEGUI_SUBPROCESS"] = "1"
         NiceGUIApp().run()

@@ -102,4 +102,5 @@ class ModelServer:
 
     @staticmethod
     def start_server(model_server_state: multiprocessing.managers.DictProxy) -> None:
+        init_cuda()
         asyncio.run(ModelServer(model_server_state).run())
