@@ -52,7 +52,6 @@ class OutputSample:
 class NiceGUIAppConfig:
     model_name: str
     model_load_options: dict
-    max_gpu_concurrency: int = 1
     save_output_latents: bool = True
 
     web_server_host: Optional[str] = None
@@ -98,9 +97,8 @@ class NiceGUIApp:
             target=ModelServer.start_server, args=(self.model_server_state,))
         self.model_server_process.start()
 
-        self.gpu_lock = asyncio.Semaphore(self.config.max_gpu_concurrency)
+        self.gpu_lock = asyncio.Semaphore()
         self.input_output_sample: OutputSample = None
-        self.playing_output_sample: OutputSample = None
 
         self.init_layout()
         app.on_startup(partial(self.on_startup_app))
@@ -288,11 +286,13 @@ class NiceGUIApp:
             self.logger.error(f"wait_for_model_server error: {error}")
         return error
     
+    # wait for model server to be idle, then send args and command
     async def model_server_cmd(self, cmd: str, **kwargs) -> None:
         await self.wait_for_model_server()
         self.model_server_state.update(kwargs)
         self.model_server_state["cmd"] = cmd
 
+    # load a new model on the model server and retrieve updated model / dataset metadata
     async def load_model(self, model_name: str, model_load_options: dict) -> None:
         async with self.gpu_lock:
             await self.model_server_cmd("load_model", model_name=model_name, model_load_options=model_load_options)
@@ -313,7 +313,7 @@ class NiceGUIApp:
                 self.refresh_game_prompt_elements()
 
                 if model_load_options["compile_options"] is not None:
-                    self.model_server_cmd("compile_model")
+                    await self.model_server_cmd("compile_model")
     
     async def on_startup_app(self) -> None:
         await self.load_model(self.config.model_name, self.config.model_load_options)
@@ -342,11 +342,12 @@ class NiceGUIApp:
 
     async def on_click_generate_button(self) -> None:
         
-        if len(self.prompt) == 0:
+        if len(self.prompt) == 0: # abort if no prompt games selected
             self.logger.error("No prompt games selected")
             ui.notify("No prompt games selected", type="warning", color="red", close_button=True)
             return
         
+        # setup sample params and auto-increment seed
         sample_params: SampleParams = SampleParams(seed=self.seed.value,
             length=int(self.generate_length.value) * self.format_config["sample_rate"],
             prompt={**self.prompt}, **self.gen_params)
@@ -359,34 +360,41 @@ class NiceGUIApp:
             sample_params.inpainting_mask = torch.zeros_like(sample_params.input_audio[:, 0:1])
             sample_params.inpainting_mask[..., self.input_output_sample.select_range.value["min"]:self.input_output_sample.select_range.value["max"]] = 1.
         
+        # get name / label and add output sample to workspace
         output_sample = OutputSample(name=f"{sample_params.get_label(self.model_metadata, self.dataset_game_ids)}",
             seed=sample_params.seed, prompt=sample_params.prompt, gen_params={**self.gen_params}, sample_params=sample_params)
         self.add_output_sample(output_sample)
 
+        # this lock holds output samples in queue while generation is in progress
         async with self.gpu_lock:
             if output_sample not in self.output_samples:
-                return # handle removal from queue
+                return # handle early removal from queue
+            
+            # reset abort state and send generate command to model server
             self.model_server_state["generate_abort"] = False
             await self.model_server_cmd("generate", sample_params=sample_params)
             while self.model_server_state.get("cmd", None) is not None:
-                step = self.model_server_state.get("generate_step", None)
-                if step is not None:
-                    output_sample.sampling_progress_element.set_value(f"{int(step/sample_params.num_steps*100)}%")
-
-                latents = self.model_server_state.get("generate_latents", None)
-                if latents is not None:
-                    latents_image = tensor_to_img(latents, flip_y=True)
-                    latents_image = Image.fromarray(latents_image)
-                    output_sample.latents_image_element.set_source(latents_image)
 
                 if output_sample not in self.output_samples:
                     self.model_server_state["generate_abort"] = True
                     return # abort in progress
                 
-                if self.model_server_state.get("cmd", None) is None:
-                    break # finished
+                # update linear progress
+                step = self.model_server_state.get("generate_step", None)
+                if step is not None:
+                    output_sample.sampling_progress_element.set_value(f"{int(step/sample_params.num_steps*100)}%")
+
+                # update latents image preview
+                latents = self.model_server_state.get("generate_latents", None)
+                if latents is not None:
+                    latents_image = tensor_to_img(latents, flip_y=True)
+                    latents_image = Image.fromarray(latents_image)
+                    output_sample.latents_image_element.set_source(latents_image)
+                
+                # required to keep the interface responsive
                 await asyncio.sleep(0.1)
 
+            # if any error occurred on the model server, display it and remove from workspace
             error = self.model_server_state.get("error", None)
             if error is not None:
                 self.logger.error(f"on_click_generate_button error: {error}")
@@ -394,13 +402,20 @@ class NiceGUIApp:
                 self.remove_output_sample(output_sample)
                 return
             
+            # retrieve sampling output from model server
             output_sample.sample_output = self.model_server_state["generate_output"]
         
-        if output_sample not in self.output_samples: return # handle late abort
+        if output_sample not in self.output_samples:
+            return # handle late abort
+
+        # save output sample audio / latents
         output_sample.audio_path, output_sample.latents_path = self.save_output_sample(output_sample.sample_output)
 
+        # set output sample name label
         output_sample.name = os.path.splitext(os.path.basename(output_sample.audio_path))[0]
         output_sample.name_label_element.set_text(output_sample.name)
+
+        # set spectrogram image
         spectrogram_image = output_sample.sample_output.spectrogram.mean(dim=(0,1))
         spectrogram_image = tensor_to_img(spectrogram_image, colormap=True, flip_y=True)
         spectrogram_image = cv2.resize(
@@ -408,8 +423,12 @@ class NiceGUIApp:
         spectrogram_image = Image.fromarray(spectrogram_image)
         output_sample.spectrogram_image_element.set_source(spectrogram_image)
         output_sample.spectrogram_image_element.set_visibility(True)
+
+        # set audio element
         output_sample.audio_element.set_source(output_sample.audio_path)
         output_sample.audio_element.set_visibility(True)
+
+        # hide progress and setup inpainting range select element
         output_sample.sampling_progress_element.set_visibility(False)
         output_sample.select_range.max = output_sample.sample_output.latents.shape[-1]
         output_sample.select_range.value = {
@@ -421,9 +440,6 @@ class NiceGUIApp:
         #output_sample.audio_element.on("timeupdate", lambda e: self.logger.debug(e))
         #output_sample.audio_element.seek(10)
         #output_sample.audio_element.play()
-
-        # todo: button to open output sample in configured daw
-        #Popen(["c:/program files/audacity/audacity.exe", audio_output_path])
     
     def refresh_output_samples(self) -> None:
 
@@ -521,23 +537,20 @@ class NiceGUIApp:
         
     def refresh_game_prompt_elements(self) -> None:
 
-        self.logger.debug(f"refresh_game_prompt_elements: {dict_str(self.prompt)}")
+        def on_game_select_change(new_game_name: str, old_game_name: str) -> None:
+            # ugly hack to replace dict key while preserving order
+            prompt_list = list(self.prompt.items())
+            index = prompt_list.index((old_game_name, self.prompt[old_game_name]))
+            prompt_list[index] = (new_game_name, self.prompt[old_game_name])
+            self.prompt = dict(prompt_list)
+
+            self.on_change_gen_param()
+            self.refresh_game_prompt_elements()
+            
         self.prompt_games_column.clear()
         with self.prompt_games_column:
             for game_name, game_weight in self.prompt.items():
-
-                def on_game_select_change(new_game_name: str, old_game_name: str) -> None:
-                    self.logger.debug(f"game_select changed {old_game_name} to {new_game_name}")
-
-                    # ugly hack to replace dict key while preserving order
-                    prompt_list = list(self.prompt.items())
-                    index = prompt_list.index((old_game_name, self.prompt[old_game_name]))
-                    prompt_list[index] = (new_game_name, self.prompt[old_game_name])
-                    self.prompt = dict(prompt_list)
-
-                    self.on_change_gen_param()
-                    self.refresh_game_prompt_elements()
-                
+    
                 if game_name not in self.dataset_games_dict:
                     ui.notify(f"Error '{game_name}' not found in dataset_games_dict", type="error", color="red", close_button=True)
                     continue
@@ -599,7 +612,6 @@ class NiceGUIApp:
             self.preset_select.update()
             self.preset_load_button.enable()
             self.preset_save_button.enable()
-        self.logger.debug(f"updated gen_params loading_preset: {self.loading_preset}")
     
     def on_input_value_preset_select(self, preset_name: str) -> None:
         self.new_preset_name = preset_name
@@ -612,7 +624,6 @@ class NiceGUIApp:
             self.preset_select.set_value(self.new_preset_name)
             
     def on_value_change_preset_select(self, preset_name: str) -> None:
-        self.logger.debug(f"Selected preset: {preset_name}")
         self.preset_save_button.enable()
         if preset_name in self.saved_preset_list:
             self.preset_load_button.enable()
@@ -661,13 +672,11 @@ class NiceGUIApp:
     async def reset_preset_loading_state(self) -> None:
         await asyncio.sleep(0.25)
         self.loading_preset = False
-        self.logger.debug("reset loading state")
 
     def load_preset(self) -> None:
         preset_name = self.preset_select.value
         load_preset_path = os.path.join(
             config.CONFIG_PATH, "sampling", "presets", f"{sanitize_filename(preset_name)}.json")
-        self.logger.debug(f"Loading preset '{load_preset_path}'")
 
         loaded_preset_dict = config.load_json(load_preset_path)
         self.logger.info(f"Loaded preset {preset_name}: {dict_str(loaded_preset_dict)}")
