@@ -152,9 +152,10 @@ class NiceGUIApp:
 
     def init_debug_logs_layout(self) -> None:
         ui.label("Debug Log:")
-        self.debug_log = ui.log(max_lines=self.config.max_debug_log_length).style("height: 500px")
+        self.debug_log = ui.log(max_lines=self.config.max_debug_log_length).style("height: calc(100vh - 200px)")
         self.log_handler.set_log_control(self.debug_log)
-        self.interface_tabs.on_value_change(lambda: ui.run_javascript(f'getElement({self.debug_log.id}).lastChild.scrollIntoView()'))
+        self.interface_tabs.on_value_change(
+            lambda e: ui.run_javascript(f'getElement({self.debug_log.id}).lastChild.scrollIntoView()') if e.value == "Debug Logs" else None)
 
     def init_generation_layout(self) -> None:
             
@@ -292,7 +293,8 @@ class NiceGUIApp:
 
             if error is not None:
                 ui.notify(f"Error loading model: {self.model_server_state['error']}", type="error", color="red", close_button=True)
-            else:                
+            else:
+                ui.notify(f"Loaded model {model_name} successfully", type="success", color="green", close_button=True)
                 self.model_metadata = self.model_server_state["model_metadata"]
                 self.format_config = self.model_server_state["format_config"]
                 self.dataset_games_dict = self.model_server_state["dataset_games_dict"]
@@ -305,6 +307,12 @@ class NiceGUIApp:
 
                 if model_load_options["compile_options"] is not None:
                     await self.model_server_cmd("compile_model")
+                    ui.notify("Compiling model...", type="info", color="blue", close_button=True)
+                    error = await self.wait_for_model_server()
+                    if error is not None:
+                        ui.notify(f"Error compiling model: {self.model_server_state['error']}", type="error", color="red", close_button=True)
+                    else:
+                        ui.notify("Model compilation complete", type="success", color="green", close_button=True)
     
     async def on_startup_app(self) -> None:
         await self.model_server_cmd("get_available_torch_devices")
