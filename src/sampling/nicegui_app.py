@@ -1,6 +1,6 @@
 from utils import config
 
-from typing import Optional, Union, Any
+from typing import Optional
 from dataclasses import dataclass
 from datetime import datetime
 from functools import partial
@@ -17,15 +17,14 @@ import numpy as np
 from nicegui import ui, app
 
 from utils.dual_diffusion_utils import (
-    init_cuda, save_audio, load_audio, save_safetensors, dict_str,
-    get_available_torch_devices, sanitize_filename, tensor_to_img
+    save_audio, load_audio, save_safetensors, load_safetensors, dict_str,
+    sanitize_filename, tensor_to_img
 )
-from pipelines.dual_diffusion_pipeline import DualDiffusionPipeline, SampleParams, SampleOutput
+from pipelines.dual_diffusion_pipeline import SampleParams, SampleOutput
 from sampling.model_server import ModelServer
 from sampling.schedule import SamplingSchedule
-from sampling.scrollable_log import ScrollableLog
 
-        
+
 @dataclass
 class OutputSample:
     name: str
@@ -147,23 +146,15 @@ class NiceGUIApp:
                 self.init_model_settings_layout()
             with ui.tab_panel(self.debug_logs_tab):
                 self.init_debug_logs_layout()
-                # todo: switching tabs currently scrolls the log back up to the top, try to fix this
-                """
-                def on_debug_logs_tab_focus():  
-                    with self.log_handler.log_control:
-                        tmp_label = ui.label("")
-                    self.log_handler.log_control.remove(tmp_label)
-                self.debug_logs_tab.on("focus", on_debug_logs_tab_focus)
-                """
 
     def init_model_settings_layout(self) -> None:
         ui.label("model settings stuff")
 
     def init_debug_logs_layout(self) -> None:
         ui.label("Debug Log:")
-        #self.debug_log = ui.log(max_lines=self.config.max_debug_log_length).style("height: 500px")
-        self.debug_log = ScrollableLog(max_lines=self.config.max_debug_log_length).style("height: 500px")
+        self.debug_log = ui.log(max_lines=self.config.max_debug_log_length).style("height: 500px")
         self.log_handler.set_log_control(self.debug_log)
+        self.interface_tabs.on_value_change(lambda: ui.run_javascript(f'getElement({self.debug_log.id}).lastChild.scrollIntoView()'))
 
     def init_generation_layout(self) -> None:
             
@@ -316,6 +307,7 @@ class NiceGUIApp:
                     await self.model_server_cmd("compile_model")
     
     async def on_startup_app(self) -> None:
+        await self.model_server_cmd("get_available_torch_devices")
         await self.load_model(self.config.model_name, self.config.model_load_options)
         self.load_preset()
 
