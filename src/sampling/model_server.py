@@ -1,8 +1,8 @@
 import multiprocessing.managers
 from utils import config
 
-from typing import Optional, Union
-from dataclasses import dataclass
+#from typing import Optional, Union
+#from dataclasses import dataclass
 from datetime import datetime
 import asyncio
 import multiprocessing
@@ -10,13 +10,12 @@ import logging
 import os
 
 import torch
-import numpy as np
+#import numpy as np
 
-from pipelines.dual_diffusion_pipeline import DualDiffusionPipeline, SampleParams, SampleOutput
+from pipelines.dual_diffusion_pipeline import DualDiffusionPipeline, SampleParams
 
 from utils.dual_diffusion_utils import (
-    init_cuda, save_audio, load_audio, dict_str, tensor_to_img,
-    get_available_torch_devices
+    init_cuda, dict_str, get_available_torch_devices
 )
 
 class ModelServer:
@@ -50,10 +49,11 @@ class ModelServer:
             self.log_path = None
             self.logger.warning("WARNING: DEBUG_PATH not defined, logging to file disabled")
 
-    async def get_available_torch_devices(self) -> list[str]:
-        return get_available_torch_devices()
+    async def cmd_get_available_torch_devices(self) -> None:
+        self.model_server_state["available_torch_devices"] = get_available_torch_devices()
+        self.logger.debug(f"Available torch devices: {self.model_server_state['available_torch_devices']}")
     
-    async def load_model(self) -> dict:
+    async def cmd_load_model(self) -> None:
         
         model_path = os.path.join(config.MODELS_PATH, self.model_server_state["model_name"])
         self.logger.info(f"Loading DualDiffusion model from '{model_path}'...")
@@ -73,14 +73,20 @@ class ModelServer:
         self.model_server_state["dataset_games_dict"] = self.dataset_games_dict
         self.model_server_state["dataset_game_ids"] = self.pipeline.dataset_game_ids
 
-    async def compile_model(self) -> None:
-        pass
-        # todo: run a single batch of default size / shape to trigger compilation
+    async def cmd_compile_model(self) -> None:
+        
+        self.logger.info("Compiling default path...")
+        dummy_params = SampleParams(num_steps=1, use_heun=False, num_fgla_iters=1)
+        sample_output = self.pipeline(dummy_params, quiet=True).cpu()
 
-    async def abort(self) -> None:
-        pass
+        self.logger.info("Compiling inpainting path...")
+        dummy_params.input_audio = torch.randn_like(sample_output.raw_sample)
+        dummy_params.inpainting_mask = torch.ones_like(sample_output.latents[:, :1])
+        self.pipeline(dummy_params, quiet=True)
 
-    async def generate(self) -> None:
+        self.logger.info("Compilation complete")
+
+    async def cmd_generate(self) -> None:
         sample_output = self.pipeline(self.model_server_state["sample_params"], self.model_server_state)
         self.model_server_state["generate_output"] = sample_output.cpu() if sample_output is not None else None
 
@@ -91,7 +97,7 @@ class ModelServer:
             else:
                 try:
                     self.logger.debug(f"Processing command '{cmd}'")
-                    await getattr(self, cmd)()
+                    await getattr(self, f"cmd_{cmd}")()
                     self.model_server_state["error"] = None
                 except Exception as e:
                     error_str = f"Error processing command '{cmd}': {e}"
