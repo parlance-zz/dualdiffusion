@@ -53,7 +53,12 @@ class SamplingSchedule:
             if callable(getattr(cls, attr)) and attr.startswith("schedule_"):
                 schedules.append(attr.removeprefix("schedule_"))
         return schedules
-    
+
+    @staticmethod
+    @torch.no_grad()
+    def schedule_edm2(t: torch.Tensor, sigma_max: float, sigma_min: float, rho: float = 7., **_) -> torch.Tensor:
+        return (sigma_max ** (1 / rho) + (1 - t) * (sigma_min ** (1 / rho) - sigma_max ** (1 / rho))) ** rho
+        
     @staticmethod
     @torch.no_grad()
     def schedule_linear(t: torch.Tensor, sigma_max: float, sigma_min: float, **_) -> torch.Tensor:
@@ -66,11 +71,6 @@ class SamplingSchedule:
         theta_min = np.pi/2 - np.arctan(sigma_min)
         theta = (1-t) * (theta_min - theta_max) + theta_max
         return theta.cos() / theta.sin()
-    
-    @staticmethod
-    @torch.no_grad()
-    def schedule_edm2(t: torch.Tensor, sigma_max: float, sigma_min: float, rho: float = 7., **_) -> torch.Tensor:
-        return (sigma_max ** (1 / rho) + (1 - t) * (sigma_min ** (1 / rho) - sigma_max ** (1 / rho))) ** rho
     
     @staticmethod
     @torch.no_grad()
