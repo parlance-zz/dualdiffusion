@@ -45,7 +45,7 @@ from utils.dual_diffusion_utils import (
 from pipelines.dual_diffusion_pipeline import SampleParams, SampleOutput
 from sampling.model_server import ModelServer
 from sampling.schedule import SamplingSchedule
-from sampling.nicegui_elements import LockButton, ScrollableNumber
+from sampling.nicegui_elements import LockButton, ScrollableNumber, PromptEditor
 
 @dataclass
 class OutputSample:
@@ -83,21 +83,21 @@ class NiceGUIAppConfig:
     max_debug_log_length: int = 10000
 
 class NiceGUILogHandler(logging.Handler):
-    def __init__(self, log_control: Optional[ui.log] = None) -> None:
+    def __init__(self, log_element: Optional[ui.log] = None) -> None:
         super().__init__()
-        self.log_control = log_control
+        self.log_element = log_element
         self.buffered_messages = []
 
-    def set_log_control(self, log_control: Optional[ui.log] = None) -> None:
-        self.log_control = log_control
+    def set_log_element(self, log_control: Optional[ui.log] = None) -> None:
+        self.log_element = log_control
 
         for message in self.buffered_messages:
-            self.log_control.push(message)
+            self.log_element.push(message)
         self.buffered_messages.clear()
 
     def emit(self, record: logging.LogRecord) -> None:
-        if self.log_control is not None:
-            self.log_control.push(record.getMessage())
+        if self.log_element is not None:
+            self.log_element.push(record.getMessage())
         else:
             self.buffered_messages.append(record.getMessage())
 
@@ -156,7 +156,7 @@ class NiceGUIApp:
 
     def init_layout(self) -> None:
         
-        # default element props
+        # default element props / classes
         ui.tooltip.default_props("delay=1000")
 
         # main layout is split into 3 tabs
@@ -178,10 +178,11 @@ class NiceGUIApp:
 
     def init_debug_logs_layout(self) -> None:
         ui.label("Debug Log:")
-        self.debug_log = ui.log(max_lines=self.config.max_debug_log_length).style("height: calc(100vh - 200px)")
-        self.log_handler.set_log_control(self.debug_log)
+        debug_log_element = ui.log(max_lines=self.config.max_debug_log_length).style("height: calc(100vh - 200px)")
         self.interface_tabs.on_value_change(
-            lambda e: ui.run_javascript(f'getElement({self.debug_log.id}).lastChild.scrollIntoView()') if e.value == "Debug Logs" else None)
+            lambda e: ui.run_javascript(
+                f'getElement({debug_log_element.id}).lastChild.scrollIntoView()') if e.value == "Debug Logs" else None)
+        self.log_handler.set_log_element(debug_log_element)
 
     def init_generation_layout(self) -> None:
                 
@@ -265,24 +266,8 @@ class NiceGUIApp:
                         self.preset_save_button.disable()
                         self.preset_delete_button.disable()
 
-            with ui.card().classes("flex-grow-[50]"): # prompt editor                    
-                self.prompt = {}
-                with ui.row().classes("w-full h-1 gap-0"):
-                    with LockButton() as self.prompt_lock_button:
-                        ui.tooltip("Lock to freeze prompt when generating")
-                with ui.row().classes("w-full h-12 flex items-center"):
-
-                    self.game_select = ui.select(label="Select a game", with_input=True,
-                        options={}).classes("flex-grow-[1000]")
-                    self.game_weight = ScrollableNumber(label="Weight", value=10, min=-100, max=100, step=1).classes("flex-grow-[1]")
-                    self.game_add_button = ui.button(icon='add', color='green').classes("w-1")
-                    self.game_add_button.on_click(lambda: self.on_click_game_add_button())
-                    with self.game_add_button:
-                        ui.tooltip("Add selected game to prompt")
-
-                ui.separator().classes("bg-primary").style("height: 3px")
-                with ui.column().classes("w-full") as self.prompt_games_column:
-                    pass # added prompt game elements will be created in this container
+            self.prompt_editor = PromptEditor()
+            self.prompt_editor.on_prompt_change = lambda: self.on_change_gen_param()
 
         ui.separator().classes("bg-primary").style("height: 3px")
 
@@ -317,13 +302,9 @@ class NiceGUIApp:
                 ui.notify(f"Loaded model {model_name} successfully", type="success", color="green", close_button=True)
                 self.model_metadata = self.model_server_state["model_metadata"]
                 self.format_config = self.model_server_state["format_config"]
-                self.dataset_games_dict = self.model_server_state["dataset_games_dict"]
                 self.dataset_game_ids = self.model_server_state["dataset_game_ids"]
 
-                self.game_select.options = self.dataset_games_dict
-                self.game_select.value = next(iter(self.dataset_games_dict))
-                self.game_select.update()
-                self.refresh_game_prompt_elements()
+                self.prompt_editor.update_dataset_games_dict(self.model_server_state["dataset_games_dict"])
 
                 if model_load_options["compile_options"] is not None:
                     await self.model_server_cmd("compile_model")
@@ -363,7 +344,7 @@ class NiceGUIApp:
 
     async def on_click_generate_button(self) -> None:
         
-        if len(self.prompt) == 0: # abort if no prompt games selected
+        if len(self.prompt_editor.prompt) == 0: # abort if no prompt games selected
             self.logger.error("No prompt games selected")
             ui.notify("No prompt games selected", type="warning", color="red", close_button=True)
             return
@@ -371,7 +352,7 @@ class NiceGUIApp:
         # setup sample params and auto-increment seed
         sample_params: SampleParams = SampleParams(seed=self.seed.value,
             length=int(self.generate_length.value) * self.format_config["sample_rate"],
-            prompt={**self.prompt}, **self.gen_params)
+            prompt={**self.prompt_editor.prompt}, **self.gen_params)
         if self.auto_increment_seed.value == True: self.seed.set_value(self.seed.value + 1)
         self.logger.info(f"on_click_generate_button - params:{dict_str(sample_params.__dict__)}")
 
@@ -557,48 +538,6 @@ class NiceGUIApp:
         self.output_samples.remove(output_sample)
         self.refresh_output_samples()
         
-    def refresh_game_prompt_elements(self) -> None:
-
-        def on_game_select_change(new_game_name: str, old_game_name: str) -> None:
-            # ugly hack to replace dict key while preserving order
-            prompt_list = list(self.prompt.items())
-            index = prompt_list.index((old_game_name, self.prompt[old_game_name]))
-            prompt_list[index] = (new_game_name, self.prompt[old_game_name])
-            self.prompt = dict(prompt_list)
-
-            self.on_change_gen_param()
-            self.refresh_game_prompt_elements()
-            
-        self.prompt_games_column.clear()
-        with self.prompt_games_column:
-            for game_name, game_weight in self.prompt.items():
-    
-                if game_name not in self.dataset_games_dict:
-                    ui.notify(f"Error '{game_name}' not found in dataset_games_dict", type="error", color="red", close_button=True)
-                    continue
-
-                with ui.row().classes("w-full h-10 flex items-center"):
-                    game_select_element = ui.select(value=game_name, with_input=True, options=self.dataset_games_dict).classes("flex-grow-[1000]")
-                    weight_element = ScrollableNumber(label="Weight", value=game_weight, min=-100, max=100, step=1,
-                        on_change=lambda: self.on_change_gen_param()).classes("flex-grow-[1]")
-                    weight_element.bind_value(self.prompt, game_name)
-                    game_select_element.on_value_change(
-                        lambda e,g=game_name: on_game_select_change(new_game_name=e.value, old_game_name=g))
-                    with ui.button(icon="remove", on_click=lambda g=game_name: self.on_click_game_remove_button(g)).classes("w-1 top-0 right-0").props("color='red'"):
-                        ui.tooltip("Remove game from prompt")
-
-            ui.separator().classes("bg-transparent")
-
-    def on_click_game_remove_button(self, game_name: str) -> None:
-        self.prompt.pop(game_name)
-        self.refresh_game_prompt_elements()
-        self.on_change_gen_param()
-        
-    def on_click_game_add_button(self):
-        self.prompt.update({self.game_select.value: self.game_weight.value})
-        self.refresh_game_prompt_elements()
-        self.on_change_gen_param()
-
     def on_click_show_schedule_button(self) -> None:
 
         self.sigma_schedule_dialog.clear()
@@ -671,7 +610,7 @@ class NiceGUIApp:
         preset_name = os.path.splitext(os.path.basename(save_preset_path))[0]
         self.logger.debug(f"Saving preset '{save_preset_path}'")
 
-        save_preset_dict = {"prompt": self.prompt, "gen_params": self.gen_params}
+        save_preset_dict = {"prompt": self.prompt_editor.prompt, "gen_params": self.gen_params}
         config.save_json(save_preset_dict, save_preset_path)
         self.logger.info(f"Saved preset {preset_name}: {dict_str(save_preset_dict)}")
 
@@ -718,9 +657,7 @@ class NiceGUIApp:
                 self.preset_select._props["label"] = f"Select a Preset - (loaded preset: {self.last_loaded_preset}*)"
 
         self.preset_select.update()
-        self.prompt.clear()
-        self.prompt.update(loaded_preset_dict["prompt"])
-        self.refresh_game_prompt_elements()
+        self.prompt_editor.update_prompt(loaded_preset_dict["prompt"])
     
     def delete_preset(self) -> None:
         preset_name = self.preset_select.value
