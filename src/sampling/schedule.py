@@ -64,6 +64,14 @@ class SamplingSchedule:
     
     @staticmethod
     @torch.no_grad()
+    def cos(t: torch.Tensor, sigma_max: float, sigma_min: float, **_) -> torch.Tensor:
+        theta_max = np.pi/2 - np.arctan(sigma_max)
+        theta_min = np.pi/2 - np.arctan(sigma_min)
+        theta = (1-t) * (theta_min - theta_max) + theta_max
+        return theta.cos() / theta.sin()
+    
+    @staticmethod
+    @torch.no_grad()
     def edm2(t: torch.Tensor, sigma_max: float, sigma_min: float, rho: float = 7., **_) -> torch.Tensor:
         return (sigma_max ** (1 / rho) + (1 - t) * (sigma_min ** (1 / rho) - sigma_max ** (1 / rho))) ** rho
     
