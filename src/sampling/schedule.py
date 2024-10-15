@@ -32,14 +32,14 @@ class SamplingSchedule:
     @staticmethod
     @torch.no_grad()
     def get_schedule(name: str, steps: int, t_start: float = 1., device: Optional[torch.device] = None, **kwargs) -> torch.Tensor:
-        schedule_fn = getattr(SamplingSchedule, name)
+        schedule_fn = getattr(SamplingSchedule, f"schedule_{name}")
         t = torch.linspace(t_start, 0, int(steps) + 1, device=device)
         return schedule_fn(t, **kwargs)
     
     @staticmethod
     def get_schedule_params(name: str) -> dict[str, type[Any]]:
         params = {param_name: param_type.annotation
-            for param_name, param_type in inspect.signature(getattr(SamplingSchedule, name)).parameters.items()}
+            for param_name, param_type in inspect.signature(getattr(SamplingSchedule, f"schedule_{name}")).parameters.items()}
         if "t" in params: del params["t"]
         if "_" in params: del params["_"]
         if "sigma_max" in params: del params["sigma_max"]
@@ -49,22 +49,19 @@ class SamplingSchedule:
     @classmethod
     def get_schedules_list(cls) -> list[str]:
         schedules = []
-        for name in dir(cls):
-            if (callable(getattr(cls, name))
-                and not name.startswith("__")
-                and name not in ["get_schedule", "get_schedules_list", "get_schedule_params"]):
-
-                schedules.append(name)
+        for attr in dir(cls):
+            if callable(getattr(cls, attr)) and attr.startswith("schedule_"):
+                schedules.append(attr.removeprefix("schedule_"))
         return schedules
     
     @staticmethod
     @torch.no_grad()
-    def linear(t: torch.Tensor, sigma_max: float, sigma_min: float, **_) -> torch.Tensor:
+    def schedule_linear(t: torch.Tensor, sigma_max: float, sigma_min: float, **_) -> torch.Tensor:
         return (np.log(sigma_min) + (np.log(sigma_max) - np.log(sigma_min)) * t).exp()
     
     @staticmethod
     @torch.no_grad()
-    def cos(t: torch.Tensor, sigma_max: float, sigma_min: float, **_) -> torch.Tensor:
+    def schedule_cos(t: torch.Tensor, sigma_max: float, sigma_min: float, **_) -> torch.Tensor:
         theta_max = np.pi/2 - np.arctan(sigma_max)
         theta_min = np.pi/2 - np.arctan(sigma_min)
         theta = (1-t) * (theta_min - theta_max) + theta_max
@@ -72,12 +69,12 @@ class SamplingSchedule:
     
     @staticmethod
     @torch.no_grad()
-    def edm2(t: torch.Tensor, sigma_max: float, sigma_min: float, rho: float = 7., **_) -> torch.Tensor:
+    def schedule_edm2(t: torch.Tensor, sigma_max: float, sigma_min: float, rho: float = 7., **_) -> torch.Tensor:
         return (sigma_max ** (1 / rho) + (1 - t) * (sigma_min ** (1 / rho) - sigma_max ** (1 / rho))) ** rho
     
     @staticmethod
     @torch.no_grad()
-    def scale_invariant(t: torch.Tensor, sigma_max: float, sigma_min: float, rho: float = 1., **_) -> torch.Tensor:
+    def schedule_scale_invariant(t: torch.Tensor, sigma_max: float, sigma_min: float, rho: float = 1., **_) -> torch.Tensor:
         return sigma_min / ((1 - t)**rho + sigma_min / sigma_max)
     
 
