@@ -23,7 +23,7 @@ from utils.dual_diffusion_utils import (
 from pipelines.dual_diffusion_pipeline import SampleParams, SampleOutput
 from sampling.model_server import ModelServer
 from sampling.schedule import SamplingSchedule
-
+from sampling.nicegui_elements import LockButton, ScrollableNumber
 
 @dataclass
 class OutputSample:
@@ -133,7 +133,11 @@ class NiceGUIApp:
             self.logger.warning("WARNING: DEBUG_PATH not defined, logging to file disabled")
 
     def init_layout(self) -> None:
+        
+        # default element props
+        ui.tooltip.default_props("delay=1000")
 
+        # main layout is split into 3 tabs
         with ui.tabs() as self.interface_tabs:
             self.generation_tab = ui.tab("Generation")
             self.model_settings_tab = ui.tab("Model Settings")
@@ -158,62 +162,53 @@ class NiceGUIApp:
             lambda e: ui.run_javascript(f'getElement({self.debug_log.id}).lastChild.scrollIntoView()') if e.value == "Debug Logs" else None)
 
     def init_generation_layout(self) -> None:
-            
+                
         with ui.row().classes("w-full"): # gen params, preset, and prompt editor
             with ui.card().classes("flex-grow-[1]"):
                 with ui.row().classes("w-full"): # gen params and seed
                     with ui.card().classes("flex-grow-[1] items-center"): # general (non-saved) params
-                        self.generate_length = ui.number(label="Length (seconds)", value=0, min=0, max=300, precision=0, step=5).classes("w-full")
-                        self.generate_length.on("wheel", lambda: None)
-                        self.seed = ui.number(label="Seed", value=10042, min=10000, max=99999, precision=0, step=1).classes("w-full")
-                        self.seed.on("wheel", lambda: None)
+                        self.generate_length = ScrollableNumber(label="Length (seconds)", value=0, min=0, max=300, precision=0, step=5).classes("w-full")
+                        self.seed = ScrollableNumber(label="Seed", value=10042, min=10000, max=99999, precision=0, step=1).classes("w-full")
                         self.auto_increment_seed = ui.checkbox("Auto Increment Seed", value=True).classes("w-full")
 
                         with ui.column().classes("w-full gap-0 items-center"):
                             with ui.button("Randomize Seed", icon="casino", on_click=lambda: self.seed.set_value(random.randint(10000, 99999))).classes("w-52 rounded-b-none"):
-                                ui.tooltip("Choose new seed at random").props('delay=1000')
+                                ui.tooltip("Choose new seed at random")
                             self.generate_button = ui.button("Generate", icon="audiotrack", color="green", on_click=partial(self.on_click_generate_button)).classes("w-52 rounded-none")
                             with self.generate_button:
-                                ui.tooltip("Generate new sample with current settings").props('delay=1000')
+                                ui.tooltip("Generate new sample with current settings")
                             self.clear_output_button = ui.button("Clear Outputs", icon="delete", color="red", on_click=lambda: self.clear_output_samples()).classes("w-52 rounded-t-none")
                             self.clear_output_button.disable()
                             with self.clear_output_button:
-                                ui.tooltip("Clear all output samples in workspace").props('delay=1000')
+                                ui.tooltip("Clear all output samples in workspace")
 
                     with ui.card().classes("flex-grow-[3]"): # gen params
                         self.gen_param_elements = {}
-                        with ui.grid(columns=2).classes("w-full items-center"):
+                        with ui.grid(columns=2).classes("w-full items-center"):                 
+                            with LockButton() as self.gen_params_lock_button:
+                                ui.tooltip("Lock to freeze parameters when loading presets")
 
-                            self.gen_params_lock_button = ui.button(icon="lock_open", on_click=lambda: self.toggle_gen_params_lock()).style(
-                                'position: absolute; top: 5px; right: 5px; z-index: 2; background-color: transparent; '
-                                'border: none; width: 20px; height: 20px; padding: 0;'
-                            ).classes("bg-transparent")
-                            with self.gen_params_lock_button:
-                                ui.tooltip("Lock to freeze parameters when loading presets").props('delay=1000')
-
-                            self.gen_param_elements["num_steps"] = ui.number(label="Number of Steps", value=100, min=10, max=1000, precision=0, step=10).classes("w-full")
-                            self.gen_param_elements["cfg_scale"] = ui.number(label="CFG Scale", value=1.5, min=0, max=10, step=0.1).classes("w-full")
+                            self.gen_param_elements["num_steps"] = ScrollableNumber(label="Number of Steps", value=100, min=10, max=1000, precision=0, step=10).classes("w-full")
+                            self.gen_param_elements["cfg_scale"] = ScrollableNumber(label="CFG Scale", value=1.5, min=0, max=10, step=0.1).classes("w-full")
                             self.gen_param_elements["use_heun"] = ui.checkbox("Use Heun's Method", value=True).classes("w-full")
-                            self.gen_param_elements["num_fgla_iters"] = ui.number(label="Number of FGLA Iterations", value=250, min=50, max=1000, precision=0, step=50).classes("w-full")
+                            self.gen_param_elements["num_fgla_iters"] = ScrollableNumber(label="Number of FGLA Iterations", value=250, min=50, max=1000, precision=0, step=50).classes("w-full")
 
-                            self.gen_param_elements["sigma_max"] = ui.number(label="Sigma Max", value=200, min=10, max=1000, step=10).classes("w-full")
-                            self.gen_param_elements["sigma_min"] = ui.number(label="Sigma Min", value=0.15, min=0.05, max=2, step=0.05).classes("w-full")
-                            self.gen_param_elements["rho"] = ui.number(label="Rho", value=7, min=0.5, max=1000, precision=2, step=0.5).classes("w-full")
-                            self.gen_param_elements["input_perturbation"] = ui.number(label="Input Perturbation", value=1, min=0, max=1, step=0.05).classes("w-full")
+                            self.gen_param_elements["sigma_max"] = ScrollableNumber(label="Sigma Max", value=200, min=10, max=1000, step=10).classes("w-full")
+                            self.gen_param_elements["sigma_min"] = ScrollableNumber(label="Sigma Min", value=0.15, min=0.05, max=2, step=0.05).classes("w-full")
+                            self.gen_param_elements["rho"] = ScrollableNumber(label="Rho", value=7, min=0.5, max=1000, precision=2, step=0.5).classes("w-full")
+                            self.gen_param_elements["input_perturbation"] = ScrollableNumber(label="Input Perturbation", value=1, min=0, max=1, step=0.05).classes("w-full")
                             
                             self.gen_param_elements["schedule"] = ui.select(label="Σ Schedule", options=SamplingSchedule.get_schedules_list(), value="edm2").classes("w-full")
                             self.sigma_schedule_dialog = ui.dialog()
                             self.show_schedule_button = ui.button("Show σ Schedule", on_click=lambda: self.on_click_show_schedule_button()).classes("w-44 items-center")
                             with self.show_schedule_button:
-                                ui.tooltip("Show noise schedule with current settings").props('delay=1000')
+                                ui.tooltip("Show noise schedule with current settings")
 
                         self.gen_params = {}
                         for param_name, param_element in self.gen_param_elements.items():
                             self.gen_params[param_name] = param_element.value
                             param_element.bind_value(self.gen_params, param_name)
                             param_element.on_value_change(lambda: self.on_change_gen_param())
-                            if isinstance(param_element, ui.number):
-                                param_element.on("wheel", lambda: None)
 
                 with ui.card().classes("w-full"): # preset editor
                     with ui.row().classes("w-full"):
@@ -238,11 +233,11 @@ class NiceGUIApp:
                             self.preset_save_button = ui.button("Save", icon="save", color="green", on_click=lambda: self.save_preset()).classes("w-36 rounded-none")
                             self.preset_delete_button = ui.button("Delete", icon="delete", color="red", on_click=lambda: self.delete_preset()).classes("w-36 rounded-t-none")
                             with self.preset_load_button:
-                                ui.tooltip("Load selected preset").props('delay=1000')
+                                ui.tooltip("Load selected preset")
                             with self.preset_save_button:
-                                ui.tooltip("Save current parameters to selected preset").props('delay=1000')
+                                ui.tooltip("Save current parameters to selected preset")
                             with self.preset_delete_button:
-                                ui.tooltip("Delete selected preset").props('delay=1000')
+                                ui.tooltip("Delete selected preset")
 
                         self.preset_load_button.disable()
                         self.preset_save_button.disable()
@@ -250,15 +245,18 @@ class NiceGUIApp:
 
             with ui.card().classes("flex-grow-[50]"): # prompt editor                    
                 self.prompt = {}
+                with ui.row().classes("w-full h-1 gap-0"):
+                    with LockButton() as self.prompt_lock_button:
+                        ui.tooltip("Lock to freeze prompt when generating")
                 with ui.row().classes("w-full h-12 flex items-center"):
+
                     self.game_select = ui.select(label="Select a game", with_input=True,
                         options={}).classes("flex-grow-[1000]")
-                    self.game_weight = ui.number(label="Weight", value=10, min=-100, max=100, step=1).classes("flex-grow-[1]")
-                    self.game_weight.on("wheel", lambda: None)
+                    self.game_weight = ScrollableNumber(label="Weight", value=10, min=-100, max=100, step=1).classes("flex-grow-[1]")
                     self.game_add_button = ui.button(icon='add', color='green').classes("w-1")
                     self.game_add_button.on_click(lambda: self.on_click_game_add_button())
                     with self.game_add_button:
-                        ui.tooltip("Add selected game to prompt").props('delay=1000')
+                        ui.tooltip("Add selected game to prompt")
 
                 ui.separator().classes("bg-primary").style("height: 3px")
                 with ui.column().classes("w-full") as self.prompt_games_column:
@@ -491,16 +489,16 @@ class NiceGUIApp:
                         output_sample.use_as_input_button = ui.button(
                             icon="format_color_fill", color="orange", on_click=lambda: use_output_sample_as_input(output_sample)).classes("w-1 border-none border-double")
                         with output_sample.use_as_input_button:
-                            ui.tooltip("Use this sample as inpainting input").props('delay=1000')
+                            ui.tooltip("Use this sample as inpainting input")
                         output_sample.use_as_input_button.disable()
                         output_sample.move_up_button = ui.button('▲', on_click=lambda: move_output_sample(output_sample, direction=-1)).classes("w-1")
                         with output_sample.move_up_button:
-                            ui.tooltip("Move sample up").props('delay=1000')
+                            ui.tooltip("Move sample up")
                         output_sample.move_down_button = ui.button('▼', on_click=lambda: move_output_sample(output_sample, direction=1)).classes("w-1")
                         with output_sample.move_down_button:
-                            ui.tooltip("Move sample down").props('delay=1000')
+                            ui.tooltip("Move sample down")
                         with ui.button('✕', color="red", on_click=lambda s=output_sample: self.remove_output_sample(s)).classes("w-1"):
-                            ui.tooltip("Remove sample from workspace").props('delay=1000')
+                            ui.tooltip("Remove sample from workspace")
 
                         #ui.label("Rating:") 
                         #ui.slider(min=0, max=5, step=1, value=0).props("label-always").classes("h-10 top-0")
@@ -559,13 +557,13 @@ class NiceGUIApp:
 
                 with ui.row().classes("w-full h-10 flex items-center"):
                     game_select_element = ui.select(value=game_name, with_input=True, options=self.dataset_games_dict).classes("flex-grow-[1000]")
-                    weight_element = ui.number(label="Weight", value=game_weight, min=-100, max=100, step=1,
-                        on_change=lambda: self.on_change_gen_param()).classes("flex-grow-[1]").on("wheel", lambda: None)
+                    weight_element = ScrollableNumber(label="Weight", value=game_weight, min=-100, max=100, step=1,
+                        on_change=lambda: self.on_change_gen_param()).classes("flex-grow-[1]")
                     weight_element.bind_value(self.prompt, game_name)
                     game_select_element.on_value_change(
                         lambda e,g=game_name: on_game_select_change(new_game_name=e.value, old_game_name=g))
                     with ui.button(icon="remove", on_click=lambda g=game_name: self.on_click_game_remove_button(g)).classes("w-1 top-0 right-0").props("color='red'"):
-                        ui.tooltip("Remove game from prompt").props('delay=1000')
+                        ui.tooltip("Remove game from prompt")
 
             ui.separator().classes("bg-transparent")
 
@@ -601,12 +599,6 @@ class NiceGUIApp:
 
             self.sigma_schedule_dialog.open()
             ui.button("Close").classes("ml-auto").on_click(lambda: self.sigma_schedule_dialog.close())
-    
-    def toggle_gen_params_lock(self):
-        if self.gen_params_lock_button.icon == "lock":
-            self.gen_params_lock_button.icon = "lock_open"
-        else:
-            self.gen_params_lock_button.icon = "lock"
             
     def on_change_gen_param(self) -> None:
         if self.loading_preset == False:
@@ -685,7 +677,7 @@ class NiceGUIApp:
 
         self.last_loaded_preset = preset_name
 
-        if self.gen_params_lock_button.icon == "lock_open":
+        if not self.gen_params_lock_button.is_locked:
             self.gen_params.update(loaded_preset_dict["gen_params"])
             self.preset_load_button.disable()
             self.preset_save_button.disable()
@@ -729,6 +721,6 @@ class NiceGUIApp:
 
 if __name__ in {"__main__", "__mp_main__"}:
     
-    if os.getenv("_IS_NICEGUI_SUBPROCESS", None) is None: # ugly hack
+    if os.getenv("_IS_NICEGUI_SUBPROCESS", None) is None: # ugly hack for windows
         os.environ["_IS_NICEGUI_SUBPROCESS"] = "1"
         NiceGUIApp().run()
