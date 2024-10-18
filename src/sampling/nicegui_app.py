@@ -73,6 +73,7 @@ class NiceGUIAppConfig:
     model_name: str
     model_load_options: dict
     save_output_latents: bool = True
+    hide_latents_after_generation: bool = True
 
     web_server_host: Optional[str] = None
     web_server_port: int = 3001
@@ -394,9 +395,11 @@ class NiceGUIApp:
         spectrogram_image = output_sample.sample_output.spectrogram.mean(dim=(0,1))
         spectrogram_image = tensor_to_img(spectrogram_image, colormap=True, flip_y=True)
         spectrogram_image = cv2.resize(
-            spectrogram_image, (spectrogram_image.shape[1]//2, spectrogram_image.shape[0]), interpolation=cv2.INTER_AREA)
+            spectrogram_image, (spectrogram_image.shape[1]//4, spectrogram_image.shape[0]), interpolation=cv2.INTER_AREA)
         spectrogram_image = Image.fromarray(spectrogram_image)
         output_sample.spectrogram_image_element.set_source(spectrogram_image)
+        if self.config.hide_latents_after_generation:
+            output_sample.latents_image_element.set_visibility(False)
         output_sample.spectrogram_image_element.set_visibility(True)
 
         # set audio element

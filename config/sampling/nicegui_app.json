@@ -8,6 +8,7 @@
       "compile_options": null
     },
     "save_output_latents": true,
+    "hide_latents_after_generation": true,
     "web_server_host": "localhost",
     "web_server_port": 3001,
     "enable_debug_logging": true,
