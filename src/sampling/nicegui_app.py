@@ -267,13 +267,22 @@ class NiceGUIApp:
     async def load_model(self, model_name: str, model_load_options: dict) -> None:
         async with self.gpu_lock:
             await self.model_server_cmd("load_model", model_name=model_name, model_load_options=model_load_options)
-            ui.notify(f"Loading model: {model_name}", type="info", color="blue", close_button=True)
+
+            loading_notification = ui.notification(timeout=None)
+            loading_notification.message = f"Loading model: {model_name}..."
+            loading_notification.spinner = True
+
             error = await self.wait_for_model_server()
 
             if error is not None:
+                loading_notification.dismiss()
                 ui.notify(f"Error loading model: {self.model_server_state['error']}", type="error", color="red", close_button=True)
             else:
-                ui.notify(f"Loaded model {model_name} successfully", type="success", color="green", close_button=True)
+                loading_notification.message = "Loaded model {model_name} successfully"
+                loading_notification.spinner = False
+                await asyncio.sleep(0.5)
+                loading_notification.dismiss()
+                
                 self.model_metadata = self.model_server_state["model_metadata"]
                 self.format_config = self.model_server_state["format_config"]
                 self.dataset_game_ids = self.model_server_state["dataset_game_ids"]
