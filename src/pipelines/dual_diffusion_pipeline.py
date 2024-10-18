@@ -40,6 +40,8 @@ from utils.dual_diffusion_utils import (
     normalize, load_safetensors, torch_dtype, load_audio, get_cos_angle
 )
 from sampling.schedule import SamplingSchedule
+from training.ema import get_ema_list
+
 
 @dataclass
 class SampleParams:
@@ -93,7 +95,7 @@ class SampleParams:
 
         last_global_step = model_metadata["last_global_step"][module_name]
         if module_name in model_metadata["load_emas"]:
-            ema = model_metadata["load_emas"][module_name].replace("pf_ema_std-", "").replace(".safetensors", "")
+            ema = model_metadata["load_emas"][module_name].replace("ema_", "").replace(".safetensors", "")
         else:
             ema = None
         top_game_name = sorted(self.prompt.items(), key=lambda x:x[1])[-1][0]
@@ -189,13 +191,6 @@ class DualDiffusionPipeline(torch.nn.Module):
         
         model_index = config.load_json(os.path.join(model_path, "model_index.json"))
         model_inventory: dict[str, ModuleInventory] = {}
-
-        def get_ema_list(module_path: str) -> list[str]:
-            ema_list = []
-            for path in os.listdir(module_path):
-                if os.path.isfile(os.path.join(module_path, path)) and path.startswith("pf_ema"):
-                    ema_list.append(path)
-            return sorted(ema_list)
         
         for module_name, _ in model_index["modules"].items():
             module_inventory = ModuleInventory(module_name, [], {})
@@ -209,9 +204,9 @@ class DualDiffusionPipeline(torch.nn.Module):
             module_inventory.checkpoints = sorted(module_inventory.checkpoints, key=lambda x: int(x.split("-")[1]))
 
             # get ema list for each checkpoint
-            module_inventory.emas[""] = get_ema_list(os.path.join(model_path, module_name))
+            module_inventory.emas[""], _ = get_ema_list(os.path.join(model_path, module_name))
             for checkpoint in module_inventory.checkpoints:
-                module_inventory.emas[checkpoint] = get_ema_list(os.path.join(model_path, checkpoint, module_name))
+                module_inventory.emas[checkpoint], _ = get_ema_list(os.path.join(model_path, checkpoint, module_name))
 
             model_inventory[module_name] = module_inventory
 

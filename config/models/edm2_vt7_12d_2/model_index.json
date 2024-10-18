@@ -1,7 +1,7 @@
 {
   "modules": {
     "unet": {
-      "package": "modules.unets.unet_edm2_b4a",
+      "package": "modules.unets.unet_edm2_b4",
       "class": "UNet"
     },
     "vae": {

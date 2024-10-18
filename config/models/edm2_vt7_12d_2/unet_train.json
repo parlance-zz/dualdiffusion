@@ -65,12 +65,13 @@
     "validation_sigma_dist_scale": 1.0,
     "validation_sigma_dist_offset": 0.3,
 
-    "inpainting_probability": 0.5,
-    "inpainting_extend_probability": 0.15,
-    "inpainting_prepend_probability": 0.15,
+    "inpainting_probability": 1.0,
+    "inpainting_extend_probability": 0.0,
+    "inpainting_prepend_probability": 0.0,
     "inpainting_outpaint_min_width": 64,
     "inpainting_outpaint_max_width": 516,
     "inpainting_min_width": 16,
-    "inpainting_max_width": 516
+    "inpainting_max_width": 516,
+    "inpainting_random_probability": 0.2
   }
 }

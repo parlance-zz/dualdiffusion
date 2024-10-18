@@ -3,21 +3,19 @@
   "in_channels": 4,
   "out_channels": 4,
   "use_t_ranges": false,
-  "inpainting": true,
+  "inpainting": false,
   "label_dim": 1612,
   "dropout": 0,
   "sigma_max": 200.0,
   "sigma_min": 0.03,
   "sigma_data": 1.0,
-  "model_channels": 256,
-  "bottleneck_channels": 8,
+  "model_channels": 192,
   "logvar_channels": 128,
   "channel_mult": [
     1,
     2,
-    2,
-    2,
-    2
+    3,
+    4
   ],
   "channel_mult_noise": 1,
   "channel_mult_emb": 2,
@@ -28,8 +26,8 @@
   "res_balance": 0.3,
   "attn_balance": 0.3,
   "attn_levels": [
-    3,
-    4
+    2,
+    3
   ],
   "mlp_multiplier": 2,
   "mlp_groups": 8

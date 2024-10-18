@@ -58,6 +58,7 @@ class UNetTrainerConfig(ModuleTrainerConfig):
     inpainting_outpaint_max_width: int = 516
     inpainting_min_width: int = 8
     inpainting_max_width: int = 516
+    inpainting_random_probability: float = 0.2
 
 class UNetTrainer(ModuleTrainer):
     
@@ -73,8 +74,8 @@ class UNetTrainer(ModuleTrainer):
         self.device_generator = None
         self.cpu_generator = None
 
-        if config.inpainting_probability > 0 and self.module.config.inpainting == False:
-            self.logger.error(f"UNet model does not support inpainting, aborting training..."); exit(1)
+        #if config.inpainting_probability > 0 and self.module.config.inpainting == False:
+        #    self.logger.error(f"UNet model does not support inpainting, aborting training..."); exit(1)
 
         if trainer.config.enable_model_compilation:
             self.module.compile(**trainer.config.compile_params)
@@ -126,6 +127,7 @@ class UNetTrainer(ModuleTrainer):
             self.logger.info(f"  outpaint max width: {self.config.inpainting_outpaint_max_width}")
             self.logger.info(f"  inpainting min width: {self.config.inpainting_min_width}")
             self.logger.info(f"  inpainting max width: {self.config.inpainting_max_width}")
+            self.logger.info(f"  random probability: {self.config.inpainting_random_probability}")
         else:
             self.logger.info("Inpainting training is disabled")
 
@@ -196,7 +198,11 @@ class UNetTrainer(ModuleTrainer):
 
                 mask[i, :] = 0
                 mask[i, :, :, mask_start:mask_end] = 1
-        
+
+        # dropout/inpaint random pixels with configured probability
+        if self.config.inpainting_random_probability > 0:
+            mask *= torch.rand(mask.shape, generator=self.cpu_generator).to(device=mask.device) > self.config.inpainting_random_probability
+
         return torch.cat((samples * (1 - mask), mask), dim=1).detach()
 
     @torch.no_grad()
@@ -269,13 +275,13 @@ class UNetTrainer(ModuleTrainer):
 
         noise = torch.randn(samples.shape, device=samples.device, generator=self.device_generator) * batch_sigma.view(-1, 1, 1, 1)
         samples = (samples * self.module.config.sigma_data).detach()
-        ref_samples = self.get_inpainting_ref_samples(samples) if self.module.config.inpainting == True else None
+        ref_samples = self.get_inpainting_ref_samples(samples) if self.config.inpainting_probability > 0 or self.module.config.inpainting == True else None
 
         denoised = self.module(samples + noise, batch_sigma, self.trainer.pipeline.format, unet_class_embeddings, sample_t_ranges, ref_samples)
         batch_loss_weight = (batch_sigma ** 2 + self.module.config.sigma_data ** 2) / (batch_sigma * self.module.config.sigma_data) ** 2
         batch_weighted_loss = torch.nn.functional.mse_loss(denoised, samples, reduction="none").mean(dim=(1,2,3)) * batch_loss_weight
 
-        # normalize validation loss wrt inpainting mask for consistency
+        # normalize loss wrt inpainting mask for comparability/consistency in validation loss
         if self.config.inpainting_probability > 0 and self.is_validation_batch == True:
             batch_weighted_loss = batch_weighted_loss / ref_samples[:, -1:].mean(dim=(1,2,3))
 

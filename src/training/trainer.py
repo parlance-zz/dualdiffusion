@@ -45,8 +45,8 @@ from tqdm.auto import tqdm
 from pipelines.dual_diffusion_pipeline import DualDiffusionPipeline
 from utils.dual_diffusion_utils import dict_str
 from training.module_trainers.module_trainer import ModuleTrainerConfig
-from .ema import PowerFunctionEMA
-from .dataset import DatasetConfig, DualDiffusionDataset
+from training.ema import EMA_Manager, get_ema_list
+from training.dataset import DatasetConfig, DualDiffusionDataset
 from modules.module import DualDiffusionModule
 
 
@@ -100,8 +100,11 @@ class OptimizerConfig:
 
 @dataclass
 class EMAConfig:
-    use_ema: bool           = False
-    ema_stds: tuple[float]  = (0.02,)
+    use_ema: bool                  = False
+    use_switch_ema: bool           = False
+    switch_ema_initial_beta: float = 0.9999
+    switch_ema_gamma: float        = 0.5
+    ema_betas: tuple[float]  = (0.9999,)
     ema_cpu_offload: bool   = False
 
 @dataclass
@@ -182,7 +185,7 @@ class DualDiffusionTrainer:
         self.init_tensorboard()
         self.init_pytorch()
         self.init_module_pipeline()
-        self.init_ema_module()
+        self.init_ema_manager()
         self.init_optimizer()
         self.init_checkpointing()
         self.init_lr_scheduler()
@@ -303,16 +306,31 @@ class DualDiffusionTrainer:
         if hasattr(self.module, "normalize_weights"):
             self.module.normalize_weights()
         
-    def init_ema_module(self) -> None:
+    def init_ema_manager(self) -> None:
         
-        if self.config.ema.use_ema:
-            ema_device = "cpu" if self.config.ema.ema_cpu_offload else self.accelerator.device
-            self.ema_module = PowerFunctionEMA(self.module, stds=self.config.ema.ema_stds, device=self.accelerator.device)
+        if self.config.ema.use_ema == True:
 
-            self.logger.info(f"Using EMA model with stds: {self.config.ema.ema_stds}")
+            if self.config.ema.use_switch_ema == True:
+                ema_betas = (self.config.ema.switch_ema_initial_beta ** (1/self.config.ema.switch_ema_gamma),
+                          self.config.ema.switch_ema_initial_beta ** self.config.ema.switch_ema_gamma)
+            else:
+                ema_betas = self.config.ema.ema_betas
+                if len(ema_betas) == 0:
+                    raise ValueError("EMA is enabled but no EMA betas specified in config")
+            
+            ema_device = "cpu" if self.config.ema.ema_cpu_offload else self.accelerator.device
+            self.ema_manager = EMA_Manager(self.module, betas=ema_betas, device=self.accelerator.device)
+
+            if self.config.ema.use_switch_ema == False:
+                self.logger.info(f"Using EMA model(s) with beta(s): {ema_betas}")
+            else:
+                self.logger.info(f"Using SwitchEMA with initial beta: {self.config.ema.switch_ema_initial_beta} gamma: {self.config.ema.switch_ema_gamma}")
             self.logger.info(f"  EMA CPU offloading {'enabled' if ema_device == 'cpu' else 'disabled'}")
         else:
-            self.logger.info("Not using EMA model")
+            if self.config.ema.use_switch_ema == True:
+                raise ValueError("SwitchEMA is enabled but EMA is disabled")
+            
+            self.logger.info("Not using EMA")
 
     def init_optimizer(self) -> None:
         
@@ -336,7 +354,7 @@ class DualDiffusionTrainer:
 
         self.last_checkpoint_time = datetime.now()
         self.logger.info(f"Saving checkpoints every {self.config.min_checkpoint_time}s")
-
+        
         def save_model_hook(models: list[DualDiffusionModule],
                             weights: list[dict[str, torch.Tensor]], output_dir: str) -> None:
             if self.accelerator.is_main_process:
@@ -348,8 +366,8 @@ class DualDiffusionTrainer:
                     model.save_pretrained(output_dir, subfolder=self.config.module_name)
                     weights.pop() # accelerate documentation says we need to do this, not sure why
 
-                if self.ema_module is not None:
-                    self.ema_module.save(output_dir, subfolder=self.config.module_name)
+                if self.config.ema.use_ema == True:
+                    self.ema_manager.save(output_dir, subfolder=self.config.module_name)
 
         def load_model_hook(models: list[DualDiffusionModule], input_dir: str) -> None:
             assert len(models) == 1
@@ -364,14 +382,22 @@ class DualDiffusionTrainer:
             if hasattr(model, "normalize_weights"):
                 model.normalize_weights()
                 
-            if self.ema_module is not None: # load / create EMA models
+            if self.config.ema.use_ema == True: # load / create EMA weights
                 ema_model_dir = os.path.join(input_dir, self.config.module_name)
-                ema_load_errors = self.ema_module.load(ema_model_dir, target_module=model)
+
+                # betas are dynamic for SwitchEMA
+                if self.config.ema.use_switch_ema == True:
+                    ema_list, ema_betas = get_ema_list(ema_model_dir)
+                    if len(ema_list) != 2:
+                        raise FileNotFoundError("SwitchEMA is enabled but did not find 2 EMA models")
+                    self.ema_manager.betas = ema_betas
+                
+                ema_load_errors = self.ema_manager.load(ema_model_dir, target_module=model)
                 if len(ema_load_errors) > 0:
-                    self.logger.warning(f"Errors loading EMA model(s) - Missing EMA(s) initialized from checkpoint model:")
+                    self.logger.warning(f"Errors loading EMA weights - Missing EMA(s) initialized from checkpoint non-ema weights:")
                     self.logger.warning("\n".join(ema_load_errors))
                 else:
-                    self.logger.info(f"Successfully loaded EMA model(s) from {ema_model_dir}")
+                    self.logger.info(f"Successfully loaded EMA weights from {ema_model_dir}")
 
         self.accelerator.register_save_state_pre_hook(save_model_hook)
         self.accelerator.register_load_state_pre_hook(load_model_hook)
@@ -540,7 +566,7 @@ class DualDiffusionTrainer:
         resume_step = 0
         first_epoch = 0
         
-        # get lasted checkpoint path
+        # get latest checkpoint path
         dirs = os.listdir(self.config.model_path)
         dirs = [d for d in dirs if d.startswith(f"{self.config.module_name}_checkpoint")]
         dirs = sorted(dirs, key=lambda x: int(x.split("-")[1]))
@@ -620,7 +646,7 @@ class DualDiffusionTrainer:
 
             for local_batch in (resume_dataloader or self.train_dataloader):
 
-                train_logger.clear()
+                train_logger.clear() # accumulates per-batch logs / statistics
                 self.module_trainer.init_batch()
                 
                 for accum_step in range(self.config.gradient_accumulation_steps):
@@ -674,9 +700,7 @@ class DualDiffusionTrainer:
                     global_step += 1
                     
                     if self.config.ema.use_ema:
-                        std_betas = self.ema_module.update(global_step * self.total_batch_size, self.total_batch_size)
-                        for std, beta in std_betas:
-                            train_logger.add_log(f"ema/std_{std:.3f}_beta", beta)
+                        self.ema_manager.update(global_step * self.total_batch_size, self.total_batch_size)
 
                     train_logger.add_logs(self.module_trainer.finish_batch())
 
@@ -685,11 +709,13 @@ class DualDiffusionTrainer:
                     progress_bar.set_postfix(loss=logs["loss"], grad_norm=logs["grad_norm"], global_step=global_step)
                     
                     if self.accelerator.is_main_process:
+                        # if using strict checkpoint time, save it now at the end of the batch
                         _save_checkpoint = False
                         if self.config.strict_checkpoint_time:
                             if (datetime.now() - self.last_checkpoint_time).total_seconds() >= self.config.min_checkpoint_time:
                                 _save_checkpoint = True
                         
+                        # saves a checkpoint immediately if a file named "_save_checkpoint" is found in the model path
                         _save_checkpoint_path = os.path.join(self.config.model_path, "_save_checkpoint")
                         if os.path.isfile(_save_checkpoint_path): _save_checkpoint = True
                         if _save_checkpoint: self.save_checkpoint(global_step)
@@ -703,10 +729,11 @@ class DualDiffusionTrainer:
             
             progress_bar.close()
             self.accelerator.wait_for_everyone()
-            resume_dataloader = None
+            resume_dataloader = None # throw away resume dataloader (if any) at end of epoch
             
             if self.accelerator.is_main_process:
                 
+                # save per-sample training loss statistics
                 sample_log_path = os.path.join(self.config.model_path, "tmp", "sample_loss.json")
                 try:
                     sorted_sample_logs = dict(sorted(sample_logger.get_logs().items(), key=lambda item: item[1]))
@@ -714,15 +741,18 @@ class DualDiffusionTrainer:
                 except Exception as e:
                     self.logger.warning(f"Error saving sample logs to {sample_log_path}: {e}")
 
+                # if we're not saving checkpoints ASAP, check if we should save one at the end of the epoch
                 if not self.config.strict_checkpoint_time:
                     if (datetime.now() - self.last_checkpoint_time).total_seconds() >= self.config.min_checkpoint_time:
                         self.save_checkpoint(global_step)
 
+            # if validation is enabled, run validation every n'th epoch
             self.accelerator.wait_for_everyone()
             if self.config.num_validation_epochs > 0:
                 if epoch % self.config.num_validation_epochs == 0:
                     self.run_validation(global_step)
         
+        # hurray!
         self.logger.info("Training complete")
         self.accelerator.end_training()
 
@@ -734,14 +764,52 @@ class DualDiffusionTrainer:
         self.logger.info(f"  Total validation batch size (w. parallel, distributed & accumulation) = {self.validation_total_batch_size}")
 
         start_validation_time = datetime.now()
+        self.module.eval()
+
+        if self.config.ema.use_switch_ema == True:
+            # get validation losses for each ema
+            ema_validations_logs = []
+            for i, ema in enumerate(self.ema_manager.emas):
+                self.module.load_state_dict(ema.state_dict())
+                self.module.normalize_weights()
+                ema_validations_logs.append(self.run_validation_epoch(f"ema_{i}"))
+                self.logger.info(f"SwitchEMA beta: {self.ema_manager.betas[i]} loss_validation: {ema_validations_logs[i]['loss_validation']}")
+
+            # choose the ema with the lowest validation loss
+            winning_ema_index = min(enumerate(ema_validations_logs), key=lambda x: x[1]["loss_validation"])[0]
+            self.logger.info(f"Winning EMA beta: {self.ema_manager.betas[winning_ema_index]} with loss_validation: {ema_validations_logs[winning_ema_index]['loss_validation']}")
+            winning_ema = self.ema_manager.emas[winning_ema_index]
+            winning_beta = self.ema_manager.betas[winning_ema_index]
+            winning_logs = ema_validations_logs[winning_ema_index]
+
+            # only log the winning ema (and the associated beta)
+            winning_logs["ema/switch_ema_beta"] = winning_beta
+            self.accelerator.log(winning_logs, step=global_step)
+
+            # load the winning ema into the model and normalize to continue training
+            self.module.load_state_dict(winning_ema.state_dict())
+            self.module.normalize_weights()
+
+            # reset all emas to the winning ema
+            for ema in self.ema_manager.emas:
+                if ema != winning_ema:
+                    torch._foreach_copy_(tuple(ema.parameters()), tuple(winning_ema.parameters()))
+
+            # for next epoch try new betas slightly faster/slower than the winning beta
+            self.ema_manager.betas = [winning_beta ** (1/self.config.ema.switch_ema_gamma),
+                                      winning_beta ** self.config.ema.switch_ema_gamma]
+
+        self.logger.info(f"Validation complete (runtime: {(datetime.now() - start_validation_time).total_seconds()}s)")
+        self.module.train()
+
+    @torch.no_grad()
+    def run_validation_epoch(self, variant_label: str = "") -> dict:
 
         validation_logger = TrainLogger(self.accelerator)
         sample_logger = TrainLogger(self.accelerator)
 
         progress_bar = tqdm(total=len(self.validation_dataloader), disable=not self.accelerator.is_local_main_process)
-        progress_bar.set_description(f"Validation")
-
-        self.module.eval()
+        progress_bar.set_description(f"Validation {variant_label}")
 
         for _, batch in enumerate(self.validation_dataloader):
             
@@ -766,20 +834,22 @@ class DualDiffusionTrainer:
         
         progress_bar.close()
 
+        # validation log labels use _validation suffix
         validation_logs = {}
         for key, value in validation_logger.get_logs().items():
             key = key.replace("/", "_validation/", 1) if "/" in key else key + "_validation"
             validation_logs[key] = value
-        self.accelerator.log(validation_logs, step=global_step)
 
+        # save per-sample validation loss statistics
         self.accelerator.wait_for_everyone()
         if self.accelerator.is_main_process:                   
-            sample_log_path = os.path.join(self.config.model_path, "tmp", "sample_loss_validation.json")
+            sample_log_path = os.path.join(self.config.model_path, "tmp", f"sample_loss_{variant_label}_validation.json")
             try:
                 sorted_sample_logs = dict(sorted(sample_logger.get_logs().items(), key=lambda item: item[1]))
                 config.save_json(sorted_sample_logs, sample_log_path)
             except Exception as e:
                 self.logger.warning(f"Error saving validation sample logs to {sample_log_path}: {e}")
 
-        self.logger.info(f"Validation complete (runtime: {(datetime.now() - start_validation_time).total_seconds()}s)")
-        self.module.train()
+        return validation_logs
+
+        
