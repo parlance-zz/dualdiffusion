@@ -782,8 +782,11 @@ class DualDiffusionTrainer:
             winning_beta = self.ema_manager.betas[winning_ema_index]
             winning_logs = ema_validations_logs[winning_ema_index]
 
+            # clamp the winning beta to ensure it's never rounded to 0 or 1
+            winning_beta = max(min(winning_beta, 0.9999999999999), 0.9)
+            
             # only log the winning ema (and the associated beta)
-            winning_logs["ema/switch_ema_beta"] = winning_beta
+            winning_logs["ema/switch_ema_ln_beta"] = math.log(winning_beta)
             self.accelerator.log(winning_logs, step=global_step)
 
             # load the winning ema into the model and normalize to continue training
