@@ -4,14 +4,14 @@
     "spc/Teenage Mutant Ninja Turtles - Tournament Fighters": 10
   },
   "gen_params": {
-    "num_steps": 250.0,
+    "num_steps": 300.0,
     "cfg_scale": 1.5,
     "use_heun": true,
     "num_fgla_iters": 300.0,
     "sigma_max": 200,
     "sigma_min": 0.6,
     "rho": 7.0,
-    "input_perturbation": 0.95,
+    "input_perturbation": 0.3,
     "schedule": "edm2"
   }
 }

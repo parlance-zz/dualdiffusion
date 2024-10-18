@@ -33,40 +33,19 @@ import logging
 import random
 import os
 
-import cv2
-import torch
 import numpy as np
 from nicegui import ui, app
 
 from utils.dual_diffusion_utils import (
-    save_audio, load_audio, save_safetensors, load_safetensors, dict_str, tensor_to_img, sanitize_filename
+    dict_str, tensor_to_img
 )
-from pipelines.dual_diffusion_pipeline import SampleParams, SampleOutput
 from sampling.model_server import ModelServer
 from sampling.schedule import SamplingSchedule
-from sampling.nicegui_elements import EditableSelect, LockButton, ScrollableNumber, PromptEditor, PresetEditor
+from sampling.nicegui_elements import (
+    EditableSelect, LockButton, ScrollableNumber, PromptEditor,
+    PresetEditor, OutputEditor
+)
 
-@dataclass
-class OutputSample:
-    name: str
-    seed: int
-    prompt: dict
-    gen_params: dict
-    sample_params: SampleParams
-    sample_output: Optional[SampleOutput] = None
-    audio_path: Optional[str] = None
-    latents_path: Optional[str] = None
-
-    card_element: Optional[ui.card] = None
-    name_label_element: Optional[ui.label] = None
-    sampling_progress_element: Optional[ui.linear_progress] = None
-    latents_image_element: Optional[ui.interactive_image] = None
-    spectrogram_image_element: Optional[ui.interactive_image] = None
-    audio_element: Optional[ui.audio] = None
-    use_as_input_button: Optional[ui.button] = None
-    select_range: Optional[ui.range] = None
-    move_up_button: Optional[ui.button] = None
-    move_down_button: Optional[ui.button] = None
 
 @dataclass
 class NiceGUIAppConfig:
@@ -113,13 +92,10 @@ class NiceGUIApp:
 
         self.mp_manager = multiprocessing.Manager()
         self.model_server_state = self.mp_manager.dict()
-        
         self.model_server_process = multiprocessing.Process(daemon=False, name="model_server",
             target=ModelServer.start_server, args=(self.model_server_state,))
         self.model_server_process.start()
-
         self.gpu_lock = asyncio.Semaphore()
-        self.input_output_sample: OutputSample = None
 
         self.init_layout()
         app.on_startup(partial(self.on_startup_app))
@@ -202,10 +178,6 @@ class NiceGUIApp:
                             self.generate_button = ui.button("Generate", icon="audiotrack", color="green", on_click=partial(self.on_click_generate_button)).classes("w-52 rounded-none")
                             with self.generate_button:
                                 ui.tooltip("Generate new sample with current settings")
-                            self.clear_output_button = ui.button("Clear Outputs", icon="delete", color="red", on_click=lambda: self.clear_output_samples()).classes("w-52 rounded-t-none")
-                            self.clear_output_button.disable()
-                            with self.clear_output_button:
-                                ui.tooltip("Clear all output samples in workspace")
 
                     with ui.card().classes("flex-grow-[3]"): # gen params
                         self.gen_param_elements = {}
@@ -245,9 +217,8 @@ class NiceGUIApp:
 
         ui.separator().classes("bg-primary").style("height: 3px")
 
-        # queued / output samples go here
-        self.output_samples: list[OutputSample] = []
-        self.output_samples_column = ui.column().classes("w-full")      
+        self.output_editor = OutputEditor()
+        self.output_editor.get_app_config = lambda: self.config
 
     async def wait_for_model_server(self) -> str:
         while self.model_server_state.get("cmd", None) is not None:
@@ -267,63 +238,59 @@ class NiceGUIApp:
     async def load_model(self, model_name: str, model_load_options: dict) -> None:
         async with self.gpu_lock:
             await self.model_server_cmd("load_model", model_name=model_name, model_load_options=model_load_options)
-
+            self.logger.info(f"Loading model: {model_name}...")
             loading_notification = ui.notification(timeout=None)
             loading_notification.message = f"Loading model: {model_name}..."
             loading_notification.spinner = True
 
             error = await self.wait_for_model_server()
-
             if error is not None:
+                self.logger.error(f"Error loading model: {self.model_server_state['error']}")
                 loading_notification.dismiss()
-                ui.notify(f"Error loading model: {self.model_server_state['error']}", type="error", color="red", close_button=True)
+                ui.notify(f"Error loading model: {self.model_server_state['error']}",
+                    type="error", color="red", close_button=True)
+                return
+
+            self.logger.info(f"Loaded model: {model_name} successfully")
+            loading_notification.message = f"Loaded model {model_name} successfully"
+            loading_notification.spinner = False
+            await asyncio.sleep(0.5)
+            loading_notification.dismiss()
+            
+            self.output_editor.update_model_info(model_name,
+                self.model_server_state["model_metadata"],
+                self.model_server_state["format_config"],
+                self.model_server_state["dataset_game_ids"])
+            self.prompt_editor.update_dataset_games_dict(self.model_server_state["dataset_games_dict"])
+            
+    async def compile_model(self, model_name: str) -> None:
+        async with self.gpu_lock:
+            await self.model_server_cmd("compile_model")
+            self.logger.info(f"Compiling model: {model_name}...")
+            compiling_notification = ui.notification(timeout=None)
+            compiling_notification.message = f"Compiling model: {model_name}..."
+            compiling_notification.spinner = True
+
+            error = await self.wait_for_model_server()
+            if error is not None:
+                self.logger.error(f"Error compiling model: {self.model_server_state['error']}")
+                compiling_notification.dismiss()
+                ui.notify(f"Error compiling model: {self.model_server_state['error']}",
+                    type="error", color="red", close_button=True)
             else:
-                loading_notification.message = "Loaded model {model_name} successfully"
-                loading_notification.spinner = False
+                self.logger.info(f"Compiled model: {model_name} successfully")
+                compiling_notification.message = f"Compiled model {model_name} successfully"
+                compiling_notification.spinner = False
                 await asyncio.sleep(0.5)
-                loading_notification.dismiss()
-                
-                self.model_metadata = self.model_server_state["model_metadata"]
-                self.format_config = self.model_server_state["format_config"]
-                self.dataset_game_ids = self.model_server_state["dataset_game_ids"]
-
-                self.prompt_editor.update_dataset_games_dict(self.model_server_state["dataset_games_dict"])
-
-                if model_load_options["compile_options"] is not None:
-                    await self.model_server_cmd("compile_model")
-                    ui.notify("Compiling model...", type="info", color="blue", close_button=True)
-                    error = await self.wait_for_model_server()
-                    if error is not None:
-                        ui.notify(f"Error compiling model: {self.model_server_state['error']}", type="error", color="red", close_button=True)
-                    else:
-                        ui.notify("Model compilation complete", type="success", color="green", close_button=True)
+                compiling_notification.dismiss()
     
     async def on_startup_app(self) -> None:
         await self.model_server_cmd("get_available_torch_devices")
         await self.load_model(self.config.model_name, self.config.model_load_options)
         self.preset_editor.load_preset()
 
-    def save_output_sample(self, sample_output: SampleOutput) -> tuple[str, Optional[str]]:
-        metadata = {"diffusion_metadata": dict_str(sample_output.params.get_metadata())}
-        metadata["model_metadata"] = dict_str(self.model_metadata)
-        last_global_step = self.model_metadata["last_global_step"]["unet"]
-        audio_output_filename = f"{sample_output.params.get_label(self.model_metadata, self.dataset_game_ids)}.flac"
-        audio_output_path = os.path.join(
-            config.MODELS_PATH, self.config.model_name, "output", f"step_{last_global_step}", audio_output_filename)
-        
-        audio_output_path = save_audio(sample_output.raw_sample.squeeze(0),
-            self.format_config["sample_rate"], audio_output_path, metadata=metadata, no_clobber=True)
-        self.logger.info(f"Saved audio output to {audio_output_path}")
-
-        if self.config.save_output_latents and sample_output.latents is not None:
-            latents_output_path = os.path.join(os.path.dirname(audio_output_path), "latents",
-                f"{os.path.splitext(os.path.basename(audio_output_path))[0]}.safetensors")
-            save_safetensors({"latents": sample_output.latents}, latents_output_path, metadata=metadata)
-            self.logger.info(f"Saved latents to {latents_output_path}")
-        else:
-            latents_output_path = None
-
-        return audio_output_path, latents_output_path
+        if self.config.model_load_options["compile_options"] is not None:
+            await self.compile_model(self.config.model_name)
 
     async def on_click_generate_button(self) -> None:
         
@@ -332,42 +299,31 @@ class NiceGUIApp:
             ui.notify("No prompt games selected", type="warning", color="red", close_button=True)
             return
         
-        # setup sample params and auto-increment seed
-        sample_params: SampleParams = SampleParams(seed=self.seed.value,
-            length=int(self.generate_length.value) * self.format_config["sample_rate"],
-            prompt={**self.prompt_editor.prompt}, **self.gen_params)
-        if self.auto_increment_seed.value == True: self.seed.set_value(self.seed.value + 1)
-        self.logger.info(f"on_click_generate_button - params:{dict_str(sample_params.__dict__)}")
-
-        if self.input_output_sample is not None: # setup inpainting input
-            sample_params.input_audio = self.input_output_sample.sample_output.latents
-            sample_params.input_audio_pre_encoded = True
-            sample_params.inpainting_mask = torch.zeros_like(sample_params.input_audio[:, 0:1])
-            sample_params.inpainting_mask[..., self.input_output_sample.select_range.value["min"]:self.input_output_sample.select_range.value["max"]] = 1.
+        # queue new output sample and auto-increment seed
+        output_sample = self.output_editor.add_output_sample(int(self.generate_length.value),
+            int(self.seed.value), self.prompt_editor.prompt.copy(), self.gen_params.copy())
+        if self.auto_increment_seed.value == True:
+            self.seed.set_value(self.seed.value + 1)
         
-        # get name / label and add output sample to workspace
-        output_sample = OutputSample(name=f"{sample_params.get_label(self.model_metadata, self.dataset_game_ids)}",
-            seed=sample_params.seed, prompt=sample_params.prompt, gen_params={**self.gen_params}, sample_params=sample_params)
-        self.add_output_sample(output_sample)
-
         # this lock holds output samples in queue while generation is in progress
         async with self.gpu_lock:
-            if output_sample not in self.output_samples:
+            if output_sample not in self.output_editor.output_samples:
                 return # handle early removal from queue
             
             # reset abort state and send generate command to model server
             self.model_server_state["generate_abort"] = False
-            await self.model_server_cmd("generate", sample_params=sample_params)
+            await self.model_server_cmd("generate", sample_params=output_sample.sample_params)
             while self.model_server_state.get("cmd", None) is not None:
 
-                if output_sample not in self.output_samples:
+                if output_sample not in self.output_editor.output_samples:
                     self.model_server_state["generate_abort"] = True
                     return # abort in progress
                 
                 # update linear progress
                 step = self.model_server_state.get("generate_step", None)
                 if step is not None:
-                    output_sample.sampling_progress_element.set_value(f"{int(step/sample_params.num_steps*100)}%")
+                    output_sample.sampling_progress_element.set_value(
+                        f"{int(step/output_sample.sample_params.num_steps*100)}%")
 
                 # update latents image preview
                 latents = self.model_server_state.get("generate_latents", None)
@@ -384,145 +340,18 @@ class NiceGUIApp:
             if error is not None:
                 self.logger.error(f"on_click_generate_button error: {error}")
                 ui.notify(f"Error generating sample: {error}", type="error", color="red", close_button=True)
-                self.remove_output_sample(output_sample)
+                self.output_editor.remove_output_sample(output_sample)
                 return
             
             # retrieve sampling output from model server
             output_sample.sample_output = self.model_server_state["generate_output"]
         
-        if output_sample not in self.output_samples:
-            return # handle late abort
+        if output_sample not in self.output_editor.output_samples:
+            return # handle late abort 
 
-        # save output sample audio / latents
-        output_sample.audio_path, output_sample.latents_path = self.save_output_sample(output_sample.sample_output)
-
-        # set output sample name label
-        output_sample.name = os.path.splitext(os.path.basename(output_sample.audio_path))[0]
-        output_sample.name_label_element.set_text(output_sample.name)
-
-        # set spectrogram image
-        spectrogram_image = output_sample.sample_output.spectrogram.mean(dim=(0,1))
-        spectrogram_image = tensor_to_img(spectrogram_image, colormap=True, flip_y=True)
-        spectrogram_image = cv2.resize(
-            spectrogram_image, (spectrogram_image.shape[1]//4, spectrogram_image.shape[0]), interpolation=cv2.INTER_AREA)
-        spectrogram_image = Image.fromarray(spectrogram_image)
-        output_sample.spectrogram_image_element.set_source(spectrogram_image)
-        if self.config.hide_latents_after_generation:
-            output_sample.latents_image_element.set_visibility(False)
-        output_sample.spectrogram_image_element.set_visibility(True)
-
-        # set audio element
-        output_sample.audio_element.set_source(output_sample.audio_path)
-        output_sample.audio_element.set_visibility(True)
-
-        # hide progress and setup inpainting range select element
-        output_sample.sampling_progress_element.set_visibility(False)
-        output_sample.select_range.max = output_sample.sample_output.latents.shape[-1]
-        output_sample.select_range.value = {
-            "min": output_sample.select_range.max//2 - output_sample.select_range.max//4,
-            "max": output_sample.select_range.max//2 + output_sample.select_range.max//4}
-        output_sample.select_range.update()
-        output_sample.use_as_input_button.enable()
-
-        #output_sample.audio_element.on("timeupdate", lambda e: self.logger.debug(e))
-        #output_sample.audio_element.seek(10)
-        #output_sample.audio_element.play()
+        # update output sample elements with completed sample output   
+        self.output_editor.on_output_sample_generated(output_sample)
     
-    def refresh_output_samples(self) -> None:
-
-        if len(self.output_samples) == 0:
-            self.clear_output_button.disable()
-        else:
-            self.clear_output_button.enable()
-
-        for i, output_sample in enumerate(self.output_samples):
-            if i == 0: output_sample.move_up_button.disable()
-            else: output_sample.move_up_button.enable()
-            if i == len(self.output_samples) - 1: output_sample.move_down_button.disable()
-            else: output_sample.move_down_button.enable()
-
-            if self.input_output_sample != output_sample:
-                output_sample.use_as_input_button.classes(remove="border-4", add="border-none")
-                output_sample.select_range.set_visibility(False)
-            else:
-                output_sample.use_as_input_button.classes(remove="border-none", add="border-4")
-                output_sample.select_range.set_visibility(True)
-        
-    def add_output_sample(self, output_sample: OutputSample) -> None:
-        
-        def move_output_sample(output_sample: OutputSample, direction: int) -> None:
-            current_index = output_sample.card_element.parent_slot.children.index(output_sample.card_element)
-            new_index = min(max(current_index + direction, 0), len(output_sample.card_element.parent_slot.children) - 1)
-            if new_index != current_index:
-                output_sample.card_element.move(self.output_samples_column, target_index=new_index)
-                self.output_samples.insert(new_index, self.output_samples.pop(current_index))
-                self.refresh_output_samples()
-
-        def use_output_sample_as_input(output_sample: OutputSample) -> None:
-            if self.input_output_sample == output_sample:
-                self.input_output_sample = None
-            else:
-                self.input_output_sample = output_sample
-            self.refresh_output_samples()
-
-        with ui.card().classes("w-full") as output_sample.card_element:
-            with ui.column().classes("w-full gap-0"):
-                with ui.row().classes("h-10 justify-between gap-0 w-full"):
-
-                    with ui.row(): # output sample name label
-                        output_sample.name_label_element = ui.label(output_sample.name).classes("p-2").style(
-                            "border: 1px solid grey; border-bottom: none; border-radius: 10px 10px 0 0;")
-                        
-                    with ui.button_group().classes("h-10 gap-0"): # output sample icon toolbar
-                        output_sample.use_as_input_button = ui.button(
-                            icon="format_color_fill", color="orange", on_click=lambda: use_output_sample_as_input(output_sample)).classes("w-1 border-none border-double")
-                        with output_sample.use_as_input_button:
-                            ui.tooltip("Use this sample as inpainting input")
-                        output_sample.use_as_input_button.disable()
-                        output_sample.move_up_button = ui.button('▲', on_click=lambda: move_output_sample(output_sample, direction=-1)).classes("w-1")
-                        with output_sample.move_up_button:
-                            ui.tooltip("Move sample up")
-                        output_sample.move_down_button = ui.button('▼', on_click=lambda: move_output_sample(output_sample, direction=1)).classes("w-1")
-                        with output_sample.move_down_button:
-                            ui.tooltip("Move sample down")
-                        with ui.button('✕', color="red", on_click=lambda s=output_sample: self.remove_output_sample(s)).classes("w-1"):
-                            ui.tooltip("Remove sample from workspace")
-
-                        #ui.label("Rating:") 
-                        #ui.slider(min=0, max=5, step=1, value=0).props("label-always").classes("h-10 top-0")
-
-                output_sample.latents_image_element = ui.interactive_image().classes(
-                    "w-full gap-0").style("image-rendering: pixelated; width: 100%; height: auto;").props("fit=scale-down")
-                output_sample.sampling_progress_element = ui.linear_progress(
-                    value="0%").classes("w-full font-bold gap-0").props("instant-feedback")
-                output_sample.spectrogram_image_element = ui.interactive_image(
-                    #cross="white", cross_horizontal=False).classes("w-full gap-0").props(add="fit=fill")
-                    cross="white").classes("w-full gap-0").props(add="fit=fill")
-                output_sample.spectrogram_image_element.set_visibility(False)
-
-                output_sample.select_range = ui.range(min=0, max=688, step=1, value={"min": 0, "max": 0}).classes("w-full").props("step snap color='orange' label='Inpaint Selection'")
-                output_sample.select_range.set_visibility(False)
-
-                output_sample.audio_element = ui.audio("").classes("w-full").props("preload='auto'").style("filter: invert(1) hue-rotate(180deg);")
-                output_sample.audio_element.set_visibility(False)
-
-        self.output_samples.insert(0, output_sample)
-        output_sample.card_element.move(self.output_samples_column, target_index=0)
-        self.refresh_output_samples()
-
-    def clear_output_samples(self) -> None:
-        self.output_samples_column.clear()
-        self.output_samples.clear()
-        self.clear_output_button.disable()
-        self.input_output_sample = None
-
-    def remove_output_sample(self, output_sample: OutputSample) -> None:
-        if self.input_output_sample == output_sample:
-            self.input_output_sample = None
-        self.output_samples_column.remove(output_sample.card_element)
-        self.output_samples.remove(output_sample)
-        self.refresh_output_samples()
-        
     def on_click_show_schedule_button(self) -> None:
 
         self.sigma_schedule_dialog.clear()
