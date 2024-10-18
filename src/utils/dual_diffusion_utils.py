@@ -36,6 +36,7 @@ import safetensors.torch as ST
 import matplotlib.pyplot as plt
 from scipy.special import erfinv
 from mutagen import File as MTAudioFile
+from safetensors import safe_open
 
 from utils.roseus_colormap import ROSEUS_COLORMAP
 
@@ -210,6 +211,25 @@ def save_audio(raw_samples: torch.Tensor,
 
     return output_path
 
+def update_audio_metadata(audio_path: str,
+                          metadata: Optional[dict] = None,
+                          rating: Optional[int] = None) -> None:
+    metadata = metadata or {}
+
+    if rating is not None:
+        metadata = metadata.copy()
+        metadata.update({
+            "RATING": str(rating),
+            "RATING WMP": str(rating),
+            "FMPS_RATING": f"{rating/5}"
+        })
+
+    if len(metadata) > 0:
+        audio_file = MTAudioFile(audio_path)
+        for key in metadata:
+            audio_file[key] = metadata[key]    
+        audio_file.save()
+
 def torch_dtype(dtype: Union[str, torch.dtype]) -> torch.dtype:
     if isinstance(dtype, torch.dtype):
         return dtype
@@ -284,6 +304,23 @@ def save_safetensors(tensors_dict: dict[str, torch.Tensor], output_path: str,
 def load_safetensors(input_path: str, device: Optional[torch.device] = None) -> dict[str, torch.Tensor]:
     return ST.load_file(input_path, device=device)
 
+def load_safetensors_ex(input_path: str, # returns metadata
+        device: Optional[torch.device] = None) -> tuple[dict[str, torch.Tensor], dict[str, str]]:  
+    tensors_dict = {}
+    with safe_open(input_path, framework="pt", device=device) as f:
+        for k in f.keys():
+            tensors_dict[k] = f.get_tensor(k)
+        metadata = dict(f.metadata())
+
+    return tensors_dict, metadata
+
+def update_safetensors_metadata(safetensors_path: str,
+                                new_metadata: dict[str, str]) -> None:
+    
+    tensors_dict, metadata = load_safetensors_ex(safetensors_path)
+    metadata.update(new_metadata)
+    ST.save_file(tensors_dict, safetensors_path, metadata=metadata)
+    
 def get_expected_max_normal(n: int) -> float:
     return erfinv((n - np.pi/8) / (n - np.pi/4 + 1))
 
