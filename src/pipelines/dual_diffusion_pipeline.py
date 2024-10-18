@@ -96,6 +96,7 @@ class SampleParams:
         last_global_step = model_metadata["last_global_step"][module_name]
         if module_name in model_metadata["load_emas"]:
             ema = model_metadata["load_emas"][module_name].replace("ema_", "").replace(".safetensors", "")
+            ema = ema[:min(len(ema), 10)] # truncate beta string if longer than 8 digits
         else:
             ema = None
         top_game_name = sorted(self.prompt.items(), key=lambda x:x[1])[-1][0]
@@ -191,6 +192,14 @@ class DualDiffusionPipeline(torch.nn.Module):
         
         model_index = config.load_json(os.path.join(model_path, "model_index.json"))
         model_inventory: dict[str, ModuleInventory] = {}
+
+        def get_ema_list(module_path: str) -> list[str]:
+            ema_list = []
+            for path in os.listdir(module_path):
+                #if os.path.isfile(os.path.join(module_path, path)) and path.startswith("pf_ema"):
+                if os.path.isfile(os.path.join(module_path, path)) and path.startswith("ema_"):
+                    ema_list.append(path)
+            return sorted(ema_list)
         
         for module_name, _ in model_index["modules"].items():
             module_inventory = ModuleInventory(module_name, [], {})
@@ -545,4 +554,7 @@ class DualDiffusionPipeline(torch.nn.Module):
             spectrogram = sample
         raw_sample = self.format.sample_to_raw(spectrogram)
         
+        if model_server_state is not None:
+            model_server_state["generate_latents"] = None
+            model_server_state["generate_step"] = None
         return SampleOutput(raw_sample, spectrogram, params, debug_info, latents)

@@ -1,12 +1,10 @@
 {
-    "model_name": "edm2_vae_test7_12d",
+    "model_name": "edm2_vt7_12d_3",
     "model_load_options": {
       "torch_dtype": "bfloat16",
       "device": "cuda",
       "load_checkpoints": true,
-      "load_emas": {
-        "unet": "pf_ema_std-0.100.safetensors"
-      },
+      "load_emas": true,
       "compile_options": null
     },
     "save_output_latents": true,

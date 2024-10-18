@@ -39,13 +39,12 @@ import numpy as np
 from nicegui import ui, app
 
 from utils.dual_diffusion_utils import (
-    save_audio, load_audio, save_safetensors, load_safetensors, dict_str,
-    sanitize_filename, tensor_to_img
+    save_audio, load_audio, save_safetensors, load_safetensors, dict_str, tensor_to_img, sanitize_filename
 )
 from pipelines.dual_diffusion_pipeline import SampleParams, SampleOutput
 from sampling.model_server import ModelServer
 from sampling.schedule import SamplingSchedule
-from sampling.nicegui_elements import LockButton, ScrollableNumber, PromptEditor
+from sampling.nicegui_elements import EditableSelect, LockButton, ScrollableNumber, PromptEditor, PresetEditor
 
 @dataclass
 class OutputSample:
@@ -158,6 +157,8 @@ class NiceGUIApp:
         
         # default element props / classes
         ui.tooltip.default_props("delay=1000")
+        ui.select.default_props("options-dense")
+        EditableSelect.default_props("options-dense")
 
         # main layout is split into 3 tabs
         with ui.tabs() as self.interface_tabs:
@@ -233,38 +234,10 @@ class NiceGUIApp:
                             param_element.bind_value(self.gen_params, param_name)
                             param_element.on_value_change(lambda: self.on_change_gen_param())
 
-                with ui.card().classes("w-full"): # preset editor
-                    with ui.row().classes("w-full"):
-                        with ui.column().classes("flex-grow-[4]"):
-
-                            self.last_loaded_preset = "default"
-                            self.new_preset_name = ""
-                            self.loading_preset = False
-                            self.saved_preset_list = self.get_saved_presets()
-
-                            self.preset_select = ui.select(
-                                label=f"Select a Preset - (loaded preset: {self.last_loaded_preset})",
-                                options=self.saved_preset_list,
-                                value="default", with_input=True).classes("w-full")
-                            
-                            self.preset_select.on("input-value", lambda e: self.on_input_value_preset_select(e.args))
-                            self.preset_select.on("blur", lambda e: self.on_blur_preset_select(e))
-                            self.preset_select.on_value_change(lambda e: self.on_value_change_preset_select(e.value))     
-
-                        with ui.column().classes("gap-0 items-center"):
-                            self.preset_load_button = ui.button("Load", icon="source", on_click=lambda: self.load_preset()).classes("w-36 rounded-b-none")
-                            self.preset_save_button = ui.button("Save", icon="save", color="green", on_click=lambda: self.save_preset()).classes("w-36 rounded-none")
-                            self.preset_delete_button = ui.button("Delete", icon="delete", color="red", on_click=lambda: self.delete_preset()).classes("w-36 rounded-t-none")
-                            with self.preset_load_button:
-                                ui.tooltip("Load selected preset")
-                            with self.preset_save_button:
-                                ui.tooltip("Save current parameters to selected preset")
-                            with self.preset_delete_button:
-                                ui.tooltip("Delete selected preset")
-
-                        self.preset_load_button.disable()
-                        self.preset_save_button.disable()
-                        self.preset_delete_button.disable()
+                self.preset_editor = PresetEditor()
+                self.preset_editor.get_prompt_editor = lambda: self.prompt_editor
+                self.preset_editor.get_gen_params = lambda: self.gen_params
+                self.preset_editor.get_gen_params_locked = lambda: self.gen_params_lock_button.is_locked
 
             self.prompt_editor = PromptEditor()
             self.prompt_editor.on_prompt_change = lambda: self.on_change_gen_param()
@@ -318,7 +291,7 @@ class NiceGUIApp:
     async def on_startup_app(self) -> None:
         await self.model_server_cmd("get_available_torch_devices")
         await self.load_model(self.config.model_name, self.config.model_load_options)
-        self.load_preset()
+        self.preset_editor.load_preset()
 
     def save_output_sample(self, sample_output: SampleOutput) -> tuple[str, Optional[str]]:
         metadata = {"diffusion_metadata": dict_str(sample_output.params.get_metadata())}
@@ -562,115 +535,7 @@ class NiceGUIApp:
             ui.button("Close").classes("ml-auto").on_click(lambda: self.sigma_schedule_dialog.close())
             
     def on_change_gen_param(self) -> None:
-        if self.loading_preset == False:
-            self.preset_select._props["label"] = f"Select a Preset - (loaded preset: {self.last_loaded_preset}*)"
-            self.preset_select.update()
-            self.preset_load_button.enable()
-            self.preset_save_button.enable()
-    
-    def on_input_value_preset_select(self, preset_name: str) -> None:
-        self.new_preset_name = preset_name
-        if preset_name != "default":
-            self.preset_save_button.enable()
-
-    def on_blur_preset_select(self, _) -> None:
-        if self.new_preset_name != "" and self.new_preset_name not in self.saved_preset_list:
-            self.preset_select.options = self.saved_preset_list + [self.new_preset_name]
-            self.preset_select.set_value(self.new_preset_name)
-            
-    def on_value_change_preset_select(self, preset_name: str) -> None:
-        self.preset_save_button.enable()
-        if preset_name in self.saved_preset_list:
-            self.preset_load_button.enable()
-            self.preset_select.set_options(self.saved_preset_list)
-            if preset_name != "default":
-                self.preset_delete_button.enable()
-            else:
-                self.preset_delete_button.disable()
-        else:
-            self.preset_delete_button.disable()
-            self.preset_load_button.disable()
-            
-    def get_saved_presets(self) -> list[str]:
-        preset_files = os.listdir(os.path.join(config.CONFIG_PATH, "sampling", "presets"))
-        saved_presets = []
-        for file in preset_files:
-            if os.path.splitext(file)[1] == ".json":
-                saved_presets.append(os.path.splitext(file)[0])
-        saved_presets = sorted(saved_presets)
-        self.logger.debug(f"Found saved presets: {saved_presets}")
-        self.saved_preset_list = saved_presets
-        return saved_presets
-
-    def save_preset(self) -> None:
-        preset_name = self.preset_select.value
-        preset_filename = f"{sanitize_filename(preset_name)}.json"
-        save_preset_path = os.path.join(
-            config.CONFIG_PATH, "sampling", "presets", preset_filename)
-        preset_name = os.path.splitext(os.path.basename(save_preset_path))[0]
-        self.logger.debug(f"Saving preset '{save_preset_path}'")
-
-        save_preset_dict = {"prompt": self.prompt_editor.prompt, "gen_params": self.gen_params}
-        config.save_json(save_preset_dict, save_preset_path)
-        self.logger.info(f"Saved preset {preset_name}: {dict_str(save_preset_dict)}")
-
-        self.preset_select.options = self.get_saved_presets()
-        self.last_loaded_preset = preset_name
-        self.preset_select.value = preset_name
-        self.preset_select._props["label"] = f"Select a Preset - (loaded preset: {self.last_loaded_preset})"
-        self.preset_select.update()
-        self.preset_load_button.disable()
-        self.preset_save_button.disable()
-        if preset_name != "default":
-            self.preset_delete_button.enable()
-    
-    async def reset_preset_loading_state(self) -> None:
-        await asyncio.sleep(0.25)
-        self.loading_preset = False
-
-    def load_preset(self) -> None:
-        preset_name = self.preset_select.value
-        load_preset_path = os.path.join(
-            config.CONFIG_PATH, "sampling", "presets", f"{sanitize_filename(preset_name)}.json")
-
-        loaded_preset_dict = config.load_json(load_preset_path)
-        self.logger.info(f"Loaded preset {preset_name}: {dict_str(loaded_preset_dict)}")
-
-        self.last_loaded_preset = preset_name
-
-        if not self.gen_params_lock_button.is_locked:
-            self.gen_params.update(loaded_preset_dict["gen_params"])
-            self.preset_load_button.disable()
-            self.preset_save_button.disable()
-            self.preset_select._props["label"] = f"Select a Preset - (loaded preset: {self.last_loaded_preset})"
-            self.loading_preset = True
-            asyncio.create_task(self.reset_preset_loading_state())
-        else:
-            # check if loaded_preset_dict matches current gen_params, even if locked
-            if all([self.gen_params[p] == loaded_preset_dict["gen_params"][p] for p in self.gen_params.keys()]) == True:
-                self.preset_load_button.disable()
-                self.preset_save_button.disable()
-                self.preset_select._props["label"] = f"Select a Preset - (loaded preset: {self.last_loaded_preset})"
-                self.loading_preset = True
-                asyncio.create_task(self.reset_preset_loading_state())
-            else:
-                self.preset_select._props["label"] = f"Select a Preset - (loaded preset: {self.last_loaded_preset}*)"
-
-        self.preset_select.update()
-        self.prompt_editor.update_prompt(loaded_preset_dict["prompt"])
-    
-    def delete_preset(self) -> None:
-        preset_name = self.preset_select.value
-        delete_preset_path = os.path.join(
-            config.CONFIG_PATH, "sampling", "presets", f"{sanitize_filename(preset_name)}.json")
-        self.logger.info(f"Deleting preset '{delete_preset_path}'")
-
-        os.remove(delete_preset_path)
-        self.preset_select.options = self.get_saved_presets()
-        self.preset_select.set_value("default")
-        self.preset_load_button.enable()
-        self.preset_save_button.enable()
-        self.preset_delete_button.disable()
+        self.preset_editor.on_preset_modified()
 
     def run(self) -> None:
         on_air_token = os.getenv("ON_AIR_TOKEN", None)
