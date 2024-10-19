@@ -592,9 +592,6 @@ class OutputEditor(ui.column):
                         with ui.button('✕', color="red", on_click=lambda s=output_sample: self.remove_output_sample(s)).classes("w-1"):
                             ui.tooltip("Remove sample from workspace")
 
-                        #ui.label("Rating:") 
-                        #ui.slider(min=0, max=5, step=1, value=0).props("label-always").classes("h-10 top-0")
-
                 output_sample.latents_image_element = ui.interactive_image().classes(
                     "w-full gap-0").style("image-rendering: pixelated; width: 100%; height: auto;").props("fit=scale-down")
                 output_sample.sampling_progress_element = ui.linear_progress(
@@ -602,7 +599,7 @@ class OutputEditor(ui.column):
                 output_sample.spectrogram_image_element = ui.interactive_image(
                     cross="white").classes("w-full gap-0").props(add="fit=fill")
                 
-                output_sample.toggle_show_latents_button.toggle(is_toggled=True)
+                output_sample.toggle_show_latents_button.toggle(is_toggled=False)
                 output_sample.toggle_show_spectrogram_button.toggle(is_toggled=False)
 
                 output_sample.select_range = ui.range(min=0, max=688, step=1, value={"min": 0, "max": 0}).classes("w-full").props("step snap color='orange' label='Inpaint Selection'")

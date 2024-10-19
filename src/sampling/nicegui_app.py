@@ -331,6 +331,10 @@ class NiceGUIApp:
                     latents_image = tensor_to_img(latents, flip_y=True)
                     latents_image = Image.fromarray(latents_image)
                     output_sample.latents_image_element.set_source(latents_image)
+
+                    # only show latents after we have an image, otherwise it messes up positioning
+                    if output_sample.toggle_show_latents_button.is_toggled == False:
+                        output_sample.toggle_show_latents_button.toggle(is_toggled=True)
                 
                 # required to keep the interface responsive
                 await asyncio.sleep(0.1)
