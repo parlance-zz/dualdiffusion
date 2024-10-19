@@ -37,7 +37,7 @@ from nicegui import ui
 from pipelines.dual_diffusion_pipeline import SampleParams, SampleOutput
 from utils.dual_diffusion_utils import (
     sanitize_filename, dict_str, save_safetensors, load_safetensors,
-    save_audio, load_audio, tensor_to_img
+    save_audio, load_audio, tensor_to_img, update_audio_metadata, update_safetensors_metadata
 )
 
 @dataclass
@@ -53,14 +53,87 @@ class OutputSample:
 
     card_element: Optional[ui.card] = None
     name_label_element: Optional[ui.label] = None
+    rating_element: Optional["StarRating"] = None
     sampling_progress_element: Optional[ui.linear_progress] = None
     latents_image_element: Optional[ui.interactive_image] = None
     spectrogram_image_element: Optional[ui.interactive_image] = None
     audio_element: Optional[ui.audio] = None
+    toggle_show_latents_button: Optional["ToggleButton"] = None
+    toggle_show_spectrogram_button: Optional["ToggleButton"] = None
+    toggle_show_params_button: Optional["ToggleButton"] = None
+    toggle_show_debug_button: Optional["ToggleButton"] = None
     use_as_input_button: Optional[ui.button] = None
     select_range: Optional[ui.range] = None
     move_up_button: Optional[ui.button] = None
     move_down_button: Optional[ui.button] = None
+
+class ToggleButton(ui.button):
+
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+
+        self.is_toggled = False
+        self.on_toggle = lambda _: None
+        self.classes("border-none border-double")
+
+        self.on("click", lambda: self.toggle())
+            
+    def toggle(self, is_toggled: Optional[bool] = None) -> bool:
+        if is_toggled is not None:
+            self.is_toggled = is_toggled
+        else:
+            self.is_toggled = not self.is_toggled
+
+        if self.is_toggled == True:
+            self.classes(remove="border-none", add="border-4")
+        else:
+            self.classes(remove="border-4", add="border-none")
+        self.on_toggle(self.is_toggled)
+
+class StarRating(ui.row):
+
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+
+        self.on_rating_change = lambda _: None
+        self.is_disabled = False
+        self.rating = 0
+
+        self.stars: list[ui.icon] = []
+        with self.classes("gap-0"):
+            self.remove_icon = ui.icon("block", color="red").style("cursor: pointer")
+            self.remove_icon.on("click", lambda: self.set_rating(0))
+            for i in range(0, 5):
+                star = ui.icon("star", color="darkgray").style("cursor: pointer")
+                star.on("click", lambda i=i: self.set_rating(i+1))
+                self.stars.append(star)
+    
+    def disable(self) -> None:
+        self.is_disabled = True
+        self.remove_icon.style("cursor: not-allowed")
+        for star in self.stars:
+            star.style("cursor: not-allowed")
+
+    def enable(self) -> None:
+        self.is_disabled = False
+        self.remove_icon.style("cursor: pointer")
+        for star in self.stars:
+            star.style("cursor: pointer")
+
+    def set_rating(self, rating: int) -> None:
+        if self.is_disabled == True:
+            return
+        
+        self.rating = rating
+        for i, star in enumerate(self.stars):
+            if rating == 0:
+                star.style("color: darkgray")
+            elif i <= rating - 1:
+                star.style("color: gold")
+            else:
+                star.style("color: lightgray")  
+
+        self.on_rating_change(rating)
 
 class EditableSelect(ui.select): # unfortunate necessity due to select element behavior
 
@@ -272,7 +345,7 @@ class PresetEditor(ui.card):
             if os.path.splitext(file)[1] == ".json":
                 saved_presets.append(os.path.splitext(file)[0])
         saved_presets = sorted(saved_presets)
-        self.logger.debug(f"Found saved presets: {saved_presets}")
+        self.logger.debug(dict_str({'Found saved presets': saved_presets}))
         self.saved_preset_list = saved_presets
         return saved_presets
 
@@ -358,14 +431,16 @@ class OutputEditor(ui.column):
         self.input_output_sample: OutputSample = None
         self.get_app_config = lambda: None
 
-        with ui.row().classes("w-full h-10 gap-0"): # output samples toolbar
+        with ui.button_group().classes("w-full h-10 gap-0"): # output samples toolbar
             self.clear_output_button = ui.button("Clear Outputs", icon="delete", color="red", on_click=lambda: self.clear_output_samples())
             self.clear_output_button.disable()
             with self.clear_output_button:
                 ui.tooltip("Clear all output samples in workspace")
-            self.load_sample_button = ui.button("Load Sample", icon="upload")
+            self.load_sample_button = ui.button("Upload Sample", icon="upload")
             with self.load_sample_button:
                 ui.tooltip("Upload an existing sample from audio or latents file")
+
+        self.output_samples_column = ui.column().classes("w-full") # output samples container
 
     def update_model_info(self, model_name: str,
                                 model_metadata: dict[str, Any],
@@ -444,7 +519,7 @@ class OutputEditor(ui.column):
             current_index = output_sample.card_element.parent_slot.children.index(output_sample.card_element)
             new_index = min(max(current_index + direction, 0), len(output_sample.card_element.parent_slot.children) - 1)
             if new_index != current_index:
-                output_sample.card_element.move(self, target_index=new_index)
+                output_sample.card_element.move(self.output_samples_column, target_index=new_index)
                 self.output_samples.insert(new_index, self.output_samples.pop(current_index))
                 self.refresh_output_samples()
 
@@ -455,15 +530,54 @@ class OutputEditor(ui.column):
                 self.input_output_sample = output_sample
             self.refresh_output_samples()
 
+        def change_output_rating(output_sample: OutputSample, rating: int) -> None:
+            try: update_audio_metadata(output_sample.audio_path, rating=rating)
+            except Exception as e:
+                self.logger.error(f"Error updating audio metadata in {output_sample.audio_path}: {e}")
+            try: update_safetensors_metadata(output_sample.latents_path, {"rating": str(rating)})
+            except Exception as e:
+                self.logger.error(f"Error updating latents metadata in {output_sample.latents_path}: {e}")
+
+        def on_toggle_show_latents(output_sample: OutputSample, is_toggled: bool) -> None:
+            output_sample.latents_image_element.set_visibility(is_toggled)
+        def on_toggle_show_spectrogram(output_sample: OutputSample, is_toggled: bool) -> None:
+            output_sample.spectrogram_image_element.set_visibility(is_toggled)
+        def on_toggle_show_params(output_sample: OutputSample, is_toggled: bool) -> None:
+            pass
+        def on_toggle_show_debug(output_sample: OutputSample, is_toggled: bool) -> None:
+            pass
+
         with ui.card().classes("w-full") as output_sample.card_element:
             with ui.column().classes("w-full gap-0"):
                 with ui.row().classes("h-10 justify-between gap-0 w-full"):
 
-                    with ui.row(): # output sample name label
+                    with ui.row().classes("items-center"): # output sample name label
                         output_sample.name_label_element = ui.label(output_sample.name).classes("p-2").style(
                             "border: 1px solid grey; border-bottom: none; border-radius: 10px 10px 0 0;")
-                        
+                        with StarRating() as output_sample.rating_element: # and star rating
+                            ui.tooltip("Rate this sample")
+                        output_sample.rating_element.disable()
+                        output_sample.rating_element.classes("p-2").style(
+                            "border: 1px solid grey; border-bottom: none; border-radius: 10px 10px 0 0;")
+                        output_sample.rating_element.on_rating_change = lambda rating: change_output_rating(output_sample, rating)
+
                     with ui.button_group().classes("h-10 gap-0"): # output sample icon toolbar
+                        with ToggleButton(icon="gradient", color="gray").classes("w-1") as output_sample.toggle_show_latents_button:
+                            ui.tooltip("Toggle latents image visibility")
+                        output_sample.toggle_show_latents_button.on_toggle = lambda is_toggled: on_toggle_show_latents(output_sample, is_toggled)
+                        with ToggleButton(icon="equalizer", color="gray").classes("w-1") as output_sample.toggle_show_spectrogram_button:
+                            ui.tooltip("Toggle spectrogram image visibility")
+                        output_sample.toggle_show_spectrogram_button.on_toggle = lambda is_toggled: on_toggle_show_spectrogram(output_sample, is_toggled)
+                        with ToggleButton(icon="display_settings", color="gray").classes("w-1") as output_sample.toggle_show_params_button:
+                            ui.tooltip("Toggle generation parameters visibility")
+                        output_sample.toggle_show_params_button.on_toggle = lambda is_toggled: on_toggle_show_params(output_sample, is_toggled)
+                        with ToggleButton(icon="broken_image", color="gray").classes("w-1") as output_sample.toggle_show_debug_button:
+                            ui.tooltip("Toggle debug plot visibility")
+                        output_sample.toggle_show_debug_button.on_toggle = lambda is_toggled: on_toggle_show_debug(output_sample, is_toggled)
+
+                        output_sample.toggle_show_spectrogram_button.disable()
+                        output_sample.toggle_show_debug_button.disable()
+                        
                         output_sample.use_as_input_button = ui.button(
                             icon="format_color_fill", color="orange", on_click=lambda: use_output_sample_as_input(output_sample)).classes("w-1 border-none border-double")
                         with output_sample.use_as_input_button:
@@ -487,7 +601,9 @@ class OutputEditor(ui.column):
                     value="0%").classes("w-full font-bold gap-0").props("instant-feedback")
                 output_sample.spectrogram_image_element = ui.interactive_image(
                     cross="white").classes("w-full gap-0").props(add="fit=fill")
-                output_sample.spectrogram_image_element.set_visibility(False)
+                
+                output_sample.toggle_show_latents_button.toggle(is_toggled=True)
+                output_sample.toggle_show_spectrogram_button.toggle(is_toggled=False)
 
                 output_sample.select_range = ui.range(min=0, max=688, step=1, value={"min": 0, "max": 0}).classes("w-full").props("step snap color='orange' label='Inpaint Selection'")
                 output_sample.select_range.set_visibility(False)
@@ -496,7 +612,7 @@ class OutputEditor(ui.column):
                 output_sample.audio_element.set_visibility(False)
 
         self.output_samples.insert(0, output_sample)
-        output_sample.card_element.move(self, target_index=0)
+        output_sample.card_element.move(self.output_samples_column, target_index=0)
         self.refresh_output_samples()
 
         return output_sample
@@ -506,9 +622,10 @@ class OutputEditor(ui.column):
         # save output sample audio / latents
         output_sample.audio_path, output_sample.latents_path = self.save_output_sample(output_sample.sample_output)
 
-        # set output sample name label
+        # set output sample name label to match audio filename and enable rating
         output_sample.name = os.path.splitext(os.path.basename(output_sample.audio_path))[0]
         output_sample.name_label_element.set_text(output_sample.name)
+        output_sample.rating_element.enable()
 
         # set spectrogram image
         spectrogram_image = output_sample.sample_output.spectrogram.mean(dim=(0,1))
@@ -518,8 +635,9 @@ class OutputEditor(ui.column):
         spectrogram_image = Image.fromarray(spectrogram_image)
         output_sample.spectrogram_image_element.set_source(spectrogram_image)
         if self.get_app_config().hide_latents_after_generation == True:
-            output_sample.latents_image_element.set_visibility(False)
-        output_sample.spectrogram_image_element.set_visibility(True)
+            output_sample.toggle_show_latents_button.toggle(is_toggled=False)
+
+        output_sample.toggle_show_spectrogram_button.toggle(is_toggled=True)
 
         # set audio element
         output_sample.audio_element.set_source(output_sample.audio_path)
@@ -532,14 +650,17 @@ class OutputEditor(ui.column):
             "min": output_sample.select_range.max//2 - output_sample.select_range.max//4,
             "max": output_sample.select_range.max//2 + output_sample.select_range.max//4}
         output_sample.select_range.update()
+
         output_sample.use_as_input_button.enable()
+        output_sample.toggle_show_spectrogram_button.enable()
+        output_sample.toggle_show_debug_button.enable()
 
         #output_sample.audio_element.on("timeupdate", lambda e: self.logger.debug(e))
         #output_sample.audio_element.seek(10)
         #output_sample.audio_element.play()
 
     def clear_output_samples(self) -> None:
-        self.clear()
+        self.output_samples_column.clear()
         self.output_samples.clear()
         self.clear_output_button.disable()
         self.input_output_sample = None
@@ -547,6 +668,6 @@ class OutputEditor(ui.column):
     def remove_output_sample(self, output_sample: OutputSample) -> None:
         if self.input_output_sample == output_sample:
             self.input_output_sample = None
-        self.remove(output_sample.card_element)
+        self.output_samples_column.remove(output_sample.card_element)
         self.output_samples.remove(output_sample)
         self.refresh_output_samples()
