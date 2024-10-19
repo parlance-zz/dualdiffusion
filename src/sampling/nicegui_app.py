@@ -314,10 +314,12 @@ class NiceGUIApp:
             self.model_server_state["generate_abort"] = False
             await self.model_server_cmd("generate", sample_params=output_sample.sample_params)
             while self.model_server_state.get("cmd", None) is not None:
-
+                
+                # abort in progress if output sample was removed from workspace
                 if output_sample not in self.output_editor.output_samples:
                     self.model_server_state["generate_abort"] = True
-                    return # abort in progress
+                    await self.wait_for_model_server() # we need this otherwise there is a race condition
+                    return
                 
                 # update linear progress
                 step = self.model_server_state.get("generate_step", None)
