@@ -36,7 +36,7 @@ import torch
 
 from pipelines.dual_diffusion_pipeline import DualDiffusionPipeline, SampleParams
 from utils.dual_diffusion_utils import (
-    init_cuda, dict_str, get_available_torch_devices
+    init_cuda, dict_str, get_available_torch_devices, move_tensors_to_cpu
 )
 
 class ModelServer:
@@ -109,7 +109,7 @@ class ModelServer:
 
     async def cmd_generate(self) -> None:
         sample_output = self.pipeline(self.model_server_state["sample_params"], self.model_server_state)
-        self.model_server_state["generate_output"] = sample_output.cpu() if sample_output is not None else None
+        self.model_server_state["generate_output"] = move_tensors_to_cpu(sample_output) if sample_output is not None else None
 
     async def run(self):
         while True:

@@ -22,10 +22,10 @@
 
 from utils import config
 
-import os
 from io import BytesIO
-from typing import Optional, Union
+from typing import Optional, Union, Any
 from json import dumps as json_dumps
+import os
 
 import numpy as np
 import torch
@@ -320,7 +320,19 @@ def update_safetensors_metadata(safetensors_path: str,
     tensors_dict, metadata = load_safetensors_ex(safetensors_path)
     metadata.update(new_metadata)
     ST.save_file(tensors_dict, safetensors_path, metadata=metadata)
+
+# recursively (through dicts and class instances) move all tensors to CPU
+def move_tensors_to_cpu(instance: Union[dict, torch.Tensor, Any]) -> Any:
+    if torch.is_tensor(instance):
+        return instance.cpu()
     
+    instance_dict = getattr(instance, "__dict__", None)
+    if isinstance(instance_dict, dict):
+        for key, value in instance_dict.items():
+            instance_dict[key] = move_tensors_to_cpu(value)
+
+    return instance
+
 def get_expected_max_normal(n: int) -> float:
     return erfinv((n - np.pi/8) / (n - np.pi/4 + 1))
 

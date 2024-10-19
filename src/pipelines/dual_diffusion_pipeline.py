@@ -115,19 +115,6 @@ class SampleOutput:
     debug_info: dict[str, Any]
     latents: Optional[torch.Tensor] = None
 
-    def cpu(self) -> "SampleOutput":
-        if self.latents is not None:
-            self.latents = self.latents.cpu()
-        if self.raw_sample is not None:
-            self.raw_sample = self.raw_sample.cpu()
-        if self.spectrogram is not None:
-            self.spectrogram = self.spectrogram.cpu()
-        if self.params.input_audio is not None:
-            self.params.input_audio = self.params.input_audio.cpu()
-        if self.params.inpainting_mask is not None:
-            self.params.inpainting_mask = self.params.inpainting_mask.cpu()
-        return self
-
 @dataclass
 class ModuleInventory:
     name: str
