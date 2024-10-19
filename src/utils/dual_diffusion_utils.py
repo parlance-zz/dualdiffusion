@@ -306,10 +306,10 @@ def load_safetensors(input_path: str, device: Optional[torch.device] = None) -> 
 
 def load_safetensors_ex(input_path: str, # returns metadata
         device: Optional[torch.device] = None) -> tuple[dict[str, torch.Tensor], dict[str, str]]:  
-    tensors_dict = {}
+    
+    with open(input_path,'rb') as f:
+        tensors_dict = ST.load(f.read())
     with safe_open(input_path, framework="pt", device=device) as f:
-        for k in f.keys():
-            tensors_dict[k] = f.get_tensor(k)
         metadata = dict(f.metadata())
 
     return tensors_dict, metadata
