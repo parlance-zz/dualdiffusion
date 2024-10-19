@@ -220,6 +220,13 @@ class NiceGUIApp:
         self.output_editor = OutputEditor()
         self.output_editor.get_app_config = lambda: self.config
 
+    # wait for model server idle, then send new command and parameters
+    async def model_server_cmd(self, cmd: str, **kwargs) -> None:
+        await self.wait_for_model_server()
+        self.model_server_state.update(kwargs)
+        self.model_server_state["cmd"] = cmd
+
+    # wait for model server idle, returns error from last command if any
     async def wait_for_model_server(self) -> str:
         while self.model_server_state.get("cmd", None) is not None:
             await asyncio.sleep(0.1)
@@ -227,12 +234,6 @@ class NiceGUIApp:
         if error is not None:
             self.logger.error(f"wait_for_model_server error: {error}")
         return error
-    
-    # wait for model server to be idle, then send args and command
-    async def model_server_cmd(self, cmd: str, **kwargs) -> None:
-        await self.wait_for_model_server()
-        self.model_server_state.update(kwargs)
-        self.model_server_state["cmd"] = cmd
 
     # load a new model on the model server and retrieve updated model / dataset metadata
     async def load_model(self, model_name: str, model_load_options: dict) -> None:
@@ -262,7 +263,8 @@ class NiceGUIApp:
                 self.model_server_state["format_config"],
                 self.model_server_state["dataset_game_ids"])
             self.prompt_editor.update_dataset_games_dict(self.model_server_state["dataset_games_dict"])
-            
+    
+    # trigger torch.compile on model server and show progress notifications
     async def compile_model(self, model_name: str) -> None:
         async with self.gpu_lock:
             await self.model_server_cmd("compile_model")
@@ -284,6 +286,7 @@ class NiceGUIApp:
                 await asyncio.sleep(0.5)
                 compiling_notification.dismiss()
     
+    # on startup load configured model, default preset, and trigger compilation if enabled
     async def on_startup_app(self) -> None:
         await self.model_server_cmd("get_available_torch_devices")
         await self.load_model(self.config.model_name, self.config.model_load_options)
@@ -292,6 +295,7 @@ class NiceGUIApp:
         if self.config.model_load_options["compile_options"] is not None:
             await self.compile_model(self.config.model_name)
 
+    # queues a new output sample for generation, then proceeds with generation when ready
     async def on_click_generate_button(self) -> None:
         
         if len(self.prompt_editor.prompt) == 0: # abort if no prompt games selected

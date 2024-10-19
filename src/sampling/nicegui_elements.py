@@ -563,13 +563,13 @@ class OutputEditor(ui.column):
 
                     with ui.button_group().classes("h-10 gap-0"): # output sample icon toolbar
                         with ToggleButton(icon="gradient", color="gray").classes("w-1") as output_sample.toggle_show_latents_button:
-                            ui.tooltip("Toggle latents image visibility")
+                            ui.tooltip("Toggle latents visibility")
                         output_sample.toggle_show_latents_button.on_toggle = lambda is_toggled: on_toggle_show_latents(output_sample, is_toggled)
                         with ToggleButton(icon="queue_music", color="gray").classes("w-1") as output_sample.toggle_show_spectrogram_button:
-                            ui.tooltip("Toggle spectrogram image visibility")
+                            ui.tooltip("Toggle spectrogram visibility")
                         output_sample.toggle_show_spectrogram_button.on_toggle = lambda is_toggled: on_toggle_show_spectrogram(output_sample, is_toggled)
                         with ToggleButton(icon="tune", color="gray").classes("w-1") as output_sample.toggle_show_params_button:
-                            ui.tooltip("Toggle generation parameters visibility")
+                            ui.tooltip("Toggle parameters visibility")
                         output_sample.toggle_show_params_button.on_toggle = lambda is_toggled: on_toggle_show_params(output_sample, is_toggled)
                         with ToggleButton(icon="query_stats", color="gray").classes("w-1") as output_sample.toggle_show_debug_button:
                             ui.tooltip("Toggle debug plot visibility")
