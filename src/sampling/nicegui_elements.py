@@ -104,7 +104,7 @@ class StarRating(ui.row):
             self.remove_icon = ui.icon("block", color="red").style("cursor: pointer")
             self.remove_icon.on("click", lambda: self.set_rating(0))
             for i in range(0, 5):
-                star = ui.icon("star", color="darkgray").style("cursor: pointer")
+                star = ui.icon("star_rate", color="darkgray").style("cursor: pointer")
                 star.on("click", lambda i=i: self.set_rating(i+1))
                 self.stars.append(star)
     
@@ -431,7 +431,7 @@ class OutputEditor(ui.column):
         self.input_output_sample: OutputSample = None
         self.get_app_config = lambda: None
 
-        with ui.button_group().classes("w-full h-10 gap-0"): # output samples toolbar
+        with ui.button_group().classes("h-10 gap-0"): # output samples toolbar
             self.clear_output_button = ui.button("Clear Outputs", icon="delete", color="red", on_click=lambda: self.clear_output_samples())
             self.clear_output_button.disable()
             with self.clear_output_button:
@@ -565,13 +565,13 @@ class OutputEditor(ui.column):
                         with ToggleButton(icon="gradient", color="gray").classes("w-1") as output_sample.toggle_show_latents_button:
                             ui.tooltip("Toggle latents image visibility")
                         output_sample.toggle_show_latents_button.on_toggle = lambda is_toggled: on_toggle_show_latents(output_sample, is_toggled)
-                        with ToggleButton(icon="equalizer", color="gray").classes("w-1") as output_sample.toggle_show_spectrogram_button:
+                        with ToggleButton(icon="queue_music", color="gray").classes("w-1") as output_sample.toggle_show_spectrogram_button:
                             ui.tooltip("Toggle spectrogram image visibility")
                         output_sample.toggle_show_spectrogram_button.on_toggle = lambda is_toggled: on_toggle_show_spectrogram(output_sample, is_toggled)
-                        with ToggleButton(icon="display_settings", color="gray").classes("w-1") as output_sample.toggle_show_params_button:
+                        with ToggleButton(icon="tune", color="gray").classes("w-1") as output_sample.toggle_show_params_button:
                             ui.tooltip("Toggle generation parameters visibility")
                         output_sample.toggle_show_params_button.on_toggle = lambda is_toggled: on_toggle_show_params(output_sample, is_toggled)
-                        with ToggleButton(icon="broken_image", color="gray").classes("w-1") as output_sample.toggle_show_debug_button:
+                        with ToggleButton(icon="query_stats", color="gray").classes("w-1") as output_sample.toggle_show_debug_button:
                             ui.tooltip("Toggle debug plot visibility")
                         output_sample.toggle_show_debug_button.on_toggle = lambda is_toggled: on_toggle_show_debug(output_sample, is_toggled)
 
