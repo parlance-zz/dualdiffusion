@@ -33,17 +33,15 @@ import logging
 import random
 import os
 
-import numpy as np
 from nicegui import ui, app
 
 from utils.dual_diffusion_utils import (
     dict_str, tensor_to_img
 )
 from sampling.model_server import ModelServer
-from sampling.schedule import SamplingSchedule
 from sampling.nicegui_elements import (
-    EditableSelect, LockButton, ScrollableNumber, PromptEditor,
-    PresetEditor, OutputEditor
+    EditableSelect, ScrollableNumber, PromptEditor,
+    PresetEditor, OutputEditor, GenParamsEditor
 )
 
 
@@ -179,41 +177,15 @@ class NiceGUIApp:
                             with self.generate_button:
                                 ui.tooltip("Generate new sample with current settings")
 
-                    with ui.card().classes("flex-grow-[3]"): # gen params
-                        self.gen_param_elements = {}
-                        with ui.grid(columns=2).classes("w-full items-center"):                 
-                            with LockButton() as self.gen_params_lock_button:
-                                ui.tooltip("Lock to freeze parameters when loading presets")
-
-                            self.gen_param_elements["num_steps"] = ScrollableNumber(label="Number of Steps", value=100, min=10, max=1000, precision=0, step=10).classes("w-full")
-                            self.gen_param_elements["cfg_scale"] = ScrollableNumber(label="CFG Scale", value=1.5, min=0, max=10, step=0.1).classes("w-full")
-                            self.gen_param_elements["use_heun"] = ui.checkbox("Use Heun's Method", value=True).classes("w-full")
-                            self.gen_param_elements["num_fgla_iters"] = ScrollableNumber(label="Number of FGLA Iterations", value=250, min=50, max=1000, precision=0, step=50).classes("w-full")
-
-                            self.gen_param_elements["sigma_max"] = ScrollableNumber(label="Sigma Max", value=200, min=10, max=1000, step=10).classes("w-full")
-                            self.gen_param_elements["sigma_min"] = ScrollableNumber(label="Sigma Min", value=0.15, min=0.05, max=2, step=0.05).classes("w-full")
-                            self.gen_param_elements["rho"] = ScrollableNumber(label="Rho", value=7, min=0.5, max=1000, precision=2, step=0.5).classes("w-full")
-                            self.gen_param_elements["input_perturbation"] = ScrollableNumber(label="Input Perturbation", value=1, min=0, max=1, step=0.05).classes("w-full")
-                            
-                            self.gen_param_elements["schedule"] = ui.select(label="Σ Schedule", options=SamplingSchedule.get_schedules_list(), value="edm2").classes("w-full")
-                            self.sigma_schedule_dialog = ui.dialog()
-                            self.show_schedule_button = ui.button("Show σ Schedule", on_click=lambda: self.on_click_show_schedule_button()).classes("w-44 items-center")
-                            with self.show_schedule_button:
-                                ui.tooltip("Show noise schedule with current settings")
-
-                        self.gen_params = {}
-                        for param_name, param_element in self.gen_param_elements.items():
-                            self.gen_params[param_name] = param_element.value
-                            param_element.bind_value(self.gen_params, param_name)
-                            param_element.on_value_change(lambda: self.on_change_gen_param())
+                    self.gen_params_editor = GenParamsEditor()
 
                 self.preset_editor = PresetEditor()
                 self.preset_editor.get_prompt_editor = lambda: self.prompt_editor
-                self.preset_editor.get_gen_params = lambda: self.gen_params
-                self.preset_editor.get_gen_params_locked = lambda: self.gen_params_lock_button.is_locked
+                self.preset_editor.get_gen_params_editor = lambda: self.gen_params_editor
+                self.gen_params_editor.on_change_gen_param = lambda: self.preset_editor.on_preset_modified()
 
             self.prompt_editor = PromptEditor()
-            self.prompt_editor.on_prompt_change = lambda: self.on_change_gen_param()
+            self.prompt_editor.on_change_prompt = lambda: self.preset_editor.on_preset_modified()
 
         ui.separator().classes("bg-primary").style("height: 3px")
 
@@ -305,7 +277,7 @@ class NiceGUIApp:
         
         # queue new output sample and auto-increment seed
         output_sample = self.output_editor.add_output_sample(int(self.generate_length.value),
-            int(self.seed.value), self.prompt_editor.prompt.copy(), self.gen_params.copy())
+            int(self.seed.value), self.prompt_editor.prompt.copy(), self.gen_params_editor.gen_params.copy())
         if self.auto_increment_seed.value == True:
             self.seed.set_value(self.seed.value + 1)
         
@@ -361,33 +333,7 @@ class NiceGUIApp:
 
         # update output sample elements with completed sample output   
         self.output_editor.on_output_sample_generated(output_sample)
-    
-    def on_click_show_schedule_button(self) -> None:
-
-        self.sigma_schedule_dialog.clear()
-        with self.sigma_schedule_dialog, ui.card():
-            ui.label("Sigma Schedule:")
-            sigma_schedule = SamplingSchedule.get_schedule(
-                self.gen_params["schedule"], int(self.gen_params["num_steps"]),
-                sigma_max=self.gen_params["sigma_max"],
-                sigma_min=self.gen_params["sigma_min"],
-                rho=self.gen_params["rho"])
-
-            x = np.arange(int(self.gen_params["num_steps"]) + 1)
-            y = sigma_schedule.log().numpy()
             
-            with ui.matplotlib(figsize=(5, 4)).figure as fig:
-                ax = fig.gca()
-                ax.plot(x, y, "-")
-                ax.set_xlabel("step")
-                ax.set_ylabel("ln(sigma)")
-
-            self.sigma_schedule_dialog.open()
-            ui.button("Close").classes("ml-auto").on_click(lambda: self.sigma_schedule_dialog.close())
-            
-    def on_change_gen_param(self) -> None:
-        self.preset_editor.on_preset_modified()
-
     def run(self) -> None:
         on_air_token = os.getenv("ON_AIR_TOKEN", None)
         ui.run(dark=self.config.enable_dark_mode, title="Dual-Diffusion WebUI", reload=False, show=False,

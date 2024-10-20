@@ -22,7 +22,7 @@
 
 from utils import config
 
-from typing import Optional, Any
+from typing import Optional, Union, Callable, Any
 from dataclasses import dataclass
 from copy import deepcopy
 from PIL import Image
@@ -30,10 +30,12 @@ import os
 import asyncio
 import logging
 
+import numpy as np
 import torch
 import cv2
 from nicegui import ui
 
+from sampling.schedule import SamplingSchedule
 from pipelines.dual_diffusion_pipeline import SampleParams, SampleOutput
 from utils.dual_diffusion_utils import (
     sanitize_filename, dict_str, save_safetensors, load_safetensors,
@@ -66,6 +68,7 @@ class OutputSample:
     select_range: Optional[ui.range] = None
     move_up_button: Optional[ui.button] = None
     move_down_button: Optional[ui.button] = None
+    show_parameters_row_element: Optional[ui.row] = None
 
 class ToggleButton(ui.button):
 
@@ -202,36 +205,106 @@ class ScrollableNumber(ui.number): # same as ui.number but works with mouse whee
         # curiously, this enables values scrolling with the mouse wheel
         self.on("wheel", lambda: None)
 
-class PromptEditor(ui.card):
+class GenParamsEditor(ui.card):
 
-    def __init__(self, *args, **kwargs) -> None:
+    def __init__(self, *args, gen_params: Optional[dict[str, Union[float, int, str]]] = None, read_only: bool = False, **kwargs) -> None:
         super().__init__(*args, **kwargs)
 
-        self.prompt = {}
-        self.dataset_games_dict = {}
-        self.on_prompt_change = lambda: None
+        self.gen_params: dict[str, Union[float, int, str]] = gen_params or {}
+        self.elements: dict[str, ui.element] = {}
+        self.read_only = read_only
+        self.on_change_gen_param = lambda: None
+
+        with self.classes("flex-grow-[3]"):
+            with ui.grid(columns=2).classes("w-full items-center"):
+                if read_only == False:
+                    with LockButton() as self.lock_button:
+                        ui.tooltip("Lock to freeze parameters when loading presets")
+
+                self.elements["num_steps"] = ScrollableNumber(label="Number of Steps", value=100, min=10, max=1000, precision=0, step=10).classes("w-full")
+                self.elements["cfg_scale"] = ScrollableNumber(label="CFG Scale", value=1.5, min=0, max=10, step=0.1).classes("w-full")
+                self.elements["use_heun"] = ui.checkbox("Use Heun's Method", value=True).classes("w-full")
+                self.elements["num_fgla_iters"] = ScrollableNumber(label="Number of FGLA Iterations", value=250, min=50, max=1000, precision=0, step=50).classes("w-full")
+
+                self.elements["sigma_max"] = ScrollableNumber(label="Sigma Max", value=200, min=10, max=1000, step=10).classes("w-full")
+                self.elements["sigma_min"] = ScrollableNumber(label="Sigma Min", value=0.15, min=0.05, max=2, step=0.05).classes("w-full")
+                self.elements["rho"] = ScrollableNumber(label="Rho", value=7, min=0.5, max=1000, precision=2, step=0.5).classes("w-full")
+                self.elements["input_perturbation"] = ScrollableNumber(label="Input Perturbation", value=1, min=0, max=1, step=0.05).classes("w-full")
+                
+                self.elements["schedule"] = ui.select(label="Σ Schedule", options=SamplingSchedule.get_schedules_list(), value="edm2").classes("w-full")
+                self.sigma_schedule_dialog = ui.dialog()
+                self.show_schedule_button = ui.button("Show σ Schedule", on_click=lambda: self.on_click_show_schedule_button()).classes("w-44 items-center")
+                with self.show_schedule_button:
+                    ui.tooltip("Show noise schedule with current settings")
+
+            for param_name, param_element in self.elements.items():
+                if read_only == False:
+                    if param_name not in self.gen_params:
+                        self.gen_params[param_name] = param_element.value
+                    param_element.bind_value(self.gen_params, param_name)
+                    param_element.on_value_change(lambda: self.on_change_gen_param())
+                else:
+                    param_element.value = self.gen_params.get(param_name, param_element.value)
+                    param_element.disable()
+
+    def on_click_show_schedule_button(self) -> None:
+
+        self.sigma_schedule_dialog.clear()
+        with self.sigma_schedule_dialog, ui.card():
+            ui.label("Sigma Schedule:")
+            sigma_schedule = SamplingSchedule.get_schedule(
+                self.gen_params["schedule"], int(self.gen_params["num_steps"]),
+                sigma_max=self.gen_params["sigma_max"],
+                sigma_min=self.gen_params["sigma_min"],
+                rho=self.gen_params["rho"])
+
+            x = np.arange(int(self.gen_params["num_steps"]) + 1)
+            y = sigma_schedule.log().numpy()
+            
+            with ui.matplotlib(figsize=(5, 4)).figure as fig:
+                ax = fig.gca()
+                ax.plot(x, y, "-")
+                ax.set_xlabel("step")
+                ax.set_ylabel("ln(sigma)")
+
+            self.sigma_schedule_dialog.open()
+            ui.button("Close").classes("ml-auto").on_click(lambda: self.sigma_schedule_dialog.close())
+
+class PromptEditor(ui.card):
+
+    def __init__(self, *args, prompt: Optional[dict[str, float]] = None, read_only: bool = False, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+
+        self.prompt: dict[str, float] = prompt or {}
+        self.dataset_games_dict: dict[str, str] = {}
+        self.read_only = read_only
+        self.on_change_prompt = lambda: None
 
         with self.classes("flex-grow-[50]"):
             #with ui.row().classes("w-full h-0 gap-0"):
             #    with LockButton() as self.prompt_lock_button:
             #        ui.tooltip("Lock to freeze prompt when loading presets")
-            with ui.row().classes("w-full h-12 flex items-center"):
+            if read_only == False:
+                with ui.row().classes("w-full h-12 flex items-center"):
+                    self.game_select = ui.select(label="Select a game", with_input=True, options={}).classes("flex-grow-[1000]")
+                    self.game_weight = ScrollableNumber(label="Weight", value=10, min=-100, max=100, step=1).classes("flex-grow-[1]")
+                    self.game_add_button = ui.button(icon="add", color="green", on_click=lambda: self.on_click_game_add_button()).classes("w-1")
+                    with self.game_add_button:
+                        ui.tooltip("Add selected game to prompt")
+                ui.separator().classes("bg-primary").style("height: 3px")
 
-                self.game_select = ui.select(label="Select a game", with_input=True, options={}).classes("flex-grow-[1000]")
-                self.game_weight = ScrollableNumber(label="Weight", value=10, min=-100, max=100, step=1).classes("flex-grow-[1]")
-                self.game_add_button = ui.button(icon="add", color="green", on_click=lambda: self.on_click_game_add_button()).classes("w-1")
-                with self.game_add_button:
-                    ui.tooltip("Add selected game to prompt")
-
-            ui.separator().classes("bg-primary").style("height: 3px")
             with ui.column().classes("w-full") as self.prompt_games_column:
                 pass # added prompt game elements will be created in this container
-    
+        
+        if read_only == True:
+            self.refresh_game_prompt_elements()
+
     def update_dataset_games_dict(self, dataset_games_dict: dict[str, str]) -> None:
         self.dataset_games_dict = dataset_games_dict
-        self.game_select.options = dataset_games_dict
-        self.game_select.value = next(iter(dataset_games_dict))
-        self.game_select.update()
+        if self.read_only == False:
+            self.game_select.options = dataset_games_dict
+            self.game_select.value = next(iter(dataset_games_dict))
+            self.game_select.update()
         self.refresh_game_prompt_elements()
 
     def update_prompt(self, new_prompt: dict[str, float]) -> None:
@@ -241,12 +314,12 @@ class PromptEditor(ui.card):
     def on_click_game_remove_button(self, game_name: str) -> None:
         self.prompt.pop(game_name)
         self.refresh_game_prompt_elements()
-        self.on_prompt_change()
+        self.on_change_prompt()
         
     def on_click_game_add_button(self) -> None:
         self.prompt.update({self.game_select.value: self.game_weight.value})
         self.refresh_game_prompt_elements()
-        self.on_prompt_change()
+        self.on_change_prompt()
         
     def refresh_game_prompt_elements(self) -> None:
 
@@ -257,25 +330,33 @@ class PromptEditor(ui.card):
             prompt_list[index] = (new_game_name, self.prompt[old_game_name])
             self.prompt = dict(prompt_list)
 
-            self.on_prompt_change()
+            self.on_change_prompt()
             self.refresh_game_prompt_elements()
             
         self.prompt_games_column.clear()
         with self.prompt_games_column:
             for game_name, game_weight in self.prompt.items():
-
+                
                 if game_name not in self.dataset_games_dict:
-                    ui.notify(f"Error '{game_name}' not found in dataset_games_dict", type="error", color="red", close_button=True)
-                    continue
-
+                    if self.read_only == False:
+                        ui.notify(f"Error '{game_name}' not found in dataset_games_dict", type="error", color="red", close_button=True)
+                        continue
+                    else:
+                        self.dataset_games_dict[game_name] = game_name
+                    
                 with ui.row().classes("w-full h-10 flex items-center"):
-                    game_select_element = ui.select(value=game_name, with_input=True, options=self.dataset_games_dict).classes("flex-grow-[1000]")
-                    weight_element = ScrollableNumber(label="Weight", value=game_weight, min=-100, max=100, step=1, on_change=self.on_prompt_change).classes("flex-grow-[1]")
+                    game_select_element = ui.select(value=game_name, with_input=True, options=self.dataset_games_dict).classes("flex-grow-[1000]")                    
+                    weight_element = ScrollableNumber(label="Weight", value=game_weight, min=-100, max=100, step=1, on_change=self.on_change_prompt).classes("flex-grow-[1]")
                     weight_element.bind_value(self.prompt, game_name)
-                    game_select_element.on_value_change(
-                        lambda event, game_name=game_name: on_game_select_change(new_game_name=event.value, old_game_name=game_name))
-                    with ui.button(icon="remove", on_click=lambda g=game_name: self.on_click_game_remove_button(g)).classes("w-1 top-0 right-0").props("color='red'"):
-                        ui.tooltip("Remove game from prompt")
+
+                    if self.read_only == False:
+                        game_select_element.on_value_change(
+                            lambda event, game_name=game_name: on_game_select_change(new_game_name=event.value, old_game_name=game_name))
+                        with ui.button(icon="remove", on_click=lambda g=game_name: self.on_click_game_remove_button(g)).classes("w-1 top-0 right-0").props("color='red'"):
+                            ui.tooltip("Remove game from prompt")
+                    else:
+                        game_select_element.disable()
+                        weight_element.disable()
 
             ui.separator().classes("bg-transparent")
 
@@ -290,9 +371,8 @@ class PresetEditor(ui.card):
         self.loading_preset = False
         self.saved_preset_list = self.get_saved_presets()
 
-        self.get_prompt_editor = lambda: None
-        self.get_gen_params = lambda: None
-        self.get_gen_params_locked = lambda: None
+        self.get_prompt_editor: Callable[[], PromptEditor] = lambda: None
+        self.get_gen_params_editor: Callable[[], GenParamsEditor] = lambda: None
 
         with self.classes("w-full"):
             with ui.row().classes("w-full"):
@@ -357,7 +437,10 @@ class PresetEditor(ui.card):
         preset_name = os.path.splitext(os.path.basename(save_preset_path))[0]
         self.logger.debug(f"Saving preset '{save_preset_path}'")
 
-        save_preset_dict = {"prompt": self.get_prompt_editor().prompt, "gen_params": self.get_gen_params()}
+        save_preset_dict = {
+            "prompt": self.get_prompt_editor().prompt,
+            "gen_params": self.get_gen_params_editor().gen_params
+        }
         config.save_json(save_preset_dict, save_preset_path)
         self.logger.info(f"Saved preset {preset_name}: {dict_str(save_preset_dict)}")
 
@@ -385,8 +468,8 @@ class PresetEditor(ui.card):
 
         self.last_loaded_preset = preset_name
 
-        if not self.get_gen_params_locked():
-            self.get_gen_params().update(loaded_preset_dict["gen_params"])
+        if self.get_gen_params_editor().lock_button.is_locked == False:
+            self.get_gen_params_editor().gen_params.update(loaded_preset_dict["gen_params"])
             self.preset_load_button.disable()
             self.preset_save_button.disable()
             self.preset_select._props["label"] = f"Select a Preset - (loaded preset: {self.last_loaded_preset})"
@@ -394,7 +477,7 @@ class PresetEditor(ui.card):
             asyncio.create_task(self.reset_preset_loading_state())
         else:
             # check if loaded_preset_dict matches current gen_params, even if locked
-            gen_params = self.get_gen_params()
+            gen_params = self.get_gen_params_editor().gen_params
             if all([gen_params[p] == loaded_preset_dict["gen_params"][p] for p in gen_params]) == True:
                 self.preset_load_button.disable()
                 self.preset_save_button.disable()
@@ -543,7 +626,7 @@ class OutputEditor(ui.column):
         def on_toggle_show_spectrogram(output_sample: OutputSample, is_toggled: bool) -> None:
             output_sample.spectrogram_image_element.set_visibility(is_toggled)
         def on_toggle_show_params(output_sample: OutputSample, is_toggled: bool) -> None:
-            pass
+            output_sample.show_parameters_row_element.set_visibility(is_toggled)
         def on_toggle_show_debug(output_sample: OutputSample, is_toggled: bool) -> None:
             pass
 
@@ -568,6 +651,7 @@ class OutputEditor(ui.column):
                         with ToggleButton(icon="queue_music", color="gray").classes("w-1") as output_sample.toggle_show_spectrogram_button:
                             ui.tooltip("Toggle spectrogram visibility")
                         output_sample.toggle_show_spectrogram_button.on_toggle = lambda is_toggled: on_toggle_show_spectrogram(output_sample, is_toggled)
+                        #output_sample.toggle_show_spectrogram_button.style("background: linear-gradient(45deg, #FF6B6B, #FFD93D);")
                         with ToggleButton(icon="tune", color="gray").classes("w-1") as output_sample.toggle_show_params_button:
                             ui.tooltip("Toggle parameters visibility")
                         output_sample.toggle_show_params_button.on_toggle = lambda is_toggled: on_toggle_show_params(output_sample, is_toggled)
@@ -607,6 +691,12 @@ class OutputEditor(ui.column):
 
                 output_sample.audio_element = ui.audio("").classes("w-full").props("preload='auto'").style("filter: invert(1) hue-rotate(180deg);")
                 output_sample.audio_element.set_visibility(False)
+
+                with ui.row().classes("w-full") as output_sample.show_parameters_row_element:
+                    ui.separator().classes("bg-transparent")
+                    GenParamsEditor(gen_params=gen_params, read_only=True)
+                    PromptEditor(prompt=prompt, read_only=True)
+                output_sample.toggle_show_params_button.toggle(is_toggled=False)
 
         self.output_samples.insert(0, output_sample)
         output_sample.card_element.move(self.output_samples_column, target_index=0)
