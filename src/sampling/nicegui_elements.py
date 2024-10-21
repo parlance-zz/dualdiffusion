@@ -183,7 +183,7 @@ class LockButton(ui.button):
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(icon="lock_open", *args, **kwargs)     
         self.style("position: absolute; top: 5px; right: 5px; z-index: 2; background-color: transparent;"
-                   "border: none; width: 20px; height: 20px; padding: 0;").classes("bg-transparent")
+                   "border: none; width: 20px; height: 20px; padding: 0;").classes("bg-transparent z-10")
         self.on_click(lambda: self.toggle_lock())
 
     def toggle_lock(self) -> bool:
@@ -197,6 +197,15 @@ class LockButton(ui.button):
     @is_locked.setter
     def is_locked(self, locked: bool) -> None:
         self.icon = "lock" if locked == True else "lock_open"
+
+class CopyButton(ui.button):
+
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(icon="content_copy", *args, **kwargs)     
+
+        self.icon="content_copy"
+        self.style("position: absolute; top: 5px; right: 5px; z-index: 2; background-color: transparent;"
+            "border: none; width: 20px; height: 20px; padding: 0;").classes("bg-transparent z-10")
 
 class ScrollableNumber(ui.number): # same as ui.number but works with mouse wheel
 
@@ -512,7 +521,10 @@ class OutputEditor(ui.column):
         self.logger = logging.getLogger(name="nicegui_app")
         self.output_samples: list[OutputSample] = []
         self.input_output_sample: OutputSample = None
+
         self.get_app_config = lambda: None
+        self.get_prompt_editor: Callable[[], PromptEditor] = lambda: None
+        self.get_gen_params_editor: Callable[[], GenParamsEditor] = lambda: None
 
         with ui.button_group().classes("h-10 gap-0"): # output samples toolbar
             self.clear_output_button = ui.button("Clear Outputs", icon="delete", color="red", on_click=lambda: self.clear_output_samples())
@@ -630,6 +642,13 @@ class OutputEditor(ui.column):
         def on_toggle_show_debug(output_sample: OutputSample, is_toggled: bool) -> None:
             pass
 
+        def on_click_copy_gen_params_button(output_sample: OutputSample) -> None:
+            self.get_gen_params_editor().gen_params.update(output_sample.gen_params)
+            ui.notification("Copied parameters!", timeout=1, icon="content_copy")
+        def on_click_copy_prompt_button(output_sample: OutputSample) -> None:
+            self.get_prompt_editor().update_prompt(output_sample.prompt)
+            ui.notification("Copied prompt!", timeout=1, icon="content_copy")
+            
         with ui.card().classes("w-full") as output_sample.card_element:
             with ui.column().classes("w-full gap-0"):
                 with ui.row().classes("h-10 justify-between gap-0 w-full"):
@@ -648,10 +667,11 @@ class OutputEditor(ui.column):
                         with ToggleButton(icon="gradient", color="gray").classes("w-1") as output_sample.toggle_show_latents_button:
                             ui.tooltip("Toggle latents visibility")
                         output_sample.toggle_show_latents_button.on_toggle = lambda is_toggled: on_toggle_show_latents(output_sample, is_toggled)
+                        output_sample.toggle_show_latents_button.style("background: linear-gradient(45deg, #593782, #588143);")
                         with ToggleButton(icon="queue_music", color="gray").classes("w-1") as output_sample.toggle_show_spectrogram_button:
                             ui.tooltip("Toggle spectrogram visibility")
                         output_sample.toggle_show_spectrogram_button.on_toggle = lambda is_toggled: on_toggle_show_spectrogram(output_sample, is_toggled)
-                        #output_sample.toggle_show_spectrogram_button.style("background: linear-gradient(45deg, #FF6B6B, #FFD93D);")
+                        output_sample.toggle_show_spectrogram_button.style("background: linear-gradient(45deg, #bf2a81, #322481);")
                         with ToggleButton(icon="tune", color="gray").classes("w-1") as output_sample.toggle_show_params_button:
                             ui.tooltip("Toggle parameters visibility")
                         output_sample.toggle_show_params_button.on_toggle = lambda is_toggled: on_toggle_show_params(output_sample, is_toggled)
@@ -682,7 +702,6 @@ class OutputEditor(ui.column):
                     value="0%").classes("w-full font-bold gap-0").props("instant-feedback")
                 output_sample.spectrogram_image_element = ui.interactive_image(
                     cross="white").classes("w-full gap-0").props(add="fit=fill")
-                
                 output_sample.toggle_show_latents_button.toggle(is_toggled=False)
                 output_sample.toggle_show_spectrogram_button.toggle(is_toggled=False)
 
@@ -694,8 +713,12 @@ class OutputEditor(ui.column):
 
                 with ui.row().classes("w-full") as output_sample.show_parameters_row_element:
                     ui.separator().classes("bg-transparent")
-                    GenParamsEditor(gen_params=gen_params, read_only=True)
-                    PromptEditor(prompt=prompt, read_only=True)
+                    with GenParamsEditor(gen_params=gen_params, read_only=True):
+                        with CopyButton().on_click(lambda: on_click_copy_gen_params_button(output_sample)):
+                            ui.tooltip("Copy to current parameters")
+                    with PromptEditor(prompt=prompt, read_only=True):
+                        with CopyButton().on_click(lambda: on_click_copy_prompt_button(output_sample)):
+                            ui.tooltip("Copy to current prompt")
                 output_sample.toggle_show_params_button.toggle(is_toggled=False)
 
         self.output_samples.insert(0, output_sample)

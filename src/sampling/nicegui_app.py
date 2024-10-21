@@ -191,6 +191,8 @@ class NiceGUIApp:
 
         self.output_editor = OutputEditor()
         self.output_editor.get_app_config = lambda: self.config
+        self.output_editor.get_prompt_editor = lambda: self.prompt_editor
+        self.output_editor.get_gen_params_editor = lambda: self.gen_params_editor
 
     # wait for model server idle, then send new command and parameters
     async def model_server_cmd(self, cmd: str, **kwargs) -> None:
@@ -288,6 +290,7 @@ class NiceGUIApp:
             
             # reset abort state and send generate command to model server
             self.model_server_state["generate_abort"] = False
+            toggled_show_latents = False
             await self.model_server_cmd("generate", sample_params=output_sample.sample_params)
             while self.model_server_state.get("cmd", None) is not None:
                 
@@ -311,8 +314,9 @@ class NiceGUIApp:
                     output_sample.latents_image_element.set_source(latents_image)
 
                     # only show latents after we have an image, otherwise it messes up positioning
-                    if output_sample.toggle_show_latents_button.is_toggled == False:
+                    if output_sample.toggle_show_latents_button.is_toggled == False and toggled_show_latents == False:
                         output_sample.toggle_show_latents_button.toggle(is_toggled=True)
+                        toggled_show_latents = True # only force show latents when starting generation, they can be hidden again by user
                 
                 # required to keep the interface responsive
                 await asyncio.sleep(0.1)
