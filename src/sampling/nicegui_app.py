@@ -30,7 +30,6 @@ from PIL import Image
 import asyncio
 import multiprocessing
 import logging
-import random
 import os
 
 from nicegui import ui, app
@@ -51,6 +50,7 @@ class NiceGUIAppConfig:
     model_load_options: dict
     save_output_latents: bool = True
     hide_latents_after_generation: bool = True
+    use_verbose_labels: bool = False
 
     web_server_host: Optional[str] = None
     web_server_port: int = 3001
@@ -155,30 +155,15 @@ class NiceGUIApp:
     def init_debug_logs_layout(self) -> None:
         ui.label("Debug Log:")
         debug_log_element = ui.log(max_lines=self.config.max_debug_log_length).style("height: calc(100vh - 200px)")
-        self.interface_tabs.on_value_change(
-            lambda e: ui.run_javascript(
-                f'getElement({debug_log_element.id}).lastChild.scrollIntoView()') if e.value == "Debug Logs" else None)
+        self.interface_tabs.on_value_change(lambda e: ui.run_javascript( # fix to scroll to bottom when viewing log
+            f'getElement({debug_log_element.id}).lastChild.scrollIntoView()') if e.value == "Debug Logs" else None)
         self.log_handler.set_log_element(debug_log_element)
 
     def init_generation_layout(self) -> None:
                 
         with ui.row().classes("w-full"): # gen params, preset, and prompt editor
-            with ui.card().classes("flex-grow-[1]"):
-                with ui.row().classes("w-full"): # gen params and seed
-                    with ui.card().classes("flex-grow-[1] items-center"): # general (non-saved) params
-                        self.generate_length = ScrollableNumber(label="Length (seconds)", value=0, min=0, max=300, precision=0, step=5).classes("w-full")
-                        self.seed = ScrollableNumber(label="Seed", value=10042, min=10000, max=99999, precision=0, step=1).classes("w-full")
-                        self.auto_increment_seed = ui.checkbox("Auto Increment Seed", value=True).classes("w-full")
-
-                        with ui.column().classes("w-full gap-0 items-center"):
-                            with ui.button("Randomize Seed", icon="casino", on_click=lambda: self.seed.set_value(random.randint(10000, 99999))).classes("w-52 rounded-b-none"):
-                                ui.tooltip("Choose new seed at random")
-                            self.generate_button = ui.button("Generate", icon="audiotrack", color="green", on_click=partial(self.on_click_generate_button)).classes("w-52 rounded-none")
-                            with self.generate_button:
-                                ui.tooltip("Generate new sample with current settings")
-
-                    self.gen_params_editor = GenParamsEditor()
-
+            with ui.card():
+                self.gen_params_editor = GenParamsEditor()
                 self.preset_editor = PresetEditor()
                 self.preset_editor.get_prompt_editor = lambda: self.prompt_editor
                 self.preset_editor.get_gen_params_editor = lambda: self.gen_params_editor
@@ -193,6 +178,7 @@ class NiceGUIApp:
         self.output_editor.get_app_config = lambda: self.config
         self.output_editor.get_prompt_editor = lambda: self.prompt_editor
         self.output_editor.get_gen_params_editor = lambda: self.gen_params_editor
+        self.output_editor.generate_button.on_click(partial(self.on_click_generate_button))
 
     # wait for model server idle, then send new command and parameters
     async def model_server_cmd(self, cmd: str, **kwargs) -> None:
@@ -278,10 +264,10 @@ class NiceGUIApp:
             return
         
         # queue new output sample and auto-increment seed
-        output_sample = self.output_editor.add_output_sample(int(self.generate_length.value),
-            int(self.seed.value), self.prompt_editor.prompt.copy(), self.gen_params_editor.gen_params.copy())
-        if self.auto_increment_seed.value == True:
-            self.seed.set_value(self.seed.value + 1)
+        output_sample = self.output_editor.add_output_sample(int(self.gen_params_editor.generate_length.value),
+            int(self.gen_params_editor.seed.value), self.prompt_editor.prompt.copy(), self.gen_params_editor.gen_params.copy())
+        if self.gen_params_editor.auto_increment_seed.value == True:
+            self.gen_params_editor.seed.set_value(self.gen_params_editor.seed.value + 1)
         
         # this lock holds output samples in queue while generation is in progress
         async with self.gpu_lock:

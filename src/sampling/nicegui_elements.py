@@ -26,9 +26,11 @@ from typing import Optional, Union, Callable, Any
 from dataclasses import dataclass
 from copy import deepcopy
 from PIL import Image
+from functools import partial
 import os
 import asyncio
 import logging
+import random
 
 import numpy as np
 import torch
@@ -65,6 +67,7 @@ class OutputSample:
     toggle_show_params_button: Optional["ToggleButton"] = None
     toggle_show_debug_button: Optional["ToggleButton"] = None
     use_as_input_button: Optional[ui.button] = None
+    extend_button: Optional[ui.button] = None
     select_range: Optional[ui.range] = None
     move_up_button: Optional[ui.button] = None
     move_down_button: Optional[ui.button] = None
@@ -171,12 +174,16 @@ class EditableSelect(ui.select): # unfortunate necessity due to select element b
         if self.new_value in self.original_options:
             self.set_options(options=self.original_options, value=self.new_value)
 
+    def set_value(self, value: str) -> None:
+        self.new_value = value
+        super().set_value(value)
+
     def on_blur_self(self) -> None:
         if self.new_value != "":
             if self.new_value not in self.original_options:
                 self.set_options(options=self.original_options + [self.new_value], value=self.new_value)
             else:
-                self.set_value(self.new_value)
+                super().set_value(self.new_value)
 
 class LockButton(ui.button):
 
@@ -214,47 +221,70 @@ class ScrollableNumber(ui.number): # same as ui.number but works with mouse whee
         # curiously, this enables values scrolling with the mouse wheel
         self.on("wheel", lambda: None)
 
-class GenParamsEditor(ui.card):
+class GenParamsEditor(ui.row):
 
-    def __init__(self, *args, gen_params: Optional[dict[str, Union[float, int, str]]] = None, read_only: bool = False, **kwargs) -> None:
+    def __init__(self, *args, gen_params: Optional[dict[str, Union[float, int, str]]] = None, seed: Optional[int] = None, 
+                 length: Optional[int] = None, read_only: bool = False, **kwargs) -> None:
         super().__init__(*args, **kwargs)
 
+        seed = seed or 10042
+        length = length or 0
         self.gen_params: dict[str, Union[float, int, str]] = gen_params or {}
-        self.elements: dict[str, ui.element] = {}
+        self.param_elements: dict[str, ui.element] = {}
         self.read_only = read_only
         self.on_change_gen_param = lambda: None
 
-        with self.classes("flex-grow-[3]"):
-            with ui.grid(columns=2).classes("w-full items-center"):
-                if read_only == False:
-                    with LockButton() as self.lock_button:
-                        ui.tooltip("Lock to freeze parameters when loading presets")
+        with self.classes("w-full"):
+            with ui.card().classes("w-48"):
 
-                self.elements["num_steps"] = ScrollableNumber(label="Number of Steps", value=100, min=10, max=1000, precision=0, step=10).classes("w-full")
-                self.elements["cfg_scale"] = ScrollableNumber(label="CFG Scale", value=1.5, min=0, max=10, step=0.1).classes("w-full")
-                self.elements["use_heun"] = ui.checkbox("Use Heun's Method", value=True).classes("w-full")
-                self.elements["num_fgla_iters"] = ScrollableNumber(label="Number of FGLA Iterations", value=250, min=50, max=1000, precision=0, step=50).classes("w-full")
-
-                self.elements["sigma_max"] = ScrollableNumber(label="Sigma Max", value=200, min=10, max=1000, step=10).classes("w-full")
-                self.elements["sigma_min"] = ScrollableNumber(label="Sigma Min", value=0.15, min=0.05, max=2, step=0.05).classes("w-full")
-                self.elements["rho"] = ScrollableNumber(label="Rho", value=7, min=0.5, max=1000, precision=2, step=0.5).classes("w-full")
-                self.elements["input_perturbation"] = ScrollableNumber(label="Input Perturbation", value=1, min=0, max=1, step=0.05).classes("w-full")
+                self.generate_length = ScrollableNumber(label="Length (seconds)", value=length, min=0, max=300, precision=0, step=5).classes("w-full")
+                with ui.row().classes("w-full items-center"):
+                    self.seed = ScrollableNumber(label="Seed", value=seed, min=10000, max=99999, precision=0, step=1)
+                    if read_only == False:
+                        self.seed.classes("w-32")
+                        with ui.button(icon="casino", on_click=lambda: self.seed.set_value(random.randint(10000, 99999))).classes("right-0 w-8").style("position: absolute; right: 5px;"
+                            "border: none; width: 40px; height: 40px; padding: 0; font-size: 20px").classes("bg-transparent z-10"):
+                            ui.tooltip("Choose new seed at random")
+                    else:
+                        self.seed.classes("w-full")
                 
-                self.elements["schedule"] = ui.select(label="Σ Schedule", options=SamplingSchedule.get_schedules_list(), value="edm2").classes("w-full")
-                self.sigma_schedule_dialog = ui.dialog()
-                self.show_schedule_button = ui.button("Show σ Schedule", on_click=lambda: self.on_click_show_schedule_button()).classes("w-44 items-center")
-                with self.show_schedule_button:
-                    ui.tooltip("Show noise schedule with current settings")
-
-            for param_name, param_element in self.elements.items():
-                if read_only == False:
-                    if param_name not in self.gen_params:
-                        self.gen_params[param_name] = param_element.value
-                    param_element.bind_value(self.gen_params, param_name)
-                    param_element.on_value_change(lambda: self.on_change_gen_param())
+                if read_only == True:
+                    self.generate_length.disable()
+                    self.seed.disable()
                 else:
-                    param_element.value = self.gen_params.get(param_name, param_element.value)
-                    param_element.disable()
+                    self.auto_increment_seed = ui.checkbox("Auto Increment Seed", value=True).classes("w-full")
+
+            with ui.card().classes("w-[88]"):
+                with ui.grid(columns=2).classes("w-full items-center"):
+                    if read_only == False:
+                        with LockButton() as self.lock_button:
+                            ui.tooltip("Lock to freeze parameters when loading presets")
+
+                    self.param_elements["num_steps"] = ScrollableNumber(label="Number of Steps", value=100, min=10, max=1000, precision=0, step=10).classes("w-full")
+                    self.param_elements["cfg_scale"] = ScrollableNumber(label="CFG Scale", value=1.5, min=0, max=10, step=0.1).classes("w-full")
+                    self.param_elements["use_heun"] = ui.checkbox("Use Heun's Method", value=True).classes("w-full")
+                    self.param_elements["num_fgla_iters"] = ScrollableNumber(label="Number of FGLA Iterations", value=250, min=50, max=1000, precision=0, step=50).classes("w-full")
+
+                    self.param_elements["sigma_max"] = ScrollableNumber(label="Sigma Max", value=200, min=10, max=1000, step=10).classes("w-full")
+                    self.param_elements["sigma_min"] = ScrollableNumber(label="Sigma Min", value=0.15, min=0.05, max=2, step=0.05).classes("w-full")
+                    self.param_elements["rho"] = ScrollableNumber(label="Rho", value=7, min=0.5, max=1000, precision=2, step=0.5).classes("w-full")
+                    self.param_elements["input_perturbation"] = ScrollableNumber(label="Input Perturbation", value=1, min=0, max=1, step=0.05).classes("w-full")
+                    
+                    self.param_elements["schedule"] = ui.select(label="Σ Schedule", options=SamplingSchedule.get_schedules_list(), value="edm2").classes("w-full")
+                    self.sigma_schedule_dialog = ui.dialog()
+                    self.show_schedule_button = ui.button("Show σ Schedule", on_click=lambda: self.on_click_show_schedule_button()).classes("w-full items-center")
+                    with self.show_schedule_button:
+                        ui.tooltip("Show noise schedule with current settings")
+
+        for param_name, param_element in self.param_elements.items():
+            if read_only == False:
+                if param_name not in self.gen_params:
+                    self.gen_params[param_name] = param_element.value
+                param_element.bind_value(self.gen_params, param_name)
+                param_element.on_value_change(lambda: self.on_change_gen_param())
+            else:
+                param_element.value = self.gen_params.get(param_name, param_element.value)
+                param_element.disable()
 
     def on_click_show_schedule_button(self) -> None:
 
@@ -482,6 +512,7 @@ class PresetEditor(ui.card):
             self.preset_load_button.disable()
             self.preset_save_button.disable()
             self.preset_select._props["label"] = f"Select a Preset - (loaded preset: {self.last_loaded_preset})"
+            self.preset_select.set_value(self.last_loaded_preset)
             self.loading_preset = True
             asyncio.create_task(self.reset_preset_loading_state())
         else:
@@ -491,6 +522,7 @@ class PresetEditor(ui.card):
                 self.preset_load_button.disable()
                 self.preset_save_button.disable()
                 self.preset_select._props["label"] = f"Select a Preset - (loaded preset: {self.last_loaded_preset})"
+                self.preset_select.set_value(self.last_loaded_preset)
                 self.loading_preset = True
                 asyncio.create_task(self.reset_preset_loading_state())
             else:
@@ -527,6 +559,9 @@ class OutputEditor(ui.column):
         self.get_gen_params_editor: Callable[[], GenParamsEditor] = lambda: None
 
         with ui.button_group().classes("h-10 gap-0"): # output samples toolbar
+            self.generate_button = ui.button("Generate", icon="audiotrack", color="green")
+            with self.generate_button:
+                ui.tooltip("Generate new sample with current settings")
             self.clear_output_button = ui.button("Clear Outputs", icon="delete", color="red", on_click=lambda: self.clear_output_samples())
             self.clear_output_button.disable()
             with self.clear_output_button:
@@ -554,7 +589,7 @@ class OutputEditor(ui.column):
         }
 
         last_global_step = self.model_metadata["last_global_step"]["unet"]
-        audio_output_filename = f"{sample_output.params.get_label(self.model_metadata, self.dataset_game_ids)}.flac"
+        audio_output_filename = f"{sample_output.params.get_label(self.model_metadata, self.dataset_game_ids, verbose=self.get_app_config().use_verbose_labels)}.flac"
         audio_output_path = os.path.join(
             config.MODELS_PATH, self.model_name, "output", f"step_{last_global_step}", audio_output_filename)
         
@@ -595,7 +630,7 @@ class OutputEditor(ui.column):
     def add_output_sample(self, length: int, seed: int,
             prompt: dict[str, float], gen_params: dict[str, Any]) -> OutputSample:
         
-        # setup sample input params
+        # setup sample input param
         sample_params = SampleParams(seed=seed, length=length * self.format_config["sample_rate"],
             prompt=prompt.copy(), **gen_params)
         self.logger.info(f"OutputEditor.add_output_sample - params:{dict_str(sample_params.__dict__)}")
@@ -604,10 +639,11 @@ class OutputEditor(ui.column):
             sample_params.input_audio = self.input_output_sample.sample_output.latents
             sample_params.input_audio_pre_encoded = True
             sample_params.inpainting_mask = torch.zeros_like(sample_params.input_audio[:, 0:1])
-            sample_params.inpainting_mask[..., self.input_output_sample.select_range.value["min"]:self.input_output_sample.select_range.value["max"]] = 1.
+            sample_params.inpainting_mask[...,
+                self.input_output_sample.select_range.value["min"]:self.input_output_sample.select_range.value["max"]] = 1.
         
         # get name / label and add output sample to workspace
-        output_sample = OutputSample(name=f"{sample_params.get_label(self.model_metadata, self.dataset_game_ids)}",
+        output_sample = OutputSample(name=f"{sample_params.get_label(self.model_metadata, self.dataset_game_ids, verbose=self.get_app_config().use_verbose_labels)}",
             seed=sample_params.seed, prompt=sample_params.prompt, gen_params=gen_params, sample_params=sample_params)
 
         def move_output_sample(output_sample: OutputSample, direction: int) -> None:
@@ -624,6 +660,9 @@ class OutputEditor(ui.column):
             else:
                 self.input_output_sample = output_sample
             self.refresh_output_samples()
+
+        def on_click_extend_button(output_sample: OutputSample) -> None:
+            pass
 
         def change_output_rating(output_sample: OutputSample, rating: int) -> None:
             try: update_audio_metadata(output_sample.audio_path, rating=rating)
@@ -644,16 +683,24 @@ class OutputEditor(ui.column):
 
         def on_click_copy_gen_params_button(output_sample: OutputSample) -> None:
             self.get_gen_params_editor().gen_params.update(output_sample.gen_params)
-            ui.notification("Copied parameters!", timeout=1, icon="content_copy")
+            self.get_gen_params_editor().seed.set_value(output_sample.seed)
+            self.get_gen_params_editor().generate_length.set_value(output_sample.sample_params.length)
+            ui.notification("Copied all parameters!", timeout=1, icon="content_copy")
         def on_click_copy_prompt_button(output_sample: OutputSample) -> None:
             self.get_prompt_editor().update_prompt(output_sample.prompt)
             ui.notification("Copied prompt!", timeout=1, icon="content_copy")
+        def on_click_copy_all_button(output_sample: OutputSample) -> None:
+            self.get_gen_params_editor().gen_params.update(output_sample.gen_params)
+            self.get_gen_params_editor().seed.set_value(output_sample.seed)
+            self.get_gen_params_editor().generate_length.set_value(output_sample.sample_params.length)
+            self.get_prompt_editor().update_prompt(output_sample.prompt)
+            ui.notification("Copied all parameters and prompt!", timeout=1, icon="content_copy")
             
         with ui.card().classes("w-full") as output_sample.card_element:
             with ui.column().classes("w-full gap-0"):
-                with ui.row().classes("h-10 justify-between gap-0 w-full"):
+                with ui.row().classes("h-10 justify-between gap-0 w-full no-wrap"):
 
-                    with ui.row().classes("items-center"): # output sample name label
+                    with ui.row().classes("items-center no-wrap gap-0"): # output sample name label
                         output_sample.name_label_element = ui.label(output_sample.name).classes("p-2").style(
                             "border: 1px solid grey; border-bottom: none; border-radius: 10px 10px 0 0;")
                         with StarRating() as output_sample.rating_element: # and star rating
@@ -663,7 +710,7 @@ class OutputEditor(ui.column):
                             "border: 1px solid grey; border-bottom: none; border-radius: 10px 10px 0 0;")
                         output_sample.rating_element.on_rating_change = lambda rating: change_output_rating(output_sample, rating)
 
-                    with ui.button_group().classes("h-10 gap-0"): # output sample icon toolbar
+                    with ui.button_group().classes("h-10 gap-0 z-10"): # output sample icon toolbar
                         with ToggleButton(icon="gradient", color="gray").classes("w-1") as output_sample.toggle_show_latents_button:
                             ui.tooltip("Toggle latents visibility")
                         output_sample.toggle_show_latents_button.on_toggle = lambda is_toggled: on_toggle_show_latents(output_sample, is_toggled)
@@ -672,25 +719,35 @@ class OutputEditor(ui.column):
                             ui.tooltip("Toggle spectrogram visibility")
                         output_sample.toggle_show_spectrogram_button.on_toggle = lambda is_toggled: on_toggle_show_spectrogram(output_sample, is_toggled)
                         output_sample.toggle_show_spectrogram_button.style("background: linear-gradient(45deg, #bf2a81, #322481);")
-                        with ToggleButton(icon="tune", color="gray").classes("w-1") as output_sample.toggle_show_params_button:
+                        output_sample.toggle_show_spectrogram_button.disable()
+                        with ToggleButton(icon="tune").classes("w-1") as output_sample.toggle_show_params_button:
                             ui.tooltip("Toggle parameters visibility")
                         output_sample.toggle_show_params_button.on_toggle = lambda is_toggled: on_toggle_show_params(output_sample, is_toggled)
-                        with ToggleButton(icon="query_stats", color="gray").classes("w-1") as output_sample.toggle_show_debug_button:
+                        with ToggleButton(icon="query_stats").classes("w-1") as output_sample.toggle_show_debug_button:
                             ui.tooltip("Toggle debug plot visibility")
                         output_sample.toggle_show_debug_button.on_toggle = lambda is_toggled: on_toggle_show_debug(output_sample, is_toggled)
-
-                        output_sample.toggle_show_spectrogram_button.disable()
                         output_sample.toggle_show_debug_button.disable()
                         
-                        output_sample.use_as_input_button = ui.button(
-                            icon="format_color_fill", color="orange", on_click=lambda: use_output_sample_as_input(output_sample)).classes("w-1 border-none border-double")
+                        output_sample.use_as_input_button = ui.button(icon="format_color_fill", color="orange",
+                            on_click=lambda: use_output_sample_as_input(output_sample)).classes("w-1 border-none border-double")
                         with output_sample.use_as_input_button:
                             ui.tooltip("Use this sample as inpainting input")
+                        output_sample.extend_button = ToggleButton(icon="swap_horiz", color="orange",
+                            on_click=lambda: on_click_extend_button(output_sample)).classes("w-1")
+                        with output_sample.extend_button:
+                            ui.tooltip("Change sample length")
+
                         output_sample.use_as_input_button.disable()
-                        output_sample.move_up_button = ui.button('▲', on_click=lambda: move_output_sample(output_sample, direction=-1)).classes("w-1")
+                        with ui.button(icon="content_copy", color="green",
+                            on_click=lambda: on_click_copy_all_button(output_sample)).classes("w-1 border-none border-double"):
+                            ui.tooltip("Copy all parameters to current settings")
+                        
+                        output_sample.move_up_button = ui.button('▲',
+                            on_click=lambda: move_output_sample(output_sample, direction=-1)).classes("w-1")
                         with output_sample.move_up_button:
                             ui.tooltip("Move sample up")
-                        output_sample.move_down_button = ui.button('▼', on_click=lambda: move_output_sample(output_sample, direction=1)).classes("w-1")
+                        output_sample.move_down_button = ui.button('▼',
+                            on_click=lambda: move_output_sample(output_sample, direction=1)).classes("w-1")
                         with output_sample.move_down_button:
                             ui.tooltip("Move sample down")
                         with ui.button('✕', color="red", on_click=lambda s=output_sample: self.remove_output_sample(s)).classes("w-1"):
@@ -713,9 +770,10 @@ class OutputEditor(ui.column):
 
                 with ui.row().classes("w-full") as output_sample.show_parameters_row_element:
                     ui.separator().classes("bg-transparent")
-                    with GenParamsEditor(gen_params=gen_params, read_only=True):
-                        with CopyButton().on_click(lambda: on_click_copy_gen_params_button(output_sample)):
-                            ui.tooltip("Copy to current parameters")
+                    with ui.card():
+                        with GenParamsEditor(gen_params=gen_params, seed=seed, length=length, read_only=True):
+                            with CopyButton().on_click(lambda: on_click_copy_gen_params_button(output_sample)):
+                                ui.tooltip("Copy to current parameters")
                     with PromptEditor(prompt=prompt, read_only=True):
                         with CopyButton().on_click(lambda: on_click_copy_prompt_button(output_sample)):
                             ui.tooltip("Copy to current prompt")

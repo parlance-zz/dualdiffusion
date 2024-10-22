@@ -86,24 +86,28 @@ class SampleParams:
         metadata["timestamp"] = datetime.now().strftime(r"%m/%d/%Y %I:%M:%S %p")
         return {str(key): str(value) for key, value in metadata.items()}
     
-    def get_label(self, model_metadata: dict, dataset_game_ids: dict) -> str:
+    def get_label(self, model_metadata: dict, dataset_game_ids: dict, verbose: bool = True) -> str:
         
         module_name = "unet"
         #if self.inpainting_mask is not None: # I prefer having the step label from the main unet for now
         #    if getattr(pipeline, "unet_inpainting", None) is not None:
         #        module_name = "unet_inpainting"
 
-        last_global_step = model_metadata["last_global_step"][module_name]
-        if module_name in model_metadata["load_emas"]:
-            ema = model_metadata["load_emas"][module_name].replace("ema_", "").replace(".safetensors", "")
-            ema = ema[:min(len(ema), 10)] # truncate beta string if longer than 8 digits
-        else:
+        if verbose == True:
+            last_global_step = model_metadata["last_global_step"][module_name]
             ema = None
-        top_game_name = sorted(self.prompt.items(), key=lambda x:x[1])[-1][0]
-        top_game_id = dataset_game_ids[top_game_name]
+            if module_name in model_metadata["load_emas"]:
+                ema = model_metadata["load_emas"][module_name].replace("ema_", "").replace(".safetensors", "")
+                ema = ema[:min(len(ema), 10)] # truncate beta string if longer than 8 digits
+            else:
+                ema = None
+            top_game_name = sorted(self.prompt.items(), key=lambda x:x[1])[-1][0]
+            top_game_id = dataset_game_ids[top_game_name]
 
-        label = f"step_{last_global_step}_{int(self.num_steps)}_{'ema'+ema+'_' if ema else ''}cfg{self.cfg_scale}"
-        label += f"_sgm{self.sigma_max}-{self.sigma_min}_ip{self.input_perturbation}_r{self.rho}_g{top_game_id}_s{int(self.seed)}"
+            label = f"step_{last_global_step}_{int(self.num_steps)}_{'ema'+ema+'_' if ema else ''}cfg{self.cfg_scale}"
+            label += f"_sgm{self.sigma_max}-{self.sigma_min}_ip{self.input_perturbation}_r{self.rho}_g{top_game_id}_s{int(self.seed)}"
+        else:
+            label = f"s{self.seed}"
         
         return label
 
