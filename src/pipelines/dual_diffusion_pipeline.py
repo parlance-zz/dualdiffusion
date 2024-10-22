@@ -399,7 +399,7 @@ class DualDiffusionPipeline(torch.nn.Module):
         else:
             input_audio = params.input_audio
 
-        self.format.config.num_fgla_iters = params.num_fgla_iters
+        self.format.config.num_fgla_iters = params.num_fgla_iters # todo: this should be a runtime param, not config
         generator = torch.Generator(device=unet.device).manual_seed(params.seed)
 
         sample_shape = self.get_sample_shape(bsz=params.batch_size, length=params.length)
@@ -451,7 +451,7 @@ class DualDiffusionPipeline(torch.nn.Module):
             sigma_max=params.sigma_max, sigma_min=params.sigma_min, rho=params.rho)#**params.schedule_kwargs)
         sigma_schedule_list = sigma_schedule.tolist()
         debug_info["sigma_schedule"] = sigma_schedule_list
-
+        
         noise = torch.randn(sample_shape, device=unet.device, generator=generator)
         sample = noise * sigma_schedule[0] + input_audio_sample * params.sigma_data
 
@@ -478,6 +478,11 @@ class DualDiffusionPipeline(torch.nn.Module):
             #                               device=p_unet_class_embeddings.device, dtype=p_unet_class_embeddings.dtype)
             #    p_unet_class_embeddings = mp_sum(p_unet_class_embeddings, perturbation, dynamic_conditioning_perturbation)#*1.35
             #    print("p_unet_class_embeddings mean:", p_unet_class_embeddings.mean().item(), "std:", p_unet_class_embeddings.std())
+            if i > 0: last_cfg_model_output = cfg_model_output
+            else:
+                debug_info["cfg_output_curvature"] = []
+                debug_info["cfg_output_mean"] = []
+                debug_info["cfg_output_std"] = []
 
             model_output = unet(input_sample, input_sigma, self.format, unet_class_embeddings, t_ranges, input_ref_sample).float()
             cfg_model_output = model_output[params.batch_size:].lerp(model_output[:params.batch_size], params.cfg_scale)
@@ -506,6 +511,12 @@ class DualDiffusionPipeline(torch.nn.Module):
             #    ideal_norm = (sigma_next**2 + sigma_data**2)**0.5
             #    measured_norm = sample.square().mean(dim=(1,2,3), keepdim=True).sqrt()
             #    sample = sample / (measured_norm / ideal_norm)**(1 - temperature_scale)
+
+            # log sampling debug info
+            if i > 0: debug_info["cfg_output_curvature"].append(
+                get_cos_angle(last_cfg_model_output, cfg_model_output).mean().item())
+            debug_info["cfg_output_mean"].append(cfg_model_output.mean().item())
+            debug_info["cfg_output_std"].append(cfg_model_output.std().item())
 
             if i+1 < params.num_steps:
                 p = max(old_sigma_next**2 - sigma_next**2, 0)**0.5

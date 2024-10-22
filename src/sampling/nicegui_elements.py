@@ -72,6 +72,7 @@ class OutputSample:
     move_up_button: Optional[ui.button] = None
     move_down_button: Optional[ui.button] = None
     show_parameters_row_element: Optional[ui.row] = None
+    show_debug_plots_row_element: Optional[ui.row] = None
 
 class ToggleButton(ui.button):
 
@@ -272,7 +273,7 @@ class GenParamsEditor(ui.row):
                     
                     self.param_elements["schedule"] = ui.select(label="Σ Schedule", options=SamplingSchedule.get_schedules_list(), value="edm2").classes("w-full")
                     self.sigma_schedule_dialog = ui.dialog()
-                    self.show_schedule_button = ui.button("Show σ Schedule", on_click=lambda: self.on_click_show_schedule_button()).classes("w-full items-center")
+                    self.show_schedule_button = ui.button("Show σ Schedule", color="gray", on_click=lambda: self.on_click_show_schedule_button()).classes("w-full items-center")
                     with self.show_schedule_button:
                         ui.tooltip("Show noise schedule with current settings")
 
@@ -290,7 +291,7 @@ class GenParamsEditor(ui.row):
 
         self.sigma_schedule_dialog.clear()
         with self.sigma_schedule_dialog, ui.card():
-            ui.label("Sigma Schedule:")
+
             sigma_schedule = SamplingSchedule.get_schedule(
                 self.gen_params["schedule"], int(self.gen_params["num_steps"]),
                 sigma_max=self.gen_params["sigma_max"],
@@ -300,9 +301,12 @@ class GenParamsEditor(ui.row):
             x = np.arange(int(self.gen_params["num_steps"]) + 1)
             y = sigma_schedule.log().numpy()
             
-            with ui.matplotlib(figsize=(5, 4)).figure as fig:
+            with ui.matplotlib(figsize=(5, 4)).classes("border-gray-500 border-2").figure as fig:
+                #fig.patch.set_facecolor("#1d1d1d") # todo: doesn't do anything :(
                 ax = fig.gca()
-                ax.plot(x, y, "-")
+                ax.set_facecolor("#1d1d1d")
+                ax.set_title("Sigma Schedule")
+                ax.plot(x, y, "-", color="#5898d4")
                 ax.set_xlabel("step")
                 ax.set_ylabel("ln(sigma)")
 
@@ -614,6 +618,11 @@ class OutputEditor(ui.column):
         else:
             self.clear_output_button.enable()
 
+        if self.input_output_sample is not None:
+            self.generate_button.props(add="color='orange'", remove="color='green'")
+        else:
+            self.generate_button.props(add="color='green'", remove="color='orange'")
+
         for i, output_sample in enumerate(self.output_samples):
             if i == 0: output_sample.move_up_button.disable()
             else: output_sample.move_up_button.enable()
@@ -621,11 +630,14 @@ class OutputEditor(ui.column):
             else: output_sample.move_down_button.enable()
 
             if self.input_output_sample != output_sample:
+                output_sample.card_element.classes(remove="border-2", add="border-none")
                 output_sample.use_as_input_button.classes(remove="border-4", add="border-none")
                 output_sample.select_range.set_visibility(False)
             else:
+                output_sample.card_element.classes(remove="border-none", add="border-2 border-orange-400")
                 output_sample.use_as_input_button.classes(remove="border-none", add="border-4")
                 output_sample.select_range.set_visibility(True)
+                
     
     def add_output_sample(self, length: int, seed: int,
             prompt: dict[str, float], gen_params: dict[str, Any]) -> OutputSample:
@@ -679,7 +691,7 @@ class OutputEditor(ui.column):
         def on_toggle_show_params(output_sample: OutputSample, is_toggled: bool) -> None:
             output_sample.show_parameters_row_element.set_visibility(is_toggled)
         def on_toggle_show_debug(output_sample: OutputSample, is_toggled: bool) -> None:
-            pass
+            output_sample.show_debug_plots_row_element.set_visibility(is_toggled)
 
         def on_click_copy_gen_params_button(output_sample: OutputSample) -> None:
             self.get_gen_params_editor().gen_params.update(output_sample.gen_params)
@@ -711,19 +723,23 @@ class OutputEditor(ui.column):
                         output_sample.rating_element.on_rating_change = lambda rating: change_output_rating(output_sample, rating)
 
                     with ui.button_group().classes("h-10 gap-0 z-10"): # output sample icon toolbar
+
                         with ToggleButton(icon="gradient", color="gray").classes("w-1") as output_sample.toggle_show_latents_button:
                             ui.tooltip("Toggle latents visibility")
                         output_sample.toggle_show_latents_button.on_toggle = lambda is_toggled: on_toggle_show_latents(output_sample, is_toggled)
-                        output_sample.toggle_show_latents_button.style("background: linear-gradient(45deg, #593782, #588143);")
+                        #output_sample.toggle_show_latents_button.style("background: linear-gradient(45deg, #593782, #588143);")
+
                         with ToggleButton(icon="queue_music", color="gray").classes("w-1") as output_sample.toggle_show_spectrogram_button:
                             ui.tooltip("Toggle spectrogram visibility")
                         output_sample.toggle_show_spectrogram_button.on_toggle = lambda is_toggled: on_toggle_show_spectrogram(output_sample, is_toggled)
-                        output_sample.toggle_show_spectrogram_button.style("background: linear-gradient(45deg, #bf2a81, #322481);")
+                        #output_sample.toggle_show_spectrogram_button.style("background: linear-gradient(45deg, #bf2a81, #322481);")
                         output_sample.toggle_show_spectrogram_button.disable()
-                        with ToggleButton(icon="tune").classes("w-1") as output_sample.toggle_show_params_button:
+
+                        with ToggleButton(icon="tune", color="gray").classes("w-1") as output_sample.toggle_show_params_button:
                             ui.tooltip("Toggle parameters visibility")
                         output_sample.toggle_show_params_button.on_toggle = lambda is_toggled: on_toggle_show_params(output_sample, is_toggled)
-                        with ToggleButton(icon="query_stats").classes("w-1") as output_sample.toggle_show_debug_button:
+
+                        with ToggleButton(icon="query_stats", color="gray").classes("w-1") as output_sample.toggle_show_debug_button:
                             ui.tooltip("Toggle debug plot visibility")
                         output_sample.toggle_show_debug_button.on_toggle = lambda is_toggled: on_toggle_show_debug(output_sample, is_toggled)
                         output_sample.toggle_show_debug_button.disable()
@@ -732,24 +748,27 @@ class OutputEditor(ui.column):
                             on_click=lambda: use_output_sample_as_input(output_sample)).classes("w-1 border-none border-double")
                         with output_sample.use_as_input_button:
                             ui.tooltip("Use this sample as inpainting input")
+                        output_sample.use_as_input_button.disable()
+
                         output_sample.extend_button = ToggleButton(icon="swap_horiz", color="orange",
                             on_click=lambda: on_click_extend_button(output_sample)).classes("w-1")
                         with output_sample.extend_button:
                             ui.tooltip("Change sample length")
-
-                        output_sample.use_as_input_button.disable()
-                        with ui.button(icon="content_copy", color="green",
+                        output_sample.extend_button.disable()
+                        
+                        with ui.button(icon="content_copy",
                             on_click=lambda: on_click_copy_all_button(output_sample)).classes("w-1 border-none border-double"):
                             ui.tooltip("Copy all parameters to current settings")
                         
-                        output_sample.move_up_button = ui.button('▲',
+                        output_sample.move_up_button = ui.button('▲', color="gray",
                             on_click=lambda: move_output_sample(output_sample, direction=-1)).classes("w-1")
                         with output_sample.move_up_button:
                             ui.tooltip("Move sample up")
-                        output_sample.move_down_button = ui.button('▼',
+                        output_sample.move_down_button = ui.button('▼', color="gray",
                             on_click=lambda: move_output_sample(output_sample, direction=1)).classes("w-1")
                         with output_sample.move_down_button:
                             ui.tooltip("Move sample down")
+                        
                         with ui.button('✕', color="red", on_click=lambda s=output_sample: self.remove_output_sample(s)).classes("w-1"):
                             ui.tooltip("Remove sample from workspace")
 
@@ -768,6 +787,7 @@ class OutputEditor(ui.column):
                 output_sample.audio_element = ui.audio("").classes("w-full").props("preload='auto'").style("filter: invert(1) hue-rotate(180deg);")
                 output_sample.audio_element.set_visibility(False)
 
+                # re-use gen param and prompt editors in read-only mode to show sample params
                 with ui.row().classes("w-full") as output_sample.show_parameters_row_element:
                     ui.separator().classes("bg-transparent")
                     with ui.card():
@@ -778,6 +798,12 @@ class OutputEditor(ui.column):
                         with CopyButton().on_click(lambda: on_click_copy_prompt_button(output_sample)):
                             ui.tooltip("Copy to current prompt")
                 output_sample.toggle_show_params_button.toggle(is_toggled=False)
+
+                with ui.row().classes("w-full") as output_sample.show_debug_plots_row_element:
+                    ui.separator().classes("bg-transparent")
+                    # debug plots and info elements will be added here
+                output_sample.toggle_show_debug_button.toggle(is_toggled=False)
+                output_sample.toggle_show_debug_button.disable()
 
         self.output_samples.insert(0, output_sample)
         output_sample.card_element.move(self.output_samples_column, target_index=0)
@@ -822,6 +848,38 @@ class OutputEditor(ui.column):
         output_sample.use_as_input_button.enable()
         output_sample.toggle_show_spectrogram_button.enable()
         output_sample.toggle_show_debug_button.enable()
+
+        # debug info and plots display
+        with output_sample.show_debug_plots_row_element:
+            # show scalar debug values first
+            debug_val_columns = [
+                {"name": "name", "label": "Name", "field": "name", "required": True, "align": "left"},
+                {"name": "value", "label": "Value", "field": "value"},
+            ]
+            debug_val_rows = []
+            for name, value in output_sample.sample_output.debug_info.items():
+                if isinstance(value, list):
+                    pass
+                elif isinstance(value, (int, float, bool, str, tuple)):
+                    debug_val_rows.append({"name": name, "value": str(value)})
+                else:
+                    self.logger.error(f"Unsupported type in sample_output.debug_info: {name}={value}")
+            ui.table(rows=debug_val_rows, columns=debug_val_columns, row_key="name", title="Debug Info")
+
+            for name, value in output_sample.sample_output.debug_info.items():
+                if isinstance(value, list):
+                    x = np.arange(len(value))
+                    y = np.array(value)
+                    with ui.matplotlib(figsize=(5, 4)).classes("border-gray-500 border-2").figure as fig:
+                        #fig.patch.set_facecolor("#1d1d1d") # todo: doesn't do anything :(
+                        ax = fig.gca()
+                        ax.set_facecolor("#1d1d1d")
+                        ax.set_title(name)
+                        ax.plot(x, y, "-", color="#5898d4")
+                        ax.set_xlabel("step")
+                        # todo: add units metadata to debug_info
+                        if "curvature" in name:
+                            ax.set_ylabel("radians")
 
         #output_sample.audio_element.on("timeupdate", lambda e: self.logger.debug(e))
         #output_sample.audio_element.seek(10)

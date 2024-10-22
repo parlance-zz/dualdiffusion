@@ -27,6 +27,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from functools import partial
 from PIL import Image
+import matplotlib.pyplot as plt
 import asyncio
 import multiprocessing
 import logging
@@ -254,6 +255,9 @@ class NiceGUIApp:
 
         if self.config.model_load_options["compile_options"] is not None:
             await self.compile_model(self.config.model_name)
+
+        # set matplotlibs to use dark theme
+        plt.style.use("dark_background")
 
     # queues a new output sample for generation, then proceeds with generation when ready
     async def on_click_generate_button(self) -> None:
