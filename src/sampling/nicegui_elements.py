@@ -301,9 +301,10 @@ class GenParamsEditor(ui.row):
             x = np.arange(int(self.gen_params["num_steps"]) + 1)
             y = sigma_schedule.log().numpy()
             
-            with ui.matplotlib(figsize=(5, 4)).classes("border-gray-500 border-2").figure as fig:
+            with ui.matplotlib(figsize=(5, 4)).classes("border-gray-600 border-2").figure as fig:
                 #fig.patch.set_facecolor("#1d1d1d") # todo: doesn't do anything :(
                 ax = fig.gca()
+                ax.grid(color="#666666", linewidth=0.5, linestyle="--")
                 ax.set_facecolor("#1d1d1d")
                 ax.set_title("Sigma Schedule")
                 ax.plot(x, y, "-", color="#5898d4")
@@ -870,9 +871,10 @@ class OutputEditor(ui.column):
                 if isinstance(value, list):
                     x = np.arange(len(value))
                     y = np.array(value)
-                    with ui.matplotlib(figsize=(5, 4)).classes("border-gray-500 border-2").figure as fig:
+                    with ui.matplotlib(figsize=(4.75, 4.05)).classes("border-gray-600 border-2").figure as fig:
                         #fig.patch.set_facecolor("#1d1d1d") # todo: doesn't do anything :(
                         ax = fig.gca()
+                        ax.grid(color="#666666", linewidth=0.5, linestyle="--")
                         ax.set_facecolor("#1d1d1d")
                         ax.set_title(name)
                         ax.plot(x, y, "-", color="#5898d4")

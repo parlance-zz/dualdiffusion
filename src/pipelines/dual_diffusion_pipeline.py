@@ -480,6 +480,7 @@ class DualDiffusionPipeline(torch.nn.Module):
             #    print("p_unet_class_embeddings mean:", p_unet_class_embeddings.mean().item(), "std:", p_unet_class_embeddings.std())
             if i > 0: last_cfg_model_output = cfg_model_output
             else:
+                debug_info["sample_std"] = []
                 debug_info["cfg_output_curvature"] = []
                 debug_info["cfg_output_mean"] = []
                 debug_info["cfg_output_std"] = []
@@ -512,16 +513,17 @@ class DualDiffusionPipeline(torch.nn.Module):
             #    measured_norm = sample.square().mean(dim=(1,2,3), keepdim=True).sqrt()
             #    sample = sample / (measured_norm / ideal_norm)**(1 - temperature_scale)
 
-            # log sampling debug info
-            if i > 0: debug_info["cfg_output_curvature"].append(
-                get_cos_angle(last_cfg_model_output, cfg_model_output).mean().item())
-            debug_info["cfg_output_mean"].append(cfg_model_output.mean().item())
-            debug_info["cfg_output_std"].append(cfg_model_output.std().item())
-
             if i+1 < params.num_steps:
                 p = max(old_sigma_next**2 - sigma_next**2, 0)**0.5
                 sample.add_(torch.randn(sample.shape, generator=generator,
                     device=sample.device, dtype=sample.dtype), alpha=p)
+
+            # log sampling debug info
+            debug_info["sample_std"].append(sample.std().item())
+            if i > 0: debug_info["cfg_output_curvature"].append(
+                get_cos_angle(last_cfg_model_output, cfg_model_output).mean().item())
+            debug_info["cfg_output_mean"].append(cfg_model_output.mean().item())
+            debug_info["cfg_output_std"].append(cfg_model_output.std().item())
 
             if model_server_state is not None:
                 if model_server_state.get("generate_abort", None) == True:
