@@ -98,7 +98,7 @@ class ModelServer:
         
         self.logger.info("Compiling default path...")
         dummy_params = SampleParams(num_steps=1, use_heun=False, num_fgla_iters=1)
-        sample_output = self.pipeline(dummy_params, quiet=True).cpu()
+        sample_output = move_tensors_to_cpu(self.pipeline(dummy_params, quiet=True))
 
         self.logger.info("Compiling inpainting path...")
         dummy_params.input_audio = torch.randn_like(sample_output.raw_sample)
