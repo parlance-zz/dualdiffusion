@@ -104,6 +104,8 @@ class EMAConfig:
     use_switch_ema: bool           = False
     switch_ema_initial_beta: float = 0.9999
     switch_ema_gamma: float        = 0.5
+    ema_max_beta: float            = 0.999999
+    ema_min_beta: float            = 0.999
     ema_betas: tuple[float]  = (0.9999,)
     ema_cpu_offload: bool   = False
 
@@ -801,7 +803,7 @@ class DualDiffusionTrainer:
             
             # clamp the bets to ensure they are never rounded to 0 or 1 at 32-bit precision
             for i, beta in enumerate(self.ema_manager.betas):
-                self.ema_manager.betas[i] = max(min(beta, 0.9999999), 0.9)
+                self.ema_manager.betas[i] = max(min(beta, self.config.ema.ema_max_beta), self.config.ema.ema_min_beta)
 
         self.logger.info(f"Validation complete (runtime: {(datetime.now() - start_validation_time).total_seconds()}s)")
         self.module.train()
