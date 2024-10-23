@@ -890,12 +890,15 @@ class OutputEditor(ui.column):
     def clear_output_samples(self) -> None:
         self.output_samples_column.clear()
         self.output_samples.clear()
-        self.clear_output_button.disable()
-        self.input_output_sample = None
+        if self.input_output_sample is not None: # prevent removing input sample while selected
+            self.output_samples.append(self.input_output_sample)
+            self.input_output_sample.card_element.move(self.output_samples_column, target_index=0)
+            self.refresh_output_samples()
 
     def remove_output_sample(self, output_sample: OutputSample) -> None:
-        if self.input_output_sample == output_sample:
-            self.input_output_sample = None
-        self.output_samples_column.remove(output_sample.card_element)
-        self.output_samples.remove(output_sample)
-        self.refresh_output_samples()
+        if self.input_output_sample == output_sample: # prevent removing input sample while selected
+            ui.notify("Cannot remove input sample", type="error", color="red", close_button=True)
+        else:
+            self.output_samples_column.remove(output_sample.card_element)
+            self.output_samples.remove(output_sample)
+            self.refresh_output_samples()
