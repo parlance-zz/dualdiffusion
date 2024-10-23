@@ -66,7 +66,7 @@ class EMA_Manager:
     @torch.no_grad()
     def update(self, cur_nimg: int, batch_size: int) -> list[tuple[float, float]]:
 
-        with torch.cuda.amp.autocast(enabled=False), TF32_Disabled():
+        with torch.amp.autocast("cuda", enabled=False), TF32_Disabled():
             net_parameters = tuple(self.module.parameters())
             for beta, ema in zip(self.betas, self.emas):
                 torch._foreach_lerp_(tuple(ema.parameters()), net_parameters, 1 - beta)
