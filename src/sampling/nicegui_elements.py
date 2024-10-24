@@ -562,7 +562,7 @@ class OutputEditor(ui.column):
         self.get_prompt_editor: Callable[[], PromptEditor] = lambda: None
         self.get_gen_params_editor: Callable[[], GenParamsEditor] = lambda: None
 
-        with ui.button_group().classes("h-10 gap-0"): # output samples toolbar
+        with ui.button_group().classes("h-10 gap-0"): # output editor top toolbar
             self.generate_button = ui.button("Generate", icon="audiotrack", color="green")
             with self.generate_button:
                 ui.tooltip("Generate new sample with current settings")
@@ -611,6 +611,7 @@ class OutputEditor(ui.column):
 
         return audio_output_path, latents_output_path
 
+    # updates various elements after changes to output samples state or order
     def refresh_output_samples(self) -> None:
 
         if len(self.output_samples) == 0:
@@ -618,17 +619,21 @@ class OutputEditor(ui.column):
         else:
             self.clear_output_button.enable()
 
+        # if there is a selected input sample change the generate button color accordingly
         if self.input_output_sample is not None:
             self.generate_button.props(add="color='orange'", remove="color='green'")
         else:
             self.generate_button.props(add="color='green'", remove="color='orange'")
 
         for i, output_sample in enumerate(self.output_samples):
+
+            # enable/disable positioning buttons based on output sample position
             if i == 0: output_sample.move_up_button.disable()
             else: output_sample.move_up_button.enable()
             if i == len(self.output_samples) - 1: output_sample.move_down_button.disable()
             else: output_sample.move_down_button.enable()
 
+            # enable/disable the highlighted border and select-range overlay if the output sample is selected as input
             if self.input_output_sample != output_sample:
                 output_sample.card_element.classes(remove="border-2", add="border-none")
                 output_sample.use_as_input_button.classes(remove="border-4", add="border-none")
@@ -639,19 +644,19 @@ class OutputEditor(ui.column):
                 output_sample.use_as_input_button.classes(remove="border-none", add="border-4")
                 output_sample.select_range.set_visibility(True)
                 output_sample.audio_editor_element._props["select_range"] = True
-
             output_sample.audio_editor_element.update()
                 
-    
+    # adds a new output sample to the top of the workspace, queued initially
     def add_output_sample(self, length: int, seed: int,
             prompt: dict[str, float], gen_params: dict[str, Any]) -> OutputSample:
         
-        # setup sample input param
+        # setup SampleParams input for actual pipeline generation call
         sample_params = SampleParams(seed=seed, length=length * self.format_config["sample_rate"],
             prompt=prompt.copy(), **gen_params)
         self.logger.info(f"OutputEditor.add_output_sample - params:{dict_str(sample_params.__dict__)}")
 
-        if self.input_output_sample is not None: # setup inpainting input
+        # setup inpainting input
+        if self.input_output_sample is not None:
             sample_params.input_audio = self.input_output_sample.sample_output.latents
             sample_params.input_audio_pre_encoded = True
             sample_params.inpainting_mask = torch.zeros_like(sample_params.input_audio[:, 0:1])
@@ -662,6 +667,7 @@ class OutputEditor(ui.column):
         output_sample = OutputSample(name=f"{sample_params.get_label(self.model_metadata, self.dataset_game_ids, verbose=self.get_app_config().use_verbose_labels)}",
             seed=sample_params.seed, prompt=sample_params.prompt, gen_params=gen_params, sample_params=sample_params)
 
+        # moves output sample up or down in the workspace
         def move_output_sample(output_sample: OutputSample, direction: int) -> None:
             current_index = output_sample.card_element.parent_slot.children.index(output_sample.card_element)
             new_index = min(max(current_index + direction, 0), len(output_sample.card_element.parent_slot.children) - 1)
@@ -670,12 +676,14 @@ class OutputEditor(ui.column):
                 self.output_samples.insert(new_index, self.output_samples.pop(current_index))
                 self.refresh_output_samples()
 
+        # updates the select-range overlay in the AudioEditor element
         def set_select_range(output_sample: OutputSample) -> None:
             seconds_per_latent_pixel = output_sample.audio_editor_element.duration / output_sample.sample_output.latents.shape[-1]
             duration = (output_sample.select_range.value["max"] - output_sample.select_range.value["min"]) * seconds_per_latent_pixel
             output_sample.audio_editor_element.set_select_range(
                 output_sample.select_range.value["min"] * seconds_per_latent_pixel, duration)
-            
+        
+        # selects the chosen output sample as current input sample
         def use_output_sample_as_input(output_sample: OutputSample) -> None:
             if self.input_output_sample == output_sample:
                 self.input_output_sample = None
@@ -687,10 +695,12 @@ class OutputEditor(ui.column):
         def on_click_extend_button(output_sample: OutputSample) -> None:
             pass
         
+        # pauses all other output samples when a new one is played
         def on_play_audio(output_sample: OutputSample) -> None:
             for sample in self.output_samples:
                 if sample != output_sample: sample.audio_editor_element.pause()
 
+        # updates rating metadata in output sample audio and latents files
         def change_output_rating(output_sample: OutputSample, rating: int) -> None:
             try: update_audio_metadata(output_sample.audio_path, rating=rating)
             except Exception as e:
@@ -699,6 +709,7 @@ class OutputEditor(ui.column):
             except Exception as e:
                 self.logger.error(f"Error updating latents metadata in {output_sample.latents_path}: {e}")
 
+        # toggle visibility of optional elements in output sample card
         def on_toggle_show_latents(output_sample: OutputSample, is_toggled: bool) -> None:
             output_sample.latents_image_element.set_visibility(is_toggled)
         def on_toggle_show_audio_editor(output_sample: OutputSample, is_toggled: bool) -> None:
@@ -709,6 +720,7 @@ class OutputEditor(ui.column):
         def on_toggle_show_debug(output_sample: OutputSample, is_toggled: bool) -> None:
             output_sample.show_debug_plots_row_element.set_visibility(is_toggled)
 
+        # param copy buttons
         def on_click_copy_gen_params_button(output_sample: OutputSample) -> None:
             self.get_gen_params_editor().gen_params.update(output_sample.gen_params)
             self.get_gen_params_editor().seed.set_value(output_sample.seed)
@@ -727,19 +739,20 @@ class OutputEditor(ui.column):
         with ui.card().classes("w-full") as output_sample.card_element:
             with ui.column().classes("w-full gap-0"):
                 with ui.row().classes("h-10 justify-between gap-0 w-full no-wrap"):
-
-                    with ui.row().classes("items-center no-wrap gap-0"): # output sample name label
+                    
+                    # setup output sample name label and star rating
+                    with ui.row().classes("items-center no-wrap gap-0"):
                         output_sample.name_label_element = ui.label(output_sample.name).classes("p-2").style(
                             "border: 1px solid grey; border-bottom: none; border-radius: 10px 10px 0 0;")
-                        with StarRating() as output_sample.rating_element: # and star rating
+                        with StarRating() as output_sample.rating_element:
                             ui.tooltip("Rate this sample")
                         output_sample.rating_element.disable()
                         output_sample.rating_element.classes("p-2").style(
                             "border: 1px solid grey; border-bottom: none; border-radius: 10px 10px 0 0;")
                         output_sample.rating_element.on_rating_change = lambda rating: change_output_rating(output_sample, rating)
 
-                    with ui.button_group().classes("h-10 gap-0 z-10"): # output sample icon toolbar
-
+                    # setup output sample toolbar
+                    with ui.button_group().classes("h-10 gap-0 z-10"):
                         with ToggleButton(icon="gradient", color="gray").classes("w-1") as output_sample.toggle_show_latents_button:
                             ui.tooltip("Toggle latents visibility")
                         output_sample.toggle_show_latents_button.on_toggle = lambda is_toggled: on_toggle_show_latents(output_sample, is_toggled)
@@ -788,15 +801,19 @@ class OutputEditor(ui.column):
                         with ui.button('✕', color="red", on_click=lambda s=output_sample: self.remove_output_sample(s)).classes("w-1"):
                             ui.tooltip("Remove sample from workspace")
 
-                output_sample.latents_image_element = ui.interactive_image().classes(
-                    "w-full gap-0").style("image-rendering: pixelated; width: 100%; height: auto;").props("fit=scale-down")
+                # setup generation progress and latent image elements
                 output_sample.sampling_progress_element = ui.linear_progress(
                     value="0%").classes("w-full font-bold gap-0").props("instant-feedback")
+                output_sample.latents_image_element = ui.interactive_image().classes(
+                    "w-full gap-0").style("image-rendering: pixelated; width: 100%; height: auto;").props("fit=scale-down")
+                output_sample.toggle_show_latents_button.toggle(is_toggled=False)
+
+                # setup audio editor element, initially hidden while waiting for generation
                 output_sample.audio_editor_element = AudioEditor().classes("w-full gap-0").props(add="fit=fill")
                 output_sample.audio_editor_element.audio_element.on("play", lambda: on_play_audio(output_sample))
-                output_sample.toggle_show_latents_button.toggle(is_toggled=False)
                 output_sample.toggle_show_audio_editor_button.toggle(is_toggled=False)
 
+                # setup inpainting range select element
                 output_sample.select_range = ui.range(min=0, max=0, step=1, value={"min": 0, "max": 0}).classes("w-full").props("step snap color='orange' label='Inpaint Selection'")
                 output_sample.select_range.on_value_change(lambda: set_select_range(output_sample))
                 output_sample.select_range.set_visibility(False)
@@ -813,22 +830,26 @@ class OutputEditor(ui.column):
                             ui.tooltip("Copy to current prompt")
                 output_sample.toggle_show_params_button.toggle(is_toggled=False)
 
+                # setup debug info and plots display
                 with ui.row().classes("w-full") as output_sample.show_debug_plots_row_element:
                     ui.separator().classes("bg-transparent")
                     # debug plots and info elements will be added here
                 output_sample.toggle_show_debug_button.toggle(is_toggled=False)
                 output_sample.toggle_show_debug_button.disable()
 
+        # add to output samples list and insert root card element at top of workspace
         self.output_samples.insert(0, output_sample)
         output_sample.card_element.move(self.output_samples_column, target_index=0)
         self.refresh_output_samples()
 
         return output_sample
 
+    # called when generation / pipeline call is completed for this output sample
     def on_output_sample_generated(self, output_sample: OutputSample) -> None:
 
-        # save output sample audio / latents
+        # save output sample audio / latents, hide generation progress element
         output_sample.audio_path, output_sample.latents_path = self.save_output_sample(output_sample.sample_output)
+        output_sample.sampling_progress_element.set_visibility(False)
 
         # set output sample name label to match audio filename and enable rating
         output_sample.name = os.path.splitext(os.path.basename(output_sample.audio_path))[0]
@@ -848,18 +869,17 @@ class OutputEditor(ui.column):
         output_sample.toggle_show_audio_editor_button.enable()
         output_sample.toggle_show_audio_editor_button.toggle(is_toggled=True)
 
-        # hide progress and setup inpainting range select element
-        output_sample.sampling_progress_element.set_visibility(False)
+        # setup inpainting range select element and enable use as input button
         output_sample.select_range.max = output_sample.sample_output.latents.shape[-1]
         output_sample.select_range.set_value({
             "min": output_sample.select_range.max//2 - output_sample.select_range.max//4,
             "max": output_sample.select_range.max//2 + output_sample.select_range.max//4})
-
         output_sample.use_as_input_button.enable()
-        output_sample.toggle_show_debug_button.enable()
-
+        
         # debug info and plots display
+        output_sample.toggle_show_debug_button.enable()
         with output_sample.show_debug_plots_row_element:
+
             # show scalar debug values first
             debug_val_columns = [
                 {"name": "name", "label": "Name", "field": "name", "required": True, "align": "left"},
@@ -875,6 +895,7 @@ class OutputEditor(ui.column):
                     self.logger.error(f"Unsupported type in sample_output.debug_info: {name}={value}")
             ui.table(rows=debug_val_rows, columns=debug_val_columns, row_key="name", title="Debug Info")
 
+            # show debug lists as plot images
             for name, value in output_sample.sample_output.debug_info.items():
                 if isinstance(value, list):
                     x = np.arange(len(value))
@@ -891,14 +912,15 @@ class OutputEditor(ui.column):
                         if "curvature" in name:
                             ax.set_ylabel("radians")
 
+    # removes all output samples in workspace (except the selected input sample)
     def clear_output_samples(self) -> None:
-        self.output_samples_column.clear()
-        self.output_samples.clear()
-        if self.input_output_sample is not None: # prevent removing input sample while selected
-            self.output_samples.append(self.input_output_sample)
-            self.input_output_sample.card_element.move(self.output_samples_column, target_index=0)
-            self.refresh_output_samples()
+        for output_sample in [*self.output_samples]:
+            if self.input_output_sample != output_sample:
+                self.output_samples_column.remove(output_sample.card_element)
+                self.output_samples.remove(output_sample)
+        self.refresh_output_samples()
 
+    # remove chosen output sample (unless it is the selected input sample)
     def remove_output_sample(self, output_sample: OutputSample) -> None:
         if self.input_output_sample == output_sample: # prevent removing input sample while selected
             ui.notify("Cannot remove input sample", type="error", color="red", close_button=True)

@@ -32,9 +32,9 @@ export default {
         loaded_image_height: 0,
         x: 100,
         y: 100,
-        tx: 0,
-        sx: 0,
-        sw: 0,
+        tx: 0, // time crosshair x position (in pixels)
+        sx: 0, // selection start x position (in pixels)
+        sw: 0, // selection width (in pixels)
         playing: false,
         time: 0,
         last_timestamp: 0,
@@ -102,12 +102,13 @@ export default {
         this.$emit("loaded", { width: this.loaded_image_width, height: this.loaded_image_height, source: e.target.src });
       },
       onMouseEvent(type, e) {
-        const imageWidth = this.src ? this.loaded_image_width : this.size ? this.size[0] : 1;
-        const imageHeight = this.src ? this.loaded_image_height : this.size ? this.size[1] : 1;
+        //const imageWidth = this.src ? this.loaded_image_width : this.size ? this.size[0] : 1;
+        //const imageHeight = this.src ? this.loaded_image_height : this.size ? this.size[1] : 1;
         this.$emit("mouse", {
           mouse_event_type: type,
           //image_x: (e.offsetX * imageWidth) / this.$refs.img.clientWidth,
           //image_y: (e.offsetY * imageHeight) / this.$refs.img.clientHeight,
+          // modified to return normalized (0..1) coordinates
           image_x: e.offsetX / this.$refs.img.clientWidth,
           image_y: e.offsetY / this.$refs.img.clientHeight,
           button: e.button,

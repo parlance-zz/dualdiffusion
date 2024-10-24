@@ -1,5 +1,27 @@
 # MIT License
 #
+# Copyright (c) 2021 Zauberzeug GmbH
+#
+# Permission is hereby granted, free of charge, to any person obtaining a copy
+# of this software and associated documentation files (the "Software"), to deal
+# in the Software without restriction, including without limitation the rights
+# to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+# copies of the Software, and to permit persons to whom the Software is
+# furnished to do so, subject to the following conditions:
+#
+# The above copyright notice and this permission notice shall be included in all
+# copies or substantial portions of the Software.
+#
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+#SOFTWARE.
+
+# Modifications under MIT License
+#
 # Copyright (c) 2023 Christopher Friesen
 #
 # Permission is hereby granted, free of charge, to any person obtaining a copy
@@ -22,10 +44,7 @@
 
 import logging
 
-from nicegui import ui
 import nicegui.events
-
-#from sampling.custom_audio import CustomAudio
 
 # *****************************************************************************
 import time
@@ -46,8 +65,8 @@ try:
 except ImportError:
     pass
 
-
-class CustomAudio(SourceElement, component='custom_audio.js'):
+# lightly modified copy of nicegui.elements.audio, needed for custom js
+class CustomAudio(SourceElement, component='nicegui_custom_audio.js'):
     SOURCE_IS_MEDIA_FILE = True
 
     def __init__(self, src: Union[str, Path], *,
@@ -93,6 +112,7 @@ class CustomAudio(SourceElement, component='custom_audio.js'):
         """Pause audio."""
         self.run_method('pause')
 
+# lightly modified copy of nicegui.elements.interactive_image, needed for custom js
 class AudioPlayer(SourceElement, ContentElement, component='nicegui_audio_editor.js'):
     CONTENT_PROP = 'content'
     PIL_CONVERT_FORMAT = 'PNG'
@@ -152,6 +172,7 @@ class AudioPlayer(SourceElement, ContentElement, component='nicegui_audio_editor
 
 # *****************************************************************************
 
+# custom element combining a spectrogram image and interactive audio playback / editing
 class AudioEditor(AudioPlayer):
 
     def __init__(self, *args, **kwargs) -> None:
@@ -162,8 +183,9 @@ class AudioEditor(AudioPlayer):
         self.logger = logging.getLogger(name="nicegui_app")
         self.playing = False
         self.duration = 0
-        self.add_slot('cross', '<line :x1="props.x" y1="0" :x2="props.x" y2="100%" stroke="white" />')
-        
+        self.add_slot("cross", '<line :x1="props.x" y1="0" :x2="props.x" y2="100%" stroke="white" />')
+        self.on_mouse(lambda e: self._on_mouse(e))
+
         with self:
             self.audio_element = CustomAudio("", controls=False).props("preload='auto'").classes("w-full")
             self.audio_element.on("time_update", lambda e: self.on_time_update(e))
@@ -174,14 +196,6 @@ class AudioEditor(AudioPlayer):
         if audio_source is not None:
             self.set_audio_source(audio_source)
 
-        self.on_mouse(lambda e: self.handle_mouse(e))
-
-    def handle_mouse(self, e: nicegui.events.MouseEventArguments) -> None:
-        if e.type == "mousedown":
-            if self.playing == False:
-                self.seek(e.image_x * self.duration)
-            self.play_pause()
-
     def play(self) -> None:
         self.audio_element.play()
     def pause(self) -> None:
@@ -189,6 +203,8 @@ class AudioEditor(AudioPlayer):
     def play_pause(self) -> None:
         if self.playing == True: self.pause()
         else: self.play()
+    def seek(self, seconds: float) -> None:
+        self.audio_element.seek(seconds)
 
     def on_play(self) -> None:
         self.playing = True
@@ -196,10 +212,6 @@ class AudioEditor(AudioPlayer):
     def on_pause(self) -> None:
         self.playing = False
         self.run_method("play", False)
-
-    def seek(self, seconds: float) -> None:
-        self.audio_element.seek(seconds)
-
     def on_time_update(self, e) -> None:
         self.run_method("set_time", e.args["time"])
     def on_duration_change(self, e) -> None:
@@ -208,9 +220,10 @@ class AudioEditor(AudioPlayer):
 
     def set_select_range(self, start: float, duration: float) -> None:
         self.run_method("set_select_range", start, duration)
-
     def set_audio_source(self, audio_path: str) -> None:
         self.audio_element.set_source(audio_path)
-
-    def debug(self, e) -> None:
-        self.logger.debug(e)
+    def _on_mouse(self, e: nicegui.events.MouseEventArguments) -> None:
+        if e.type == "mousedown":
+            if self.playing == False:
+                self.seek(e.image_x * self.duration)
+            self.play_pause()
