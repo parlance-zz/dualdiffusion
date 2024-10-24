@@ -26,7 +26,6 @@ from typing import Optional, Union, Callable, Any
 from dataclasses import dataclass
 from copy import deepcopy
 from PIL import Image
-from functools import partial
 import os
 import asyncio
 import logging
@@ -38,6 +37,7 @@ import cv2
 from nicegui import ui
 
 from sampling.schedule import SamplingSchedule
+from sampling.nicegui_audio_editor import AudioEditor
 from pipelines.dual_diffusion_pipeline import SampleParams, SampleOutput
 from utils.dual_diffusion_utils import (
     sanitize_filename, dict_str, save_safetensors, load_safetensors,
@@ -60,10 +60,9 @@ class OutputSample:
     rating_element: Optional["StarRating"] = None
     sampling_progress_element: Optional[ui.linear_progress] = None
     latents_image_element: Optional[ui.interactive_image] = None
-    spectrogram_image_element: Optional[ui.interactive_image] = None
-    audio_element: Optional[ui.audio] = None
+    audio_editor_element: Optional["AudioEditor"] = None
     toggle_show_latents_button: Optional["ToggleButton"] = None
-    toggle_show_spectrogram_button: Optional["ToggleButton"] = None
+    toggle_show_audio_editor_button: Optional["ToggleButton"] = None
     toggle_show_params_button: Optional["ToggleButton"] = None
     toggle_show_debug_button: Optional["ToggleButton"] = None
     use_as_input_button: Optional[ui.button] = None
@@ -687,8 +686,9 @@ class OutputEditor(ui.column):
 
         def on_toggle_show_latents(output_sample: OutputSample, is_toggled: bool) -> None:
             output_sample.latents_image_element.set_visibility(is_toggled)
-        def on_toggle_show_spectrogram(output_sample: OutputSample, is_toggled: bool) -> None:
-            output_sample.spectrogram_image_element.set_visibility(is_toggled)
+        def on_toggle_show_audio_editor(output_sample: OutputSample, is_toggled: bool) -> None:
+            if is_toggled == False: output_sample.audio_editor_element.pause()
+            output_sample.audio_editor_element.set_visibility(is_toggled)
         def on_toggle_show_params(output_sample: OutputSample, is_toggled: bool) -> None:
             output_sample.show_parameters_row_element.set_visibility(is_toggled)
         def on_toggle_show_debug(output_sample: OutputSample, is_toggled: bool) -> None:
@@ -730,11 +730,11 @@ class OutputEditor(ui.column):
                         output_sample.toggle_show_latents_button.on_toggle = lambda is_toggled: on_toggle_show_latents(output_sample, is_toggled)
                         #output_sample.toggle_show_latents_button.style("background: linear-gradient(45deg, #593782, #588143);")
 
-                        with ToggleButton(icon="queue_music", color="gray").classes("w-1") as output_sample.toggle_show_spectrogram_button:
+                        with ToggleButton(icon="queue_music", color="gray").classes("w-1") as output_sample.toggle_show_audio_editor_button:
                             ui.tooltip("Toggle spectrogram visibility")
-                        output_sample.toggle_show_spectrogram_button.on_toggle = lambda is_toggled: on_toggle_show_spectrogram(output_sample, is_toggled)
+                        output_sample.toggle_show_audio_editor_button.on_toggle = lambda is_toggled: on_toggle_show_audio_editor(output_sample, is_toggled)
                         #output_sample.toggle_show_spectrogram_button.style("background: linear-gradient(45deg, #bf2a81, #322481);")
-                        output_sample.toggle_show_spectrogram_button.disable()
+                        output_sample.toggle_show_audio_editor_button.disable()
 
                         with ToggleButton(icon="tune", color="gray").classes("w-1") as output_sample.toggle_show_params_button:
                             ui.tooltip("Toggle parameters visibility")
@@ -777,16 +777,12 @@ class OutputEditor(ui.column):
                     "w-full gap-0").style("image-rendering: pixelated; width: 100%; height: auto;").props("fit=scale-down")
                 output_sample.sampling_progress_element = ui.linear_progress(
                     value="0%").classes("w-full font-bold gap-0").props("instant-feedback")
-                output_sample.spectrogram_image_element = ui.interactive_image(
-                    cross="white").classes("w-full gap-0").props(add="fit=fill")
+                output_sample.audio_editor_element = AudioEditor().classes("w-full gap-0").props(add="fit=fill")
                 output_sample.toggle_show_latents_button.toggle(is_toggled=False)
-                output_sample.toggle_show_spectrogram_button.toggle(is_toggled=False)
+                output_sample.toggle_show_audio_editor_button.toggle(is_toggled=False)
 
                 output_sample.select_range = ui.range(min=0, max=688, step=1, value={"min": 0, "max": 0}).classes("w-full").props("step snap color='orange' label='Inpaint Selection'")
                 output_sample.select_range.set_visibility(False)
-
-                output_sample.audio_element = ui.audio("").classes("w-full").props("preload='auto'").style("filter: invert(1) hue-rotate(180deg);")
-                output_sample.audio_element.set_visibility(False)
 
                 # re-use gen param and prompt editors in read-only mode to show sample params
                 with ui.row().classes("w-full") as output_sample.show_parameters_row_element:
@@ -822,21 +818,19 @@ class OutputEditor(ui.column):
         output_sample.name_label_element.set_text(output_sample.name)
         output_sample.rating_element.enable()
 
-        # set spectrogram image
+        # setup audio editor element
         spectrogram_image = output_sample.sample_output.spectrogram.mean(dim=(0,1))
         spectrogram_image = tensor_to_img(spectrogram_image, colormap=True, flip_y=True)
         spectrogram_image = cv2.resize(
             spectrogram_image, (spectrogram_image.shape[1]//4, spectrogram_image.shape[0]), interpolation=cv2.INTER_AREA)
         spectrogram_image = Image.fromarray(spectrogram_image)
-        output_sample.spectrogram_image_element.set_source(spectrogram_image)
+        output_sample.audio_editor_element.set_source(spectrogram_image)
         if self.get_app_config().hide_latents_after_generation == True:
             output_sample.toggle_show_latents_button.toggle(is_toggled=False)
-
-        output_sample.toggle_show_spectrogram_button.toggle(is_toggled=True)
-
-        # set audio element
-        output_sample.audio_element.set_source(output_sample.audio_path)
-        output_sample.audio_element.set_visibility(True)
+        output_sample.audio_editor_element.set_audio_source(output_sample.audio_path,
+            output_sample.sample_output.raw_sample.shape[-1] / self.format_config["sample_rate"])
+        output_sample.toggle_show_audio_editor_button.enable()
+        output_sample.toggle_show_audio_editor_button.toggle(is_toggled=True)
 
         # hide progress and setup inpainting range select element
         output_sample.sampling_progress_element.set_visibility(False)
@@ -847,7 +841,6 @@ class OutputEditor(ui.column):
         output_sample.select_range.update()
 
         output_sample.use_as_input_button.enable()
-        output_sample.toggle_show_spectrogram_button.enable()
         output_sample.toggle_show_debug_button.enable()
 
         # debug info and plots display
@@ -882,10 +875,6 @@ class OutputEditor(ui.column):
                         # todo: add units metadata to debug_info
                         if "curvature" in name:
                             ax.set_ylabel("radians")
-
-        #output_sample.audio_element.on("timeupdate", lambda e: self.logger.debug(e))
-        #output_sample.audio_element.seek(10)
-        #output_sample.audio_element.play()
 
     def clear_output_samples(self) -> None:
         self.output_samples_column.clear()

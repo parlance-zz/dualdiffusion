@@ -40,7 +40,7 @@ from utils.dual_diffusion_utils import (
 )
 from sampling.model_server import ModelServer
 from sampling.nicegui_elements import (
-    EditableSelect, ScrollableNumber, PromptEditor,
+    EditableSelect, PromptEditor,
     PresetEditor, OutputEditor, GenParamsEditor
 )
 
