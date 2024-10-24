@@ -25,7 +25,7 @@ import logging
 from nicegui import ui
 import nicegui.events
 
-from sampling.custom_audio import CustomAudio
+#from sampling.custom_audio import CustomAudio
 
 # *****************************************************************************
 import time
@@ -47,6 +47,52 @@ except ImportError:
     pass
 
 
+class CustomAudio(SourceElement, component='custom_audio.js'):
+    SOURCE_IS_MEDIA_FILE = True
+
+    def __init__(self, src: Union[str, Path], *,
+                 controls: bool = True,
+                 autoplay: bool = False,
+                 muted: bool = False,
+                 loop: bool = False,
+                 ) -> None:
+        """Audio
+
+        Displays an audio player.
+
+        :param src: URL or local file path of the audio source
+        :param controls: whether to show the audio controls, like play, pause, and volume (default: `True`)
+        :param autoplay: whether to start playing the audio automatically (default: `False`)
+        :param muted: whether the audio should be initially muted (default: `False`)
+        :param loop: whether the audio should loop (default: `False`)
+
+        See `here <https://developer.mozilla.org/en-US/docs/Web/HTML/Element/audio#events>`_
+        for a list of events you can subscribe to using the generic event subscription `on()`.
+        """
+        super().__init__(source=src)
+        self._props['controls'] = controls
+        self._props['autoplay'] = autoplay
+        self._props['muted'] = muted
+        self._props['loop'] = loop
+
+    def set_source(self, source: Union[str, Path]) -> None:
+        return super().set_source(source)
+
+    def seek(self, seconds: float) -> None:
+        """Seek to a specific position in the audio.
+
+        :param seconds: the position in seconds
+        """
+        self.run_method('seek', seconds)
+
+    def play(self) -> None:
+        """Play audio."""
+        self.run_method('play')
+
+    def pause(self) -> None:
+        """Pause audio."""
+        self.run_method('pause')
+
 class AudioPlayer(SourceElement, ContentElement, component='nicegui_audio_editor.js'):
     CONTENT_PROP = 'content'
     PIL_CONVERT_FORMAT = 'PNG'
@@ -64,6 +110,8 @@ class AudioPlayer(SourceElement, ContentElement, component='nicegui_audio_editor
         self._props['events'] = events[:]
         self._props['cross'] = cross
         self._props['size'] = size
+        self._props['duration'] = 0
+        self._props['select_range'] = False
 
         if on_mouse:
             self.on_mouse(on_mouse)
@@ -118,8 +166,11 @@ class AudioEditor(AudioPlayer):
         
         with self:
             self.audio_element = CustomAudio("", controls=False).props("preload='auto'").classes("w-full")
-            self.audio_element.on("event", lambda e: self.time_update(e))
-        
+            self.audio_element.on("time_update", lambda e: self.on_time_update(e))
+            self.audio_element.on("duration_change", lambda e: self.on_duration_change(e))
+            self.audio_element.on("play", lambda: self.on_play())
+            self.audio_element.on("pause", lambda: self.on_pause())
+            
         if audio_source is not None:
             self.set_audio_source(audio_source)
 
@@ -128,33 +179,38 @@ class AudioEditor(AudioPlayer):
     def handle_mouse(self, e: nicegui.events.MouseEventArguments) -> None:
         if e.type == "mousedown":
             if self.playing == False:
-                print(e)
                 self.seek(e.image_x * self.duration)
             self.play_pause()
 
-    def play_pause(self) -> None:
-        if self.playing == True:
-            self.pause()
-        else:
-            self.play()
-            
     def play(self) -> None:
+        self.audio_element.play()
+    def pause(self) -> None:
+        self.audio_element.pause()
+    def play_pause(self) -> None:
+        if self.playing == True: self.pause()
+        else: self.play()
+
+    def on_play(self) -> None:
         self.playing = True
         self.run_method("play", True)
-        self.audio_element.play()
-
-    def pause(self) -> None:
+    def on_pause(self) -> None:
         self.playing = False
         self.run_method("play", False)
-        self.audio_element.pause()
 
     def seek(self, seconds: float) -> None:
         self.audio_element.seek(seconds)
 
-    def time_update(self, e) -> None:
+    def on_time_update(self, e) -> None:
         self.run_method("set_time", e.args["time"])
+    def on_duration_change(self, e) -> None:
+        self.duration = e.args["duration"]
+        self.props(f"duration='{self.duration}'")
 
-    def set_audio_source(self, audio_path: str, duration: float) -> None:
+    def set_select_range(self, start: float, duration: float) -> None:
+        self.run_method("set_select_range", start, duration)
+
+    def set_audio_source(self, audio_path: str) -> None:
         self.audio_element.set_source(audio_path)
-        self.props(f"duration='{duration}'")
-        self.duration = duration
+
+    def debug(self, e) -> None:
+        self.logger.debug(e)

@@ -16,7 +16,10 @@ export default {
             <line v-if="cross" x1="0" :y1="y" x2="100%" :y2="y" :stroke="cross === true ? 'black' : cross" />
             <slot name="cross" :x="x" :y="y"></slot>
           </g>
-          <line :x1="tx" y1="0" :x2="tx" y2="100%" stroke="orange" />
+          <rect v-if="select_range" :x="sx" y="0" :width="sw" height="100%" fill="orange" fill-opacity="0.15" />
+          <line v-if="select_range" :x1="sx" y1="0" :x2="sx" y2="100%" stroke="orange" />
+          <line v-if="select_range" :x1="sx+sw" y1="0" :x2="sx+sw" y2="100%" stroke="orange" />
+          <line :x1="tx" y1="0" :x2="tx" y2="100%" stroke="orange" stroke-width="2" />
           <g v-html="content"></g>
         </svg>
         <slot></slot>
@@ -30,6 +33,8 @@ export default {
         x: 100,
         y: 100,
         tx: 0,
+        sx: 0,
+        sw: 0,
         playing: false,
         time: 0,
         last_timestamp: 0,
@@ -124,9 +129,6 @@ export default {
         });
       },
       play(playing) {
-        const imageWidth = this.src ? this.loaded_image_width : this.size ? this.size[0] : 1;
-        //alert(imageWidth);
-        //alert(this.$refs.img.clientWidth);
         this.playing = playing;
         if (this.playing) {
             requestAnimationFrame((t) => this.update_time_cross(t));
@@ -136,10 +138,13 @@ export default {
         this.time = time;
         this.last_timestamp = performance.now();
       },
+      set_select_range(start, duration) {
+        const pixels_per_second = this.loaded_image_width / this.duration;
+        this.sx = start * pixels_per_second;
+        this.sw = duration * pixels_per_second;
+      },
       update_time_cross(timestamp) {
         if (this.playing) {
-          //const imageWidth = this.src ? this.loaded_image_width : this.size ? this.size[0] : 1;
-          //const imageHeight = this.src ? this.loaded_image_height : this.size ? this.size[1] : 1;
           const pixels_per_second = this.loaded_image_width / this.duration;
           const seconds_since_set_time = (timestamp - this.last_timestamp) / 1000;
           this.tx = (this.time + seconds_since_set_time) * pixels_per_second;
@@ -172,6 +177,7 @@ export default {
       cross: Boolean,
       t: String,
       duration: Number,
+      select_range: Boolean,
     },
   };
   

@@ -633,10 +633,14 @@ class OutputEditor(ui.column):
                 output_sample.card_element.classes(remove="border-2", add="border-none")
                 output_sample.use_as_input_button.classes(remove="border-4", add="border-none")
                 output_sample.select_range.set_visibility(False)
+                output_sample.audio_editor_element._props["select_range"] = False
             else:
                 output_sample.card_element.classes(remove="border-none", add="border-2 border-orange-400")
                 output_sample.use_as_input_button.classes(remove="border-none", add="border-4")
                 output_sample.select_range.set_visibility(True)
+                output_sample.audio_editor_element._props["select_range"] = True
+
+            output_sample.audio_editor_element.update()
                 
     
     def add_output_sample(self, length: int, seed: int,
@@ -666,15 +670,26 @@ class OutputEditor(ui.column):
                 self.output_samples.insert(new_index, self.output_samples.pop(current_index))
                 self.refresh_output_samples()
 
+        def set_select_range(output_sample: OutputSample) -> None:
+            seconds_per_latent_pixel = output_sample.audio_editor_element.duration / output_sample.sample_output.latents.shape[-1]
+            duration = (output_sample.select_range.value["max"] - output_sample.select_range.value["min"]) * seconds_per_latent_pixel
+            output_sample.audio_editor_element.set_select_range(
+                output_sample.select_range.value["min"] * seconds_per_latent_pixel, duration)
+            
         def use_output_sample_as_input(output_sample: OutputSample) -> None:
             if self.input_output_sample == output_sample:
                 self.input_output_sample = None
             else:
                 self.input_output_sample = output_sample
             self.refresh_output_samples()
+            set_select_range(output_sample) # required to refresh select range
 
         def on_click_extend_button(output_sample: OutputSample) -> None:
             pass
+        
+        def on_play_audio(output_sample: OutputSample) -> None:
+            for sample in self.output_samples:
+                if sample != output_sample: sample.audio_editor_element.pause()
 
         def change_output_rating(output_sample: OutputSample, rating: int) -> None:
             try: update_audio_metadata(output_sample.audio_path, rating=rating)
@@ -708,7 +723,7 @@ class OutputEditor(ui.column):
             self.get_gen_params_editor().generate_length.set_value(output_sample.sample_params.length)
             self.get_prompt_editor().update_prompt(output_sample.prompt)
             ui.notification("Copied all parameters and prompt!", timeout=1, icon="content_copy")
-            
+        
         with ui.card().classes("w-full") as output_sample.card_element:
             with ui.column().classes("w-full gap-0"):
                 with ui.row().classes("h-10 justify-between gap-0 w-full no-wrap"):
@@ -778,10 +793,12 @@ class OutputEditor(ui.column):
                 output_sample.sampling_progress_element = ui.linear_progress(
                     value="0%").classes("w-full font-bold gap-0").props("instant-feedback")
                 output_sample.audio_editor_element = AudioEditor().classes("w-full gap-0").props(add="fit=fill")
+                output_sample.audio_editor_element.audio_element.on("play", lambda: on_play_audio(output_sample))
                 output_sample.toggle_show_latents_button.toggle(is_toggled=False)
                 output_sample.toggle_show_audio_editor_button.toggle(is_toggled=False)
 
-                output_sample.select_range = ui.range(min=0, max=688, step=1, value={"min": 0, "max": 0}).classes("w-full").props("step snap color='orange' label='Inpaint Selection'")
+                output_sample.select_range = ui.range(min=0, max=0, step=1, value={"min": 0, "max": 0}).classes("w-full").props("step snap color='orange' label='Inpaint Selection'")
+                output_sample.select_range.on_value_change(lambda: set_select_range(output_sample))
                 output_sample.select_range.set_visibility(False)
 
                 # re-use gen param and prompt editors in read-only mode to show sample params
@@ -827,18 +844,16 @@ class OutputEditor(ui.column):
         output_sample.audio_editor_element.set_source(spectrogram_image)
         if self.get_app_config().hide_latents_after_generation == True:
             output_sample.toggle_show_latents_button.toggle(is_toggled=False)
-        output_sample.audio_editor_element.set_audio_source(output_sample.audio_path,
-            output_sample.sample_output.raw_sample.shape[-1] / self.format_config["sample_rate"])
+        output_sample.audio_editor_element.set_audio_source(output_sample.audio_path)
         output_sample.toggle_show_audio_editor_button.enable()
         output_sample.toggle_show_audio_editor_button.toggle(is_toggled=True)
 
         # hide progress and setup inpainting range select element
         output_sample.sampling_progress_element.set_visibility(False)
         output_sample.select_range.max = output_sample.sample_output.latents.shape[-1]
-        output_sample.select_range.value = {
+        output_sample.select_range.set_value({
             "min": output_sample.select_range.max//2 - output_sample.select_range.max//4,
-            "max": output_sample.select_range.max//2 + output_sample.select_range.max//4}
-        output_sample.select_range.update()
+            "max": output_sample.select_range.max//2 + output_sample.select_range.max//4})
 
         output_sample.use_as_input_button.enable()
         output_sample.toggle_show_debug_button.enable()

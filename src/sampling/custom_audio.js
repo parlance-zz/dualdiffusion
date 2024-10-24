@@ -1,5 +1,13 @@
 export default {
-    template: `<audio ref="audioPlayer" @timeupdate="update_time" :controls="controls" :autoplay="autoplay" :muted="muted" :src="computed_src" />`,
+    template: `<audio
+                ref="audioPlayer"
+                @timeupdate="time_update"
+                @durationchange="duration_change"
+                :controls="controls"
+                :autoplay="autoplay"
+                :muted="muted"
+                :src="computed_src"
+               />`,
     props: {
       controls: Boolean,
       autoplay: Boolean,
@@ -24,9 +32,13 @@ export default {
       seek(seconds) {
         this.$el.currentTime = seconds;
       },
-      update_time() {
+      time_update() {
         this.currentTime = this.$refs.audioPlayer.currentTime;
-        this.$emit("event", {time: this.currentTime});
+        this.$emit("time_update", {time: this.currentTime});
+      },
+      duration_change() {
+        this.duration = this.$refs.audioPlayer.duration;
+        this.$emit("duration_change", {duration: this.duration});
       },
       play() {
         this.$el.play();
