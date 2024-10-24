@@ -1,1 +1,3 @@
-sampling/
+sampling/*
+!sampling/nicegui_app.json
+!sampling/presets/default.json
