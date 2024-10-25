@@ -815,6 +815,9 @@ class OutputEditor(ui.column):
 
                 # setup inpainting range select element
                 output_sample.select_range = ui.range(min=0, max=0, step=1, value={"min": 0, "max": 0}).classes("w-full").props("step snap color='orange' label='Inpaint Selection'")
+                if self.input_output_sample is not None:
+                    output_sample.select_range.max = self.input_output_sample.sample_output.latents.shape[-1]
+                    output_sample.select_range.set_value({**self.input_output_sample.select_range.value})
                 output_sample.select_range.on_value_change(lambda: set_select_range(output_sample))
                 output_sample.select_range.set_visibility(False)
 
@@ -870,10 +873,17 @@ class OutputEditor(ui.column):
         output_sample.toggle_show_audio_editor_button.toggle(is_toggled=True)
 
         # setup inpainting range select element and enable use as input button
-        output_sample.select_range.max = output_sample.sample_output.latents.shape[-1]
-        output_sample.select_range.set_value({
-            "min": output_sample.select_range.max//2 - output_sample.select_range.max//4,
-            "max": output_sample.select_range.max//2 + output_sample.select_range.max//4})
+        if output_sample.select_range.max == 0:
+            output_sample.select_range.max = output_sample.sample_output.latents.shape[-1]
+            output_sample.select_range.set_value({
+                "min": output_sample.select_range.max//2 - output_sample.select_range.max//4,
+                "max": output_sample.select_range.max//2 + output_sample.select_range.max//4})
+        else:
+            output_sample.select_range.set_value({**output_sample.select_range.value}) # refreshes select range in audio editor
+            # this needs to be calculated from the output raw sample shape because the duration is only refreshed after the audio element is loaded
+            seconds_per_latent_pixel = (output_sample.sample_output.raw_sample.shape[-1] / self.format_config["sample_rate"]) / output_sample.sample_output.latents.shape[-1]
+            output_sample.audio_editor_element.seek(output_sample.select_range.value["min"] * seconds_per_latent_pixel)
+            
         output_sample.use_as_input_button.enable()
         
         # debug info and plots display

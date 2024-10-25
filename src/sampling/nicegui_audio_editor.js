@@ -138,6 +138,10 @@ export default {
       set_time(time) {
         this.time = time;
         this.last_timestamp = performance.now();
+        if (!this.playing) {
+            const pixels_per_second = this.loaded_image_width / this.duration;
+            this.tx = this.time * pixels_per_second;
+        }
       },
       set_select_range(start, duration) {
         const pixels_per_second = this.loaded_image_width / this.duration;

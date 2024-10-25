@@ -205,6 +205,7 @@ class AudioEditor(AudioPlayer):
         else: self.play()
     def seek(self, seconds: float) -> None:
         self.audio_element.seek(seconds)
+        self.run_method("set_time", seconds)
 
     def on_play(self) -> None:
         self.playing = True
