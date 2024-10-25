@@ -16,10 +16,29 @@ export default {
             <line v-if="cross" x1="0" :y1="y" x2="100%" :y2="y" :stroke="cross === true ? 'black' : cross" />
             <slot name="cross" :x="x" :y="y"></slot>
           </g>
-          <rect v-if="select_range" :x="sx" y="0" :width="sw" height="100%" fill="orange" fill-opacity="0.15" />
-          <line v-if="select_range" :x1="sx" y1="0" :x2="sx" y2="100%" stroke="orange" />
-          <line v-if="select_range" :x1="sx+sw" y1="0" :x2="sx+sw" y2="100%" stroke="orange" />
-          <line :x1="tx" y1="0" :x2="tx" y2="100%" stroke="orange" stroke-width="2" />
+          <rect v-if="highlight_range && !loading && (duration > 0)"
+            :x="highlight_start * loaded_image_width / duration"
+            :width="highlight_duration * loaded_image_width / duration"
+            y="0" height="100%" fill="white" fill-opacity="0.15"
+          />
+          <rect v-if="select_range && !loading && (duration > 0)"
+            :x="shdw_select_start * loaded_image_width / duration"
+            :width="shdw_select_duration * loaded_image_width / duration"
+            y="0" height="100%" fill="orange" fill-opacity="0.125"
+          />
+          <line v-if="select_range && !loading && (duration > 0)"
+            :x1="shdw_select_start * loaded_image_width / duration"
+            y1="0"
+            :x2="shdw_select_start * loaded_image_width / duration"
+            y2="100%" stroke="orange" stroke-opacity="0.75"
+          />
+          <line v-if="select_range && !loading && (duration > 0)"
+            :x1="(shdw_select_start + shdw_select_duration) * loaded_image_width / duration"
+            y1="0"
+            :x2="(shdw_select_start + shdw_select_duration) * loaded_image_width / duration"
+            y2="100%" stroke="orange" stroke-opacity="0.75"
+          />
+          <line v-if="!loading && (duration > 0)" :x1="tx" y1="0" :x2="tx" y2="100%" stroke="orange" stroke-width="2" />
           <g v-html="content"></g>
         </svg>
         <slot></slot>
@@ -30,14 +49,14 @@ export default {
         viewBox: "0 0 0 0",
         loaded_image_width: 0,
         loaded_image_height: 0,
-        x: 100,
-        y: 100,
-        tx: 0, // time crosshair x position (in pixels)
-        sx: 0, // selection start x position (in pixels)
-        sw: 0, // selection width (in pixels)
-        playing: false,
-        time: 0,
-        last_timestamp: 0,
+        x: 100,            // crosshair x position (in pixels)
+        y: 100,            // crosshair y position (in pixels)
+        playing: false,    // set if associated audio is playing
+        tx: 0,             // time crosshair x position (in pixels)
+        time: 0,           // last updatetime from audio element (seconds)
+        last_timestamp: 0, // timestamp of last updatetime (milliseconds)
+        shdw_select_start: 0,    // shadows select_start prop for better reactivity
+        shdw_select_duration: 0, // shadows select_duration prop for better reactivity
         showCross: false,
         computed_src: undefined,
         waiting_source: undefined,
@@ -100,6 +119,7 @@ export default {
         this.loaded_image_height = e.target.naturalHeight;
         this.viewBox = `0 0 ${this.loaded_image_width} ${this.loaded_image_height}`;
         this.$emit("loaded", { width: this.loaded_image_width, height: this.loaded_image_height, source: e.target.src });
+        this.set_select_range(this.select_start, this.select_duration);
       },
       onMouseEvent(type, e) {
         //const imageWidth = this.src ? this.loaded_image_width : this.size ? this.size[0] : 1;
@@ -138,15 +158,15 @@ export default {
       set_time(time) {
         this.time = time;
         this.last_timestamp = performance.now();
-        if (!this.playing) {
+        if (!this.playing && !this.loading && (this.duration > 0)) {
             const pixels_per_second = this.loaded_image_width / this.duration;
             this.tx = this.time * pixels_per_second;
         }
       },
+      // updates shadow attributes _select_start and _select_duration for better reactivity
       set_select_range(start, duration) {
-        const pixels_per_second = this.loaded_image_width / this.duration;
-        this.sx = start * pixels_per_second;
-        this.sw = duration * pixels_per_second;
+        this.shdw_select_start = start;
+        this.shdw_select_duration = duration;
       },
       update_time_cross(timestamp) {
         if (this.playing) {
@@ -181,8 +201,13 @@ export default {
       events: Array,
       cross: Boolean,
       t: String,
-      duration: Number,
-      select_range: Boolean,
+      duration: Number,            // duration of associated audio (seconds)
+      select_range: Boolean,       // enables selection range display
+      select_start: Number,        // start of selection range (seconds)
+      select_duration: Number,     // duration of selection range (seconds)
+      highlight_range: Boolean,    // enables highlight range display
+      highlight_start: Number,     // start of highlight range (seconds
+      highlight_duration: Number,  // duration of highlight range (seconds)
     },
   };
   

@@ -638,12 +638,12 @@ class OutputEditor(ui.column):
                 output_sample.card_element.classes(remove="border-2", add="border-none")
                 output_sample.use_as_input_button.classes(remove="border-4", add="border-none")
                 output_sample.select_range.set_visibility(False)
-                output_sample.audio_editor_element._props["select_range"] = False
+                output_sample.audio_editor_element.set_select_range_visibility(False)
             else:
                 output_sample.card_element.classes(remove="border-none", add="border-2 border-orange-400")
                 output_sample.use_as_input_button.classes(remove="border-none", add="border-4")
                 output_sample.select_range.set_visibility(True)
-                output_sample.audio_editor_element._props["select_range"] = True
+                output_sample.audio_editor_element.set_select_range_visibility(True)
             output_sample.audio_editor_element.update()
                 
     # adds a new output sample to the top of the workspace, queued initially
@@ -676,13 +676,13 @@ class OutputEditor(ui.column):
                 self.output_samples.insert(new_index, self.output_samples.pop(current_index))
                 self.refresh_output_samples()
 
-        # updates the select-range overlay in the AudioEditor element
+        # update the select-range overlay in the AudioEditor element
         def set_select_range(output_sample: OutputSample) -> None:
-            seconds_per_latent_pixel = output_sample.audio_editor_element.duration / output_sample.sample_output.latents.shape[-1]
+            seconds_per_latent_pixel = output_sample.audio_editor_element._props["duration"] / output_sample.sample_output.latents.shape[-1]
             duration = (output_sample.select_range.value["max"] - output_sample.select_range.value["min"]) * seconds_per_latent_pixel
             output_sample.audio_editor_element.set_select_range(
                 output_sample.select_range.value["min"] * seconds_per_latent_pixel, duration)
-        
+            
         # selects the chosen output sample as current input sample
         def use_output_sample_as_input(output_sample: OutputSample) -> None:
             if self.input_output_sample == output_sample:
@@ -815,11 +815,15 @@ class OutputEditor(ui.column):
 
                 # setup inpainting range select element
                 output_sample.select_range = ui.range(min=0, max=0, step=1, value={"min": 0, "max": 0}).classes("w-full").props("step snap color='orange' label='Inpaint Selection'")
-                if self.input_output_sample is not None:
-                    output_sample.select_range.max = self.input_output_sample.sample_output.latents.shape[-1]
-                    output_sample.select_range.set_value({**self.input_output_sample.select_range.value})
                 output_sample.select_range.on_value_change(lambda: set_select_range(output_sample))
                 output_sample.select_range.set_visibility(False)
+
+                # add highlight range for the inpainting region, if any
+                if self.input_output_sample is not None:
+                    output_sample.audio_editor_element.set_highlight_range(
+                        self.input_output_sample.audio_editor_element._props["select_start"],
+                        self.input_output_sample.audio_editor_element._props["select_duration"])
+                    output_sample.audio_editor_element.set_highlight_range_visibility(True)
 
                 # re-use gen param and prompt editors in read-only mode to show sample params
                 with ui.row().classes("w-full") as output_sample.show_parameters_row_element:
@@ -868,22 +872,16 @@ class OutputEditor(ui.column):
         output_sample.audio_editor_element.set_source(spectrogram_image)
         if self.get_app_config().hide_latents_after_generation == True:
             output_sample.toggle_show_latents_button.toggle(is_toggled=False)
-        output_sample.audio_editor_element.set_audio_source(output_sample.audio_path)
+        audio_duration = output_sample.sample_output.raw_sample.shape[-1] / self.format_config["sample_rate"]
+        output_sample.audio_editor_element.set_audio_source(output_sample.audio_path, duration=audio_duration)
         output_sample.toggle_show_audio_editor_button.enable()
         output_sample.toggle_show_audio_editor_button.toggle(is_toggled=True)
 
-        # setup inpainting range select element and enable use as input button
-        if output_sample.select_range.max == 0:
-            output_sample.select_range.max = output_sample.sample_output.latents.shape[-1]
-            output_sample.select_range.set_value({
-                "min": output_sample.select_range.max//2 - output_sample.select_range.max//4,
-                "max": output_sample.select_range.max//2 + output_sample.select_range.max//4})
-        else:
-            output_sample.select_range.set_value({**output_sample.select_range.value}) # refreshes select range in audio editor
-            # this needs to be calculated from the output raw sample shape because the duration is only refreshed after the audio element is loaded
-            seconds_per_latent_pixel = (output_sample.sample_output.raw_sample.shape[-1] / self.format_config["sample_rate"]) / output_sample.sample_output.latents.shape[-1]
-            output_sample.audio_editor_element.seek(output_sample.select_range.value["min"] * seconds_per_latent_pixel)
-            
+        # setup inpainting range select element and enable use as input button        
+        output_sample.select_range.max = output_sample.sample_output.latents.shape[-1]
+        output_sample.select_range.set_value({
+            "min": output_sample.select_range.max//2 - output_sample.select_range.max//4,
+            "max": output_sample.select_range.max//2 + output_sample.select_range.max//4})
         output_sample.use_as_input_button.enable()
         
         # debug info and plots display

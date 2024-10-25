@@ -132,6 +132,11 @@ class AudioPlayer(SourceElement, ContentElement, component='nicegui_audio_editor
         self._props['size'] = size
         self._props['duration'] = 0
         self._props['select_range'] = False
+        self._props['select_start'] = 0
+        self._props['select_duration'] = 0
+        self._props['highlight_range'] = False
+        self._props['highlight_start'] = 0
+        self._props['highlight_duration'] = 0
 
         if on_mouse:
             self.on_mouse(on_mouse)
@@ -182,16 +187,15 @@ class AudioEditor(AudioPlayer):
 
         self.logger = logging.getLogger(name="nicegui_app")
         self.playing = False
-        self.duration = 0
         self.add_slot("cross", '<line :x1="props.x" y1="0" :x2="props.x" y2="100%" stroke="white" />')
         self.on_mouse(lambda e: self._on_mouse(e))
 
         with self:
             self.audio_element = CustomAudio("", controls=False).props("preload='auto'").classes("w-full")
-            self.audio_element.on("time_update", lambda e: self.on_time_update(e))
-            self.audio_element.on("duration_change", lambda e: self.on_duration_change(e))
-            self.audio_element.on("play", lambda: self.on_play())
-            self.audio_element.on("pause", lambda: self.on_pause())
+            self.audio_element.on("time_update", lambda e: self.on_audio_time_update(e))
+            self.audio_element.on("duration_change", lambda e: self.on_audio_duration_change(e))
+            self.audio_element.on("play", lambda: self.on_audio_play())
+            self.audio_element.on("pause", lambda: self.on_audio_pause())
             
         if audio_source is not None:
             self.set_audio_source(audio_source)
@@ -207,24 +211,36 @@ class AudioEditor(AudioPlayer):
         self.audio_element.seek(seconds)
         self.run_method("set_time", seconds)
 
-    def on_play(self) -> None:
+    def on_audio_play(self) -> None:
         self.playing = True
         self.run_method("play", True)
-    def on_pause(self) -> None:
+    def on_audio_pause(self) -> None:
         self.playing = False
         self.run_method("play", False)
-    def on_time_update(self, e) -> None:
+    def on_audio_time_update(self, e) -> None:
         self.run_method("set_time", e.args["time"])
-    def on_duration_change(self, e) -> None:
-        self.duration = e.args["duration"]
-        self.props(f"duration='{self.duration}'")
+    def on_audio_duration_change(self, e) -> None:
+        self._props["duration"] = e.args["duration"]
 
     def set_select_range(self, start: float, duration: float) -> None:
+        self._props["select_start"] = start
+        self._props["select_duration"] = duration
         self.run_method("set_select_range", start, duration)
-    def set_audio_source(self, audio_path: str) -> None:
+    def set_select_range_visibility(self, visible: bool) -> None:
+        self._props["select_range"] = visible
+    def set_highlight_range(self, start: float, duration: float) -> None:
+        self._props["highlight_start"] = start
+        self._props["highlight_duration"] = duration
+    def set_highlight_range_visibility(self, visible: bool) -> None:
+        self._props["highlight_range"] = visible
+
+    def set_audio_source(self, audio_path: str, duration: Optional[float] = None) -> None:
         self.audio_element.set_source(audio_path)
+        if duration is not None:
+            self._props["duration"] = duration
+
     def _on_mouse(self, e: nicegui.events.MouseEventArguments) -> None:
         if e.type == "mousedown":
             if self.playing == False:
-                self.seek(e.image_x * self.duration)
+                self.seek(e.image_x * self._props["duration"])
             self.play_pause()
