@@ -197,6 +197,8 @@ class AudioEditor(AudioPlayer):
             self.audio_element.on("play", lambda: self.on_audio_play())
             self.audio_element.on("pause", lambda: self.on_audio_pause())
             
+            nicegui.ui.context_menu() # disables browser right-click context menu
+            
         if audio_source is not None:
             self.set_audio_source(audio_source)
 
@@ -239,8 +241,11 @@ class AudioEditor(AudioPlayer):
         if duration is not None:
             self._props["duration"] = duration
 
+    # left click to seek/play, right click to pause
     def _on_mouse(self, e: nicegui.events.MouseEventArguments) -> None:
         if e.type == "mousedown":
-            if self.playing == False:
+            if e.button == 0:
                 self.seek(e.image_x * self._props["duration"])
-            self.play_pause()
+                self.play()
+            else:
+                self.pause()
