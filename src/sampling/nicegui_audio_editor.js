@@ -52,7 +52,7 @@ export default {
         x: 100,            // crosshair x position (in pixels)
         y: 100,            // crosshair y position (in pixels)
         playing: false,    // set if associated audio is playing
-        tx: 0,             // time crosshair x position (in pixels)
+        tx: 4,             // time crosshair x position (in pixels) (small offset for better invisibility)
         time: 0,           // last updatetime from audio element (seconds)
         last_timestamp: 0, // timestamp of last updatetime (milliseconds)
         shdw_select_start: 0,    // shadows select_start prop for better reactivity
@@ -173,6 +173,9 @@ export default {
           const pixels_per_second = this.loaded_image_width / this.duration;
           const seconds_since_set_time = (timestamp - this.last_timestamp) / 1000;
           this.tx = (this.time + seconds_since_set_time) * pixels_per_second;
+          // these offsets give better invisibility at the very begining and end of the sample
+          if (this.tx < 4) { this.tx = 4; }
+          if (this.tx > this.loaded_image_width - 1) { this.tx = this.loaded_image_width - 1; }
           requestAnimationFrame((t) => this.update_time_cross(t));
         }
       },

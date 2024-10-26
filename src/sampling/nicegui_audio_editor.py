@@ -209,9 +209,10 @@ class AudioEditor(AudioPlayer):
     def play_pause(self) -> None:
         if self.playing == True: self.pause()
         else: self.play()
-    def seek(self, seconds: float) -> None:
+    def seek(self, seconds: float, no_set_time: bool = False) -> None:
         self.audio_element.seek(seconds)
-        self.run_method("set_time", seconds)
+        if not no_set_time: # mitigates jitter if audio plays immediately after seeking
+            self.run_method("set_time", seconds)
 
     def on_audio_play(self) -> None:
         self.playing = True
@@ -245,7 +246,7 @@ class AudioEditor(AudioPlayer):
     def _on_mouse(self, e: nicegui.events.MouseEventArguments) -> None:
         if e.type == "mousedown":
             if e.button == 0:
-                self.seek(e.image_x * self._props["duration"])
+                self.seek(e.image_x * self._props["duration"], no_set_time=True)
                 self.play()
             else:
                 self.pause()
