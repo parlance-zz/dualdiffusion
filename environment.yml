@@ -6,7 +6,8 @@ channels:
 dependencies:
   - python=3.10
   - nvidia::cudatoolkit
-  - pytorch::pytorch  
+  - pytorch::pytorch
+  - ffmpeg<7::conda-forge # for torchaudio, replaces soundfile
   - pip
   - numpy
   - torchaudio
@@ -18,7 +19,7 @@ dependencies:
     - safetensors
     - tensorboard
     - opencv-python
-    - soundfile
+    #- soundfile
     - python-dotenv
     - mutagen
     - nicegui

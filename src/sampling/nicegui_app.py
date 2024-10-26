@@ -49,13 +49,18 @@ from sampling.nicegui_elements import (
 class NiceGUIAppConfig:
     model_name: str
     model_load_options: dict
+
     save_output_latents: bool = True
     hide_latents_after_generation: bool = True
     use_verbose_labels: bool = False
 
+    output_audio_format: str = ".flac"
+    output_audio_bitrate: Optional[int] = None
+    output_audio_compression_level: Optional[int]  = None
+    output_audio_qscale: Optional[int] = 9
+    
     web_server_host: Optional[str] = None
     web_server_port: int = 3001
-
     enable_dark_mode: bool = True
     enable_debug_logging: bool = False
     max_debug_log_length: int = 10000

@@ -35,7 +35,7 @@ import cv2
 import safetensors.torch as ST
 import matplotlib.pyplot as plt
 from scipy.special import erfinv
-from mutagen import File as MTAudioFile
+import mutagen
 from safetensors import safe_open
 
 from utils.roseus_colormap import ROSEUS_COLORMAP
@@ -186,7 +186,8 @@ def save_audio(raw_samples: torch.Tensor,
                output_path: str,
                target_lufs: float = -11.,
                metadata: Optional[dict] = None,
-               no_clobber: bool = False) -> str:
+               no_clobber: bool = False,
+               compression: Optional[torchaudio.io.CodecConfig] = None) -> str:
     
     raw_samples = raw_samples.detach().real.float()
     if raw_samples.ndim == 1:
@@ -200,34 +201,47 @@ def save_audio(raw_samples: torch.Tensor,
     
     if no_clobber == True:
         output_path = get_no_clobber_filepath(output_path)
-
-    torchaudio.save(output_path, raw_samples.cpu(), sample_rate, bits_per_sample=16)
+    
+    audio_format = os.path.splitext(output_path)[1].lower()
+    bits_per_sample = 16 if audio_format in [".wav", ".flac"] else None
+    torchaudio.save(output_path, raw_samples.cpu(),
+        sample_rate, bits_per_sample=bits_per_sample, compression=compression)
 
     if metadata is not None:
-        audio_file = MTAudioFile(output_path)
-        for key in metadata:
-            audio_file[key] = metadata[key]
-        audio_file.save()
+        update_audio_metadata(output_path, metadata)
 
     return output_path
 
 def update_audio_metadata(audio_path: str,
                           metadata: Optional[dict] = None,
                           rating: Optional[int] = None) -> None:
+    
     metadata = metadata or {}
+    audio_format = os.path.splitext(audio_path)[1].lower()
 
-    if rating is not None:
+    if rating is not None and audio_format != ".mp3":
         metadata = metadata.copy()
-        metadata.update({
+        # documentation on rating metadata is scarce, this works for VLC but not windows explorer/media player
+        metadata.update({ 
             "RATING": str(rating),
             "RATING WMP": str(rating),
             "FMPS_RATING": f"{rating/5}"
         })
 
-    if len(metadata) > 0:
-        audio_file = MTAudioFile(audio_path)
+    if len(metadata) > 0 or rating is not None:
+        audio_file = mutagen.File(audio_path)
+
         for key in metadata:
-            audio_file[key] = metadata[key]    
+            if audio_format != ".mp3": audio_file[key] = metadata[key]
+            else: audio_file[f"TXXX:{key}"] = mutagen.id3.TXXX(encoding=3, desc=key, text=metadata[key])
+        
+        # this works for windows explorer/media player but not VLC
+        if rating is not None and audio_format == ".mp3":
+            rating = int(min(max(rating, 0), 5))
+            rating = [0, 1, 64, 128, 196, 255][rating] # whoever came up with this scale is an idiot
+            audio_file["POPM:Windows Media Player 9 Series"] = mutagen.id3.POPM(
+                email="Windows Media Player 9 Series", rating=rating)
+
         audio_file.save()
 
 def torch_dtype(dtype: Union[str, torch.dtype]) -> torch.dtype:
@@ -310,14 +324,17 @@ def load_safetensors_ex(input_path: str, # returns metadata
     with open(input_path,'rb') as f:
         tensors_dict = ST.load(f.read())
     with safe_open(input_path, framework="pt", device=device) as f:
-        metadata = dict(f.metadata())
+        metadata = f.metadata()
+        if metadata is not None:
+            metadata = dict(metadata)
 
     return tensors_dict, metadata
 
 def update_safetensors_metadata(safetensors_path: str,
                                 new_metadata: dict[str, str]) -> None:
-    
+    if new_metadata is None: return
     tensors_dict, metadata = load_safetensors_ex(safetensors_path)
+    metadata = metadata or {}
     metadata.update(new_metadata)
     ST.save_file(tensors_dict, safetensors_path, metadata=metadata)
 

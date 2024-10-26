@@ -33,6 +33,7 @@ import random
 
 import numpy as np
 import torch
+import torchaudio
 import cv2
 from nicegui import ui
 
@@ -593,12 +594,22 @@ class OutputEditor(ui.column):
         }
 
         last_global_step = self.model_metadata["last_global_step"]["unet"]
-        audio_output_filename = f"{sample_output.params.get_label(self.model_metadata, self.dataset_game_ids, verbose=self.get_app_config().use_verbose_labels)}.flac"
+        audio_format = self.get_app_config().output_audio_format.lower()
+        audio_output_filename = f"{sample_output.params.get_label(self.model_metadata, self.dataset_game_ids, verbose=self.get_app_config().use_verbose_labels)}{audio_format}"
         audio_output_path = os.path.join(
             config.MODELS_PATH, self.model_name, "output", f"step_{last_global_step}", audio_output_filename)
-        
+
+        if audio_format == ".mp3":
+            bit_rate = self.get_app_config().output_audio_bitrate or -1
+            qscale = self.get_app_config().output_audio_qscale or 9
+            compression_level = self.get_app_config().output_audio_compression_level or -1
+            compression = torchaudio.io.CodecConfig(
+                bit_rate=bit_rate, compression_level=compression_level, qscale=qscale)
+        else:
+            compression = None
+            
         audio_output_path = save_audio(sample_output.raw_sample.squeeze(0),
-            self.format_config["sample_rate"], audio_output_path, metadata=metadata, no_clobber=True)
+            self.format_config["sample_rate"], audio_output_path, metadata=metadata, no_clobber=True, compression=compression)
         self.logger.info(f"Saved audio output to {audio_output_path}")
 
         if self.get_app_config().save_output_latents == True and sample_output.latents is not None:
