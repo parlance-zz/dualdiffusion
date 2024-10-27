@@ -33,12 +33,16 @@ export default {
         this.$el.currentTime = seconds;
       },
       time_update() {
-        this.currentTime = this.$refs.audioPlayer.currentTime;
-        this.$emit("time_update", {time: this.currentTime});
+        if (this.$refs.audioPlayer != null) {
+          this.currentTime = this.$refs.audioPlayer.currentTime;
+          this.$emit("time_update", {time: this.currentTime});
+        }
       },
       duration_change() {
-        this.duration = this.$refs.audioPlayer.duration;
-        this.$emit("duration_change", {duration: this.duration});
+        if (this.$refs.audioPlayer != null) {
+          this.duration = this.$refs.audioPlayer.duration;
+          this.$emit("duration_change", {duration: this.duration});
+        }
       },
       play() {
         this.$el.play();
