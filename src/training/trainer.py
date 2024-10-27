@@ -33,6 +33,7 @@ import platform
 from datetime import datetime
 from typing import Optional, Literal, Type, Union
 from dataclasses import dataclass
+from copy import deepcopy
 
 import torch
 import torch.utils.checkpoint
@@ -100,14 +101,17 @@ class OptimizerConfig:
 
 @dataclass
 class EMAConfig:
-    use_ema: bool                  = False
-    use_switch_ema: bool           = False
-    switch_ema_initial_beta: float = 0.9999
-    switch_ema_gamma: float        = 0.5
-    ema_max_beta: float            = 0.999999
-    ema_min_beta: float            = 0.999
-    ema_betas: tuple[float]  = (0.9999,)
-    ema_cpu_offload: bool   = False
+    use_ema: bool               = False
+    use_switch_ema: bool        = False
+    use_dynamic_betas: bool     = False
+    dynamic_initial_beta: float = 0.9999
+    dynamic_beta_gamma: float   = 0.5
+    dynamic_max_beta: float     = 0.999999
+    dynamic_min_beta: float     = 0.999
+    ema_betas: tuple[float]     = (0.9999,)
+    feedback_ema_index: Optional[int] = None
+    feedback_ema_beta: float    = 0.9999
+    ema_cpu_offload: bool = False
 
 @dataclass
 class DataLoaderConfig:
@@ -309,12 +313,11 @@ class DualDiffusionTrainer:
             self.module.normalize_weights()
         
     def init_ema_manager(self) -> None:
-        
-        if self.config.ema.use_ema == True:
 
-            if self.config.ema.use_switch_ema == True:
-                ema_betas = (self.config.ema.switch_ema_initial_beta ** (1/self.config.ema.switch_ema_gamma),
-                          self.config.ema.switch_ema_initial_beta ** self.config.ema.switch_ema_gamma)
+        if self.config.ema.use_ema == True:
+            if self.config.ema.use_dynamic_betas == True:
+                ema_betas = (self.config.ema.dynamic_initial_beta ** (1/self.config.ema.dynamic_beta_gamma),
+                          self.config.ema.dynamic_initial_beta ** self.config.ema.dynamic_beta_gamma)
             else:
                 ema_betas = self.config.ema.ema_betas
                 if len(ema_betas) == 0:
@@ -323,15 +326,20 @@ class DualDiffusionTrainer:
             ema_device = "cpu" if self.config.ema.ema_cpu_offload else self.accelerator.device
             self.ema_manager = EMA_Manager(self.module, betas=ema_betas, device=self.accelerator.device)
 
-            if self.config.ema.use_switch_ema == False:
+            if self.config.ema.use_dynamic_betas == False:
                 self.logger.info(f"Using EMA model(s) with beta(s): {ema_betas}")
             else:
-                self.logger.info(f"Using SwitchEMA with initial beta: {self.config.ema.switch_ema_initial_beta} gamma: {self.config.ema.switch_ema_gamma}")
+                self.logger.info(f"Using EMA dynamic betas with initial beta: {self.config.ema.dynamic_initial_beta} gamma: {self.config.ema.dynamic_beta_gamma}")
             self.logger.info(f"  EMA CPU offloading {'enabled' if ema_device == 'cpu' else 'disabled'}")
-        else:
+
             if self.config.ema.use_switch_ema == True:
-                raise ValueError("SwitchEMA is enabled but EMA is disabled")
-            
+                if self.config.ema.feedback_ema_index is not None:
+                    raise ValueError("Error: Found both SwitchEMA and feedback EMA enabled")
+                self.logger.info("  Using SwitchEMA")
+            else:
+                if self.config.ema.feedback_ema_index is not None:
+                    self.logger.info(f"  Using feedback EMA with index: {self.config.ema.feedback_ema_index} beta: {self.config.ema.feedback_ema_beta}")
+        else:
             self.logger.info("Not using EMA")
 
     def init_optimizer(self) -> None:
@@ -387,11 +395,10 @@ class DualDiffusionTrainer:
             if self.config.ema.use_ema == True: # load / create EMA weights
                 ema_model_dir = os.path.join(input_dir, self.config.module_name)
 
-                # betas are dynamic for SwitchEMA
-                if self.config.ema.use_switch_ema == True:
+                if self.config.ema.use_dynamic_betas == True:
                     ema_list, ema_betas = get_ema_list(ema_model_dir)
                     if len(ema_list) != 2:
-                        raise FileNotFoundError("SwitchEMA is enabled but did not find 2 EMA models")
+                        raise FileNotFoundError("config.ema.use_dynamic_betas is enabled but did not find 2 EMA models")
                     self.ema_manager.betas = ema_betas
                 
                 ema_load_errors = self.ema_manager.load(ema_model_dir, target_module=model)
@@ -704,6 +711,10 @@ class DualDiffusionTrainer:
                     if self.config.ema.use_ema:
                         self.ema_manager.update(global_step * self.total_batch_size, self.total_batch_size)
 
+                        if self.config.ema.feedback_ema_index is not None:
+                            self.ema_manager.feedback(global_step * self.total_batch_size, self.total_batch_size,
+                                self.config.ema.feedback_ema_index, self.config.ema.feedback_ema_beta)
+
                     train_logger.add_logs(self.module_trainer.finish_batch())
 
                     logs = train_logger.get_logs()
@@ -768,42 +779,51 @@ class DualDiffusionTrainer:
         start_validation_time = datetime.now()
         self.module.eval()
 
+        # create a backup copy of train weights if we're not using switch ema
+        if self.config.ema.use_switch_ema != True:
+            backup_module = deepcopy(self.module)
+
+        # get validation losses for each ema
+        ema_validations_logs = []
+        for i, ema in enumerate(self.ema_manager.emas):
+            self.module.load_state_dict(ema.state_dict())
+            self.module.normalize_weights()
+            ema_validations_logs.append(self.run_validation_epoch(f"ema_{i}"))
+            self.logger.info(f"EMA beta: {self.ema_manager.betas[i]} loss_validation: {ema_validations_logs[i]['loss_validation']}")
+
+        # choose the ema with the lowest validation loss
+        best_ema_index = min(enumerate(ema_validations_logs), key=lambda x: x[1]["loss_validation"])[0]
+        self.logger.info(f"Best EMA beta: {self.ema_manager.betas[best_ema_index]} with loss_validation: {ema_validations_logs[best_ema_index]['loss_validation']}")
+        best_ema = self.ema_manager.emas[best_ema_index]
+        best_beta = self.ema_manager.betas[best_ema_index]
+        best_logs = ema_validations_logs[best_ema_index]
+        
+        # only log the best ema (and the associated beta)
+        best_logs["ema/best_ema_beta_9s"] = -math.log10(1 - best_beta)
+        self.accelerator.log(best_logs, step=global_step)
+
         if self.config.ema.use_switch_ema == True:
-            # get validation losses for each ema
-            ema_validations_logs = []
-            for i, ema in enumerate(self.ema_manager.emas):
-                self.module.load_state_dict(ema.state_dict())
-                self.module.normalize_weights()
-                ema_validations_logs.append(self.run_validation_epoch(f"ema_{i}"))
-                self.logger.info(f"SwitchEMA beta: {self.ema_manager.betas[i]} loss_validation: {ema_validations_logs[i]['loss_validation']}")
-
-            # choose the ema with the lowest validation loss
-            winning_ema_index = min(enumerate(ema_validations_logs), key=lambda x: x[1]["loss_validation"])[0]
-            self.logger.info(f"Winning EMA beta: {self.ema_manager.betas[winning_ema_index]} with loss_validation: {ema_validations_logs[winning_ema_index]['loss_validation']}")
-            winning_ema = self.ema_manager.emas[winning_ema_index]
-            winning_beta = self.ema_manager.betas[winning_ema_index]
-            winning_logs = ema_validations_logs[winning_ema_index]
-            
-            # only log the winning ema (and the associated beta)
-            winning_logs["ema/switch_ema_beta_9s"] = -math.log10(1 - winning_beta)
-            self.accelerator.log(winning_logs, step=global_step)
-
-            # load the winning ema into the model and normalize to continue training
-            self.module.load_state_dict(winning_ema.state_dict())
+            # load the best ema into the model and normalize to continue training
+            self.module.load_state_dict(best_ema.state_dict())
+            self.module.normalize_weights()
+        else:
+            # restore the original train weights
+            self.module.load_state_dict(backup_module.state_dict())
             self.module.normalize_weights()
 
-            # reset all emas to the winning ema
+        if self.config.ema.use_dynamic_betas == True:
+            # reset all emas to the best ema
             for ema in self.ema_manager.emas:
-                if ema != winning_ema:
-                    torch._foreach_copy_(tuple(ema.parameters()), tuple(winning_ema.parameters()))
+                if ema != best_ema:
+                    torch._foreach_copy_(tuple(ema.parameters()), tuple(best_ema.parameters()))
 
-            # for next epoch try new betas slightly faster/slower than the winning beta
-            self.ema_manager.betas = [winning_beta ** (1/self.config.ema.switch_ema_gamma),
-                                      winning_beta ** self.config.ema.switch_ema_gamma]
+            # for next epoch try new betas slightly faster/slower than the best beta
+            self.ema_manager.betas = [best_beta ** (1/self.config.ema.dynamic_beta_gamma),
+                                        best_beta ** self.config.ema.dynamic_beta_gamma]
             
-            # clamp the bets to ensure they are never rounded to 0 or 1 at 32-bit precision
+            # clamp the betas to ensure they are never rounded to 0 or 1 at 32-bit precision
             for i, beta in enumerate(self.ema_manager.betas):
-                self.ema_manager.betas[i] = max(min(beta, self.config.ema.ema_max_beta), self.config.ema.ema_min_beta)
+                self.ema_manager.betas[i] = max(min(beta, self.config.ema.dynamic_max_beta), self.config.ema.dynamic_min_beta)
 
         self.logger.info(f"Validation complete (runtime: {(datetime.now() - start_validation_time).total_seconds()}s)")
         self.module.train()
