@@ -36,6 +36,7 @@ from tqdm.auto import tqdm
 
 from modules.module import DualDiffusionModule
 from modules.unets.unet import DualDiffusionUNet
+from modules.mp_tools import mp_sum
 from utils.dual_diffusion_utils import (
     normalize, load_safetensors, torch_dtype, load_audio, get_cos_angle
 )
@@ -105,7 +106,7 @@ class SampleParams:
             top_game_id = dataset_game_ids[top_game_name]
 
             label = f"step_{last_global_step}_{int(self.num_steps)}_{'ema'+ema+'_' if ema else ''}cfg{self.cfg_scale}"
-            label += f"_sgm{self.sigma_max}-{self.sigma_min}_ip{self.input_perturbation}_r{self.rho}_g{top_game_id}_s{int(self.seed)}"
+            label += f"_sgm{self.sigma_max}-{self.sigma_min}_ip{self.input_perturbation}_cp{self.conditioning_perturbation}_r{self.rho}_g{top_game_id}_s{int(self.seed)}"
         else:
             label = f"s{self.seed}"
         
@@ -415,6 +416,9 @@ class DualDiffusionPipeline(torch.nn.Module):
         conditioning_mask = torch.cat((torch.ones(params.batch_size), torch.zeros(params.batch_size)))
         unet_class_embeddings = unet.get_class_embeddings(
             self.get_class_labels(params.prompt, module_name="unet"), conditioning_mask)
+        
+        unet_class_embeddings[:params.batch_size] = mp_sum(
+            unet_class_embeddings[:params.batch_size], unet_class_embeddings[params.batch_size:], params.conditioning_perturbation)
         debug_info["unet_class_embeddings mean"] = unet_class_embeddings.mean().item()
         debug_info["unet_class_embeddings std"] = unet_class_embeddings.std().item()
 
