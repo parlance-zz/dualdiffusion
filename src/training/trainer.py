@@ -781,7 +781,7 @@ class DualDiffusionTrainer:
 
         # create a backup copy of train weights if we're not using switch ema
         if self.config.ema.use_switch_ema != True:
-            backup_module = deepcopy(self.module)
+            backup_module_state_dict = {k: v.cpu() for k, v in self.module.state_dict().items()}
 
         # get validation losses for each ema
         ema_validations_logs = []
@@ -808,8 +808,8 @@ class DualDiffusionTrainer:
             self.module.normalize_weights()
         else:
             # restore the original train weights
-            self.module.load_state_dict(backup_module.state_dict())
-            self.module.normalize_weights()
+            self.module.load_state_dict(backup_module_state_dict)
+            del backup_module_state_dict
 
         if self.config.ema.use_dynamic_betas == True:
             # reset all emas to the best ema
