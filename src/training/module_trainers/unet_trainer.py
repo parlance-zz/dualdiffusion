@@ -50,6 +50,7 @@ class UNetTrainerConfig(ModuleTrainerConfig):
     input_perturbation: float = 0.
     conditioning_perturbation: float = 0.
     conditioning_dropout: float = 0.1
+    continuous_conditioning_dropout: bool = False
 
     inpainting_probability: float = 0.7
     inpainting_extend_probability: float = 0.2
@@ -119,6 +120,7 @@ class UNetTrainer(ModuleTrainer):
             self.logger.info(f"Using conditioning perturbation: {self.config.conditioning_perturbation}")
         else: self.logger.info("Conditioning perturbation is disabled")
         self.logger.info(f"Dropout: {self.module.config.dropout} Conditioning dropout: {self.config.conditioning_dropout}")
+        if self.config.continuous_conditioning_dropout == True: self.logger.info("Continuous conditioning dropout is enabled")
         if self.config.inpainting_probability > 0:
             self.logger.info(f"Using inpainting (probability: {self.config.inpainting_probability})")
             self.logger.info(f"  extend probability: {self.config.inpainting_extend_probability}")
@@ -249,8 +251,15 @@ class UNetTrainer(ModuleTrainer):
         #sample_author_ids = batch["author_ids"]
 
         class_labels = self.trainer.pipeline.get_class_labels(sample_game_ids, module_name="unet")
-        conditioning_mask = torch.nn.functional.dropout(torch.ones(self.trainer.config.device_batch_size,
-            device=self.trainer.accelerator.device), p=self.config.conditioning_dropout)
+        if self.config.continuous_conditioning_dropout == True and self.is_validation_batch == False:
+            conditioning_mask = (torch.rand(self.trainer.config.device_batch_size,
+                generator=self.device_generator, device=self.trainer.accelerator.device) > (self.config.conditioning_dropout * 2)).float()
+            conditioning_mask = 1 - ((1 - conditioning_mask) * torch.rand(
+                conditioning_mask.shape, generator=self.device_generator, device=self.trainer.accelerator.device))
+        else:
+            conditioning_mask = (torch.rand(self.trainer.config.device_batch_size,
+                generator=self.device_generator, device=self.trainer.accelerator.device) > self.config.conditioning_dropout).float()
+
         unet_class_embeddings = self.module.get_class_embeddings(class_labels, conditioning_mask)
         if self.config.conditioning_perturbation > 0 and self.is_validation_batch == False:
             conditioning_perturbation = torch.randn(unet_class_embeddings.shape, device=unet_class_embeddings.device, generator=self.device_generator)
