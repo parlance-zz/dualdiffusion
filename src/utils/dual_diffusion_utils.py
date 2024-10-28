@@ -143,7 +143,7 @@ def save_tensor_raw(tensor: torch.Tensor, output_path: str) -> None:
 def normalize_lufs(raw_samples: torch.Tensor,
                    sample_rate: int,
                    target_lufs: float = -11.,
-                   max_clip:float = 0.15) -> torch.Tensor:
+                   max_clip:float = 0.2) -> torch.Tensor:
     
     original_shape = raw_samples.shape
     raw_samples = torch.nan_to_num(raw_samples, nan=0, posinf=0, neginf=0)
