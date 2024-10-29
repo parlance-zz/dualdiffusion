@@ -1,12 +1,12 @@
 {
-    "reference_model_name": "edm2_vt7_12d_2",
+    "reference_model_name": "edm2_vt7_12d_4",
     "model_load_options": {
         "device": "cpu",
         "load_checkpoints": true,
         "load_emas": false
     },
     "reference_model_class_id": 387,
-    "use_unconditional_model_class_id": false,
+    "use_unconditional_model_class_id": true,
     "sigma_max": 200.0,
     "sigma_min": 0.03,
     "sigma_data": 1.0,

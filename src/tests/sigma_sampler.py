@@ -77,9 +77,9 @@ def sigma_sampler_test():
         sigma_error = pipeline.unet.get_sigma_loss_logvar(sigma, unet_class_embeddings).float().flatten()
     
         if batch_distribution == "ln_pdf":
-            batch_distribution_pdf = (-sigma_error / batch_dist_scale).exp()
+            batch_distribution_pdf = (-sigma_error * batch_dist_scale).exp()
         if reference_distribution == "ln_pdf":
-            reference_distribution_pdf = (-sigma_error / reference_dist_scale).exp()
+            reference_distribution_pdf = (-sigma_error * reference_dist_scale).exp()
 
     batch_sampler_config = SigmaSamplerConfig(
         sigma_max=sigma_max,
