@@ -86,9 +86,10 @@ class TrainLogger():
 class LRScheduleConfig:
     lr_schedule: Literal["edm2", "constant"] = "edm2"
     learning_rate: float     = 1e-2
-    lr_warmup_steps: int     = 5000
-    lr_reference_steps: int  = 5000
-    lr_decay_exponent: float = 1.
+    lr_warmup_steps: int     = 4000
+    lr_reference_steps: int  = 20000
+    lr_decay_exponent: float = 0.5
+    min_learning_rate: float = 2e-3
 
 @dataclass
 class OptimizerConfig:
@@ -444,6 +445,8 @@ class DualDiffusionTrainer:
                     lr *= current_step / scaled_lr_warmup_steps
                 if current_step > scaled_lr_reference_steps:
                     lr *= (scaled_lr_reference_steps / current_step) ** self.config.lr_schedule.lr_decay_exponent
+                    lr = max(lr * self.config.lr_schedule.learning_rate,
+                        self.config.lr_schedule.min_learning_rate) / self.config.lr_schedule.learning_rate
                 return lr
             
         elif self.config.lr_schedule.lr_schedule == "constant":
