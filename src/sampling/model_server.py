@@ -111,6 +111,12 @@ class ModelServer:
         sample_output = self.pipeline(self.model_server_state["sample_params"], self.model_server_state)
         self.model_server_state["generate_output"] = move_tensors_to_cpu(sample_output) if sample_output is not None else None
 
+    async def cmd_get_module_state_dict(self) -> None:
+        module_name = self.model_server_state.get("module_name", "unet")
+        self.logger.info(f"Loading module state dict ({module_name})...")
+        module = getattr(self.pipeline, module_name)
+        self.model_server_state["module_state_dict"] = {k: v.cpu() for k,v in module.state_dict().items()}
+
     async def run(self):
         while True:
             cmd = self.model_server_state.get("cmd", None)

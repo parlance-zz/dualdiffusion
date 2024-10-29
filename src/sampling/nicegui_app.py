@@ -34,11 +34,13 @@ import logging
 import os
 
 from nicegui import ui, app
+import torch
 
 from utils.dual_diffusion_utils import (
     dict_str, tensor_to_img
 )
 from sampling.model_server import ModelServer
+from sampling.nicegui_model_explorer import ModelExplorer
 from sampling.nicegui_elements import (
     EditableSelect, PromptEditor,
     PresetEditor, OutputEditor, GenParamsEditor
@@ -100,6 +102,7 @@ class NiceGUIApp:
             target=ModelServer.start_server, args=(self.model_server_state,))
         self.model_server_process.start()
         self.gpu_lock = asyncio.Semaphore()
+        self.last_loaded_model_name = None
 
         self.init_layout()
         app.on_startup(partial(self.on_startup_app))
@@ -139,12 +142,14 @@ class NiceGUIApp:
         # default element props / classes
         ui.tooltip.default_props("delay=1000")
         ui.select.default_props("options-dense")
+        ui.tree.default_props("dense")
         EditableSelect.default_props("options-dense")
 
         # main layout is split into 3 tabs
         with ui.tabs() as self.interface_tabs:
             self.generation_tab = ui.tab("Generation")
             self.model_settings_tab = ui.tab("Model Settings")
+            self.model_explorer_tab = ui.tab("Model Explorer")
             self.debug_logs_tab = ui.tab("Debug Logs")
 
         with ui.tab_panels(self.interface_tabs, value=self.generation_tab).classes("w-full"):
@@ -152,12 +157,20 @@ class NiceGUIApp:
                 self.init_generation_layout()
             with ui.tab_panel(self.model_settings_tab):
                 self.init_model_settings_layout()
+            with ui.tab_panel(self.model_explorer_tab):
+                self.init_model_explorer_layout()
             with ui.tab_panel(self.debug_logs_tab):
                 self.init_debug_logs_layout()
 
     def init_model_settings_layout(self) -> None:
         ui.label("model settings stuff")
 
+    def init_model_explorer_layout(self) -> None:
+        self.model_explorer = ModelExplorer()
+        self.model_explorer.get_app = lambda: self
+        self.interface_tabs.on_value_change(
+            lambda e: self.model_explorer.on_tab_change() if e.value == "Model Explorer" else None)
+        
     def init_debug_logs_layout(self) -> None:
         ui.label("Debug Log:")
         debug_log_element = ui.log(max_lines=self.config.max_debug_log_length).style("height: calc(100vh - 200px)")
@@ -203,8 +216,13 @@ class NiceGUIApp:
 
     # load a new model on the model server and retrieve updated model / dataset metadata
     async def load_model(self, model_name: str, model_load_options: dict) -> None:
+        if self.gpu_lock.locked():
+            return ui.notify(f"Error loading model {model_name}: model_server is busy",
+                type="error", color="red", close_button=True)
+       
         async with self.gpu_lock:
-            await self.model_server_cmd("load_model", model_name=model_name, model_load_options=model_load_options)
+            await self.model_server_cmd("load_model", model_name=model_name,
+                                        model_load_options=model_load_options)
             self.logger.info(f"Loading model: {model_name}...")
             loading_notification = ui.notification(timeout=None)
             loading_notification.message = f"Loading model: {model_name}..."
@@ -212,9 +230,9 @@ class NiceGUIApp:
 
             error = await self.wait_for_model_server()
             if error is not None:
-                self.logger.error(f"Error loading model: {self.model_server_state['error']}")
+                self.logger.error(f"Error loading model: {error}")
                 loading_notification.dismiss()
-                ui.notify(f"Error loading model: {self.model_server_state['error']}",
+                ui.notify(f"Error loading model: {error}",
                     type="error", color="red", close_button=True)
                 return
 
@@ -229,7 +247,38 @@ class NiceGUIApp:
                 self.model_server_state["format_config"],
                 self.model_server_state["dataset_game_ids"])
             self.prompt_editor.update_dataset_games_dict(self.model_server_state["dataset_games_dict"])
+            self.last_loaded_model_name = model_name
     
+    async def get_module_state_dict(self, module_name: str) -> dict[str, torch.Tensor]:
+       if self.gpu_lock.locked():
+            ui.notify(f"Error loading module state dict ({module_name}): model_server is busy",
+                type="error", color="red", close_button=True)
+            return None
+            
+       async with self.gpu_lock:
+            await self.model_server_cmd("get_module_state_dict", module_name=module_name)
+
+            self.logger.info(f"Loading module state dict ({module_name})...")
+            loading_notification = ui.notification(timeout=None)
+            loading_notification.message = f"Loading module state dict ({module_name})..."
+            loading_notification.spinner = True
+
+            error = await self.wait_for_model_server()
+            if error is not None:
+                self.logger.error(f"Error loading module state dict ({module_name}): {error}")
+                loading_notification.dismiss()
+                ui.notify(f"Error loading module state dict ({module_name}): {error}",
+                    type="error", color="red", close_button=True)
+                return
+
+            self.logger.info(f"Loaded module state dict: ({module_name}) successfully")
+            loading_notification.message = f"Loaded module state dict ({module_name}) successfully"
+            loading_notification.spinner = False
+            await asyncio.sleep(0.5)
+            loading_notification.dismiss()
+
+            return self.model_server_state["module_state_dict"]
+
     # trigger torch.compile on model server and show progress notifications
     async def compile_model(self, model_name: str) -> None:
         async with self.gpu_lock:
@@ -261,8 +310,9 @@ class NiceGUIApp:
         if self.config.model_load_options["compile_options"] is not None:
             await self.compile_model(self.config.model_name)
 
-        # set matplotlibs to use dark theme
-        plt.style.use("dark_background")
+        # set matplotlibs to use dark theme if dark mode is enabled
+        if self.config.enable_dark_mode:
+            plt.style.use("dark_background")
 
     # queues a new output sample for generation, then proceeds with generation when ready
     async def on_click_generate_button(self) -> None:
