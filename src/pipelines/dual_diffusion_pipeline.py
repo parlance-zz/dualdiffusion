@@ -466,22 +466,11 @@ class DualDiffusionPipeline(torch.nn.Module):
             #effective_input_perturbation = (sigma_schedule_error_logvar[i]/4).exp().item() * input_perturbation
             #effective_input_perturbation = params.input_perturbation
             effective_input_perturbation = params.input_perturbation * (1 - (i/params.num_steps)*(1 - i/params.num_steps))**2 #***
-            #if params.inpainting_mask is not None:
-            #    effective_input_perturbation *= (1 - (i/params.num_steps))**3
             sigma_next *= (1 - (max(min(effective_input_perturbation, 1), 0)))
 
             input_sigma = torch.tensor([sigma_curr] * unet_class_embeddings.shape[0], device=unet.device)
             input_sample = sample.repeat(2, 1, 1, 1)
-            #if params.static_conditioning_perturbation > 0:
-            #    p_unet_class_embeddings = mp_sum(unet_class_embeddings, -unet.u_class_embeddings, static_conditioning_perturbation)
-            #else:
-            #    p_unet_class_embeddings = unet_class_embeddings
 
-            #if dynamic_conditioning_perturbation > 0:
-            #    perturbation = torch.randn((batch_size,) + p_unet_class_embeddings.shape[1:], generator=generator,
-            #                               device=p_unet_class_embeddings.device, dtype=p_unet_class_embeddings.dtype)
-            #    p_unet_class_embeddings = mp_sum(p_unet_class_embeddings, perturbation, dynamic_conditioning_perturbation)#*1.35
-            #    print("p_unet_class_embeddings mean:", p_unet_class_embeddings.mean().item(), "std:", p_unet_class_embeddings.std())
             if i > 0: last_cfg_model_output = cfg_model_output
             else:
                 debug_info["sample_std"] = []
@@ -503,15 +492,13 @@ class DualDiffusionPipeline(torch.nn.Module):
 
                 model_output_hat = unet(input_sample_hat, input_sigma_hat, self.format, unet_class_embeddings, t_ranges, input_ref_sample).float()
                 cfg_model_output_hat = model_output_hat[params.batch_size:].lerp(model_output_hat[:params.batch_size], params.cfg_scale)
-                #cfg_model_output = (cfg_model_output + cfg_model_output_hat) / 2
                 cfg_model_output = torch.lerp(cfg_model_output, cfg_model_output_hat, 0.5)            
             
             t = sigma_next / sigma_curr if (i+1) < params.num_steps else 0
-            #sample = (t * sample + (1 - t) * cfg_model_output)
             sample = torch.lerp(cfg_model_output, sample, t)
             
-            #print(sample.std().item(), (sigma_next**2 + params.sigma_data**2)**0.5)
-            #sample = normalize(sample).float() * (sigma_next**2 + params.sigma_data**2)**0.5 #***
+            #sample = (normalize(sample) * (sigma_next**2 + params.sigma_data**2)**0.5).float()
+
             #if params.temperature_scale < 1:
             #    ideal_norm = (sigma_next**2 + sigma_data**2)**0.5
             #    measured_norm = sample.square().mean(dim=(1,2,3), keepdim=True).sqrt()
@@ -522,6 +509,8 @@ class DualDiffusionPipeline(torch.nn.Module):
                 sample.add_(torch.randn(sample.shape, generator=generator,
                     device=sample.device, dtype=sample.dtype), alpha=p)
 
+            sample = (normalize(sample) * (sigma_next**2 + params.sigma_data**2)**0.5).float()
+            
             # log sampling debug info
             debug_info["sample_std"].append(sample.std().item())
             if i > 0: debug_info["cfg_output_curvature"].append(
