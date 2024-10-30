@@ -333,9 +333,14 @@ class NiceGUIApp:
             if output_sample not in self.output_editor.output_samples:
                 return # handle early removal from queue
             
-            # reset abort state and send generate command to model server
+            # reset abort state before sending new command
             self.model_server_state["generate_abort"] = False
             toggled_show_latents = False
+            # instant-feedback removed when only animation starts so progress properly starts at 0%
+            output_sample.sampling_progress_element.props(
+                add="animation-speed='1000'", remove="instant-feedback")
+            
+            # send generate command to model server and track progress
             await self.model_server_cmd("generate", sample_params=output_sample.sample_params)
             while self.model_server_state.get("cmd", None) is not None:
                 
