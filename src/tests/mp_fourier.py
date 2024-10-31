@@ -77,9 +77,10 @@ def mp_fourier_test():
         save_tensor_raw(coverage / coverage.amax(), os.path.join(test_output_path, "coverage.raw"))
 
         save_tensor_raw(inner_products, os.path.join(test_output_path, "inner_products.raw"))
-        inner_products_img = tensor_to_img(inner_products, colormap=True)
+        inner_products_img = tensor_to_img(inner_products, colormap=True).squeeze(2)
+        
         save_img(inner_products_img, os.path.join(test_output_path, "inner_products.png"))
-        show_img(inner_products_img, "inner_products.png")
+        show_img(inner_products_img, "inner_products.png", wait=0)
 
 if __name__ == "__main__":
 
