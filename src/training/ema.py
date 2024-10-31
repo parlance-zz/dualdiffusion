@@ -71,10 +71,10 @@ class EMA_Manager:
                 torch._foreach_lerp_(tuple(ema.parameters()), net_parameters, 1 - beta)
 
     @torch.no_grad()
-    def feedback(self, cur_nimg: int, batch_size: int, ema_index: int, beta: float) -> None:
+    def feedback(self, cur_nimg: int, batch_size: int, beta: float) -> None:
         with torch.amp.autocast("cuda", enabled=False), TF32_Disabled():
             net_parameters = tuple(self.module.parameters())
-            ema_parameters = tuple(self.emas[ema_index].parameters())
+            ema_parameters = tuple(self.emas[0].parameters())
             torch._foreach_lerp_(net_parameters, ema_parameters, 1 - beta)
 
     def save(self, save_directory: str, subfolder: Optional[str] = None) -> None:

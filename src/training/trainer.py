@@ -102,15 +102,15 @@ class OptimizerConfig:
 
 @dataclass
 class EMAConfig:
-    use_ema: bool               = False
+    use_ema: bool               = True
     use_switch_ema: bool        = False
+    use_feedback_ema: bool      = False
     use_dynamic_betas: bool     = False
     dynamic_initial_beta: float = 0.9999
     dynamic_beta_gamma: float   = 0.5
     dynamic_max_beta: float     = 0.999999
     dynamic_min_beta: float     = 0.999
     ema_betas: tuple[float]     = (0.9999,)
-    feedback_ema_index: Optional[int] = None
     feedback_ema_beta: float    = 0.9999
     ema_cpu_offload: bool = False
 
@@ -334,12 +334,12 @@ class DualDiffusionTrainer:
             self.logger.info(f"  EMA CPU offloading {'enabled' if ema_device == 'cpu' else 'disabled'}")
 
             if self.config.ema.use_switch_ema == True:
-                if self.config.ema.feedback_ema_index is not None:
+                if self.config.ema.use_feedback_ema == True:
                     raise ValueError("Error: Found both SwitchEMA and feedback EMA enabled")
-                self.logger.info("  Using SwitchEMA")
+                self.logger.info(f"  Using SwitchEMA (beta: {ema_betas[0]})")
             else:
-                if self.config.ema.feedback_ema_index is not None:
-                    self.logger.info(f"  Using feedback EMA with index: {self.config.ema.feedback_ema_index} beta: {self.config.ema.feedback_ema_beta}")
+                if self.config.ema.use_feedback_ema == True:
+                    self.logger.info(f"  Using feedback EMA with ema_0 (beta: {ema_betas[0]} feedback_ema_beta: {self.config.ema.feedback_ema_beta})")
         else:
             self.logger.info("Not using EMA")
 
@@ -703,9 +703,6 @@ class DualDiffusionTrainer:
                         self.optimizer.zero_grad()
 
                 if self.accelerator.sync_gradients:
-                
-                    if hasattr(self.module, "normalize_weights"):
-                        self.module.normalize_weights()
                         
                     train_logger.add_logs({"lr": self.lr_scheduler.get_last_lr()[0], "step": global_step})
                     progress_bar.update(1)
@@ -714,10 +711,12 @@ class DualDiffusionTrainer:
                     if self.config.ema.use_ema:
                         self.ema_manager.update(global_step * self.total_batch_size, self.total_batch_size)
 
-                        if self.config.ema.feedback_ema_index is not None:
-                            self.ema_manager.feedback(global_step * self.total_batch_size, self.total_batch_size,
-                                self.config.ema.feedback_ema_index, self.config.ema.feedback_ema_beta)
+                        if self.config.ema.use_feedback_ema == True:
+                            self.ema_manager.feedback(global_step * self.total_batch_size,
+                                self.total_batch_size, self.config.ema.feedback_ema_beta)
 
+                    self.module.normalize_weights()
+                    
                     train_logger.add_logs(self.module_trainer.finish_batch())
 
                     logs = train_logger.get_logs()
@@ -806,11 +805,14 @@ class DualDiffusionTrainer:
         self.accelerator.log(best_logs, step=global_step)
 
         if self.config.ema.use_switch_ema == True:
-            # load the best ema into the model and normalize to continue training
-            self.module.load_state_dict(best_ema.state_dict())
+            # load the best ema into the model if using dynamic ema
+            if self.config.ema.use_dynamic_betas == True:
+                self.module.load_state_dict(best_ema.state_dict())
+            else: # otherwise just use the first ema
+                self.module.load_state_dict(self.ema_manager.emas[0].state_dict())
+            # normalize after loading ema
             self.module.normalize_weights()
-        else:
-            # restore the original train weights
+        else: # restore the original train weights if not using switch ema
             self.module.load_state_dict(backup_module_state_dict)
             del backup_module_state_dict
 
