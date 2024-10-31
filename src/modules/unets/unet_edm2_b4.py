@@ -184,7 +184,7 @@ class UNet(DualDiffusionUNet):
 
         # Training uncertainty estimation.
         self.logvar_fourier = MPFourier(config.logvar_channels)
-        self.logvar_linear = MPConv(config.logvar_channels, 1, kernel=())
+        self.logvar_linear = MPConv(config.logvar_channels, 1, kernel=(), disable_weight_norm=True)
 
         # Encoder.
         self.enc = torch.nn.ModuleDict()

@@ -106,20 +106,22 @@ class MPConv(torch.nn.Module):
 
     @torch.no_grad()
     def __init__(self, in_channels: int, out_channels: int,
-                 kernel: tuple[int, int], groups: int = 1, stride: int = 1) -> None:
+                 kernel: tuple[int, int], groups: int = 1, stride: int = 1,
+                 disable_weight_norm: bool = False) -> None:
         super().__init__()
 
         self.in_channels = in_channels
         self.out_channels = out_channels
         self.groups = groups
         self.stride = stride
+        self.disable_weight_norm = disable_weight_norm
         
         self.weight = torch.nn.Parameter(torch.randn(out_channels, in_channels // groups, *kernel))
 
     def forward(self, x: torch.Tensor, gain: Union[float, torch.Tensor] = 1.) -> torch.Tensor:
         
         w = self.weight.float()
-        if self.training == True:
+        if self.training == True and self.disable_weight_norm == False:
             w = normalize(w) # traditional weight normalization
             
         w = w * (gain / w[0].numel()**0.5) # magnitude-preserving scaling
@@ -132,4 +134,5 @@ class MPConv(torch.nn.Module):
 
     @torch.no_grad()
     def normalize_weights(self):
-        self.weight.copy_(normalize(self.weight))
+        if self.disable_weight_norm == False:
+            self.weight.copy_(normalize(self.weight))
