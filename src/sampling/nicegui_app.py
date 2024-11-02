@@ -335,10 +335,11 @@ class NiceGUIApp:
             
             # reset abort state before sending new command
             self.model_server_state["generate_abort"] = False
+            self.model_server_state["generate_latents"] = None
             toggled_show_latents = False
             # instant-feedback removed when only animation starts so progress properly starts at 0%
             output_sample.sampling_progress_element.props(
-                add="animation-speed='1000'", remove="instant-feedback")
+                add="animation-speed='250'", remove="instant-feedback")
             
             # send generate command to model server and track progress
             await self.model_server_cmd("generate", sample_params=output_sample.sample_params)
@@ -353,8 +354,7 @@ class NiceGUIApp:
                 # update linear progress
                 step = self.model_server_state.get("generate_step", None)
                 if step is not None:
-                    output_sample.sampling_progress_element.set_value(
-                        f"{int(step/output_sample.sample_params.num_steps*100)}%")
+                    output_sample.sampling_progress_element.set_value(step/output_sample.sample_params.num_steps)
 
                 # update latents image preview
                 latents = self.model_server_state.get("generate_latents", None)
