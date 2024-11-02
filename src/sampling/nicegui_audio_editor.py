@@ -112,6 +112,9 @@ class CustomAudio(SourceElement, component='nicegui_custom_audio.js'):
         """Pause audio."""
         self.run_method('pause')
 
+    def set_volume(self, volume: float) -> None:
+        self.run_method('set_volume', volume)
+
 # lightly modified copy of nicegui.elements.interactive_image, needed for custom js
 class AudioPlayer(SourceElement, ContentElement, component='nicegui_audio_editor.js'):
     CONTENT_PROP = 'content'
@@ -202,6 +205,8 @@ class AudioEditor(AudioPlayer):
         if audio_source is not None:
             self.set_audio_source(audio_source)
 
+    def set_volume(self, volume: float) -> None:
+        self.audio_element.set_volume(volume)
     def play(self) -> None:
         self.audio_element.play()
         self.set_highlight_range_visibility(False)

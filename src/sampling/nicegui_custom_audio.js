@@ -50,6 +50,9 @@ export default {
       pause() {
         this.$el.pause();
       },
+      set_volume(volume) {
+        this.$el.volume = volume;
+      },
     },
   };
   
