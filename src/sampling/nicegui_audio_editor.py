@@ -204,8 +204,10 @@ class AudioEditor(AudioPlayer):
 
     def play(self) -> None:
         self.audio_element.play()
+        self.set_highlight_range_visibility(False)
     def pause(self) -> None:
         self.audio_element.pause()
+        self.set_highlight_range_visibility(True)
     def play_pause(self) -> None:
         if self.playing == True: self.pause()
         else: self.play()
@@ -236,6 +238,7 @@ class AudioEditor(AudioPlayer):
         self._props["highlight_duration"] = duration
     def set_highlight_range_visibility(self, visible: bool) -> None:
         self._props["highlight_range"] = visible
+        self.update()
 
     def set_audio_source(self, audio_path: str, duration: Optional[float] = None) -> None:
         self.audio_element.set_source(audio_path)
