@@ -910,10 +910,14 @@ class DatasetProcessor:
 
         # prompt to save and backup existing metadata files to config.DEBUG_PATH
 
-        if self.backup_path is None:
-            backup_warning = " (WARNING: Dataset metadata backup is NOT enabled)"
+        if os.path.isfile(self.dataset_info_path):
+            if self.backup_path is None:
+                backup_warning = " (WARNING: Dataset metadata backup is NOT enabled)"
+            else:
+                backup_warning = f" (Backing up to '{self.backup_path}')"
         else:
-            backup_warning = f" (Backing up to '{self.backup_path}')"
+            backup_warning = " No existing dataset metadata to backup"
+            self.backup_path = None
 
         if input(f"Save changes to dataset metadata? (path: '{dataset_path}') (y/n){backup_warning}: ").lower() == "y":
             if self.backup_path is not None:
