@@ -431,7 +431,7 @@ class DualDiffusionPipeline(torch.nn.Module):
                 if latent_diffusion:
                     input_audio_sample = self.vae.encode(
                         input_audio_sample.to(device=self.vae.device, dtype=self.vae.dtype),
-                        vae_class_embeddings, self.format).mode().to(dtype=torch.float32, device=self.unet.device)[..., :688] #***
+                        vae_class_embeddings, self.format).mode().to(dtype=torch.float32, device=unet.device)
         else:
             input_audio_sample = torch.zeros(sample_shape, device=unet.device)
 
