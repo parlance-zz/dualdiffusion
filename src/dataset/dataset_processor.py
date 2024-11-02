@@ -641,10 +641,10 @@ class DatasetProcessor:
                         sample["file_name"] = os.path.relpath(transcoded_file_path, config.DATASET_PATH)
                         get_audio_metadata(sample)
 
-                        if transcoded_file_path != sample_file_path:
-                            os.remove(sample_file_path)
-                        if sample["latents_file_name"] is not None:
-                            os.remove(os.path.join(config.DATASET_PATH, sample["latents_file_name"]))
+                        #if transcoded_file_path != sample_file_path:
+                        #    os.remove(sample_file_path)
+                        #if sample["latents_file_name"] is not None:
+                        #    os.remove(os.path.join(config.DATASET_PATH, sample["latents_file_name"]))
                         sample["latents_file_name"] = None
                         sample["latent_file_size"] = None
                         sample["latents_length"] = None
@@ -658,7 +658,7 @@ class DatasetProcessor:
 
                 num_failed_transcode = len(failed_transcode_samples)
                 if num_failed_transcode > 0:
-                    self.logger.warning(f"Failed to transcode {len(num_failed_transcode)} samples")
+                    self.logger.warning(f"Failed to transcode {num_failed_transcode} samples")
                     num_failed_transcode.show_samples()
                 self.logger.info(f"Successfully transcoded {num_transcode - num_failed_transcode} samples")
 
