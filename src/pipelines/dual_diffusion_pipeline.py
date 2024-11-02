@@ -462,12 +462,6 @@ class DualDiffusionPipeline(torch.nn.Module):
         progress_bar = tqdm(total=params.num_steps, disable=quiet)
         for i, (sigma_curr, sigma_next) in enumerate(zip(sigma_schedule_list[:-1], sigma_schedule_list[1:])):
 
-            old_sigma_next = sigma_next
-            #effective_input_perturbation = (sigma_schedule_error_logvar[i]/4).exp().item() * input_perturbation
-            #effective_input_perturbation = params.input_perturbation
-            effective_input_perturbation = params.input_perturbation * (1 - (i/params.num_steps)*(1 - i/params.num_steps))**2 #***
-            sigma_next *= (1 - (max(min(effective_input_perturbation, 1), 0)))
-
             input_sigma = torch.tensor([sigma_curr] * unet_class_embeddings.shape[0], device=unet.device)
             input_sample = sample.repeat(2, 1, 1, 1)
 
@@ -477,10 +471,19 @@ class DualDiffusionPipeline(torch.nn.Module):
                 debug_info["cfg_output_curvature"] = []
                 debug_info["cfg_output_mean"] = []
                 debug_info["cfg_output_std"] = []
+                debug_info["effective_input_perturbation"] = []
 
             model_output = unet(input_sample, input_sigma, self.format, unet_class_embeddings, t_ranges, input_ref_sample).float()
             cfg_model_output = model_output[params.batch_size:].lerp(model_output[:params.batch_size], params.cfg_scale)
-                
+            
+            old_sigma_next = sigma_next
+            #effective_input_perturbation = params.input_perturbation
+            #effective_input_perturbation = (sigma_schedule_error_logvar[i]/4).exp().item() * input_perturbation
+            #effective_input_perturbation = params.input_perturbation * (1 - (i/params.num_steps)*(1 - i/params.num_steps))**2 #***
+            effective_input_perturbation = params.input_perturbation * (1 - 1 / np.cosh(np.log(sigma_next * sigma_curr) / 2 - 0.3))**2
+            sigma_next *= (1 - (max(min(effective_input_perturbation, 1), 0)))
+            debug_info["effective_input_perturbation"].append(effective_input_perturbation)
+
             if params.use_heun:
                 sigma_hat = max(sigma_next, params.sigma_min)
                 t_hat = sigma_hat / sigma_curr
@@ -496,13 +499,6 @@ class DualDiffusionPipeline(torch.nn.Module):
             
             t = sigma_next / sigma_curr if (i+1) < params.num_steps else 0
             sample = torch.lerp(cfg_model_output, sample, t)
-            
-            #sample = (normalize(sample) * (sigma_next**2 + params.sigma_data**2)**0.5).float()
-
-            #if params.temperature_scale < 1:
-            #    ideal_norm = (sigma_next**2 + sigma_data**2)**0.5
-            #    measured_norm = sample.square().mean(dim=(1,2,3), keepdim=True).sqrt()
-            #    sample = sample / (measured_norm / ideal_norm)**(1 - temperature_scale)
 
             if i+1 < params.num_steps:
                 p = max(old_sigma_next**2 - sigma_next**2, 0)**0.5
@@ -526,13 +522,10 @@ class DualDiffusionPipeline(torch.nn.Module):
                 model_server_state["generate_step"] = i + 1
 
             progress_bar.update(1)
-        
         progress_bar.close()
 
         debug_info["final_sample_mean"] = sample.mean().item()
         debug_info["final_sample_std"] = sample.std().item()
-        
-        #sample = sample.float() / sigma_data
         sample = normalize(sample).float() * params.sigma_data
 
         if latent_diffusion == True:
