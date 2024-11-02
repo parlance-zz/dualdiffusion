@@ -242,6 +242,7 @@ class DatasetProcessor:
             dataset_info["features"] = self.dataset_info["features"] | dataset_info["features"]
         else:
             self.logger.warning(f"Dataset info not found at {self.dataset_info_path}, creating new dataset")
+            dataset_info = self.dataset_info
 
         dataset_info["processor_config"] = self.config.__dict__
         self.dataset_info = dataset_info
