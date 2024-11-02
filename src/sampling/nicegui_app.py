@@ -198,6 +198,7 @@ class NiceGUIApp:
         self.output_editor.get_prompt_editor = lambda: self.prompt_editor
         self.output_editor.get_gen_params_editor = lambda: self.gen_params_editor
         self.output_editor.generate_button.on_click(partial(self.on_click_generate_button))
+        self.output_editor.get_latent_shape = partial(self.get_latent_shape)
 
     # wait for model server idle, then send new command and parameters
     async def model_server_cmd(self, cmd: str, **kwargs) -> None:
@@ -301,6 +302,12 @@ class NiceGUIApp:
                 await asyncio.sleep(0.5)
                 compiling_notification.dismiss()
     
+    # get the latent shape given a particular audio length
+    async def get_latent_shape(self, audio_length: int) -> tuple[int, int, int, int]:
+        await self.model_server_cmd("get_latent_shape", audio_length=audio_length)
+        await self.wait_for_model_server()
+        return self.model_server_state["latent_shape"]
+    
     # on startup load configured model, default preset, and trigger compilation if enabled
     async def on_startup_app(self) -> None:
         await self.model_server_cmd("get_available_torch_devices")
@@ -323,7 +330,7 @@ class NiceGUIApp:
             return
         
         # queue new output sample and auto-increment seed
-        output_sample = self.output_editor.add_output_sample(int(self.gen_params_editor.generate_length.value),
+        output_sample = await self.output_editor.add_output_sample(int(self.gen_params_editor.generate_length.value),
             int(self.gen_params_editor.seed.value), self.prompt_editor.prompt.copy(), self.gen_params_editor.gen_params.copy())
         if self.gen_params_editor.auto_increment_seed.value == True:
             self.gen_params_editor.seed.set_value(self.gen_params_editor.seed.value + 1)

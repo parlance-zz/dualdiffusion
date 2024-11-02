@@ -117,6 +117,11 @@ class ModelServer:
         module = getattr(self.pipeline, module_name)
         self.model_server_state["module_state_dict"] = {k: v.cpu() for k,v in module.state_dict().items()}
 
+    async def cmd_get_latent_shape(self) -> None:
+        audio_length = self.model_server_state["audio_length"]
+        sample_shape = self.pipeline.get_sample_shape(bsz=1, length=audio_length)
+        self.model_server_state["latent_shape"] = tuple(self.pipeline.get_latent_shape(sample_shape))
+
     async def run(self):
         while True:
             cmd = self.model_server_state.get("cmd", None)
