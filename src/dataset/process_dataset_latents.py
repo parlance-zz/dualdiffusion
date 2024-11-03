@@ -62,8 +62,7 @@ def pre_encode_latents():
     
     model_path = os.path.join(config.MODELS_PATH, model_name)
     print(f"Loading DualDiffusion model from '{model_path}'...")
-    pipeline = DualDiffusionPipeline.from_pretrained(model_path, torch_dtype=torch.bfloat16,
-        load_latest_checkpoints=True, device={"vae": device, "format": device})
+    pipeline = DualDiffusionPipeline.from_pretrained(model_path, torch_dtype=torch.bfloat16, device={"vae": device, "format": device})
     
     pipeline.vae.compile(fullgraph=True, dynamic=False)
     format_config: SpectrogramFormatConfig = pipeline.format.config
