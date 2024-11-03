@@ -164,4 +164,4 @@ def pre_encode_latents():
 if __name__ == "__main__":
 
     init_cuda()
-
+    pre_encode_latents()
