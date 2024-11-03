@@ -49,8 +49,14 @@ class DatasetProcessorConfig:
     min_sample_length: Optional[int] = None
     max_sample_length: Optional[int] = None
     min_num_class_samples: Optional[int] = None
-    pre_encoded_latents_vae: Optional[str] = None
     dataset_processor_verbose: bool = False
+
+    pre_encoded_latents_vae: Optional[str] = None
+    pre_encoded_latents_device_batch_size: int = 1
+    pre_encoded_latents_num_time_offset_augmentations: int = 8
+    pre_encoded_latents_pitch_offset_augmentations: list[int] = ()
+    pre_encoded_latents_stereo_mirroring_augmentation: bool = False
+    pre_encoded_latents_enable_quantization: bool = False
 
 class DatasetSplit:
 
@@ -475,6 +481,27 @@ class DatasetProcessor:
                     new_samples.append(new_sample)
                 self.splits["train"].add_samples(new_samples)
                 self.logger.info(f"Added {num_new_audio_files} new audio files to train split")
+            self.logger.info("")
+
+        # search for any .safetensors file that has a filename corresponding an existing sample in
+        # the dataset, but that sample does not have a latents_file_name set
+        # if any found, prompt to set latents_file_name to the existing .safetensors file
+        samples_with_safetensors = SampleList()
+        for split, index, sample in self.all_samples():
+            if sample["file_name"] is not None and sample["latents_file_name"] is None:
+                latents_file_name = f"{os.path.splitext(sample['file_name'])[0]}.safetensors"
+                if os.path.isfile(os.path.join(config.DATASET_PATH, latents_file_name)):
+                    samples_with_safetensors.add_sample(split, index)
+        
+        num_samples_with_safetensors = len(samples_with_safetensors)
+        if num_samples_with_safetensors > 0:
+            self.logger.warning(f"Found {num_samples_with_safetensors} samples with no latents_file_name but matching latents file exists")
+            samples_with_safetensors.show_samples()
+            if input(f"Use existing pre-encoded latents files for {num_samples_with_safetensors} samples? (y/n): ").lower() == "y":
+                for _, _, sample in num_samples_with_safetensors:
+                    sample["latents_file_name"] = f"{os.path.splitext(sample['file_name'])[0]}.safetensors"
+                self.logger.info(f"Set latents_file_name for {num_samples_with_safetensors} samples")
+
             self.logger.info("")
 
         # search for any .safetensors file that isn't referenced as a latents_file_name in the dataset
