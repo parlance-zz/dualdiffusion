@@ -189,7 +189,10 @@ class AudioEditor(AudioPlayer):
         super().__init__(*args, **kwargs)
 
         self.logger = logging.getLogger(name="nicegui_app")
+
         self.playing = False
+        self.volume = 1.
+
         self.add_slot("cross", '<line :x1="props.x" y1="0" :x2="props.x" y2="100%" stroke="white" />')
         self.on_mouse(lambda e: self._on_mouse(e))
 
@@ -206,8 +209,10 @@ class AudioEditor(AudioPlayer):
             self.set_audio_source(audio_source)
 
     def set_volume(self, volume: float) -> None:
+        self.volume = volume
         self.audio_element.set_volume(volume)
     def play(self) -> None:
+        self.set_volume(self.volume) # refresh audio volume before playback
         self.audio_element.play()
         self.set_highlight_range_visibility(False)
     def pause(self) -> None:

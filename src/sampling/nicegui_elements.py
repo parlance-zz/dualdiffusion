@@ -22,7 +22,7 @@
 
 from utils import config
 
-from typing import Optional, Union, Callable, Any
+from typing import Optional, Union, Callable, Literal, Any
 from dataclasses import dataclass
 from copy import deepcopy
 from PIL import Image
@@ -35,6 +35,7 @@ import numpy as np
 import torch
 import torchaudio
 import cv2
+import nicegui
 from nicegui import ui
 
 from sampling.schedule import SamplingSchedule
@@ -56,19 +57,23 @@ class OutputSample:
     audio_path: Optional[str] = None
     latents_path: Optional[str] = None
 
+    editing_mode: Literal["normal", "inpaint", "extend"] = "normal"
+    highlight_start: int = 0    # in units of latent pixels
+    highlight_duration: int = 0 # in units of latent pixels
     card_element: Optional[ui.card] = None
+    name_row_element: Optional[ui.row] = None
     name_label_element: Optional[ui.label] = None
     rating_element: Optional["StarRating"] = None
     sampling_progress_element: Optional[ui.linear_progress] = None
     latents_image_element: Optional[ui.interactive_image] = None
     audio_editor_element: Optional["AudioEditor"] = None
     toggle_show_latents_button: Optional["ToggleButton"] = None
-    toggle_show_audio_editor_button: Optional["ToggleButton"] = None
     toggle_show_params_button: Optional["ToggleButton"] = None
     toggle_show_debug_button: Optional["ToggleButton"] = None
-    use_as_input_button: Optional[ui.button] = None
-    extend_button: Optional[ui.button] = None
+    inpaint_button: Optional[ui.button] = None
     select_range: Optional[ui.range] = None
+    extend_button: Optional[ui.button] = None
+    extend_mode_radio: Optional[ui.radio] = None
     move_up_button: Optional[ui.button] = None
     move_down_button: Optional[ui.button] = None
     show_parameters_row_element: Optional[ui.row] = None
@@ -238,7 +243,7 @@ class GenParamsEditor(ui.row):
         with self.classes("w-full"):
             with ui.card().classes("w-48"):
 
-                self.generate_length = ScrollableNumber(label="Length (seconds)", value=length, min=0, max=300, precision=0, step=5).classes("w-full")
+                self.generate_length = ScrollableNumber(label="Length (seconds)", value=length, min=0, max=150, precision=0, step=5).classes("w-full")
                 with ui.row().classes("w-full items-center"):
                     self.seed = ScrollableNumber(label="Seed", value=seed, min=10000, max=99999, precision=0, step=1)
                     if read_only == False:
@@ -266,12 +271,14 @@ class GenParamsEditor(ui.row):
                     self.param_elements["use_heun"] = ui.checkbox("Use Heun's Method", value=True).classes("w-full")
                     self.param_elements["num_fgla_iters"] = ScrollableNumber(label="Number of FGLA Iterations", value=250, min=50, max=1000, precision=0, step=50).classes("w-full")
 
+                    self.param_elements["input_perturbation"] = ScrollableNumber(label="Input Perturbation", value=1, min=0, max=1, step=0.05).classes("w-full")
+                    self.param_elements["conditioning_perturbation"] = ScrollableNumber(label="Conditioning Perturbation", value=0, min=0, max=1, step=0.05).classes("w-full")
+
                     self.param_elements["sigma_max"] = ScrollableNumber(label="Sigma Max", value=200, min=10, max=1000, step=10).classes("w-full")
                     self.param_elements["sigma_min"] = ScrollableNumber(label="Sigma Min", value=0.15, min=0.05, max=2, step=0.05).classes("w-full")
-                    self.param_elements["rho"] = ScrollableNumber(label="Rho", value=7, min=0.5, max=1000, precision=2, step=0.5).classes("w-full")
-                    self.param_elements["input_perturbation"] = ScrollableNumber(label="Input Perturbation", value=1, min=0, max=1, step=0.05).classes("w-full")
-                    
                     self.param_elements["schedule"] = ui.select(label="Σ Schedule", options=SamplingSchedule.get_schedules_list(), value="edm2").classes("w-full")
+                    self.param_elements["rho"] = ScrollableNumber(label="Rho", value=7, min=0.5, max=1000, precision=2, step=0.5).classes("w-full")
+                    
                     self.sigma_schedule_dialog = ui.dialog()
                     self.show_schedule_button = ui.button("Show σ Schedule", color="gray", on_click=lambda: self.on_click_show_schedule_button()).classes("w-full items-center")
                     with self.show_schedule_button:
@@ -522,7 +529,7 @@ class PresetEditor(ui.card):
             asyncio.create_task(self.reset_preset_loading_state())
         else:
             # check if loaded_preset_dict matches current gen_params, even if locked
-            gen_params = self.get_gen_params_editor().gen_params
+            gen_params = {k: v for k,v in self.get_gen_params_editor().gen_params.items() if k in loaded_preset_dict["gen_params"]}
             if all([gen_params[p] == loaded_preset_dict["gen_params"][p] for p in gen_params]) == True:
                 self.preset_load_button.disable()
                 self.preset_save_button.disable()
@@ -562,20 +569,31 @@ class OutputEditor(ui.column):
         self.get_app_config = lambda: None
         self.get_prompt_editor: Callable[[], PromptEditor] = lambda: None
         self.get_gen_params_editor: Callable[[], GenParamsEditor] = lambda: None
+        self.get_latent_shape: Callable[[int], tuple[int, int, int, int]] = lambda: None
 
-        with ui.button_group().classes("h-10 gap-0"): # output editor top toolbar
-            self.generate_button = ui.button("Generate", icon="audiotrack", color="green")
-            with self.generate_button:
-                ui.tooltip("Generate new sample with current settings")
-            self.clear_output_button = ui.button("Clear Outputs", icon="delete", color="red", on_click=lambda: self.clear_output_samples())
-            self.clear_output_button.disable()
-            with self.clear_output_button:
-                ui.tooltip("Clear all output samples in workspace")
-            self.load_sample_button = ui.button("Upload Sample", icon="upload")
-            with self.load_sample_button:
-                ui.tooltip("Upload an existing sample from audio or latents file")
+        with ui.row().classes("w-full"):
+            with ui.button_group().classes("h-10 gap-0"): # output editor top toolbar
+                self.generate_button = ui.button("Generate", icon="audiotrack", color="green")
+                with self.generate_button:
+                    ui.tooltip("Generate new sample with current settings")
+                self.clear_output_button = ui.button("Clear Outputs", icon="delete", color="red", on_click=lambda: self.clear_output_samples())
+                self.clear_output_button.disable()
+                with self.clear_output_button:
+                    ui.tooltip("Clear all output samples in workspace")
+                self.load_sample_button = ui.button("Upload Sample", icon="upload")
+                with self.load_sample_button:
+                    ui.tooltip("Upload an existing sample from audio or latents file")
+
+            with ui.row().classes("absolute right-4 items-center gap-2"): # output editor right toolbar
+                ui.icon("volume_off", size="1.75rem")
+                self.audio_volume_slider = ui.slider(value=1, min=0, max=1, step=0.01, on_change=lambda v: self.set_audio_volume(v.value)).classes("w-24")
+                ui.icon("volume_up", size="1.75rem")
 
         self.output_samples_column = ui.column().classes("w-full") # output samples container
+
+    def set_audio_volume(self, volume: float) -> None:
+        for output_sample in self.output_samples:
+            output_sample.audio_editor_element.set_volume(volume)
 
     def update_model_info(self, model_name: str,
                                 model_metadata: dict[str, Any],
@@ -645,20 +663,31 @@ class OutputEditor(ui.column):
             else: output_sample.move_down_button.enable()
 
             # enable/disable the highlighted border and select-range overlay if the output sample is selected as input
-            if self.input_output_sample != output_sample:
-                output_sample.card_element.classes(remove="border-2", add="border-none")
-                output_sample.use_as_input_button.classes(remove="border-4", add="border-none")
-                output_sample.select_range.set_visibility(False)
-                output_sample.audio_editor_element.set_select_range_visibility(False)
+            if self.input_output_sample == output_sample:
+                output_sample.card_element.style(replace="outline: 2px solid #ff9800;")
             else:
-                output_sample.card_element.classes(remove="border-none", add="border-2 border-orange-400")
-                output_sample.use_as_input_button.classes(remove="border-none", add="border-4")
+                output_sample.card_element.style(replace="outline: 2px solid #505050;")
+
+            if output_sample.editing_mode == "inpaint":
+                output_sample.inpaint_button.classes(remove="border-none", add="border-4")
                 output_sample.select_range.set_visibility(True)
                 output_sample.audio_editor_element.set_select_range_visibility(True)
+            else:
+                output_sample.inpaint_button.classes(remove="border-4", add="border-none")
+                output_sample.select_range.set_visibility(False)
+                output_sample.audio_editor_element.set_select_range_visibility(False)
+
+            if output_sample.editing_mode == "extend":
+                output_sample.extend_button.classes(remove="border-none", add="border-4")
+                output_sample.extend_mode_radio.set_visibility(True)
+            else:
+                output_sample.extend_button.classes(remove="border-4", add="border-none")
+                output_sample.extend_mode_radio.set_visibility(False)
+
             output_sample.audio_editor_element.update()
                 
     # adds a new output sample to the top of the workspace, queued initially
-    def add_output_sample(self, length: int, seed: int,
+    async def add_output_sample(self, length: int, seed: int,
             prompt: dict[str, float], gen_params: dict[str, Any]) -> OutputSample:
         
         # setup SampleParams input for actual pipeline generation call
@@ -670,13 +699,43 @@ class OutputEditor(ui.column):
         if self.input_output_sample is not None:
             sample_params.input_audio = self.input_output_sample.sample_output.latents
             sample_params.input_audio_pre_encoded = True
-            sample_params.inpainting_mask = torch.zeros_like(sample_params.input_audio[:, 0:1])
-            sample_params.inpainting_mask[...,
-                self.input_output_sample.select_range.value["min"]:self.input_output_sample.select_range.value["max"]] = 1.
+            if self.input_output_sample.editing_mode == "inpaint":
+                sample_params.length = self.input_output_sample.sample_params.length
+                sample_params.inpainting_mask = torch.zeros_like(sample_params.input_audio[:, 0:1])
+                sample_params.inpainting_mask[...,
+                    self.input_output_sample.select_range.value["min"]:self.input_output_sample.select_range.value["max"]] = 1.
+            elif self.input_output_sample.editing_mode == "extend":
+                latent_shape = await self.get_latent_shape(sample_params.length)
+                sample_params.inpainting_mask = torch.zeros(size=(1, 1, *latent_shape[2:]))
+
+                input_latents_length = self.input_output_sample.sample_output.latents.shape[-1]
+                if latent_shape[-1] <= input_latents_length:
+                    ui.notify("Cannot extend, output length <= input length", type="error", color="red", close_button=True)
+                    raise ValueError("Cannot extend, output length <= input length")
+                
+                if self.input_output_sample.extend_mode_radio.value == "Prepend":
+                    sample_params.input_audio = torch.nn.functional.pad(sample_params.input_audio, (latent_shape[-1] - input_latents_length, 0))
+                    sample_params.inpainting_mask[..., :latent_shape[-1] - input_latents_length] = 1
+                else:
+                    sample_params.input_audio = torch.nn.functional.pad(sample_params.input_audio, (0, latent_shape[-1] - input_latents_length))
+                    sample_params.inpainting_mask[..., input_latents_length:] = 1
         
         # get name / label and add output sample to workspace
         output_sample = OutputSample(name=f"{sample_params.get_label(self.model_metadata, self.dataset_game_ids, verbose=self.get_app_config().use_verbose_labels)}",
             seed=sample_params.seed, prompt=sample_params.prompt, gen_params=gen_params, sample_params=sample_params)
+
+        # if inpainting/outpainting set the highlight range to show the generated region
+        if self.input_output_sample is not None:
+            if self.input_output_sample.editing_mode == "inpaint":
+                output_sample.highlight_start = self.input_output_sample.select_range.value["min"]
+                output_sample.highlight_duration = self.input_output_sample.select_range.value["max"] - self.input_output_sample.select_range.value["min"]
+            else:
+                if self.input_output_sample.extend_mode_radio.value == "Prepend":
+                    output_sample.highlight_start = 0
+                    output_sample.highlight_duration = latent_shape[-1] - input_latents_length
+                else:
+                    output_sample.highlight_start = input_latents_length
+                    output_sample.highlight_duration = latent_shape[-1] - input_latents_length
 
         # moves output sample up or down in the workspace
         def move_output_sample(output_sample: OutputSample, direction: int) -> None:
@@ -695,21 +754,35 @@ class OutputEditor(ui.column):
                 output_sample.select_range.value["min"] * seconds_per_latent_pixel, duration)
             
         # selects the chosen output sample as current input sample
-        def use_output_sample_as_input(output_sample: OutputSample) -> None:
-            if self.input_output_sample == output_sample:
+        def use_output_sample_as_input(output_sample: OutputSample, mode: str) -> None:
+            if self.input_output_sample == output_sample and self.input_output_sample.editing_mode == mode:
+                self.input_output_sample.editing_mode = "normal"
                 self.input_output_sample = None
             else:
+                if self.input_output_sample is not None:
+                    self.input_output_sample.editing_mode = "normal"
                 self.input_output_sample = output_sample
+                self.input_output_sample.editing_mode = mode
             self.refresh_output_samples()
+
+        def on_click_inpaint_button(output_sample: OutputSample) -> None:
+            use_output_sample_as_input(output_sample, "inpaint")
             set_select_range(output_sample) # required to refresh select range
 
         def on_click_extend_button(output_sample: OutputSample) -> None:
-            pass
+            use_output_sample_as_input(output_sample, "extend")
         
         # pauses all other output samples when a new one is played
         def on_play_audio(output_sample: OutputSample) -> None:
             for sample in self.output_samples:
                 if sample != output_sample: sample.audio_editor_element.pause()
+
+        # pause all other output samples when right-clicking on any of them
+        def on_audio_editor_mouse(output_sample: OutputSample, e: nicegui.events.MouseEventArguments) -> None:
+            if e.type == "mousedown":
+                if e.button != 0:
+                    for sample in self.output_samples:
+                        if sample != output_sample: sample.audio_editor_element.pause()
 
         # updates rating metadata in output sample audio and latents files
         def change_output_rating(output_sample: OutputSample, rating: int) -> None:
@@ -723,9 +796,6 @@ class OutputEditor(ui.column):
         # toggle visibility of optional elements in output sample card
         def on_toggle_show_latents(output_sample: OutputSample, is_toggled: bool) -> None:
             output_sample.latents_image_element.set_visibility(is_toggled)
-        def on_toggle_show_audio_editor(output_sample: OutputSample, is_toggled: bool) -> None:
-            if is_toggled == False: output_sample.audio_editor_element.pause()
-            output_sample.audio_editor_element.set_visibility(is_toggled)
         def on_toggle_show_params(output_sample: OutputSample, is_toggled: bool) -> None:
             output_sample.show_parameters_row_element.set_visibility(is_toggled)
         def on_toggle_show_debug(output_sample: OutputSample, is_toggled: bool) -> None:
@@ -747,94 +817,85 @@ class OutputEditor(ui.column):
             self.get_prompt_editor().update_prompt(output_sample.prompt)
             ui.notification("Copied all parameters and prompt!", timeout=1, icon="content_copy")
         
-        with ui.card().classes("w-full") as output_sample.card_element:
-            with ui.column().classes("w-full gap-0"):
-                with ui.row().classes("h-10 justify-between gap-0 w-full no-wrap"):
-                    
-                    # setup output sample name label and star rating
-                    with ui.row().classes("items-center no-wrap gap-0"):
-                        output_sample.name_label_element = ui.label(output_sample.name).classes("p-2").style(
-                            "border: 1px solid grey; border-bottom: none; border-radius: 10px 10px 0 0;")
-                        with StarRating() as output_sample.rating_element:
-                            ui.tooltip("Rate this sample")
-                        output_sample.rating_element.disable()
-                        output_sample.rating_element.classes("p-2").style(
-                            "border: 1px solid grey; border-bottom: none; border-radius: 10px 10px 0 0;")
-                        output_sample.rating_element.on_rating_change = lambda rating: change_output_rating(output_sample, rating)
+        with ui.card().classes("w-full p-0") as output_sample.card_element:
+            with ui.column().classes("w-full gap-0 m-0 p-0"):
+
+                # setup output sample name label and star rating
+                with ui.row().classes("h-min items-center no-wrap gap-0 absolute left-0 top-0") as output_sample.name_row_element:
+                    output_sample.name_label_element = ui.label(output_sample.name).classes("z-10 ml-1").classes("shadow-lg")
+                    with StarRating().classes("z-10 ml-3") as output_sample.rating_element:
+                        ui.tooltip("Rate this sample")
+                    output_sample.rating_element.on_rating_change = lambda rating: change_output_rating(output_sample, rating)
+                    output_sample.rating_element.set_visibility(False)
+                
+                with ui.row().classes("w-full gap-0, m-0 p-0 no-wrap"):
+                    with ui.column().classes("flex-grow gap-0 m-0 p-0"):
+                        # setup generation progress and latent image elements
+                        output_sample.sampling_progress_element = ui.linear_progress(
+                            value=0., show_value=False).classes("w-full font-bold gap-0 h-6").props("instant-feedback")
+                        with output_sample.sampling_progress_element:
+                            progress_label = ui.label().classes("absolute-center text-sm text-white")
+                            output_sample.sampling_progress_element.on_value_change(lambda v: progress_label.set_text(f"{v.value:.1%}"))
+                        
+                        output_sample.latents_image_element = ui.interactive_image().classes(
+                            "w-full gap-0 m-0").style("image-rendering: pixelated; width: 100%; height: auto;").props("fit=scale-down")
+                        
+                        # setup audio editor element, initially hidden while waiting for generation
+                        output_sample.audio_editor_element = AudioEditor().classes("w-full gap-0 m-0").props(add="fit=fill")
+                        output_sample.audio_editor_element.audio_element.on("play", lambda: on_play_audio(output_sample))
+                        output_sample.audio_editor_element.on_mouse(lambda e: on_audio_editor_mouse(output_sample, e))
+                        output_sample.audio_editor_element.set_visibility(False)
+                            
+                        # setup inpainting range select element, extend/prepend radio group
+                        output_sample.select_range = ui.range(min=0, max=0, step=1, value={"min": 0, "max": 0}).classes("w-full m-0").props("step snap color='orange' label='Inpaint Selection'")
+                        output_sample.select_range.on_value_change(lambda: set_select_range(output_sample))
+                        output_sample.select_range.set_visibility(False)
+                        
+                        output_sample.extend_mode_radio = ui.radio(["Prepend", "Extend"], value="Extend").props("color='orange' inline")
+                        output_sample.extend_mode_radio.set_value("Extend")
+                        output_sample.extend_mode_radio.set_visibility(False)
 
                     # setup output sample toolbar
-                    with ui.button_group().classes("h-10 gap-0 z-10"):
-                        with ToggleButton(icon="gradient", color="gray").classes("w-1") as output_sample.toggle_show_latents_button:
-                            ui.tooltip("Toggle latents visibility")
-                        output_sample.toggle_show_latents_button.on_toggle = lambda is_toggled: on_toggle_show_latents(output_sample, is_toggled)
-                        #output_sample.toggle_show_latents_button.style("background: linear-gradient(45deg, #593782, #588143);")
-
-                        with ToggleButton(icon="queue_music", color="gray").classes("w-1") as output_sample.toggle_show_audio_editor_button:
-                            ui.tooltip("Toggle spectrogram visibility")
-                        output_sample.toggle_show_audio_editor_button.on_toggle = lambda is_toggled: on_toggle_show_audio_editor(output_sample, is_toggled)
-                        #output_sample.toggle_show_spectrogram_button.style("background: linear-gradient(45deg, #bf2a81, #322481);")
-                        output_sample.toggle_show_audio_editor_button.disable()
-
-                        with ToggleButton(icon="tune", color="gray").classes("w-1") as output_sample.toggle_show_params_button:
-                            ui.tooltip("Toggle parameters visibility")
-                        output_sample.toggle_show_params_button.on_toggle = lambda is_toggled: on_toggle_show_params(output_sample, is_toggled)
-
-                        with ToggleButton(icon="query_stats", color="gray").classes("w-1") as output_sample.toggle_show_debug_button:
-                            ui.tooltip("Toggle debug plot visibility")
-                        output_sample.toggle_show_debug_button.on_toggle = lambda is_toggled: on_toggle_show_debug(output_sample, is_toggled)
-                        output_sample.toggle_show_debug_button.disable()
+                    with ui.column().classes("gap-0 p-0 m-0 z-10 w-min box-border").style("margin-left: -16px;"):
                         
-                        output_sample.use_as_input_button = ui.button(icon="format_color_fill", color="orange",
-                            on_click=lambda: use_output_sample_as_input(output_sample)).classes("w-1 border-none border-double")
-                        with output_sample.use_as_input_button:
-                            ui.tooltip("Use this sample as inpainting input")
-                        output_sample.use_as_input_button.disable()
-
-                        output_sample.extend_button = ToggleButton(icon="swap_horiz", color="orange",
-                            on_click=lambda: on_click_extend_button(output_sample)).classes("w-1")
-                        with output_sample.extend_button:
-                            ui.tooltip("Change sample length")
-                        output_sample.extend_button.disable()
-                        
-                        with ui.button(icon="content_copy",
-                            on_click=lambda: on_click_copy_all_button(output_sample)).classes("w-1 border-none border-double"):
-                            ui.tooltip("Copy all parameters to current settings")
-                        
+                        button_classes = "w-8 gap-0 m-0 p-0"
+                        with ui.button('✕', color="red", on_click=lambda s=output_sample: self.remove_output_sample(s)).classes(f"{button_classes} rounded-b-none rounded-l-none"):
+                            ui.tooltip("Remove sample from workspace")
                         output_sample.move_up_button = ui.button('▲', color="gray",
-                            on_click=lambda: move_output_sample(output_sample, direction=-1)).classes("w-1")
+                            on_click=lambda: move_output_sample(output_sample, direction=-1)).classes(f"{button_classes} rounded-none")
                         with output_sample.move_up_button:
                             ui.tooltip("Move sample up")
                         output_sample.move_down_button = ui.button('▼', color="gray",
-                            on_click=lambda: move_output_sample(output_sample, direction=1)).classes("w-1")
+                            on_click=lambda: move_output_sample(output_sample, direction=1)).classes(f"{button_classes} rounded-none")
                         with output_sample.move_down_button:
                             ui.tooltip("Move sample down")
-                        
-                        with ui.button('✕', color="red", on_click=lambda s=output_sample: self.remove_output_sample(s)).classes("w-1"):
-                            ui.tooltip("Remove sample from workspace")
 
-                # setup generation progress and latent image elements
-                output_sample.sampling_progress_element = ui.linear_progress(
-                    value="0%").classes("w-full font-bold gap-0").props("instant-feedback")
-                output_sample.latents_image_element = ui.interactive_image().classes(
-                    "w-full gap-0").style("image-rendering: pixelated; width: 100%; height: auto;").props("fit=scale-down")
-                output_sample.toggle_show_latents_button.toggle(is_toggled=False)
+                        with ui.button(icon="content_copy",
+                            on_click=lambda: on_click_copy_all_button(output_sample)).classes(f"{button_classes} rounded-none"):
+                            ui.tooltip("Copy all parameters to current settings")
 
-                # setup audio editor element, initially hidden while waiting for generation
-                output_sample.audio_editor_element = AudioEditor().classes("w-full gap-0").props(add="fit=fill")
-                output_sample.audio_editor_element.audio_element.on("play", lambda: on_play_audio(output_sample))
-                output_sample.toggle_show_audio_editor_button.toggle(is_toggled=False)
+                        output_sample.inpaint_button = ui.button(icon="format_color_fill", color="orange",
+                            on_click=lambda: on_click_inpaint_button(output_sample)).classes(f"{button_classes} border-none border-double rounded-none")
+                        with output_sample.inpaint_button:
+                            ui.tooltip("Use this sample as inpainting input")
+                        output_sample.inpaint_button.disable()
+                        output_sample.extend_button = ui.button(icon="swap_horiz", color="orange",
+                            on_click=lambda: on_click_extend_button(output_sample)).classes(f"{button_classes} border-none border-double rounded-none")
+                        with output_sample.extend_button:
+                            ui.tooltip("Change sample length")
+                        output_sample.extend_button.disable()
 
-                # setup inpainting range select element
-                output_sample.select_range = ui.range(min=0, max=0, step=1, value={"min": 0, "max": 0}).classes("w-full").props("step snap color='orange' label='Inpaint Selection'")
-                output_sample.select_range.on_value_change(lambda: set_select_range(output_sample))
-                output_sample.select_range.set_visibility(False)
-
-                # add highlight range for the inpainting region, if any
-                if self.input_output_sample is not None:
-                    output_sample.audio_editor_element.set_highlight_range(
-                        self.input_output_sample.audio_editor_element._props["select_start"],
-                        self.input_output_sample.audio_editor_element._props["select_duration"])
-                    output_sample.audio_editor_element.set_highlight_range_visibility(True)
+                        with ToggleButton(icon="tune", color="gray").classes(f"{button_classes} rounded-none") as output_sample.toggle_show_params_button:
+                            ui.tooltip("Toggle parameters visibility")
+                        output_sample.toggle_show_params_button.on_toggle = lambda is_toggled: on_toggle_show_params(output_sample, is_toggled)
+                        with ToggleButton(icon="query_stats", color="gray").classes(f"{button_classes} rounded-none") as output_sample.toggle_show_debug_button:
+                            ui.tooltip("Toggle debug plot visibility")
+                        output_sample.toggle_show_debug_button.on_toggle = lambda is_toggled: on_toggle_show_debug(output_sample, is_toggled)
+                        output_sample.toggle_show_debug_button.disable()
+                        with ToggleButton(icon="gradient", color="gray").classes(f"{button_classes} rounded-t-none rounded-l-none") as output_sample.toggle_show_latents_button:
+                            ui.tooltip("Toggle latents visibility")
+                        output_sample.toggle_show_latents_button.on_toggle = lambda is_toggled: on_toggle_show_latents(output_sample, is_toggled)
+                        output_sample.toggle_show_latents_button.toggle(is_toggled=False)
 
                 # re-use gen param and prompt editors in read-only mode to show sample params
                 with ui.row().classes("w-full") as output_sample.show_parameters_row_element:
@@ -872,28 +933,38 @@ class OutputEditor(ui.column):
         # set output sample name label to match audio filename and enable rating
         output_sample.name = os.path.splitext(os.path.basename(output_sample.audio_path))[0]
         output_sample.name_label_element.set_text(output_sample.name)
-        output_sample.rating_element.enable()
+        output_sample.rating_element.set_visibility(True)
 
         # setup audio editor element
         spectrogram_image = output_sample.sample_output.spectrogram.mean(dim=(0,1))
         spectrogram_image = tensor_to_img(spectrogram_image, colormap=True, flip_y=True)
         spectrogram_image = cv2.resize(
-            spectrogram_image, (spectrogram_image.shape[1]//4, spectrogram_image.shape[0]), interpolation=cv2.INTER_AREA)
+            spectrogram_image, (int(spectrogram_image.shape[1]//4/0.9), spectrogram_image.shape[0]), interpolation=cv2.INTER_AREA)
         spectrogram_image = Image.fromarray(spectrogram_image)
+        
         output_sample.audio_editor_element.set_source(spectrogram_image)
         if self.get_app_config().hide_latents_after_generation == True:
             output_sample.toggle_show_latents_button.toggle(is_toggled=False)
         audio_duration = output_sample.sample_output.raw_sample.shape[-1] / self.format_config["sample_rate"]
         output_sample.audio_editor_element.set_audio_source(output_sample.audio_path, duration=audio_duration)
-        output_sample.toggle_show_audio_editor_button.enable()
-        output_sample.toggle_show_audio_editor_button.toggle(is_toggled=True)
+        output_sample.audio_editor_element.set_visibility(True)
+        output_sample.audio_editor_element.set_volume(self.audio_volume_slider.value)
 
         # setup inpainting range select element and enable use as input button        
         output_sample.select_range.max = output_sample.sample_output.latents.shape[-1]
         output_sample.select_range.set_value({
             "min": output_sample.select_range.max//2 - output_sample.select_range.max//4,
             "max": output_sample.select_range.max//2 + output_sample.select_range.max//4})
-        output_sample.use_as_input_button.enable()
+        output_sample.inpaint_button.enable()
+        output_sample.extend_button.enable()
+        
+        # set highlight range to show the generated region if inpainting/outpainting
+        seconds_per_latent_pixel = audio_duration / output_sample.sample_output.latents.shape[-1]
+        if output_sample.highlight_duration > 0:
+            output_sample.audio_editor_element.set_highlight_range(
+                output_sample.highlight_start * seconds_per_latent_pixel,
+                output_sample.highlight_duration * seconds_per_latent_pixel)
+            output_sample.audio_editor_element.set_highlight_range_visibility(True)
         
         # debug info and plots display
         output_sample.toggle_show_debug_button.enable()

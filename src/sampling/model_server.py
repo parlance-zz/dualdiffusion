@@ -28,6 +28,7 @@ from datetime import datetime
 import multiprocessing.managers
 import asyncio
 import multiprocessing
+import traceback
 import logging
 import os
 
@@ -135,6 +136,7 @@ class ModelServer:
                     error_str = f"Error processing command '{cmd}': {e}"
                     self.logger.error(error_str)
                     self.model_server_state["error"] = error_str
+                    traceback.print_exception(type(e), e, e.__traceback__)  
                 finally:
                     self.model_server_state["cmd"] = None
 
