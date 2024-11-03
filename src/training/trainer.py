@@ -89,7 +89,7 @@ class LRScheduleConfig:
     lr_warmup_steps: int     = 4000
     lr_reference_steps: int  = 20000
     lr_decay_exponent: float = 0.5
-    min_learning_rate: float = 2e-3
+    min_learning_rate: float = 1e-3
 
 @dataclass
 class OptimizerConfig:
@@ -149,6 +149,7 @@ class DualDiffusionTrainerConfig:
     seed: Optional[int]                 = None
     device_batch_size: int              = 1
     gradient_accumulation_steps: int    = 1
+    validation_device_batch_size: int   = 1
     validation_accumulation_steps: int  = 1
 
     num_train_epochs: int               = 500000
@@ -466,7 +467,7 @@ class DualDiffusionTrainer:
         self.local_batch_size = self.config.device_batch_size * self.config.gradient_accumulation_steps
         self.total_batch_size = self.local_batch_size * self.accelerator.num_processes
         self.validation_total_batch_size = (
-            self.config.device_batch_size * self.accelerator.num_processes * self.config.validation_accumulation_steps
+            self.config.validation_device_batch_size * self.accelerator.num_processes * self.config.validation_accumulation_steps
         )
 
         latents_crop_width = self.latent_shape[-1] if self.latent_shape is not None else 0
@@ -625,6 +626,7 @@ class DualDiffusionTrainer:
         if global_step > 0:
             first_epoch = global_step // self.num_update_steps_per_epoch
             resume_step = global_step % self.num_update_steps_per_epoch
+            self.accelerator.step = 0 # required to keep accum steps in sync if resuming after changing device batch size
 
         return global_step, resume_step, first_epoch
 
@@ -679,7 +681,7 @@ class DualDiffusionTrainer:
 
                         if self.accelerator.sync_gradients:
                             assert accum_step == (self.config.gradient_accumulation_steps - 1), \
-                                f"accum_step out of sync with sync_gradients - {accum_step} != {self.config.gradient_accumulation_steps - 1}"
+                                f"accum_step out of sync with sync_gradients: {accum_step} != {self.config.gradient_accumulation_steps - 1}"
                             
                             grad_norm = self.accelerator.clip_grad_norm_(self.module.parameters(), self.config.optimizer.max_grad_norm)
                             train_logger.add_log("grad_norm", grad_norm)
@@ -847,9 +849,9 @@ class DualDiffusionTrainer:
             validation_batch = {} # expand each individual validation sample to device_batch_size
             for key, value in batch.items():
                 if torch.is_tensor(value):
-                    validation_batch[key] = value.repeat((self.config.device_batch_size,) + (1,) * (value.ndim - 1))
+                    validation_batch[key] = value.repeat((self.config.validation_device_batch_size,) + (1,) * (value.ndim - 1))
                 elif isinstance(value, list):
-                    validation_batch[key] = value * self.config.device_batch_size
+                    validation_batch[key] = value * self.config.validation_device_batch_size
                 else:
                     raise ValueError(f"Unsupported validation batch value type: {type(value)} '{key}': '{value}'")
 
