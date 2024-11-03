@@ -258,7 +258,7 @@ class DualDiffusionPipeline(torch.nn.Module):
             module_checkpoint = load_checkpoints.get(module_name, "")
             module_path = os.path.join(model_path, module_checkpoint, module_name)
             model_modules[module_name] = module_class.from_pretrained(
-                module_path, device=device, load_config_only=module_name in load_emas)
+                module_path, load_config_only=module_name in load_emas)
             
             # load and merge ema weights
             if module_name in load_emas:
