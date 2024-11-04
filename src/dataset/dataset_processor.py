@@ -290,8 +290,12 @@ class DatasetProcessor:
             max_sample_length_seconds = max(sample["sample_length"] / sample["sample_rate"]
                 for _, _, sample in self.all_samples() if sample["sample_length"] is not None and sample["sample_rate"] is not None)
             
-            min_latents_length = min(sample["latents_length"] for _, _, sample in self.all_samples() if sample["latents_length"] is not None)
-            max_latents_length = max(sample["latents_length"] for _, _, sample in self.all_samples() if sample["latents_length"] is not None)
+            try:
+                min_latents_length = min(sample["latents_length"] for _, _, sample in self.all_samples() if sample["latents_length"] is not None)
+                max_latents_length = max(sample["latents_length"] for _, _, sample in self.all_samples() if sample["latents_length"] is not None)
+            except Exception as e:
+                min_latents_length = 0
+                max_latents_length = 0
         else:
             min_sample_length = 0
             max_sample_length = 0
