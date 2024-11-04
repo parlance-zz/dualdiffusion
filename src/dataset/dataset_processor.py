@@ -502,7 +502,7 @@ class DatasetProcessor:
             self.logger.warning(f"Found {num_samples_with_safetensors} samples with no latents_file_name but matching latents file exists")
             samples_with_safetensors.show_samples()
             if input(f"Use existing pre-encoded latents files for {num_samples_with_safetensors} samples? (y/n): ").lower() == "y":
-                for _, _, sample in num_samples_with_safetensors:
+                for _, _, sample in samples_with_safetensors:
                     sample["latents_file_name"] = f"{os.path.splitext(sample['file_name'])[0]}.safetensors"
                 self.logger.info(f"Set latents_file_name for {num_samples_with_safetensors} samples")
 
