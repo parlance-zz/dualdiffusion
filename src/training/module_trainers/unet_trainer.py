@@ -301,8 +301,8 @@ class UNetTrainer(ModuleTrainer):
             batch_loss = batch_weighted_loss / error_logvar.exp() + error_logvar
         
         if self.config.num_loss_buckets > 0:
-            global_weighted_loss = self.trainer.accelerator.gather(batch_weighted_loss.detach().cpu())
-            global_sigma_quantiles = self.trainer.accelerator.gather(self.module.config.sigma_data / batch_sigma.detach().cpu()).arctan() / (torch.pi/2)
+            global_weighted_loss = self.trainer.accelerator.gather(batch_weighted_loss.detach()).cpu()
+            global_sigma_quantiles = self.trainer.accelerator.gather(self.module.config.sigma_data / batch_sigma.detach()).cpu().arctan() / (torch.pi/2)
 
             target_buckets = (global_sigma_quantiles * self.unet_loss_buckets.shape[0]).long().clip(min=0, max=self.unet_loss_buckets.shape[0] - 1)
             self.unet_loss_buckets.index_add_(0, target_buckets, global_weighted_loss)
