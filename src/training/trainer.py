@@ -310,7 +310,9 @@ class DualDiffusionTrainer:
         #self.logger.info(f"Model metadata: {dict_str(self.pipeline.model_metadata)}")
 
         self.module = self.accelerator.prepare(self.module)
-
+        if isinstance(self.module, torch.nn.parallel.DistributedDataParallel):
+            self.module = self.module.module
+        
         if hasattr(self.module, "normalize_weights"):
             self.module.normalize_weights()
         
