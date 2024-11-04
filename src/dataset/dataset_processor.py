@@ -719,7 +719,7 @@ class DatasetProcessor:
                     self.logger.debug(f"Game id '{game_id_to_name[game_id]}' has only {count} samples")
                 self.logger.debug(f"Total sample count in low_sample_game_ids: {total_low_samples}")
 
-                input("")
+                #input("")
                 #if input(f"Remove {len(low_sample_game_ids)} game ids with fewer than {self.config.min_class_samples} samples? (y/n): ").lower() == "y":
 
         # todo: detect any duplicate / highly similar samples in splits,
