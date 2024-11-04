@@ -64,6 +64,9 @@ def pre_encode_latents():
     print(f"Loading DualDiffusion model from '{model_path}'...")
     pipeline = DualDiffusionPipeline.from_pretrained(model_path, torch_dtype=torch.bfloat16, device={"vae": device, "format": device})
     
+    if pipeline.vae.config.last_global_step == 0:
+        raise ValueError("The VAE module configured for pre-encoding has not been trained: last_global_step == 0")
+    
     pipeline.vae.compile(fullgraph=True, dynamic=True)
     format_config: SpectrogramFormatConfig = pipeline.format.config
     spectrogram_hop_length = format_config.hop_length
