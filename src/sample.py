@@ -30,7 +30,7 @@ import argparse
 import numpy as np
 import torch
 
-from sampling.gradio_app import GradioApp
+from sampling.nicegui_app import NiceGUIApp
 
 from pipelines.dual_diffusion_pipeline import DualDiffusionPipeline, SampleParams
 from utils.dual_diffusion_utils import init_cuda, save_audio, load_audio, dict_str
@@ -39,7 +39,7 @@ from utils.dual_diffusion_utils import init_cuda, save_audio, load_audio, dict_s
 def sample(args: argparse.Namespace) -> None:
 
     if args.interactive == True:
-        return GradioApp().run()
+        return NiceGUIApp().run()
 
     if args.sample_cfg_file is None:
         raise ValueError("Must either launch with interactive enabled or provide a sampling configuration file.")
