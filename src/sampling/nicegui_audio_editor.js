@@ -52,6 +52,7 @@ export default {
         x: 100,            // crosshair x position (in pixels)
         y: 100,            // crosshair y position (in pixels)
         playing: false,    // set if associated audio is playing
+        loop: false,       // set if associated audio should play looping
         tx: 1,             // time crosshair x position (in pixels) (small offset for better invisibility)
         time: 0,           // last updatetime from audio element (seconds)
         last_timestamp: 0, // timestamp of last updatetime (milliseconds)
@@ -170,6 +171,9 @@ export default {
         this.shdw_select_start = start;
         this.shdw_select_duration = duration;
       },
+      set_looping(looping) {
+        this.loop = looping;
+      },
       update_time_cross(timestamp) {
         if (this.playing) {
           const pixels_per_second = this.loaded_image_width / this.duration;
@@ -177,7 +181,10 @@ export default {
           this.tx = (this.time + seconds_since_set_time) * pixels_per_second;
           // these offsets give better invisibility at the very begining and end of the sample
           if (this.tx < 1) { this.tx = 1; }
-          if (this.tx > this.loaded_image_width - 1) { this.tx = this.loaded_image_width - 1; }
+          if (this.tx > this.loaded_image_width - 1) {
+            if (this.loop == false) { this.tx = this.loaded_image_width - 1; }
+            else { this.tx = this.tx - this.loaded_image_width; }
+          }
           requestAnimationFrame((t) => this.update_time_cross(t));
         }
       },

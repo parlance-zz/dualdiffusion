@@ -208,6 +208,10 @@ class AudioEditor(AudioPlayer):
         if audio_source is not None:
             self.set_audio_source(audio_source)
 
+    def set_looping(self, looping: bool) -> None:
+        self.run_method("set_looping", looping)
+        self.audio_element._props["loop"] = looping
+        self.audio_element.update()
     def set_volume(self, volume: float) -> None:
         self.volume = volume
         self.audio_element.set_volume(volume)

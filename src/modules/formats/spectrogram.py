@@ -126,7 +126,7 @@ class SpectrogramConverter(torch.nn.Module):
             wkwargs=window_args,
             momentum=config.fgla_momentum,
             length=None,
-            rand_init=True,
+            rand_init=False,#True,
             stereo=config.stereo,
             stereo_coherence=config.stereo_coherence
         )

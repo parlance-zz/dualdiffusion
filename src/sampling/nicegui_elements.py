@@ -230,11 +230,12 @@ class ScrollableNumber(ui.number): # same as ui.number but works with mouse whee
 class GenParamsEditor(ui.row):
 
     def __init__(self, *args, gen_params: Optional[dict[str, Union[float, int, str]]] = None, seed: Optional[int] = None, 
-                 length: Optional[int] = None, read_only: bool = False, **kwargs) -> None:
+                 seamless_loop: Optional[bool] = None, length: Optional[int] = None, read_only: bool = False, **kwargs) -> None:
         super().__init__(*args, **kwargs)
 
         seed = seed or 10042
         length = length or 0
+        seamless_loop = seamless_loop or False
         self.gen_params: dict[str, Union[float, int, str]] = gen_params or {}
         self.param_elements: dict[str, ui.element] = {}
         self.read_only = read_only
@@ -244,6 +245,7 @@ class GenParamsEditor(ui.row):
             with ui.card().classes("w-48"):
 
                 self.generate_length = ScrollableNumber(label="Length (seconds)", value=length, min=0, max=150, precision=0, step=5).classes("w-full")
+                self.seamless_loop = ui.checkbox("Seamless Loop", value=seamless_loop).classes("w-full")
                 with ui.row().classes("w-full items-center"):
                     self.seed = ScrollableNumber(label="Seed", value=seed, min=10000, max=99999, precision=0, step=1)
                     if read_only == False:
@@ -256,6 +258,7 @@ class GenParamsEditor(ui.row):
                 
                 if read_only == True:
                     self.generate_length.disable()
+                    self.seamless_loop.disable()
                     self.seed.disable()
                 else:
                     self.auto_increment_seed = ui.checkbox("Auto Increment Seed", value=True).classes("w-full")
@@ -687,12 +690,12 @@ class OutputEditor(ui.column):
             output_sample.audio_editor_element.update()
                 
     # adds a new output sample to the top of the workspace, queued initially
-    async def add_output_sample(self, length: int, seed: int,
+    async def add_output_sample(self, length: int, seed: int, seamless_loop: bool,
             prompt: dict[str, float], gen_params: dict[str, Any]) -> OutputSample:
         
         # setup SampleParams input for actual pipeline generation call
         sample_params = SampleParams(seed=seed, length=length * self.format_config["sample_rate"],
-            prompt=prompt.copy(), **gen_params)
+            seamless_loop=seamless_loop, prompt=prompt.copy(), **gen_params)
         self.logger.info(f"OutputEditor.add_output_sample - params:{dict_str(sample_params.__dict__)}")
 
         # setup inpainting input
@@ -806,6 +809,7 @@ class OutputEditor(ui.column):
             self.get_gen_params_editor().gen_params.update(output_sample.gen_params)
             self.get_gen_params_editor().seed.set_value(output_sample.seed)
             self.get_gen_params_editor().generate_length.set_value(output_sample.sample_params.length)
+            self.get_gen_params_editor().seamless_loop.set_value(output_sample.sample_params.seamless_loop)
             ui.notification("Copied all parameters!", timeout=1, icon="content_copy")
         def on_click_copy_prompt_button(output_sample: OutputSample) -> None:
             self.get_prompt_editor().update_prompt(output_sample.prompt)
@@ -814,6 +818,7 @@ class OutputEditor(ui.column):
             self.get_gen_params_editor().gen_params.update(output_sample.gen_params)
             self.get_gen_params_editor().seed.set_value(output_sample.seed)
             self.get_gen_params_editor().generate_length.set_value(output_sample.sample_params.length)
+            self.get_gen_params_editor().seamless_loop.set_value(output_sample.sample_params.seamless_loop)
             self.get_prompt_editor().update_prompt(output_sample.prompt)
             ui.notification("Copied all parameters and prompt!", timeout=1, icon="content_copy")
         
@@ -901,7 +906,7 @@ class OutputEditor(ui.column):
                 with ui.row().classes("w-full") as output_sample.show_parameters_row_element:
                     ui.separator().classes("bg-transparent")
                     with ui.card():
-                        with GenParamsEditor(gen_params=gen_params, seed=seed, length=length, read_only=True):
+                        with GenParamsEditor(gen_params=gen_params, seed=seed, seamless_loop=seamless_loop, length=length, read_only=True):
                             with CopyButton().on_click(lambda: on_click_copy_gen_params_button(output_sample)):
                                 ui.tooltip("Copy to current parameters")
                     with PromptEditor(prompt=prompt, read_only=True):
@@ -949,6 +954,7 @@ class OutputEditor(ui.column):
         output_sample.audio_editor_element.set_audio_source(output_sample.audio_path, duration=audio_duration)
         output_sample.audio_editor_element.set_visibility(True)
         output_sample.audio_editor_element.set_volume(self.audio_volume_slider.value)
+        output_sample.audio_editor_element.set_looping(output_sample.sample_params.seamless_loop)
 
         # setup inpainting range select element and enable use as input button        
         output_sample.select_range.max = output_sample.sample_output.latents.shape[-1]

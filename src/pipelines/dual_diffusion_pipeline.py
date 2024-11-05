@@ -50,6 +50,7 @@ class SampleParams:
     num_steps: int              = 100
     batch_size: int             = 1
     length: Optional[int]       = None
+    seamless_loop: bool         = False
     cfg_scale: float            = 1.5
     sigma_max: Optional[float]  = None
     sigma_min: Optional[float]  = None
@@ -402,7 +403,8 @@ class DualDiffusionPipeline(torch.nn.Module):
 
         self.format.config.num_fgla_iters = params.num_fgla_iters # todo: this should be a runtime param, not config
         generator = torch.Generator(device=unet.device).manual_seed(params.seed)
-
+        np_generator = np.random.default_rng(params.seed)
+        
         sample_shape = self.get_sample_shape(bsz=params.batch_size, length=params.length)
         if getattr(self, "vae", None) is not None:
             latent_diffusion = True
@@ -461,6 +463,15 @@ class DualDiffusionPipeline(torch.nn.Module):
 
         progress_bar = tqdm(total=params.num_steps, disable=quiet)
         for i, (sigma_curr, sigma_next) in enumerate(zip(sigma_schedule_list[:-1], sigma_schedule_list[1:])):
+            
+            if params.seamless_loop == True:
+                loop_shift = int(np_generator.integers(0, sample.shape[-1]))
+                sample = torch.roll(sample, shifts=loop_shift, dims=-1)
+                sample = torch.cat((sample[..., -32:], sample, sample[..., :32]), dim=-1)
+                input_ref_sample = torch.roll(input_ref_sample, shifts=loop_shift, dims=-1)
+                input_ref_sample = torch.cat((input_ref_sample[..., -32:], input_ref_sample, input_ref_sample[..., :32]), dim=-1)
+            else:
+                loop_shift = None
 
             input_sigma = torch.tensor([sigma_curr] * unet_class_embeddings.shape[0], device=unet.device)
             input_sample = sample.repeat(2, 1, 1, 1)
@@ -500,6 +511,11 @@ class DualDiffusionPipeline(torch.nn.Module):
             t = sigma_next / sigma_curr if (i+1) < params.num_steps else 0
             sample = torch.lerp(cfg_model_output, sample, t)
 
+            if loop_shift is not None:
+                sample = torch.roll(sample[..., 32:-32], shifts=-loop_shift, dims=-1)
+                input_ref_sample = torch.roll(input_ref_sample[..., 32:-32], shifts=-loop_shift, dims=-1)
+                cfg_model_output = torch.roll(cfg_model_output[..., 32:-32], shifts=-loop_shift, dims=-1)
+
             if i+1 < params.num_steps:
                 p = max(old_sigma_next**2 - sigma_next**2, 0)**0.5
                 sample.add_(torch.randn(sample.shape, generator=generator,
@@ -530,11 +546,27 @@ class DualDiffusionPipeline(torch.nn.Module):
 
         if latent_diffusion == True:
             latents = sample
+            if params.seamless_loop == True:
+                sample = torch.cat((sample[..., -4:], sample, sample[..., :4]), dim=-1)
             spectrogram = self.vae.decode(sample.to(self.vae.dtype), vae_class_embeddings, self.format).float()
         else:
             latents = None
             spectrogram = sample
+            if params.seamless_loop == True:
+                spectrogram = torch.cat((spectrogram[..., -32:], spectrogram, spectrogram[..., :32]), dim=-1)
+
         raw_sample = self.format.sample_to_raw(spectrogram)
+        
+        if params.seamless_loop == True:   
+            loop_padding = int((32 - 0.5) * self.format.config.hop_length) * 2 # todo: not sure why the -0.5 is needed
+            cross_fade_exponent = 2/3
+            blend_window = (torch.arange(0, loop_padding) / loop_padding).to(raw_sample.device)
+            blended = (raw_sample[..., -loop_padding:] * (1-blend_window)**cross_fade_exponent +
+                       raw_sample[..., :loop_padding] * blend_window**cross_fade_exponent)
+            raw_sample = raw_sample[..., loop_padding//2:-loop_padding//2]
+            raw_sample[..., :loop_padding//2] = blended[..., -loop_padding//2:]
+            raw_sample[..., -loop_padding//2:] = blended[..., :loop_padding//2]
+            spectrogram = spectrogram[..., 32:-32]
         
         if model_server_state is not None:
             model_server_state["generate_latents"] = None

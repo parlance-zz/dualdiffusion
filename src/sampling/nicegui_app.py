@@ -331,7 +331,8 @@ class NiceGUIApp:
         
         # queue new output sample and auto-increment seed
         output_sample = await self.output_editor.add_output_sample(int(self.gen_params_editor.generate_length.value),
-            int(self.gen_params_editor.seed.value), self.prompt_editor.prompt.copy(), self.gen_params_editor.gen_params.copy())
+            int(self.gen_params_editor.seed.value), self.gen_params_editor.seamless_loop.value,
+            self.prompt_editor.prompt.copy(), self.gen_params_editor.gen_params.copy())
         if self.gen_params_editor.auto_increment_seed.value == True:
             self.gen_params_editor.seed.set_value(self.gen_params_editor.seed.value + 1)
         
