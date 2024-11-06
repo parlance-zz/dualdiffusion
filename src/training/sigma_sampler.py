@@ -31,7 +31,7 @@ class SigmaSamplerConfig:
     sigma_max: float  = 200.
     sigma_min: float  = 0.03
     sigma_data: float = 1.
-    distribution: Literal["ln_normal", "ln_sech", "ln_sech^2", "ln_linear", "ln_pdf"] = "ln_sech"
+    distribution: Literal["ln_normal", "ln_sech", "ln_sech^2", "ln_linear", "ln_pdf", "ln_quadratic"] = "ln_sech"
     dist_scale: float  = 1.
     dist_offset: float = 0.1
     dist_pdf: Optional[torch.Tensor] = None
@@ -53,7 +53,7 @@ class SigmaSampler():
     def __init__(self, sigma_sampler_config: SigmaSamplerConfig) -> None:
         self.config = sigma_sampler_config
 
-        if self.config.distribution not in ["ln_normal", "ln_sech", "ln_sech^2", "ln_linear", "ln_pdf"]:
+        if self.config.distribution not in ["ln_normal", "ln_sech", "ln_sech^2", "ln_linear", "ln_quadratic", "ln_pdf"]:
             raise ValueError(f"Invalid distribution: {self.config.distribution}")
             
         if self.config.distribution == "ln_normal":
@@ -64,6 +64,8 @@ class SigmaSampler():
             self.sample_fn = self.sample_ln_sech2
         elif self.config.distribution == "ln_linear":
             self.sample_fn = self.sample_ln_linear
+        elif self.config.distribution == "ln_quadratic":
+            self.sample_fn = self.sample_ln_quadratic
         elif self.config.distribution == "ln_pdf":
             
             if self.config.dist_pdf is None:
@@ -101,6 +103,14 @@ class SigmaSampler():
         ln_sigma[ln_sigma < self.config.ln_sigma_min] += self.config.ln_sigma_max - self.config.ln_sigma_min
         ln_sigma[ln_sigma > self.config.ln_sigma_max] -= self.config.ln_sigma_max - self.config.ln_sigma_min
         return ln_sigma.exp().clip(self.config.sigma_min, self.config.sigma_max)
+    
+    @torch.no_grad()
+    def sample_ln_quadratic(self, n_samples: Optional[int] = None, quantiles: Optional[torch.Tensor] = None) -> torch.Tensor:
+        if quantiles is None:
+            quantiles = torch.rand(n_samples)
+
+        ln_sigma = (quantiles**(0.5*self.config.dist_scale)) * (self.config.ln_sigma_max - self.config.ln_sigma_min) + self.config.ln_sigma_min
+        return ln_sigma.exp().clip(min=self.config.sigma_min, max=self.config.sigma_max)
     
     @torch.no_grad()
     def sample_ln_sech(self, n_samples: Optional[int] = None, quantiles: Optional[torch.Tensor] = None) -> torch.Tensor:
