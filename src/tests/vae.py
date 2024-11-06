@@ -103,9 +103,9 @@ def vae_test() -> None:
         latents_mean += latents.mean().item()
         latents_std += latents.std().item()
 
-        save_img(tensor_to_img(latents), os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_latents.png')}"))
-        save_img(tensor_to_img(input_sample), os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_input_sample.png')}"))
-        save_img(tensor_to_img(output_sample), os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_output_sample.png')}"))
+        save_img(tensor_to_img(latents, flip_y=True), os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_latents.png')}"))
+        save_img(tensor_to_img(input_sample, flip_y=True), os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_input_sample.png')}"))
+        save_img(tensor_to_img(output_sample, flip_y=True), os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_output_sample.png')}"))
 
         input_raw_sample = pipeline.format.sample_to_raw(input_sample)
         output_flac_file_path = os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_original.flac')}")
@@ -117,7 +117,7 @@ def vae_test() -> None:
         print(f"Saved flac output to {output_flac_file_path}")
 
         latents_fft = torch.fft.rfft2(latents.float(), norm="ortho").abs().clip(min=noise_floor).log()
-        save_img(tensor_to_img(latents_fft), os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_latents_fft_ln_psd.png')}"))
+        save_img(tensor_to_img(latents_fft, flip_y=True), os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_latents_fft_ln_psd.png')}"))
 
     print(f"Finished in: {datetime.datetime.now() - start_time}")
     print(f"Point similarity: {point_similarity / len(test_samples)}")
