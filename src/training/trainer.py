@@ -337,12 +337,9 @@ class DualDiffusionTrainer:
             self.logger.info(f"  EMA CPU offloading {'enabled' if ema_device == 'cpu' else 'disabled'}")
 
             if self.config.ema.use_switch_ema == True:
-                if self.config.ema.use_feedback_ema == True:
-                    raise ValueError("Error: Found both SwitchEMA and feedback EMA enabled")
-                self.logger.info(f"  Using SwitchEMA (beta: {ema_betas[0]})")
-            else:
-                if self.config.ema.use_feedback_ema == True:
-                    self.logger.info(f"  Using feedback EMA with ema_0 (beta: {ema_betas[0]} feedback_ema_beta: {self.config.ema.feedback_ema_beta})")
+                self.logger.info(f"  Using SwitchEMA with ema_0 (beta: {ema_betas[0]})")
+            if self.config.ema.use_feedback_ema == True:
+                self.logger.info(f"  Using feedback EMA with ema_0 (beta: {ema_betas[0]} feedback_ema_beta: {self.config.ema.feedback_ema_beta})")
         else:
             self.logger.info("Not using EMA")
 
