@@ -44,7 +44,7 @@ def vae_test() -> None:
     model_name = test_params["model_name"]
     model_load_options = test_params["model_load_options"]
     length = test_params["length"]
-    num_fgla_iters = test_params["fgla_iterations"]
+    num_fgla_iters = test_params["num_fgla_iters"]
     sample_latents = test_params["sample_latents"]
     normalize_latents = test_params["normalize_latents"]
     random_latents = test_params["random_latents"]
