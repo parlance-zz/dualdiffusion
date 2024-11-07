@@ -122,8 +122,19 @@ def multi_plot(*args, layout: Optional[tuple[int, int]] = None,
                         hspace=1/figsize[1])
     plt.show()
 
+def _is_json_serializable(value: Any) -> bool:
+    if isinstance(value, (str, int, float, bool, type(None))):
+        return True
+    elif isinstance(value, list):
+        return all(_is_json_serializable(item) for item in value)
+    elif isinstance(value, dict):
+        return all(_is_json_serializable(v) for v in value.values())
+    else:
+        return False
+    
 def dict_str(d: dict, indent: int = 4) -> str:
-    return json_dumps(d, indent=indent)
+    json_dict = {k: v for k, v in d.items() if _is_json_serializable(v)}
+    return json_dumps(json_dict, indent=indent)
 
 def sanitize_filename(filename: str) -> str:
     return ("".join(c for c in filename
