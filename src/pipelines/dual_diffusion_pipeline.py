@@ -549,6 +549,8 @@ class DualDiffusionPipeline(torch.nn.Module):
             if params.seamless_loop == True:
                 sample = torch.cat((sample[..., -4:], sample, sample[..., :4]), dim=-1)
             spectrogram = self.vae.decode(sample.to(self.vae.dtype), vae_class_embeddings, self.format).float()
+            debug_info["spectrogram_mean"] = spectrogram.mean().item()
+            debug_info["spectrogram_std"] = spectrogram.std().item()
         else:
             latents = None
             spectrogram = sample
@@ -556,6 +558,8 @@ class DualDiffusionPipeline(torch.nn.Module):
                 spectrogram = torch.cat((spectrogram[..., -32:], spectrogram, spectrogram[..., :32]), dim=-1)
 
         raw_sample = self.format.sample_to_raw(spectrogram)
+        debug_info["raw_sample_mean"] = raw_sample.mean().item()
+        debug_info["raw_sample_std"] = raw_sample.std().item()
         
         if params.seamless_loop == True:   
             loop_padding = int((32 - 0.5) * self.format.config.hop_length) * 2 # todo: not sure why the -0.5 is needed
