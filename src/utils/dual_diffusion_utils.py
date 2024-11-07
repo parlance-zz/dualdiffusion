@@ -62,7 +62,8 @@ def init_cuda(default_device: Optional[torch.device] = None) -> None:
         torch.backends.cuda.matmul.allow_tf32 = True
         torch.backends.cudnn.allow_tf32 = True
         torch.backends.cuda.cufft_plan_cache[0].max_size = 250 # cufft memory leak
-
+        torch.backends.cudnn.benchmark = True
+        
         if default_device is not None:
             torch.cuda.set_device(default_device)
 
