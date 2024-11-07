@@ -160,6 +160,7 @@ class DualDiffusionTrainerConfig:
 
     enable_anomaly_detection: bool      = False
     enable_model_compilation: bool      = True
+    enable_channels_last: bool          = True
     compile_params: Optional[dict]      = None
 
     @staticmethod
@@ -308,6 +309,9 @@ class DualDiffusionTrainer:
         self.logger.info(f"Module class: {self.module_class.__name__}")
         self.logger.info(f"Module trainer class: {self.config.module_trainer_class.__name__}")
         #self.logger.info(f"Model metadata: {dict_str(self.pipeline.model_metadata)}")
+
+        if self.config.enable_channels_last == True:
+            self.module = self.module.to(memory_format=torch.channels_last)
 
         self.module = self.accelerator.prepare(self.module)
         if isinstance(self.module, torch.nn.parallel.DistributedDataParallel):

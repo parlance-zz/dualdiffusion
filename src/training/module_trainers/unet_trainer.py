@@ -286,6 +286,11 @@ class UNetTrainer(ModuleTrainer):
         samples = (samples * self.module.config.sigma_data).detach()
         ref_samples = self.get_inpainting_ref_samples(samples) if self.config.inpainting_probability > 0 or self.module.config.inpainting == True else None
 
+        if self.trainer.config.enable_channels_last == True:
+            samples = samples.to(memory_format=torch.channels_last)
+            noise = noise.to(memory_format=torch.channels_last)
+            ref_samples = ref_samples.to(memory_format=torch.channels_last) if ref_samples is not None else None
+
         denoised = self.module(samples + noise, batch_sigma, self.trainer.pipeline.format, unet_class_embeddings, sample_t_ranges, ref_samples)
         batch_loss_weight = (batch_sigma ** 2 + self.module.config.sigma_data ** 2) / (batch_sigma * self.module.config.sigma_data) ** 2
         batch_weighted_loss = torch.nn.functional.mse_loss(denoised, samples, reduction="none").mean(dim=(1,2,3)) * batch_loss_weight
@@ -299,6 +304,7 @@ class UNetTrainer(ModuleTrainer):
         else:
             error_logvar = self.module.get_sigma_loss_logvar(sigma=batch_sigma, class_embeddings=unet_class_embeddings)
             batch_loss = batch_weighted_loss / error_logvar.exp() + error_logvar
+            #batch_loss = batch_loss / batch_sigma ** 0.25
         
         if self.config.num_loss_buckets > 0:
             global_weighted_loss = self.trainer.accelerator.gather(batch_weighted_loss.detach()).cpu()
