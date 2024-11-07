@@ -22,8 +22,10 @@
 
 from dataclasses import dataclass
 from typing import Optional, Literal
+
 import torch
 import numpy as np
+from scipy.special import erf
 
 @dataclass
 class SigmaSamplerConfig:
@@ -94,14 +96,19 @@ class SigmaSampler():
 
         return self.sample_fn(n_samples, quantiles).to(device)
 
+    def get_ln_normal_quantile(self, sigma: float) -> float:
+        return 0.5 * (1 + erf((2**0.5*sigma - 2**0.5*self.config.dist_offset) / (2*self.config.dist_scale)))
+
     @torch.no_grad()
     def sample_ln_normal(self, n_samples: Optional[int] = None, quantiles: Optional[torch.Tensor] = None) -> torch.Tensor:
         if quantiles is None:
             quantiles = torch.rand(n_samples)
         
-        ln_sigma = self.config.dist_offset + (self.config.dist_scale * 2**0.5) * (quantiles * 2 - 1).erfinv().clip(min=-5, max=5)
-        ln_sigma[ln_sigma < self.config.ln_sigma_min] += self.config.ln_sigma_max - self.config.ln_sigma_min
-        ln_sigma[ln_sigma > self.config.ln_sigma_max] -= self.config.ln_sigma_max - self.config.ln_sigma_min
+        max_quantile = self.get_ln_normal_quantile(self.config.ln_sigma_max)
+        min_quantile = self.get_ln_normal_quantile(self.config.ln_sigma_min)
+        quantiles = min_quantile + quantiles * (max_quantile - min_quantile)
+
+        ln_sigma = self.config.dist_offset + (self.config.dist_scale * 2**0.5) * (quantiles*2 - 1).erfinv().clip(min=-6, max=6)
         return ln_sigma.exp().clip(self.config.sigma_min, self.config.sigma_max)
     
     @torch.no_grad()
