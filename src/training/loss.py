@@ -147,7 +147,6 @@ class DualMultiscaleSpectralLoss2DConfig:
 
 class DualMultiscaleSpectralLoss2D:
 
-    @torch.no_grad()
     def __init__(self, config: DualMultiscaleSpectralLoss2DConfig) -> None:
         self.config = config
 

@@ -220,6 +220,7 @@ class DualDiffusionPipeline(torch.nn.Module):
         return model_module_classes
     
     @staticmethod
+    @torch.no_grad()
     def from_pretrained(model_path: str,
                         torch_dtype: Union[dict[str, torch.dtype], torch.dtype] = torch.float32,
                         device: Optional[Union[dict[str, torch.device], torch.device]] = None,
@@ -296,6 +297,7 @@ class DualDiffusionPipeline(torch.nn.Module):
         
         return pipeline
     
+    @torch.no_grad()
     def save_pretrained(self, model_path: str, subfolder: Optional[str] = None) -> None:
         
         if subfolder is not None:

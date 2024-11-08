@@ -119,6 +119,7 @@ def solve_posthoc_coefficients(in_ofs: np.ndarray, in_std: np.ndarray,
 
 class PowerFunctionEMA_Manager:
     
+    @torch.no_grad()
     def __init__(self, module: torch.nn.Module, stds: list[float],
                  device: Optional[torch.device] = None) -> None:
 
@@ -147,6 +148,7 @@ class PowerFunctionEMA_Manager:
                 
             return zip(self.stds, betas)
 
+    @torch.no_grad()
     def save(self, save_directory: str, subfolder: Optional[str] = None) -> None:
 
         if subfolder is not None:

@@ -61,6 +61,7 @@ class DualDiffusionUNet(DualDiffusionModule, ABC):
         pass
 
     @abstractmethod
+    @torch.no_grad()
     def convert_to_inpainting(self) -> None:
         pass
 

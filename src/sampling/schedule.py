@@ -30,7 +30,7 @@ import numpy as np
 class SamplingSchedule:
 
     @staticmethod
-    @torch.no_grad()
+    @torch.inference_mode()
     def get_schedule(name: str, steps: int, t_start: float = 1., device: Optional[torch.device] = None, **kwargs) -> torch.Tensor:
         schedule_fn = getattr(SamplingSchedule, f"schedule_{name}")
         t = torch.linspace(t_start, 0, int(steps) + 1, device=device)
@@ -55,17 +55,14 @@ class SamplingSchedule:
         return schedules
 
     @staticmethod
-    @torch.no_grad()
     def schedule_edm2(t: torch.Tensor, sigma_max: float, sigma_min: float, rho: float = 7., **_) -> torch.Tensor:
         return (sigma_max ** (1 / rho) + (1 - t) * (sigma_min ** (1 / rho) - sigma_max ** (1 / rho))) ** rho
         
     @staticmethod
-    @torch.no_grad()
     def schedule_linear(t: torch.Tensor, sigma_max: float, sigma_min: float, **_) -> torch.Tensor:
         return (np.log(sigma_min) + (np.log(sigma_max) - np.log(sigma_min)) * t).exp()
     
     @staticmethod
-    @torch.no_grad()
     def schedule_cos(t: torch.Tensor, sigma_max: float, sigma_min: float, **_) -> torch.Tensor:
         theta_max = np.pi/2 - np.arctan(sigma_max)
         theta_min = np.pi/2 - np.arctan(sigma_min)
@@ -73,7 +70,6 @@ class SamplingSchedule:
         return theta.cos() / theta.sin()
     
     @staticmethod
-    @torch.no_grad()
     def schedule_scale_invariant(t: torch.Tensor, sigma_max: float, sigma_min: float, rho: float = 1., **_) -> torch.Tensor:
         return sigma_min / ((1 - t)**rho + sigma_min / sigma_max)
     

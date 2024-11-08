@@ -104,7 +104,6 @@ class MPFourier(torch.nn.Module):
 
 class MPConv(torch.nn.Module):
 
-    @torch.no_grad()
     def __init__(self, in_channels: int, out_channels: int,
                  kernel: tuple[int, int], groups: int = 1, stride: int = 1,
                  disable_weight_norm: bool = False) -> None:
@@ -132,7 +131,7 @@ class MPConv(torch.nn.Module):
         
         return torch.nn.functional.conv2d(x, w, padding=(w.shape[-2]//2, w.shape[-1]//2), groups=self.groups, stride=self.stride)
 
-    @torch.no_grad()
+    #@torch.no_grad() is applied at a higher level
     def normalize_weights(self):
         if self.disable_weight_norm == False:
             self.weight.copy_(normalize(self.weight))

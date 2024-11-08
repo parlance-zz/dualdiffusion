@@ -27,13 +27,11 @@ import torch
 class WindowFunction:
 
     @staticmethod
-    @torch.no_grad()
     def hann(window_len: int, device: Optional[torch.device] = None) -> torch.Tensor:
         n = torch.arange(window_len, device=device) / window_len
         return (0.5 - 0.5 * torch.cos(2 * torch.pi * n))
 
     @staticmethod
-    @torch.no_grad()
     def kaiser(window_len: int, beta: float = 4*torch.pi, device: Optional[torch.device] = None) -> torch.Tensor:
         alpha = (window_len - 1) / 2
         n = torch.arange(window_len, device=device)
@@ -41,7 +39,6 @@ class WindowFunction:
                 / torch.special.i0(torch.tensor(beta)))
 
     @staticmethod
-    @torch.no_grad()
     def kaiser_derived(window_len:int , beta: float = 4*torch.pi, device: Optional[torch.device] = None) -> torch.Tensor:
 
         kaiserw = WindowFunction.kaiser(window_len // 2 + 1, beta, device)
@@ -55,19 +52,16 @@ class WindowFunction:
         return w
 
     @staticmethod
-    @torch.no_grad()
     def hann_poisson(window_len: int, alpha: float = 2, device: Optional[torch.device] = None) -> torch.Tensor:
         x = torch.arange(window_len, device=device) / window_len
         return (torch.exp(-alpha * (1 - 2*x).abs()) * 0.5 * (1 - torch.cos(2*torch.pi*x)))
 
     @staticmethod
-    @torch.no_grad()
     def blackman_harris(window_len: int, device: Optional[torch.device] = None) -> torch.Tensor:
         x = torch.arange(window_len, device=device) / window_len * 2*torch.pi
         return (0.35875 - 0.48829 * torch.cos(x) + 0.14128 * torch.cos(2*x) - 0.01168 * torch.cos(3*x))
 
     @staticmethod
-    @torch.no_grad()
     def flat_top(window_len:int , device: Optional[torch.device] = None) -> torch.Tensor:
         x = torch.arange(window_len, device=device) / window_len * 2*torch.pi
         return (  0.21557895

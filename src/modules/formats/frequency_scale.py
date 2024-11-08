@@ -91,11 +91,11 @@ class FrequencyScale(torch.nn.Module):
         if (self.filters.max(dim=0).values == 0.0).any():
             print("Warning: At least one FrequencyScale filterbank has all zero values.")
 
-    @torch.inference_mode()
+    @torch.no_grad()
     def scale(self, specgram: torch.Tensor) -> torch.Tensor:
         return torch.matmul(specgram.transpose(-1, -2), self.filters).transpose(-1, -2)
     
-    @torch.inference_mode()
+    @torch.no_grad()
     def unscale(self, spectrogram: torch.Tensor) -> torch.Tensor:
         # pack batch
         original_shape = spectrogram.size()

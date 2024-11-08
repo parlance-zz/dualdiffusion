@@ -49,6 +49,7 @@ def get_ema_list(module_path: str) -> tuple[list[str], list[float]]:
 
 class EMA_Manager:
 
+    @torch.no_grad()
     def __init__(self, module: torch.nn.Module, betas: list[float],
                  device: Optional[torch.device] = None) -> None:
 
@@ -77,6 +78,7 @@ class EMA_Manager:
             ema_parameters = tuple(self.emas[0].parameters())
             torch._foreach_lerp_(net_parameters, ema_parameters, 1 - beta)
 
+    @torch.no_grad()
     def save(self, save_directory: str, subfolder: Optional[str] = None) -> None:
 
         if subfolder is not None:

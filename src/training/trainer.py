@@ -63,7 +63,7 @@ class TrainLogger():
         self.channels.clear()
         self.counts.clear()
 
-    @torch.no_grad()
+    @torch.inference_mode()
     def add_log(self, key: str, value: Union[torch.Tensor, float]) -> None:
         if torch.is_tensor(value):
             value = self.accelerator.gather(value.detach()).mean().item()
@@ -355,8 +355,8 @@ class DualDiffusionTrainer:
             betas=(self.config.optimizer.adam_beta1, self.config.optimizer.adam_beta2),
             weight_decay=self.config.optimizer.adam_weight_decay,
             eps=self.config.optimizer.adam_epsilon,
-            foreach=True,
-            #fused=True,
+            #foreach=True,
+            fused=True,
         )
 
         self.logger.info(f"Using AdamW optimiser with learning rate {self.config.lr_schedule.learning_rate}")
@@ -838,7 +838,7 @@ class DualDiffusionTrainer:
         self.logger.info(f"Validation complete (runtime: {(datetime.now() - start_validation_time).total_seconds()}s)")
         self.module.train()
 
-    @torch.no_grad()
+    @torch.inference_mode()
     def run_validation_epoch(self, variant_label: str = "") -> dict:
 
         validation_logger = TrainLogger(self.accelerator)

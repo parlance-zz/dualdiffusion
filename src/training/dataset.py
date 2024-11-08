@@ -63,7 +63,6 @@ class DatasetTransform(torch.nn.Module):
         super().__init__()
         self.config = dataset_transform_config
     
-    @torch.no_grad()
     def get_t(self, t: float) -> float:
         return t / self.config.sample_raw_crop_width * self.config.t_scale - self.config.t_scale/2
     

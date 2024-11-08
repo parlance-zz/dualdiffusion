@@ -432,7 +432,7 @@ def dequantize_tensor(x: torch.Tensor, offset_and_range: torch.Tensor) -> torch.
     min_val, scale = offset_and_range.unbind(-1)
     return x * scale.view(view_dims) + min_val.view(view_dims)
 
-@torch.no_grad()
+@torch.inference_mode()
 def tensor_to_img(x: torch.Tensor,
                   recenter: bool = True,
                   rescale: bool = True,

@@ -289,6 +289,7 @@ class UNetP(DualDiffusionUNet):
         return latent_shape[0:2] + ((latent_shape[2] // 2**(self.num_levels-1)) * 2**(self.num_levels-1),
                                     (latent_shape[3] // 2**(self.num_levels-1)) * 2**(self.num_levels-1))
 
+    @torch.no_grad()
     def convert_to_inpainting(self) -> None:
         raise NotImplementedError("Conversion to inpainting is not supported for this model.")
 

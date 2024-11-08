@@ -85,7 +85,6 @@ class SpectrogramFormatConfig(DualDiffusionFormatConfig):
 class SpectrogramConverter(torch.nn.Module):
 
     @staticmethod
-    @torch.no_grad()
     def hann_power_window(window_length: int, periodic: bool = True, *, dtype: torch.dtype = None,
                           layout: torch.layout = torch.strided, device: torch.device = None,
                           requires_grad: bool = False, exponent: float = 1.) -> torch.Tensor:
@@ -165,7 +164,6 @@ class SpectrogramConverter(torch.nn.Module):
 
 class SpectrogramFormat(DualDiffusionFormat):
 
-    @torch.no_grad()
     def __init__(self, config: SpectrogramFormatConfig) -> None:
         super().__init__()
         self.config = config
@@ -211,10 +209,8 @@ class SpectrogramFormat(DualDiffusionFormat):
         else:
             return raw_samples
     
-    def get_ln_freqs(self, x: torch.Tensor) -> torch.Tensor:
-        
-        with torch.no_grad():
-            ln_freqs = self.spectrogram_converter.freq_scale.get_unscaled(x.shape[2] + 2, device=x.device)[1:-1].log2()
-            ln_freqs = ln_freqs.view(1, 1,-1, 1).repeat(x.shape[0], 1, 1, x.shape[3])
-
-            return ((ln_freqs - ln_freqs.mean()) / ln_freqs.std()).to(x.dtype)
+    @torch.no_grad()
+    def get_ln_freqs(self, x: torch.Tensor) -> torch.Tensor:        
+        ln_freqs = self.spectrogram_converter.freq_scale.get_unscaled(x.shape[2] + 2, device=x.device)[1:-1].log2()
+        ln_freqs = ln_freqs.view(1, 1,-1, 1).repeat(x.shape[0], 1, 1, x.shape[3])
+        return ((ln_freqs - ln_freqs.mean()) / ln_freqs.std()).to(x.dtype)

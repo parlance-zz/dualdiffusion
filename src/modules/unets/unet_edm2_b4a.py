@@ -254,6 +254,7 @@ class UNet(DualDiffusionUNet):
         return latent_shape[0:2] + ((latent_shape[2] // 2**(self.num_levels-1)) * 2**(self.num_levels-1),
                                     (latent_shape[3] // 2**(self.num_levels-1)) * 2**(self.num_levels-1))
 
+    @torch.no_grad()
     def convert_to_inpainting(self) -> None:
         if self.config.inpainting != True:
             raise ValueError("Model requires inpainting to be enabled")

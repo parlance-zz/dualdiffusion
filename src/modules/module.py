@@ -29,6 +29,7 @@ class DualDiffusionModule(torch.nn.Module, ABC):
         self.device = torch.device("cpu")
 
     @classmethod
+    @torch.no_grad()
     def from_pretrained(cls: Type["DualDiffusionModule"],
                         module_path: str,
                         subfolder: Optional[str] = None,
@@ -52,6 +53,7 @@ class DualDiffusionModule(torch.nn.Module, ABC):
         
         return module.to(dtype=torch_dtype, device=device)
     
+    @torch.no_grad()
     def save_pretrained(self, module_path: str, subfolder: Optional[str] = None) -> None:
         
         if subfolder is not None:
@@ -91,6 +93,7 @@ class DualDiffusionModule(torch.nn.Module, ABC):
         if type(self).supports_compile == True:
             self.forward = torch.compile(self.forward, **kwargs)
 
+    @torch.no_grad()
     def load_ema(self, ema_path: str) -> None:
         self.load_state_dict(load_safetensors(ema_path))
         self.normalize_weights()

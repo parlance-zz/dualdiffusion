@@ -230,14 +230,13 @@ class UNetTrainer(ModuleTrainer):
             self.unet_loss_bucket_counts.zero_()
 
         if self.config.sigma_distribution == "ln_pdf" and validation == False:
-            sigma_sample_temperature = 1 / self.config.sigma_dist_scale
             ln_sigma = torch.linspace(self.sigma_sampler.config.ln_sigma_min,
                                       self.sigma_sampler.config.ln_sigma_max,
                                       self.config.sigma_pdf_resolution,
                                       device=self.trainer.accelerator.device)
             ln_sigma_error = self.module.logvar_linear(
                 self.module.logvar_fourier(ln_sigma/4)).float().flatten().detach()
-            sigma_distribution_pdf = (-sigma_sample_temperature * ln_sigma_error).exp()
+            sigma_distribution_pdf = (-self.config.sigma_dist_scale * ln_sigma_error).exp()
             self.sigma_sampler.update_pdf(sigma_distribution_pdf)
         
         self.global_sigma = sigma_sampler.sample(total_batch_size, device=self.trainer.accelerator.device)
@@ -304,6 +303,7 @@ class UNetTrainer(ModuleTrainer):
         else:
             error_logvar = self.module.get_sigma_loss_logvar(sigma=batch_sigma, class_embeddings=unet_class_embeddings)
             batch_loss = batch_weighted_loss / error_logvar.exp() + error_logvar
+            #batch_loss = batch_loss / (1 + batch_sigma)
             #batch_loss = batch_loss / batch_sigma ** 0.25
         
         if self.config.num_loss_buckets > 0:
