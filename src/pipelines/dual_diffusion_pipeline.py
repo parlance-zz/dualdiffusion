@@ -521,7 +521,7 @@ class DualDiffusionPipeline(torch.nn.Module):
                 sample.add_(torch.randn(sample.shape, generator=generator,
                     device=sample.device, dtype=sample.dtype), alpha=p)
 
-            sample = (normalize(sample) * (sigma_next**2 + params.sigma_data**2)**0.5).float()
+            sample = (normalize(sample) * (old_sigma_next**2 + params.sigma_data**2)**0.5).float()
             
             # log sampling debug info
             debug_info["sample_std"].append(sample.std().item())
