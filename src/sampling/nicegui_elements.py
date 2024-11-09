@@ -275,7 +275,7 @@ class GenParamsEditor(ui.row):
                     self.param_elements["num_fgla_iters"] = ScrollableNumber(label="Number of FGLA Iterations", value=250, min=50, max=1000, precision=0, step=50).classes("w-full")
 
                     self.param_elements["input_perturbation"] = ScrollableNumber(label="Input Perturbation", value=1, min=0, max=1, step=0.05).classes("w-full")
-                    self.param_elements["conditioning_perturbation"] = ScrollableNumber(label="Conditioning Perturbation", value=0, min=0, max=1, step=0.05).classes("w-full")
+                    self.param_elements["conditioning_perturbation"] = ScrollableNumber(label="Conditioning Perturbation", value=0, min=-1, max=1, step=0.05).classes("w-full")
 
                     self.param_elements["sigma_max"] = ScrollableNumber(label="Sigma Max", value=200, min=10, max=1000, step=10).classes("w-full")
                     self.param_elements["sigma_min"] = ScrollableNumber(label="Sigma Min", value=0.15, min=0.05, max=2, step=0.05).classes("w-full")
