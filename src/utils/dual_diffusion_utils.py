@@ -154,7 +154,7 @@ def save_tensor_raw(tensor: torch.Tensor, output_path: str) -> None:
 @torch.inference_mode()
 def normalize_lufs(raw_samples: torch.Tensor,
                    sample_rate: int,
-                   target_lufs: float = -10.5) -> torch.Tensor:
+                   target_lufs: float = -10.75) -> torch.Tensor:
     
     original_shape = raw_samples.shape
     raw_samples = torch.nan_to_num(raw_samples, nan=0, posinf=0, neginf=0)
@@ -197,7 +197,7 @@ def get_no_clobber_filepath(filepath):
 def save_audio(raw_samples: torch.Tensor,
                sample_rate: int,
                output_path: str,
-               target_lufs: float = -10.5,
+               target_lufs: float = -10.75,
                metadata: Optional[dict] = None,
                no_clobber: bool = False,
                compression: Optional[torchaudio.io.CodecConfig] = None) -> str:
