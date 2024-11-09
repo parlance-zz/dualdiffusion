@@ -29,6 +29,7 @@ from training.sigma_sampler import SigmaSamplerConfig, SigmaSampler
 from training.trainer import DualDiffusionTrainer
 from .module_trainer import ModuleTrainerConfig, ModuleTrainer
 from modules.unets.unet import DualDiffusionUNet
+from modules.mp_tools import mp_sum
 from utils.dual_diffusion_utils import dict_str
 
 @dataclass
@@ -40,7 +41,6 @@ class UNetTrainerConfig(ModuleTrainerConfig):
     sigma_dist_offset: float = 0.1
     use_stratified_sigma_sampling: bool = True
     sigma_pdf_resolution: Optional[int] = 127
-
     validation_sigma_distribution: Literal["ln_normal", "ln_sech", "ln_sech^2",
                                             "ln_linear", "ln_pdf"] = "ln_sech"
     validation_sigma_dist_scale: float = 1.0
@@ -48,6 +48,7 @@ class UNetTrainerConfig(ModuleTrainerConfig):
 
     num_loss_buckets: int = 10
     input_perturbation: float = 0.
+    noise_sample_bias: float = 0.
     conditioning_perturbation: float = 0.
     conditioning_dropout: float = 0.1
     continuous_conditioning_dropout: bool = False
@@ -74,9 +75,6 @@ class UNetTrainer(ModuleTrainer):
         self.is_validation_batch = False
         self.device_generator = None
         self.cpu_generator = None
-
-        #if config.inpainting_probability > 0 and self.module.config.inpainting == False:
-        #    self.logger.error(f"UNet model does not support inpainting, aborting training..."); exit(1)
 
         if trainer.config.enable_model_compilation:
             self.module.compile(**trainer.config.compile_params)
@@ -112,6 +110,7 @@ class UNetTrainer(ModuleTrainer):
         else:
             self.logger.info("UNet loss buckets are disabled")
 
+        # log unet trainer specific config / settings
         if self.config.input_perturbation > 0:
             self.logger.info(f"Using input perturbation: {self.config.input_perturbation}")
         else: self.logger.info("Input perturbation is disabled")
@@ -133,6 +132,11 @@ class UNetTrainer(ModuleTrainer):
         else:
             self.logger.info("Inpainting training is disabled")
 
+        self.logger.info(f"Using sample biased noise: {self.config.noise_sample_bias > 0}")
+        if self.config.noise_sample_bias > 0:
+            self.logger.info(f"  noise sample bias: {self.config.noise_sample_bias}")
+
+        # sigma schedule / distribution for train batches
         sigma_sampler_config = SigmaSamplerConfig(
             sigma_max=self.module.config.sigma_max,
             sigma_min=self.module.config.sigma_min,
@@ -147,6 +151,7 @@ class UNetTrainer(ModuleTrainer):
         self.logger.info("SigmaSampler config:")
         self.logger.info(dict_str(sigma_sampler_config.__dict__))
 
+        # separate noise schedule / sigma distribution for validation batches
         validation_sigma_sampler_config = SigmaSamplerConfig(
             sigma_max=self.module.config.sigma_max,
             sigma_min=self.module.config.sigma_min,
@@ -161,6 +166,7 @@ class UNetTrainer(ModuleTrainer):
         self.logger.info("Validation SigmaSampler config:")
         self.logger.info(dict_str(validation_sigma_sampler_config.__dict__))
 
+        # pre-calculate the per-sigma loss bucket names
         if self.config.num_loss_buckets > 0:
             bucket_ln_sigma = (1 / torch.linspace(torch.pi/2, 0, self.config.num_loss_buckets+1).tan()).log()
             bucket_ln_sigma[0] = float("-inf"); bucket_ln_sigma[-1] = float("inf")
@@ -173,7 +179,6 @@ class UNetTrainer(ModuleTrainer):
     
     @torch.no_grad()
     def get_inpainting_ref_samples(self, samples: torch.Tensor) -> None:
-
         mask = torch.ones_like(samples[:, 0:1])
         
         for i in range(samples.shape[0]):
@@ -210,7 +215,7 @@ class UNetTrainer(ModuleTrainer):
     @torch.no_grad()
     def init_batch(self, validation: bool = False) -> None:
         
-        if validation == True:
+        if validation == True: # use the same random values for every validation batch
             self.is_validation_batch = True
             total_batch_size = self.trainer.validation_total_batch_size
             sigma_sampler = self.validation_sigma_sampler
@@ -225,10 +230,12 @@ class UNetTrainer(ModuleTrainer):
             self.device_generator = None
             self.cpu_generator = None
 
+        # reset sigma-bucketed loss for new batch
         if self.config.num_loss_buckets > 0:
             self.unet_loss_buckets.zero_()
             self.unet_loss_bucket_counts.zero_()
 
+        # if using dynamic sigma sampling with ln_pdf, update the pdf using the learned per-sigma error estimate
         if self.config.sigma_distribution == "ln_pdf" and validation == False:
             ln_sigma = torch.linspace(self.sigma_sampler.config.ln_sigma_min,
                                       self.sigma_sampler.config.ln_sigma_max,
@@ -239,8 +246,9 @@ class UNetTrainer(ModuleTrainer):
             sigma_distribution_pdf = (-self.config.sigma_dist_scale * ln_sigma_error).exp()
             self.sigma_sampler.update_pdf(sigma_distribution_pdf)
         
+        # sample whole-batch sigma and sync across all ranks / processes
         self.global_sigma = sigma_sampler.sample(total_batch_size, device=self.trainer.accelerator.device)
-        self.global_sigma = self.trainer.accelerator.gather(self.global_sigma.unsqueeze(0))[0] # sync sigma across all ranks / processes
+        self.global_sigma = self.trainer.accelerator.gather(self.global_sigma.unsqueeze(0))[0]
 
     def train_batch(self, batch: dict, accum_step: int) -> dict[str, torch.Tensor]:
 
@@ -250,41 +258,51 @@ class UNetTrainer(ModuleTrainer):
         #sample_author_ids = batch["author_ids"]
 
         class_labels = self.trainer.pipeline.get_class_labels(sample_game_ids, module_name="unet")
+        # with continuous conditioning dropout enabled the conditioning embedding is interpolated smoothly to the unconditional embedding
         if self.config.continuous_conditioning_dropout == True and self.is_validation_batch == False:
             conditioning_mask = (torch.rand(self.trainer.config.device_batch_size,
                 generator=self.device_generator, device=self.trainer.accelerator.device) > (self.config.conditioning_dropout * 2)).float()
             conditioning_mask = 1 - ((1 - conditioning_mask) * torch.rand(
                 conditioning_mask.shape, generator=self.device_generator, device=self.trainer.accelerator.device))
-        else:
+        else: # normal conditioning dropout
             conditioning_mask = (torch.rand(self.trainer.config.device_batch_size,
                 generator=self.device_generator, device=self.trainer.accelerator.device) > self.config.conditioning_dropout).float()
 
         unet_class_embeddings = self.module.get_class_embeddings(class_labels, conditioning_mask)
-        if self.config.conditioning_perturbation > 0 and self.is_validation_batch == False:
+        if self.config.conditioning_perturbation > 0 and self.is_validation_batch == False: # adds noise to the conditioning embedding while preserving variance
             conditioning_perturbation = torch.randn(unet_class_embeddings.shape, device=unet_class_embeddings.device, generator=self.device_generator)
-            unet_class_embeddings = unet_class_embeddings + conditioning_perturbation * self.config.conditioning_perturbation
-            
+            unet_class_embeddings = mp_sum(unet_class_embeddings, conditioning_perturbation, self.config.conditioning_perturbation)
+        
+        # pre-encoding latents is strongly recommended for performance / training efficiency
         if self.trainer.config.dataloader.use_pre_encoded_latents:
             samples = raw_samples.float()
             assert samples.shape == self.trainer.latent_shape, f"Expected shape {self.trainer.latent_shape}, got {samples.shape}"
-        else:
+        else: # otherwise convert audio to spectrogram/format and encode latents with VAE
             samples = self.trainer.pipeline.format.raw_to_sample(raw_samples)
             vae_class_embeddings = self.trainer.pipeline.vae.get_class_embeddings(class_labels)
             samples = self.trainer.pipeline.vae.encode(samples.to(self.trainer.pipeline.vae.dtype),
                                                        vae_class_embeddings, self.trainer.pipeline.format).mode().float()
             assert samples.shape == self.trainer.sample_shape, f"Expected shape {self.trainer.sample_shape}, got {samples.shape}"
         
+        # add extra noise to the sample while preserving variance if input_perturbation is enabled
         if self.config.input_perturbation > 0 and self.is_validation_batch == False:
             input_perturbation = torch.randn(samples.shape, device=samples.device, generator=self.device_generator)
-            samples += input_perturbation * self.config.input_perturbation
+            samples = mp_sum(samples, input_perturbation, self.config.input_perturbation)
 
+        # get the noise level for this sub-batch from the pre-calculated whole-batch sigma (required for stratified sampling)
         local_sigma = self.global_sigma[self.trainer.accelerator.local_process_index::self.trainer.accelerator.num_processes]
         batch_sigma = local_sigma[accum_step * self.trainer.config.device_batch_size:(accum_step+1) * self.trainer.config.device_batch_size]
 
-        noise = torch.randn(samples.shape, device=samples.device, generator=self.device_generator) * batch_sigma.view(-1, 1, 1, 1)
+        # prepare model inputs
+        noise = torch.randn(samples.shape, device=samples.device, generator=self.device_generator)
         samples = (samples * self.module.config.sigma_data).detach()
         ref_samples = self.get_inpainting_ref_samples(samples) if self.config.inpainting_probability > 0 or self.module.config.inpainting == True else None
+        if self.is_validation_batch == False and self.config.noise_sample_bias > 0: # this has an effect similar to immiscible diffusion / rectified flow
+            noise = (mp_sum(noise, samples, t=self.config.noise_sample_bias) * batch_sigma.view(-1, 1, 1, 1)).detach()
+        else:
+            noise = (noise * batch_sigma.view(-1, 1, 1, 1)).detach()
 
+        # convert model inputs to channels_last memory format for performance, if enabled
         if self.trainer.config.enable_channels_last == True:
             samples = samples.to(memory_format=torch.channels_last)
             noise = noise.to(memory_format=torch.channels_last)
@@ -300,12 +318,11 @@ class UNetTrainer(ModuleTrainer):
 
         if self.is_validation_batch == True:
             batch_loss = batch_weighted_loss
-        else:
+        else: # for train batches this takes the loss as the gaussian NLL with sigma-specific learned variance
             error_logvar = self.module.get_sigma_loss_logvar(sigma=batch_sigma, class_embeddings=unet_class_embeddings)
             batch_loss = batch_weighted_loss / error_logvar.exp() + error_logvar
-            #batch_loss = batch_loss / (1 + batch_sigma)
-            #batch_loss = batch_loss / batch_sigma ** 0.25
         
+        # log loss bucketed by noise level range
         if self.config.num_loss_buckets > 0:
             global_weighted_loss = self.trainer.accelerator.gather(batch_weighted_loss.detach()).cpu()
             global_sigma_quantiles = self.trainer.accelerator.gather(self.module.config.sigma_data / batch_sigma.detach()).cpu().arctan() / (torch.pi/2)
@@ -320,6 +337,7 @@ class UNetTrainer(ModuleTrainer):
     def finish_batch(self) -> dict[str, torch.Tensor]:
         logs = {}
 
+        # added sigma-bucketed loss to logs
         if self.config.num_loss_buckets > 0:
             for i in range(self.config.num_loss_buckets):
                 if self.unet_loss_bucket_counts[i].item() > 0:
