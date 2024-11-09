@@ -154,8 +154,7 @@ def save_tensor_raw(tensor: torch.Tensor, output_path: str) -> None:
 @torch.inference_mode()
 def normalize_lufs(raw_samples: torch.Tensor,
                    sample_rate: int,
-                   target_lufs: float = -11.,
-                   max_clip:float = 0.2) -> torch.Tensor:
+                   target_lufs: float = -10.5) -> torch.Tensor:
     
     original_shape = raw_samples.shape
     raw_samples = torch.nan_to_num(raw_samples, nan=0, posinf=0, neginf=0)
@@ -164,7 +163,9 @@ def normalize_lufs(raw_samples: torch.Tensor,
         raw_samples = raw_samples.view(1, 1,-1)
     elif raw_samples.ndim == 2:
         raw_samples = raw_samples.view(1, raw_samples.shape[0], -1)
-
+    elif raw_samples.ndim != 3:
+        raise ValueError(f"Unsupported raw_samples shape: {raw_samples.shape}")
+    
     raw_samples /= raw_samples.abs().amax(
         dim=tuple(range(1, len(raw_samples.shape))), keepdim=True).clip(min=1e-16)
     
@@ -173,8 +174,8 @@ def normalize_lufs(raw_samples: torch.Tensor,
     gain = gain.view((*gain.shape,) + (1,) * (raw_samples.ndim - gain.ndim))
 
     normalized_raw_samples = raw_samples * gain
-    normalized_raw_samples /= normalized_raw_samples.abs().amax(
-        dim=tuple(range(1, len(normalized_raw_samples.shape))), keepdim=True).clip(min=1+max_clip)
+    normalized_raw_samples /= normalized_raw_samples.abs().amax( # if we haven't clipped add gain to the clipping point
+        dim=tuple(range(1, len(normalized_raw_samples.shape))), keepdim=True).clip(max=1)
 
     return normalized_raw_samples.view(original_shape)
 
@@ -196,7 +197,7 @@ def get_no_clobber_filepath(filepath):
 def save_audio(raw_samples: torch.Tensor,
                sample_rate: int,
                output_path: str,
-               target_lufs: float = -11.,
+               target_lufs: float = -10.5,
                metadata: Optional[dict] = None,
                no_clobber: bool = False,
                compression: Optional[torchaudio.io.CodecConfig] = None) -> str:
