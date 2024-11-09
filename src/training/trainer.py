@@ -780,6 +780,7 @@ class DualDiffusionTrainer:
     def run_validation(self, global_step):
 
         self.logger.info("***** Running validation *****")
+        self.logger.info(f"  Epoch = {global_step // self.num_update_steps_per_epoch} (step: {global_step})")
         self.logger.info(f"  Num examples = {len(self.dataset['validation'])}")
         self.logger.info(f"  Total validation batch size (w. parallel, distributed & accumulation) = {self.validation_total_batch_size}")
 
