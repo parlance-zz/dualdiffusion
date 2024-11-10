@@ -37,12 +37,17 @@ class UNetTrainerConfig(ModuleTrainerConfig):
 
     sigma_distribution: Literal["ln_normal", "ln_sech", "ln_sech^2",
                                 "ln_linear", "ln_pdf"] = "ln_sech"
+    sigma_override_max: Optional[float] = None
+    sigma_override_min: Optional[float] = None
     sigma_dist_scale: float = 1.0
     sigma_dist_offset: float = 0.1
     use_stratified_sigma_sampling: bool = True
     sigma_pdf_resolution: Optional[int] = 127
+
     validation_sigma_distribution: Literal["ln_normal", "ln_sech", "ln_sech^2",
                                             "ln_linear", "ln_pdf"] = "ln_sech"
+    validation_sigma_override_max: Optional[float] = None
+    validation_sigma_override_min: Optional[float] = None
     validation_sigma_dist_scale: float = 1.0
     validation_sigma_dist_offset: float = 0.3
 
@@ -138,8 +143,8 @@ class UNetTrainer(ModuleTrainer):
 
         # sigma schedule / distribution for train batches
         sigma_sampler_config = SigmaSamplerConfig(
-            sigma_max=self.module.config.sigma_max,
-            sigma_min=self.module.config.sigma_min,
+            sigma_max=self.config.sigma_override_max or self.module.config.sigma_max,
+            sigma_min=self.config.sigma_override_min or self.module.config.sigma_min,
             sigma_data=self.module.config.sigma_data,
             distribution=self.config.sigma_distribution,
             dist_scale=self.config.sigma_dist_scale,
@@ -153,8 +158,8 @@ class UNetTrainer(ModuleTrainer):
 
         # separate noise schedule / sigma distribution for validation batches
         validation_sigma_sampler_config = SigmaSamplerConfig(
-            sigma_max=self.module.config.sigma_max,
-            sigma_min=self.module.config.sigma_min,
+            sigma_max=self.config.validation_sigma_override_max or self.module.config.sigma_max,
+            sigma_min=self.config.validation_sigma_override_min or self.module.config.sigma_min,
             sigma_data=self.module.config.sigma_data,
             distribution=self.config.validation_sigma_distribution,
             dist_scale=self.config.validation_sigma_dist_scale,
@@ -168,9 +173,9 @@ class UNetTrainer(ModuleTrainer):
 
         # pre-calculate the per-sigma loss bucket names
         if self.config.num_loss_buckets > 0:
-            bucket_ln_sigma = (1 / torch.linspace(torch.pi/2, 0, self.config.num_loss_buckets+1).tan()).log()
-            bucket_ln_sigma[0] = float("-inf"); bucket_ln_sigma[-1] = float("inf")
-            self.bucket_names = [f"unet_buckets_loss/b{i} s:{bucket_ln_sigma[i]:.3f} ~ {bucket_ln_sigma[i+1]:.3f}"
+            bucket_sigma = 1 / torch.linspace(torch.pi/2, 0, self.config.num_loss_buckets+1).tan()
+            bucket_sigma[0] = 0; bucket_sigma[-1] = float("inf")
+            self.bucket_names = [f"unet_buckets_loss/b{i} s:{bucket_sigma[i]:.2f} ~ {bucket_sigma[i+1]:.2f}"
                                  for i in range(self.config.num_loss_buckets)]
 
     @staticmethod
@@ -325,7 +330,7 @@ class UNetTrainer(ModuleTrainer):
         # log loss bucketed by noise level range
         if self.config.num_loss_buckets > 0:
             global_weighted_loss = self.trainer.accelerator.gather(batch_weighted_loss.detach()).cpu()
-            global_sigma_quantiles = self.trainer.accelerator.gather(self.module.config.sigma_data / batch_sigma.detach()).cpu().arctan() / (torch.pi/2)
+            global_sigma_quantiles = 1 - self.trainer.accelerator.gather(self.module.config.sigma_data / batch_sigma.detach()).cpu().arctan() / (torch.pi/2)
 
             target_buckets = (global_sigma_quantiles * self.unet_loss_buckets.shape[0]).long().clip(min=0, max=self.unet_loss_buckets.shape[0] - 1)
             self.unet_loss_buckets.index_add_(0, target_buckets, global_weighted_loss)
