@@ -1,4 +1,4 @@
-name: dualdiffusion2
+name: dualdiffusion
 channels:
   - pytorch
   - nvidia
@@ -8,18 +8,18 @@ dependencies:
   - _libgcc_mutex=0.1=conda_forge
   - _openmp_mutex=4.5=2_gnu
   - aom=3.6.1=h59595ed_0
-  - audioread=3.0.1=py310hff52083_2
+  - audioread=3.0.1=py312h7900ff3_2
   - blas=1.0=mkl
   - brotli=1.1.0=hb9d3cd8_2
   - brotli-bin=1.1.0=hb9d3cd8_2
-  - brotli-python=1.1.0=py310hf71b8c6_2
+  - brotli-python=1.1.0=py312h2ec8cdc_2
   - bzip2=1.0.8=h4bc722e_7
   - ca-certificates=2024.8.30=hbcca054_0
   - certifi=2024.8.30=pyhd8ed1ab_0
-  - cffi=1.17.1=py310h8deb56e_0
+  - cffi=1.17.1=py312h06ac9bb_0
   - charset-normalizer=3.4.0=pyhd8ed1ab_0
-  - contourpy=1.3.0=py310h3788b33_2
-  - cpython=3.10.15=py310hd8ed1ab_2
+  - contourpy=1.3.0=py312h68727a3_2
+  - cpython=3.12.7=py312hd8ed1ab_0
   - cuda-cudart=12.4.127=0
   - cuda-cupti=12.4.127=0
   - cuda-libraries=12.4.1=0
@@ -30,34 +30,32 @@ dependencies:
   - cudatoolkit=11.7.0=hd8887f6_10
   - cycler=0.12.1=pyhd8ed1ab_0
   - decorator=5.1.1=pyhd8ed1ab_0
-  - expat=2.6.3=h5888daf_0
   - ffmpeg=4.4.2=gpl_hdf48244_113
   - filelock=3.16.1=pyhd8ed1ab_0
   - font-ttf-dejavu-sans-mono=2.37=hab24e00_0
   - font-ttf-inconsolata=3.000=h77eed37_0
   - font-ttf-source-code-pro=2.038=h77eed37_0
   - font-ttf-ubuntu=0.83=h77eed37_3
-  - fontconfig=2.14.2=h14ed4e7_0
+  - fontconfig=2.15.0=h7e30c49_1
   - fonts-conda-ecosystem=1=0
   - fonts-conda-forge=1=0
-  - fonttools=4.54.1=py310h89163eb_1
+  - fonttools=4.54.1=py312h178313f_1
   - freetype=2.12.1=h267a509_2
   - gettext=0.22.5=he02047a_3
   - gettext-tools=0.22.5=he02047a_3
   - giflib=5.2.2=hd590300_0
   - gmp=6.3.0=hac33072_2
-  - gmpy2=2.1.5=py310he8512ff_2
+  - gmpy2=2.1.5=py312h7201bc8_2
   - gnutls=3.7.9=hb077bed_0
   - h2=4.1.0=pyhd8ed1ab_0
   - hpack=4.0.0=pyh9f0ad1d_0
   - hyperframe=6.0.1=pyhd8ed1ab_0
-  - icu=75.1=he02047a_0
   - idna=3.10=pyhd8ed1ab_0
   - importlib-metadata=8.5.0=pyha770c72_0
   - intel-openmp=2022.0.1=h06a4308_3633
   - jinja2=3.1.4=pyhd8ed1ab_0
   - joblib=1.4.2=pyhd8ed1ab_0
-  - kiwisolver=1.4.7=py310h3788b33_0
+  - kiwisolver=1.4.7=py312h68727a3_0
   - lame=3.100=h166bdaf_1003
   - lazy-loader=0.4=pyhd8ed1ab_1
   - lazy_loader=0.4=pyhd8ed1ab_1
@@ -80,7 +78,7 @@ dependencies:
   - libdeflate=1.22=hb9d3cd8_0
   - libdrm=2.4.123=hb9d3cd8_0
   - libegl=1.7.0=ha4b6fd6_1
-  - libexpat=2.6.3=h5888daf_0
+  - libexpat=2.6.4=h5888daf_0
   - libffi=3.4.2=h7f98852_5
   - libflac=1.4.3=h59595ed_0
   - libgcc=14.2.0=h77fa898_1
@@ -109,7 +107,7 @@ dependencies:
   - libpng=1.6.44=hadc24fc_0
   - librosa=0.10.2.post1=pyhd8ed1ab_0
   - libsndfile=1.2.2=hc60ed4a_1
-  - libsqlite=3.47.0=hadc24fc_0
+  - libsqlite=3.47.0=hadc24fc_1
   - libstdcxx=14.2.0=hc0a3c3a_1
   - libstdcxx-ng=14.2.0=h4852527_1
   - libtasn1=4.19.0=h166bdaf_0
@@ -123,31 +121,31 @@ dependencies:
   - libwebp-base=1.4.0=hd590300_0
   - libxcb=1.17.0=h8a09558_0
   - libxcrypt=4.4.36=hd590300_1
-  - libxml2=2.12.7=he7c6b58_4
+  - libxml2=2.13.4=h064dc61_2
   - libzlib=1.3.1=hb9d3cd8_2
   - llvm-openmp=15.0.7=h0cdce71_0
-  - llvmlite=0.43.0=py310h1a6248f_1
-  - markupsafe=3.0.2=py310h89163eb_0
-  - matplotlib-base=3.9.2=py310h68603db_1
+  - llvmlite=0.43.0=py312h374181b_1
+  - markupsafe=3.0.2=py312h178313f_0
+  - matplotlib-base=3.9.2=py312hd3ec401_2
   - mkl=2022.1.0=hc2b9512_224
   - mpc=1.3.1=h24ddda3_1
   - mpfr=4.2.1=h90cbb55_3
-  - mpg123=1.32.6=h59595ed_0
+  - mpg123=1.32.9=hc50e24c_0
   - mpmath=1.3.0=pyhd8ed1ab_0
-  - msgpack-python=1.1.0=py310h3788b33_0
+  - msgpack-python=1.1.0=py312h68727a3_0
   - munkres=1.1.4=pyh9f0ad1d_0
   - ncurses=6.5=he02047a_1
   - nettle=3.9.1=h7ab15ed_0
-  - networkx=3.4.2=pyhd8ed1ab_0
-  - numba=0.60.0=py310h5dc88bb_0
-  - numpy=2.0.2=py310hd6e36ab_0
+  - networkx=3.4.2=pyhd8ed1ab_1
+  - numba=0.60.0=py312h83e6fd3_0
+  - numpy=2.0.2=py312h58c1407_0
   - openh264=2.3.1=hcb278e6_2
   - openjpeg=2.5.2=h488ebb8_0
   - openssl=3.3.2=hb9d3cd8_0
   - p11-kit=0.24.1=hc5aa10d_0
   - packaging=24.1=pyhd8ed1ab_0
-  - pillow=11.0.0=py310hfeaa1f3_0
-  - pip=24.2=pyh8b19718_1
+  - pillow=11.0.0=py312h7b63e92_0
+  - pip=24.3.1=pyh8b19718_0
   - platformdirs=4.3.6=pyhd8ed1ab_0
   - pooch=1.8.2=pyhd8ed1ab_0
   - pthread-stubs=0.4=hb9d3cd8_1002
@@ -155,34 +153,34 @@ dependencies:
   - pyparsing=3.2.0=pyhd8ed1ab_1
   - pysocks=1.7.1=pyha2e5f31_6
   - pysoundfile=0.12.1=pyhd8ed1ab_0
-  - python=3.10.15=h4a871b0_2_cpython
+  - python=3.12.7=hc5c86c4_0_cpython
   - python-dateutil=2.9.0=pyhd8ed1ab_0
-  - python_abi=3.10=5_cp310
-  - pytorch=2.5.0=py3.10_cuda12.4_cudnn9.1.0_0
+  - python_abi=3.12=5_cp312
+  - pytorch=2.5.1=py3.12_cuda12.4_cudnn9.1.0_0
   - pytorch-cuda=12.4=hc786d27_7
   - pytorch-mutex=1.0=cuda
-  - pyyaml=6.0.2=py310ha75aee5_1
+  - pyyaml=6.0.2=py312h66e93f0_1
   - qhull=2020.2=h434a139_5
   - readline=8.2=h8228510_1
   - requests=2.32.3=pyhd8ed1ab_0
-  - scikit-learn=1.5.2=py310h27f47ee_1
-  - scipy=1.14.1=py310hfcf56fc_1
-  - setuptools=75.1.0=pyhd8ed1ab_0
+  - scikit-learn=1.5.2=py312h7a48858_1
+  - scipy=1.14.1=py312h62794b6_1
+  - setuptools=75.3.0=pyhd8ed1ab_0
   - six=1.16.0=pyh6c4a22f_0
   - soxr=0.1.3=h0b41bf4_3
-  - soxr-python=0.5.0.post1=py310hf71b8c6_1
+  - soxr-python=0.5.0.post1=py312h2ec8cdc_1
   - svt-av1=1.4.1=hcb278e6_0
   - threadpoolctl=3.5.0=pyhc1e730c_0
   - tk=8.6.13=noxft_h4845f30_101
-  - torchaudio=2.5.0=py310_cu124
-  - torchtriton=3.1.0=py310
-  - torchvision=0.20.0=py310_cu124
+  - torchaudio=2.5.1=py312_cu124
+  - torchtriton=3.1.0=py312
+  - torchvision=0.20.1=py312_cu124
   - typing_extensions=4.12.2=pyha770c72_0
-  - unicodedata2=15.1.0=py310h2372a71_0
+  - unicodedata2=15.1.0=py312h66e93f0_1
   - urllib3=2.2.3=pyhd8ed1ab_0
   - wayland=1.23.1=h3e06ad9_0
   - wayland-protocols=1.37=hd8ed1ab_0
-  - wheel=0.44.0=pyhd8ed1ab_0
+  - wheel=0.45.0=pyhd8ed1ab_0
   - x264=1!164.3095=h166bdaf_2
   - x265=3.5=h924138e_3
   - xorg-libx11=1.8.10=h4f16b4b_0
@@ -194,34 +192,32 @@ dependencies:
   - xz=5.2.6=h166bdaf_0
   - yaml=0.2.5=h7f98852_2
   - zipp=3.20.2=pyhd8ed1ab_0
-  - zstandard=0.23.0=py310ha39cb0e_1
+  - zstandard=0.23.0=py312hef9b889_1
   - zstd=1.5.6=ha6fb4c9_0
   - pip:
       - absl-py==2.1.0
-      - accelerate==1.0.1
+      - accelerate==1.1.1
       - aiofiles==24.1.0
       - aiohappyeyeballs==2.4.3
       - aiohttp==3.10.10
       - aiosignal==1.3.1
       - annotated-types==0.7.0
       - anyio==4.6.2.post1
-      - async-timeout==4.0.3
       - attrs==24.2.0
       - bidict==0.23.1
       - click==8.1.7
-      - datasets==3.0.2
+      - datasets==3.1.0
       - dill==0.3.8
       - docutils==0.21.2
-      - exceptiongroup==1.2.2
-      - fastapi==0.115.3
+      - fastapi==0.115.4
       - frozenlist==1.5.0
       - fsspec==2024.9.0
-      - grpcio==1.67.0
+      - grpcio==1.67.1
       - h11==0.14.0
       - httpcore==1.0.6
       - httptools==0.6.4
       - httpx==0.27.2
-      - huggingface-hub==0.26.1
+      - huggingface-hub==0.26.2
       - ifaddr==0.2.0
       - itsdangerous==2.2.0
       - markdown==3.7
@@ -229,39 +225,39 @@ dependencies:
       - multidict==6.1.0
       - multiprocess==0.70.16
       - mutagen==1.47.0
-      - nicegui==2.4.0
+      - nicegui==2.5.0
       - opencv-python==4.10.0.84
-      - orjson==3.10.10
+      - orjson==3.10.11
       - pandas==2.2.3
       - propcache==0.2.0
       - protobuf==5.28.3
       - pscript==0.7.7
       - psutil==6.1.0
-      - pyarrow==17.0.0
+      - pyarrow==18.0.0
       - pydantic==2.9.2
       - pydantic-core==2.23.4
       - pygments==2.18.0
       - python-dotenv==1.0.1
       - python-engineio==4.10.1
-      - python-multipart==0.0.12
+      - python-multipart==0.0.17
       - python-socketio==5.11.4
       - pytz==2024.2
       - safetensors==0.4.5
       - simple-websocket==1.1.0
       - sniffio==1.3.1
-      - starlette==0.41.0
+      - starlette==0.41.2
       - sympy==1.13.1
       - tensorboard==2.18.0
       - tensorboard-data-server==0.7.2
-      - tqdm==4.66.5
+      - tqdm==4.67.0
       - tzdata==2024.2
       - uvicorn==0.32.0
       - uvloop==0.21.0
       - vbuild==0.8.2
       - watchfiles==0.24.0
-      - websockets==13.1
-      - werkzeug==3.0.4
+      - websockets==14.0
+      - werkzeug==3.1.3
       - wsproto==1.2.0
       - xxhash==3.5.0
-      - yarl==1.16.0
+      - yarl==1.17.1
 prefix: /home/parlance/miniconda3/envs/dualdiffusion
