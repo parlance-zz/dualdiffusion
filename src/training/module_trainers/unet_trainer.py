@@ -173,9 +173,9 @@ class UNetTrainer(ModuleTrainer):
 
         # pre-calculate the per-sigma loss bucket names
         if self.config.num_loss_buckets > 0:
-            bucket_sigma = 1 / torch.linspace(torch.pi/2, 0, self.config.num_loss_buckets+1).tan()
+            bucket_sigma = 2 / torch.linspace(torch.pi/2, 0, self.config.num_loss_buckets+1).tan()
             bucket_sigma[0] = 0; bucket_sigma[-1] = float("inf")
-            self.bucket_names = [f"unet_buckets_loss/b{i} s:{bucket_sigma[i]:.2f} ~ {bucket_sigma[i+1]:.2f}"
+            self.bucket_names = [f"loss_σ_buckets/{bucket_sigma[i]:.2f} - {bucket_sigma[i+1]:.2f}"
                                  for i in range(self.config.num_loss_buckets)]
 
     @staticmethod
@@ -330,7 +330,7 @@ class UNetTrainer(ModuleTrainer):
         # log loss bucketed by noise level range
         if self.config.num_loss_buckets > 0:
             global_weighted_loss = self.trainer.accelerator.gather(batch_weighted_loss.detach()).cpu()
-            global_sigma_quantiles = 1 - self.trainer.accelerator.gather(self.module.config.sigma_data / batch_sigma.detach()).cpu().arctan() / (torch.pi/2)
+            global_sigma_quantiles = 1 - self.trainer.accelerator.gather(self.module.config.sigma_data / batch_sigma.detach() * 2).cpu().arctan() / (torch.pi/2)
 
             target_buckets = (global_sigma_quantiles * self.unet_loss_buckets.shape[0]).long().clip(min=0, max=self.unet_loss_buckets.shape[0] - 1)
             self.unet_loss_buckets.index_add_(0, target_buckets, global_weighted_loss)
