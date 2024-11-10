@@ -983,7 +983,7 @@ class OutputEditor(ui.column):
             ]
             debug_val_rows = []
             for name, value in output_sample.sample_output.debug_info.items():
-                if isinstance(value, list):
+                if isinstance(value, list) or isinstance(value, torch.Tensor):
                     pass
                 elif isinstance(value, (int, float, bool, str, tuple)):
                     debug_val_rows.append({"name": name, "value": str(value)})
@@ -1007,6 +1007,22 @@ class OutputEditor(ui.column):
                         # todo: add units metadata to debug_info
                         if "curvature" in name:
                             ax.set_ylabel("radians")
+
+                elif isinstance(value, torch.Tensor):
+                    
+                    # if tensor is 2d show as image
+                    if len(value.shape) == 4:
+                        value:torch.Tensor = value.mean(dim=0)
+                        for i, tensor in enumerate(value.unbind(0)):
+                            with ui.matplotlib(figsize=(tensor.shape[1]*0.04, tensor.shape[0]*0.04)).classes("border-gray-600 border-2").figure as fig:
+                                ax = fig.gca()
+                                min_val = tensor.amin().item()
+                                max_val = tensor.amax().item()
+                                tensor_img = tensor_to_img(tensor, colormap=True, flip_y=True)
+                                ax.imshow(tensor_img, aspect="auto")
+                                ax.set_title(f"{name}_c{i} min: {min_val:.2f} max: {max_val:.2f} mean: {tensor.mean().item():.2f} std: {tensor.std().item():.2f}")
+                                fig.subplots_adjust(left=8/tensor.shape[1], right=1, top=1 - 6.4/tensor.shape[0], bottom=6.4/tensor.shape[0])
+                                fig.patch.set_facecolor("#1d1d1d")
 
     # removes all output samples in workspace (except the selected input sample)
     def clear_output_samples(self) -> None:
