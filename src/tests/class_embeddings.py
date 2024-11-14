@@ -55,7 +55,7 @@ def class_embeddings_test() -> None:
 
     num_classes = module.config.label_dim
     class_labels = pipeline.get_class_labels(torch.arange(num_classes, device=module.device))
-    class_embeddings = module.get_class_embeddings(class_labels)
+    class_embeddings = module.get_class_embeddings(class_labels, torch.ones(class_labels.shape[0], device=module.device))
 
     if remove_embedding_mean:
         class_embeddings -= class_embeddings.mean(dim=0, keepdim=True)
@@ -78,7 +78,9 @@ def class_embeddings_test() -> None:
     if test_output_path is not None:
         inner_products_img_path = os.path.join(test_output_path, "inner_products.png")
         print(f"Saving '{inner_products_img_path}'...")
-        save_img(tensor_to_img(inner_products, colormap=True), inner_products_img_path)
+        inner_products_img = tensor_to_img(inner_products, colormap=True).squeeze(2)
+        print(inner_products_img.shape, inner_products_img.dtype)
+        save_img(inner_products_img, inner_products_img_path)
 
     print("Show classes with high cosine similarity:")
     while True:
