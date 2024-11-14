@@ -50,6 +50,14 @@ def resample(x: torch.Tensor, mode: Literal["keep", "down", "up"] = "keep") -> t
     elif mode == 'up':                              # however, pixel norm is applied after downsampling so it doesn't matter
         return torch.nn.functional.interpolate(x, scale_factor=2, mode="nearest")
 
+def resample_1d(x: torch.Tensor, mode: Literal["keep", "down", "up"] = "keep") -> torch.Tensor:
+    if mode == "keep":
+        return x
+    elif mode == 'down':
+        return torch.lerp(x[..., ::2], x[..., 1::2], 0.5)
+    elif mode == 'up':
+        return torch.repeat_interleave(x, 2, dim=-1)
+    
 #----------------------------------------------------------------------------
 # Magnitude-preserving SiLU (Equation 81).
 
