@@ -27,7 +27,8 @@ class DualDiffusionModule(torch.nn.Module, ABC):
         
         self.dtype = torch.get_default_dtype()
         self.device = torch.device("cpu")
-
+        self.memory_layout = torch.contiguous_format
+        
     @classmethod
     @torch.no_grad()
     def from_pretrained(cls: Type["DualDiffusionModule"],
@@ -67,8 +68,8 @@ class DualDiffusionModule(torch.nn.Module, ABC):
         if type(self).has_trainable_parameters:
             save_safetensors(self.state_dict(), os.path.join(module_path, f"{module_name}.safetensors"))
 
-    def to(self, device: Optional[torch.device] = None,
-           dtype: Optional[torch.dtype] = None, **kwargs) -> "DualDiffusionModule":
+    def to(self, device: Optional[torch.device] = None, dtype: Optional[torch.dtype] = None,
+           memory_format: Optional[torch.memory_format] = None,**kwargs) -> "DualDiffusionModule":
         
         if dtype is not None:
             if type(self).supports_half_precision == True:
@@ -76,10 +77,12 @@ class DualDiffusionModule(torch.nn.Module, ABC):
             else:
                 dtype = torch.float32
 
-        super().to(device=device, dtype=dtype, **kwargs)
+        super().to(device=device, dtype=dtype, memory_format=memory_format, **kwargs)
 
         self.dtype = dtype or self.dtype
         self.device = device or self.device
+        self.memory_layout = memory_format or self.memory_layout
+
         return self
     
     def half(self) -> "DualDiffusionModule":

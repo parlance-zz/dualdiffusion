@@ -57,6 +57,7 @@ class UNetConfig(DualDiffusionUNetConfig):
     mlp_multiplier: int = 2                  # Multiplier for the number of channels in the MLP.
     mlp_groups: int     = 8                  # Number of groups for the MLPs.
     latents_height: int = 32                 # Expected height dim of input latents
+    position_channels: int = 0               # Number of channels for positional encoding.
 
 class Block(torch.nn.Module):
 
@@ -174,7 +175,8 @@ class UNet(DualDiffusionUNet):
         cblock = [config.model_channels * x for x in config.channel_mult]
         cnoise = config.model_channels * config.channel_mult_noise if config.channel_mult_noise is not None else max(cblock)
         cemb = config.model_channels * config.channel_mult_emb if config.channel_mult_emb is not None else max(cblock)
-        
+        cpos = config.position_channels
+
         self.num_levels = len(config.channel_mult)
 
         # Embedding.
@@ -198,13 +200,13 @@ class UNet(DualDiffusionUNet):
                 cout = channels
                 self.enc[f"conv_in"] = MPConv(cin, cout, kernel=(1,3))
             else:
-                self.enc[f"block{level}_down"] = Block(level, cout, cout, cemb, use_attention=level in config.attn_levels,
+                self.enc[f"block{level}_down"] = Block(level, cout, cout, cemb + cpos, use_attention=level in config.attn_levels,
                                                        flavor="enc", resample_mode="down", **block_kwargs)
             
             for idx in range(config.num_layers_per_block):
                 cin = cout
                 cout = channels
-                self.enc[f"block{level}_layer{idx}"] = Block(level, cin, cout, cemb, use_attention=level in config.attn_levels,
+                self.enc[f"block{level}_layer{idx}"] = Block(level, cin, cout, cemb + cpos, use_attention=level in config.attn_levels,
                                                              flavor="enc", **block_kwargs)
 
         # Decoder.
@@ -214,17 +216,17 @@ class UNet(DualDiffusionUNet):
         for level, channels in reversed(list(enumerate(cblock))):
             
             if level == len(cblock) - 1:
-                self.dec[f"block{level}_in0"] = Block(level, cout, cout, cemb, use_attention=True,
+                self.dec[f"block{level}_in0"] = Block(level, cout, cout, cemb + cpos, use_attention=True,
                                                       flavor="dec", **block_kwargs)
-                self.dec[f"block{level}_in1"] = Block(level, cout, cout, cemb, use_attention=True,
+                self.dec[f"block{level}_in1"] = Block(level, cout, cout, cemb + cpos, use_attention=True,
                                                       flavor="dec", **block_kwargs)
             else:
-                self.dec[f"block{level}_up"] = Block(level, cout, cout, cemb, use_attention=level in config.attn_levels,
+                self.dec[f"block{level}_up"] = Block(level, cout, cout, cemb + cpos, use_attention=level in config.attn_levels,
                                                      flavor="dec", resample_mode="up", **block_kwargs)
             for idx in range(config.num_layers_per_block + 1):
                 cin = cout + skips.pop()
                 cout = channels
-                self.dec[f"block{level}_layer{idx}"] = Block(level, cin, cout, cemb, use_attention=level in config.attn_levels,
+                self.dec[f"block{level}_layer{idx}"] = Block(level, cin, cout, cemb + cpos, use_attention=level in config.attn_levels,
                                                              flavor="dec", **block_kwargs)
                 
         self.out_gain = torch.nn.Parameter(torch.zeros([]))
@@ -274,7 +276,9 @@ class UNet(DualDiffusionUNet):
         emb = mp_silu(emb).unsqueeze(2).unsqueeze(3).to(x.dtype)
 
         # Encoder.
-        x = x.view(x.shape[0], x.shape[1]*self.config.latents_height, 1, x.shape[3])
+        x = x.reshape(x.shape[0], x.shape[1]*self.config.latents_height, 1, x.shape[3])
+        if self.memory_layout == torch.channels_last:
+            x = x.contiguous(memory_format=torch.channels_last)
         x = torch.cat((x, torch.ones_like(x[:, :1])), dim=1)
 
         skips = []
@@ -289,9 +293,11 @@ class UNet(DualDiffusionUNet):
             x = block(x, emb)
 
         x = self.conv_out(x, gain=self.out_gain)
+        x = x.reshape(x.shape[0], x.shape[1] // self.config.latents_height, self.config.latents_height, x.shape[3])
+        if self.memory_layout == torch.channels_last:
+            x = x.contiguous(memory_format=torch.contiguous_format)
         D_x = c_skip * x_in + c_out * x.float()
         
-        D_x = D_x.view(D_x.shape[0], D_x.shape[1] // self.config.latents_height, self.config.latents_height, D_x.shape[3])
         if self.config.inpainting == False and x_ref is not None:
             D_x = mp_sum(x_ref[:, :-1].float(), D_x, t=x_ref[:, -1:].float())
 
