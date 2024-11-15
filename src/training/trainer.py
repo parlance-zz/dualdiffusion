@@ -301,10 +301,13 @@ class DualDiffusionTrainer:
         self.module_class: Type[DualDiffusionModule] = type(self.module)
 
         self.sample_shape: tuple = self.pipeline.get_sample_shape(bsz=self.config.device_batch_size)
+        self.validation_sample_shape: tuple = self.pipeline.get_sample_shape(bsz=self.config.validation_device_batch_size)
         if hasattr(self.pipeline, "vae"):
             self.latent_shape: tuple = self.pipeline.get_latent_shape(self.sample_shape)
+            self.validation_latent_shape: tuple = self.pipeline.get_latent_shape(self.validation_sample_shape)
         else:
             self.latent_shape = None
+            self.validation_latent_shape = None
 
         self.logger.info(f"Module class: {self.module_class.__name__}")
         self.logger.info(f"Module trainer class: {self.config.module_trainer_class.__name__}")

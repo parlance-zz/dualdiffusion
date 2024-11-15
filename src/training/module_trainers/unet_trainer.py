@@ -261,16 +261,20 @@ class UNetTrainer(ModuleTrainer):
         sample_game_ids = batch["game_ids"]
         sample_t_ranges = batch["t_ranges"] if self.trainer.dataset.config.t_scale is not None else None
         #sample_author_ids = batch["author_ids"]
+        if self.is_validation_batch == False:
+            device_batch_size = self.trainer.config.device_batch_size
+        else:
+            device_batch_size = self.trainer.config.validation_device_batch_size
 
         class_labels = self.trainer.pipeline.get_class_labels(sample_game_ids, module_name="unet")
         # with continuous conditioning dropout enabled the conditioning embedding is interpolated smoothly to the unconditional embedding
         if self.config.continuous_conditioning_dropout == True and self.is_validation_batch == False:
-            conditioning_mask = (torch.rand(self.trainer.config.device_batch_size,
+            conditioning_mask = (torch.rand(device_batch_size,
                 generator=self.device_generator, device=self.trainer.accelerator.device) > (self.config.conditioning_dropout * 2)).float()
             conditioning_mask = 1 - ((1 - conditioning_mask) * torch.rand(
                 conditioning_mask.shape, generator=self.device_generator, device=self.trainer.accelerator.device))
         else: # normal conditioning dropout
-            conditioning_mask = (torch.rand(self.trainer.config.device_batch_size,
+            conditioning_mask = (torch.rand(device_batch_size,
                 generator=self.device_generator, device=self.trainer.accelerator.device) > self.config.conditioning_dropout).float()
 
         unet_class_embeddings = self.module.get_class_embeddings(class_labels, conditioning_mask)
@@ -281,13 +285,16 @@ class UNetTrainer(ModuleTrainer):
         # pre-encoding latents is strongly recommended for performance / training efficiency
         if self.trainer.config.dataloader.use_pre_encoded_latents:
             samples = raw_samples.float()
-            assert samples.shape == self.trainer.latent_shape, f"Expected shape {self.trainer.latent_shape}, got {samples.shape}"
         else: # otherwise convert audio to spectrogram/format and encode latents with VAE
             samples = self.trainer.pipeline.format.raw_to_sample(raw_samples)
             vae_class_embeddings = self.trainer.pipeline.vae.get_class_embeddings(class_labels)
             samples = self.trainer.pipeline.vae.encode(samples.to(self.trainer.pipeline.vae.dtype),
                                                        vae_class_embeddings, self.trainer.pipeline.format).mode().float()
-            assert samples.shape == self.trainer.sample_shape, f"Expected shape {self.trainer.sample_shape}, got {samples.shape}"
+
+        if self.is_validation_batch == False:
+            assert samples.shape == self.trainer.latent_shape, f"Expected shape {self.trainer.latent_shape}, got {samples.shape}"
+        else:
+            assert samples.shape == self.trainer.validation_latent_shape, f"Expected shape {self.trainer.validation_latent_shape}, got {samples.shape}"
         
         # add extra noise to the sample while preserving variance if input_perturbation is enabled
         if self.config.input_perturbation > 0 and self.is_validation_batch == False:
@@ -296,7 +303,7 @@ class UNetTrainer(ModuleTrainer):
 
         # get the noise level for this sub-batch from the pre-calculated whole-batch sigma (required for stratified sampling)
         local_sigma = self.global_sigma[self.trainer.accelerator.local_process_index::self.trainer.accelerator.num_processes]
-        batch_sigma = local_sigma[accum_step * self.trainer.config.device_batch_size:(accum_step+1) * self.trainer.config.device_batch_size]
+        batch_sigma = local_sigma[accum_step * device_batch_size:(accum_step+1) * device_batch_size]
 
         # prepare model inputs
         noise = torch.randn(samples.shape, device=samples.device, generator=self.device_generator)
