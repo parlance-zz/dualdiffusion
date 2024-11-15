@@ -112,5 +112,7 @@ class DualDiffusionVAE(DualDiffusionModule, ABC):
         pass
 
     def compile(self, **kwargs) -> None:
-        self.encode = torch.compile(self.encode, **kwargs)
-        self.decode = torch.compile(self.decode, **kwargs)
+        if type(self).supports_compile == True:
+            super().compile(**kwargs)
+            self.encode = torch.compile(self.encode, **kwargs)
+            self.decode = torch.compile(self.decode, **kwargs)

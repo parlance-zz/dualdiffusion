@@ -80,6 +80,6 @@ class DualDiffusionFormat(DualDiffusionModule, ABC):
 
     def compile(self, **kwargs) -> None:
         if type(self).supports_compile == True:
+            super().compile(**kwargs)
             self.raw_to_sample = torch.compile(self.raw_to_sample, **kwargs)
             self.sample_to_raw = torch.compile(self.sample_to_raw, **kwargs)
-        return

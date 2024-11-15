@@ -279,10 +279,10 @@ class UNet(DualDiffusionUNet):
         if self.config.label_dim != 0:
             emb = mp_sum(emb, class_embeddings.to(emb.dtype), t=self.config.label_balance)
         emb = emb.unsqueeze(2).unsqueeze(3)
-        
+
         if self.position_fourier is not None:
             pos = torch.linspace(-1, 1, x.shape[3], device=self.device, dtype=self.dtype)
-            pos_emb = self.position_linear(self.position_fourier(pos)).transpose().unsqueeze(0).unsqueeze(-2)
+            pos_emb = self.position_linear(self.position_fourier(pos)).transpose(-1,-2).unsqueeze(0).unsqueeze(-2)
             emb = mp_sum(emb, pos_emb.to(emb.dtype), t=self.config.pos_balance)
 
         emb = mp_silu(emb).to(x.dtype, memory_format=self.memory_layout)

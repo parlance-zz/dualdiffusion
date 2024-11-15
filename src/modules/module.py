@@ -95,6 +95,8 @@ class DualDiffusionModule(torch.nn.Module, ABC):
     def compile(self, **kwargs) -> None:
         if type(self).supports_compile == True:
             self.forward = torch.compile(self.forward, **kwargs)
+            if hasattr(self, "normalize_weights"):
+                self.normalize_weights = torch.compile(self.normalize_weights, **kwargs)
 
     @torch.no_grad()
     def load_ema(self, ema_path: str) -> None:
@@ -103,7 +105,7 @@ class DualDiffusionModule(torch.nn.Module, ABC):
 
     @torch.no_grad()
     def normalize_weights(self) -> None:
-        if self.has_trainable_parameters == False: return
+        if type(self).has_trainable_parameters == False: return
         for module in self.modules():
             if hasattr(module, "normalize_weights") and module != self:
                 module.normalize_weights()
