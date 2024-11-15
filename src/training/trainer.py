@@ -311,7 +311,7 @@ class DualDiffusionTrainer:
 
         self.logger.info(f"Module class: {self.module_class.__name__}")
         self.logger.info(f"Module trainer class: {self.config.module_trainer_class.__name__}")
-        #self.logger.info(f"Model metadata: {dict_str(self.pipeline.model_metadata)}")
+        self.logger.info(f"Model metadata: {dict_str(self.pipeline.model_metadata)}")
 
         if self.config.enable_channels_last == True:
             self.module = self.module.to(memory_format=torch.channels_last)
@@ -786,6 +786,10 @@ class DualDiffusionTrainer:
         self.logger.info(f"  Epoch = {global_step // self.num_update_steps_per_epoch} (step: {global_step})")
         self.logger.info(f"  Num examples = {len(self.dataset['validation'])}")
         self.logger.info(f"  Total validation batch size (w. parallel, distributed & accumulation) = {self.validation_total_batch_size}")
+        if not self.config.dataloader.use_pre_encoded_latents:
+            self.logger.info(f"  Sample shape: {self.validation_sample_shape}")
+        if self.validation_latent_shape is not None:
+            self.logger.info(f"  Latent shape: {self.validation_latent_shape}")
 
         start_validation_time = datetime.now()
         self.module.eval()
