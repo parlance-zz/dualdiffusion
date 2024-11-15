@@ -57,8 +57,10 @@ class UNetConfig(DualDiffusionUNetConfig):
     mlp_multiplier: int = 2                  # Multiplier for the number of channels in the MLP.
     mlp_groups: int     = 8                  # Number of groups for the MLPs.
     latents_height: int = 32                 # Expected height dim of input latents
-    position_channels: int = 0               # Number of channels for positional encoding.
+    pos_channels: int = 0                    # Number of channels for positional encoding.
+    pos_emb_bandwidth: float = 1.0           # MPFourier bandwidth for positional encoding.
     pos_balance: float = 0.333               # Balance between noise + class embedding embedding (0) and positional embedding (1).
+    use_skips: bool = True                   # Use U-Net structured skip connections in the model.
 
 class Block(torch.nn.Module):
 
@@ -176,7 +178,7 @@ class UNet(DualDiffusionUNet):
         cblock = [config.model_channels * x for x in config.channel_mult]
         cnoise = config.model_channels * config.channel_mult_noise if config.channel_mult_noise is not None else max(cblock)
         cemb = config.model_channels * config.channel_mult_emb if config.channel_mult_emb is not None else max(cblock)
-        cpos = config.position_channels
+        cpos = config.pos_channels
 
         self.num_levels = len(config.channel_mult)
 
@@ -190,8 +192,10 @@ class UNet(DualDiffusionUNet):
         self.logvar_fourier = MPFourier(config.logvar_channels)
         self.logvar_linear = MPConv(config.logvar_channels, 1, kernel=(), disable_weight_norm=True)
 
-        # Position conditioning
-        self.position_fourier = MPFourier(cpos) if cpos != 0 else None
+        # Position embedding
+        if cpos != 0 and len(cblock) > 1:
+            raise ValueError("Positional embedding is only supported for single resolution models")
+        self.position_fourier = MPFourier(cpos, bandwidth=config.pos_emb_bandwidth) if cpos != 0 else None
         self.position_linear = MPConv(cpos, cemb, kernel=()) if cpos != 0 else None
 
         # Encoder.
@@ -229,7 +233,7 @@ class UNet(DualDiffusionUNet):
                 self.dec[f"block{level}_up"] = Block(level, cout, cout, cemb, use_attention=level in config.attn_levels,
                                                      flavor="dec", resample_mode="up", **block_kwargs)
             for idx in range(config.num_layers_per_block + 1):
-                cin = cout + skips.pop()
+                cin = cout + skips.pop() if config.use_skips == True else cout
                 cout = channels
                 self.dec[f"block{level}_layer{idx}"] = Block(level, cin, cout, cemb, use_attention=level in config.attn_levels,
                                                              flavor="dec", **block_kwargs)
@@ -296,11 +300,11 @@ class UNet(DualDiffusionUNet):
         skips = []
         for name, block in self.enc.items():
             x = block(x) if "conv" in name else block(x, emb)
-            skips.append(x)
+            if self.config.use_skips == True: skips.append(x)
 
         # Decoder.
         for name, block in self.dec.items():
-            if "layer" in name:
+            if "layer" in name and self.config.use_skips == True:
                 x = mp_cat(x, skips.pop(), t=self.config.concat_balance)
             x = block(x, emb)
 
