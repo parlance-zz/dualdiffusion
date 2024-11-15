@@ -58,6 +58,7 @@ class UNetConfig(DualDiffusionUNetConfig):
     mlp_groups: int     = 8                  # Number of groups for the MLPs.
     latents_height: int = 32                 # Expected height dim of input latents
     position_channels: int = 0               # Number of channels for positional encoding.
+    pos_balance: float = 0.333               # Balance between noise + class embedding embedding (0) and positional embedding (1).
 
 class Block(torch.nn.Module):
 
@@ -189,6 +190,10 @@ class UNet(DualDiffusionUNet):
         self.logvar_fourier = MPFourier(config.logvar_channels)
         self.logvar_linear = MPConv(config.logvar_channels, 1, kernel=(), disable_weight_norm=True)
 
+        # Position conditioning
+        self.position_fourier = MPFourier(cpos) if cpos != 0 else None
+        self.position_linear = MPConv(cpos, cemb, kernel=()) if cpos != 0 else None
+
         # Encoder.
         self.enc = torch.nn.ModuleDict()
         cout = config.in_channels * config.latents_height + 1 # 1 extra const channel
@@ -200,13 +205,13 @@ class UNet(DualDiffusionUNet):
                 cout = channels
                 self.enc[f"conv_in"] = MPConv(cin, cout, kernel=(1,3))
             else:
-                self.enc[f"block{level}_down"] = Block(level, cout, cout, cemb + cpos, use_attention=level in config.attn_levels,
+                self.enc[f"block{level}_down"] = Block(level, cout, cout, cemb, use_attention=level in config.attn_levels,
                                                        flavor="enc", resample_mode="down", **block_kwargs)
             
             for idx in range(config.num_layers_per_block):
                 cin = cout
                 cout = channels
-                self.enc[f"block{level}_layer{idx}"] = Block(level, cin, cout, cemb + cpos, use_attention=level in config.attn_levels,
+                self.enc[f"block{level}_layer{idx}"] = Block(level, cin, cout, cemb, use_attention=level in config.attn_levels,
                                                              flavor="enc", **block_kwargs)
 
         # Decoder.
@@ -216,17 +221,17 @@ class UNet(DualDiffusionUNet):
         for level, channels in reversed(list(enumerate(cblock))):
             
             if level == len(cblock) - 1:
-                self.dec[f"block{level}_in0"] = Block(level, cout, cout, cemb + cpos, use_attention=True,
+                self.dec[f"block{level}_in0"] = Block(level, cout, cout, cemb, use_attention=True,
                                                       flavor="dec", **block_kwargs)
-                self.dec[f"block{level}_in1"] = Block(level, cout, cout, cemb + cpos, use_attention=True,
+                self.dec[f"block{level}_in1"] = Block(level, cout, cout, cemb, use_attention=True,
                                                       flavor="dec", **block_kwargs)
             else:
-                self.dec[f"block{level}_up"] = Block(level, cout, cout, cemb + cpos, use_attention=level in config.attn_levels,
+                self.dec[f"block{level}_up"] = Block(level, cout, cout, cemb, use_attention=level in config.attn_levels,
                                                      flavor="dec", resample_mode="up", **block_kwargs)
             for idx in range(config.num_layers_per_block + 1):
                 cin = cout + skips.pop()
                 cout = channels
-                self.dec[f"block{level}_layer{idx}"] = Block(level, cin, cout, cemb + cpos, use_attention=level in config.attn_levels,
+                self.dec[f"block{level}_layer{idx}"] = Block(level, cin, cout, cemb, use_attention=level in config.attn_levels,
                                                              flavor="dec", **block_kwargs)
                 
         self.out_gain = torch.nn.Parameter(torch.zeros([]))
@@ -273,7 +278,14 @@ class UNet(DualDiffusionUNet):
         emb = self.emb_noise(self.emb_fourier(c_noise))
         if self.config.label_dim != 0:
             emb = mp_sum(emb, class_embeddings.to(emb.dtype), t=self.config.label_balance)
-        emb = mp_silu(emb).unsqueeze(2).unsqueeze(3).to(x.dtype)
+        emb = emb.unsqueeze(2).unsqueeze(3)
+        
+        if self.position_fourier is not None:
+            pos = torch.linspace(-1, 1, x.shape[3], device=self.device, dtype=self.dtype)
+            pos_emb = self.position_linear(self.position_fourier(pos)).transpose().unsqueeze(0).unsqueeze(-2)
+            emb = mp_sum(emb, pos_emb.to(emb.dtype), t=self.config.pos_balance)
+
+        emb = mp_silu(emb).to(x.dtype, memory_format=self.memory_layout)
 
         # Encoder.
         x = x.reshape(x.shape[0], x.shape[1]*self.config.latents_height, 1, x.shape[3])
