@@ -288,7 +288,7 @@ class DualDiffusionPipeline(torch.nn.Module):
         # load dataset info
         dataset_info_path = os.path.join(model_path, "dataset_info.json")
         if not os.path.isfile(dataset_info_path):
-            dataset_info_path = os.path.join(config.DATASET_PATH, "dataset_info.json")
+            dataset_info_path = os.path.join(config.DATASET_PATH, "dataset_infos", "dataset_info.json")
 
         if os.path.isfile(dataset_info_path):
             pipeline.dataset_info = config.load_json(dataset_info_path)
