@@ -105,7 +105,9 @@ class DualDiffusionModule(torch.nn.Module, ABC):
 
     @torch.no_grad()
     def blend_weights(self, other: "DualDiffusionModule", t: float = 0.5) -> None:
-        for (param, other_param) in zip(self.parameters(), other.parameters()):
+        for ((param_name, param), (other_param_name, other_param)) in zip(self.named_parameters(), other.named_parameters()):
+            if param.data.shape != other_param.data.shape:
+                raise ValueError(f"Cannot blend parameters with different shapes: {param_name} {param.data.shape} != {other_param_name} {other_param.data.shape}")
             param.data.lerp_(other_param.data, t)
         self.normalize_weights()
 
