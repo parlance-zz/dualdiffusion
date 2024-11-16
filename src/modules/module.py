@@ -104,6 +104,12 @@ class DualDiffusionModule(torch.nn.Module, ABC):
         self.normalize_weights()
 
     @torch.no_grad()
+    def blend_weights(self, other: "DualDiffusionModule", t: float = 0.5) -> None:
+        for (param, other_param) in zip(self.parameters(), other.parameters()):
+            param.data.lerp_(other_param.data, t)
+        self.normalize_weights()
+
+    @torch.no_grad()
     def normalize_weights(self) -> None:
         if type(self).has_trainable_parameters == False: return
         for module in self.modules():
