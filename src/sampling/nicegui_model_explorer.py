@@ -87,6 +87,7 @@ class ModelExplorer(ui.column):
                 self.filter_input = ui.input("Filter").classes("w-64")
                 expand_button = ui.button('+ Expand All')
                 collapse_button = ui.button('- Collapse All')
+                uncheck_button = ui.button('Uncheck All', color="red")
 
             def build_tree(data):
                 tree = {}
@@ -123,13 +124,19 @@ class ModelExplorer(ui.column):
 
                 return convert_tree(tree)
 
-
             self.module_tree = ui.tree(build_tree(list(self.module_state_dict.keys())),
                 on_tick=lambda e: self.on_tick(e.value), tick_strategy="leaf")
 
             self.filter_input.bind_value_to(self.module_tree, "filter")
             expand_button.on_click(lambda: self.module_tree.expand())
             collapse_button.on_click(lambda: self.module_tree.collapse())
+
+            async def uncheck_all():
+                self.module_tree._props.setdefault('ticked', [])
+                self.module_tree._props['ticked'][:] = []
+                self.module_tree.update()
+                await self.on_tick([])
+            uncheck_button.on_click(uncheck_all)
 
     async def on_tick(self, keys: list[str]) -> None:
         

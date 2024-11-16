@@ -493,20 +493,22 @@ class DualDiffusionPipeline(torch.nn.Module):
             cfg_model_output = model_output[params.batch_size:].lerp(model_output[:params.batch_size], params.cfg_scale)
             
             old_sigma_next = sigma_next
-            effective_input_perturbation = params.input_perturbation
+            #effective_input_perturbation = params.input_perturbation
             #effective_input_perturbation = (sigma_schedule_error_logvar[i]/4).exp().item() * input_perturbation
             #effective_input_perturbation = params.input_perturbation * (1 - (i/params.num_steps)*(1 - i/params.num_steps))**2 #***
-            #effective_input_perturbation = float(params.input_perturbation * (1 - 1 / np.cosh(np.log(sigma_next * sigma_curr) / 2 - 0.425))**2)
+            effective_input_perturbation = float(params.input_perturbation * (1 - 1 / np.cosh(np.log(sigma_next * sigma_curr) / 2 - 0.1))**2)
             #effective_input_perturbation = float(params.input_perturbation * (1 - 1 / np.cosh(np.log(sigma_next * sigma_curr) / 2 - 0.425)))
             #effective_input_perturbation = sigma_curr**2 / (sigma_curr**2 + params.sigma_data**2) * params.input_perturbation
             #effective_input_perturbation = float(params.input_perturbation * (1 - 1 / np.cosh(np.log(sigma_next * sigma_curr) / 2 - 0.))**2)
             #nsr0 = sigma_curr**2 / (sigma_curr**2 + params.sigma_data**2)
             #nsr1 = sigma_next**2 / (sigma_next**2 + params.sigma_data**2)
             #effective_input_perturbation = (nsr0 - nsr1) * nsr0 * 100 * params.input_perturbation
+            #effective_input_perturbation = sigma_curr**2 / (sigma_curr**2 + params.sigma_data**2) * params.input_perturbation
             sigma_next *= (1 - (max(min(effective_input_perturbation, 1), 0)))
+            #sigma_next = 0#(params.sigma_min + sigma_next) / 2
 
             #sigma_next = max(sigma_next + (sigma_next - sigma_curr) * params.input_perturbation, params.sigma_min)
-            #effective_input_perturbation = 1 - sigma_next / old_sigma_next
+            effective_input_perturbation = 1 - sigma_next / old_sigma_next
             effective_input_perturbation = old_sigma_next - sigma_next
             debug_info["effective_input_perturbation"].append(effective_input_perturbation)
 
