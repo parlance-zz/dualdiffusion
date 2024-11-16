@@ -21,7 +21,9 @@
 # SOFTWARE.
 
 from PIL import Image
+from datetime import datetime
 import logging
+import asyncio
 
 import numpy as np
 import torch
@@ -36,7 +38,9 @@ class ModelExplorer(ui.column):
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
 
-        self.logger = logging.getLogger(name="nicegui_app")        
+        self.logger = logging.getLogger(name="nicegui_app")
+        self.generating_visualization = asyncio.Semaphore()
+        self.loading_notification = None
         self.get_app = lambda: None
         self.selected_keys = set()
 
@@ -128,36 +132,56 @@ class ModelExplorer(ui.column):
             collapse_button.on_click(lambda: self.module_tree.collapse())
 
     async def on_tick(self, keys: list[str]) -> None:
-
-        keys = set(keys)
-        deselected_keys = self.selected_keys - keys
-        new_selected_keys = keys - self.selected_keys
-
-        for key in deselected_keys:
-            self.module_tree.slots.pop(f"body-{key}", None)
         
-        for key in new_selected_keys:
-            tensor = self.module_state_dict[key].data
-            if tensor.numel() == 1: continue
+        async with self.generating_visualization:
+            
+            if self.loading_notification is None:
+                self.loading_notification = ui.notification(timeout=None)
+                self.loading_notification.message = f"Generating visualization..."
+                self.loading_notification.spinner = True
+                await asyncio.sleep(0.1)
+            
+            last_sleep = datetime.now()
 
-            with self.module_tree.add_slot(f"body-{key}"):
+            keys = set(keys)
+            deselected_keys = self.selected_keys - keys
+            new_selected_keys = keys - self.selected_keys
 
-                if tensor.ndim >= 2: tensor = tensor.transpose(0, 1)
-                else:
-                    # todo: 1d visualization
-                    continue
+            for key in deselected_keys:
+                self.module_tree.slots.pop(f"body-{key}", None)
+            
+            for key in new_selected_keys:
 
-                while tensor.ndim < 4:
-                    tensor.unsqueeze_(-1)
+                tensor = self.module_state_dict[key].data
+                if tensor.numel() == 1: continue
 
-                with ui.grid(columns=tensor.shape[-1], rows=tensor.shape[-2]).classes("gap-0"):
-                    for i in range(tensor.shape[-2]):
-                        for j in range(tensor.shape[-1]):                
-                            image_array = tensor_to_img(tensor[:, :, i, j], colormap=True)
-                            if image_array.ndim == 4: # ?????
-                                image_array = image_array[:, :, 0, :]
+                now = datetime.now()
+                if (now - last_sleep).total_seconds() > 1:
+                    await asyncio.sleep(0.1)
+                    last_sleep = now
 
-                            image = Image.fromarray(image_array)
-                            ui.interactive_image(source=image)
+                with self.module_tree.add_slot(f"body-{key}"):
+                    
+                    self.logger.debug(f"model_explorer: Generating visualization for {key}...")
+                    if tensor.ndim >= 2: tensor = tensor.transpose(0, 1)
+                    else:
+                        # todo: 1d visualization
+                        continue
 
-        self.selected_keys = keys
+                    while tensor.ndim < 4:
+                        tensor.unsqueeze_(-1)
+
+                    with ui.grid(columns=tensor.shape[-1], rows=tensor.shape[-2]).classes("gap-0"):
+                        for i in range(tensor.shape[-2]):
+                            for j in range(tensor.shape[-1]):                
+                                image_array = tensor_to_img(tensor[:, :, i, j], colormap=True)
+                                if image_array.ndim == 4: # ?????
+                                    image_array = image_array[:, :, 0, :]
+
+                                image = Image.fromarray(image_array)
+                                ui.interactive_image(source=image)
+
+            self.module_tree.update()
+            self.selected_keys = keys
+            self.loading_notification.dismiss()
+            self.loading_notification = None
