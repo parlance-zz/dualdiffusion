@@ -45,4 +45,6 @@ CACHE_PATH = os.getenv("CACHE_PATH")
 FFMPEG_PATH = os.getenv("FFMPEG_PATH")
 DATASET_PATH = os.getenv("DATASET_PATH")
 
+CLAP_MODEL_PATH = os.getenv("CLAP_MODEL_PATH")
+
 NO_GUI = int(os.getenv("NO_GUI") or 0) == 1
