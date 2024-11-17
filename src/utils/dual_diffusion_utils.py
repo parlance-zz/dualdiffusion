@@ -36,6 +36,7 @@ import safetensors.torch as ST
 import matplotlib.pyplot as plt
 from scipy.special import erfinv
 import mutagen
+import mutagen.flac
 from safetensors import safe_open
 
 from utils.roseus_colormap import ROSEUS_COLORMAP
@@ -225,9 +226,8 @@ def save_audio(raw_samples: torch.Tensor,
 
     return output_path
 
-def update_audio_metadata(audio_path: str,
-                          metadata: Optional[dict] = None,
-                          rating: Optional[int] = None) -> None:
+def update_audio_metadata(audio_path: str, metadata: Optional[dict] = None,
+                          rating: Optional[int] = None, clear_clap_fields: bool = False) -> None:
     
     metadata = metadata or {}
     audio_format = os.path.splitext(audio_path)[1].lower()
@@ -242,7 +242,17 @@ def update_audio_metadata(audio_path: str,
         })
 
     if len(metadata) > 0 or rating is not None:
-        audio_file = mutagen.File(audio_path)
+
+        if audio_format == ".flac":
+            audio_file = mutagen.flac.FLAC(audio_path)
+        else:
+            audio_file = mutagen.File(audio_path)
+        
+        if clear_clap_fields == True:
+            for key in list(audio_file.keys()):
+                if key.startswith("clap_"):
+                    audio_file.pop(key)
+                    print(f"Removed {key}")
 
         for key in metadata:
             if audio_format != ".mp3": audio_file[key] = metadata[key]
