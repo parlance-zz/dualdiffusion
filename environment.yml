@@ -4,12 +4,12 @@ channels:
   - nvidia
   - conda-forge
 dependencies:
-  - python=3.12
+  - python=3.11 # 3.11 for laion-clap, otherwise 3.12
   - nvidia::cudatoolkit
   - pytorch::pytorch
   #- ffmpeg<7::conda-forge # for torchaudio, replaces soundfile
   - pip
-  - numpy
+  - numpy==1.23.5 # for laion-clap, otherwise *
   - torchaudio
   - torchvision
   - librosa
@@ -23,3 +23,4 @@ dependencies:
     - python-dotenv
     - mutagen
     - nicegui
+    - laion-clap
