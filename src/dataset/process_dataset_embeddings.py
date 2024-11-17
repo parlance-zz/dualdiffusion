@@ -56,9 +56,10 @@ def pre_encode_embeddings():
         raise ValueError("CLAP_MODEL_PATH is not set")
 
     with distributed_state.main_process_first():
-        print("Warning: This script will modify all audio file metadata and latents in the dataset path.")
-        if input("Are you sure you want to continue? (y/n): ").lower() not in ["y", "yes"]:
-            return
+        if distributed_state.is_main_process:
+            print("Warning: This script will modify all audio file metadata and latents in the dataset path.")
+            if input("Are you sure you want to continue? (y/n): ").lower() not in ["y", "yes"]:
+                return
 
         clap_model = laion_clap.CLAP_Module(device=device, enable_fusion=enable_fusion, amodel=audio_encoder, tmodel=text_encoder)
         clap_model.load_ckpt(config.CLAP_MODEL_PATH, verbose=False)
