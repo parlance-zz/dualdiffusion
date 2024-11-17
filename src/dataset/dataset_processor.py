@@ -58,7 +58,7 @@ class DatasetProcessorConfig:
     pre_encoded_latents_stereo_mirroring_augmentation: bool = False
     pre_encoded_latents_enable_quantization: bool = False
 
-    clap_embedding_labels: list[str] = ()
+    clap_embedding_labels: Optional[dict[str, list[str]]] = None
     clap_enable_fusion: bool = False
     clap_audio_encoder: str = "HTSAT-base"
     clap_text_encoder: str = "roberta"

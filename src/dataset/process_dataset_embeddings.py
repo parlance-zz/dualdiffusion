@@ -71,7 +71,22 @@ def pre_encode_embeddings():
         clap_model.get_audio_embedding_from_data = torch.compile(clap_model.get_audio_embedding_from_data, **compile_options)
         clap_model.get_text_embedding = torch.compile(clap_model.get_text_embedding, **compile_options)
 
-    label_embeddings = normalize(clap_model.get_text_embedding(labels, use_tensor=True)).float()
+    if labels is not None:
+        if isinstance(labels, list):
+            labels = {label: label for label in labels}
+
+        print(f"Calculating text embeddings for {len(labels)} labels...")
+        label_embeddings = []
+        for label, tag_list in labels.items():
+            if isinstance(tag_list, str):
+                tag_list = [tag_list]
+            elif not isinstance(tag_list, list):
+                raise ValueError(f"Invalid tag list for label '{label}': {tag_list}")
+            
+            tag_embeddings = clap_model.get_text_embedding(tag_list, use_tensor=True)
+            label_embeddings.append(tag_embeddings.mean(dim=0))
+        label_embeddings = torch.stack(label_embeddings, dim=0).to(device=device, dtype=torch.float32)
+        label_embeddings = normalize(label_embeddings).float()
 
     # get split metadata
     split_metadata_files = []
@@ -133,19 +148,20 @@ def pre_encode_embeddings():
                     save_latents = True
                     text_embeddings = normalize(clap_model.get_text_embedding([sample_prompt], use_tensor=True)).float()
 
-                # gets similarity for each label and chunk individually
-                #cos_similarity = torch.mm(label_embeddings / label_embeddings.shape[1]**0.5,
-                #                          audio_embeddings.T / audio_embeddings.shape[1]**0.5).clip(-1, 1)
+                if labels is not None:
+                    # gets similarity for each label and chunk individually
+                    #cos_similarity = torch.mm(label_embeddings / label_embeddings.shape[1]**0.5,
+                    #                          audio_embeddings.T / audio_embeddings.shape[1]**0.5).clip(-1, 1)
 
-                # update audio file metadata with label similarity scores
-                label_scores = (torch.einsum("ld,d->l",
-                    label_embeddings, audio_embeddings.mean(dim=0)) / label_embeddings.shape[1]).clip(-1, 1).tolist()                
-                labels_metadata = {f"clap_{label}": f"{score:+01.4f}" for label, score in zip(labels, label_scores)}
-                
-                try:
-                    update_audio_metadata(input_path, labels_metadata)
-                except Exception as e:
-                    print(f"Failed to update metadata for {file_name}: {e}")
+                    # update audio file metadata with label similarity scores
+                    label_scores = (torch.einsum("ld,d->l",
+                        label_embeddings, audio_embeddings.mean(dim=0)) / label_embeddings.shape[1]).clip(-1, 1).tolist()                
+                    labels_metadata = {f"clap_{label}": f"{score:+01.4f}" for label, score in zip(labels.keys(), label_scores)}
+                    
+                    try:
+                        update_audio_metadata(input_path, labels_metadata, clear_clap_fields=True)
+                    except Exception as e:
+                        print(f"Failed to update metadata for {file_name}: {e}")
 
                 if save_latents == True:
                     latents_dict = existing_latents or {}
