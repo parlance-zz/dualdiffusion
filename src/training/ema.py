@@ -50,12 +50,13 @@ def get_ema_list(module_path: str) -> tuple[list[str], list[float]]:
 class EMA_Manager:
 
     @torch.no_grad()
-    def __init__(self, module: torch.nn.Module, betas: list[float],
+    def __init__(self, module: torch.nn.Module, betas: list[float], warmup_steps: int,
                  device: Optional[torch.device] = None) -> None:
 
         self.module = module
         self.betas = betas
         self.device = device
+        self.warmup_steps = warmup_steps
 
         self.emas: list[DualDiffusionModule] = [deepcopy(module).to(device) for _ in betas]
 
@@ -69,6 +70,7 @@ class EMA_Manager:
         with torch.amp.autocast("cuda", enabled=False), TF32_Disabled():
             net_parameters = tuple(self.module.parameters())
             for beta, ema in zip(self.betas, self.emas):
+                beta *= min((cur_nimg / batch_size) / self.warmup_steps, 1)
                 torch._foreach_lerp_(tuple(ema.parameters()), net_parameters, 1 - beta)
 
     @torch.no_grad()
@@ -76,6 +78,7 @@ class EMA_Manager:
         with torch.amp.autocast("cuda", enabled=False), TF32_Disabled():
             net_parameters = tuple(self.module.parameters())
             ema_parameters = tuple(self.emas[0].parameters())
+            beta *= min((cur_nimg / batch_size) / self.warmup_steps, 1)
             torch._foreach_lerp_(net_parameters, ema_parameters, 1 - beta)
 
     @torch.no_grad()

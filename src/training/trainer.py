@@ -85,11 +85,11 @@ class TrainLogger():
 @dataclass
 class LRScheduleConfig:
     lr_schedule: Literal["edm2", "constant"] = "edm2"
-    learning_rate: float     = 1e-2
-    lr_warmup_steps: int     = 4000
-    lr_reference_steps: int  = 20000
+    learning_rate: float     = 3e-3
+    lr_warmup_steps: int     = 5000
+    lr_reference_steps: int  = 70000
     lr_decay_exponent: float = 0.5
-    min_learning_rate: float = 1e-3
+    min_learning_rate: float = 1e-4
 
 @dataclass
 class OptimizerConfig:
@@ -97,31 +97,32 @@ class OptimizerConfig:
     adam_beta2: float        = 0.99
     adam_epsilon: float      = 1e-8
     adam_weight_decay: float = 0.
-    max_grad_norm: float     = 10.
+    max_grad_norm: float     = 1.
     add_grad_noise: float    = 0.
 
 @dataclass
 class EMAConfig:
     use_ema: bool               = True
     use_switch_ema: bool        = False
-    use_feedback_ema: bool      = False
+    use_feedback_ema: bool      = True
     use_dynamic_betas: bool     = False
     dynamic_initial_beta: float = 0.9999
     dynamic_beta_gamma: float   = 0.5
     dynamic_max_beta: float     = 0.999999
     dynamic_min_beta: float     = 0.999
-    ema_betas: tuple[float]     = (0.9999,)
+    ema_betas: tuple[float]     = (0.9999, 0.99999)
     feedback_ema_beta: float    = 0.9999
+    ema_warmup_steps: int       = 10000
     ema_cpu_offload: bool = False
 
 @dataclass
 class DataLoaderConfig:
-    use_pre_encoded_latents: bool = False
-    filter_invalid_samples: bool = False
+    use_pre_encoded_latents: bool = True
+    filter_invalid_samples: bool = True
     dataset_num_proc: Optional[int] = None
-    dataloader_num_workers: Optional[int] = None
+    dataloader_num_workers: Optional[int] = 4
     pin_memory: bool = False
-    prefetch_factor: Optional[int] = None
+    prefetch_factor: Optional[int] = 2
 
 @dataclass
 class LoggingConfig:
@@ -147,10 +148,10 @@ class DualDiffusionTrainerConfig:
     model_src_path: str
     train_config_path: Optional[str]    = None
     seed: Optional[int]                 = None
-    device_batch_size: int              = 1
-    gradient_accumulation_steps: int    = 1
-    validation_device_batch_size: int   = 1
-    validation_accumulation_steps: int  = 1
+    device_batch_size: int              = 8
+    gradient_accumulation_steps: int    = 6
+    validation_device_batch_size: int   = 6
+    validation_accumulation_steps: int  = 10
 
     num_train_epochs: int               = 500000
     num_validation_epochs: int          = 10
@@ -335,7 +336,8 @@ class DualDiffusionTrainer:
                     raise ValueError("EMA is enabled but no EMA betas specified in config")
             
             ema_device = "cpu" if self.config.ema.ema_cpu_offload else self.accelerator.device
-            self.ema_manager = EMA_Manager(self.module, betas=ema_betas, device=self.accelerator.device)
+            self.ema_manager = EMA_Manager(self.module, betas=ema_betas,
+                warmup_steps=self.config.ema.ema_warmup_steps, device=self.accelerator.device)
 
             if self.config.ema.use_dynamic_betas == False:
                 self.logger.info(f"Using EMA model(s) with beta(s): {ema_betas}")

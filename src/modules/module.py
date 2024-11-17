@@ -95,7 +95,7 @@ class DualDiffusionModule(torch.nn.Module, ABC):
     def compile(self, **kwargs) -> None:
         if type(self).supports_compile == True:
             self.forward = torch.compile(self.forward, **kwargs)
-            if hasattr(self, "normalize_weights"):
+            if hasattr(self, "normalize_weights") and self.training == True:
                 self.normalize_weights = torch.compile(self.normalize_weights, **kwargs)
 
     @torch.no_grad()
