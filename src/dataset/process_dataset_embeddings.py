@@ -84,28 +84,10 @@ def pre_encode_embeddings():
         with open(os.path.join(config.DATASET_PATH, split_metadata_file), "r") as f:
             split_metadata = [json.loads(line) for line in f.readlines()]
 
-        # filter split samples that already encoded
         if distributed_state.is_main_process:
-            print(f"Scanning {len(split_metadata)} samples from {split_metadata_file}...")
-
-        encode_samples = []
-        for sample in split_metadata:
-            if sample["latents_file_name"] is None:
-                sample["latents_file_name"] = f"{os.path.splitext(sample['file_name'])[0]}.safetensors"
-
-            if os.path.isfile(os.path.join(config.DATASET_PATH, sample["latents_file_name"])) and resume_progress == True:
-                existing_latents = load_safetensors(os.path.join(config.DATASET_PATH, sample["latents_file_name"]))
-                if "clap_audio_embeddings" in existing_latents:
-                    sample["clap_audio_embeddings"] = existing_latents["clap_audio_embeddings"].clone()
-                if "clap_text_embeddings" in existing_latents:
-                    sample["clap_text_embeddings"] = existing_latents["clap_text_embeddings"].clone()
-                del existing_latents
-            encode_samples.append(sample)
-
-        if distributed_state.is_main_process:
-            print(f"Processing {len(split_metadata)} samples from {split_metadata_file} ({len(encode_samples)} samples left to process)...")
+            print(f"Processing {len(split_metadata)} samples from {split_metadata_file}...")
             
-        with distributed_state.split_between_processes(encode_samples) as samples:
+        with distributed_state.split_between_processes(split_metadata) as samples:
 
             if distributed_state.is_main_process:
                 progress_bar = tqdm(total=len(samples))
@@ -113,6 +95,9 @@ def pre_encode_embeddings():
             
             for sample in samples:
 
+                if sample["latents_file_name"] is None:
+                    sample["latents_file_name"] = f"{os.path.splitext(sample['file_name'])[0]}.safetensors"
+                    
                 file_name = sample["file_name"]
                 input_path = os.path.join(config.DATASET_PATH, file_name)
                 output_filename = sample["latents_file_name"]
@@ -120,35 +105,41 @@ def pre_encode_embeddings():
                 sample_prompt = sample.get("prompt", None)
                 save_latents = False
 
-                # get audio embeddings
-                if sample.get("clap_audio_embeddings") is None:
+                existing_latents = None
+                audio_embeddings = None
+                text_embeddings = None
+            
+                if os.path.isfile(output_path): # deep copying required for safetensors to close the file handle
+                    existing_latents = deepcopy(load_safetensors(output_path))
+                    if resume_progress == True:
+                        if "clap_audio_embeddings" in existing_latents:
+                            audio_embeddings = existing_latents["clap_audio_embeddings"].to(device=device, dtype=torch.float32)
+                        if "clap_text_embeddings" in existing_latents:
+                            text_embeddings = existing_latents["clap_text_embeddings"].to(device=device, dtype=torch.float32)
+
+                # get audio embeddings if they are not yet encoded
+                if audio_embeddings is None:
                     save_latents = True
                 
                     audio, sample_rate = librosa.load(input_path, sr=48000, mono=True)
                     chunk_size = sample_rate * 10
 
                     audio = audio[:audio.shape[0] // chunk_size * chunk_size] # crop out last chunk if it's too small
-                    audio = torch.tensor(audio.reshape(-1, chunk_size), dtype=torch.float32).to(device)
+                    audio = torch.tensor(audio.reshape(-1, chunk_size), dtype=torch.float32, device=device)
                     audio_embeddings = normalize(clap_model.get_audio_embedding_from_data(audio, use_tensor=True)).float()
-                else:
-                    audio_embeddings = sample["clap_audio_embeddings"].float().to(device=device)
 
-                # get text embeddings, if a prompt is available
-                if sample_prompt is not None:
-                    if sample.get("clap_text_embeddings") is None:
-                        save_latents = True
-                        text_embeddings = normalize(clap_model.get_text_embedding([sample_prompt], use_tensor=True)).float()
-                    else:
-                        text_embeddings = sample["clap_text_embeddings"].float().to(device=device)
-                else:
-                    text_embeddings = None
+                # get text embeddings if a prompt is available and they are not yet encoded
+                if sample_prompt is not None and text_embeddings is None:
+                    save_latents = True
+                    text_embeddings = normalize(clap_model.get_text_embedding([sample_prompt], use_tensor=True)).float()
 
                 # gets similarity for each label and chunk individually
-                cos_similarity = torch.mm(label_embeddings / label_embeddings.shape[1]**0.5,
-                                          audio_embeddings.T / audio_embeddings.shape[1]**0.5).clip(-1, 1)
+                #cos_similarity = torch.mm(label_embeddings / label_embeddings.shape[1]**0.5,
+                #                          audio_embeddings.T / audio_embeddings.shape[1]**0.5).clip(-1, 1)
 
                 # update audio file metadata with label similarity scores
-                label_scores = cos_similarity.mean(dim=1).tolist() # per-label similarity averaged across whole song
+                label_scores = (torch.einsum("ld,d->l",
+                    label_embeddings, audio_embeddings.mean(dim=0)) / label_embeddings.shape[1]).clip(-1, 1).tolist()                
                 labels_metadata = {f"clap_{label}": f"{score:+01.4f}" for label, score in zip(labels, label_scores)}
                 
                 try:
@@ -157,10 +148,7 @@ def pre_encode_embeddings():
                     print(f"Failed to update metadata for {file_name}: {e}")
 
                 if save_latents == True:
-                    if os.path.isfile(output_path):
-                        latents_dict = deepcopy(load_safetensors(output_path))
-                    else:
-                        latents_dict = {}
+                    latents_dict = existing_latents or {}
                     latents_dict["clap_audio_embeddings"] = audio_embeddings.to(torch.bfloat16)
                     if text_embeddings is not None:
                         latents_dict["clap_text_embeddings"] = text_embeddings.to(torch.bfloat16)
