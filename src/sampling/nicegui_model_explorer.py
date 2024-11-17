@@ -112,6 +112,7 @@ class ModelExplorer(ui.column):
                             tensor = self.module_state_dict[current_path].data
                             if tensor.numel() > 1:
                                 label = f"{key} - Shape: {tuple(tensor.shape)} Mean: {tensor.mean().item()} Std: {tensor.std().item()}"
+                                label += f" Min: {tensor.amin().item()} Max: {tensor.amax().item()}"
                             else:
                                 label = f"{key} - Value: {tensor.item()}"
                         result.append({
@@ -125,7 +126,7 @@ class ModelExplorer(ui.column):
                 return convert_tree(tree)
 
             self.module_tree = ui.tree(build_tree(list(self.module_state_dict.keys())),
-                on_tick=lambda e: self.on_tick(e.value), tick_strategy="leaf")
+                on_tick=lambda e: self.on_tick(e.value), tick_strategy="leaf-filtered")
 
             self.filter_input.bind_value_to(self.module_tree, "filter")
             expand_button.on_click(lambda: self.module_tree.expand())
@@ -190,5 +191,6 @@ class ModelExplorer(ui.column):
 
             self.module_tree.update()
             self.selected_keys = keys
+
             self.loading_notification.dismiss()
             self.loading_notification = None
