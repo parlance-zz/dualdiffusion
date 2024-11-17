@@ -68,6 +68,7 @@ def pre_encode_embeddings():
 
     if compile_options is not None:
         clap_model.get_audio_embedding_from_data = torch.compile(clap_model.get_audio_embedding_from_data, **compile_options)
+        clap_model.get_text_embedding = torch.compile(clap_model.get_text_embedding, **compile_options)
 
     label_embeddings = normalize(clap_model.get_text_embedding(labels, use_tensor=True)).float()
 
