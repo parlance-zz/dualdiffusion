@@ -43,6 +43,7 @@ def pre_encode_embeddings():
         **config.load_json(os.path.join(config.CONFIG_PATH, "dataset", "dataset.json")))
     
     labels = dataset_processor_config.clap_embedding_labels
+    tags = dataset_processor_config.clap_embedding_tags
     enable_fusion = dataset_processor_config.clap_enable_fusion
     audio_encoder = dataset_processor_config.clap_audio_encoder
     text_encoder = dataset_processor_config.clap_text_encoder
@@ -71,9 +72,14 @@ def pre_encode_embeddings():
         clap_model.get_audio_embedding_from_data = torch.compile(clap_model.get_audio_embedding_from_data, **compile_options)
         clap_model.get_text_embedding = torch.compile(clap_model.get_text_embedding, **compile_options)
 
+    if tags is not None: 
+        tag_labels = {tag: [tag] for tag in tags}
+        if labels is not None:
+            labels.update(tag_labels)
+        else:
+            labels = tag_labels
+
     if labels is not None:
-        if isinstance(labels, list):
-            labels = {label: label for label in labels}
 
         print(f"Calculating text embeddings for {len(labels)} labels...")
         label_embeddings = []
