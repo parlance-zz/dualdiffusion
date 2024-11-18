@@ -30,11 +30,12 @@ from dataclasses import dataclass
 from typing import Generator, Optional
 from datetime import datetime
 
+import torch
 import mutagen
 import safetensors.torch as ST
 from tqdm.auto import tqdm
 
-from utils.dual_diffusion_utils import dict_str
+from utils.dual_diffusion_utils import dict_str, normalize, save_safetensors
 
 
 @dataclass
@@ -89,12 +90,15 @@ class DatasetSplit:
             "num_channels": None,
             "sample_length": None,
             "bit_rate": None,
+            "prompt": None,
             "latents_file_name": None,
             "latents_file_size": None,
             "latents_length": None,
             "latents_num_variations": None,
             "latents_quantized": None,
             "latents_vae_model": None,
+            "latents_has_audio_embeddings": None,
+            "latents_has_text_embeddings": None,
         }
         if os.path.isfile(self.path):
             logging.getLogger().info(f"Loading split from {self.path}")
@@ -223,6 +227,7 @@ class DatasetProcessor:
                         "num_classes": 0,
                     }
                 },
+                "prompt": {"type": "string"},
                 "sample_rate": {"type": "int"},
                 "num_channels": {"type": "int"},
                 "sample_length": {"type": "int"},
@@ -234,6 +239,8 @@ class DatasetProcessor:
                 "latents_num_variations": {"type": "int"},
                 "latents_quantized": {"type": "bool"},
                 "latents_vae_model": {"type": "string"},
+                "latents_has_audio_embeddings": {"type": "bool"},
+                "latents_has_text_embeddings": {"type": "bool"},
             },
             "system_id": {},
             "game_id": {},
@@ -244,7 +251,6 @@ class DatasetProcessor:
             "system_train_sample_counts": {},
             "game_train_sample_counts": {},
             "author_train_sample_counts": {},
-            ""
             "processor_config": None,
         }
 
@@ -400,6 +406,8 @@ class DatasetProcessor:
                     sample["latents_num_variations"] = None
                     sample["latents_quantized"] = None
                     sample["latents_vae_model"] = None
+                    sample["latents_has_audio_embeddings"] = None
+                    sample["latents_has_text_embeddings"] = None
                 self.logger.info(f"Cleared latents metadata for {num_missing_latents} samples")
             self.logger.info("")
 
@@ -527,7 +535,7 @@ class DatasetProcessor:
             for file in files:
                 if os.path.splitext(file)[1].lower() == ".safetensors":
                     rel_path = os.path.normpath(os.path.relpath(os.path.join(root, file), config.DATASET_PATH))
-                    if rel_path not in referenced_latents_files:
+                    if rel_path not in referenced_latents_files and os.path.dirname(rel_path).lower() != "dataset_infos":
                         unreferenced_latents_files.append(rel_path)
 
         num_unreferenced_latents_files = len(unreferenced_latents_files)
@@ -635,71 +643,8 @@ class DatasetProcessor:
                 self.logger.info(f"{num_invalid_audio} samples with insufficient sample/bit rate or length removed from dataset")
             self.logger.info("")
 
-        # for any samples with a format in source formats but not in the dataset_formats list in config,
-        # or with a sample_rate / num_channels / sample_length > config values
-        # if any found, prompt to transcode / crop (and update metadata)
-        transcode_samples = SampleList()
-        for split, index, sample in self.all_samples():
-            if sample["file_name"] is not None:
-                sample_file_ext = os.path.splitext(sample["file_name"])[1].lower()
-                if sample_file_ext in self.config.source_formats:
-                    if sample_file_ext not in self.config.dataset_formats:
-                        transcode_samples.add_sample(split, index, f"file format '{sample_file_ext}' not in dataset_formats")
-                        continue
-                if self.config.max_sample_length is not None and sample["sample_length"] is not None:
-                    if sample["sample_length"] > self.config.max_sample_length:
-                        transcode_samples.add_sample(split, index, f"sample_length {sample['sample_length']} > {self.config.max_sample_length}")
-                        continue
-                if sample["sample_rate"] is not None and sample["sample_rate"] > self.config.sample_rate:
-                    transcode_samples.add_sample(split, index, f"sample_rate {sample['sample_rate']} > {self.config.sample_rate}")
-                    continue
-                if sample["num_channels"] is not None and sample["num_channels"] > self.config.num_channels:
-                    transcode_samples.add_sample(split, index, f"num_channels {sample['num_channels']} > {self.config.num_channels}")
-                    continue
-                
-        num_transcode = len(transcode_samples)
-        if num_transcode > 0:
-            self.logger.warning(f"Found {num_transcode} samples that need transcoding")
-            transcode_samples.show_samples()
-            if input(f"Transcode {num_transcode} samples? (WARNING: this is permanent and cannot be undone) (type 'transcode' to confirm): ").lower() == "transcode":
-                failed_transcode_samples = SampleList()
-                for _, _, sample in tqdm(transcode_samples, total=num_transcode, mininterval=1):
-                    try:
-                        sample_file_path = os.path.join(config.DATASET_PATH, sample["file_name"])
-                        transcoded_file_path = os.path.splitext(sample_file_path)[0] + self.config.dataset_formats[0]
-                        temporary_transcode_path = f"{transcoded_file_path}.tmp"
-                        if os.path.isfile(temporary_transcode_path):
-                            os.remove(temporary_transcode_path)
-
-                        # todo: transcode sample
-
-                        # get file size of temporary file
-                        assert os.path.getsize(temporary_transcode_path) > 0
-                        shutil.move(temporary_transcode_path, transcoded_file_path)
-                        sample["file_name"] = os.path.relpath(transcoded_file_path, config.DATASET_PATH)
-                        get_audio_metadata(sample)
-
-                        #if transcoded_file_path != sample_file_path:
-                        #    os.remove(sample_file_path)
-                        #if sample["latents_file_name"] is not None:
-                        #    os.remove(os.path.join(config.DATASET_PATH, sample["latents_file_name"]))
-                        sample["latents_file_name"] = None
-                        sample["latent_file_size"] = None
-                        sample["latents_length"] = None
-                        sample["latents_num_variations"] = None
-                        sample["latents_quantized"] = None
-                        sample["latents_vae_model"] = None
-
-                    except Exception as e:
-                        failed_transcode_samples.add_sample(split, index, str(e))
-                        continue
-
-                num_failed_transcode = len(failed_transcode_samples)
-                if num_failed_transcode > 0:
-                    self.logger.warning(f"Failed to transcode {num_failed_transcode} samples")
-                    num_failed_transcode.show_samples()
-                self.logger.info(f"Successfully transcoded {num_transcode - num_failed_transcode} samples")
-
+        # transcoding in dataset_processor removed, it is done better in an external tool (foobar2000)
+        
     def filter(self) -> None:
 
         # find any game ids with a low number of samples
@@ -739,8 +684,7 @@ class DatasetProcessor:
         # search for any samples in splits that have a latents_file_name and any null latents metadata fields
         # if any found, prompt to extract latents metadata
         need_metadata_samples = SampleList()
-        metadata_check_keys = ["latents_file_size", "latents_length", "latents_num_variations",
-                               "latents_quantized", "latents_vae_model"]
+        metadata_check_keys = [key for key in self.dataset_info["features"].keys() if key.startswith("latents_") and key != "latents_file_name"]
         for split, index, sample in self.all_samples():
             if sample["latents_file_name"] is not None:
                 if any(sample[key] is None for key in metadata_check_keys):
@@ -771,7 +715,19 @@ class DatasetProcessor:
                             st_metadata = f.metadata()
                             if st_metadata is not None:
                                 sample["latents_vae_model"] = st_metadata.get("latents_vae_model", None)
-                                                       
+
+                            try:
+                                _ = f.get_slice("clap_audio_embeddings")
+                                sample["latents_has_audio_embeddings"] = True
+                            except Exception as _:
+                                sample["latents_has_audio_embeddings"] = False
+                            
+                            try:
+                                _ = f.get_slice("clap_text_embeddings")
+                                sample["latents_has_text_embeddings"] = True
+                            except Exception as _:
+                                sample["latents_has_text_embeddings"] = False
+
                     except Exception as e:
                         failed_metadata_extraction_samples.add_sample(split, index, str(e))
                         continue
@@ -904,23 +860,109 @@ class DatasetProcessor:
                 self.logger.info("Rebuilt all dataset ids from current metadata")
             self.logger.info("")
 
+        # search for any samples in splits that have any null prompt field
+        # if any found, prompt to to create a default prompt for each sample
+        need_prompt_samples = SampleList()
+        for split, index, sample in self.all_samples():
+            if sample["prompt"] is None:
+                if (sample["song"] is not None and sample["song"] != "") or (sample["game"] is not None and sample["game"] != ""):
+                    need_prompt_samples.add_sample(split, index)
+
+        num_need_prompt = len(need_prompt_samples)
+        if num_need_prompt > 0:
+            self.logger.warning(f"Found {num_need_prompt} samples with song metadata and missing prompt")
+            need_prompt_samples.show_samples()
+            if input(f"Create default prompt for {num_need_prompt} samples? (y/n): ").lower() == "y":
+                for _, _, sample in need_prompt_samples:
+                    song = sample["song"] or ""
+                    game = sample["game"] or ""
+                    if game != "": game = game.split("/")[1]
+                    if "miscellaneous" in game.lower(): game = ""
+                    if game.lower().split(" ")[0] in song.lower().split(" ")[0]: game = ""
+
+                    prompt = f"{game} - {song}" if game != "" else song
+                    if sample["author"] is not None and len(sample["author"]) > 0:
+                        prompt += f" by {', '.join(sample['author'])}"
+                    sample["prompt"] = prompt
+                    self.logger.debug(prompt)
+
+                self.logger.info(f"Created default prompt for {num_need_prompt} samples")
+            self.logger.info("")
+
     def train_validation_split(self) -> None:
         # todo: prompt to resplit the aggregated dataset into train / validation splits
         pass
 
     def encode_latents(self) -> None:
 
+        # todo: pre-encoding latents and embeddings is done in separate scripts, ideally launching them from here would be nice
+        """
         # if self.config.pre_encoded_latents_vae is null skip encode_latents step
         if self.config.pre_encoded_latents_vae is None:
             self.logger.warning("Skipping encode_latents because config.pre_encoded_latents_vae is not defined")
 
-        # todo: search for any samples with a null latents_vae_model, or
+        # search for any samples with a null latents_vae_model, or
         # a latents_vae_model that doesn't match the config vae model name
         # or a null latents_file_name
         # if any found, prompt to encode them with configured vae and update metadata
         # will need to launch subprocess to use accelerate
         # accelerate config for pre_encoding is in config.CONFIG_PATH/dataset/dataset_accelerate.yaml
-        pass
+        """
+        
+
+        samples_with_audio_embeddings = SampleList()
+        samples_with_text_embeddings = SampleList()
+        samples_with_embeddings = SampleList()
+        for split, index, sample in self.all_samples():
+            if sample["latents_has_audio_embeddings"] == True:
+                samples_with_audio_embeddings.add_sample(split, index)
+            if sample["latents_has_text_embeddings"] == True:
+                samples_with_text_embeddings.add_sample(split, index)
+            if sample["latents_has_audio_embeddings"] == True or sample["latents_has_text_embeddings"] == True:
+                samples_with_embeddings.add_sample(split, index)
+
+        num_samples_with_embeddings = len(samples_with_embeddings)
+        if num_samples_with_embeddings > 0:
+            num_samples_with_audio_embeddings = len(samples_with_audio_embeddings)
+            num_samples_with_text_embeddings = len(samples_with_text_embeddings)
+            self.logger.info(f"Found {num_samples_with_audio_embeddings} samples with audio embeddings and {num_samples_with_text_embeddings} samples with text embeddings")
+            samples_with_embeddings.show_samples()
+
+            if input(f"Aggregate embeddings? (you only need to do this when the dataset embeddings have changed) (y/n): ").lower() == "y":
+                self.logger.info("Aggregating dataset audio and text embeddings...")
+                dataset_embeddings_dict = {
+                    "_unconditional_audio": torch.zeros(512, dtype=torch.float64),
+                    "_unconditional_text": torch.zeros(512, dtype=torch.float64),
+                }
+
+                for split, index, sample in tqdm(samples_with_embeddings, total=num_samples_with_embeddings, mininterval=1):
+                    latents_path = os.path.join(config.DATASET_PATH, sample["latents_file_name"])
+                    with ST.safe_open(latents_path, framework="pt") as f:
+                        
+                        if sample["latents_has_audio_embeddings"] == True:
+                            dataset_embeddings_dict["_unconditional_audio"].add_(
+                                f.get_slice("clap_audio_embeddings")[:].to(torch.float64).mean(dim=0), alpha=1./num_samples_with_audio_embeddings)
+                            if sample["game"] is not None:
+                                game_audio_embeddings = dataset_embeddings_dict.get(f"{sample['game']}_audio",
+                                    torch.zeros_like(dataset_embeddings_dict["_unconditional_audio"]))
+                                game_audio_embeddings.add_(f.get_slice("clap_audio_embeddings")[:].to(torch.float64).mean(dim=0))
+                                dataset_embeddings_dict[f"{sample['game']}_audio"] = game_audio_embeddings
+
+                        if sample["latents_has_text_embeddings"] == True:
+                            dataset_embeddings_dict["_unconditional_text"].add_(
+                                f.get_slice("clap_text_embeddings")[:].to(torch.float64).mean(dim=0), alpha=1./num_samples_with_text_embeddings)
+                            if sample["game"] is not None:
+                                game_text_embeddings = dataset_embeddings_dict.get(f"{sample['game']}_text",
+                                    torch.zeros_like(dataset_embeddings_dict["_unconditional_text"]))
+                                game_text_embeddings.add_(f.get_slice("clap_text_embeddings")[:].to(torch.float64).mean(dim=0))
+                                dataset_embeddings_dict[f"{sample['game']}_text"] = game_text_embeddings
+                
+                dataset_embeddings_dict = {k: normalize(v).float() for k, v in dataset_embeddings_dict.items()}
+                output_path = os.path.join(config.DATASET_PATH, "dataset_infos", "dataset_embeddings.safetensors")
+                self.logger.info(f"Saving aggregated dataset embeddings to '{output_path}'...")
+                save_safetensors(dataset_embeddings_dict, output_path)
+                self.logger.info("")
+
  
     def save(self, dataset_path: Optional[str] = None) -> None:
     

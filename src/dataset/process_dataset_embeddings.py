@@ -111,7 +111,7 @@ def pre_encode_embeddings():
         with distributed_state.split_between_processes(split_metadata) as samples:
 
             if distributed_state.is_main_process:
-                progress_bar = tqdm(total=len(samples))
+                progress_bar = tqdm(total=len(samples), mininterval=1)
                 progress_bar.set_description(f"Split: {split_metadata_file}")
             
             for sample in samples:
@@ -160,9 +160,10 @@ def pre_encode_embeddings():
                     #                          audio_embeddings.T / audio_embeddings.shape[1]**0.5).clip(-1, 1)
 
                     # update audio file metadata with label similarity scores
-                    label_scores = (torch.einsum("ld,d->l",
-                        label_embeddings, audio_embeddings.mean(dim=0)) / label_embeddings.shape[1]).clip(-1, 1).tolist()                
-                    labels_metadata = {f"clap_{label}": f"{score:+01.4f}" for label, score in zip(labels.keys(), label_scores)}
+                    label_scores = (torch.einsum("ld,d->l", label_embeddings, audio_embeddings.mean(dim=0)) / label_embeddings.shape[1])
+                    label_scores = ((label_scores + 1) / 2).clip(0, 1).tolist() # keep score positive to preserve textual sorting order
+                    labels_metadata = {f"clap_{label}": f"{score:01.4f}" for label, score in zip(labels.keys(), label_scores)}
+                    labels_metadata["clap_all_labels"] = f"{sum(label_scores) / len(label_scores):01.4f}"
                     
                     try:
                         update_audio_metadata(input_path, labels_metadata, clear_clap_fields=True)
@@ -180,7 +181,8 @@ def pre_encode_embeddings():
 
                 if distributed_state.is_main_process:
                     progress_bar.update(1)
-                    progress_bar.set_postfix({"file_name": file_name})
+                    # doesn't respect min_interval, disabled for performance
+                    #progress_bar.set_postfix({"file_name": file_name}) 
 
         print("Main process finished, waiting for distributed processes...")
         distributed_state.wait_for_everyone()

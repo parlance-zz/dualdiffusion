@@ -252,7 +252,6 @@ def update_audio_metadata(audio_path: str, metadata: Optional[dict] = None,
             for key in list(audio_file.keys()):
                 if key.startswith("clap_"):
                     audio_file.pop(key)
-                    print(f"Removed {key}")
 
         for key in metadata:
             if audio_format != ".mp3": audio_file[key] = metadata[key]

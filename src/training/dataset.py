@@ -40,6 +40,8 @@ class DatasetTransformConfig:
     sample_raw_channels: int
     sample_raw_crop_width: int
     use_pre_encoded_latents: bool
+    use_pre_encoded_embeddings: bool
+    text_embedding_weight: float
     latents_crop_width: int
     t_scale: Optional[float] = None
 
@@ -52,6 +54,8 @@ class DatasetConfig:
      sample_raw_channels: int
      sample_raw_crop_width: int
      use_pre_encoded_latents: bool
+     use_pre_encoded_embeddings: bool
+     text_embedding_weight: float
      latents_crop_width: int
      num_proc: Optional[int] = None
      t_scale: Optional[float] = None
@@ -161,12 +165,15 @@ class DualDiffusionDataset:
         
         def invalid_sample_filter(example):
             if example["game_id"] is None:
-                return False
+                if self.config.use_pre_encoded_embeddings == False or self.config.use_pre_encoded_latents == False:
+                    return False
             if self.config.use_pre_encoded_latents:
                 if example["latents_file_name"] is None:
                     return False
                 if example["latents_length"] is not None:
                     return example["latents_length"] >= self.config.latents_crop_width
+                if example.get("latents_has_audio_embeddings", False) == False and self.config.use_pre_encoded_embeddings == True:
+                    return False
                 return False
             else:
                 if example["file_name"] is None:
@@ -191,6 +198,8 @@ class DualDiffusionDataset:
             sample_raw_channels=self.config.sample_raw_channels,
             sample_raw_crop_width=self.config.sample_raw_crop_width,
             use_pre_encoded_latents=self.config.use_pre_encoded_latents,
+            use_pre_encoded_embeddings=self.config.use_pre_encoded_embeddings,
+            text_embedding_weight=self.config.text_embedding_weight,
             latents_crop_width=self.config.latents_crop_width,
             t_scale=self.config.t_scale
         )

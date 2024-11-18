@@ -118,6 +118,8 @@ class EMAConfig:
 @dataclass
 class DataLoaderConfig:
     use_pre_encoded_latents: bool = True
+    use_pre_encoded_embeddings: bool = False
+    text_embedding_weight: float = 0
     filter_invalid_samples: bool = True
     dataset_num_proc: Optional[int] = None
     dataloader_num_workers: Optional[int] = 4
@@ -488,6 +490,8 @@ class DualDiffusionTrainer:
             sample_raw_crop_width=sample_raw_crop_width,
             sample_raw_channels=self.pipeline.format.config.sample_raw_channels,
             use_pre_encoded_latents=self.config.dataloader.use_pre_encoded_latents,
+            use_pre_encoded_embeddings=self.config.dataloader.use_pre_encoded_embeddings,
+            text_embedding_weight=self.config.dataloader.text_embedding_weight,
             latents_crop_width=latents_crop_width,
             num_proc=self.config.dataloader.dataset_num_proc,
             t_scale=getattr(self.pipeline.unet.config, "t_scale", None) if self.config.module_name == "unet" else None,
