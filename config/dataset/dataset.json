@@ -4,10 +4,10 @@
   "sample_rate": 32000,
   "num_channels": 2,
   "min_sample_rate": 32000,
-  "min_kbps": 32,
+  "min_kbps": 0,
   "min_sample_length": 1442048,
   "max_sample_length": 4800000,
-  "min_num_class_samples": 6,
+  "min_num_class_samples": 0,
 
   "dataset_processor_verbose": true,
 
@@ -27,6 +27,6 @@
     "whispering", "screaming", "yelling", "chanting"],
     "sfx": ["SFX", "sound effect", "sound effects", "movie", "explosions", "rain", "thunder", "wind", "gunshots", 
     "footsteps", "car engine", "noise", "burning", "ocean", "water", "birds", "crowd", "crackling", "applause"],
-    "poor_quality": ["muffled", "distorted", "noise", "clipping", "hiss", "hum", "crackling", "pops", "clicks"]
+    "poor_quality": ["muffled", "distorted", "noise", "clipping", "hiss", "hum", "crackling", "pops", "clicks", "dissonance", "atonal"]
   }
 }
