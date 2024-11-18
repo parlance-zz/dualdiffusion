@@ -105,7 +105,7 @@ def pre_encode_embeddings():
         with distributed_state.split_between_processes(split_metadata) as samples:
 
             if distributed_state.is_main_process:
-                progress_bar = tqdm(total=len(samples))
+                progress_bar = tqdm(total=len(samples), mininterval=1)
                 progress_bar.set_description(f"Split: {split_metadata_file}")
             
             for sample in samples:
