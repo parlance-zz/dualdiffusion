@@ -687,7 +687,7 @@ class DatasetProcessor:
         metadata_check_keys = [key for key in self.dataset_info["features"].keys() if key.startswith("latents_") and key != "latents_file_name"]
         for split, index, sample in self.all_samples():
             if sample["latents_file_name"] is not None:
-                if any(sample[key] is None for key in metadata_check_keys):
+                if any(sample[key] is None for key in metadata_check_keys) or (sample["prompt"] is not None and sample["latents_has_text_embeddings"] == False):
                     need_metadata_samples.add_sample(split, index)
 
         num_need_metadata = len(need_metadata_samples)
