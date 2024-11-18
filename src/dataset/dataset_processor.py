@@ -30,11 +30,12 @@ from dataclasses import dataclass
 from typing import Generator, Optional
 from datetime import datetime
 
+import torch
 import mutagen
 import safetensors.torch as ST
 from tqdm.auto import tqdm
 
-from utils.dual_diffusion_utils import dict_str
+from utils.dual_diffusion_utils import dict_str, normalize, save_safetensors
 
 
 @dataclass
@@ -533,7 +534,7 @@ class DatasetProcessor:
             for file in files:
                 if os.path.splitext(file)[1].lower() == ".safetensors":
                     rel_path = os.path.normpath(os.path.relpath(os.path.join(root, file), config.DATASET_PATH))
-                    if rel_path not in referenced_latents_files:
+                    if rel_path not in referenced_latents_files and os.path.dirname(rel_path).lower() != "dataset_infos":
                         unreferenced_latents_files.append(rel_path)
 
         num_unreferenced_latents_files = len(unreferenced_latents_files)
@@ -858,6 +859,35 @@ class DatasetProcessor:
                 self.logger.info("Rebuilt all dataset ids from current metadata")
             self.logger.info("")
 
+        # search for any samples in splits that have any null prompt field
+        # if any found, prompt to to create a default prompt for each sample
+        need_prompt_samples = SampleList()
+        for split, index, sample in self.all_samples():
+            if sample["prompt"] is None:
+                if (sample["song"] is not None and sample["song"] != "") or (sample["game"] is not None and sample["game"] != ""):
+                    need_prompt_samples.add_sample(split, index)
+
+        num_need_prompt = len(need_prompt_samples)
+        if num_need_prompt > 0:
+            self.logger.warning(f"Found {num_need_prompt} samples with song metadata and missing prompt")
+            need_prompt_samples.show_samples()
+            if input(f"Create default prompt for {num_need_prompt} samples? (y/n): ").lower() == "y":
+                for _, _, sample in need_prompt_samples:
+                    song = sample["song"] or ""
+                    game = sample["game"] or ""
+                    if game != "": game = game.split("/")[1]
+                    if "miscellaneous" in game.lower(): game = ""
+                    if game.lower().split(" ")[0] in song.lower().split(" ")[0]: game = ""
+
+                    prompt = f"{game} - {song}" if game != "" else song
+                    if sample["author"] is not None and len(sample["author"]) > 0:
+                        prompt += f" by {', '.join(sample['author'])}"
+                    sample["prompt"] = prompt
+                    self.logger.debug(prompt)
+
+                self.logger.info(f"Created default prompt for {num_need_prompt} samples")
+            self.logger.info("")
+
     def train_validation_split(self) -> None:
         # todo: prompt to resplit the aggregated dataset into train / validation splits
         pass
@@ -877,7 +907,61 @@ class DatasetProcessor:
         # will need to launch subprocess to use accelerate
         # accelerate config for pre_encoding is in config.CONFIG_PATH/dataset/dataset_accelerate.yaml
         """
-        pass
+        
+
+        samples_with_audio_embeddings = SampleList()
+        samples_with_text_embeddings = SampleList()
+        samples_with_embeddings = SampleList()
+        for split, index, sample in self.all_samples():
+            if sample["latents_has_audio_embeddings"] == True:
+                samples_with_audio_embeddings.add_sample(split, index)
+            if sample["latents_has_text_embeddings"] == True:
+                samples_with_text_embeddings.add_sample(split, index)
+            if sample["latents_has_audio_embeddings"] == True or sample["latents_has_text_embeddings"] == True:
+                samples_with_embeddings.add_sample(split, index)
+
+        num_samples_with_embeddings = len(samples_with_embeddings)
+        if num_samples_with_embeddings > 0:
+            num_samples_with_audio_embeddings = len(samples_with_audio_embeddings)
+            num_samples_with_text_embeddings = len(samples_with_text_embeddings)
+            self.logger.info(f"Found {num_samples_with_audio_embeddings} samples with audio embeddings and {num_samples_with_text_embeddings} samples with text embeddings")
+            samples_with_embeddings.show_samples()
+
+            if input(f"Aggregate embeddings? (you only need to do this when the dataset embeddings have changed) (y/n): ").lower() == "y":
+                self.logger.info("Aggregating dataset audio and text embeddings...")
+                dataset_embeddings_dict = {
+                    "_unconditional_audio": torch.zeros(512, dtype=torch.float64),
+                    "_unconditional_text": torch.zeros(512, dtype=torch.float64),
+                }
+
+                for split, index, sample in tqdm(samples_with_embeddings, total=num_samples_with_embeddings, mininterval=1):
+                    latents_path = os.path.join(config.DATASET_PATH, sample["latents_file_name"])
+                    with ST.safe_open(latents_path, framework="pt") as f:
+                        
+                        if sample["latents_has_audio_embeddings"] == True:
+                            dataset_embeddings_dict["_unconditional_audio"].add_(
+                                f.get_slice("clap_audio_embeddings")[:].to(torch.float64).mean(dim=0), alpha=1./num_samples_with_audio_embeddings)
+                            if sample["game"] is not None:
+                                game_audio_embeddings = dataset_embeddings_dict.get(f"{sample['game']}_audio",
+                                    torch.zeros_like(dataset_embeddings_dict["_unconditional_audio"]))
+                                game_audio_embeddings.add_(f.get_slice("clap_audio_embeddings")[:].to(torch.float64).mean(dim=0))
+                                dataset_embeddings_dict[f"{sample['game']}_audio"] = game_audio_embeddings
+
+                        if sample["latents_has_text_embeddings"] == True:
+                            dataset_embeddings_dict["_unconditional_text"].add_(
+                                f.get_slice("clap_text_embeddings")[:].to(torch.float64).mean(dim=0), alpha=1./num_samples_with_text_embeddings)
+                            if sample["game"] is not None:
+                                game_text_embeddings = dataset_embeddings_dict.get(f"{sample['game']}_text",
+                                    torch.zeros_like(dataset_embeddings_dict["_unconditional_text"]))
+                                game_text_embeddings.add_(f.get_slice("clap_text_embeddings")[:].to(torch.float64).mean(dim=0))
+                                dataset_embeddings_dict[f"{sample['game']}_text"] = game_text_embeddings
+                
+                dataset_embeddings_dict = {k: normalize(v).float() for k, v in dataset_embeddings_dict.items()}
+                output_path = os.path.join(config.DATASET_PATH, "dataset_infos", "dataset_embeddings.safetensors")
+                self.logger.info(f"Saving aggregated dataset embeddings to '{output_path}'...")
+                save_safetensors(dataset_embeddings_dict, output_path)
+                self.logger.info("")
+
  
     def save(self, dataset_path: Optional[str] = None) -> None:
     
