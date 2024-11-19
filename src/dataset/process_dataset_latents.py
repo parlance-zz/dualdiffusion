@@ -27,6 +27,7 @@ import json
 from copy import deepcopy
 
 import torch
+import safetensors.torch as ST
 from tqdm.auto import tqdm
 from accelerate import PartialState
 
@@ -34,7 +35,7 @@ from pipelines.dual_diffusion_pipeline import DualDiffusionPipeline
 from modules.formats.spectrogram import SpectrogramFormat, SpectrogramFormatConfig
 from dataset.dataset_processor import DatasetProcessorConfig
 from utils.dual_diffusion_utils import (
-    init_cuda, load_audio, save_safetensors, quantize_tensor
+    init_cuda, load_audio, load_safetensors, save_safetensors, quantize_tensor
 )
 
 def get_pitch_augmentation_format(original_config: SpectrogramFormatConfig, shift_semitones: float) -> SpectrogramFormat:
@@ -95,8 +96,15 @@ def pre_encode_latents():
             if sample["latents_file_name"] is not None: continue
             sample["latents_file_name"] = f"{os.path.splitext(sample['file_name'])[0]}.safetensors"
 
-            if not os.path.exists(os.path.join(config.DATASET_PATH, sample["latents_file_name"])):
+            latents_path = os.path.join(config.DATASET_PATH, sample["latents_file_name"])
+            if not os.path.isfile(latents_path):
                 encode_samples.append(sample)
+            else:
+                with ST.safe_open(latents_path, framework="pt") as f:
+                    try:
+                        _ = f.get_slice("latents")
+                    except:
+                        encode_samples.append(sample)
         
         if distributed_state.is_main_process:
             print(f"Processing {len(split_metadata)} samples from {split_metadata_file} ({len(encode_samples)} samples left to process)...")
@@ -114,9 +122,15 @@ def pre_encode_latents():
                 output_path = os.path.join(config.DATASET_PATH, output_filename)
 
                 if os.path.exists(output_path):
-                    if distributed_state.is_main_process:
-                        progress_bar.update(1)
-                    continue
+                    existing_latents = load_safetensors(output_path)
+                    if "latents" in existing_latents:
+                        if distributed_state.is_main_process: progress_bar.update(1)
+                        del existing_latents
+                        continue
+                    else:
+                        existing_latents = deepcopy(existing_latents)
+                else:
+                    existing_latents = {}
 
                 input_raw_sample = load_audio(os.path.join(config.DATASET_PATH, file_name))
                 crop_width = pipeline.format.sample_raw_crop_width(input_raw_sample.shape[-1] - encode_offset_padding)
@@ -150,7 +164,9 @@ def pre_encode_latents():
                     latents_dict = {"latents": latents_quantized.type(torch.uint8), "offset_and_range": offset_and_range}
                 else:
                     latents_dict = {"latents": latents}
-                save_safetensors(latents_dict, output_path)
+                existing_latents.update(latents_dict)
+                save_safetensors(existing_latents, output_path)
+                del existing_latents
 
                 if distributed_state.is_main_process:
                     progress_bar.update(1)
