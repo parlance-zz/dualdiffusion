@@ -1,9 +1,9 @@
 {
   "seed": 3000,
-  "device_batch_size": 8,
-  "gradient_accumulation_steps": 8,
-  "validation_device_batch_size": 6,
-  "validation_accumulation_steps": 10,
+  "device_batch_size": 10,
+  "gradient_accumulation_steps": 5,
+  "validation_device_batch_size": 10,
+  "validation_accumulation_steps": 6,
   "num_train_epochs": 500000,
   "min_checkpoint_time": 3600,
   "strict_checkpoint_time": false,
