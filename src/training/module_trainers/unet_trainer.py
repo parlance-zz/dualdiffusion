@@ -317,8 +317,8 @@ class UNetTrainer(ModuleTrainer):
             class_labels = self.trainer.pipeline.get_class_labels(sample_game_ids, module_name="unet")
             unet_class_embeddings = self.module.get_class_embeddings(class_labels, conditioning_mask)
         else:
-            unet_class_embeddings = mp_sum(self.unconditional_audio_embedding, sample_embeddings,
-                t=conditioning_mask.unsqueeze(1).to(self.trainer.accelerator.device, self.module.dtype))
+            unet_class_embeddings = self.module.get_clap_embeddings(sample_embeddings,
+                                    self.unconditional_audio_embedding, conditioning_mask)
 
         if self.config.conditioning_perturbation > 0 and self.is_validation_batch == False: # adds noise to the conditioning embedding while preserving variance
             conditioning_perturbation = torch.randn(unet_class_embeddings.shape, device=unet_class_embeddings.device, generator=self.device_generator)

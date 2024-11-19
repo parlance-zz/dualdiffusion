@@ -52,6 +52,11 @@ class DualDiffusionUNet(DualDiffusionModule, ABC):
         pass
     
     @abstractmethod
+    def get_clap_embeddings(self, clap_embeddings: torch.Tensor,
+        unconditional_clap_embedding: torch.Tensor, conditioning_mask: torch.Tensor) -> torch.Tensor:
+        pass
+        
+    @abstractmethod
     def get_sigma_loss_logvar(self, sigma: Optional[torch.Tensor] = None,
             class_embeddings: Optional[torch.Tensor] = None) -> torch.Tensor:
         pass

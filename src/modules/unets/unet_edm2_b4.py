@@ -238,6 +238,15 @@ class UNet(DualDiffusionUNet):
         else:
             return u_embedding
     
+    def get_clap_embeddings(self, clap_embeddings: torch.Tensor,
+        unconditional_clap_embedding: torch.Tensor, conditioning_mask: torch.Tensor) -> torch.Tensor:
+        if self.config.label_dim != 0:
+            clap_embeddings = self.emb_label(normalize(clap_embeddings).to(device=self.device, dtype=self.dtype))
+            unconditional_clap_embedding = self.emb_label(normalize(unconditional_clap_embedding).to(device=self.device, dtype=self.dtype))
+            return mp_sum(unconditional_clap_embedding, clap_embeddings, t=conditioning_mask.unsqueeze(1).to(self.device, self.dtype))
+        else:
+            return unconditional_clap_embedding
+        
     def get_sigma_loss_logvar(self, sigma: Optional[torch.Tensor] = None, class_embeddings: Optional[torch.Tensor] = None) -> torch.Tensor:
         return self.logvar_linear(self.logvar_fourier(sigma.flatten().log() / 4)).view(-1, 1, 1, 1).float()
     
