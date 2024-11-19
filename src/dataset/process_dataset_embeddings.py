@@ -48,6 +48,7 @@ def pre_encode_embeddings():
     audio_encoder = dataset_processor_config.clap_audio_encoder
     text_encoder = dataset_processor_config.clap_text_encoder
     compile_options = dataset_processor_config.clap_compile_options
+    max_batch_size = dataset_processor_config.clap_max_batch_size
     resume_progress = True
 
     distributed_state = PartialState()
@@ -111,7 +112,7 @@ def pre_encode_embeddings():
         with distributed_state.split_between_processes(split_metadata) as samples:
 
             if distributed_state.is_main_process:
-                progress_bar = tqdm(total=len(samples), mininterval=1)
+                progress_bar = tqdm(total=len(samples))
                 progress_bar.set_description(f"Split: {split_metadata_file}")
             
             for sample in samples:
@@ -147,7 +148,10 @@ def pre_encode_embeddings():
 
                     audio = audio[:audio.shape[0] // chunk_size * chunk_size] # crop out last chunk if it's too small
                     audio = torch.tensor(audio.reshape(-1, chunk_size), dtype=torch.float32, device=device)
-                    audio_embeddings = normalize(clap_model.get_audio_embedding_from_data(audio, use_tensor=True)).float()
+
+                    # get embeddings in chunks using max_batch_size
+                    audio_embeddings = torch.cat([
+                        normalize(clap_model.get_audio_embedding_from_data(chunk, use_tensor=True)).float() for chunk in audio.split(max_batch_size)], dim=0)
 
                 # get text embeddings if a prompt is available and they are not yet encoded
                 if sample_prompt is not None and text_embeddings is None:
