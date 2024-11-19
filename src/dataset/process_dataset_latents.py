@@ -93,18 +93,16 @@ def pre_encode_latents():
         # filter split samples that already encoded
         encode_samples = []
         for sample in split_metadata:
-            if sample["latents_file_name"] is not None: continue
-            sample["latents_file_name"] = f"{os.path.splitext(sample['file_name'])[0]}.safetensors"
+            if sample["latents_file_name"] is None:
+                sample["latents_file_name"] = f"{os.path.splitext(sample['file_name'])[0]}.safetensors"
 
             latents_path = os.path.join(config.DATASET_PATH, sample["latents_file_name"])
             if not os.path.isfile(latents_path):
                 encode_samples.append(sample)
             else:
                 with ST.safe_open(latents_path, framework="pt") as f:
-                    try:
-                        _ = f.get_slice("latents")
-                    except:
-                        encode_samples.append(sample)
+                    try: _ = f.get_slice("latents")
+                    except: encode_samples.append(sample)
         
         if distributed_state.is_main_process:
             print(f"Processing {len(split_metadata)} samples from {split_metadata_file} ({len(encode_samples)} samples left to process)...")
