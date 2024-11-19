@@ -118,8 +118,8 @@ class EMAConfig:
 @dataclass
 class DataLoaderConfig:
     use_pre_encoded_latents: bool = True
-    use_pre_encoded_embeddings: bool = False
-    text_embedding_weight: float = 0
+    use_pre_encoded_audio_embeddings: bool = False
+    use_pre_encoded_text_embeddings: bool = False
     filter_invalid_samples: bool = True
     dataset_num_proc: Optional[int] = None
     dataloader_num_workers: Optional[int] = 4
@@ -483,6 +483,10 @@ class DualDiffusionTrainer:
         latents_crop_width = self.latent_shape[-1] if self.latent_shape is not None else 0
         sample_raw_crop_width = self.pipeline.format.sample_raw_crop_width()
         
+        if ((self.config.dataloader.use_pre_encoded_audio_embeddings == True or self.config.dataloader.use_pre_encoded_audio_embeddings == True)
+                and self.config.dataloader.use_pre_encoded_latents == False):
+            raise ValueError("Cannot use pre-encoded audio or text embeddings without pre-encoded latents")
+
         dataset_config = DatasetConfig(
             data_dir=config.DATASET_PATH,
             cache_dir=config.CACHE_PATH,
@@ -490,8 +494,8 @@ class DualDiffusionTrainer:
             sample_raw_crop_width=sample_raw_crop_width,
             sample_raw_channels=self.pipeline.format.config.sample_raw_channels,
             use_pre_encoded_latents=self.config.dataloader.use_pre_encoded_latents,
-            use_pre_encoded_embeddings=self.config.dataloader.use_pre_encoded_embeddings,
-            text_embedding_weight=self.config.dataloader.text_embedding_weight,
+            use_pre_encoded_audio_embeddings=self.config.dataloader.use_pre_encoded_audio_embeddings,
+            use_pre_encoded_text_embeddings=self.config.dataloader.use_pre_encoded_text_embeddings,
             latents_crop_width=latents_crop_width,
             num_proc=self.config.dataloader.dataset_num_proc,
             t_scale=getattr(self.pipeline.unet.config, "t_scale", None) if self.config.module_name == "unet" else None,

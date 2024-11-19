@@ -40,8 +40,8 @@ class DatasetTransformConfig:
     sample_raw_channels: int
     sample_raw_crop_width: int
     use_pre_encoded_latents: bool
-    use_pre_encoded_embeddings: bool
-    text_embedding_weight: float
+    use_pre_encoded_audio_embeddings: bool
+    use_pre_encoded_text_embeddings: bool
     latents_crop_width: int
     t_scale: Optional[float] = None
 
@@ -54,8 +54,8 @@ class DatasetConfig:
      sample_raw_channels: int
      sample_raw_crop_width: int
      use_pre_encoded_latents: bool
-     use_pre_encoded_embeddings: bool
-     text_embedding_weight: float
+     use_pre_encoded_audio_embeddings: bool
+     use_pre_encoded_text_embeddings: bool
      latents_crop_width: int
      num_proc: Optional[int] = None
      t_scale: Optional[float] = None
@@ -63,10 +63,10 @@ class DatasetConfig:
 
 class DatasetTransform(torch.nn.Module):
 
-    def __init__(self, dataset_transform_config: DatasetTransformConfig) -> None:
+    def __init__(self, config: DatasetTransformConfig) -> None:
         super().__init__()
-        self.config = dataset_transform_config
-    
+        self.config = config
+
     def get_t(self, t: float) -> float:
         return t / self.config.sample_raw_crop_width * self.config.t_scale - self.config.t_scale/2
     
@@ -77,15 +77,15 @@ class DatasetTransform(torch.nn.Module):
         paths = []
         game_ids = []
         t_ranges = []
-        #author_ids = []
+        audio_embeddings = []
+        text_embeddings = []
 
         num_examples = len(next(iter(examples.values())))
         examples = [{key: examples[key][i] for key in examples} for i in range(num_examples)]
 
         for train_sample in examples:
-            
+
             game_id = train_sample["game_id"]
-            #author_id = train_sample["author_id"]
 
             if self.config.use_pre_encoded_latents:
                 file_path = train_sample["latents_file_name"]
@@ -103,6 +103,19 @@ class DatasetTransform(torch.nn.Module):
                     except Exception as _:
                         pass
 
+                    if self.config.use_pre_encoded_audio_embeddings == True:
+                        sample_audio_embeddings = f.get_slice("clap_audio_embeddings")
+                        seconds_per_latent_pixel = self.config.sample_raw_crop_width / self.config.sample_rate / self.config.latents_crop_width
+                        audio_embed_start = int(t_offset * seconds_per_latent_pixel / 10 + 0.5)
+                        audio_embed_len = int(self.config.latents_crop_width * seconds_per_latent_pixel / 10 + 0.5)
+                        audio_embed_end = min(audio_embed_start + audio_embed_len, sample_audio_embeddings.get_shape()[-1])
+                        sample_audio_embeddings = sample_audio_embeddings[audio_embed_start:audio_embed_end].mean(dim=0)
+                        audio_embeddings.append(sample_audio_embeddings)
+
+                    if self.config.use_pre_encoded_text_embeddings == True:
+                        sample_text_embeddings = f.get_slice("clap_text_embeddings")[:].mean(dim=0)
+                        text_embeddings.append(sample_text_embeddings)
+
                 assert sample.shape[2] == self.config.latents_crop_width
             else:
                 file_path = train_sample["file_name"]
@@ -118,7 +131,6 @@ class DatasetTransform(torch.nn.Module):
             samples.append(sample)
             paths.append(file_path)
             game_ids.append(game_id)
-            #author_ids.append(author_id)
 
             if self.config.t_scale is not None:
                 t_ranges.append(torch.tensor([self.get_t(t_offset),
@@ -128,11 +140,15 @@ class DatasetTransform(torch.nn.Module):
             "input": samples,
             "sample_paths": paths,
             "game_ids": game_ids,
-            #"author_ids": author_ids}
         }
 
         if self.config.t_scale is not None:
             batch_data["t_ranges"] = t_ranges
+
+        if self.config.use_pre_encoded_audio_embeddings == True:
+            batch_data["audio_embeddings"] = audio_embeddings
+        if self.config.use_pre_encoded_text_embeddings == True:
+            batch_data["text_embeddings"] = text_embeddings
 
         return batch_data
 
@@ -164,17 +180,19 @@ class DualDiffusionDataset:
         self.dataset_dict = self.dataset_dict.map(resolve_absolute_path)
         
         def invalid_sample_filter(example):
-            if example["game_id"] is None:
-                if self.config.use_pre_encoded_embeddings == False or self.config.use_pre_encoded_latents == False:
-                    return False
+            if (example["game_id"] is None and self.config.use_pre_encoded_audio_embeddings == False
+                    and self.config.use_pre_encoded_text_embeddings == False):
+                return False
+            
             if self.config.use_pre_encoded_latents:
                 if example["latents_file_name"] is None:
                     return False
                 if example["latents_length"] is not None:
                     return example["latents_length"] >= self.config.latents_crop_width
-                if example.get("latents_has_audio_embeddings", False) == False and self.config.use_pre_encoded_embeddings == True:
+                if example.get("latents_has_audio_embeddings", False) == False and self.config.use_pre_encoded_audio_embeddings == True:
                     return False
-                return False
+                if example.get("latents_has_text_embeddings", False) == False and self.config.use_pre_encoded_text_embeddings == True:
+                    return False
             else:
                 if example["file_name"] is None:
                     return False
@@ -198,8 +216,8 @@ class DualDiffusionDataset:
             sample_raw_channels=self.config.sample_raw_channels,
             sample_raw_crop_width=self.config.sample_raw_crop_width,
             use_pre_encoded_latents=self.config.use_pre_encoded_latents,
-            use_pre_encoded_embeddings=self.config.use_pre_encoded_embeddings,
-            text_embedding_weight=self.config.text_embedding_weight,
+            use_pre_encoded_audio_embeddings=self.config.use_pre_encoded_audio_embeddings,
+            use_pre_encoded_text_embeddings=self.config.use_pre_encoded_text_embeddings,
             latents_crop_width=self.config.latents_crop_width,
             t_scale=self.config.t_scale
         )

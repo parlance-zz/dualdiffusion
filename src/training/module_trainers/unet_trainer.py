@@ -22,6 +22,7 @@
 
 from dataclasses import dataclass
 from typing import Literal, Optional
+import os
 
 import torch
 
@@ -30,7 +31,7 @@ from training.trainer import DualDiffusionTrainer
 from .module_trainer import ModuleTrainerConfig, ModuleTrainer
 from modules.unets.unet import DualDiffusionUNet
 from modules.mp_tools import mp_sum
-from utils.dual_diffusion_utils import dict_str
+from utils.dual_diffusion_utils import dict_str, normalize, load_safetensors
 
 @dataclass
 class UNetTrainerConfig(ModuleTrainerConfig):
@@ -57,6 +58,7 @@ class UNetTrainerConfig(ModuleTrainerConfig):
     conditioning_perturbation: float = 0.
     conditioning_dropout: float = 0.1
     continuous_conditioning_dropout: bool = False
+    text_embedding_weight: float = 0.
 
     inpainting_probability: float = 0.7
     inpainting_extend_probability: float = 0.2
@@ -105,6 +107,28 @@ class UNetTrainer(ModuleTrainer):
                 self.logger.info(f"Training diffusion model without VAE")
         else:
             self.logger.info(f"Training diffusion model with pre-encoded latents")
+
+            if trainer.config.dataloader.use_pre_encoded_audio_embeddings == True:
+                self.logger.info(f"  Using pre-encoded audio embeddings")
+            if trainer.config.dataloader.use_pre_encoded_text_embeddings == True:
+                self.logger.info(f"  Using pre-encoded text embeddings")
+                self.logger.info(f"  Text embedding weight: {self.config.text_embedding_weight}")
+            
+            if (trainer.config.dataloader.use_pre_encoded_audio_embeddings == True
+                or trainer.config.dataloader.use_pre_encoded_text_embeddings == True):
+                self.unconditional_audio_embedding = None
+                self.unconditional_text_embedding = None
+
+                dataset_embeddings_path = os.path.join(self.trainer.dataset.config.data_dir, "dataset_infos", "dataset_embeddings.safetensors")
+                if not os.path.isfile(dataset_embeddings_path):
+                    self.logger.error(f"  Dataset embeddings not found at {dataset_embeddings_path}, aborting training..."); exit(1)
+                dataset_embeddings = load_safetensors(dataset_embeddings_path)
+                if trainer.config.dataloader.use_pre_encoded_audio_embeddings == True:
+                    self.unconditional_audio_embedding = normalize(dataset_embeddings["_unconditional_audio"][:].to(self.trainer.accelerator.device).unsqueeze(0)).float()
+                if trainer.config.dataloader.use_pre_encoded_text_embeddings == True:
+                    self.unconditional_text_embedding = normalize(dataset_embeddings["_unconditional_text"][:].to(self.trainer.accelerator.device).unsqueeze(0)).float()
+
+                self.logger.info(f"  Loaded dataset embeddings successfully from {dataset_embeddings_path}")
         
         if self.config.num_loss_buckets > 0:
             self.logger.info(f"Using {self.config.num_loss_buckets} loss buckets")
@@ -260,13 +284,25 @@ class UNetTrainer(ModuleTrainer):
         raw_samples = batch["input"]
         sample_game_ids = batch["game_ids"]
         sample_t_ranges = batch["t_ranges"] if self.trainer.dataset.config.t_scale is not None else None
-        #sample_author_ids = batch["author_ids"]
+        sample_audio_embeddings = normalize(batch["audio_embeddings"]) if self.trainer.dataset.config.use_pre_encoded_audio_embeddings else None
+        sample_text_embeddings = normalize(batch["text_embeddings"]) if self.trainer.dataset.config.use_pre_encoded_text_embeddings else None
+
+        # calculate sample embeddings if using pre-encoded audio/text embeddings
+        sample_embeddings = None
+        if sample_audio_embeddings is not None:
+            if sample_text_embeddings is not None and self.config.text_embedding_weight > 0:
+                sample_embeddings = normalize(mp_sum(sample_audio_embeddings, sample_text_embeddings, self.config.text_embedding_weight)).float()
+            else:
+                sample_embeddings = sample_audio_embeddings.float()
+        else:
+            if sample_text_embeddings is not None:
+                sample_embeddings = sample_text_embeddings.float()
+
         if self.is_validation_batch == False:
             device_batch_size = self.trainer.config.device_batch_size
         else:
             device_batch_size = self.trainer.config.validation_device_batch_size
-
-        class_labels = self.trainer.pipeline.get_class_labels(sample_game_ids, module_name="unet")
+        
         # with continuous conditioning dropout enabled the conditioning embedding is interpolated smoothly to the unconditional embedding
         if self.config.continuous_conditioning_dropout == True and self.is_validation_batch == False:
             conditioning_mask = (torch.rand(device_batch_size,
@@ -277,7 +313,13 @@ class UNetTrainer(ModuleTrainer):
             conditioning_mask = (torch.rand(device_batch_size,
                 generator=self.device_generator, device=self.trainer.accelerator.device) > self.config.conditioning_dropout).float()
 
-        unet_class_embeddings = self.module.get_class_embeddings(class_labels, conditioning_mask)
+        if sample_embeddings is None:
+            class_labels = self.trainer.pipeline.get_class_labels(sample_game_ids, module_name="unet")
+            unet_class_embeddings = self.module.get_class_embeddings(class_labels, conditioning_mask)
+        else:
+            unet_class_embeddings = mp_sum(self.unconditional_audio_embedding, sample_embeddings,
+                t=conditioning_mask.unsqueeze(1).to(self.trainer.accelerator.device, self.module.dtype))
+
         if self.config.conditioning_perturbation > 0 and self.is_validation_batch == False: # adds noise to the conditioning embedding while preserving variance
             conditioning_perturbation = torch.randn(unet_class_embeddings.shape, device=unet_class_embeddings.device, generator=self.device_generator)
             unet_class_embeddings = mp_sum(unet_class_embeddings, conditioning_perturbation, self.config.conditioning_perturbation)
