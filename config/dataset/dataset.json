@@ -29,5 +29,7 @@
     "footsteps", "car engine", "noise", "burning", "ocean", "water", "birds", "crowd", "crackling", "applause"],
     "poor_quality": ["muffled", "distorted", "noise", "clipping", "hiss", "hum", "crackling", "pops", "clicks"]
   },
-  "clap_embedding_tags": []
+  "clap_embedding_tags": [],
+  "clap_force_re_encode_audio_embeddings": false,
+  "clap_force_re_encode_text_embeddings": false
 }
