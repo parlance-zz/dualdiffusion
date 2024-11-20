@@ -66,6 +66,8 @@ class DatasetProcessorConfig:
     clap_text_encoder: str = "roberta"
     clap_compile_options: Optional[dict] = None
     clap_max_batch_size: int = 32
+    clap_force_re_encode_audio_embeddings: bool = False
+    clap_force_re_encode_text_embeddings: bool = False
 
 class DatasetSplit:
 

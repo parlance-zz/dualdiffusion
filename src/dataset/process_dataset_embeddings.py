@@ -49,7 +49,8 @@ def pre_encode_embeddings():
     text_encoder = dataset_processor_config.clap_text_encoder
     compile_options = dataset_processor_config.clap_compile_options
     max_batch_size = dataset_processor_config.clap_max_batch_size
-    resume_progress = True
+    force_re_encode_audio_embeddings = dataset_processor_config.clap_force_re_encode_audio_embeddings
+    force_re_encode_text_embeddings = dataset_processor_config.clap_force_re_encode_text_embeddings
 
     distributed_state = PartialState()
     device = distributed_state.device
@@ -133,11 +134,10 @@ def pre_encode_embeddings():
             
                 if os.path.isfile(output_path): # deep copying required for safetensors to close the file handle
                     existing_latents = deepcopy(load_safetensors(output_path))
-                    if resume_progress == True:
-                        if "clap_audio_embeddings" in existing_latents:
-                            audio_embeddings = existing_latents["clap_audio_embeddings"].to(device=device, dtype=torch.float32)
-                        if "clap_text_embeddings" in existing_latents:
-                            text_embeddings = existing_latents["clap_text_embeddings"].to(device=device, dtype=torch.float32)
+                    if "clap_audio_embeddings" in existing_latents and force_re_encode_audio_embeddings == False:
+                        audio_embeddings = existing_latents["clap_audio_embeddings"].to(device=device, dtype=torch.float32)
+                    if "clap_text_embeddings" in existing_latents and force_re_encode_text_embeddings == False:
+                        text_embeddings = existing_latents["clap_text_embeddings"].to(device=device, dtype=torch.float32)
 
                 # get audio embeddings if they are not yet encoded
                 if audio_embeddings is None:
