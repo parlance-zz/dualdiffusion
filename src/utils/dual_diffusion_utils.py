@@ -266,6 +266,15 @@ def update_audio_metadata(audio_path: str, metadata: Optional[dict] = None,
 
         audio_file.save()
 
+def get_audio_metadata(audio_path: str) -> dict:
+    audio_format = os.path.splitext(audio_path)[1].lower()
+    if audio_format == ".flac":
+        audio_file = mutagen.flac.FLAC(audio_path)
+    else:
+        audio_file = mutagen.File(audio_path)
+    
+    return {key: audio_file[key] for key in audio_file.keys()}
+
 def torch_dtype(dtype: Union[str, torch.dtype]) -> torch.dtype:
     if isinstance(dtype, torch.dtype):
         return dtype

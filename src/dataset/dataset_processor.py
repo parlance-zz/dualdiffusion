@@ -35,7 +35,7 @@ import mutagen
 import safetensors.torch as ST
 from tqdm.auto import tqdm
 
-from utils.dual_diffusion_utils import dict_str, normalize, save_safetensors
+from utils.dual_diffusion_utils import dict_str, normalize, save_safetensors, get_audio_metadata
 
 
 @dataclass
@@ -802,7 +802,12 @@ class DatasetProcessor:
                                 if sample["system"] is None: sample["system"] = file_path_list[0]
                                 if sample["game"] is None: sample["game"] = f"{file_path_list[0]}/{file_path_list[1]}"
                                 if sample["song"] is None: sample["song"] = os.path.splitext(os.path.basename(sample["file_name"]))[0]
-                                if sample["author"] is None: sample["author"] = []
+                                if sample["author"] is None:
+                                    sample["author"] = []
+                                    sample_metadata = get_audio_metadata(os.path.join(config.DATASET_PATH, sample["file_name"]))
+                                    if "author" in sample_metadata:
+                                        for author in sample_metadata["author"]:
+                                            sample["author"].extend([author.strip() for author in author.split(",")])
                             else:
                                 failed_metadata_extraction_samples.add_sample(split, index, "path does not match system/game/song format")
                                 continue
