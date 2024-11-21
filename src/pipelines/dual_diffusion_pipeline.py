@@ -298,6 +298,18 @@ class DualDiffusionPipeline(torch.nn.Module):
             pipeline.dataset_info = None
             pipeline.dataset_game_names = None
         
+        # load dataset embeddings
+        dataset_embeddings_path = os.path.join(model_path, "dataset_embeddings.safetensors")
+        if not os.path.isfile(dataset_embeddings_path):
+            dataset_embeddings_path = os.path.join(config.DATASET_PATH, "dataset_infos", "dataset_embeddings.safetensors")
+        
+        if os.path.isfile(dataset_embeddings_path):
+            dataset_embeddings: dict[str, torch.Tensor] = load_safetensors(dataset_embeddings_path)
+            pipeline.dataset_embeddings = {key: value[:] for key, value in dataset_embeddings.items()}
+            print(pipeline.dataset_embeddings.keys())
+        else:
+            pipeline.dataset_embeddings = None
+
         return pipeline
     
     @torch.no_grad()
@@ -421,11 +433,22 @@ class DualDiffusionPipeline(torch.nn.Module):
 
         vae_class_embeddings = self.vae.get_class_embeddings(self.get_class_labels(params.prompt, module_name="vae"))
         conditioning_mask = torch.cat((torch.ones(params.batch_size), torch.zeros(params.batch_size)))
-        unet_class_embeddings = unet.get_class_embeddings(
-            self.get_class_labels(params.prompt, module_name="unet"), conditioning_mask)
-        
+
+        if unet.config.label_dim == 512:
+            #unconditional_embedding = normalize(self.dataset_embeddings["_unconditional_audio"] + self.dataset_embeddings["_unconditional_text"]).float().to(device=unet.device)
+            unconditional_embedding = normalize(self.dataset_embeddings["_unconditional_audio"]).float().to(device=unet.device)
+            sample_embeddings = torch.zeros(unet.config.label_dim, device=unet.device)
+            for game_name, weight in params.prompt.items():
+                sample_embeddings += self.dataset_embeddings[f"{game_name}_audio"].to(device=unet.device) * weight
+                sample_embeddings += self.dataset_embeddings[f"{game_name}_text"].to(device=unet.device) * weight
+            sample_embeddings = normalize(sample_embeddings).float()
+            unet_class_embeddings = unet.get_clap_embeddings(sample_embeddings, unconditional_embedding, conditioning_mask)
+        else:
+            unet_class_embeddings = unet.get_class_embeddings(
+                self.get_class_labels(params.prompt, module_name="unet"), conditioning_mask)
+
         unet_class_embeddings[:params.batch_size] = mp_sum(
-            unet_class_embeddings[:params.batch_size], unet_class_embeddings[params.batch_size:], params.conditioning_perturbation)
+            unet_class_embeddings[:params.batch_size], unet_class_embeddings[params.batch_size:], params.conditioning_perturbation)            
         debug_info["unet_class_embeddings mean"] = unet_class_embeddings.mean().item()
         debug_info["unet_class_embeddings std"] = unet_class_embeddings.std().item()
 
