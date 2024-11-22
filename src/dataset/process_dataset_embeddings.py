@@ -148,6 +148,7 @@ def pre_encode_embeddings():
 
                     audio = audio[:audio.shape[0] // chunk_size * chunk_size] # crop out last chunk if it's too small
                     audio = torch.tensor(audio.reshape(-1, chunk_size), dtype=torch.float32, device=device)
+                    audio /= audio.abs().amax() + 1e-4 # normalize audio to [-1, 1]
 
                     # get embeddings in chunks using max_batch_size
                     audio_embeddings = torch.cat([
