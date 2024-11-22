@@ -27,7 +27,9 @@
     "whispering", "screaming", "yelling", "chanting"],
     "sfx": ["SFX", "sound effect", "sound effects", "movie", "explosions", "rain", "thunder", "wind", "gunshots", 
     "footsteps", "car engine", "noise", "burning", "ocean", "water", "birds", "crowd", "crackling", "applause"],
-    "poor_quality": ["muffled", "distorted", "noise", "clipping", "hiss", "hum", "crackling", "pops", "clicks"]
+    "poor_quality": ["muffled", "distorted", "noise", "clipping", "hiss", "hum", "crackling", "pops", "clicks"],
+    "music": ["music", "song", "instrumental", "melody", "tune", "rhythm", "harmony", "beat", "orchestra", "band"],
+    "simple": ["simple", "minimal", "basic"]
   },
   "clap_embedding_tags": [],
   "clap_force_re_encode_audio_embeddings": false,
