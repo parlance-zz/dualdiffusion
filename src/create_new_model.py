@@ -63,12 +63,6 @@ def print_module_info(module: DualDiffusionModule, module_name: str) -> None:
 if __name__ == "__main__":
 
     model_name = input(f"Enter model name: ")
-    model_seed = input(f"Enter random seed (or none for random seed): ")
-    print("")
-
-    if model_seed != "":
-        torch.manual_seed(int(model_seed))
-    
     model_config_source_path = os.path.join(config.CONFIG_PATH, "models", model_name)
     if not os.path.isdir(model_config_source_path):
         raise FileNotFoundError(f"Model config path '{model_config_source_path}' not found")
@@ -76,6 +70,10 @@ if __name__ == "__main__":
     # load and initialize model modules
     model_modules: dict[str, DualDiffusionModule] = {}
     model_index = config.load_json(os.path.join(model_config_source_path, "model_index.json"))
+
+    model_seed = int(model_index.get("model_init_seed", 1337))
+    torch.manual_seed(int(model_seed))
+    print("")
 
     for module_name, module_import_dict in model_index["modules"].items():
 
