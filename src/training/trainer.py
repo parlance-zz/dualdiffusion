@@ -804,8 +804,8 @@ class DualDiffusionTrainer:
         start_validation_time = datetime.now()
         self.module.eval()
 
-        # create a backup copy of train weights if we're not using switch ema
-        if self.config.ema.use_switch_ema != True:
+        # create a backup copy of train weights if we're not using switch ema, or if we're still in ema warmup
+        if self.config.ema.use_switch_ema != True or global_step <= self.config.ema.ema_warmup_steps:
             backup_module_state_dict = {k: v.cpu() for k, v in self.module.state_dict().items()}
 
         # get validation losses for each ema
@@ -827,7 +827,7 @@ class DualDiffusionTrainer:
         best_logs["ema/best_ema_beta_9s"] = -math.log10(1 - best_beta)
         self.accelerator.log(best_logs, step=global_step)
 
-        if self.config.ema.use_switch_ema == True:
+        if self.config.ema.use_switch_ema == True and global_step > self.config.ema.ema_warmup_steps:
             # load the best ema into the model if using dynamic ema
             if self.config.ema.use_dynamic_betas == True:
                 self.module.load_state_dict(best_ema.state_dict())
