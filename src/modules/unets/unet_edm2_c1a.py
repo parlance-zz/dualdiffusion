@@ -298,11 +298,11 @@ class UNet(DualDiffusionUNet):
             pos_emb = self.position_linear(self.position_fourier(pos)).transpose(-1,-2).unsqueeze(0).unsqueeze(-2)
             emb = mp_sum(emb, pos_emb.to(emb.dtype), t=self.config.pos_balance)
 
-        emb = mp_silu(emb).to(x.dtype, memory_format=self.memory_layout)
+        emb = mp_silu(emb).to(x.dtype, memory_format=self.memory_format)
 
         # Encoder.
         x = x.reshape(x.shape[0], x.shape[1]*self.config.latents_height, 1, x.shape[3])
-        if self.memory_layout == torch.channels_last:
+        if self.memory_format == torch.channels_last:
             x = x.contiguous(memory_format=torch.channels_last)
         x = torch.cat((x, torch.ones_like(x[:, :1])), dim=1)
 
@@ -319,7 +319,7 @@ class UNet(DualDiffusionUNet):
 
         x = self.conv_out(x, gain=self.out_gain)
         x = x.reshape(x.shape[0], x.shape[1] // self.config.latents_height, self.config.latents_height, x.shape[3])
-        if self.memory_layout == torch.channels_last:
+        if self.memory_format == torch.channels_last:
             x = x.contiguous(memory_format=torch.contiguous_format)
         D_x = c_skip * x_in + c_out * x.float()
         

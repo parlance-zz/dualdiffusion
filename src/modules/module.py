@@ -27,7 +27,7 @@ class DualDiffusionModule(torch.nn.Module, ABC):
         
         self.dtype = torch.get_default_dtype()
         self.device = torch.device("cpu")
-        self.memory_layout = torch.contiguous_format
+        self.memory_format = torch.contiguous_format
         self.module_path = None
         
     @classmethod
@@ -83,7 +83,7 @@ class DualDiffusionModule(torch.nn.Module, ABC):
 
         self.dtype = dtype or self.dtype
         self.device = device or self.device
-        self.memory_layout = memory_format or self.memory_layout
+        self.memory_format = memory_format or self.memory_format
 
         return self
     
