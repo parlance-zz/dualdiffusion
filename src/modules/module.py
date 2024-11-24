@@ -28,6 +28,7 @@ class DualDiffusionModule(torch.nn.Module, ABC):
         self.dtype = torch.get_default_dtype()
         self.device = torch.device("cpu")
         self.memory_layout = torch.contiguous_format
+        self.module_path = None
         
     @classmethod
     @torch.no_grad()
@@ -52,6 +53,7 @@ class DualDiffusionModule(torch.nn.Module, ABC):
         if (not load_config_only) and cls.has_trainable_parameters:
             module.load_state_dict(load_safetensors(os.path.join(module_path, f"{module_name}.safetensors")))
         
+        module.module_path = module_path
         return module.to(dtype=torch_dtype, device=device)
     
     @torch.no_grad()
