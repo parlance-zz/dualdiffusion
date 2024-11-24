@@ -306,7 +306,6 @@ class DualDiffusionPipeline(torch.nn.Module):
         if os.path.isfile(dataset_embeddings_path):
             dataset_embeddings: dict[str, torch.Tensor] = load_safetensors(dataset_embeddings_path)
             pipeline.dataset_embeddings = {key: value[:] for key, value in dataset_embeddings.items()}
-            print(pipeline.dataset_embeddings.keys())
         else:
             pipeline.dataset_embeddings = None
 
