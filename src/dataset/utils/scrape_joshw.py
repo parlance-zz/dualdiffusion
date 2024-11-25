@@ -26,12 +26,14 @@ import urllib.parse
 import urllib.request
 import os
 import time
+import shutil
 
 pages = ["0-9", "a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m", "n", "o", "p", "q", "r", "s", "t", "u", "v", "w", "x", "y", "z"]
-base_url = "https://usf.joshw.info"
+base_url = "https://dsf.joshw.info"
 download_link_pattern = re.compile(r'href="([^"]+\.7z)">')
 request_throttle_delay_seconds = 0.1
-target_zip_dir = "d:/dualdiffusion/dataset/usf/zip"
+target_zip_dir = "/home/parlance/dualdiffusion/dataset/dsf/zip"
+minimum_disk_space_mb = 25000
 
 os.makedirs(target_zip_dir, exist_ok=True)
 
@@ -54,6 +56,11 @@ for page in pages:
                 continue
 
             try:
+                free_disk_space_mb = shutil.disk_usage(target_zip_dir).free / 1024 / 1024
+                if free_disk_space_mb < minimum_disk_space_mb:
+                    print(f"Minimum disk space threshold reached ({free_disk_space_mb:.1f} MB), aborting...")
+                    exit(1)
+
                 print(f"Downloading: {full_link}")
                 urllib.request.urlretrieve(full_link, zip_save_path)
                 time.sleep(request_throttle_delay_seconds) # throttling
