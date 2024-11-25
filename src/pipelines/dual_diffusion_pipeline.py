@@ -535,7 +535,8 @@ class DualDiffusionPipeline(torch.nn.Module):
             debug_info["effective_input_perturbation"].append(effective_input_perturbation)
 
             if params.use_heun:
-                sigma_hat = max(sigma_next, params.sigma_min)
+                #sigma_hat = max(sigma_next, params.sigma_min)
+                sigma_hat = max(old_sigma_next, params.sigma_min)
                 t_hat = sigma_hat / sigma_curr
 
                 #input_sample_hat = (t_hat * sample + (1 - t_hat) * cfg_model_output).to(unet.dtype).repeat(2, 1, 1, 1)
