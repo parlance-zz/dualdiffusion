@@ -1,6 +1,9 @@
 import os
 import py7zr
 
+source_folder = 'D:/dualdiffusion/dataset/usf/zip'
+target_folder = 'D:/dualdiffusion/dataset/usf/to_transcode'
+
 def extract_7z_files(source_folder, target_folder):
     # Ensure the target folder exists
     os.makedirs(target_folder, exist_ok=True)
@@ -34,9 +37,5 @@ def extract_7z_files(source_folder, target_folder):
             with py7zr.SevenZipFile(file_path, mode='r') as archive:
                 archive.extractall(path=subfolder_path)
 
-# Define your source and target folders
-source_folder = 'Z:/dualdiffusion/dataset/psf/zip'
-target_folder = 'D:/dualdiffusion/dataset/psf/to_transcode'
-
-# Run the extraction
-extract_7z_files(source_folder, target_folder)
+if __name__ == "__main__":
+    extract_7z_files(source_folder, target_folder)
