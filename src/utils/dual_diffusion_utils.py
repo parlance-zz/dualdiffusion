@@ -58,8 +58,10 @@ def init_cuda(default_device: Optional[torch.device] = None) -> None:
     if not torch.cuda.is_available():
         raise ValueError("Error: PyTorch not compiled with CUDA support or CUDA unavailable")
     else:
+         # leaving these enabled these seems to make no difference for performance or stability
         torch.backends.cuda.matmul.allow_fp16_reduced_precision_reduction = False
         torch.backends.cuda.matmul.allow_bf16_reduced_precision_reduction = False
+        #torch.backends.cuda.allow_fp16_bf16_reduction_math_sdp(True) # improves perf by ~2.5%, seems stable
         torch.backends.cuda.matmul.allow_tf32 = True
         torch.backends.cudnn.allow_tf32 = True
         torch.backends.cuda.cufft_plan_cache[0].max_size = 250 # cufft memory leak
