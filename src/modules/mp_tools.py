@@ -34,13 +34,17 @@ from typing import Optional, Union, Literal
 
 import torch
 
+from utils.dual_diffusion_utils import TF32_Disabled
+
+
 def normalize(x: torch.Tensor, dim: Optional[Union[tuple, list]] = None,
               eps: float = 1e-4) -> torch.Tensor:
     
-    norm = torch.linalg.vector_norm(x, dim=dim or list(range(1, x.ndim)),
-                                    keepdim=True, dtype=torch.float32)
-    norm = torch.add(eps, norm, alpha=(norm.numel() / x.numel())**0.5)
-    return x / norm.to(x.dtype)
+    with TF32_Disabled():
+        norm = torch.linalg.vector_norm(x, dim=dim or list(range(1, x.ndim)),
+                                        keepdim=True, dtype=torch.float32)
+        norm = torch.add(eps, norm, alpha=(norm.numel() / x.numel())**0.5)
+        return (x.float() / norm).to(x.dtype)
 
 def resample(x: torch.Tensor, mode: Literal["keep", "down", "up"] = "keep") -> torch.Tensor:
     if mode == "keep":
@@ -104,11 +108,12 @@ class MPFourier(torch.nn.Module):
         self.register_buffer('phases', torch.pi/2 * (torch.arange(num_channels) % 2 == 0).float())
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        if x.ndim == 1:
-            y = x.float().ger(self.freqs.float()) + self.phases.float()
-        else:
-            y = x.float() * self.freqs.float().view(1,-1, 1, 1) + self.phases.float().view(1,-1, 1, 1)
-        return (y.cos() * 2**0.5).to(x.dtype)
+        with TF32_Disabled():
+            if x.ndim == 1:
+                y = x.float().ger(self.freqs.float()) + self.phases.float()
+            else:
+                y = x.float() * self.freqs.float().view(1,-1, 1, 1) + self.phases.float().view(1,-1, 1, 1)
+            return (y.cos() * 2**0.5).to(x.dtype)
 
 class MPConv(torch.nn.Module):
 
@@ -139,7 +144,7 @@ class MPConv(torch.nn.Module):
         
         return torch.nn.functional.conv2d(x, w, padding=(w.shape[-2]//2, w.shape[-1]//2), groups=self.groups, stride=self.stride)
 
-    #@torch.no_grad() is applied at a higher level
+    @torch.no_grad()
     def normalize_weights(self):
         if self.disable_weight_norm == False:
             self.weight.copy_(normalize(self.weight))
