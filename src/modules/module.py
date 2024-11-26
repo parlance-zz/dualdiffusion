@@ -8,7 +8,7 @@ from dataclasses import dataclass
 
 import torch
 
-from utils.dual_diffusion_utils import load_safetensors, save_safetensors, torch_dtype
+from utils.dual_diffusion_utils import load_safetensors, save_safetensors, torch_dtype, TF32_Disabled
 
 @dataclass
 class DualDiffusionModuleConfig(ABC):
@@ -102,20 +102,23 @@ class DualDiffusionModule(torch.nn.Module, ABC):
 
     @torch.no_grad()
     def load_ema(self, ema_path: str) -> None:
-        self.load_state_dict(load_safetensors(ema_path))
-        self.normalize_weights()
+        with TF32_Disabled():
+            self.load_state_dict(load_safetensors(ema_path))
+            self.normalize_weights()
 
     @torch.no_grad()
     def blend_weights(self, other: "DualDiffusionModule", t: float = 0.5) -> None:
-        for ((param_name, param), (other_param_name, other_param)) in zip(self.named_parameters(), other.named_parameters()):
-            if param.data.shape != other_param.data.shape:
-                raise ValueError(f"Cannot blend parameters with different shapes: {param_name} {param.data.shape} != {other_param_name} {other_param.data.shape}")
-            param.data.lerp_(other_param.data, t)
-        self.normalize_weights()
+        with TF32_Disabled():
+            for ((param_name, param), (other_param_name, other_param)) in zip(self.named_parameters(), other.named_parameters()):
+                if param.data.shape != other_param.data.shape:
+                    raise ValueError(f"Cannot blend parameters with different shapes: {param_name} {param.data.shape} != {other_param_name} {other_param.data.shape}")
+                param.data.lerp_(other_param.data, t)
+            self.normalize_weights()
 
     @torch.no_grad()
     def normalize_weights(self) -> None:
         if type(self).has_trainable_parameters == False: return
-        for module in self.modules():
-            if hasattr(module, "normalize_weights") and module != self:
-                module.normalize_weights()
+        with TF32_Disabled():
+            for module in self.modules():
+                if hasattr(module, "normalize_weights") and module != self:
+                    module.normalize_weights()
