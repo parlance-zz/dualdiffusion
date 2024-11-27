@@ -67,7 +67,7 @@ The model has changed substantially over the course of development in the last 1
 * In October/2024 I continued developing the webUI and experimenting with EMA techniques.
    * I replaced the default HTML5 audio elements with a custom niceGUI element that shows a spectrogram view and
    includes a precise time cursor. This improved the ease of use and precision of the in-painting tool.
-   * I added out-painting to extend or prepend generated samples.
+   * I added out-painting to extend or prepend generated samples. I also added an option to generate seamless loops.
    * I separated the PyTorch model processing into its own process to make the UI more responsive.
    * I found [SwitchEMA](https://github.com/Westlake-AI/SEMA) could make a significant improvement in validation loss with no additional cost / training overhead.
    * After some experimentation I found that the technique could be further improved by instead using feedback from EMA weights back into the train weights with a hyperparameter to control the feedback strength.
