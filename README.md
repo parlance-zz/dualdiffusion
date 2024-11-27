@@ -64,6 +64,19 @@ The model has changed substantially over the course of development in the last 1
    * I found that the inpainting model conversion / intialization strategy (zero-init extra channels for reference sample and mask in the first conv_in layer) used by stable diffusion works with my model but can take a while to properly converge. Adding inpainting to the existing model reduced non-inpainting performance slightly so I'm using the inpainting model exclusively for inpainting tasks for now. I'd like to find a way to improve the performance to the point where I only need one model for both tasks.
    * For the webUI I started with Gradio but found unfortunate limitations and poor performance. Looking for alternatives I found [NiceGUI](https://github.com/zauberzeug/nicegui) as a much better fit for what I want to accomplish. As of today the webUI is functional but is missing webUI controlled model switching and some of the detailed debug information / plots that I was using for development. The default HTML5 audio element is clunky and I'll be working to replace it with a custom player more suitable for audio editing.
 
+* In October/2024 I continued developing the webUI and experimenting with EMA techniques.
+   * I replaced the default HTML5 audio elements with a custom niceGUI element that shows a spectrogram view and
+   includes a precise time cursor. This improved the ease of use and precision of the in-painting tool.
+   * I added out-painting to extend or prepend generated samples.
+   * I separated the PyTorch model processing into its own process to make the UI more responsive.
+   * I found [SwitchEMA](https://github.com/Westlake-AI/SEMA) could make a significant improvement in validation loss with no additional cost / training overhead.
+   * After some experimentation I found that the technique could be further improved by instead using feedback from EMA weights back into the train weights with a hyperparameter to control the feedback strength.
+
+* In November/2024 I began the process of adopting [CLAP](https://github.com/LAION-AI/CLAP) to replace the class label conditioning system with the goal of training a model with a cleaner expanded dataset.
+   * I replaced some of the dataset preparation workflow by using [foobar2000](https://www.foobar2000.org/) for transcoding and labelling.
+   * I added pre-encoded CLAP embeddings to the existing pre-encoded latents for samples in the dataset. The scores for these embeddings against a pre-defined list of labels / captions and negative examples are used to update the audio metadata and bootstrap the manual labelling process.
+   * I began experimenting with different ways to integrate CLAP conditioning into the model training. I found that using the aggregate average audio embedding for the entire dataset can be used effectively as the unconditional embedding when using conditioning dropout and classifier-free guidance. I found the aggregate audio and text embeddings for what use to be a simple class label can be used effectively to sample from that class.
+
 Some additional notes:
 * The training code supports multiple GPUs and distributed training through huggingface accelerate, currently logging is to tensorboard.
 * The dataset pre/post-processing code is included in this repository which includes everything needed to train a new model on your own data
