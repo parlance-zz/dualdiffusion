@@ -11,6 +11,10 @@
     "format": {
       "package": "modules.formats.spectrogram",
       "class": "SpectrogramFormat"
+    },
+    "embedding": {
+      "package": "modules.embeddings.clap",
+      "class": "CLAP_Embedding"
     }
   }
 }

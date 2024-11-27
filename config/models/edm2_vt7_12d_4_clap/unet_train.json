@@ -1,7 +1,7 @@
 {
   "seed": 3000,
   "device_batch_size": 10,
-  "gradient_accumulation_steps": 5,
+  "gradient_accumulation_steps": 10,
   "validation_device_batch_size": 10,
   "validation_accumulation_steps": 6,
   "num_train_epochs": 500000,
@@ -19,9 +19,9 @@
     "learning_rate": 1e-2,
     "lr_schedule": "edm2",
     "lr_warmup_steps": 500,
-    "lr_reference_steps": 70000,
+    "lr_reference_steps": 30000,
     "lr_decay_exponent": 0.5,
-    "min_learning_rate": 1e-3
+    "min_learning_rate": 1e-4
   },
   "optimizer": {
     "adam_beta1": 0.9,
@@ -40,10 +40,10 @@
     "dynamic_beta_gamma": 0.7,
     "dynamic_max_beta": 0.999999,
     "dynamic_min_beta": 0.9999,
-    "feedback_ema_beta": 0.9999,
+    "feedback_ema_beta": 0.99,
     "ema_betas": [0.9999, 0.99999],
     "ema_cpu_offload": false,
-    "ema_warmup_steps": 12000
+    "ema_warmup_steps": 25000
   },
   "dataloader": {
     "use_pre_encoded_latents": true,
