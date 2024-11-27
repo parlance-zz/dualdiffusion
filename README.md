@@ -74,7 +74,7 @@ The model has changed substantially over the course of development in the last 1
 
 * In November/2024 I began the process of adopting [CLAP](https://github.com/LAION-AI/CLAP) to replace the class label conditioning system with the goal of training a model with a cleaner expanded dataset.
    * I replaced some of the dataset preparation workflow by using [foobar2000](https://www.foobar2000.org/) for transcoding and labelling.
-   * I added pre-encoded CLAP embeddings to the existing pre-encoded latents for samples in the dataset. The scores for these embeddings against a pre-defined list of labels / captions and negative examples are used to update the audio metadata and bootstrap the manual labelling process.
+   * I added pre-encoded CLAP embeddings to the existing pre-encoded latents for samples in the dataset. The scores for these embeddings against a pre-defined list of labels / captions and negative examples are used to update the audio metadata and bootstrap the process of cleaning / filtering the dataset.
    * I began experimenting with different ways to integrate CLAP conditioning into the model training. I found that using the aggregate average audio embedding for the entire dataset can be used effectively as the unconditional embedding when using conditioning dropout and classifier-free guidance. I found the aggregate audio and text embeddings for what use to be a simple class label can be used effectively to sample from that class.
 
 Some additional notes:
