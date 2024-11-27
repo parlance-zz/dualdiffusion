@@ -34,14 +34,13 @@ def truncate_flac_files(directory, max_length, backup_path=None):
                     print(f"Error retrieving duration for {input_path}: {e}")
                     continue
 
-                # ffmpeg command to truncate the file while preserving format and metadata
                 command = [
                     config.FFMPEG_PATH,
-                    "-i", input_path,        # Input file
-                    "-t", str(max_length),   # Truncate to max_length
-                    "-c:a", file_ext[1:].lower(), # Re-encode to FLAC
-                    "-map_metadata", "0",    # Preserve all metadata
-                    output_path              # Output file
+                    "-i", input_path,
+                    "-t", str(max_length), # truncate to max_length
+                    "-c:a", "copy",        # preserve audio codec and settings
+                    "-map_metadata", "0",  # preserve metadata
+                    output_path
                 ]
 
                 try:
