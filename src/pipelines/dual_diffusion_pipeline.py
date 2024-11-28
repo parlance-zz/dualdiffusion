@@ -518,7 +518,8 @@ class DualDiffusionPipeline(torch.nn.Module):
             #effective_input_perturbation = params.input_perturbation
             #effective_input_perturbation = (sigma_schedule_error_logvar[i]/4).exp().item() * input_perturbation
             #effective_input_perturbation = params.input_perturbation * (1 - (i/params.num_steps)*(1 - i/params.num_steps))**2 #***
-            effective_input_perturbation = float(params.input_perturbation * (1 - 1 / np.cosh(np.log(sigma_next * sigma_curr) / 2 - 0.1))**2)
+            #effective_input_perturbation = float(params.input_perturbation * (1 - 1 / np.cosh(np.log(sigma_next * sigma_curr) / 2 - 0.1))**2)
+            effective_input_perturbation = float(params.input_perturbation * (1 - 1 / np.cosh(np.log(sigma_next * sigma_curr) / 2 + 0.5))**2)
             #effective_input_perturbation = float(params.input_perturbation * (1 - 1 / np.cosh(np.log(sigma_next * sigma_curr) / 2 - 0.425)))
             #effective_input_perturbation = sigma_curr**2 / (sigma_curr**2 + params.sigma_data**2) * params.input_perturbation
             #effective_input_perturbation = float(params.input_perturbation * (1 - 1 / np.cosh(np.log(sigma_next * sigma_curr) / 2 - 0.))**2)
