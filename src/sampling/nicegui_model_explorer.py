@@ -179,10 +179,13 @@ class ModelExplorer(ui.column):
                     while tensor.ndim < 4:
                         tensor.unsqueeze_(-1)
 
+                    tensor = tensor / tensor.abs().amax()
+                    tensor = (tensor + 1) / 2
+
                     with ui.grid(columns=tensor.shape[-1], rows=tensor.shape[-2]).classes("gap-0"):
                         for i in range(tensor.shape[-2]):
                             for j in range(tensor.shape[-1]):                
-                                image_array = tensor_to_img(tensor[:, :, i, j], colormap=True)
+                                image_array = tensor_to_img(tensor[:, :, i, j], colormap=True, recenter=False, rescale=False)
                                 if image_array.ndim == 4: # ?????
                                     image_array = image_array[:, :, 0, :]
 
