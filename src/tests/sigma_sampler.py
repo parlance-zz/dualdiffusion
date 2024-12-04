@@ -107,7 +107,8 @@ def sigma_sampler_test():
 
     if batch_sampler.config.distribution == "ln_pdf":
         multi_plot((batch_sampler.dist_pdf, "batch_distribution_pdf"),
-                   (batch_sampler.dist_cdf, "batch_distribution_cdf"),)
+                   (batch_sampler.dist_cdf, "batch_distribution_cdf"),
+                   y_axis_range=(0, None))
         
     avg_batch_mean = avg_batch_min = avg_batch_max = 0
     avg_reference_mean = avg_reference_min = avg_reference_max = 0

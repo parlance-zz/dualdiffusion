@@ -75,7 +75,8 @@ def multi_plot(*args, layout: Optional[tuple[int, int]] = None,
                added_plots: Optional[dict] = None,
                x_log_scale: bool = False,
                y_log_scale: bool = False,
-               x_axis_range: Optional[tuple] = None) -> None:
+               x_axis_range: Optional[tuple] = None,
+               y_axis_range: Optional[tuple] = None) -> None:
 
     if config.NO_GUI: return
     
@@ -96,6 +97,8 @@ def multi_plot(*args, layout: Optional[tuple[int, int]] = None,
             else:
                 x_values = np.arange(y_values.shape[0])
             axis.plot(x_values, y_values, label=args[i][1])
+            if y_axis_range is not None:
+                axis.set_ylim(ymin=y_axis_range[0], ymax=y_axis_range[1])
 
             if added_plots is not None:
                 added_plot = added_plots.get(i, None)
