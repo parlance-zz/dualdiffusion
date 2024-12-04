@@ -1,5 +1,5 @@
 {
-    "reference_model_name": "edm2_vt7_12d_4_clap",
+    "reference_model_name": "edm2_vt7_12d_4_clap2",
     "model_load_options": {
         "device": "cpu",
         "load_checkpoints": true,
@@ -18,9 +18,9 @@
     "reference_batch_size": 100,
     "reference_distribution": "ln_sech",
     "reference_dist_scale": 1.0,
-    "reference_dist_offset": 0.45,
+    "reference_dist_offset": 0.4,
     "reference_stratified_sampling": true,
     "n_iter": 10000,
-    "n_histo_bins": 200,
+    "n_histo_bins": 128,
     "use_y_log_scale": false
   }
