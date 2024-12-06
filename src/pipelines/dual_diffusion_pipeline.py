@@ -138,6 +138,8 @@ class DualDiffusionPipeline(torch.nn.Module):
             
             self.add_module(module_name, module)
 
+        self.model_metadata: Optional[dict] = None
+
     def to(self, device: Optional[Union[dict[str, torch.device], torch.device]] = None,
                  dtype:  Optional[Union[dict[str, torch.dtype],  torch.dtype]]  = None,
                  **kwargs) -> "DualDiffusionPipeline":
@@ -440,6 +442,16 @@ class DualDiffusionPipeline(torch.nn.Module):
             for game_name, weight in params.prompt.items():
                 sample_embeddings += self.dataset_embeddings[f"{game_name}_audio"].to(device=unet.device) * weight
                 sample_embeddings += self.dataset_embeddings[f"{game_name}_text"].to(device=unet.device) * weight
+            sample_embeddings = normalize(sample_embeddings).float()
+            unet_class_embeddings = unet.get_clap_embeddings(sample_embeddings, unconditional_embedding, conditioning_mask)
+        elif unet.config.label_dim == 1024:
+            unconditional_audio_embedding = normalize(self.dataset_embeddings["_unconditional_audio"]).float().to(device=unet.device)
+            unconditional_text_embedding = normalize(self.dataset_embeddings["_unconditional_text"]).float().to(device=unet.device)
+            unconditional_embedding = torch.cat((unconditional_audio_embedding, unconditional_text_embedding))
+            sample_embeddings = torch.zeros(unet.config.label_dim, device=unet.device)
+            for game_name, weight in params.prompt.items():
+                sample_embeddings += torch.cat((self.dataset_embeddings[f"{game_name}_audio"].to(device=unet.device) * weight,
+                                                self.dataset_embeddings[f"{game_name}_text"].to(device=unet.device) * weight))
             sample_embeddings = normalize(sample_embeddings).float()
             unet_class_embeddings = unet.get_clap_embeddings(sample_embeddings, unconditional_embedding, conditioning_mask)
         else:
