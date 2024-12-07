@@ -13,5 +13,5 @@
     "random_latents": false,
     "quantize_latents": 0,
     "add_latent_noise": 0,
-    "test_samples": [[1420, "magic_love.flac"]]
+    "test_samples": [[0, "spc/3 Ninjas Kick Back/3 Ninjas Kick Back - 01 Title Screen & Ending.safetensors"]]
 }

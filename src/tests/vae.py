@@ -29,7 +29,7 @@ import torch
 
 from pipelines.dual_diffusion_pipeline import DualDiffusionPipeline
 from utils.dual_diffusion_utils import (
-    init_cuda, normalize, save_audio, load_audio,
+    init_cuda, normalize, save_audio, load_audio, load_safetensors,
     tensor_to_img, save_img, quantize_tensor, dequantize_tensor
 )
 
@@ -74,18 +74,20 @@ def vae_test() -> None:
 
     for sample_game_id, filename in test_samples:
 
-        file_ext = os.path.splitext(filename)[1]
-        input_raw_sample = load_audio(os.path.join(dataset_path, filename), count=crop_width)
-        input_raw_sample = input_raw_sample.unsqueeze(0).to(pipeline.format.device)
-
         class_labels = pipeline.get_class_labels(sample_game_id)
         vae_class_embeddings = pipeline.vae.get_class_embeddings(class_labels)
-        input_sample = pipeline.format.raw_to_sample(input_raw_sample)
-
-        posterior = pipeline.vae.encode(input_sample.type(pipeline.vae.dtype),
-                                        vae_class_embeddings, pipeline.format)
-        latents = posterior.sample() if sample_latents else posterior.mode()
-
+        
+        file_ext = os.path.splitext(filename)[1]
+        if file_ext.lower() != ".safetensors":
+            input_raw_sample = load_audio(os.path.join(dataset_path, filename), count=crop_width)
+            input_raw_sample = input_raw_sample.unsqueeze(0).to(pipeline.format.device)
+            input_sample = pipeline.format.raw_to_sample(input_raw_sample)
+            posterior = pipeline.vae.encode(input_sample.type(pipeline.vae.dtype),
+                                            vae_class_embeddings, pipeline.format)
+            latents = posterior.sample() if sample_latents else posterior.mode()
+        else:
+            latents = load_safetensors(os.path.join(dataset_path, filename))["latents"][0:1, :, :, :latent_shape[-1]].to(pipeline.vae.device)
+    
         if quantize_latents > 0:
             latents, offset_and_range = quantize_tensor(latents, quantize_latents)
             latents = dequantize_tensor(latents, offset_and_range)
@@ -99,18 +101,21 @@ def vae_test() -> None:
         output_sample = pipeline.vae.decode(latents, vae_class_embeddings, pipeline.format)
         output_raw_sample = pipeline.format.sample_to_raw(output_sample.type(torch.float32))
 
-        point_similarity += (output_sample - input_sample).abs().mean().item()
         latents_mean += latents.mean().item()
         latents_std += latents.std().item()
 
+        filename = os.path.basename(filename)
         save_img(tensor_to_img(latents, flip_y=True), os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_latents.png')}"))
-        save_img(tensor_to_img(input_sample, flip_y=True), os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_input_sample.png')}"))
         save_img(tensor_to_img(output_sample, flip_y=True), os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_output_sample.png')}"))
 
-        input_raw_sample = pipeline.format.sample_to_raw(input_sample)
-        output_flac_file_path = os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_original.flac')}")
-        save_audio(input_raw_sample.squeeze(0), sample_rate, output_flac_file_path)
-        print(f"Saved flac output to {output_flac_file_path}")
+        if file_ext.lower() != ".safetensors":
+            point_similarity += (output_sample - input_sample).abs().mean().item()
+            save_img(tensor_to_img(input_sample, flip_y=True), os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_input_sample.png')}"))
+
+            input_raw_sample = pipeline.format.sample_to_raw(input_sample)
+            output_flac_file_path = os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_original.flac')}")
+            save_audio(input_raw_sample.squeeze(0), sample_rate, output_flac_file_path)
+            print(f"Saved flac output to {output_flac_file_path}")
 
         output_flac_file_path = os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_decoded.flac')}")
         save_audio(output_raw_sample.squeeze(0), sample_rate, output_flac_file_path)
