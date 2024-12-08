@@ -43,6 +43,7 @@ class DualDiffusionVAE_EDM2Config(DualDiffusionVAEConfig):
     mlp_multiplier: int = 1                  # Multiplier for the number of channels in the MLP.
     mlp_groups: int     = 1                  # Number of groups for the MLPs.
     add_mid_block_attention: bool = False    # Add attention layers in decoder mid-block
+    class_id_override: Optional[int] = None  # Override class id for class embeddings
 
 class Block(torch.nn.Module):
 
@@ -216,8 +217,13 @@ class AutoencoderKL_EDM2(DualDiffusionVAE):
         self.conv_out = MPConv(cout, config.out_channels, kernel=(3,3))
 
     def get_class_embeddings(self, class_labels: torch.Tensor) -> torch.Tensor:
+        if self.config.class_id_override is not None: # if the vae was trained on a different set of classes this can force a specific vae class
+            class_labels = torch.zeros_like(class_labels)
+            class_labels[:, self.config.class_id_override] = 1.
+
         return mp_silu(self.emb_label(
             normalize(class_labels).to(device=self.device, dtype=self.dtype)))
+        
 
     def get_recon_loss_logvar(self) -> torch.Tensor:
         return self.recon_loss_logvar
