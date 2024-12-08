@@ -352,17 +352,26 @@ class DualDiffusionPipeline(torch.nn.Module):
                          module_name: str = "unet") -> torch.Tensor:
 
         module: DualDiffusionModule = getattr(self, module_name)
+        class_id_override = getattr(module.config, "class_id_override", None)
+
         label_dim = module.config.label_dim
         assert label_dim > 0, f"{module_name} label dim must be > 0, got {label_dim}"
         
         if isinstance(labels, int):
-            labels = torch.tensor([labels])
+            if class_id_override is not None:
+                labels = torch.tensor([class_id_override])
+            else:
+                labels = torch.tensor([labels])
         
         if isinstance(labels, torch.Tensor):
             if labels.ndim < 1: labels = labels.unsqueeze(0)
+            if class_id_override is not None:
+                labels = labels.clone().fill_(class_id_override)
             class_labels = torch.nn.functional.one_hot(labels, num_classes=label_dim)
         
         elif isinstance(labels, list):
+            if class_id_override is not None:
+                labels = [class_id_override for _ in labels]
             class_labels = torch.zeros((1, label_dim))
             class_labels = class_labels.index_fill_(1, torch.tensor(labels, dtype=torch.long), 1)
         
@@ -370,6 +379,8 @@ class DualDiffusionPipeline(torch.nn.Module):
             _labels = {self.get_class_label(l): w for l, w in labels.items()}
 
             class_ids = torch.tensor(list(_labels.keys()), dtype=torch.long)
+            if class_id_override is not None:
+                class_ids.fill_(class_id_override)
             weights = torch.tensor(list(_labels.values())).float()
             class_labels = torch.zeros((1, label_dim)).scatter_(1, class_ids.unsqueeze(0), weights.unsqueeze(0))
         else:
