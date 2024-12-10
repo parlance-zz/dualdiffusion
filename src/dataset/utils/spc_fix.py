@@ -8,11 +8,11 @@ import io
 # to anyone who might need this code for something else:
 # I thought writing this would be quick but it turned out to be a painful mess. sorry.  ¯\_(ツ)_/¯
 
-ignore_spcs_under_length = 20    # do not make length changes to any SPCs under this length in seconds
+ignore_spcs_under_length = 18    # do not make length changes to any SPCs under this length in seconds
 min_spc_length = 50              # if an SPC is under this length, set it to this length in seconds
 fade_length = 0                  # replaces all SPC fadeout lengths (in milliseconds) or None to leave unchanged
-spc_path = "y:/spc/spc_fix_test" # the script will process all SPC files in this folder (or any subfolder)
-verbose = False                  # print all changes made to stdout
+spc_path = "y:/spc/to_transcode" # the script will process all SPC files in this folder (or any subfolder)
+verbose = True                  # print all changes made to stdout
 
 def read_utf8_string(file, offset, length):
     if offset is not None: file.seek(offset)
@@ -77,9 +77,11 @@ def spc_fix(file_path, ignore_spcs_under_length, min_spc_length, new_fade_length
         file_header = read_utf8_string(file, 0, len(spc_header))
         if file_header != spc_header:
             raise ValueError(f"Incorrect SPC file header: '{file_header}'")
-            
-        has_id666 = read_int(file, 35, 1) == 26
-        if has_id666 == True:
+        
+        spc_length = None
+        fade_length = None
+        id666_file_header = read_int(file, 35, 1)
+        if id666_file_header == 26 or id666_file_header == 27: # apparently this can also be 27? ¯\_(ツ)_/¯
             
             # some sick bastard decided to mix binary and text fields with no way to tell the difference
             # this is the best I could come up with since text id666 artist field comes 1 byte after
@@ -94,141 +96,173 @@ def spc_fix(file_path, ignore_spcs_under_length, min_spc_length, new_fade_length
             if read_int(file, 169, 3) > 3600 or read_int(file, 172, 4) > 30000:
                 id666_binary = False
 
+            # one last check to see if the spc_length is parsible as a txt int
+            try:
+                txt_length = read_utf8_string(file, 169, 3)
+                if not txt_length.isdigit():
+                    id666_binary = True
+                int(txt_length)
+            except: id666_binary = True
+
             # spc length is in seconds
             if id666_binary == False:
-                spc_length = int(read_utf8_string(file, 169, 3))
-                if read_int(file, 172, 4) == 0: fade_length = 0
-                else: fade_length = int(read_utf8_string(file, 172, 5))
-            else:
+                try:
+                    spc_length = int(read_utf8_string(file, 169, 3))
+                    if read_int(file, 172, 4) == 0: fade_length = 0
+                    else: fade_length = int(read_utf8_string(file, 172, 5))
+                except:
+                    id666_binary = True
+
+            if id666_binary == True:
                 spc_length = read_int(file, 169, 3)
                 fade_length = read_int(file, 172, 4)
 
-            # read extended id666 data at end of spc file for yet _another_ fade length field
-            extended_fade_length = None
-            extended_intro_length = None
-            extended_loop_length = None
-            extended_end_length = None
+        # read extended id666 data at end of spc file for yet _another_ fade length field
+        extended_fade_length = None
+        extended_intro_length = None
+        extended_loop_length = None
+        extended_end_length = None
+        file_size = get_file_size(file)
+  
+        try: extended_id666_file_header = read_utf8_string(file, 66048, len(extended_id666_header))
+        except: extended_id666_file_header = ""
+
+        if extended_id666_file_header != extended_id666_header:
+            file.seek(0)
+            extended_id666_file_header_offset = find_string_offset(file, extended_id666_header)
+            try: extended_id666_file_header = read_utf8_string(file, extended_id666_file_header_offset, len(extended_id666_header))
+            except: extended_id666_file_header = ""
+
+        if extended_id666_file_header == extended_id666_header:
+            # chunk size does not include header
+            chunk_size = read_int(file, None, 4) // 4 * 4 # align to 4 bytes
+            chunk_offset = file.tell()
+
+            #print("Chunk size: ", chunk_size)
+            while file.tell() < (chunk_offset + chunk_size):
+                
+                subchunk_id = read_int(file, None, 1)
+                subchunk_type = read_int(file, None, 1)
+                subchunk_size = read_int(file, None, 2)
+                if subchunk_type == 0: # type 0 subchunks use only the size field for the data/value
+                    subchunk_size = 0
+                else:
+                    subchunk_size = subchunk_size // 4 * 4 # align to 4 bytes
+                subchunk_offset = file.tell()
+
+                if subchunk_offset >= file_size:
+                    break
+                #print(f"Subchunk ID: '{subchunk_id}' Type: '{subchunk_type}' Size: '{subchunk_size}' Offset: '{subchunk_offset}'")
+
+                if subchunk_id == 51: # id 51 is fadeout length in ticks (1/64000th of a second)
+                    extended_fade_length_offset = file.tell()
+                    extended_fade_length = read_int(file, None, 4) // 64 # convert from ticks to milliseconds
+                elif subchunk_id == 48: # id 48 is intro length (in ticks)
+                    extended_intro_length_offset = file.tell()
+                    extended_intro_length = read_int(file, None, 4) // 64 # convert from ticks to milliseconds
+                elif subchunk_id == 49: # id 49 is loop length (in ticks)
+                    extended_loop_length_offset = file.tell()
+                    extended_loop_length = read_int(file, None, 4) // 64 # convert from ticks to milliseconds
+                elif subchunk_id == 50: # id 50 is end length (in ticks)
+                    extended_end_length_offset = file.tell()
+                    extended_end_length = read_int(file, None, 4) // 64 # convert from ticks to milliseconds
+
+                file.seek(subchunk_offset + subchunk_size)
+                assert file.tell() == (subchunk_offset + subchunk_size), f"Expected to be at {subchunk_offset + subchunk_size}, but at {file.tell()}"
+
+            file.seek(chunk_offset + chunk_size)
+            assert file.tell() == (chunk_offset + chunk_size), f"Expected to be at {chunk_offset + chunk_size}, but at {file.tell()}"
         
-            if get_file_size(file) > 66048:
-                
-                extended_id666_file_header = read_utf8_string(file, 66048, len(extended_id666_header))
-                if extended_id666_file_header != extended_id666_header:
-                    raise ValueError(f"Unrecognized extended file header: '{extended_id666_file_header}'")
-                
-                # chunk size does not include header
-                chunk_size = read_int(file, None, 4) // 4 * 4 # align to 4 bytes
-                chunk_offset = file.tell()
+        # possible apev2 tag data at the end of the file, among others
+        apev2_spc_length = None
+        apev2_fade_length = None
 
-                #print("Chunk size: ", chunk_size)
-                while file.tell() < (chunk_offset + chunk_size):
-                    
-                    subchunk_id = read_int(file, None, 1)
-                    subchunk_type = read_int(file, None, 1)
-                    subchunk_size = read_int(file, None, 2)
-                    if subchunk_type == 0: # type 0 subchunks use only the size field for the data/value
-                        subchunk_size = 0
+        try: apev2_file_header = read_utf8_string(file, None, len(apev2_header))
+        except: apev2_file_header = ""
+
+        if apev2_file_header != apev2_header:
+            file.seek(0)
+            apev2_file_header_offset = find_string_offset(file, apev2_header)
+            try: apev2_file_header = read_utf8_string(file, apev2_file_header_offset, len(apev2_header))
+            except: apev2_file_header = ""
+
+        if apev2_file_header == apev2_header:
+            #print(f"Processing APEv2 tag data in {file_path}")
+            version = read_int(file, None, 4)
+            if version == 2000:
+                tag_size = read_int(file, None, 4)
+                item_count = read_int(file, None, 4)
+                flags = read_int(file, None, 4)
+                file.seek(file.tell() + 8)
+
+                for i in range(item_count):
+                    item_size = read_int(file, None, 4)
+                    item_flags = read_int(file, None, 4)
+                    null_offset = find_byte_offset(file, 0)
+                    item_key = read_utf8_string(file, None, null_offset+1)
+
+                    if item_key.lower() == "spc_length":
+                        apev2_spc_length_offset = file.tell()
+                        apev2_spc_length_len = item_size
+                        if apev2_spc_length_len > 0: # apparently this can be 0? ¯\_(ツ)_/¯
+                            apev2_spc_length = int(read_utf8_string(file, None, item_size)) // 1000 # convert milliseconds to seconds
+                        #print(f"Found APEv2 SPC length: {apev2_spc_length}")
+                    elif item_key.lower() == "spc_fade":
+                        apev2_fade_length_offset = file.tell()
+                        apev2_fade_length_len = item_size
+                        if apev2_fade_length_len > 0: # apparently this can be 0? ¯\_(ツ)_/¯
+                            apev2_fade_length = int(read_utf8_string(file, None, item_size)) # milliseconds
+                        #print(f"Found APEv2 fade length: {apev2_fade_length}")
                     else:
-                        subchunk_size = subchunk_size // 4 * 4 # align to 4 bytes
-                    subchunk_offset = file.tell()
+                        file.seek(file.tell() + item_size)
+                    
+                    if file.tell() >= file_size: break
 
-                    #print(f"Subchunk ID: '{subchunk_id}' Type: '{subchunk_type}' Size: '{subchunk_size}' Offset: '{subchunk_offset}'")
+        if spc_length is not None and (spc_length >= ignore_spcs_under_length or spc_length == 0) and spc_length < min_spc_length:
+            if id666_binary == True: write_int(file, 169, 3, int(min_spc_length))
+            else: write_utf8_string(file, 169, 3, str(min_spc_length))
+            updated_length = True
+        
+        # potential for a problem if the apev2_spc_length_len is too short for the new length ¯\_(ツ)_/¯
+        if apev2_spc_length is not None and apev2_spc_length >= ignore_spcs_under_length and apev2_spc_length < min_spc_length:
+            write_utf8_string(file, apev2_spc_length_offset, apev2_spc_length_len, str(min_spc_length*1000)) # convert seconds to milliseconds
+            updated_apev2_length = True
 
-                    if subchunk_id == 51: # id 51 is fadeout length in ticks (1/64000th of a second)
-                        extended_fade_length_offset = file.tell()
-                        extended_fade_length = read_int(file, None, 4) // 64 # convert from ticks to milliseconds
-                    elif subchunk_id == 48: # id 48 is intro length (in ticks)
-                        extended_intro_length_offset = file.tell()
-                        extended_intro_length = read_int(file, None, 4) // 64 # convert from ticks to milliseconds
-                    elif subchunk_id == 49: # id 49 is loop length (in ticks)
-                        extended_loop_length_offset = file.tell()
-                        extended_loop_length = read_int(file, None, 4) // 64 # convert from ticks to milliseconds
-                    elif subchunk_id == 50: # id 50 is end length (in ticks)
-                        extended_end_length_offset = file.tell()
-                        extended_end_length = read_int(file, None, 4) // 64 # convert from ticks to milliseconds
+        if new_fade_length is not None:
+            if fade_length is not None and fade_length != new_fade_length:
+                if id666_binary == True: write_int(file, 172, 4, int(new_fade_length))
+                else: write_utf8_string(file, 172, 5, str(new_fade_length))
+                updated_fade_length = True
 
-                    file.seek(subchunk_offset + subchunk_size)
-                    assert file.tell() == (subchunk_offset + subchunk_size), f"Expected to be at {subchunk_offset + subchunk_size}, but at {file.tell()}"
+            if extended_fade_length is not None and extended_fade_length != new_fade_length:
+                file.seek(extended_fade_length_offset)
+                write_int(file, None, 4, new_fade_length * 64) # convert from milliseconds to ticks (1/64000th of a second)
+                updated_extended_fade_length = True
 
-                file.seek(chunk_offset + chunk_size)
-                assert file.tell() == (chunk_offset + chunk_size), f"Expected to be at {chunk_offset + chunk_size}, but at {file.tell()}"
-            
-            # possible apev2 tag data at the end of the file, among others
-            apev2_spc_length = None
-            apev2_fade_length = None
+            # potential for a problem if the apev2_fade_length_len is too short for the new fade length ¯\_(ツ)_/¯
+            if apev2_fade_length is not None and apev2_fade_length != new_fade_length:
+                write_utf8_string(file, apev2_fade_length_offset, apev2_fade_length_len, str(new_fade_length))
+                updated_apev2_fade_length = True
 
-            if file.tell() < get_file_size(file):
-                try: apev2_file_header = read_utf8_string(file, None, len(apev2_header))
-                except: apev2_file_header = ""
-                if apev2_file_header == apev2_header:
-                    #print(f"Processing APEv2 tag data in {file_path}")
-                    version = read_int(file, None, 4)
-                    if version == 2000:
-                        tag_size = read_int(file, None, 4)
-                        item_count = read_int(file, None, 4)
-                        flags = read_int(file, None, 4)
-                        file.seek(file.tell() + 8)
-
-                        for i in range(item_count):
-                            item_size = read_int(file, None, 4)
-                            item_flags = read_int(file, None, 4)
-                            null_offset = find_byte_offset(file, 0)
-                            item_key = read_utf8_string(file, None, null_offset+1)
-
-                            if item_key.lower() == "spc_length":
-                                apev2_spc_length_offset = file.tell()
-                                apev2_spc_length_len = item_size
-                                apev2_spc_length = int(read_utf8_string(file, None, item_size)) // 1000 # convert milliseconds to seconds
-                                #print(f"Found APEv2 SPC length: {apev2_spc_length}")
-                            elif item_key.lower() == "spc_fade":
-                                apev2_fade_length_offset = file.tell()
-                                apev2_fade_length_len = item_size
-                                apev2_fade_length = int(read_utf8_string(file, None, item_size)) # milliseconds
-                                #print(f"Found APEv2 fade length: {apev2_fade_length}")
-                            else:
-                                file.seek(file.tell() + item_size)
-
-            if spc_length >= ignore_spcs_under_length and spc_length < min_spc_length:
-                if id666_binary == True: write_int(file, 169, 3, int(min_spc_length))
-                else: write_utf8_string(file, 169, 3, str(min_spc_length))
-                updated_length = True
-            
-            # potential for a problem if the apev2_spc_length_len is too short for the new length ¯\_(ツ)_/¯
-            if apev2_spc_length is not None and apev2_spc_length >= ignore_spcs_under_length and apev2_spc_length < min_spc_length:
-                write_utf8_string(file, apev2_spc_length_offset, apev2_spc_length_len, str(min_spc_length*1000)) # convert seconds to milliseconds
-                updated_apev2_length = True
-
-            if new_fade_length is not None:
-                if fade_length != new_fade_length:
-                    if id666_binary == True: write_int(file, 172, 4, int(new_fade_length))
-                    else: write_utf8_string(file, 172, 5, str(new_fade_length))
-                    updated_fade_length = True
-
-                if extended_fade_length is not None and extended_fade_length != new_fade_length:
-                    file.seek(extended_fade_length_offset)
-                    write_int(file, None, 4, new_fade_length * 64) # convert from milliseconds to ticks (1/64000th of a second)
-                    updated_extended_fade_length = True
-
-                # potential for a problem if the apev2_fade_length_len is too short for the new fade length ¯\_(ツ)_/¯
-                if apev2_fade_length is not None and apev2_fade_length != new_fade_length:
-                    write_utf8_string(file, apev2_fade_length_offset, apev2_fade_length_len, str(new_fade_length))
-                    updated_apev2_fade_length = True
-
-            if verbose == True:
-                if updated_length == True:
-                    print(f"Updated SPC length {spc_length}s -> {min_spc_length}s")
-                if updated_fade_length == True:
-                    print(f"Updated fade length {int(fade_length/1000)}s -> {int(new_fade_length/1000)}s")
-                if updated_extended_fade_length == True:
-                    print(f"Updated extended fade length {int(extended_fade_length/1000)}s -> {int(new_fade_length/1000)}s")
-                if updated_apev2_length == True:
-                    print(f"Updated APEv2 SPC length {apev2_spc_length}s -> {min_spc_length}s")
-                if updated_apev2_fade_length == True:
-                    print(f"Updated APEv2 fade length {int(apev2_fade_length/1000)}s -> {int(new_fade_length/1000)}s")
+        if verbose == True:
+            if updated_length == True:
+                print(f"Updated SPC length {spc_length}s -> {min_spc_length}s")
+            if updated_fade_length == True:
+                print(f"Updated fade length {int(fade_length/1000)}s -> {int(new_fade_length/1000)}s")
+            if updated_extended_fade_length == True:
+                print(f"Updated extended fade length {int(extended_fade_length/1000)}s -> {int(new_fade_length/1000)}s")
+            if updated_apev2_length == True:
+                print(f"Updated APEv2 SPC length {apev2_spc_length}s -> {min_spc_length}s")
+            if updated_apev2_fade_length == True:
+                print(f"Updated APEv2 fade length {int(apev2_fade_length/1000)}s -> {int(new_fade_length/1000)}s")
 
     return updated_length or updated_fade_length or updated_extended_fade_length or updated_apev2_length or updated_apev2_fade_length
 
 if __name__ == "__main__":
-    
+
+    #spc_fix("Y:\\spc\\to_transcode\\Romancing SaGa 3\\113 Victory!.spc", ignore_spcs_under_length, min_spc_length, fade_length, True)
+    #exit()
+
     if input(f"This will modify all SPCs under '{spc_path}' Are you sure you want to continue? (y/n): ").lower() != 'y':
         exit()
     
