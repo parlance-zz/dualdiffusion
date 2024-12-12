@@ -20,8 +20,8 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
+from html.parser import HTMLParser
 import requests
-import re
 import urllib.parse
 import urllib.request
 import html
@@ -29,52 +29,94 @@ import os
 import time
 import shutil
 
-system = "3sf"
+
+systems = ["2sf", "3do", "3sf", "dsf", "gcn", "hes", "psf", "psf2", "smd", "spc", "ssf", "usf", "wii", "wiiu"]
 pages = ["0-9", "a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m", "n", "o", "p", "q", "r", "s", "t", "u", "v", "w", "x", "y", "z"]
-base_url = f"https://{system}.joshw.info"
-download_link_pattern = re.compile(r'href\s*=\s*["\']?([^"\'>\s]+\.(7z|zip|rar))["\']?\s*>', re.IGNORECASE)
-request_throttle_delay_seconds = 0.1
-target_zip_dir = f"/mnt/vault/{system}/zip"
-minimum_disk_space_mb = 25000
+allowed_file_extensions = [".zip", ".7z", ".rar", ".tar", ".tar.gz", ".tar.bz2"]
+root_downloads_dir = "/mnt/vault"
+minimum_disk_space_mb = 25000 # None
+request_throttle_delay_seconds = 0.2
 
-os.makedirs(target_zip_dir, exist_ok=True)
-num_errors = 0
 
-for page in pages:
+class LinkParser(HTMLParser):
+    def __init__(self):
+        super().__init__()
+        self.hrefs = []
 
-    page_url = html.unescape(f"{base_url}/{page}")
-    response = requests.get(page_url)
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag.lower() == "a":
+            for attr, value in attrs:
+                if attr.lower() == "href":
+                    self.hrefs.append(value)
 
-    if response.status_code == 200:
-        time.sleep(request_throttle_delay_seconds) # throttling
+    def get_links(self, content: str, allowed_extensions: list[str]) -> list[str]:
+        self.hrefs.clear()
+        self.feed(content)
+        return [link for link in self.hrefs
+            if any(link.lower().endswith(ext) for ext in allowed_extensions)]
 
-        download_links = [match[0] for match in re.findall(download_link_pattern, response.text)]
-        for link in download_links:
-            
-            full_link = html.unescape(f"{page_url}/{link}")
-            zip_filename = urllib.parse.unquote(os.path.basename(full_link))
+errors = []
+num_downloads_found = 0
+num_downloaded = 0
+num_skipped = 0
+link_parser = LinkParser()
 
-            zip_save_path = os.path.join(target_zip_dir, zip_filename)
-            if os.path.isfile(zip_save_path):
-                continue
+for system in systems:
+    
+    base_url = f"https://{system}.joshw.info"
+    target_zip_dir = os.path.join(root_downloads_dir, system, "zip")
+    os.makedirs(target_zip_dir, exist_ok=True)
+    print(f"\nDownloading files for {system}...\n")
 
-            try:
-                free_disk_space_mb = shutil.disk_usage(target_zip_dir).free / 1024 / 1024
-                if free_disk_space_mb < minimum_disk_space_mb:
-                    print(f"Minimum disk space threshold reached ({free_disk_space_mb:.1f} MB), aborting...")
-                    exit(1)
+    for page in pages:
 
-                print(f"Downloading: {full_link}")
-                urllib.request.urlretrieve(full_link, zip_save_path)
-                time.sleep(request_throttle_delay_seconds) # throttling
-            except Exception as e:
-                print(f"Failed to download {zip_filename}: {e}")
-                num_errors += 1
-                continue
-            
-    else:
-        print(f"Failed to retrieve page '{page}'. Status code: {response.status_code}")
-        num_errors += 1
+        page_url = html.unescape(f"{base_url}/{page}")
+        response = requests.get(page_url)
 
-print(f"Download process completed. (errors: {num_errors})")
+        if response.status_code == 200:
+            time.sleep(request_throttle_delay_seconds)
 
+            download_links = link_parser.get_links(response.text, allowed_file_extensions)
+            num_downloads_found += len(download_links)
+
+            for link in download_links:
+                
+                full_link = html.unescape(f"{page_url}/{link}")
+                zip_filename = urllib.parse.unquote(os.path.basename(full_link))
+
+                zip_save_path = os.path.join(target_zip_dir, zip_filename)
+                if os.path.isfile(zip_save_path):
+                    #print(f"Skipping {zip_filename} as it already exists")
+                    num_skipped += 1
+                    continue
+
+                try:
+                    if minimum_disk_space_mb is not None:
+                        free_disk_space_mb = shutil.disk_usage(target_zip_dir).free / 1024 / 1024
+                        if free_disk_space_mb < minimum_disk_space_mb:
+                            print(f"Minimum disk space threshold reached ({free_disk_space_mb:.1f} MB), aborting...")
+                            exit(1)
+
+                    print(f"Downloading {full_link}")
+                    urllib.request.urlretrieve(full_link, zip_save_path)
+                    time.sleep(request_throttle_delay_seconds)
+                    num_downloaded += 1
+
+                except Exception as e:
+                    error_txt = f"Error downloading {full_link} to {zip_save_path}: {e}"
+                    print(error_txt)
+                    errors.append(error_txt)
+                
+        else:
+            error_txt = f"Error loading '{page_url}'. Status code: {response.status_code}"
+            print(error_txt)
+            errors.append(error_txt)
+
+print(f"\nDownload process completed.")
+print(f"  num downloads found: {num_downloads_found}")
+print(f"  num downloaded: {num_downloaded}")
+print(f"  num skipped: {num_skipped}")
+print(f"  num errors: {len(errors)}\n")
+if len(errors) > 0:
+    print("Errors:")
+    for error in errors: print(error)
