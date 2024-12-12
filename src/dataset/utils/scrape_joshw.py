@@ -29,7 +29,7 @@ import os
 import time
 import shutil
 
-system = "3do"
+system = "3sf"
 pages = ["0-9", "a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m", "n", "o", "p", "q", "r", "s", "t", "u", "v", "w", "x", "y", "z"]
 base_url = f"https://{system}.joshw.info"
 download_link_pattern = re.compile(r'href\s*=\s*["\']?([^"\'>\s]+\.(7z|zip|rar))["\']?\s*>', re.IGNORECASE)
@@ -41,7 +41,7 @@ os.makedirs(target_zip_dir, exist_ok=True)
 
 for page in pages:
 
-    page_url = f"{base_url}/{page}"
+    page_url = html.unescape(f"{base_url}/{page}")
     response = requests.get(page_url)
 
     if response.status_code == 200:
