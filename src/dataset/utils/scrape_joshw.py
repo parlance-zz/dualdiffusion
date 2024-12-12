@@ -24,16 +24,17 @@ import requests
 import re
 import urllib.parse
 import urllib.request
+import html
 import os
 import time
 import shutil
 
-system = "hes"
+system = "3do"
 pages = ["0-9", "a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m", "n", "o", "p", "q", "r", "s", "t", "u", "v", "w", "x", "y", "z"]
 base_url = f"https://{system}.joshw.info"
 download_link_pattern = re.compile(r'href\s*=\s*["\']?([^"\'>\s]+\.(7z|zip|rar))["\']?\s*>', re.IGNORECASE)
 request_throttle_delay_seconds = 0.1
-target_zip_dir = f"Y:/{system}/zip"
+target_zip_dir = f"/mnt/vault/{system}/zip"
 minimum_disk_space_mb = 25000
 
 os.makedirs(target_zip_dir, exist_ok=True)
@@ -49,7 +50,7 @@ for page in pages:
         download_links = [match[0] for match in re.findall(download_link_pattern, response.text)]
         for link in download_links:
             
-            full_link = f"{page_url}/{link}"
+            full_link = html.unescape(f"{page_url}/{link}")
             zip_filename = urllib.parse.unquote(os.path.basename(full_link))
 
             zip_save_path = os.path.join(target_zip_dir, zip_filename)
@@ -68,6 +69,7 @@ for page in pages:
             except Exception as e:
                 print(f"Failed to download {zip_filename}: {e}")
                 continue
+            
 
     else:
         print(f"Failed to retrieve page '{page}'. Status code: {response.status_code}")
