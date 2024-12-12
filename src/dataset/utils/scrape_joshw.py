@@ -38,6 +38,7 @@ target_zip_dir = f"/mnt/vault/{system}/zip"
 minimum_disk_space_mb = 25000
 
 os.makedirs(target_zip_dir, exist_ok=True)
+num_errors = 0
 
 for page in pages:
 
@@ -68,11 +69,12 @@ for page in pages:
                 time.sleep(request_throttle_delay_seconds) # throttling
             except Exception as e:
                 print(f"Failed to download {zip_filename}: {e}")
+                num_errors += 1
                 continue
             
-
     else:
         print(f"Failed to retrieve page '{page}'. Status code: {response.status_code}")
+        num_errors += 1
 
-print("Download process completed.")
+print(f"Download process completed. (errors: {num_errors})")
 
