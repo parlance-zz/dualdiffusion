@@ -61,7 +61,7 @@ class SampleParams:
     prompt: Optional[dict]                = None
     use_heun: bool                        = True
     input_perturbation: float             = 1.
-    conditioning_perturbation: float      = 0.
+    input_perturbation_offset: float      = 0.
     num_fgla_iters: int                   = 250
     img2img_strength: float               = 0.5
     input_audio: Optional[Union[str, torch.Tensor]] = None
@@ -107,7 +107,7 @@ class SampleParams:
             top_game_id = dataset_game_ids[top_game_name]
 
             label = f"step_{last_global_step}_{int(self.num_steps)}_{'ema'+ema+'_' if ema else ''}cfg{self.cfg_scale}"
-            label += f"_sgm{self.sigma_max}-{self.sigma_min}_ip{self.input_perturbation}_cp{self.conditioning_perturbation}_r{self.rho}_g{top_game_id}_s{int(self.seed)}"
+            label += f"_sgm{self.sigma_max}-{self.sigma_min}_ip{self.input_perturbation}_ipo{self.input_perturbation_offset}_r{self.rho}_g{top_game_id}_s{int(self.seed)}"
         else:
             label = f"s{self.seed}"
         
@@ -469,8 +469,8 @@ class DualDiffusionPipeline(torch.nn.Module):
             unet_class_embeddings = unet.get_class_embeddings(
                 self.get_class_labels(params.prompt, module_name="unet"), conditioning_mask)
 
-        unet_class_embeddings[:params.batch_size] = mp_sum(
-            unet_class_embeddings[:params.batch_size], unet_class_embeddings[params.batch_size:], params.conditioning_perturbation)            
+        #unet_class_embeddings[:params.batch_size] = mp_sum(
+        #    unet_class_embeddings[:params.batch_size], unet_class_embeddings[params.batch_size:], params.conditioning_perturbation)            
         debug_info["unet_class_embeddings mean"] = unet_class_embeddings.mean().item()
         debug_info["unet_class_embeddings std"] = unet_class_embeddings.std().item()
 
@@ -540,16 +540,9 @@ class DualDiffusionPipeline(torch.nn.Module):
             old_sigma_next = sigma_next
             #effective_input_perturbation = params.input_perturbation
             #effective_input_perturbation = (sigma_schedule_error_logvar[i]/4).exp().item() * input_perturbation
-            #effective_input_perturbation = params.input_perturbation * (1 - (i/params.num_steps)*(1 - i/params.num_steps))**2 #***
-            #effective_input_perturbation = float(params.input_perturbation * (1 - 1 / np.cosh(np.log(sigma_next * sigma_curr) / 2 - 0.1))**2)
-            effective_input_perturbation = float(params.input_perturbation * (1 - 1 / np.cosh(np.log(sigma_next * sigma_curr) / 2 + 0.4))**2)#+ 0.5))**2)
-            #effective_input_perturbation = float(params.input_perturbation * (1 - 1 / np.cosh(np.log(sigma_next * sigma_curr) / 2 - 0.425)))
-            #effective_input_perturbation = sigma_curr**2 / (sigma_curr**2 + params.sigma_data**2) * params.input_perturbation
-            #effective_input_perturbation = float(params.input_perturbation * (1 - 1 / np.cosh(np.log(sigma_next * sigma_curr) / 2 - 0.))**2)
-            #nsr0 = sigma_curr**2 / (sigma_curr**2 + params.sigma_data**2)
-            #nsr1 = sigma_next**2 / (sigma_next**2 + params.sigma_data**2)
-            #effective_input_perturbation = (nsr0 - nsr1) * nsr0 * 100 * params.input_perturbation
-            #effective_input_perturbation = sigma_curr**2 / (sigma_curr**2 + params.sigma_data**2) * params.input_perturbation
+            #effective_input_perturbation = float(params.input_perturbation * (1 - 1 / np.cosh(np.log(sigma_next * sigma_curr) / 2 + 0.4))**2)
+            effective_input_perturbation = float(params.input_perturbation * (1 - 1 / np.cosh(np.log(sigma_next * sigma_curr) / 2 + params.input_perturbation_offset))**2)
+            
             sigma_next *= (1 - (max(min(effective_input_perturbation, 1), 0)))
             #sigma_next = 0#(params.sigma_min + sigma_next) / 2
 
