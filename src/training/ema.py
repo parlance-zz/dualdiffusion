@@ -70,7 +70,8 @@ class EMA_Manager:
         with torch.amp.autocast("cuda", enabled=False), TF32_Disabled():
             net_parameters = tuple(self.module.parameters())
             for beta, ema in zip(self.betas, self.emas):
-                beta *= min((cur_nimg / batch_size) / self.warmup_steps, 1)
+                if self.warmup_steps > 0:
+                    beta *= min((cur_nimg / batch_size) / self.warmup_steps, 1)
                 torch._foreach_lerp_(tuple(ema.parameters()), net_parameters, 1 - beta)
 
     @torch.no_grad()
