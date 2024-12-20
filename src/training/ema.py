@@ -67,10 +67,12 @@ class EMA_Manager:
 
     @torch.no_grad()
     def update(self, cur_nimg: int, batch_size: int) -> None:
+        local_step = cur_nimg // batch_size
         with torch.amp.autocast("cuda", enabled=False), TF32_Disabled():
             net_parameters = tuple(self.module.parameters())
             for beta, ema in zip(self.betas, self.emas):
-                if self.warmup_steps > 0:
+                if beta >= 1: beta = 1 - 1 / (local_step + 1)
+                elif self.warmup_steps > 0:
                     beta *= min((cur_nimg / batch_size) / self.warmup_steps, 1)
                 torch._foreach_lerp_(tuple(ema.parameters()), net_parameters, 1 - beta)
 
