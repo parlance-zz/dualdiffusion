@@ -723,9 +723,7 @@ class DualDiffusionTrainer:
                 if self.accelerator.sync_gradients:
                         
                     train_logger.add_logs({"lr": self.lr_scheduler.get_last_lr()[0], "step": global_step})
-                    progress_bar.update(1)
-                    global_step += 1
-                    
+
                     if self.config.ema.use_ema:
                         self.ema_manager.update(global_step * self.total_batch_size, self.total_batch_size)
 
@@ -736,9 +734,11 @@ class DualDiffusionTrainer:
                     self.module.normalize_weights()
                     
                     train_logger.add_logs(self.module_trainer.finish_batch())
-
                     logs = train_logger.get_logs()
                     self.accelerator.log(logs, step=global_step)
+
+                    global_step += 1
+                    progress_bar.update(1)
                     progress_bar.set_postfix(loss=logs["loss"], grad_norm=logs["grad_norm"], global_step=global_step)
                     
                     if self.accelerator.is_main_process:
