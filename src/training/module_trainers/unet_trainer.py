@@ -41,9 +41,10 @@ class UNetTrainerConfig(ModuleTrainerConfig):
     sigma_override_max: Optional[float] = None
     sigma_override_min: Optional[float] = None
     sigma_dist_scale: float = 1.0
-    sigma_dist_offset: float = 0.1
+    sigma_dist_offset: float = 0.3
     use_stratified_sigma_sampling: bool = True
-    sigma_pdf_resolution: Optional[int] = 127
+    sigma_pdf_resolution: Optional[int] = 128
+    sigma_pdf_warmup_steps: Optional[int] = 30000
 
     validation_sigma_distribution: Literal["ln_normal", "ln_sech", "ln_sech^2",
                                             "ln_linear", "ln_pdf"] = "ln_sech"
@@ -202,10 +203,6 @@ class UNetTrainer(ModuleTrainer):
             self.bucket_names = [f"loss_σ_buckets/{bucket_sigma[i]:.2f} - {bucket_sigma[i+1]:.2f}"
                                  for i in range(self.config.num_loss_buckets)]
 
-    @staticmethod
-    def get_config_class() -> ModuleTrainerConfig:
-        return UNetTrainerConfig
-    
     @torch.no_grad()
     def get_inpainting_ref_samples(self, samples: torch.Tensor) -> None:
         mask = torch.ones_like(samples[:, 0:1])
@@ -272,14 +269,15 @@ class UNetTrainer(ModuleTrainer):
                                       device=self.trainer.accelerator.device)
             ln_sigma_error = self.module.logvar_linear(
                 self.module.logvar_fourier(ln_sigma/4)).float().flatten().detach()
-            sigma_distribution_pdf = (-self.config.sigma_dist_scale * ln_sigma_error).exp()
+            pdf_warmup_factor = min(1, self.trainer.global_step / (self.config.sigma_pdf_warmup_steps or 1))
+            sigma_distribution_pdf = (-pdf_warmup_factor * self.config.sigma_dist_scale * ln_sigma_error).exp()
             self.sigma_sampler.update_pdf(sigma_distribution_pdf)
         
         # sample whole-batch sigma and sync across all ranks / processes
         self.global_sigma = sigma_sampler.sample(total_batch_size, device=self.trainer.accelerator.device)
         self.global_sigma = self.trainer.accelerator.gather(self.global_sigma.unsqueeze(0))[0]
 
-    def train_batch(self, batch: dict, accum_step: int) -> dict[str, torch.Tensor]:
+    def train_batch(self, batch: dict) -> dict[str, torch.Tensor]:
 
         raw_samples = batch["input"]
         sample_game_ids = batch["game_ids"]
@@ -345,7 +343,7 @@ class UNetTrainer(ModuleTrainer):
 
         # get the noise level for this sub-batch from the pre-calculated whole-batch sigma (required for stratified sampling)
         local_sigma = self.global_sigma[self.trainer.accelerator.local_process_index::self.trainer.accelerator.num_processes]
-        batch_sigma = local_sigma[accum_step * device_batch_size:(accum_step+1) * device_batch_size]
+        batch_sigma = local_sigma[self.trainer.accum_step * device_batch_size:(self.trainer.accum_step+1) * device_batch_size]
 
         # prepare model inputs
         noise = torch.randn(samples.shape, device=samples.device, generator=self.device_generator)

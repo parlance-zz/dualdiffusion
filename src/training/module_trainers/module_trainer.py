@@ -21,7 +21,7 @@
 # SOFTWARE.
 
 from dataclasses import dataclass
-from typing import Optional
+from typing import Optional, Type
 from abc import ABC, abstractmethod
 
 import torch
@@ -32,17 +32,14 @@ class ModuleTrainerConfig(ABC):
 
 class ModuleTrainer(ABC):
 
-    @staticmethod
-    @abstractmethod
-    def get_config_class():
-        return ModuleTrainerConfig
-    
+    config_class: Optional[Type[ModuleTrainerConfig]] = None
+
     @abstractmethod
     def init_batch(self, validation: bool = False) -> None:
         pass
     
     @abstractmethod
-    def train_batch(self, batch: dict, accum_step: int) -> dict[str, torch.Tensor]:
+    def train_batch(self, batch: dict) -> dict[str, torch.Tensor]:
         pass
     
     @abstractmethod

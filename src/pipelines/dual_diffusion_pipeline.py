@@ -36,12 +36,12 @@ from tqdm.auto import tqdm
 
 from modules.module import DualDiffusionModule
 from modules.unets.unet import DualDiffusionUNet
-from modules.mp_tools import mp_sum
+#from modules.mp_tools import mp_sum
 from utils.dual_diffusion_utils import (
     normalize, load_safetensors, torch_dtype, load_audio, get_cos_angle
 )
 from sampling.schedule import SamplingSchedule
-from training.ema import get_ema_list
+from training.ema import find_emas_in_dir
 
 
 @dataclass
@@ -200,9 +200,9 @@ class DualDiffusionPipeline(torch.nn.Module):
             module_inventory.checkpoints = sorted(module_inventory.checkpoints, key=lambda x: int(x.split("-")[1]))
 
             # get ema list for each checkpoint
-            module_inventory.emas[""], _ = get_ema_list(os.path.join(model_path, module_name))
+            module_inventory.emas[""] = find_emas_in_dir(os.path.join(model_path, module_name)).values()
             for checkpoint in module_inventory.checkpoints:
-                module_inventory.emas[checkpoint], _ = get_ema_list(os.path.join(model_path, checkpoint, module_name))
+                module_inventory.emas[checkpoint] = find_emas_in_dir(os.path.join(model_path, checkpoint, module_name)).values()
 
             model_inventory[module_name] = module_inventory
 

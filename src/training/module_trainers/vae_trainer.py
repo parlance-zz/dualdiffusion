@@ -69,15 +69,11 @@ class VAETrainer(ModuleTrainer):
         self.logger.info(f"Dropout: {self.module.config.dropout}")
         self.logger.info(f"Target SNR: {self.target_snr:{8}f}")
     
-    @staticmethod
-    def get_config_class() -> ModuleTrainerConfig:
-        return VAETrainerConfig
-    
     @torch.no_grad()
     def init_batch(self, validation: bool = False) -> None:
         pass
 
-    def train_batch(self, batch: dict, accum_step: int) -> dict[str, torch.Tensor]:
+    def train_batch(self, batch: dict) -> dict[str, torch.Tensor]:
 
         raw_samples = batch["input"]
         sample_game_ids = batch["game_ids"]
