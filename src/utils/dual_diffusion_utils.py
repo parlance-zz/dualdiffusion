@@ -180,11 +180,15 @@ def normalize_lufs(raw_samples: torch.Tensor,
     gain = gain.view((*gain.shape,) + (1,) * (raw_samples.ndim - gain.ndim))
 
     normalized_raw_samples = raw_samples * gain
-    normalized_raw_samples /= normalized_raw_samples.abs().amax( # if we haven't clipped add gain to the clipping point
-        dim=tuple(range(1, len(normalized_raw_samples.shape))), keepdim=True).clip(max=1)
-
     return normalized_raw_samples.view(original_shape)
 
+# get the number of clipped samples in a raw audio tensor
+# clipping is defined as at least 2 consecutive samples with an absolute value > 1.0
+@torch.inference_mode()
+def get_num_clipped_samples(raw_samples: torch.Tensor, eps: float = 0.) -> int:
+    clips = (raw_samples.abs() > (1.0 - eps)).float()
+    return int((clips[..., :-1] * clips[..., 1:]).sum().item())
+    
 def get_no_clobber_filepath(filepath):
 
     directory, filename = os.path.split(filepath)
