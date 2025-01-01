@@ -218,7 +218,7 @@ def save_tensor_raw(tensor: torch.Tensor, output_path: str) -> None:
     if tensor.dtype in [torch.float16, torch.bfloat16]:
         tensor = tensor.float()
     elif tensor.dtype == torch.complex32:
-        tensor = tensor.complex64()
+        tensor = tensor.to(torch.complex64)
     
     with CriticalSection():
         tensor.detach().resolve_conj().cpu().numpy().tofile(output_path)
