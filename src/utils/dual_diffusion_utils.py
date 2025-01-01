@@ -26,6 +26,7 @@ from io import BytesIO
 from typing import Optional, Union, Any
 from json import dumps as json_dumps
 from datetime import datetime
+from queue import SimpleQueue
 import os
 import logging
 import signal
@@ -53,30 +54,38 @@ class TF32_Disabled: # disables reduced precision tensor cores inside the contex
         torch.backends.cuda.matmul.allow_tf32 = self.original_matmul_allow_tf32
         torch.backends.cudnn.allow_tf32 = self.original_cudnn_allow_tf32
         return False
-    
+
+# globals for CriticalSection context manager
 _CRITICAL_SIGNALS = [signal.SIGABRT, signal.SIGINT, signal.SIGTERM]
 if hasattr(signal, "SIGKILL"): _CRITICAL_SIGNALS += [signal.SIGKILL]
 if hasattr(signal, "SIGQUIT"): _CRITICAL_SIGNALS += [signal.SIGQUIT]
 
+_CRITICAL_SIGNAL_QUEUE = SimpleQueue()
+def _critical_signal_handler(signum, frame):
+    _CRITICAL_SIGNAL_QUEUE.put((signum, frame))
+
+_CRITICAL_THREAD_LOCK = threading.Lock()
+
 class CriticalSection: # ignore signals that would terminate the process inside the context
     def __enter__(self):
-
-        self.original_handlers = {}
-
-        self.lock = threading.Lock()
-        self.lock.acquire()
-
+        _CRITICAL_THREAD_LOCK.acquire()
+        
         # save original signal handlers
+        self.original_handlers = {}
         for sig in _CRITICAL_SIGNALS:
-            self.original_handlers[sig] = signal.signal(sig, signal.SIG_IGN)
+            self.original_handlers[sig] = signal.signal(sig, _critical_signal_handler)
 
     def __exit__(self, exc_type, exc_value, traceback):
-
         # restore original signal handlers
         for sig, handler in self.original_handlers.items():
             signal.signal(sig, handler)
-        
-        self.lock.release()
+
+        # process deferred signals
+        while not _CRITICAL_SIGNAL_QUEUE.empty():
+            signum, _ = _CRITICAL_SIGNAL_QUEUE.get()
+            signal.raise_signal(signum)
+
+        _CRITICAL_THREAD_LOCK.release()
         return False
 
 def init_cuda(default_device: Optional[torch.device] = None) -> None:
