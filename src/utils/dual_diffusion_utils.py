@@ -106,26 +106,25 @@ def init_cuda(default_device: Optional[torch.device] = None) -> None:
             torch.cuda.set_device(default_device)
 
 def init_logging(name: Optional[str] = None, group_name: Optional[str] = None,
-                 format: bool = False, verbose: bool = False) -> logging.Logger:
+        format: Union[bool, str] = False, verbose: bool = False, log_to_file: bool = True) -> logging.Logger:
 
-    if name is None:
-        name = globals().get("__file__", None)
-        if name is not None: name = os.path.splitext(os.path.basename(name))[0]
+    if format == True: format = f"{name}: %(message)s"
+    elif format == False: format = f"%(message)s"
+    formatter = logging.Formatter(format)
 
     logger = logging.getLogger(name)
     logger.setLevel(logging.DEBUG)
-    logger.handlers.clear()
-
-    if format == True:
-        formatter = logging.Formatter(f"{name}: %(message)s")
 
     console_handler = logging.StreamHandler()
     console_handler.setLevel(logging.DEBUG if verbose else logging.INFO)
-    if format == True:
-        console_handler.setFormatter(formatter)
-    logger.addHandler(console_handler)
-
-    if config.DEBUG_PATH is not None and name is not None:
+    console_handler.setFormatter(formatter)
+    
+    if config.DEBUG_PATH is not None and log_to_file == True:
+        if name is None:
+            name = globals().get("__file__", None)
+            if name is not None: name = os.path.splitext(os.path.basename(name))[0]
+            else: name = "log"
+            
         logging_dir = os.path.join(config.DEBUG_PATH, group_name or "logs")
         os.makedirs(logging_dir, exist_ok=True)
 
@@ -134,12 +133,20 @@ def init_logging(name: Optional[str] = None, group_name: Optional[str] = None,
 
         file_handler = logging.FileHandler(log_path)
         file_handler.setLevel(logging.DEBUG)
-        if format == True:
-            file_handler.setFormatter(formatter)
+        file_handler.setFormatter(formatter)
+        logger.addHandler(file_handler)
+    else:
+        file_handler = None
+
+    logger.addHandler(console_handler)
+    if file_handler is not None:
         logger.addHandler(file_handler)
 
+    if file_handler is not None:
         logger.debug(f"\nStarted {name} at {datetime_str}")
         logger.debug(f"Logging to {log_path}")
+    elif log_to_file == True:
+        logger.warning("Unable to log to file, DEBUG_PATH not set")
 
     return logger
 
