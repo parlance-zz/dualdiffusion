@@ -26,10 +26,13 @@ import os
 
 from dataset.dataset_processor import DatasetProcessor, DatasetProcessStage
 
+
 class TestStage(DatasetProcessStage):
 
     def process(self, input_dict: dict) -> Optional[Union[dict, list[dict]]]:
+        self.logger.debug(input_dict)
         time.sleep(0.01)
+
 
 if __name__ == "__main__":
 

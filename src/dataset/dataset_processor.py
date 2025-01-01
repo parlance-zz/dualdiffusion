@@ -58,12 +58,13 @@ def _process_worker(stage: "DatasetProcessStage", rank: int, cuda_device: Option
 
     # init logging
     logger = logging.getLogger(stage_name)
-    logger.setLevel(logging.DEBUG if stage.processor_config.verbose == True else logging.INFO)
-    logging.basicConfig(handlers=[WorkerLogHandler(stage.log_queue, stage_name)])
+    log_handler = WorkerLogHandler(stage.log_queue, stage.warning_queue, stage.error_queue, stage_name)
+    logging.basicConfig(level=logging.DEBUG, handlers=[log_handler])
 
     # init process
     try:
-        stage.start_process(rank, cuda_device, logger)
+        stage._init_process(rank, cuda_device, logger)
+        stage.start_process()
     except Exception as e:
         logger.error("".join(format_exception(type(e), e, e.__traceback__)))
         return
@@ -124,16 +125,22 @@ def _monitor_worker(input_queues: list["WorkQueue"], stage_names: list[str], fin
         update_progress(progress_bar, input_queue)
         progress_bar.close()
 
-def _terminate_worker(process: mp.Process, timeout: float = 0.1):
+def _terminate_worker(process: mp.Process, timeout: float = 0.1, close: bool = False) -> None:
+
     process.join(timeout=timeout)
+
     if process.exitcode is None:
         process.terminate()
         process.join(timeout=timeout)
+
         if process.exitcode is None:
             process.kill()
             process.join()
 
-class WorkQueue: # normal Queue class extended with progress tracking
+    if close == True:
+        process.close()
+
+class WorkQueue: # normal Queue class behavior extended with progress tracking
 
     def __init__(self, *args, **kwargs) -> None:
         self.total_count = mp.Value("i", 0)  # 'i' means integer
@@ -160,27 +167,43 @@ class WorkQueue: # normal Queue class extended with progress tracking
                 processed = self.processed_count.value
         return processed, total
 
-class WorkerLogHandler(logging.Handler): # dummy log handler that sends log records to a target queue
-    def __init__(self, log_queue: mp.Queue, process_name: Optional[str] = None) -> None:
-        super().__init__()
-        self.log_queue = log_queue
+# dummy log handler that sends all log records to an mp queue and saves warnings and errors in separate queues
+class WorkerLogHandler(logging.Handler):
+    def __init__(self, log_queue: mp.Queue, warning_queue: mp.Queue, error_queue: mp.Queue,
+                 process_name: Optional[str] = None) -> None:
+        
+        super().__init__(level=logging.DEBUG)
         self.process_name = process_name or ""
+
+        self.log_queue = log_queue
+        self.warning_queue = warning_queue
+        self.error_queue = error_queue
 
     def emit(self, record: Optional[logging.LogRecord]) -> None:
         if record is not None:
             record.msg = f"{self.process_name}: {record.msg}"
+
+            if record.levelno >= logging.ERROR:
+                self.error_queue.put(record)
+            elif record.levelno >= logging.WARNING:
+                self.warning_queue.put(record)
+
         self.log_queue.put(record)
 
 class DatasetProcessStage(ABC):
 
     def __init__(self) -> None:
         pass
-    
+
     def _start_worker_queue(self, input_queue: WorkQueue, log_queue: mp.Queue,
                 processor_config: "DatasetProcessorConfig") -> WorkQueue:
 
         self.processor_config = processor_config
+
         self.log_queue = log_queue
+        self.warning_queue = mp.Queue()
+        self.error_queue = mp.Queue()
+
         self.input_queue = input_queue
         self.output_queue = WorkQueue()
 
@@ -202,7 +225,7 @@ class DatasetProcessStage(ABC):
     # adds one None per worker process to the input queue to signal end of input
     # this should only be called after _ALL_ items have been added to the input queue
     # timeouts are necessary because if the main process blocks it will no longer respond to ctrl+c
-    def _finish_worker_queue(self) -> None:
+    def _finish_worker_queue(self) -> int: # returns total worker errors
 
         sentinels_sent = 0
         while sentinels_sent < len(self.workers):
@@ -212,16 +235,17 @@ class DatasetProcessStage(ABC):
             except QueueFullException:
                 time.sleep(0.1)
 
-        workers_terminated = 0
-        while workers_terminated < len(self.workers):
+        while True:
+            num_running = 0
             for worker in self.workers:
+                worker.join(timeout=0.01)
                 if worker.exitcode is None:
-                    worker.join(timeout=0.01)
-                if worker.exitcode is not None:
-                    workers_terminated += 1
-            
-            if workers_terminated < len(self.workers):
-                time.sleep(0.1)
+                    num_running += 1
+
+            if num_running == 0: break
+            time.sleep(0.1)
+
+        return self.error_queue.qsize()
 
     # should only be called after _ALL_ workers have terminated due to shared memory
     def _close(self) -> None:
@@ -229,28 +253,29 @@ class DatasetProcessStage(ABC):
             worker.close()
 
     # timeouts are necessary because if the main process blocks it will no longer respond to ctrl+c
-    def _terminate(self, timeout: float = 0.1) -> None:
+    def _terminate(self, timeout: float = 1.0) -> None:
         for worker in self.workers:
             worker.terminate()
 
-        if len(self.workers) > 0:
-            self.workers[0].join(timeout=timeout)
-
         for worker in self.workers:
-            worker.join(timeout=0.01)
+            worker.join(timeout=timeout)
             if worker.exitcode is None:
                 worker.kill()
         
         for worker in self.workers:
-            worker.join()
+            if worker.exitcode is None:
+                worker.join()
+
+    def _init_process(self, rank: int, device: Optional[str], logger: logging.Logger) -> None:
+        self.rank = rank
+        self.device = device
+        self.logger = logger
 
     def is_cuda_stage(self) -> bool:
         return False
 
-    def start_process(self, rank: int, device: Optional[str], logger: logging.Logger) -> None:
-        self.rank = rank
-        self.device = device
-        self.logger = logger
+    def start_process(self) -> None:
+        pass
 
     def finish_process(self) -> None:
         pass
@@ -363,13 +388,9 @@ class DatasetProcessor:
     def __init__(self) -> None:
 
         if config.CONFIG_PATH is None:
-            raise ValueError("ERROR: CONFIG_PATH not defined")
+            raise ValueError("CONFIG_PATH not defined")
         if not os.path.isdir(config.CONFIG_PATH):
-            raise ValueError(f"ERROR: CONFIG_PATH '{config.CONFIG_PATH}' not found")
-        if config.DATASET_PATH is None:
-            raise ValueError("ERROR: DATASET_PATH not defined")
-        if not os.path.isdir(config.DATASET_PATH):
-            raise ValueError(f"ERROR: DATASET_PATH '{config.DATASET_PATH}' not found")
+            raise FileNotFoundError(f"CONFIG_PATH '{config.CONFIG_PATH}' not found")
         
         self.config = DatasetProcessorConfig(
             **config.load_json(os.path.join(config.CONFIG_PATH, "dataset", "dataset.json")))    
@@ -547,7 +568,30 @@ class DatasetProcessor:
                 self.logger.info(f"Deleted {len(empty_folders)} empty folders")
             print("")
 
-    def process(self, process_name: str, process_stages: list[DatasetProcessStage], input: Optional[Union[str, WorkQueue]] = None) -> None:
+    # process a pipeline of DatasetProcessStage objects in parallel with a specified input path or WorkQueue
+    def process(self, process_name: str, process_stages: list[DatasetProcessStage],
+                input: Optional[Union[str, WorkQueue]] = None) -> None:
+    
+        # first stage input is either a specified path, None (dataset path), or pre-filled WorkQueue
+        if input is None or isinstance(input, str):
+            scan_path = input or config.DATASET_PATH
+            input_queue = WorkQueue()
+
+            if scan_path is None:
+                raise ValueError("DATASET_PATH not defined")
+            if not os.path.isdir(config.DATASET_PATH):
+                raise FileNotFoundError(f"Input path '{scan_path}' not found")
+            
+        elif isinstance(input, WorkQueue):
+            scan_path = None
+            input_queue = input
+        else:
+            raise ValueError(f"Unrecognized input type in DatasetProcessor.process: {type(input)}")
+
+        # only one stage is allowed to have cuda device(s)
+        cuda_stage_names = [stage.__class__.__name__ for stage in process_stages if stage.is_cuda_stage()]
+        if len(cuda_stage_names) > 1:
+            raise ValueError(f"More than one stage has cuda devices: {cuda_stage_names}")
 
         # start logging process
         log_queue = mp.Queue()
@@ -557,18 +601,9 @@ class DatasetProcessor:
 
         logger = logging.getLogger("DatasetProcessor")
         logger.setLevel(logging.DEBUG if self.config.verbose == True else logging.INFO)
-        log_handler = WorkerLogHandler(log_queue, "DatasetProcessor")
-        logging.basicConfig(handlers=[log_handler])
-        
-        # first stage input is either a specified path, None (dataset path), or pre-filled WorkQueue
-        if input is None or isinstance(input, str):
-            scan_path = input or config.DATASET_PATH
-            input_queue = WorkQueue()
-        elif isinstance(input, WorkQueue):
-            scan_path = None
-            input_queue = input
-        else:
-            raise ValueError(f"Unrecognized input type in DatasetProcessor.process: {type(input)}")
+        warning_queue, error_queue = mp.Queue(), mp.Queue()
+        log_handler = WorkerLogHandler(log_queue, warning_queue, error_queue, "DatasetProcessor")
+        logging.basicConfig(level=logging.DEBUG, handlers=[log_handler])
 
         # setup processing queue chain and start workers for each stage
         input_queues: list[WorkQueue] = []
@@ -583,7 +618,7 @@ class DatasetProcessor:
             args=(input_queues, stage_names, monitor_finish_event))
         monitor_worker.start()
 
-        process_completed_successfully = True
+        process_result = "completed successfully"
         process_start_time = datetime.now()
         try:
             # if first stage input is a path, scan the path and fill the first input_queue
@@ -593,31 +628,37 @@ class DatasetProcessor:
                         input_queues[0].put({"scan_path": scan_path, "file_path": os.path.join(root, file)})
             
             # wait for each stage to finish
+            total_errors = 0
             for stage in process_stages:
-                stage._finish_worker_queue()
+                total_errors += stage._finish_worker_queue()
+
+            if total_errors > 0:
+                process_result = f"completed with {total_errors} errors"
 
         except (KeyboardInterrupt, Exception) as e:
-            process_completed_successfully = False
+            process_result = "aborted" if isinstance(e, KeyboardInterrupt) else "failed"
             logger.error("".join(format_exception(type(e), e, e.__traceback__)))
 
+            # terminate / kill all worker processes that are still running in any stage
+            logger.info("Terminating all worker processes...")
             for stage in process_stages:
                 stage._terminate()
 
-        # gracefully close monitor process
+        # close monitor process
         monitor_finish_event.set()
-        _terminate_worker(monitor_worker)
-        monitor_worker.close()
+        _terminate_worker(monitor_worker, close=True)
         
-        # close logging process
+        # summarize results
         process_finish_time = datetime.now(); print("")
-        if process_completed_successfully == True:
-            logger.info(f"Process '{process_name}' completed successfully - time elapsed: {process_finish_time - process_start_time}")
-        else:
-            logger.error(f"Process '{process_name}' failed - time elapsed: {process_finish_time - process_start_time}")
-        
+        for stage in process_stages:
+            processed, total = stage.input_queue.get_processed_total()
+            errors, warnings = stage.error_queue.qsize(), stage.warning_queue.qsize()
+            logger.info(f"{stage.__class__.__name__}: {processed}/{total} processed - {errors} errors, {warnings} warnings")
+        logger.info(f"Process '{process_name}' {process_result} - time elapsed: {process_finish_time - process_start_time}")
+
+        # close logging process
         log_handler.emit(None) # None value signals the log_worker process to gracefully end
-        _terminate_worker(log_worker)
-        log_worker.close()
+        _terminate_worker(log_worker, close=True)
 
         # finally, release all memory/resources for all worker processes
         for stage in process_stages:
