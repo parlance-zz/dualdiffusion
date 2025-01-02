@@ -57,6 +57,9 @@ class Import(DatasetProcessStage):
                 
                 if self.processor_config.test_mode == False:
                     os.makedirs(os.path.dirname(dst_path), exist_ok=True)
+
+                    # todo: this is pretty slow, python reads the entire file contents into
+                    # memory before writing the new file.
                     with self.critical_lock:
                         shutil.copy2(src_path, dst_path)
 
