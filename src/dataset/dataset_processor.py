@@ -687,9 +687,13 @@ class DatasetProcessor:
         cpu_stage_procs = max(remaining_num_procs // max(num_cpu_stages, 1), 1)
         stage_num_procs = [num_proc if num_proc > 0 else cpu_stage_procs for num_proc in stage_num_procs]
 
-        # setup processing queue chain and start workers for each stage
+         # disable sigint and sigterm to avoid data corruption
         original_sigint_handler = signal.getsignal(signal.SIGINT)
-        signal.signal(signal.SIGINT, signal.SIG_IGN) # disable sigint to avoid data corruption
+        original_sigterm_handler = signal.getsignal(signal.SIGTERM)
+        signal.signal(signal.SIGINT, signal.SIG_IGN)
+        signal.signal(signal.SIGTERM, signal.SIG_IGN)
+
+        # setup processing queue chain and start workers for each stage
         logger.info(f"Process layout for {len(process_stages)} stage(s) using {sum(stage_num_procs)} total processes")
         input_queues: list[WorkQueue] = []
 
@@ -717,7 +721,8 @@ class DatasetProcessor:
 
         process_result = "completed successfully"
         process_start_time = datetime.now()
-        signal.signal(signal.SIGINT, original_sigint_handler) # re-enable sigint as it will be caught
+        signal.signal(signal.SIGINT, original_sigint_handler)  # re-enable sigint as it will be caught
+        signal.signal(signal.SIGTERM, original_sigint_handler) # set sigterm to sigint handler
         try:
             # if first stage input is a list of paths, scan the paths and fill the first input_queue
             if scan_paths is not None:
@@ -735,7 +740,10 @@ class DatasetProcessor:
                 process_result = f"completed with {total_errors} errors"
 
         except (KeyboardInterrupt, Exception) as e:
-            signal.signal(signal.SIGINT, signal.SIG_IGN) # disable sigint again to avoid data corruption
+            # disable sigint and sigterm again to avoid data corruption
+            signal.signal(signal.SIGINT, signal.SIG_IGN)
+            signal.signal(signal.SIGTERM, signal.SIG_IGN)
+
             process_result = "aborted" if isinstance(e, KeyboardInterrupt) else "failed"
             logger.error("".join(format_exception(type(e), e, e.__traceback__)))
 
@@ -744,6 +752,10 @@ class DatasetProcessor:
             for stage in process_stages:
                 stage._terminate()
 
+        # with worker processes terminated, finally re-enable sigint and sigterm once more
+        signal.signal(signal.SIGINT, original_sigint_handler)
+        signal.signal(signal.SIGTERM, original_sigterm_handler)
+        
         # close monitor process
         monitor_finish_event.set()
         _terminate_worker(monitor_worker, close=True)
