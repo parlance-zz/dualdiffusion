@@ -210,7 +210,7 @@ class WorkerLogHandler(logging.Handler):
 
 # main workhorse class for dataset processing. processes should subclass DatasetProcessStage and
 # implement process (required), and get_stage_type, start_process, finish_process,
-# get_max_output_queue_size (optional)
+# get_max_output_queue_size, info_banner (optional)
 class DatasetProcessStage(ABC):
 
     def __init__(self) -> None:
@@ -290,6 +290,12 @@ class DatasetProcessStage(ABC):
     def _close(self) -> None:
         for worker in self.workers:
             worker.close()
+
+    # subclass can override this to print some info at the start of processing
+    # this is executed on the first process stage in the main process
+    # before any worker processes are started
+    def info_banner(self, logger: logging.Logger) -> None:
+        pass
 
     # io stages get 1 process, cuda stages get 1 process per device, the remaining processes are
     # evenly divided between any cpu stages until max_num_proc is reached
@@ -615,7 +621,10 @@ class DatasetProcessor:
             if config.DATASET_PATH is None:
                 raise ValueError("DATASET_PATH not defined")
             input = [config.DATASET_PATH]
-        
+
+        elif isinstance(input, str):
+            input = [input]
+
         if isinstance(input, list):
             scan_paths = input
             input_queue = WorkQueue()
@@ -655,9 +664,12 @@ class DatasetProcessor:
         logger.info("")
 
         # 3 second chance to abort if force overwrite is enabled
-        if self.config.force_overwrite == True:
+        if self.config.force_overwrite == True and self.config.test_mode == False:
             logger.warning("WARNING: Force overwrite is enabled - existing files will be overwritten (Press ctrl+c to abort)")
             time.sleep(3)
+
+        if self.config.test_mode == True:
+            logger.warning("WARNING: Test mode is enabled - no files will be written")
 
         # if no cuda devices are configured but there is a cuda stage in the process, use all available cuda devices
         if len(cuda_stage_names) > 0 and len(self.config.cuda_devices) == 0:
@@ -716,8 +728,8 @@ class DatasetProcessor:
             input_queue = stage._start_worker_queue(
                 input_queue, log_queue, num_proc, self.config)
 
-        logger.info("")
-        time.sleep(0.1)
+        logger.info(""); process_stages[0].info_banner(logger); logger.info("")
+        time.sleep(0.2)
 
         # start a process for monitoring progress of all stages
         monitor_finish_event = mp.Event()

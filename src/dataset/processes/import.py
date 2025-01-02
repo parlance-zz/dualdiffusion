@@ -26,20 +26,21 @@ from typing import Optional, Union
 import os
 import re as regex
 import shutil
+import logging
 
 from dataset.dataset_processor import DatasetProcessor, DatasetProcessStage
 
 class Import(DatasetProcessStage):
 
+    def info_banner(self, logger: logging.Logger) -> None:
+        root_dst_path = self.processor_config.import_dst_path or config.DATASET_PATH
+        logger.info(f"Importing files from: {self.processor_config.import_paths}")
+        logger.info(f"Importing files to: {root_dst_path}")
+
     def start_process(self):
         self.filter_pattern = regex.compile(self.processor_config.import_filter_regex)
         self.filter_group = self.processor_config.import_filter_group
         self.root_dst_path = self.processor_config.import_dst_path or config.DATASET_PATH
-
-        if self.rank == 0:
-            self.logger.info(f"Importing files from: {self.processor_config.import_paths}")
-            self.logger.info(f"Importing files to: {self.root_dst_path}")
-            self.logger.info("")
 
     def process(self, input_dict: dict) -> Optional[Union[dict, list[dict]]]:
         match = self.filter_pattern.match(os.path.basename(input_dict["file_path"]))
