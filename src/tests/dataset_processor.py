@@ -41,7 +41,6 @@ if __name__ == "__main__":
         [
             TestStage()
         ],
-        input="Y:/dataset/negative_examples"
     )
 
     os._exit(0) # for whatever reason exiting is unreliable on ctrl+c without this :(

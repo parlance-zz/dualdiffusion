@@ -23,16 +23,18 @@
 import utils.config as config
 
 from dataclasses import dataclass
-from typing import Generator, Optional, Union, Any
+from typing import Generator, Optional, Union, Literal, Any
 from abc import ABC, abstractmethod
 from traceback import format_exception
 from queue import Full as QueueFullException
 from datetime import datetime
+from multiprocessing.synchronize import Lock, Event
 import os
 import json
 import logging
 import shutil
 import time
+import signal
 
 from tqdm.auto import tqdm
 import torch
@@ -41,39 +43,46 @@ import torch.multiprocessing as mp
 import safetensors.torch as safetensors
 
 from utils.dual_diffusion_utils import (
-    dict_str, normalize, save_safetensors, get_audio_metadata, init_logging, init_cuda
+    dict_str, normalize, save_safetensors, get_audio_metadata,
+    init_logging, init_cuda, get_available_torch_devices
 )
 
 
-def _process_worker(stage: "DatasetProcessStage", rank: int, cuda_device: Optional[str]) -> None:
+def _process_worker(stage: "DatasetProcessStage", rank: int,
+        cuda_device: Optional[str], critical_lock: Lock) -> None:
 
-    stage_name = stage.__class__.__name__
+    # disable sigint, it will be handled by the main process
+    signal.signal(signal.SIGINT, signal.SIG_IGN)
 
     # init pytorch 
     if cuda_device is not None:
-        assert stage.is_cuda_stage()
+        assert stage.get_stage_type() == "cuda"
         init_cuda()
-    torch.set_num_threads(1)
-    torch.set_num_interop_threads(1)
+    
+    # if using cpu fallback for a cuda stage then allow default torch threads, otherwise set to 1
+    if cuda_device != "cpu":
+        torch.set_num_threads(1)
+        torch.set_num_interop_threads(1)
 
     # init logging
+    stage_name = stage.__class__.__name__
     logger = logging.getLogger(stage_name)
     log_handler = WorkerLogHandler(stage.log_queue, stage.warning_queue, stage.error_queue, stage_name)
     logging.basicConfig(level=logging.DEBUG, handlers=[log_handler])
 
     # init process
     try:
-        stage._init_process(rank, cuda_device, logger)
+        stage._init_process(rank, cuda_device, logger, critical_lock)
         stage.start_process()
     except Exception as e:
         logger.error("".join(format_exception(type(e), e, e.__traceback__)))
-        return
+        os._exit(1)
     
     while True:
         input_dict: dict = stage.input_queue.get()
         if input_dict is None:
             stage.finish_process()
-            return
+            os._exit(0)
 
         try:
             output = stage.process(input_dict)
@@ -91,16 +100,22 @@ def _process_worker(stage: "DatasetProcessStage", rank: int, cuda_device: Option
 
 def _log_worker(process_name: str, verbose: bool, log_queue: mp.Queue):
 
+    # disable sigint, it will be handled by the main process
+    signal.signal(signal.SIGINT, signal.SIG_IGN)
+
     logger = init_logging(process_name, group_name="dataset_processor", verbose=verbose)
     while True:
         record = log_queue.get()
-        if record is None: return
+        if record is None: os._exit(0)
 
         logger.handle(record)
         for handler in logger.handlers:
             handler.flush()
 
-def _monitor_worker(input_queues: list["WorkQueue"], stage_names: list[str], finish_event) -> None:
+def _monitor_worker(input_queues: list["WorkQueue"], stage_names: list[str], finish_event: Event) -> None:
+
+    # disable sigint, it will be handled by the main process
+    signal.signal(signal.SIGINT, signal.SIG_IGN)
 
     progress_bars = []
     for name in stage_names:
@@ -119,21 +134,23 @@ def _monitor_worker(input_queues: list["WorkQueue"], stage_names: list[str], fin
             update_progress(progress_bar, input_queue)
         
         if finish_event.is_set(): break
-        time.sleep(0.1)
+        time.sleep(0.5)
 
     for progress_bar, input_queue in zip(progress_bars, input_queues):
         update_progress(progress_bar, input_queue)
         progress_bar.close()
 
-def _terminate_worker(process: mp.Process, timeout: float = 0.1, close: bool = False) -> None:
+    os._exit(0)
+
+def _terminate_worker(process: mp.Process, timeout: float = 0.25, close: bool = False) -> None:
 
     process.join(timeout=timeout)
 
-    if process.exitcode is None:
+    if process.is_alive() == True:
         process.terminate()
         process.join(timeout=timeout)
 
-        if process.exitcode is None:
+        if process.is_alive() == True:
             process.kill()
             process.join()
 
@@ -181,7 +198,8 @@ class WorkerLogHandler(logging.Handler):
 
     def emit(self, record: Optional[logging.LogRecord]) -> None:
         if record is not None:
-            record.msg = f"{self.process_name}: {record.msg}"
+            if record.msg not in ("" , "\n"):
+                record.msg = f"{self.process_name}: {record.msg}"
 
             if record.levelno >= logging.ERROR:
                 self.error_queue.put(record)
@@ -190,15 +208,18 @@ class WorkerLogHandler(logging.Handler):
 
         self.log_queue.put(record)
 
+# main workhorse class for dataset processing. processes should subclass DatasetProcessStage and
+# implement process (required) and get_stage_type, start_process, finish_process (optional)
 class DatasetProcessStage(ABC):
 
     def __init__(self) -> None:
         pass
 
     def _start_worker_queue(self, input_queue: WorkQueue, log_queue: mp.Queue,
-                processor_config: "DatasetProcessorConfig") -> WorkQueue:
+                num_proc: int, processor_config: "DatasetProcessorConfig") -> WorkQueue:
 
         self.processor_config = processor_config
+        self.num_proc = num_proc
 
         self.log_queue = log_queue
         self.warning_queue = mp.Queue()
@@ -207,19 +228,19 @@ class DatasetProcessStage(ABC):
         self.input_queue = input_queue
         self.output_queue = WorkQueue()
 
-        if self.is_cuda_stage() == True:
-            num_proc = len(self.processor_config.cuda_devices)
-        else:
-            num_proc = 4#self.processor_config.max_num_proc #todo:
-
+        critical_locks = [mp.Lock() for _ in range(num_proc)]
         workers: list[mp.Process] = []
-        for rank in range(num_proc):
+
+        for rank in range(self.num_proc):
+            cuda_device = self.processor_config.cuda_devices[rank] if self.get_stage_type() == "cuda" else None
             worker = mp.Process(target=_process_worker, daemon=True,
-                args=(self, rank, self.processor_config.cuda_devices[rank] if self.is_cuda_stage() else None))
+                args=(self, rank, cuda_device, critical_locks[rank]))
             workers.append(worker)
             worker.start()
 
         self.workers = workers
+        self.critical_locks = critical_locks
+
         return self.output_queue
 
     # adds one None per worker process to the input queue to signal end of input
@@ -239,7 +260,7 @@ class DatasetProcessStage(ABC):
             num_running = 0
             for worker in self.workers:
                 worker.join(timeout=0.01)
-                if worker.exitcode is None:
+                if worker.is_alive() == True:
                     num_running += 1
 
             if num_running == 0: break
@@ -247,32 +268,32 @@ class DatasetProcessStage(ABC):
 
         return self.error_queue.qsize()
 
+    def _init_process(self, rank: int, device: Optional[str],
+            logger: logging.Logger, critical_lock: Lock) -> None:
+        self.rank = rank
+        self.device = device
+        self.logger = logger
+        self.critical_lock = critical_lock
+
+    # acquiring the associated critical lock before terminating each worker will prevent data corruption
+    def _terminate(self) -> None:
+        for rank, worker in enumerate(self.workers):
+            with self.critical_locks[rank]:
+                worker.terminate()
+        
+        for worker in self.workers:
+            if worker.is_alive() == True:
+                worker.join()
+
     # should only be called after _ALL_ workers have terminated due to shared memory
     def _close(self) -> None:
         for worker in self.workers:
             worker.close()
 
-    # timeouts are necessary because if the main process blocks it will no longer respond to ctrl+c
-    def _terminate(self, timeout: float = 1.0) -> None:
-        for worker in self.workers:
-            worker.terminate()
-
-        for worker in self.workers:
-            worker.join(timeout=timeout)
-            if worker.exitcode is None:
-                worker.kill()
-        
-        for worker in self.workers:
-            if worker.exitcode is None:
-                worker.join()
-
-    def _init_process(self, rank: int, device: Optional[str], logger: logging.Logger) -> None:
-        self.rank = rank
-        self.device = device
-        self.logger = logger
-
-    def is_cuda_stage(self) -> bool:
-        return False
+    # io stages get 1 process, cuda stages get 1 process per device, the remaining processes are
+    # evenly divided between any cpu stages until max_num_proc is reached
+    def get_stage_type(self) -> Literal["io", "cpu", "cuda"]:
+        return "io"
 
     def start_process(self) -> None:
         pass
@@ -292,7 +313,14 @@ class DatasetProcessorConfig:
     target_lufs: float          = -20.
     max_num_proc: Optional[int] = None
     cuda_devices: list[str]     = ("cuda",)
+    force_overwrite: bool       = False
+    test_mode: bool             = False
     verbose: bool               = False
+
+    import_paths: list[str]        = ()
+    import_filter_regex: str       = "(?i)^.*\\.flac$" #"^t_[^_]*_(.*)\\.flac$",
+    import_filter_group: int       = 0 # 1
+    import_dst_path: Optional[str] = None
 
     pre_encoded_latents_vae: Optional[str] = None
     pre_encoded_latents_num_time_offset_augmentations: int = 8
@@ -393,8 +421,13 @@ class DatasetProcessor:
             raise FileNotFoundError(f"CONFIG_PATH '{config.CONFIG_PATH}' not found")
         
         self.config = DatasetProcessorConfig(
-            **config.load_json(os.path.join(config.CONFIG_PATH, "dataset", "dataset.json")))    
+            **config.load_json(os.path.join(config.CONFIG_PATH, "dataset", "dataset.json")))
+        
         self.config.max_num_proc = self.config.max_num_proc or mp.cpu_count() // 2
+        if self.config.cuda_devices is None:
+            self.config.cuda_devices = []
+        if isinstance(self.config.cuda_devices, str):
+            self.config.cuda_devices = [self.config.cuda_devices]
         
     def load_splits(self) -> None:
         splits = [
@@ -570,28 +603,38 @@ class DatasetProcessor:
 
     # process a pipeline of DatasetProcessStage objects in parallel with a specified input path or WorkQueue
     def process(self, process_name: str, process_stages: list[DatasetProcessStage],
-                input: Optional[Union[str, WorkQueue]] = None) -> None:
+                input: Optional[Union[list[str], WorkQueue]] = None) -> None:
     
         # first stage input is either a specified path, None (dataset path), or pre-filled WorkQueue
-        if input is None or isinstance(input, str):
-            scan_path = input or config.DATASET_PATH
+        if input is None:
+            if config.DATASET_PATH is None:
+                raise ValueError("DATASET_PATH not defined")
+            input = [config.DATASET_PATH]
+        
+        if isinstance(input, list):
+            scan_paths = input
             input_queue = WorkQueue()
 
-            if scan_path is None:
-                raise ValueError("DATASET_PATH not defined")
-            if not os.path.isdir(config.DATASET_PATH):
-                raise FileNotFoundError(f"Input path '{scan_path}' not found")
-            
+            for scan_path in scan_paths:
+                if not os.path.isdir(scan_path):
+                    raise FileNotFoundError(f"Input path '{scan_path}' not found")
         elif isinstance(input, WorkQueue):
-            scan_path = None
+            scan_paths = None
             input_queue = input
         else:
             raise ValueError(f"Unrecognized input type in DatasetProcessor.process: {type(input)}")
 
         # only one stage is allowed to have cuda device(s)
-        cuda_stage_names = [stage.__class__.__name__ for stage in process_stages if stage.is_cuda_stage()]
+        cuda_stage_names = [stage.__class__.__name__ for stage in process_stages if stage.get_stage_type() == "cuda"]
         if len(cuda_stage_names) > 1:
             raise ValueError(f"More than one stage has cuda devices: {cuda_stage_names}")
+
+        # validate selected cuda devices if there is a cuda stage
+        if len(cuda_stage_names) > 0:
+            available_cuda_devices = get_available_torch_devices()
+            for device in self.config.cuda_devices:
+                if device not in available_cuda_devices:
+                    raise ValueError(f"Selected cuda device '{device}' not available")
 
         # start logging process
         log_queue = mp.Queue()
@@ -604,15 +647,69 @@ class DatasetProcessor:
         warning_queue, error_queue = mp.Queue(), mp.Queue()
         log_handler = WorkerLogHandler(log_queue, warning_queue, error_queue, "DatasetProcessor")
         logging.basicConfig(level=logging.DEBUG, handlers=[log_handler])
+        logger.info("")
+
+        # 3 second chance to abort if force overwrite is enabled
+        if self.config.force_overwrite == True:
+            logger.warning("WARNING: Force overwrite is enabled - existing files will be overwritten (Press ctrl+c to abort)")
+            time.sleep(3)
+
+        # if no cuda devices are configured but there is a cuda stage in the process, use all available cuda devices
+        if len(cuda_stage_names) > 0 and len(self.config.cuda_devices) == 0:
+            if len(available_cuda_devices) > 0:
+                logger.warning(f"No cuda devices configured, using all available cuda devices ({available_cuda_devices})")
+                self.config.cuda_devices = available_cuda_devices
+            else: # fallback to cpu for cuda stage if no devices are available
+                logger.warning("No cuda devices available, using cpu processing only")
+                self.config.cuda_devices = ["cpu"]
+        
+        # allocate processes to each stage based on stage type
+        stage_names = [stage.__class__.__name__ for stage in process_stages]
+        stage_types = [stage.get_stage_type() for stage in process_stages]
+
+        remaining_num_procs = self.config.max_num_proc
+        num_cpu_stages = 0
+        stage_num_procs: list[int] = []
+
+        for stage, stage_type in zip(process_stages, stage_types):
+            if stage_type == "io":
+                stage_num_procs.append(1)
+            elif stage_type == "cuda":
+                stage_num_procs.append(len(self.config.cuda_devices))
+            elif stage_type == "cpu":
+                stage_num_procs.append(0)
+                num_cpu_stages += 1
+            else:
+                raise ValueError(f"Unrecognized stage type '{stage_type}'")
+            
+            remaining_num_procs -= stage_num_procs[-1]
+
+        cpu_stage_procs = max(remaining_num_procs // max(num_cpu_stages, 1), 1)
+        stage_num_procs = [num_proc if num_proc > 0 else cpu_stage_procs for num_proc in stage_num_procs]
 
         # setup processing queue chain and start workers for each stage
+        original_sigint_handler = signal.getsignal(signal.SIGINT)
+        signal.signal(signal.SIGINT, signal.SIG_IGN) # disable sigint to avoid data corruption
+        logger.info(f"Process layout for {len(process_stages)} stage(s) using {sum(stage_num_procs)} total processes")
         input_queues: list[WorkQueue] = []
-        for stage in process_stages:
+
+        for stage, num_proc, stage_name, stage_type in zip(process_stages, stage_num_procs,
+                                                           stage_names, stage_types):
+            logger.info(
+                f"Stage: {stage_name:<{max(len(n) for n in stage_names)+1}} "
+                f"Type: {stage_type:<{max(len(t) for t in stage_types)+1}} "
+                f"Processes: {num_proc:<{3}}"
+                f"CUDA Devices: {self.config.cuda_devices if stage_type == 'cuda' else 'n/a'} "
+            )
+
             input_queues.append(input_queue)
-            input_queue = stage._start_worker_queue(input_queue, log_queue, self.config)
+            input_queue = stage._start_worker_queue(
+                input_queue, log_queue, num_proc, self.config)
+
+        logger.info("")
+        time.sleep(0.1)
 
         # start a process for monitoring progress of all stages
-        stage_names = [stage.__class__.__name__ for stage in process_stages]
         monitor_finish_event = mp.Event()
         monitor_worker = mp.Process(target=_monitor_worker, daemon=True,
             args=(input_queues, stage_names, monitor_finish_event))
@@ -620,12 +717,14 @@ class DatasetProcessor:
 
         process_result = "completed successfully"
         process_start_time = datetime.now()
+        signal.signal(signal.SIGINT, original_sigint_handler) # re-enable sigint as it will be caught
         try:
-            # if first stage input is a path, scan the path and fill the first input_queue
-            if scan_path is not None:
-                for root, _, files in os.walk(scan_path):
-                    for file in files:
-                        input_queues[0].put({"scan_path": scan_path, "file_path": os.path.join(root, file)})
+            # if first stage input is a list of paths, scan the paths and fill the first input_queue
+            if scan_paths is not None:
+                for scan_path in scan_paths:
+                    for root, _, files in os.walk(scan_path):
+                        for file in files:
+                            input_queues[0].put({"scan_path": scan_path, "file_path": os.path.join(root, file)})
             
             # wait for each stage to finish
             total_errors = 0
@@ -636,11 +735,12 @@ class DatasetProcessor:
                 process_result = f"completed with {total_errors} errors"
 
         except (KeyboardInterrupt, Exception) as e:
+            signal.signal(signal.SIGINT, signal.SIG_IGN) # disable sigint again to avoid data corruption
             process_result = "aborted" if isinstance(e, KeyboardInterrupt) else "failed"
             logger.error("".join(format_exception(type(e), e, e.__traceback__)))
 
-            # terminate / kill all worker processes that are still running in any stage
-            logger.info("Terminating all worker processes...")
+            # safely terminate any running worker processes by acquiring each per-process critical section lock
+            logger.info("Safely terminating all worker processes...")
             for stage in process_stages:
                 stage._terminate()
 
@@ -649,12 +749,12 @@ class DatasetProcessor:
         _terminate_worker(monitor_worker, close=True)
         
         # summarize results
-        process_finish_time = datetime.now(); print("")
+        process_finish_time = datetime.now(); logger.info("")
         for stage in process_stages:
             processed, total = stage.input_queue.get_processed_total()
             errors, warnings = stage.error_queue.qsize(), stage.warning_queue.qsize()
             logger.info(f"{stage.__class__.__name__}: {processed}/{total} processed - {errors} errors, {warnings} warnings")
-        logger.info(f"Process '{process_name}' {process_result} - time elapsed: {process_finish_time - process_start_time}")
+        logger.info(f"Process '{process_name}' {process_result} - time elapsed: {process_finish_time - process_start_time}\n")
 
         # close logging process
         log_handler.emit(None) # None value signals the log_worker process to gracefully end
@@ -736,13 +836,6 @@ class DatasetProcessor:
             self.logger.info("")
 
         # transcoding in dataset_processor removed, it is done better in an external tool (foobar2000)
-        
-    def filter(self) -> None:
-
-        # todo: detect any duplicate / highly similar samples in splits,
-        # detect any abnormal / anomalous samples in splits
-        # if any found, prompt to remove them
-        pass
     
     def validate_metadata(self) -> None:
         
@@ -925,7 +1018,6 @@ class DatasetProcessor:
 
     def encode_latents(self) -> None:
 
-        # todo: pre-encoding latents and embeddings is done in separate scripts, ideally launching them from here would be nice
         """
         # if self.config.pre_encoded_latents_vae is null skip encode_latents step
         if self.config.pre_encoded_latents_vae is None:

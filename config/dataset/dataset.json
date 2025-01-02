@@ -4,7 +4,12 @@
   "target_lufs": -20.0,
   "max_num_proc": null,
   "cuda_devices": "cuda",
-  "verbose": true,
+  "force_overwrite": false,
+  "test_mode": false,
+  "verbose": false,
+
+  "import_paths": ["Y:/dataset_import/spc/transcoded"],
+  "import_dst_path": "Y:/dataset/spc",
 
   "pre_encoded_latents_vae": "edm2_vt7_12d_4_clap",
   "pre_encoded_latents_num_time_offset_augmentations": 8,

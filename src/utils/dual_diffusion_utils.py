@@ -26,11 +26,8 @@ from io import BytesIO
 from typing import Optional, Union, Any
 from json import dumps as json_dumps
 from datetime import datetime
-from queue import SimpleQueue
 import os
 import logging
-import signal
-import threading
 
 import numpy as np
 import torch
@@ -53,39 +50,6 @@ class TF32_Disabled: # disables reduced precision tensor cores inside the contex
     def __exit__(self, exc_type, exc_value, traceback):
         torch.backends.cuda.matmul.allow_tf32 = self.original_matmul_allow_tf32
         torch.backends.cudnn.allow_tf32 = self.original_cudnn_allow_tf32
-        return False
-
-# globals for CriticalSection context manager
-_CRITICAL_SIGNALS = [signal.SIGABRT, signal.SIGINT, signal.SIGTERM]
-if hasattr(signal, "SIGKILL"): _CRITICAL_SIGNALS += [signal.SIGKILL]
-if hasattr(signal, "SIGQUIT"): _CRITICAL_SIGNALS += [signal.SIGQUIT]
-
-_CRITICAL_SIGNAL_QUEUE = SimpleQueue()
-def _critical_signal_handler(signum, frame):
-    _CRITICAL_SIGNAL_QUEUE.put((signum, frame))
-
-_CRITICAL_THREAD_LOCK = threading.Lock()
-
-class CriticalSection: # ignore signals that would terminate the process inside the context
-    def __enter__(self):
-        _CRITICAL_THREAD_LOCK.acquire()
-        
-        # save original signal handlers
-        self.original_handlers = {}
-        for sig in _CRITICAL_SIGNALS:
-            self.original_handlers[sig] = signal.signal(sig, _critical_signal_handler)
-
-    def __exit__(self, exc_type, exc_value, traceback):
-        # restore original signal handlers
-        for sig, handler in self.original_handlers.items():
-            signal.signal(sig, handler)
-
-        # process deferred signals
-        while not _CRITICAL_SIGNAL_QUEUE.empty():
-            signum, _ = _CRITICAL_SIGNAL_QUEUE.get()
-            signal.raise_signal(signum)
-
-        _CRITICAL_THREAD_LOCK.release()
         return False
 
 def init_cuda(default_device: Optional[torch.device] = None) -> None:
@@ -236,8 +200,7 @@ def save_tensor_raw(tensor: torch.Tensor, output_path: str) -> None:
     elif tensor.dtype == torch.complex32:
         tensor = tensor.to(torch.complex64)
     
-    with CriticalSection():
-        tensor.detach().resolve_conj().cpu().numpy().tofile(output_path)
+    tensor.detach().resolve_conj().cpu().numpy().tofile(output_path)
 
 @torch.inference_mode()
 def normalize_lufs(raw_samples: torch.Tensor,
@@ -310,12 +273,11 @@ def save_audio(raw_samples: torch.Tensor,
     audio_format = os.path.splitext(output_path)[1].lower()
     bits_per_sample = 16 if audio_format in [".wav", ".flac"] else None
 
-    with CriticalSection():
-        torchaudio.save(output_path, raw_samples.cpu(),
-            sample_rate, bits_per_sample=bits_per_sample, compression=compression)
+    torchaudio.save(output_path, raw_samples.cpu(),
+        sample_rate, bits_per_sample=bits_per_sample, compression=compression)
 
-        if metadata is not None:
-            update_audio_metadata(output_path, metadata)
+    if metadata is not None:
+        update_audio_metadata(output_path, metadata)
 
     return output_path
 
@@ -357,8 +319,7 @@ def update_audio_metadata(audio_path: str, metadata: Optional[dict] = None,
             audio_file["POPM:Windows Media Player 9 Series"] = mutagen.id3.POPM(
                 email="Windows Media Player 9 Series", rating=rating)
 
-        with CriticalSection():
-            audio_file.save()
+        audio_file.save()
 
 def get_audio_metadata(audio_path: str) -> dict:
     audio_format = os.path.splitext(audio_path)[1].lower()
@@ -438,8 +399,7 @@ def save_safetensors(tensors_dict: dict[str, torch.Tensor], output_path: str,
             val = torch.tensor(val)
         tensors_dict[key] = val
 
-    with CriticalSection():
-        safetensors.save_file(tensors_dict, output_path, metadata=metadata)
+    safetensors.save_file(tensors_dict, output_path, metadata=metadata)
 
 def load_safetensors(input_path: str, device: Optional[torch.device] = None) -> dict[str, torch.Tensor]:
     return safetensors.load_file(input_path, device=device)
@@ -463,8 +423,7 @@ def update_safetensors_metadata(safetensors_path: str,
     metadata = metadata or {}
     metadata.update(new_metadata)
 
-    with CriticalSection():
-        safetensors.save_file(tensors_dict, safetensors_path, metadata=metadata)
+    safetensors.save_file(tensors_dict, safetensors_path, metadata=metadata)
 
 # recursively (through dicts and class instances) move all tensors to CPU
 def move_tensors_to_cpu(instance: Union[dict, torch.Tensor, Any]) -> Any:
@@ -579,14 +538,9 @@ def tensor_to_img(x: torch.Tensor,
 
     return img
 
-def save_img(np_img: np.ndarray, img_path: str, critical: bool = False) -> None:
+def save_img(np_img: np.ndarray, img_path: str) -> None:
     os.makedirs(os.path.dirname(img_path), exist_ok=True)
-
-    if critical == True:
-        with CriticalSection():
-            cv2.imwrite(img_path, np_img)
-    else:
-        cv2.imwrite(img_path, np_img)
+    cv2.imwrite(img_path, np_img)
 
 def open_img_window(name: str,
                     width:  Optional[int] = None,
