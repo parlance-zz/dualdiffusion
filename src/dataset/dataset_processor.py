@@ -209,7 +209,8 @@ class WorkerLogHandler(logging.Handler):
         self.log_queue.put(record)
 
 # main workhorse class for dataset processing. processes should subclass DatasetProcessStage and
-# implement process (required) and get_stage_type, start_process, finish_process (optional)
+# implement process (required), and get_stage_type, start_process, finish_process,
+# get_max_output_queue_size (optional)
 class DatasetProcessStage(ABC):
 
     def __init__(self) -> None:
@@ -226,7 +227,7 @@ class DatasetProcessStage(ABC):
         self.error_queue = mp.Queue()
 
         self.input_queue = input_queue
-        self.output_queue = WorkQueue()
+        self.output_queue = WorkQueue(self.get_max_output_queue_size())
 
         critical_locks = [mp.Lock() for _ in range(num_proc)]
         workers: list[mp.Process] = []
@@ -295,6 +296,10 @@ class DatasetProcessStage(ABC):
     def get_stage_type(self) -> Literal["io", "cpu", "cuda"]:
         return "io"
 
+    # subclass can return non-zero value if the output items consume significant memory
+    def get_max_output_queue_size(self) -> int:
+        return 0
+    
     def start_process(self) -> None:
         pass
 
@@ -664,6 +669,7 @@ class DatasetProcessor:
                 self.config.cuda_devices = ["cpu"]
         
         # allocate processes to each stage based on stage type
+        # todo: if this isn't good enough we should use PriorityQueue to create a cpu proc pool
         stage_names = [stage.__class__.__name__ for stage in process_stages]
         stage_types = [stage.get_stage_type() for stage in process_stages]
 
@@ -755,7 +761,7 @@ class DatasetProcessor:
         # with worker processes terminated, finally re-enable sigint and sigterm once more
         signal.signal(signal.SIGINT, original_sigint_handler)
         signal.signal(signal.SIGTERM, original_sigterm_handler)
-        
+
         # close monitor process
         monitor_finish_event.set()
         _terminate_worker(monitor_worker, close=True)
