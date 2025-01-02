@@ -52,13 +52,17 @@ class Import(DatasetProcessStage):
             src_size = os.path.getsize(src_path)
             dst_size = os.path.getsize(dst_path) if os.path.isfile(dst_path) else 0
 
-            if src_size != dst_size or self.processor_config.force_overwrite == True: 
+            if dst_size == 0 or self.processor_config.force_overwrite == True:
                 self.logger.debug(f"\"{src_path}\" -> \"{dst_path}\"")
                 
                 if self.processor_config.test_mode == False:
                     os.makedirs(os.path.dirname(dst_path), exist_ok=True)
                     with self.critical_lock:
                         shutil.copy2(src_path, dst_path)
+
+            elif src_size != dst_size:
+                self.logger.warning(
+                    f"Warning: file size mismatch: \"{src_path}\" ({src_size}) -> \"{dst_path}\" ({dst_size})")
         
         return None
 
