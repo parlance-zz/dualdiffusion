@@ -137,4 +137,4 @@ if __name__ == "__main__":
         input=config.DATASET_PATH,
     )
 
-    os._exit(0) # for whatever reason exiting is unreliable on ctrl+c without this :(
+    os._exit(0)

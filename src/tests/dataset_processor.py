@@ -24,14 +24,18 @@ from typing import Optional, Union
 import time
 import os
 
+import torch
+
 from dataset.dataset_processor import DatasetProcessor, DatasetProcessStage
 
 
 class TestStage(DatasetProcessStage):
 
+    @torch.inference_mode()
     def process(self, input_dict: dict) -> Optional[Union[dict, list[dict]]]:
         self.logger.debug(input_dict)
         time.sleep(0.01)
+        return None
 
 
 if __name__ == "__main__":
@@ -43,4 +47,4 @@ if __name__ == "__main__":
         ],
     )
 
-    os._exit(0) # for whatever reason exiting is unreliable on ctrl+c without this :(
+    os._exit(0)

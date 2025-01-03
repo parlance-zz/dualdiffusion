@@ -84,4 +84,4 @@ if __name__ == "__main__":
         input=dataset_processor.config.import_paths,
     )
 
-    os._exit(0) # for whatever reason exiting is unreliable on ctrl+c without this :(
+    os._exit(0)
