@@ -205,7 +205,8 @@ def save_tensor_raw(tensor: torch.Tensor, output_path: str) -> None:
 @torch.inference_mode()
 def normalize_lufs(raw_samples: torch.Tensor,
                    sample_rate: int,
-                   target_lufs: float = -15.) -> torch.Tensor:
+                   target_lufs: float = -15.,
+                   return_old_lufs: bool = False) -> torch.Tensor:
     
     original_shape = raw_samples.shape
     raw_samples = torch.nan_to_num(raw_samples, nan=0, posinf=0, neginf=0)
@@ -224,8 +225,11 @@ def normalize_lufs(raw_samples: torch.Tensor,
     gain = 10. ** ((target_lufs - current_lufs) / 20.0)
     gain = gain.view((*gain.shape,) + (1,) * (raw_samples.ndim - gain.ndim))
 
-    normalized_raw_samples = raw_samples * gain
-    return normalized_raw_samples.view(original_shape)
+    normalized_raw_samples = (raw_samples * gain).view(original_shape)
+    if return_old_lufs:
+        return normalized_raw_samples, current_lufs.item()
+    else:
+        return normalized_raw_samples
 
 # get the number of clipped samples in a raw audio tensor
 # clipping is defined as at least 2 consecutive samples with an absolute value > 1.0
@@ -309,7 +313,8 @@ def update_audio_metadata(audio_path: str, metadata: Optional[dict] = None,
                     audio_file.pop(key)
 
         for key in metadata:
-            if audio_format != ".mp3": audio_file[key] = metadata[key]
+            if audio_format != ".mp3":
+                audio_file[key] = metadata[key] if type(metadata[key]) not in [int, float] else str(metadata[key])
             else: audio_file[f"TXXX:{key}"] = mutagen.id3.TXXX(encoding=3, desc=key, text=metadata[key])
         
         # this works for windows explorer/media player but not VLC
