@@ -348,6 +348,7 @@ class DatasetProcessorConfig:
     max_num_proc: Optional[int] = None
     cuda_devices: list[str]     = ("cuda",)
     force_overwrite: bool       = False
+    copy_on_write: bool         = False
     test_mode: bool             = False
     verbose: bool               = False
 
@@ -355,6 +356,7 @@ class DatasetProcessorConfig:
     import_filter_regex: str       = "(?i)^.*\\.flac$" #"^t_[^_]*_(.*)\\.flac$",
     import_filter_group: int       = 0 # 1
     import_dst_path: Optional[str] = None
+    import_warn_file_size_mismatch: bool = True
 
     pre_encoded_latents_vae: Optional[str] = None
     pre_encoded_latents_num_time_offset_augmentations: int = 8
@@ -728,11 +730,9 @@ class DatasetProcessor:
         cpu_stage_procs = max(remaining_num_procs // max(num_cpu_stages, 1), 1)
         stage_num_procs = [num_proc if num_proc > 0 else cpu_stage_procs for num_proc in stage_num_procs]
 
-         # disable sigint and sigterm to avoid data corruption
+         # disable sigint to avoid data corruption
         original_sigint_handler = signal.getsignal(signal.SIGINT)
-        original_sigterm_handler = signal.getsignal(signal.SIGTERM)
         signal.signal(signal.SIGINT, signal.SIG_IGN)
-        signal.signal(signal.SIGTERM, signal.SIG_IGN)
 
         # setup processing queue chain and start workers for each stage
         logger.info(f"Process layout for {len(process_stages)} stage(s) using {sum(stage_num_procs)} total processes")
@@ -763,7 +763,6 @@ class DatasetProcessor:
         process_result = "completed successfully"
         process_start_time = datetime.now()
         signal.signal(signal.SIGINT, original_sigint_handler)  # re-enable sigint as it will be caught
-        signal.signal(signal.SIGTERM, original_sigint_handler) # set sigterm to sigint handler
         try:
             # if first stage input is a list of paths, scan the paths and fill the first input_queue
             if scan_paths is not None:
@@ -781,9 +780,8 @@ class DatasetProcessor:
                 process_result = f"completed with {total_errors} errors"
 
         except (KeyboardInterrupt, Exception) as e:
-            # disable sigint and sigterm again to avoid data corruption
+            # disable sigint to avoid data corruption while worker processes shut down
             signal.signal(signal.SIGINT, signal.SIG_IGN)
-            signal.signal(signal.SIGTERM, signal.SIG_IGN)
 
             process_result = "aborted" if isinstance(e, KeyboardInterrupt) else "failed"
             logger.error("".join(format_exception(type(e), e, e.__traceback__)))
@@ -794,9 +792,8 @@ class DatasetProcessor:
         for stage in reversed(process_stages):
             stage._terminate()
 
-        # with worker processes terminated, finally re-enable sigint and sigterm once more
+        # with worker processes terminated, finally re-enable sigint once more
         signal.signal(signal.SIGINT, original_sigint_handler)
-        signal.signal(signal.SIGTERM, original_sigterm_handler)
 
         # close monitor process
         monitor_finish_event.set()

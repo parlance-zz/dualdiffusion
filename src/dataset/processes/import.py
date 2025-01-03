@@ -68,7 +68,7 @@ class Import(DatasetProcessStage):
                     with self.critical_lock:
                         shutil.copy2(src_path, dst_path)
 
-            elif src_size != dst_size:
+            elif src_size != dst_size and self.processor_config.import_warn_file_size_mismatch == True:
                 self.logger.warning(
                     f"Warning: file size mismatch: \"{src_path}\" ({src_size}) -> \"{dst_path}\" ({dst_size})")
         
