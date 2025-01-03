@@ -28,6 +28,7 @@ from json import dumps as json_dumps
 from datetime import datetime
 import os
 import logging
+import shutil
 
 import numpy as np
 import torch
@@ -190,7 +191,7 @@ def sanitize_filename(filename: str) -> str:
     return ("".join(c for c in filename
         if c.isalnum() or c in (" ",".","_","-","+","(",")","[","]","{","}"))).strip()
 
-def save_tensor_raw(tensor: torch.Tensor, output_path: str) -> None:
+def save_tensor_raw(tensor: torch.Tensor, output_path: str, copy_on_write: bool = False) -> None:
 
     directory = os.path.dirname(output_path)
     os.makedirs(directory, exist_ok=True)
@@ -200,7 +201,25 @@ def save_tensor_raw(tensor: torch.Tensor, output_path: str) -> None:
     elif tensor.dtype == torch.complex32:
         tensor = tensor.to(torch.complex64)
     
-    tensor.detach().resolve_conj().cpu().numpy().tofile(output_path)
+    np_array = tensor.detach().resolve_conj().cpu().numpy()
+
+    if copy_on_write == True:
+        tmp_path = f"{output_path}.tmp"
+        try:
+            np_array.tofile(tmp_path)
+
+            shutil.move(tmp_path, output_path)
+            if os.path.isfile(tmp_path):
+                os.remove(tmp_path)
+
+        except Exception as e:
+            try:
+                if os.path.isfile(tmp_path):
+                    os.remove(tmp_path)
+            except: pass
+            raise e
+    else:
+        np_array.tofile(output_path)
 
 @torch.inference_mode()
 def normalize_lufs(raw_samples: torch.Tensor,
@@ -259,6 +278,7 @@ def save_audio(raw_samples: torch.Tensor,
                target_lufs: float = -15.,
                metadata: Optional[dict] = None,
                no_clobber: bool = False,
+               copy_on_write: bool = False,
                compression: Optional[torchaudio.io.CodecConfig] = None) -> str:
     
     raw_samples = raw_samples.detach().real.float()
@@ -277,16 +297,34 @@ def save_audio(raw_samples: torch.Tensor,
     audio_format = os.path.splitext(output_path)[1].lower()
     bits_per_sample = 16 if audio_format in [".wav", ".flac"] else None
 
-    torchaudio.save(output_path, raw_samples.cpu(),
-        sample_rate, bits_per_sample=bits_per_sample, compression=compression)
+    if copy_on_write == True:
+        tmp_path = f"{output_path}.tmp"
+        try:
+            torchaudio.save(tmp_path, raw_samples.cpu(),
+                sample_rate, bits_per_sample=bits_per_sample, compression=compression)
+            if metadata is not None:
+                update_audio_metadata(tmp_path, metadata)
 
-    if metadata is not None:
-        update_audio_metadata(output_path, metadata)
+            shutil.move(tmp_path, output_path)
+            if os.path.isfile(tmp_path):
+                os.remove(tmp_path)
+
+        except Exception as e:
+            try:
+                if os.path.isfile(tmp_path):
+                    os.remove(tmp_path)
+            except: pass
+            raise e
+    else:
+        torchaudio.save(output_path, raw_samples.cpu(),
+            sample_rate, bits_per_sample=bits_per_sample, compression=compression)
+        if metadata is not None:
+            update_audio_metadata(output_path, metadata)
 
     return output_path
 
 def update_audio_metadata(audio_path: str, metadata: Optional[dict] = None,
-                          rating: Optional[int] = None, clear_clap_fields: bool = False) -> None:
+        rating: Optional[int] = None, clear_clap_fields: bool = False, copy_on_write: bool = False) -> None:
     
     metadata = metadata or {}
     audio_format = os.path.splitext(audio_path)[1].lower()
@@ -324,7 +362,24 @@ def update_audio_metadata(audio_path: str, metadata: Optional[dict] = None,
             audio_file["POPM:Windows Media Player 9 Series"] = mutagen.id3.POPM(
                 email="Windows Media Player 9 Series", rating=rating)
 
-        audio_file.save()
+        if copy_on_write == True:
+            tmp_path = f"{audio_path}.tmp"
+            try:
+                shutil.copy2(audio_path, tmp_path)
+                audio_file.save(tmp_path)
+                shutil.move(tmp_path, audio_path)
+                
+                if os.path.isfile(tmp_path):
+                    os.remove(tmp_path)
+
+            except Exception as e:
+                try:
+                    if os.path.isfile(tmp_path):
+                        os.remove(tmp_path)
+                except: pass
+                raise e
+        else:
+            audio_file.save()
 
 def get_audio_metadata(audio_path: str) -> dict:
     audio_format = os.path.splitext(audio_path)[1].lower()
@@ -392,7 +447,7 @@ def load_audio(input_path: Union[str, bytes],
         return return_vals
 
 def save_safetensors(tensors_dict: dict[str, torch.Tensor], output_path: str,
-                     metadata: Optional[dict[str, str]] = None) -> None:
+                     metadata: Optional[dict[str, str]] = None, copy_on_write: bool = False) -> None:
     directory = os.path.dirname(output_path)
     os.makedirs(directory, exist_ok=True)
 
@@ -404,7 +459,23 @@ def save_safetensors(tensors_dict: dict[str, torch.Tensor], output_path: str,
             val = torch.tensor(val)
         tensors_dict[key] = val
 
-    safetensors.save_file(tensors_dict, output_path, metadata=metadata)
+    if copy_on_write == True:
+        tmp_path = f"{output_path}.tmp"
+        try:
+            safetensors.save_file(tensors_dict, tmp_path, metadata=metadata)
+
+            shutil.move(tmp_path, output_path)
+            if os.path.isfile(tmp_path):
+                os.remove(tmp_path)
+
+        except Exception as e:
+            try:
+                if os.path.isfile(tmp_path):
+                    os.remove(tmp_path)
+            except: pass
+            raise e
+    else:
+        safetensors.save_file(tensors_dict, output_path, metadata=metadata)
 
 def load_safetensors(input_path: str, device: Optional[torch.device] = None) -> dict[str, torch.Tensor]:
     return safetensors.load_file(input_path, device=device)
@@ -421,14 +492,17 @@ def load_safetensors_ex(input_path: str, # returns metadata
 
     return tensors_dict, metadata
 
-def update_safetensors_metadata(safetensors_path: str,
-                                new_metadata: dict[str, str]) -> None:
-    if new_metadata is None: return
+def update_safetensors_metadata(safetensors_path: str, new_metadata: dict[str, str],
+                                copy_on_write: bool = False) -> None:
+    
+    if new_metadata is None or len(new_metadata) == 0:
+        return
+
     tensors_dict, metadata = load_safetensors_ex(safetensors_path)
     metadata = metadata or {}
     metadata.update(new_metadata)
 
-    safetensors.save_file(tensors_dict, safetensors_path, metadata=metadata)
+    save_safetensors(tensors_dict, safetensors_path, metadata, copy_on_write=copy_on_write)
 
 # recursively (through dicts and class instances) move all tensors to CPU
 def move_tensors_to_cpu(instance: Union[dict, torch.Tensor, Any]) -> Any:
