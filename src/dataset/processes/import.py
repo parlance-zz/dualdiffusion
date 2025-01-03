@@ -41,18 +41,19 @@ class Import(DatasetProcessStage):
 
     @torch.inference_mode()
     def start_process(self):
-        self.filter_pattern = regex.compile(self.processor_config.import_filter_regex)
-        self.filter_group = self.processor_config.import_filter_group
-        self.root_dst_path = self.processor_config.import_dst_path or config.DATASET_PATH
+        self.filter_pattern = regex.compile(self.processor_config.import_filter_regex)     
 
     @torch.inference_mode()
     def process(self, input_dict: dict) -> Optional[Union[dict, list[dict]]]:
         match = self.filter_pattern.match(os.path.basename(input_dict["file_path"]))
 
         if match is not None:
+            match = match.group(self.processor_config.import_filter_group)
+            root_dst_path = self.processor_config.import_dst_path or config.DATASET_PATH
+
             src_path = os.path.normpath(input_dict["file_path"])
             rel_path = os.path.relpath(input_dict["file_path"], input_dict["scan_path"])
-            dst_path = os.path.normpath(os.path.join(self.root_dst_path, os.path.dirname(rel_path), match.group(self.filter_group)))
+            dst_path = os.path.normpath(os.path.join(root_dst_path, os.path.dirname(rel_path), match))
 
             src_size = os.path.getsize(src_path)
             dst_size = os.path.getsize(dst_path) if os.path.isfile(dst_path) else 0
@@ -63,10 +64,24 @@ class Import(DatasetProcessStage):
                 if self.processor_config.test_mode == False:
                     os.makedirs(os.path.dirname(dst_path), exist_ok=True)
 
-                    # todo: this is pretty slow, python reads the entire file contents into
-                    # memory before writing the new file.
                     with self.critical_lock:
-                        shutil.copy2(src_path, dst_path)
+                        
+                        if self.processor_config.copy_on_write == True:
+                            tmp_path = f"{dst_path}.tmp"
+                            try:
+                                shutil.copy2(src_path, tmp_path)
+                                shutil.move(tmp_path, dst_path)
+                                if os.path.isfile(tmp_path):
+                                    os.remove(tmp_path)
+
+                            except Exception as e:
+                                try:
+                                    if os.path.isfile(tmp_path):
+                                        os.remove(tmp_path)
+                                except: pass
+                                raise e
+                        else:
+                            shutil.copy2(src_path, dst_path)
 
             elif src_size != dst_size and self.processor_config.import_warn_file_size_mismatch == True:
                 self.logger.warning(

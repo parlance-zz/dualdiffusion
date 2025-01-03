@@ -117,6 +117,7 @@ class NormalizeSave(DatasetProcessStage):
                     output_path=input_dict["audio_path"],
                     target_lufs=None,
                     metadata=input_dict["audio_metadata"],
+                    copy_on_write=self.processor_config.copy_on_write
                 )
 
         return None

@@ -5,11 +5,13 @@
   "max_num_proc": null,
   "cuda_devices": "cuda",
   "force_overwrite": false,
+  "copy_on_write": false,
   "test_mode": false,
   "verbose": false,
 
   "import_paths": ["/mnt/vault/dataset_import/spc/transcoded"],
   "import_dst_path": "/mnt/vault/dataset/spc",
+  "import_warn_file_size_mismatch": false,
 
   "pre_encoded_latents_vae": "edm2_vt7_12d_4_clap",
   "pre_encoded_latents_num_time_offset_augmentations": 8,
