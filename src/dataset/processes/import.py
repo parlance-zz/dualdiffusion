@@ -59,13 +59,14 @@ class Import(DatasetProcessStage):
             dst_size = os.path.getsize(dst_path) if os.path.isfile(dst_path) else 0
 
             if dst_size == 0 or self.processor_config.force_overwrite == True:
-                self.logger.debug(f"\"{src_path}\" -> \"{dst_path}\"")
                 
-                if self.processor_config.test_mode == False:
-                    os.makedirs(os.path.dirname(dst_path), exist_ok=True)
+                with self.critical_lock:
+                    
+                    self.logger.debug(f"\"{src_path}\" -> \"{dst_path}\"")
+                    
+                    if self.processor_config.test_mode == False:
+                        os.makedirs(os.path.dirname(dst_path), exist_ok=True)
 
-                    with self.critical_lock:
-                        
                         if self.processor_config.copy_on_write == True:
                             tmp_path = f"{dst_path}.tmp"
                             try:

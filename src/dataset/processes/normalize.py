@@ -89,13 +89,13 @@ class NormalizeProcess(DatasetProcessStage):
         audio_metadata["post_norm_peaks"] = post_norm_peaks
         audio_metadata["post_norm_lufs"] = target_lufs
 
-        self.logger.debug(f"\"{audio_path}\" lufs: {old_lufs} -> {target_lufs}")
-
         return {
             "audio_path": audio_path,
             "audio": normalized_audio,
             "audio_metadata": audio_metadata,
             "sample_rate": sample_rate,
+            "old_lufs": old_lufs,
+            "target_lufs": target_lufs,
         }
 
     def get_max_output_queue_size(self):
@@ -109,8 +109,14 @@ class NormalizeSave(DatasetProcessStage):
     @torch.inference_mode()
     def process(self, input_dict: dict) -> Optional[Union[dict, list[dict]]]:
 
-        if self.processor_config.test_mode == False:
-            with self.critical_lock:
+        with self.critical_lock:
+
+            audio_path = input_dict["audio_path"]
+            old_lufs = input_dict["old_lufs"]
+            target_lufs = input_dict["target_lufs"]
+            self.logger.debug(f"\"{audio_path}\" lufs: {old_lufs} -> {target_lufs}")
+            
+            if self.processor_config.test_mode == False:
                 save_audio(
                     raw_samples=input_dict["audio"],
                     sample_rate=input_dict["sample_rate"],
