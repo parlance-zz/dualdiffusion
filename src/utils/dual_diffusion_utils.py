@@ -504,6 +504,19 @@ def update_safetensors_metadata(safetensors_path: str, new_metadata: dict[str, s
 
     save_safetensors(tensors_dict, safetensors_path, metadata, copy_on_write=copy_on_write)
 
+# calculate the size in bytes of all tensors in any number of nested dicts
+def get_tensor_dict_size(instance: Union[dict, torch.Tensor]):
+    if torch.is_tensor(instance):
+        return instance.element_size() * instance.numel()
+    
+    size = 0
+    instance_dict = getattr(instance, "__dict__", None)
+    if isinstance(instance_dict, dict):
+        for value in instance_dict.values():
+            size += get_tensor_dict_size(value)
+
+    return size
+
 # recursively (through dicts and class instances) move all tensors to CPU
 def move_tensors_to_cpu(instance: Union[dict, torch.Tensor, Any]) -> Any:
     if torch.is_tensor(instance):

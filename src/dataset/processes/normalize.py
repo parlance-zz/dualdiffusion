@@ -64,7 +64,7 @@ class NormalizeLoad(DatasetProcessStage):
         return None
 
     def get_max_output_queue_size(self):
-        return 5
+        return 4 * self.processor_config.buffer_memory_level
     
     def get_stage_type(self):
         return "cpu"
@@ -99,12 +99,19 @@ class NormalizeProcess(DatasetProcessStage):
         }
 
     def get_max_output_queue_size(self):
-        return 5
+        return 4 * self.processor_config.buffer_memory_level
     
     def get_stage_type(self):
         return "cpu"
 
 class NormalizeSave(DatasetProcessStage):
+
+    def summary_banner(self, logger: logging.Logger) -> None:
+        verb = "Normalized"
+        if self.processor_config.test_mode == True:
+            logger.info(f"(Would have) {verb} {self.output_queue.queue.qsize()} files.")
+        else:
+            logger.info(f"{verb} {self.output_queue.queue.qsize()} files.")
 
     @torch.inference_mode()
     def process(self, input_dict: dict) -> Optional[Union[dict, list[dict]]]:
@@ -125,6 +132,7 @@ class NormalizeSave(DatasetProcessStage):
                     metadata=input_dict["audio_metadata"],
                     copy_on_write=self.processor_config.copy_on_write
                 )
+                return {}
 
         return None
     

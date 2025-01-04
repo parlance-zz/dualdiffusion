@@ -317,6 +317,9 @@ class DatasetProcessStage(ABC):
     def info_banner(self, logger: logging.Logger) -> None:
         pass
 
+    def summary_banner(self, logger: logging.Logger) -> None:
+        pass
+
     # io stages get 1 process, cuda stages get 1 process per device, the remaining processes are
     # evenly divided between any cpu stages until max_num_proc is reached
     def get_stage_type(self) -> Literal["io", "cpu", "cuda"]:
@@ -342,21 +345,24 @@ class DatasetProcessStage(ABC):
 @dataclass
 class DatasetProcessorConfig:
 
-    sample_rate: int            = 32000
-    num_channels: int           = 2
-    target_lufs: float          = -20.
-    max_num_proc: Optional[int] = None
-    cuda_devices: list[str]     = ("cuda",)
-    force_overwrite: bool       = False
-    copy_on_write: bool         = False
-    test_mode: bool             = False
-    verbose: bool               = False
+    sample_rate: int            = 32000      # sample rate for dataset audio
+    num_channels: int           = 2          # mono or stereo for dataset audio
+    target_lufs: float          = -20.       # desired loudness level for dataset audio in the normalization process
+    max_num_proc: Optional[int] = None       # set max number of (total) processes for cpu stages. default is 1/2 cpu cores
+    buffer_memory_level: int    = 3          # higher values increase max queue sizes and memory usage
+    cuda_devices: list[str]     = ("cuda",)  # list of devices to use in cuda stages ("cuda:0", "cuda:1", etc)
+    force_overwrite: bool       = False      # disables skipping files that have been previously processed
+    copy_on_write: bool         = False      # enable to guarantee data integrity in event of abnormal/sudden termination
+    test_mode: bool             = False      # disables moving, copying, or writing any changes to files
+    verbose: bool               = False      # prints debug logs to stdout
 
-    import_paths: list[str]        = ()
-    import_filter_regex: str       = "(?i)^.*\\.flac$" #"^t_[^_]*_(.*)\\.flac$",
-    import_filter_group: int       = 0 # 1
-    import_dst_path: Optional[str] = None
-    import_warn_file_size_mismatch: bool = True
+    # import process
+    import_paths: list[str]        = ()                # list of paths to move/copy from
+    import_filter_regex: str       = "(?i)^.*\\.flac$" # regex for filtering and transforming filenames (default: *.flac)
+    import_filter_group: int       = 0                 # regex group for destination filename.
+    import_dst_path: Optional[str] = None              # import destination path. default is $DATASET_PATH
+    import_warn_file_size_mismatch: bool = True        # write warnings to debug log if the existing destination file has a different size
+    import_move_no_copy: bool = True                   # enable to move files instead of copying them
 
     pre_encoded_latents_vae: Optional[str] = None
     pre_encoded_latents_num_time_offset_augmentations: int = 8
@@ -801,6 +807,10 @@ class DatasetProcessor:
         
         # summarize results
         process_finish_time = datetime.now(); logger.info("")
+        try: process_stages[-1].summary_banner()
+        except Exception as e:
+            logger.error("".join(format_exception(type(e), e, e.__traceback__)))
+            
         for stage in process_stages:
             processed, total = stage.input_queue.get_processed_total()
             errors, warnings = stage.error_queue.qsize(), stage.warning_queue.qsize()

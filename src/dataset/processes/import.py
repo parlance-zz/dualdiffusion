@@ -39,6 +39,13 @@ class Import(DatasetProcessStage):
         logger.info(f"Importing files from: {self.processor_config.import_paths}")
         logger.info(f"Importing files to: {root_dst_path}")
 
+    def summary_banner(self, logger: logging.Logger) -> None:
+        verb = "Moved" if self.processor_config.import_move_no_copy == True else "Copied"
+        if self.processor_config.test_mode == True:
+            logger.info(f"(Would have) {verb} {self.output_queue.queue.qsize()} files.")
+        else:
+            logger.info(f"{verb} {self.output_queue.queue.qsize()} files.")
+
     @torch.inference_mode()
     def start_process(self):
         self.filter_pattern = regex.compile(self.processor_config.import_filter_regex)     
@@ -58,16 +65,21 @@ class Import(DatasetProcessStage):
             src_size = os.path.getsize(src_path)
             dst_size = os.path.getsize(dst_path) if os.path.isfile(dst_path) else 0
 
+            # only move/copy if the destination doesn't already exist, unless force_overwrite is eanabled
             if dst_size == 0 or self.processor_config.force_overwrite == True:
                 
-                with self.critical_lock:
-                    
+                with self.critical_lock: # task will not be terminated inside this block
                     self.logger.debug(f"\"{src_path}\" -> \"{dst_path}\"")
-                    
-                    if self.processor_config.test_mode == False:
+
+                    if self.processor_config.test_mode == False: # test mode disallows writing changes
                         os.makedirs(os.path.dirname(dst_path), exist_ok=True)
 
-                        if self.processor_config.copy_on_write == True:
+                         # copy_on_write not needed for move as it is already atomic
+                        if self.processor_config.import_move_no_copy == True:
+                            shutil.move(src_path, dst_path)
+                        
+                        # alternatively copy_on_write uses a temporary file to guarantee integrity
+                        elif self.processor_config.copy_on_write == True:
                             tmp_path = f"{dst_path}.tmp"
                             try:
                                 shutil.copy2(src_path, tmp_path)
@@ -83,9 +95,11 @@ class Import(DatasetProcessStage):
                                 raise e
                         else:
                             shutil.copy2(src_path, dst_path)
+                    
+                    return {} # return an empty dict to tally files moved/copied in summary
 
             elif src_size != dst_size and self.processor_config.import_warn_file_size_mismatch == True:
-                self.logger.warning(
+                self.logger.warning( # if the files in the destination are not expected to be modified this might indicate corruption
                     f"Warning: file size mismatch: \"{src_path}\" ({src_size}) -> \"{dst_path}\" ({dst_size})")
         
         return None
