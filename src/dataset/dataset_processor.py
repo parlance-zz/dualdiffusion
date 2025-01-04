@@ -288,7 +288,7 @@ class DatasetProcessStage(ABC):
             if num_running == 0: break
             time.sleep(0.1)
 
-        return self.error_queue.qsize()
+        return self.error_queue.qsize(), self.warning_queue.qsize()
 
     def _init_process(self, rank: int, device: Optional[str],
             logger: logging.Logger, critical_lock: Lock, finish_event: Event) -> None:
@@ -343,16 +343,17 @@ class DatasetProcessStage(ABC):
 @dataclass
 class DatasetProcessorConfig:
 
-    sample_rate: int            = 32000      # sample rate for dataset audio
-    num_channels: int           = 2          # mono or stereo for dataset audio
-    target_lufs: float          = -20.       # desired loudness level for dataset audio in the normalization process
-    max_num_proc: Optional[int] = None       # set max number of (total) processes for cpu stages. default is 1/2 cpu cores
-    buffer_memory_level: int    = 2          # higher values increase max queue sizes and memory usage
-    cuda_devices: list[str]     = ("cuda",)  # list of devices to use in cuda stages ("cuda:0", "cuda:1", etc)
-    force_overwrite: bool       = False      # disables skipping files that have been previously processed
-    copy_on_write: bool         = False      # enable to guarantee data integrity in event of abnormal/sudden termination
-    test_mode: bool             = False      # disables moving, copying, or writing any changes to files
-    verbose: bool               = False      # prints debug logs to stdout
+    sample_rate: int                = 32000      # sample rate for dataset audio
+    num_channels: int               = 2          # mono or stereo for dataset audio
+    target_lufs: float              = -20.       # desired loudness level for dataset audio in the normalization process
+    max_num_proc: Optional[int]     = None       # set max number of (total) processes for cpu stages. default is 1/2 cpu cores
+    buffer_memory_level: int        = 2          # higher values increase max queue sizes and memory usage
+    cuda_devices: list[str]         = ("cuda",)  # list of devices to use in cuda stages ("cuda:0", "cuda:1", etc)
+    force_overwrite: bool           = False      # disables skipping files that have been previously processed
+    copy_on_write: bool             = False      # enable to guarantee data integrity in event of abnormal/sudden termination
+    test_mode: bool                 = False      # disables moving, copying, or writing any changes to files
+    write_error_summary_logs: bool  = True       # when the process is completed or aborted write a separate log file for each stage's errors/warnings
+    verbose: bool                   = False      # prints debug logs to stdout
 
     # import process
     import_paths: list[str]        = ()                # list of paths to move/copy from
@@ -776,12 +777,13 @@ class DatasetProcessor:
                             input_queues[0].put({"scan_path": scan_path, "file_path": os.path.join(root, file)})
             
             # wait for each stage to finish
-            total_errors = 0
+            total_errors = 0; total_warnings = 0
             for stage in process_stages:
-                total_errors += stage._finish_worker_queue()
+                errors, warnings = stage._finish_worker_queue()
+                total_errors += errors; total_warnings += warnings
 
             if total_errors > 0:
-                process_result = f"completed with {total_errors} errors"
+                process_result = f"completed with {total_errors} errors, {total_warnings} warnings"
 
         except (KeyboardInterrupt, Exception) as e:
             # disable sigint to avoid data corruption while worker processes shut down
@@ -803,16 +805,34 @@ class DatasetProcessor:
         monitor_finish_event.set()
         _terminate_worker(monitor_worker, close=True)
         
+        # write error / warning summaries
+        if self.config.write_error_summary_logs == True:
+            for stage in process_stages:
+                try:
+                    if stage.error_queue.qsize() > 0:
+                        logger.info(""); logger.info(f"{stage.__class__.__name__} errors:")
+                        while stage.error_queue.qsize() > 0:
+                            log_handler.emit(stage.error_queue.get())
+                except: pass
+                
+                try:
+                    if stage.warning_queue.qsize() > 0:
+                        logger.info(""); logger.info(f"{stage.__class__.__name__} warnings:")
+                        while stage.warning_queue.qsize() > 0:
+                            log_handler.emit(stage.warning_queue.get())
+                except: pass
+        
         # summarize results
         process_finish_time = datetime.now(); logger.info("")
         try: process_stages[-1].summary_banner(logger)
         except Exception as e:
             logger.error("".join(format_exception(type(e), e, e.__traceback__)))
-            
+
         for stage in process_stages:
+            stage_name = stage.__class__.__name__
             processed, total = stage.input_queue.get_processed_total()
             errors, warnings = stage.error_queue.qsize(), stage.warning_queue.qsize()
-            logger.info(f"{stage.__class__.__name__}: {processed}/{total} processed - {errors} errors, {warnings} warnings")
+            logger.info(f"{stage_name}: {processed}/{total} processed - {errors} errors, {warnings} warnings")
         logger.info(f"Process '{process_name}' {process_result} - time elapsed: {process_finish_time - process_start_time}\n")
 
         # close logging process
