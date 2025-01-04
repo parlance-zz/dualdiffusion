@@ -253,8 +253,8 @@ def normalize_lufs(raw_samples: torch.Tensor,
 # get the number of clipped samples in a raw audio tensor
 # clipping is defined as at least 2 consecutive samples with an absolute value > 1.0
 @torch.inference_mode()
-def get_num_clipped_samples(raw_samples: torch.Tensor, eps: float = 0.) -> int:
-    clips = (raw_samples.abs() > (1.0 - eps)).float()
+def get_num_clipped_samples(raw_samples: torch.Tensor, eps: float = 5e-5) -> int:
+    clips = (raw_samples.abs() >= (1.0 - eps)).float()
     return int((clips[..., :-1] * clips[..., 1:]).sum().item())
     
 def get_no_clobber_filepath(filepath):
