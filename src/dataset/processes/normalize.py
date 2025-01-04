@@ -35,6 +35,9 @@ from utils.dual_diffusion_utils import (
 
 class NormalizeLoad(DatasetProcessStage):
 
+    def get_stage_type(self):
+        return "cpu"
+    
     def info_banner(self, logger: logging.Logger) -> None:
         logger.info(f"Normalizing to target_lufs: {self.processor_config.target_lufs}")
 
@@ -63,14 +66,11 @@ class NormalizeLoad(DatasetProcessStage):
         
         return None
 
-    def get_max_output_queue_size(self):
-        return 5 * self.processor_config.buffer_memory_level
-    
-    def get_stage_type(self):
-        return "cpu"
-
 class NormalizeProcess(DatasetProcessStage):
 
+    def get_stage_type(self):
+        return "cpu"
+    
     @torch.inference_mode()
     def process(self, input_dict: dict) -> Optional[Union[dict, list[dict]]]:
         
@@ -98,14 +98,11 @@ class NormalizeProcess(DatasetProcessStage):
             "target_lufs": target_lufs,
         }
 
-    def get_max_output_queue_size(self):
-        return 5 * self.processor_config.buffer_memory_level
-    
-    def get_stage_type(self):
-        return "cpu"
-
 class NormalizeSave(DatasetProcessStage):
 
+    def get_stage_type(self):
+        return "cpu"
+    
     def summary_banner(self, logger: logging.Logger) -> None:
         verb = "Normalized"
         if self.processor_config.test_mode == True:
@@ -135,10 +132,8 @@ class NormalizeSave(DatasetProcessStage):
                 return {}
 
         return None
-    
-    def get_stage_type(self):
-        return "cpu"
-    
+
+
 if __name__ == "__main__":
 
     dataset_processor = DatasetProcessor()

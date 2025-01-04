@@ -26,25 +26,47 @@ import os
 
 import torch
 
-from dataset.dataset_processor import DatasetProcessor, DatasetProcessStage
+from dataset.dataset_processor import DatasetProcessor, DatasetProcessStage, WorkQueue
 
 
 class TestStage(DatasetProcessStage):
 
+    def info_banner(self, logger):
+        logger.info("<Info Banner>")
+    
+    def summary_banner(self, logger):
+        logger.info("<Summary Banner>")
+    
+    @torch.inference_mode()
+    def start_process(self):
+        self.test_errors = 0
+        self.test_warnings = 0
+    
     @torch.inference_mode()
     def process(self, input_dict: dict) -> Optional[Union[dict, list[dict]]]:
         self.logger.debug(input_dict)
-        time.sleep(0.01)
+        time.sleep(0.1)
+
+        if self.test_errors < 5:
+            self.test_errors += 1
+            self.logger.error(f"<Test Error {self.test_errors}>")
+        elif self.test_warnings < 10:
+            self.test_warnings += 1
+            self.logger.warning(f"<Test Warning {self.test_warnings}>")
+
         return None
 
 
 if __name__ == "__main__":
 
+    input_queue = WorkQueue()
+    for i in range(50):
+        input_queue.put({"test_data": i})
+
     DatasetProcessor().process(
         "TestProcess",
-        [
-            TestStage()
-        ],
+        [TestStage()],
+        input=input_queue
     )
 
     os._exit(0)

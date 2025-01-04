@@ -70,7 +70,8 @@ def _process_worker(stage: "DatasetProcessStage", rank: int,
     stage_name = stage.__class__.__name__
     logger = logging.getLogger(stage_name)
     log_handler = WorkerLogHandler(stage.log_queue, stage.warning_queue, stage.error_queue, stage_name)
-    logging.basicConfig(level=logging.DEBUG, handlers=[log_handler])
+    logger.setLevel(logging.DEBUG)
+    logger.addHandler(log_handler)
 
     # init process
     try:
@@ -217,7 +218,9 @@ class WorkerLogHandler(logging.Handler):
     def emit(self, record: Optional[logging.LogRecord]) -> None:
         if record is not None:
             if record.msg not in ("" , "\n"):
-                record.msg = f"{self.process_name}: {record.msg}"
+                if not hasattr(record, "label"):
+                    setattr(record, "label", self.process_name)
+                    record.msg = f"{record.label}: {record.msg}"
 
             if record.levelno >= logging.ERROR:
                 self.error_queue.put(record)
@@ -227,8 +230,7 @@ class WorkerLogHandler(logging.Handler):
         self.log_queue.put(record)
 
 # main workhorse class for dataset processing. processes should subclass DatasetProcessStage and
-# implement process (required), and get_stage_type, start_process, finish_process,
-# get_max_output_queue_size, info_banner (optional)
+# implement process (required), and get_stage_type, start_process, finish_process, info_banner, summary_banner (optional)
 class DatasetProcessStage(ABC):
 
     def __init__(self) -> None:
@@ -245,7 +247,7 @@ class DatasetProcessStage(ABC):
         self.error_queue = mp.Queue()
 
         self.input_queue = input_queue
-        self.output_queue = WorkQueue(self.get_max_output_queue_size())
+        self.output_queue = WorkQueue(max(num_proc * processor_config.buffer_memory_level, 1))
 
         critical_locks = [mp.Lock() for _ in range(num_proc)]
         finish_events = [mp.Event() for _ in range(num_proc)]
@@ -324,10 +326,6 @@ class DatasetProcessStage(ABC):
     # evenly divided between any cpu stages until max_num_proc is reached
     def get_stage_type(self) -> Literal["io", "cpu", "cuda"]:
         return "io"
-
-    # subclass can return non-zero value if the output items consume significant memory
-    def get_max_output_queue_size(self) -> int:
-        return 0
     
     @torch.inference_mode()
     def start_process(self) -> None:
