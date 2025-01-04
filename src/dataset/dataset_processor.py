@@ -807,7 +807,7 @@ class DatasetProcessor:
         
         # summarize results
         process_finish_time = datetime.now(); logger.info("")
-        try: process_stages[-1].summary_banner()
+        try: process_stages[-1].summary_banner(logger)
         except Exception as e:
             logger.error("".join(format_exception(type(e), e, e.__traceback__)))
             
