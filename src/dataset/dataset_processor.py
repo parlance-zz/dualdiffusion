@@ -349,7 +349,7 @@ class DatasetProcessorConfig:
     num_channels: int           = 2          # mono or stereo for dataset audio
     target_lufs: float          = -20.       # desired loudness level for dataset audio in the normalization process
     max_num_proc: Optional[int] = None       # set max number of (total) processes for cpu stages. default is 1/2 cpu cores
-    buffer_memory_level: int    = 3          # higher values increase max queue sizes and memory usage
+    buffer_memory_level: int    = 2          # higher values increase max queue sizes and memory usage
     cuda_devices: list[str]     = ("cuda",)  # list of devices to use in cuda stages ("cuda:0", "cuda:1", etc)
     force_overwrite: bool       = False      # disables skipping files that have been previously processed
     copy_on_write: bool         = False      # enable to guarantee data integrity in event of abnormal/sudden termination

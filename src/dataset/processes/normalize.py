@@ -64,7 +64,7 @@ class NormalizeLoad(DatasetProcessStage):
         return None
 
     def get_max_output_queue_size(self):
-        return 4 * self.processor_config.buffer_memory_level
+        return 5 * self.processor_config.buffer_memory_level
     
     def get_stage_type(self):
         return "cpu"
@@ -99,7 +99,7 @@ class NormalizeProcess(DatasetProcessStage):
         }
 
     def get_max_output_queue_size(self):
-        return 4 * self.processor_config.buffer_memory_level
+        return 5 * self.processor_config.buffer_memory_level
     
     def get_stage_type(self):
         return "cpu"
