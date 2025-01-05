@@ -138,7 +138,7 @@ def _monitor_worker(input_queues: list["WorkQueue"], stage_names: list[str], fin
 
     progress_bars = []
     for name in stage_names:
-        progress_bar = tqdm(total=1)
+        progress_bar = tqdm(total=1, smoothing=0.9)
         progress_bar.set_description(name, refresh=False)
         progress_bars.append(progress_bar)
 
