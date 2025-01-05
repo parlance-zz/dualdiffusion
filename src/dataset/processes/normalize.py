@@ -41,6 +41,9 @@ class NormalizeLoad(DatasetProcessStage):
     def info_banner(self, logger: logging.Logger) -> None:
         logger.info(f"Normalizing to target_lufs: {self.processor_config.target_lufs}")
 
+    def limit_output_queue_size(self):
+        return True
+    
     @torch.inference_mode()
     def process(self, input_dict: dict) -> Optional[Union[dict, list[dict]]]:
 
@@ -70,6 +73,9 @@ class NormalizeProcess(DatasetProcessStage):
 
     def get_stage_type(self):
         return "cpu"
+    
+    def limit_output_queue_size(self):
+        return True
     
     @torch.inference_mode()
     def process(self, input_dict: dict) -> Optional[Union[dict, list[dict]]]:

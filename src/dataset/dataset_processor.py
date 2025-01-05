@@ -230,7 +230,7 @@ class WorkerLogHandler(logging.Handler):
         self.log_queue.put(record)
 
 # main workhorse class for dataset processing. processes should subclass DatasetProcessStage and
-# implement process (required), and get_stage_type, start_process, finish_process, info_banner, summary_banner (optional)
+# implement process (required), and get_stage_type, start_process, finish_process, info_banner, summary_banner, limit_output_queue_size (optional)
 class DatasetProcessStage(ABC):
 
     def __init__(self) -> None:
@@ -246,8 +246,12 @@ class DatasetProcessStage(ABC):
         self.warning_queue = mp.Queue()
         self.error_queue = mp.Queue()
 
+        if self.limit_output_queue_size() == True:
+            max_output_queue_size = max(num_proc * processor_config.buffer_memory_level, 1)
+        else:
+            max_output_queue_size = 0
         self.input_queue = input_queue
-        self.output_queue = WorkQueue(max(num_proc * processor_config.buffer_memory_level, 1))
+        self.output_queue = WorkQueue(max_output_queue_size)
 
         critical_locks = [mp.Lock() for _ in range(num_proc)]
         finish_events = [mp.Event() for _ in range(num_proc)]
@@ -321,6 +325,11 @@ class DatasetProcessStage(ABC):
 
     def summary_banner(self, logger: logging.Logger) -> None:
         pass
+    
+    # if the stage output objects are large this can be overridden to return True
+    # to cap the maximum number of items that can reside in the output queue for this stage
+    def limit_output_queue_size(self) -> bool:
+        return False
 
     # io stages get 1 process, cuda stages get 1 process per device, the remaining processes are
     # evenly divided between any cpu stages until max_num_proc is reached
@@ -360,8 +369,11 @@ class DatasetProcessorConfig:
     import_filter_regex: str       = "(?i)^.*\\.flac$" # regex for filtering and transforming filenames (default: *.flac)
     import_filter_group: int       = 0                 # regex group for destination filename.
     import_dst_path: Optional[str] = None              # import destination path. default is $DATASET_PATH
-    import_warn_file_size_mismatch: bool = True        # write warnings to debug log if the existing destination file has a different size
-    import_move_no_copy: bool = True                   # enable to move files instead of copying them
+    import_warn_file_size_mismatch: bool  = True       # write warnings to debug log if the existing destination file has a different size
+    import_overwrite_if_larger: bool      = True       # if the file to be imported exists but is larger, import it and overwrite the existing file
+    import_move_no_copy: bool             = True       # enable to move files instead of copying them
+    import_min_tree_depth: Optional[int]  = 1          # files with paths above min tree depth will use generated folder names
+    import_max_tree_depth: Optional[int]  = 1          # folders below max tree depth in the source file path aren't included in destination path
 
     pre_encoded_latents_vae: Optional[str] = None
     pre_encoded_latents_num_time_offset_augmentations: int = 8
@@ -690,7 +702,8 @@ class DatasetProcessor:
         logger.setLevel(logging.DEBUG if self.config.verbose == True else logging.INFO)
         warning_queue, error_queue = mp.Queue(), mp.Queue()
         log_handler = WorkerLogHandler(log_queue, warning_queue, error_queue, "DatasetProcessor")
-        logging.basicConfig(level=logging.DEBUG, handlers=[log_handler])
+        logger.setLevel(logging.DEBUG)
+        logger.addHandler(log_handler)
         logger.info("")
 
         # 3 second chance to abort if force overwrite is enabled
@@ -805,6 +818,12 @@ class DatasetProcessor:
         monitor_finish_event.set()
         _terminate_worker(monitor_worker, close=True)
         
+        # get stage error / warning counts
+        stage_error_counts = []; stage_warning_counts = []
+        for stage in process_stages:
+            stage_error_counts.append(stage.error_queue.qsize())
+            stage_warning_counts.append(stage.warning_queue.qsize())
+
         # write error / warning summaries
         if self.config.write_error_summary_logs == True:
             for stage in process_stages:
@@ -828,11 +847,12 @@ class DatasetProcessor:
         except Exception as e:
             logger.error("".join(format_exception(type(e), e, e.__traceback__)))
 
-        for stage in process_stages:
+        for i, stage in enumerate(process_stages):
             stage_name = stage.__class__.__name__
             processed, total = stage.input_queue.get_processed_total()
-            errors, warnings = stage.error_queue.qsize(), stage.warning_queue.qsize()
+            errors, warnings = stage_error_counts[i], stage_warning_counts[i]
             logger.info(f"{stage_name}: {processed}/{total} processed - {errors} errors, {warnings} warnings")
+
         logger.info(f"Process '{process_name}' {process_result} - time elapsed: {process_finish_time - process_start_time}\n")
 
         # close logging process

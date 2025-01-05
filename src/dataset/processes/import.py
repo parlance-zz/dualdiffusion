@@ -48,7 +48,7 @@ class Import(DatasetProcessStage):
 
     @torch.inference_mode()
     def start_process(self):
-        self.filter_pattern = regex.compile(self.processor_config.import_filter_regex)     
+        self.filter_pattern = regex.compile(self.processor_config.import_filter_regex)
 
     @torch.inference_mode()
     def process(self, input_dict: dict) -> Optional[Union[dict, list[dict]]]:
@@ -59,14 +59,44 @@ class Import(DatasetProcessStage):
             root_dst_path = self.processor_config.import_dst_path or config.DATASET_PATH
 
             src_path = os.path.normpath(input_dict["file_path"])
-            rel_path = os.path.relpath(input_dict["file_path"], input_dict["scan_path"])
-            dst_path = os.path.normpath(os.path.join(root_dst_path, os.path.dirname(rel_path), match))
-
             src_size = os.path.getsize(src_path)
+            src_rel_path = os.path.normpath(os.path.relpath(input_dict["file_path"], input_dict["scan_path"]))
+            src_rel_dir: str = os.path.dirname(src_rel_path)
+
+            # relative path normalization
+            src_rel_dir_parts = [folder for folder in src_rel_dir.split(os.sep) if folder]
+            if src_rel_dir_parts == ["."]: src_rel_dir_parts = []
+
+            if self.processor_config.import_min_tree_depth is not None:
+                for i in range(self.processor_config.import_min_tree_depth - len(src_rel_dir_parts)):
+                    src_rel_dir_parts += [f"_t_{i}"]
+
+            dst_file_prefix = ""
+            if self.processor_config.import_max_tree_depth is not None:
+                dst_file_prefix = "_".join(src_rel_dir_parts[self.processor_config.import_max_tree_depth:])
+                if len(dst_file_prefix) > 0:
+                    dst_file_prefix = f"_t_{dst_file_prefix}_"
+                src_rel_dir_parts = src_rel_dir_parts[:self.processor_config.import_max_tree_depth]
+
+            # destination path construction
+            dst_rel_dir = os.path.join(*src_rel_dir_parts) if len(src_rel_dir_parts) > 0 else ""
+            dst_path = os.path.normpath(os.path.join(root_dst_path, dst_rel_dir, f"{dst_file_prefix}{match}"))
             dst_size = os.path.getsize(dst_path) if os.path.isfile(dst_path) else 0
 
-            # only move/copy if the destination doesn't already exist, unless force_overwrite is eanabled
-            if dst_size == 0 or self.processor_config.force_overwrite == True:
+            if dst_size != 0 and src_size != dst_size and self.processor_config.import_warn_file_size_mismatch == True:
+                self.logger.warning( # if the files in the destination are not expected to be modified this might indicate corruption
+                    f"Warning: file size mismatch: \"{src_path}\" ({src_size}) -> \"{dst_path}\" ({dst_size})")
+                
+            # only move/copy if the destination doesn't already exist, unless force_overwrite is enabled
+            write_file = (dst_size == 0 or self.processor_config.force_overwrite == True)
+
+            # OR src_size is larger than dst_size and import_overwrite_if_larger is enabled
+            if dst_size != 0 and src_size > dst_size and self.processor_config.import_overwrite_if_larger == True:
+                self.logger.warning(
+                    f"Warning: overwriting smaller existing file: \"{src_path}\" ({src_size}) -> \"{dst_path}\" ({dst_size})")
+                write_file = True
+
+            if write_file == True:
                 
                 with self.critical_lock: # task will not be terminated inside this block
                     self.logger.debug(f"\"{src_path}\" -> \"{dst_path}\"")
@@ -97,10 +127,6 @@ class Import(DatasetProcessStage):
                             shutil.copy2(src_path, dst_path)
                     
                     return {} # return an empty dict to tally files moved/copied in summary
-
-            elif src_size != dst_size and self.processor_config.import_warn_file_size_mismatch == True:
-                self.logger.warning( # if the files in the destination are not expected to be modified this might indicate corruption
-                    f"Warning: file size mismatch: \"{src_path}\" ({src_size}) -> \"{dst_path}\" ({dst_size})")
         
         return None
 
