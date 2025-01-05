@@ -90,26 +90,39 @@ class NormalizeProcess(DatasetProcessStage):
         sample_rate = input_dict["sample_rate"]
         audio_metadata = input_dict["audio_metadata"]
 
+        # first trim the max length, if set
         if self.processor_config.normalize_trim_max_length is not None:
             max_samples = self.processor_config.normalize_trim_max_length * sample_rate
             if max_samples > 0 and audio.shape[-1] > max_samples:
                 audio = audio[..., :max_samples]
 
+        # then trim leading / trailing silence
         if self.processor_config.normalize_trim_silence == True:
             assert audio.ndim == 2
             mask = audio.abs().mean(dim=0) > 6e-5
-            indices = torch.nonzero(mask, as_tuple=True)
+            if len(mask) == 0:
+                indices = (0, 0)
+            else:
+                indices = torch.nonzero(mask, as_tuple=True)
             audio = audio[:, indices[0]:indices[-1]]
 
-        pre_norm_peaks = get_num_clipped_samples(audio)
-        normalized_audio, old_lufs = normalize_lufs(raw_samples=audio,
-            sample_rate=sample_rate, target_lufs=target_lufs, return_old_lufs=True)
-        post_norm_peaks = get_num_clipped_samples(normalized_audio)
-        
-        if "pre_norm_peaks" not in audio_metadata: # we want the preserve this from the original transcoded file
-            audio_metadata["pre_norm_peaks"] = pre_norm_peaks
-        audio_metadata["post_norm_peaks"] = post_norm_peaks
-        audio_metadata["post_norm_lufs"] = target_lufs
+        # count peaks and normalize loudness
+        if audio.shape[-1] >= 12800: # this is required for torchaudio.functional.loudness for some reason
+            pre_norm_peaks = get_num_clipped_samples(audio)
+            normalized_audio, old_lufs = normalize_lufs(raw_samples=audio,
+                sample_rate=sample_rate, target_lufs=target_lufs, return_old_lufs=True)
+            post_norm_peaks = get_num_clipped_samples(normalized_audio)
+            
+            if "pre_norm_peaks" not in audio_metadata: # we want the preserve this from the original transcoded file
+                audio_metadata["pre_norm_peaks"] = pre_norm_peaks
+            audio_metadata["post_norm_peaks"] = post_norm_peaks
+            audio_metadata["post_norm_lufs"] = target_lufs
+
+            # add metadata for the "effective sample rate" (frequencies below which contain 99% of the signal energy)
+            rfft = torch.cumsum(torch.fft.rfft(normalized_audio, dim=-1, norm="ortho").abs().mean(dim=0)) + 1e-20
+            indices = torch.nonzero((rfft / rfft.amax()) > 0.99, as_tuple=True)
+            effective_sample_rate = (indices[0] / rfft.shape[-1]).item() * sample_rate
+            audio_metadata["effective_sample_rate"] = effective_sample_rate
 
         return {
             "audio_path": audio_path,
