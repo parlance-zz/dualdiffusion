@@ -41,10 +41,10 @@ class NormalizeLoad(DatasetProcessStage):
     def info_banner(self, logger: logging.Logger) -> None:
         logger.info(f"Normalizing to target_lufs: {self.processor_config.normalize_target_lufs}")
         if self.processor_config.normalize_trim_max_length:
-            logger.info(f"Trim max length {self.processor_config.normalize_trim_max_length}s")
+            logger.info(f"Trim max length: {self.processor_config.normalize_trim_max_length}s")
         if self.processor_config.normalize_trim_silence == True:
             logger.info("Trim leading / trailing silence enabled")
-            
+
     def limit_output_queue_size(self):
         return True
     
