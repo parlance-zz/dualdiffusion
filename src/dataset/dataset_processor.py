@@ -354,7 +354,6 @@ class DatasetProcessorConfig:
 
     sample_rate: int                = 32000      # sample rate for dataset audio
     num_channels: int               = 2          # mono or stereo for dataset audio
-    target_lufs: float              = -20.       # desired loudness level for dataset audio in the normalization process
     max_num_proc: Optional[int]     = None       # set max number of (total) processes for cpu stages. default is 1/2 cpu cores
     buffer_memory_level: int        = 2          # higher values increase max queue sizes and memory usage
     cuda_devices: list[str]         = ("cuda",)  # list of devices to use in cuda stages ("cuda:0", "cuda:1", etc)
@@ -374,6 +373,11 @@ class DatasetProcessorConfig:
     import_move_no_copy: bool             = True       # enable to move files instead of copying them
     import_min_tree_depth: Optional[int]  = 1          # files with paths above min tree depth will use generated folder names
     import_max_tree_depth: Optional[int]  = 1          # folders below max tree depth in the source file path aren't included in destination path
+
+    # normalize process
+    normalize_target_lufs: float               = -20.  # desired loudness level for dataset audio in the normalization process
+    normalize_trim_silence: bool               = True  # removes any silence at the beginning or end of the audio file
+    normalize_trim_max_length: Optional[float] = 600   # truncates the length of the audio to this max length (in seconds)
 
     pre_encoded_latents_vae: Optional[str] = None
     pre_encoded_latents_num_time_offset_augmentations: int = 8

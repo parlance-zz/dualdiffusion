@@ -38,6 +38,8 @@ class Import(DatasetProcessStage):
         root_dst_path = self.processor_config.import_dst_path or config.DATASET_PATH
         logger.info(f"Importing files from: {self.processor_config.import_paths}")
         logger.info(f"Importing files to: {root_dst_path}")
+        if self.processor_config.import_overwrite_if_larger == True:
+            logger.info("Overwrite destination files if source file is larger: enabled")
 
     def summary_banner(self, logger: logging.Logger) -> None:
         verb = "Moved" if self.processor_config.import_move_no_copy == True else "Copied"

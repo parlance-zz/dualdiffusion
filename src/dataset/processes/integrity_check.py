@@ -29,7 +29,7 @@ import torch
 
 from dataset.dataset_processor import DatasetProcessor, DatasetProcessStage
 
-class IntegrityCheck(DatasetProcessStage):
+class IntegrityCheck(DatasetProcessStage): # please note to run this process you need the "flac" utility in your environment path
     
     def summary_banner(self, logger: logging.Logger) -> None:
         logger.info(f"{self.output_queue.queue.qsize()} files ok, {self.error_queue.qsize()} files with errors")

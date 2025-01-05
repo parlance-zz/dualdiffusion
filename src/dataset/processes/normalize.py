@@ -39,8 +39,12 @@ class NormalizeLoad(DatasetProcessStage):
         return "cpu"
     
     def info_banner(self, logger: logging.Logger) -> None:
-        logger.info(f"Normalizing to target_lufs: {self.processor_config.target_lufs}")
-
+        logger.info(f"Normalizing to target_lufs: {self.processor_config.normalize_target_lufs}")
+        if self.processor_config.normalize_trim_max_length:
+            logger.info(f"Trim max length {self.processor_config.normalize_trim_max_length}s")
+        if self.processor_config.normalize_trim_silence == True:
+            logger.info("Trim leading / trailing silence enabled")
+            
     def limit_output_queue_size(self):
         return True
     
@@ -49,7 +53,7 @@ class NormalizeLoad(DatasetProcessStage):
 
         if os.path.splitext(input_dict["file_path"])[1].lower() == ".flac":
             
-            target_lufs = self.processor_config.target_lufs
+            target_lufs = self.processor_config.normalize_target_lufs
 
             audio_path = input_dict["file_path"]
             audio_metadata = get_audio_metadata(audio_path)
@@ -86,12 +90,24 @@ class NormalizeProcess(DatasetProcessStage):
         sample_rate = input_dict["sample_rate"]
         audio_metadata = input_dict["audio_metadata"]
 
+        if self.processor_config.normalize_trim_max_length is not None:
+            max_samples = self.processor_config.normalize_trim_max_length * sample_rate
+            if max_samples > 0 and audio.shape[-1] > max_samples:
+                audio = audio[..., :max_samples]
+
+        if self.processor_config.normalize_trim_silence == True:
+            assert audio.ndim == 2
+            mask = audio.abs().mean(dim=0) > 6e-5
+            indices = torch.nonzero(mask, as_tuple=True)
+            audio = audio[:, indices[0]:indices[-1]]
+
         pre_norm_peaks = get_num_clipped_samples(audio)
         normalized_audio, old_lufs = normalize_lufs(raw_samples=audio,
             sample_rate=sample_rate, target_lufs=target_lufs, return_old_lufs=True)
         post_norm_peaks = get_num_clipped_samples(normalized_audio)
         
-        audio_metadata["pre_norm_peaks"] = pre_norm_peaks
+        if "pre_norm_peaks" not in audio_metadata: # we want the preserve this from the original transcoded file
+            audio_metadata["pre_norm_peaks"] = pre_norm_peaks
         audio_metadata["post_norm_peaks"] = post_norm_peaks
         audio_metadata["post_norm_lufs"] = target_lufs
 

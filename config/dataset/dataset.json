@@ -1,8 +1,7 @@
 {
   "sample_rate": 32000,
   "num_channels": 2,
-  "target_lufs": -20.0,
-  "max_num_proc": null,
+  "max_num_proc": 12,
   "buffer_memory_level": 3,
   "cuda_devices": "cuda",
   "force_overwrite": false,
@@ -21,6 +20,10 @@
   "import_min_tree_depth": 1,
   "import_max_tree_depth": 1,
 
+  "normalize_target_lufs": -20.0,
+  "normalize_trim_silence": true,
+  "normalize_trim_max_length": 600,
+  
   "pre_encoded_latents_vae": "edm2_vt7_12d_4_clap",
   "pre_encoded_latents_num_time_offset_augmentations": 8,
   "pre_encoded_latents_pitch_offset_augmentations": [],
