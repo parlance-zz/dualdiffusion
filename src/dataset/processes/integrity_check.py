@@ -28,6 +28,8 @@ import subprocess
 import torch
 
 from dataset.dataset_processor import DatasetProcessor, DatasetProcessStage
+from utils.dual_diffusion_utils import load_safetensors_ex
+
 
 class IntegrityCheck(DatasetProcessStage): # please note to run this process you need the "flac" utility in your environment path
     
@@ -38,16 +40,37 @@ class IntegrityCheck(DatasetProcessStage): # please note to run this process you
     def process(self, input_dict: dict) -> Optional[Union[dict, list[dict]]]:
 
         file_path = input_dict["file_path"]
-        if os.path.splitext(file_path)[1].lower() == ".flac":
+        file_ext = os.path.splitext(file_path)[1].lower()
+        corrupt_file = False
+
+        if file_ext == ".flac":
             result = subprocess.run(["flac", "-t", file_path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
-            if result.returncode == 0:
-                self.logger.debug(f"\"{file_path}\" ok")
-                return {}
-            else:
+            if result.returncode != 0:
                 self.logger.error(f"error reading \"{file_path}\"")
-                return None
+                corrupt_file = True
+            
+        elif file_ext == ".safetensors":      
+            try:
+                load_safetensors_ex(file_path)
+            except Exception as e:
+                self.logger.error(f"error reading \"{file_path}\" ({e})")
+                corrupt_file = True
+        else:
+            return None
 
+        if corrupt_file == True:
+            if self.processor_config.integrity_check_delete_corrupt_files == True:
+                if self.processor_config.test_mode == False:
+                    with self.critical_lock:
+                        os.remove(file_path)
+                        self.logger.debug(f"deleted \"{file_path}\"")
+                else:
+                    self.logger.debug(f"(would have) deleted \"{file_path}\"")
+        else:
+            self.logger.debug(f"\"{file_path}\" ok")
+            return {}
+        
 if __name__ == "__main__":
 
     dataset_processor = DatasetProcessor()

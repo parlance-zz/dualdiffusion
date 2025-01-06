@@ -374,6 +374,9 @@ class DatasetProcessorConfig:
     normalize_trim_silence: bool               = True  # removes any silence at the beginning or end of the audio file
     normalize_trim_max_length: Optional[float] = 600   # truncates the length of the audio to this max length (in seconds)
 
+    # integrity check process
+    integrity_check_delete_corrupt_files: bool = False # delete any flac or safetensors files that fail integrity check
+
     pre_encoded_latents_vae: Optional[str] = None
     pre_encoded_latents_num_time_offset_augmentations: int = 8
     pre_encoded_latents_pitch_offset_augmentations: list[int] = ()
