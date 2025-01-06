@@ -34,13 +34,20 @@ def save_json(data: Union[dict, list], json_path: str,
         indent: int = 2, copy_on_write: bool = False) -> None:
     
     os.makedirs(os.path.dirname(json_path), exist_ok=True)
-    if os.path.splitext(json_path)[1].lower() == ".jsonl": indent = None
     
+    def write_fn(f, _data):
+        if os.path.splitext(json_path)[1].lower() == ".jsonl":
+            for i, item in enumerate(_data):
+                if i == len(_data) - 1: f.write(json_dumps(item))
+                else: f.write(json_dumps(item) + "\n")
+        else:
+            f.write(json_dumps(_data, indent=indent))
+            
     if copy_on_write == True:
         tmp_path = f"{json_path}.tmp"
         try:
             with open(tmp_path, "w") as f:
-                f.write(json_dumps(data, indent=indent))
+                write_fn(f, data)
 
             shutil.move(tmp_path, json_path)
             if os.path.isfile(tmp_path):
@@ -54,7 +61,7 @@ def save_json(data: Union[dict, list], json_path: str,
             raise e
     else:
         with open(json_path, "w") as f:
-            f.write(json_dumps(data, indent=indent))
+            write_fn(f, data)
 
 load_dotenv(override=True)
 
