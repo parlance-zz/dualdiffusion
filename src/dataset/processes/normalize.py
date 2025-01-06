@@ -22,7 +22,7 @@
 
 from utils import config
 
-from typing import Optional, Union
+from typing import Optional, Union, Literal
 import logging
 import os
 
@@ -35,7 +35,7 @@ from utils.dual_diffusion_utils import (
 
 class NormalizeLoad(DatasetProcessStage):
 
-    def get_stage_type(self):
+    def get_stage_type(self) -> Literal["io", "cpu", "cuda"]:
         return "cpu"
     
     def info_banner(self, logger: logging.Logger) -> None:
@@ -45,7 +45,7 @@ class NormalizeLoad(DatasetProcessStage):
         if self.processor_config.normalize_trim_silence == True:
             logger.info("Trim leading / trailing silence enabled")
 
-    def limit_output_queue_size(self):
+    def limit_output_queue_size(self) -> bool:
         return True
     
     @torch.inference_mode()
@@ -75,10 +75,10 @@ class NormalizeLoad(DatasetProcessStage):
 
 class NormalizeProcess(DatasetProcessStage):
 
-    def get_stage_type(self):
+    def get_stage_type(self) -> Literal["io", "cpu", "cuda"]:
         return "cpu"
     
-    def limit_output_queue_size(self):
+    def limit_output_queue_size(self) -> bool:
         return True
     
     @torch.inference_mode()
@@ -135,7 +135,7 @@ class NormalizeProcess(DatasetProcessStage):
 
 class NormalizeSave(DatasetProcessStage):
 
-    def get_stage_type(self):
+    def get_stage_type(self) -> Literal["io", "cpu", "cuda"]:
         return "cpu"
     
     def summary_banner(self, logger: logging.Logger) -> None:

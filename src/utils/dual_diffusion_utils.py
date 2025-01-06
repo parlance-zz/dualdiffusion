@@ -381,7 +381,7 @@ def update_audio_metadata(audio_path: str, metadata: Optional[dict] = None,
         else:
             audio_file.save()
 
-def get_audio_metadata(audio_path: str) -> dict:
+def get_audio_metadata(audio_path: str) -> dict[str, list[str]]:
     audio_format = os.path.splitext(audio_path)[1].lower()
     if audio_format == ".flac":
         audio_file = mutagen.flac.FLAC(audio_path)
@@ -491,6 +491,14 @@ def load_safetensors_ex(input_path: str, # returns metadata
             metadata = dict(metadata)
 
     return tensors_dict, metadata
+
+def get_safetensors_metadata(input_path: str) -> dict[str, str]:
+    with safetensors.safe_open(input_path, framework="pt") as f:
+        metadata = f.metadata()
+        if metadata is not None:
+            metadata = dict(metadata)
+    
+    return metadata
 
 def update_safetensors_metadata(safetensors_path: str, new_metadata: dict[str, str],
                                 copy_on_write: bool = False) -> None:
