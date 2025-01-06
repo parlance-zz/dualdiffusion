@@ -103,7 +103,7 @@ class NormalizeProcess(DatasetProcessStage):
             if len(mask) == 0:
                 indices = (0, 0)
             else:
-                indices = torch.nonzero(mask, as_tuple=True)
+                indices = torch.nonzero(mask)
             audio = audio[:, indices[0]:indices[-1]]
 
         # count peaks and normalize loudness
@@ -119,8 +119,8 @@ class NormalizeProcess(DatasetProcessStage):
             audio_metadata["post_norm_lufs"] = target_lufs
 
             # add metadata for the "effective sample rate" (frequencies below which contain 99% of the signal energy)
-            rfft = torch.cumsum(torch.fft.rfft(normalized_audio, dim=-1, norm="ortho").abs().mean(dim=0)) + 1e-20
-            indices = torch.nonzero((rfft / rfft.amax()) > 0.99, as_tuple=True)
+            rfft = torch.cumsum(torch.fft.rfft(normalized_audio, dim=-1, norm="ortho").abs().mean(dim=0), dim=0) + 1e-20
+            indices = torch.nonzero((rfft / rfft.amax()) > 0.99)
             effective_sample_rate = (indices[0] / rfft.shape[-1]).item() * sample_rate
             audio_metadata["effective_sample_rate"] = effective_sample_rate
 
