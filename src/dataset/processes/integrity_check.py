@@ -38,14 +38,15 @@ class IntegrityCheck(DatasetProcessStage): # please note to run this process you
     def process(self, input_dict: dict) -> Optional[Union[dict, list[dict]]]:
 
         file_path = input_dict["file_path"]
-        result = subprocess.run(["flac", "-t", file_path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        if os.path.splitext(file_path)[1].lower() == ".flac":
+            result = subprocess.run(["flac", "-t", file_path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
-        if result.returncode == 0:
-            self.logger.debug(f"\"{file_path}\" ok")
-            return {}
-        else:
-            self.logger.error(f"error reading \"{file_path}\"")
-            return None
+            if result.returncode == 0:
+                self.logger.debug(f"\"{file_path}\" ok")
+                return {}
+            else:
+                self.logger.error(f"error reading \"{file_path}\"")
+                return None
 
 if __name__ == "__main__":
 
