@@ -42,17 +42,17 @@ class Build(DatasetProcessStage):
         dataset_samples: list[dict] = []
         while self.output_queue.queue.qsize() > 0:
             process_dataset_samples_dict: dict[str, Any] = self.output_queue.get()
-            dataset_samples.append(process_dataset_samples_dict.values())
+            dataset_samples += [*process_dataset_samples_dict.values()]
 
         # build splits - todo: add option for auto-validation split
         dataset_splits: dict[str, list[dict]] = {}
-
         for sample in dataset_samples: 
-            sample["split"] = sample["split"] or ["train"]
+            if sample["split"] is None: sample["split"] = ["train"]
 
             splits = []
             for split in sample["split"]:
                 rating = sample["rating"]
+                
                 if rating is not None:
                     if rating <= 1:
                         splits.append(f"{split}_negative")
@@ -66,9 +66,12 @@ class Build(DatasetProcessStage):
             
             for split in splits:
                 if split not in dataset_splits:
-                    dataset_splits[split] = {}
+                    dataset_splits[split] = []
 
                 dataset_splits[split].append(sample)
+
+        # just makes the summary neater / easier to read
+        dataset_splits = dict(sorted(dataset_splits.items()))
 
         # write dataset info
         dataset_info = {
@@ -98,14 +101,15 @@ class Build(DatasetProcessStage):
         config.save_json(dataset_info, dataset_info_path, copy_on_write=self.processor_config.copy_on_write)
 
         # write splits and summarize results
-        logger.info(f"\nTotal samples: {len(dataset_samples)}")
-        logger.info("Splits:")
+        summary_str = f"\nTotal samples: {len(dataset_samples)}\nSplits:"
         for split, split_samples in dataset_splits.items():
-            self.logger.info(f"  {split}: {len(split_samples)} samples")
+            summary_str += f"\n  {split}: {len(split_samples)} samples"
 
             split_path = os.path.join(config.DATASET_PATH, f"{split}.jsonl")
             config.save_json(split_samples, split_path, copy_on_write=self.processor_config.copy_on_write)
-    
+
+        logger.info(summary_str)
+
     def get_dataset_sample(self, file_name: str) -> dict[str, Any]:
 
         if file_name in self.dataset_samples:
@@ -173,7 +177,7 @@ class Build(DatasetProcessStage):
                         sample_dict["rating"] = None
 
                 if "split" in audio_metadata:
-                    sample_dict[field] = audio_metadata["split"]
+                    sample_dict["split"] = audio_metadata["split"]
 
                 if "author" in audio_metadata:
                     sample_dict["author"] = []
