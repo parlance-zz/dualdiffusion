@@ -50,7 +50,11 @@ class Import(DatasetProcessStage):
 
     @torch.inference_mode()
     def start_process(self):
-        self.filter_pattern = regex.compile(self.processor_config.import_filter_regex)
+        if self.processor_config.import_filter_regex is not None:
+            self.filter_pattern = regex.compile(self.processor_config.import_filter_regex)
+        else: # default is *.flac, preserves original filename
+            self.filter_pattern = "(?i)^.*\\.flac$"
+            self.processor_config.import_filter_group = 0
 
     @torch.inference_mode()
     def process(self, input_dict: dict) -> Optional[Union[dict, list[dict]]]:

@@ -71,6 +71,7 @@ def _process_worker(stage: "DatasetProcessStage", rank: int,
     # init process
     try:
         stage._init_process(rank, cuda_device, logger, critical_lock, finish_event)
+        time.sleep(0.1)
         stage.start_process()
     except Exception as e:
         logger.error("".join(format_exception(type(e), e, e.__traceback__)))
@@ -353,18 +354,18 @@ class DatasetProcessorConfig:
     buffer_memory_level: int        = 2          # higher values increase max queue sizes and memory usage
     cuda_devices: list[str]         = ("cuda",)  # list of devices to use in cuda stages ("cuda:0", "cuda:1", etc)
     force_overwrite: bool           = False      # disables skipping files that have been previously processed
-    copy_on_write: bool             = False      # enable to guarantee data integrity in event of abnormal/sudden termination
+    copy_on_write: bool             = True       # enable to guarantee data integrity in event of abnormal/sudden termination
     test_mode: bool                 = False      # disables moving, copying, or writing any changes to files
     write_error_summary_logs: bool  = True       # when the process is completed or aborted write a separate log file for each stage's errors/warnings
     verbose: bool                   = False      # prints debug logs to stdout
 
     # import process
     import_paths: list[str]        = ()                # list of paths to move/copy from
-    import_filter_regex: str       = "(?i)^.*\\.flac$" # regex for filtering and transforming filenames (default: *.flac)
+    import_filter_regex: str       = None              # regex for filtering and transforming filenames (default: *.flac)
     import_filter_group: int       = 0                 # regex group for destination filename.
     import_dst_path: Optional[str] = None              # import destination path. default is $DATASET_PATH
     import_warn_file_size_mismatch: bool  = True       # write warnings to debug log if the existing destination file has a different size
-    import_overwrite_if_larger: bool      = True       # if the file to be imported exists but is larger, import it and overwrite the existing file
+    import_overwrite_if_larger: bool      = False      # if the file to be imported exists but is larger, import it and overwrite the existing file
     import_move_no_copy: bool             = True       # enable to move files instead of copying them
     import_min_tree_depth: Optional[int]  = 1          # files with paths above min tree depth will use generated folder names
     import_max_tree_depth: Optional[int]  = 1          # folders below max tree depth in the source file path aren't included in destination path
@@ -377,10 +378,16 @@ class DatasetProcessorConfig:
     # integrity check process
     integrity_check_delete_corrupt_files: bool = False # delete any flac or safetensors files that fail integrity check
 
-    pre_encoded_latents_vae: Optional[str] = None
-    pre_encoded_latents_num_time_offset_augmentations: int = 8
-    pre_encoded_latents_pitch_offset_augmentations: list[int] = ()
-    pre_encoded_latents_stereo_mirroring_augmentation: bool = True
+    # encode process
+    encode_model: Optional[str]                          = None
+    encode_compile_models: bool                          = True
+    encode_latents_batch_size: int                       = 1
+    encode_latents_force_overwrite: bool                 = False
+    encode_latents_num_time_offset_augmentations: int    = 8
+    encode_latents_pitch_offset_augmentations: list[int] = ()
+    encode_latents_stereo_mirroring_augmentation: bool   = True
+    encode_audio_embeddings_force_overwrite: bool        = False
+    encode_text_embeddings_force_overwrite: bool         = False
 
     clap_embedding_model: Optional[str] = None
     clap_embedding_labels: Optional[dict[str, list[str]]] = None

@@ -149,11 +149,11 @@ class NormalizeSave(DatasetProcessStage):
     @torch.inference_mode()
     def process(self, input_dict: dict) -> Optional[Union[dict, list[dict]]]:
 
+        audio_path = input_dict["audio_path"]
+        old_lufs = input_dict["old_lufs"]
+        target_lufs = input_dict["target_lufs"]
+        
         with self.critical_lock:
-
-            audio_path = input_dict["audio_path"]
-            old_lufs = input_dict["old_lufs"]
-            target_lufs = input_dict["target_lufs"]
             self.logger.debug(f"\"{audio_path}\" lufs: {old_lufs} -> {target_lufs}")
             
             if self.processor_config.test_mode == False:
@@ -165,9 +165,8 @@ class NormalizeSave(DatasetProcessStage):
                     metadata=input_dict["audio_metadata"],
                     copy_on_write=self.processor_config.copy_on_write
                 )
-                return {}
 
-        return None
+        return {}
 
 
 if __name__ == "__main__":
