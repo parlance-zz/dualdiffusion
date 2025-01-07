@@ -1,27 +1,40 @@
 {
-  "dataset_formats": [".flac", ".mp3"],
-  "source_formats": [".flac", ".mp3", ".wav", ".ogg", ".m4a"],
   "sample_rate": 32000,
   "num_channels": 2,
-  "min_sample_rate": 32000,
-  "min_kbps": 0,
-  "min_sample_length": 1442048,
-  "max_sample_length": 4800000,
-  "min_num_class_samples": 0,
+  "max_num_proc": 12,
+  "buffer_memory_level": 3,
+  "cuda_devices": "cuda",
+  "force_overwrite": false,
+  "copy_on_write": false,
+  "test_mode": false,
+  "write_error_summary_logs": true,
+  "verbose": false,
 
-  "dataset_processor_verbose": true,
+  "import_paths": ["/mnt/vault/dataset_import/smd/to_transcode"],
+  "import_filter_regex": "^t_[^_]*_(.*\\.flac)$",
+  "import_filter_group": 1,
+  "import_dst_path": "/mnt/vault/dataset/smd",
+  "import_warn_file_size_mismatch": true,
+  "import_overwrite_if_larger": true,
+  "import_move_no_copy": true,
+  "import_min_tree_depth": 1,
+  "import_max_tree_depth": 1,
 
-  "pre_encoded_latents_vae": "edm2_vae_test7_4",
-  "pre_encoded_latents_device_batch_size": 1,
-  "pre_encoded_latents_num_time_offset_augmentations": 8,
-  "pre_encoded_latents_pitch_offset_augmentations": [],
-  "pre_encoded_latents_stereo_mirroring_augmentation": false,
-  "pre_encoded_latents_enable_quantization": false,
+  "normalize_target_lufs": -20.0,
+  "normalize_trim_silence": true,
+  "normalize_trim_max_length": 600,
+  
+  "integrity_check_delete_corrupt_files": false,
 
-  "clap_enable_fusion": false,
-  "clap_audio_encoder": "HTSAT-base",
-  "clap_text_encoder": "roberta",
-  "clap_compile_options": null,
+  "encode_model": "edm2_vt7_12d_4_clap2",
+  "encode_latents_num_time_offset_augmentations": 8,
+  "encode_latents_pitch_offset_augmentations": [],
+  "encode_latents_stereo_mirroring_augmentation": true,  
+  "encode_latents_force_overwrite": false,
+  "encode_audio_embeddings_force_overwrite": false,
+  "encode_text_embeddings_force_overwrite": false,
+
+  "clap_embedding_model": "edm2_vt7_12d_4_clap",
   "clap_embedding_labels": {
     "vocals": ["vocals", "singing", "female singer", "male singer", "voice", "speaking", "speech", "dialogue",
     "whispering", "screaming", "yelling", "chanting"],
@@ -31,7 +44,5 @@
     "music": ["music", "song", "instrumental", "melody", "tune", "rhythm", "harmony", "beat", "orchestra", "band"],
     "simple": ["simple", "minimal", "basic"]
   },
-  "clap_embedding_tags": [],
-  "clap_force_re_encode_audio_embeddings": false,
-  "clap_force_re_encode_text_embeddings": false
+  "clap_embedding_tags": []
 }

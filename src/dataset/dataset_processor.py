@@ -22,759 +22,608 @@
 
 import utils.config as config
 
-import os
-import json
-import logging
-import shutil
 from dataclasses import dataclass
-from typing import Generator, Optional
+from typing import Optional, Union, Literal, Any
+from abc import ABC, abstractmethod
+from traceback import format_exception
+from queue import Full as QueueFullException
 from datetime import datetime
+from multiprocessing.synchronize import Lock, Event
+from copy import deepcopy
+import os
+import logging
+import time
+import signal
+import threading
 
-import torch
-import mutagen
-import safetensors.torch as ST
 from tqdm.auto import tqdm
+import torch
+import torch.multiprocessing as mp
 
-from utils.dual_diffusion_utils import dict_str, normalize, save_safetensors, get_audio_metadata
+from utils.dual_diffusion_utils import (
+    init_logging, init_cuda, get_available_torch_devices
+)
 
+
+def _process_worker(stage: "DatasetProcessStage", rank: int,
+        cuda_device: Optional[str], critical_lock: Lock, finish_event: Event) -> None:
+
+    # disable sigint, it will be handled by the main process
+    signal.signal(signal.SIGINT, signal.SIG_IGN)
+
+    # init pytorch 
+    if cuda_device is not None:
+        assert stage.get_stage_type() == "cuda"
+        init_cuda()
+    
+    # if using cpu fallback for a cuda stage then allow default torch threads, otherwise set to 1
+    if cuda_device != "cpu":
+        torch.set_num_threads(1)
+        torch.set_num_interop_threads(1)
+
+    # init logging
+    stage_name = stage.__class__.__name__
+    logger = logging.getLogger(stage_name)
+    log_handler = WorkerLogHandler(stage.log_queue, stage.warning_queue, stage.error_queue, stage_name)
+    logger.setLevel(logging.DEBUG)
+    logger.addHandler(log_handler)
+
+    # init process
+    try:
+        stage._init_process(rank, cuda_device, logger, critical_lock, finish_event)
+        time.sleep(0.1)
+        stage.start_process()
+    except Exception as e:
+        logger.error("".join(format_exception(type(e), e, e.__traceback__)))
+
+        # flag worker as finished and wait forever
+        stage.finish_event.set()
+        threading.Event().wait()
+    
+    while True:
+        input_dict: dict = stage.input_queue.get()
+        if input_dict is None:
+            try:
+                stage.finish_process()
+            except Exception as e:
+                logger.error("".join(format_exception(type(e), e, e.__traceback__)))
+
+            # flag worker as finished and wait forever
+            stage.finish_event.set()
+            threading.Event().wait()
+
+        try:
+            cloned_input_dict = deepcopy(input_dict)
+            del input_dict  # necessary to satisfy pytorch shared memory constraints
+            output = stage.process(cloned_input_dict)
+
+            if output is not None:
+                if isinstance(output, list):
+                    for item in output:
+                        stage.output_queue.put(item)
+                elif isinstance(output, dict):
+                    stage.output_queue.put(output)
+                else:
+                    raise ValueError(f"stage.process returned unrecognized type '{type(output)}'")
+            else:
+                del cloned_input_dict
+                
+        except Exception as e:
+            logger.error("".join(format_exception(type(e), e, e.__traceback__)))
+            try: del input_dict
+            except: pass
+
+def _log_worker(process_name: str, verbose: bool, log_queue: mp.Queue):
+
+    # disable sigint, it will be handled by the main process
+    signal.signal(signal.SIGINT, signal.SIG_IGN)
+
+    logger = init_logging(process_name, group_name="dataset_processor", verbose=verbose)
+    while True:
+        record = log_queue.get()
+        if record is None: os._exit(0)
+
+        logger.handle(record)
+        for handler in logger.handlers:
+            handler.flush()
+
+def _monitor_worker(input_queues: list["WorkQueue"], stage_names: list[str], finish_event: Event) -> None:
+
+    # disable sigint, it will be handled by the main process
+    signal.signal(signal.SIGINT, signal.SIG_IGN)
+
+    progress_bars = []
+    for name in stage_names:
+        progress_bar = tqdm(total=1, smoothing=0.9)
+        progress_bar.set_description(name, refresh=False)
+        progress_bars.append(progress_bar)
+
+    def update_progress(progress_bar: tqdm, input_queue: WorkQueue) -> None:
+        processed, total = input_queue.get_processed_total()
+        progress_bar.total = total
+        progress_bar.n = processed
+        progress_bar.refresh()
+
+    while True:
+        for progress_bar, input_queue in zip(progress_bars, input_queues):
+            update_progress(progress_bar, input_queue)
+        
+        if finish_event.is_set(): break
+        time.sleep(0.5)
+
+    for progress_bar, input_queue in zip(progress_bars, input_queues):
+        update_progress(progress_bar, input_queue)
+        progress_bar.close()
+
+    os._exit(0)
+
+def _terminate_worker(process: mp.Process, timeout: float = 0.25, close: bool = False) -> None:
+
+    process.join(timeout=timeout)
+
+    if process.is_alive() == True:
+        process.terminate()
+        process.join(timeout=timeout)
+
+        if process.is_alive() == True:
+            process.kill()
+            process.join()
+
+    if close == True:
+        process.close()
+
+class WorkQueue: # normal Queue class behavior extended with progress tracking
+
+    def __init__(self, *args, **kwargs) -> None:
+        self.total_count = mp.Value("i", 0)  # 'i' means integer
+        self.processed_count = mp.Value("i", 0)
+        self.queue = mp.Queue(*args, **kwargs)
+
+    def put(self, obj, *args, **kwargs) -> None:
+        if obj is not None:
+            with self.total_count.get_lock():
+                self.total_count.value += 1
+        self.queue.put(obj, *args, **kwargs)
+
+    def get(self, *args, **kwargs) -> Any:
+        obj = self.queue.get(*args, **kwargs)
+        if obj is not None:
+            with self.processed_count.get_lock():
+                self.processed_count.value += 1
+        return obj
+
+    def get_processed_total(self) -> tuple[int, int]:
+        with self.total_count.get_lock():
+            with self.processed_count.get_lock():
+                total = self.total_count.value
+                processed = self.processed_count.value
+        return processed, total
+
+# dummy log handler that sends all log records to an mp queue and saves warnings and errors in separate queues
+class WorkerLogHandler(logging.Handler):
+    def __init__(self, log_queue: mp.Queue, warning_queue: mp.Queue, error_queue: mp.Queue,
+                 process_name: Optional[str] = None) -> None:
+        
+        super().__init__(level=logging.DEBUG)
+        self.process_name = process_name or ""
+
+        self.log_queue = log_queue
+        self.warning_queue = warning_queue
+        self.error_queue = error_queue
+
+    def emit(self, record: Optional[logging.LogRecord]) -> None:
+        if record is not None:
+            if record.msg not in ("" , "\n"):
+                if not hasattr(record, "label"):
+                    setattr(record, "label", self.process_name)
+                    record.msg = f"{record.label}: {record.msg}"
+
+            if record.levelno >= logging.ERROR:
+                self.error_queue.put(record)
+            elif record.levelno >= logging.WARNING:
+                self.warning_queue.put(record)
+
+        self.log_queue.put(record)
+
+# main workhorse class for dataset processing. processes should subclass DatasetProcessStage and
+# implement process (required), and get_stage_type, start_process, finish_process, info_banner, summary_banner, limit_output_queue_size (optional)
+class DatasetProcessStage(ABC):
+
+    def __init__(self) -> None:
+        pass
+
+    def _start_worker_queue(self, input_queue: WorkQueue, log_queue: mp.Queue,
+                num_proc: int, processor_config: "DatasetProcessorConfig") -> WorkQueue:
+
+        self.processor_config = processor_config
+        self.num_proc = num_proc
+
+        self.log_queue = log_queue
+        self.warning_queue = mp.Queue()
+        self.error_queue = mp.Queue()
+
+        if self.limit_output_queue_size() == True:
+            max_output_queue_size = max(num_proc * processor_config.buffer_memory_level, 1)
+        else:
+            max_output_queue_size = 0
+        self.input_queue = input_queue
+        self.output_queue = WorkQueue(max_output_queue_size)
+
+        critical_locks = [mp.Lock() for _ in range(num_proc)]
+        finish_events = [mp.Event() for _ in range(num_proc)]
+        workers: list[mp.Process] = []
+
+        for rank in range(self.num_proc):
+            cuda_device = self.processor_config.cuda_devices[rank] if self.get_stage_type() == "cuda" else None
+            worker = mp.Process(target=_process_worker, daemon=True,
+                args=(self, rank, cuda_device, critical_locks[rank], finish_events[rank]))
+            workers.append(worker)
+            worker.start()
+
+        self.workers = workers
+        self.critical_locks = critical_locks
+        self.finish_events = finish_events
+
+        return self.output_queue
+
+    # adds one None per worker process to the input queue to signal end of input
+    # this should only be called after _ALL_ items have been added to the input queue
+    # timeouts are necessary because if the main process blocks it will no longer respond to ctrl+c
+    def _finish_worker_queue(self) -> int: # returns total worker errors
+
+        sentinels_sent = 0
+        while sentinels_sent < len(self.workers):
+            try:
+                self.input_queue.put(None, timeout=0.01)
+                sentinels_sent += 1
+            except QueueFullException:
+                time.sleep(0.1)
+
+        while True:
+            num_running = 0
+            for finish_event in self.finish_events:
+                if finish_event.wait(timeout=0.01) == False:
+                    num_running += 1
+
+            if num_running == 0: break
+            time.sleep(0.1)
+
+        return self.error_queue.qsize(), self.warning_queue.qsize()
+
+    def _init_process(self, rank: int, device: Optional[str],
+            logger: logging.Logger, critical_lock: Lock, finish_event: Event) -> None:
+        self.rank = rank
+        self.device = device
+        self.logger = logger
+        self.critical_lock = critical_lock
+        self.finish_event = finish_event
+
+    # acquiring the associated critical lock before terminating each worker will prevent data corruption
+    def _terminate(self) -> None:
+        for critical_lock, worker in zip(self.critical_locks, self.workers):
+            with critical_lock:
+                worker.terminate()
+        
+        for worker in self.workers:
+            if worker.is_alive() == True:
+                worker.join()
+
+    # should only be called after _ALL_ workers have terminated due to shared memory
+    def _close(self) -> None:
+        for worker in self.workers:
+            worker.close()
+
+    # subclass can override this to print some info at the start of processing
+    # this is executed on the first process stage in the main process
+    # before any worker processes are started
+    def info_banner(self, logger: logging.Logger) -> None:
+        pass
+
+    def summary_banner(self, logger: logging.Logger) -> None:
+        pass
+    
+    # if the stage output objects are large this can be overridden to return True
+    # to cap the maximum number of items that can reside in the output queue for this stage
+    def limit_output_queue_size(self) -> bool:
+        return False
+
+    # io stages get 1 process, cuda stages get 1 process per device, the remaining processes are
+    # evenly divided between any cpu stages until max_num_proc is reached
+    def get_stage_type(self) -> Literal["io", "cpu", "cuda"]:
+        return "io"
+    
+    @torch.inference_mode()
+    def start_process(self) -> None:
+        pass
+    
+    @torch.inference_mode()
+    def finish_process(self) -> None:
+        pass
+
+    @abstractmethod
+    @torch.inference_mode()
+    def process(self, input_dict: dict) -> Optional[Union[dict, list[dict]]]:
+        pass
 
 @dataclass
 class DatasetProcessorConfig:
 
-    dataset_formats: list[str]
-    source_formats: list[str]
-    sample_rate: int
-    num_channels: int
-    min_sample_rate: Optional[int] = None
-    min_kbps: Optional[int] = None
-    min_sample_length: Optional[int] = None
-    max_sample_length: Optional[int] = None
-    min_num_class_samples: Optional[int] = None
-    dataset_processor_verbose: bool = False
+    sample_rate: int                = 32000      # sample rate for dataset audio
+    num_channels: int               = 2          # mono or stereo for dataset audio
+    max_num_proc: Optional[int]     = None       # set max number of (total) processes for cpu stages. default is 1/2 cpu cores
+    buffer_memory_level: int        = 2          # higher values increase max queue sizes and memory usage
+    cuda_devices: list[str]         = ("cuda",)  # list of devices to use in cuda stages ("cuda:0", "cuda:1", etc)
+    force_overwrite: bool           = False      # disables skipping files that have been previously processed
+    copy_on_write: bool             = True       # enable to guarantee data integrity in event of abnormal/sudden termination
+    test_mode: bool                 = False      # disables moving, copying, or writing any changes to files
+    write_error_summary_logs: bool  = True       # when the process is completed or aborted write a separate log file for each stage's errors/warnings
+    verbose: bool                   = False      # prints debug logs to stdout
 
-    pre_encoded_latents_vae: Optional[str] = None
-    pre_encoded_latents_device_batch_size: int = 1
-    pre_encoded_latents_num_time_offset_augmentations: int = 8
-    pre_encoded_latents_pitch_offset_augmentations: list[int] = ()
-    pre_encoded_latents_stereo_mirroring_augmentation: bool = False
-    pre_encoded_latents_enable_quantization: bool = False
+    # import process
+    import_paths: list[str]        = ()                # list of paths to move/copy from
+    import_filter_regex: str       = None              # regex for filtering and transforming filenames (default: *.flac)
+    import_filter_group: int       = 0                 # regex group for destination filename.
+    import_dst_path: Optional[str] = None              # import destination path. default is $DATASET_PATH
+    import_warn_file_size_mismatch: bool  = True       # write warnings to debug log if the existing destination file has a different size
+    import_overwrite_if_larger: bool      = False      # if the file to be imported exists but is larger, import it and overwrite the existing file
+    import_move_no_copy: bool             = True       # enable to move files instead of copying them
+    import_min_tree_depth: Optional[int]  = 1          # files with paths above min tree depth will use generated folder names
+    import_max_tree_depth: Optional[int]  = 1          # folders below max tree depth in the source file path aren't included in destination path
 
+    # normalize process
+    normalize_target_lufs: float               = -20.  # desired loudness level for dataset audio in the normalization process
+    normalize_trim_silence: bool               = True  # removes any silence at the beginning or end of the audio file
+    normalize_trim_max_length: Optional[float] = 600   # truncates the length of the audio to this max length (in seconds)
+
+    # integrity check process
+    integrity_check_delete_corrupt_files: bool = False # delete any flac or safetensors files that fail integrity check
+
+    # encode process
+    encode_model: Optional[str]                          = None
+    encode_compile_models: bool                          = True
+    encode_latents_batch_size: int                       = 1
+    encode_latents_force_overwrite: bool                 = False
+    encode_latents_num_time_offset_augmentations: int    = 8
+    encode_latents_pitch_offset_augmentations: list[int] = ()
+    encode_latents_stereo_mirroring_augmentation: bool   = True
+    encode_audio_embeddings_force_overwrite: bool        = False
+    encode_text_embeddings_force_overwrite: bool         = False
+
+    clap_embedding_model: Optional[str] = None
     clap_embedding_labels: Optional[dict[str, list[str]]] = None
     clap_embedding_tags: Optional[list[str]] = None
-    clap_enable_fusion: bool = False
-    clap_audio_encoder: str = "HTSAT-base"
-    clap_text_encoder: str = "roberta"
-    clap_compile_options: Optional[dict] = None
-    clap_max_batch_size: int = 32
-    clap_force_re_encode_audio_embeddings: bool = False
-    clap_force_re_encode_text_embeddings: bool = False
-
-class DatasetSplit:
-
-    def __init__(self, path: str) -> None:
-        self.path = path
-        self.name = os.path.splitext(os.path.basename(path))[0]
-
-        self.init_split()
-
-    def init_split(self) -> None:
-
-        self.empty_sample = {
-            "file_name": None,
-            "file_size": None,
-            "system": None,
-            "game": None,
-            "song": None,
-            "author": None,
-            "system_id": None,
-            "game_id": None,
-            "author_id": None,
-            "sample_rate": None,
-            "num_channels": None,
-            "sample_length": None,
-            "bit_rate": None,
-            "prompt": None,
-            "latents_file_name": None,
-            "latents_file_size": None,
-            "latents_length": None,
-            "latents_num_variations": None,
-            "latents_quantized": None,
-            "latents_vae_model": None,
-            "latents_has_audio_embeddings": None,
-            "latents_has_text_embeddings": None,
-        }
-        if os.path.isfile(self.path):
-            logging.getLogger().info(f"Loading split from {self.path}")
-            with open(self.path, "r") as f:
-                self.samples = [self.empty_sample | json.loads(line) for line in f]
-        else:
-            logging.getLogger().warning(f"Split not found at {self.path}, creating new split")
-            self.samples: list[dict] = []
-
-    def remove_samples(self, indices: list[int]) -> None:
-        self.samples = [sample for index, sample in enumerate(self.samples) if index not in indices]
-    
-    def add_samples(self, samples: list[dict]) -> None:
-        for sample in samples:
-            self.samples.append(self.empty_sample | sample)
-
-    def save(self, path: Optional[str] = None) -> None:
-        with open(path or self.path, "w") as f:
-            for sample in self.samples:
-                f.write(json.dumps(sample) + "\n")
-
-class SampleList:
-
-    def __init__(self) -> None:
-        self.samples: dict[DatasetSplit, list[int]] = {}
-        self.annotations : dict[tuple[DatasetSplit, int], str] = {}
-
-    def add_sample(self, split: DatasetSplit, index: int, annotation: Optional[str] = None) -> None:
-        if split not in self.samples:
-            self.samples[split] = []
-        self.samples[split].append(index)
-
-        if annotation is not None:
-            self.annotations[(split, index)] = annotation
-
-    def __len__(self) -> int:
-        return sum(len(indices) for indices in self.samples.values())
-    
-    def __iter__(self) -> Generator[DatasetSplit, int, dict]:
-        for split, indices in self.samples.items():
-            yield from ((split, index, split.samples[index]) for index in indices)
-    
-    def remove_samples_from_dataset(self) -> None:
-        for split, indices in self.samples.items():
-            split.remove_samples(indices)
-
-    def show_samples(self) -> None:
-        logger = logging.getLogger()
-        for split, index, sample in self:
-            sample_str = f'{split.name}_{index}: "{sample["file_name"]}"'
-            annotation = self.annotations.get((split, index), None)
-            if annotation is not None: sample_str += f" ({annotation})"
-            logger.debug(sample_str)
 
 class DatasetProcessor:
     
     def __init__(self) -> None:
 
         if config.CONFIG_PATH is None:
-            raise ValueError("ERROR: CONFIG_PATH not defined")
+            raise ValueError("CONFIG_PATH not defined")
         if not os.path.isdir(config.CONFIG_PATH):
-            raise ValueError(f"ERROR: CONFIG_PATH '{config.CONFIG_PATH}' not found")
-        if config.DATASET_PATH is None:
-            raise ValueError("ERROR: DATASET_PATH not defined")
-        if not os.path.isdir(config.DATASET_PATH):
-            raise ValueError(f"ERROR: DATASET_PATH '{config.DATASET_PATH}' not found")
+            raise FileNotFoundError(f"CONFIG_PATH '{config.CONFIG_PATH}' not found")
         
         self.config = DatasetProcessorConfig(
             **config.load_json(os.path.join(config.CONFIG_PATH, "dataset", "dataset.json")))
         
-        self.datetime_str = datetime.now().strftime(r"%Y-%m-%d_%H_%M_%S")
-        if config.DEBUG_PATH is not None:
-            self.backup_path = os.path.join(config.DEBUG_PATH, "dataset_processing", f"backup_{self.datetime_str}")
+        self.config.max_num_proc = self.config.max_num_proc or mp.cpu_count() // 2
+        if self.config.cuda_devices is None:
+            self.config.cuda_devices = []
+        if isinstance(self.config.cuda_devices, str):
+            self.config.cuda_devices = [self.config.cuda_devices]
+
+    # process a pipeline of DatasetProcessStage objects in parallel with a specified input path or WorkQueue
+    def process(self, process_name: str, process_stages: list[DatasetProcessStage],
+                input: Optional[Union[list[str], WorkQueue]] = None) -> None:
+    
+        # first stage input is either a specified path, None (dataset path), or pre-filled WorkQueue
+        if input is None:
+            if config.DATASET_PATH is None:
+                raise ValueError("DATASET_PATH not defined")
+            input = [config.DATASET_PATH]
+
+        elif isinstance(input, str):
+            input = [input]
+
+        if isinstance(input, list):
+            scan_paths = input
+            input_queue = WorkQueue()
+
+            for scan_path in scan_paths:
+                if not os.path.isdir(scan_path):
+                    raise FileNotFoundError(f"Input path '{scan_path}' not found")
+        elif isinstance(input, WorkQueue):
+            scan_paths = None
+            input_queue = input
         else:
-            self.backup_path = None
+            raise ValueError(f"Unrecognized input type in DatasetProcessor.process: {type(input)}")
+
+        # only one stage is allowed to have cuda device(s)
+        cuda_stage_names = [stage.__class__.__name__ for stage in process_stages if stage.get_stage_type() == "cuda"]
+        if len(cuda_stage_names) > 1:
+            raise ValueError(f"More than one stage has cuda devices: {cuda_stage_names}")
+
+        # validate selected cuda devices if there is a cuda stage
+        if len(cuda_stage_names) > 0:
+            available_cuda_devices = get_available_torch_devices()
+            for device in self.config.cuda_devices:
+                if device not in available_cuda_devices:
+                    raise ValueError(f"Selected cuda device '{device}' not available")
+
+        # start logging process
+        log_queue = mp.Queue()
+        log_worker = mp.Process(target=_log_worker, daemon=True,
+            args=(process_name, self.config.verbose, log_queue))
+        log_worker.start()
+
+        logger = logging.getLogger("DatasetProcessor")
+        logger.setLevel(logging.DEBUG if self.config.verbose == True else logging.INFO)
+        warning_queue, error_queue = mp.Queue(), mp.Queue()
+        log_handler = WorkerLogHandler(log_queue, warning_queue, error_queue, "DatasetProcessor")
+        logger.setLevel(logging.DEBUG)
+        logger.addHandler(log_handler)
+        logger.info("")
+
+        # 3 second chance to abort if force overwrite is enabled
+        if self.config.force_overwrite == True and self.config.test_mode == False:
+            logger.warning("WARNING: Force overwrite is enabled - existing files will be overwritten (Press ctrl+c to abort)")
+            time.sleep(3)
+
+        if self.config.test_mode == True:
+            logger.warning("WARNING: Test mode is enabled - no files will be written")
+
+        # if no cuda devices are configured but there is a cuda stage in the process, use all available cuda devices
+        if len(cuda_stage_names) > 0 and len(self.config.cuda_devices) == 0:
+            if len(available_cuda_devices) > 0:
+                logger.warning(f"No cuda devices configured, using all available cuda devices ({available_cuda_devices})")
+                self.config.cuda_devices = available_cuda_devices
+            else: # fallback to cpu for cuda stage if no devices are available
+                logger.warning("No cuda devices available, using cpu processing only")
+                self.config.cuda_devices = ["cpu"]
         
-        self.init_logging()
-        self.init_dataset()
+        # allocate processes to each stage based on stage type
+        # todo: if this isn't good enough we should use PriorityQueue to create a cpu proc pool
+        stage_names = [stage.__class__.__name__ for stage in process_stages]
+        stage_types = [stage.get_stage_type() for stage in process_stages]
 
-    def init_logging(self) -> None:
+        remaining_num_procs = self.config.max_num_proc
+        num_cpu_stages = 0
+        stage_num_procs: list[int] = []
 
-        self.logger = logging.getLogger()
-
-        if config.DEBUG_PATH is not None:
-            logging_dir = os.path.join(config.DEBUG_PATH, "dataset_processing")
-            os.makedirs(logging_dir, exist_ok=True)
-
-            log_path = os.path.join(logging_dir, f"dataset_processing_{self.datetime_str}.log")
-            logging.basicConfig(
-                handlers=[
-                    logging.FileHandler(log_path),
-                    logging.StreamHandler()
-                ],
-                format="",
-                level=logging.DEBUG if self.config.dataset_processor_verbose else logging.INFO,
-            )
-            self.logger.info(f"\nStarted DatasetProcessor at {self.datetime_str}")
-            self.logger.info(f"Logging to {log_path}")
-        else:
-            self.logger.warning("WARNING: DEBUG_PATH not defined, logging to file and metadata backup is disabled")
-
-    def init_dataset(self) -> None:
-        
-        # init dataset info
-        self.dataset_info = {
-            "features": {
-                "system": {"type": "string"},
-                "game": {"type": "string"},
-                "song": {"type": "string"},
-                "author": {
-                    "type": "list",
-                    "value_type": {"type": "string"},
-                },
-                "system_id": {
-                    "type": "int",
-                    "num_classes": 0,
-                },
-                "game_id": {
-                    "type": "int",
-                    "num_classes": 0,
-                },
-                "author_id": {
-                    "type": "list",
-                    "value_type": {
-                        "type": "int",
-                        "num_classes": 0,
-                    }
-                },
-                "prompt": {"type": "string"},
-                "sample_rate": {"type": "int"},
-                "num_channels": {"type": "int"},
-                "sample_length": {"type": "int"},
-                "file_size": {"type": "int"},
-                "bit_rate": {"type": "int"},
-                "latents_file_name": {"type": "string"},
-                "latent_file_size": {"type": "int"},
-                "latents_length": {"type": "int"},
-                "latents_num_variations": {"type": "int"},
-                "latents_quantized": {"type": "bool"},
-                "latents_vae_model": {"type": "string"},
-                "latents_has_audio_embeddings": {"type": "bool"},
-                "latents_has_text_embeddings": {"type": "bool"},
-            },
-            "system_id": {},
-            "game_id": {},
-            "author_id": {},
-            "num_total_samples": 0,
-            "num_train_samples": 0,
-            "num_validation_samples": 0,
-            "system_train_sample_counts": {},
-            "game_train_sample_counts": {},
-            "author_train_sample_counts": {},
-            "processor_config": None,
-        }
-
-        self.dataset_info_path = os.path.join(config.DATASET_PATH, "dataset_infos", "dataset_info.json")
-        if os.path.isfile(self.dataset_info_path):
-            self.logger.info(f"Loading dataset info from {self.dataset_info_path}")
-            dataset_info = self.dataset_info | config.load_json(self.dataset_info_path)
-            dataset_info["features"] = self.dataset_info["features"] | dataset_info["features"]
-        else:
-            self.logger.warning(f"Dataset info not found at {self.dataset_info_path}, creating new dataset")
-            dataset_info = self.dataset_info
-
-        dataset_info["processor_config"] = self.config.__dict__
-        self.dataset_info = dataset_info
-
-        # load / create splits
-        splits = [
-            DatasetSplit(os.path.join(config.DATASET_PATH, f))
-            for f in os.listdir(config.DATASET_PATH)
-            if f.lower().endswith(".jsonl")
-        ]
-        self.splits = {split.name: split for split in splits}
-
-        if "train" not in self.splits:
-            self.splits["train"] = DatasetSplit(os.path.join(config.DATASET_PATH, "train.jsonl"))
-        if "validation" not in self.splits:
-            self.splits["validation"] = DatasetSplit(os.path.join(config.DATASET_PATH, "validation.jsonl"))
-
-        self.show_dataset_summary()
-
-    def show_dataset_summary(self) -> None:
-
-        self.logger.info(f"\nLoaded dataset with {self.num_samples()} samples")
-        self.logger.info("Splits:")
-        total_samples = 0
-        for split in self.splits.values():
-            self.logger.info(f"  {split.name}: {len(split.samples)} samples")
-            total_samples += len(split.samples)
-
-        self.logger.info("Dataset info:")
-        self.logger.info(f"  {len(self.dataset_info['system_id'])} system id(s)")
-        self.logger.info(f"  {len(self.dataset_info['game_id'])} game id(s)")
-        self.logger.info(f"  {len(self.dataset_info['author_id'])} author id(s)")
-
-        if total_samples > 0:
-            min_sample_length = min(sample["sample_length"] for _, _, sample in self.all_samples() if sample["sample_length"] is not None)
-            max_sample_length = max(sample["sample_length"] for _, _, sample in self.all_samples() if sample["sample_length"] is not None)
-            min_sample_length_seconds = min(sample["sample_length"] / sample["sample_rate"]
-                for _, _, sample in self.all_samples() if sample["sample_length"] is not None and sample["sample_rate"] is not None)
-            max_sample_length_seconds = max(sample["sample_length"] / sample["sample_rate"]
-                for _, _, sample in self.all_samples() if sample["sample_length"] is not None and sample["sample_rate"] is not None)
+        for stage, stage_type in zip(process_stages, stage_types):
+            if stage_type == "io":
+                stage_num_procs.append(1)
+            elif stage_type == "cuda":
+                stage_num_procs.append(len(self.config.cuda_devices))
+            elif stage_type == "cpu":
+                stage_num_procs.append(0)
+                num_cpu_stages += 1
+            else:
+                raise ValueError(f"Unrecognized stage type '{stage_type}'")
             
-            try:
-                min_latents_length = min(sample["latents_length"] for _, _, sample in self.all_samples() if sample["latents_length"] is not None)
-                max_latents_length = max(sample["latents_length"] for _, _, sample in self.all_samples() if sample["latents_length"] is not None)
-            except Exception as e:
-                min_latents_length = 0
-                max_latents_length = 0
-        else:
-            min_sample_length = 0
-            max_sample_length = 0
-            min_sample_length_seconds = 0
-            max_sample_length_seconds = 0
-            min_latents_length = 0
-            max_latents_length = 0
+            remaining_num_procs -= stage_num_procs[-1]
 
-        self.logger.info(f"  min sample_length: {min_sample_length} ({min_sample_length_seconds:.2f}s)")
-        self.logger.info(f"  max sample_length: {max_sample_length} ({max_sample_length_seconds:.2f}s)")
-        self.logger.info(f"  min latents_length: {min_latents_length}")
-        self.logger.info(f"  max latents_length: {max_latents_length}")
+        cpu_stage_procs = max(remaining_num_procs // max(num_cpu_stages, 1), 1)
+        stage_num_procs = [num_proc if num_proc > 0 else cpu_stage_procs for num_proc in stage_num_procs]
 
-    def get_id(self, id_type: str, name: str) -> int:
+         # disable sigint to avoid data corruption
+        original_sigint_handler = signal.getsignal(signal.SIGINT)
+        signal.signal(signal.SIGINT, signal.SIG_IGN)
 
-        id = self.dataset_info[id_type].get(name, None)
-        if id is None:
+        # setup processing queue chain and start workers for each stage
+        logger.info(f"Process layout for {len(process_stages)} stage(s) using {sum(stage_num_procs)} total processes")
+        input_queues: list[WorkQueue] = []
 
-            if "value_type" in self.dataset_info["features"][id_type]:
-                id = self.dataset_info["features"][id_type]["value_type"]["num_classes"]
-                self.dataset_info["features"][id_type]["value_type"]["num_classes"] += 1
-            else:
-                id = self.dataset_info["features"][id_type]["num_classes"]
-                self.dataset_info["features"][id_type]["num_classes"] += 1
+        for stage, num_proc, stage_name, stage_type in zip(process_stages, stage_num_procs,
+                                                           stage_names, stage_types):
+            logger.info(
+                f"Stage: {stage_name:<{max(len(n) for n in stage_names)+1}} "
+                f"Type: {stage_type:<{max(len(t) for t in stage_types)+1}} "
+                f"Processes: {num_proc:<{3}}"
+                f"CUDA Devices: {self.config.cuda_devices if stage_type == 'cuda' else 'n/a'} "
+            )
 
-            self.dataset_info[id_type][name] = id
+            input_queues.append(input_queue)
+            input_queue = stage._start_worker_queue(
+                input_queue, log_queue, num_proc, self.config)
 
-        return id
-    
-    def all_samples(self) -> Generator[DatasetSplit, int, dict]:
-        for _, split in self.splits.items():
-            yield from ((split, index, sample) for index, sample in enumerate(split.samples))
+        logger.info(""); process_stages[0].info_banner(logger); logger.info("")
+        time.sleep(0.2)
 
-    def num_samples(self) -> int:
-        return sum(len(split.samples) for split in self.splits.values())
+        # start a process for monitoring progress of all stages
+        monitor_finish_event = mp.Event()
+        monitor_worker = mp.Process(target=_monitor_worker, daemon=True,
+            args=(input_queues, stage_names, monitor_finish_event))
+        monitor_worker.start()
 
-    def get_unused_ids(self) -> tuple[dict[str, int]]:
+        process_result = "completed successfully"
+        process_start_time = datetime.now()
+        signal.signal(signal.SIGINT, original_sigint_handler)  # re-enable sigint as it will be caught
+        try:
+            # if first stage input is a list of paths, scan the paths and fill the first input_queue
+            if scan_paths is not None:
+                for scan_path in scan_paths:
+                    for root, _, files in os.walk(scan_path):
+                        for file in files:
+                            input_queues[0].put({"scan_path": scan_path, "file_path": os.path.join(root, file)})
+            
+            # wait for each stage to finish
+            total_errors = 0; total_warnings = 0
+            for stage in process_stages:
+                errors, warnings = stage._finish_worker_queue()
+                total_errors += errors; total_warnings += warnings
 
-        used_system_ids, used_game_ids, used_author_ids = set(), set(), set()
-        for _, _, sample in self.all_samples():
-            if sample["system_id"] is not None: used_system_ids.add(sample["system_id"])
-            if sample["game_id"] is not None: used_game_ids.add(sample["game_id"])
-            if sample["author_id"] is not None: used_author_ids.update(id for id in sample["author_id"])
+            if total_errors > 0:
+                process_result = f"completed with {total_errors} errors, {total_warnings} warnings"
 
-        unused_system_ids: dict[str, int] = {}
-        unused_game_ids: dict[str, int] = {}
-        unused_author_ids: dict[str, int] = {}
-        for system, system_id in self.dataset_info["system_id"].items():
-            if system_id not in used_system_ids:
-                unused_system_ids[system] = system_id
-        for game, game_id in self.dataset_info["game_id"].items():
-            if game_id not in used_game_ids:
-                unused_game_ids[game] = game_id
-        for author, author_id in self.dataset_info["author_id"].items():
-            if author_id not in used_author_ids:
-                unused_author_ids[author] = author_id
+        except (KeyboardInterrupt, Exception) as e:
+            # disable sigint to avoid data corruption while worker processes shut down
+            signal.signal(signal.SIGINT, signal.SIG_IGN)
 
-        return unused_system_ids, unused_game_ids, unused_author_ids
+            process_result = "aborted" if isinstance(e, KeyboardInterrupt) else "failed"
+            logger.error("".join(format_exception(type(e), e, e.__traceback__)))
 
-    def validate_files(self) -> None:
+        # safely terminate worker processes by acquiring each per-process critical section lock
+        # doing this safely requires reverse order because of pytorch shared memory
+        logger.info("Safely terminating worker processes...")
+        for stage in reversed(process_stages):
+            stage._terminate()
 
-        # search for any sample file_name in splits that no longer exists (or null file_name)
-        # if any found, prompt to remove the samples from splits
-        missing_samples = SampleList()
-        for split, index, sample in self.all_samples():
-            if sample["file_name"] is None or (not os.path.isfile(os.path.join(config.DATASET_PATH, sample["file_name"]))):
-                missing_samples.add_sample(split, index)
+        # with worker processes terminated, finally re-enable sigint once more
+        signal.signal(signal.SIGINT, original_sigint_handler)
+
+        # close monitor process
+        monitor_finish_event.set()
+        _terminate_worker(monitor_worker, close=True)
         
-        num_missing = len(missing_samples)
-        if num_missing > 0:
-            self.logger.warning(f"Found {num_missing} samples in dataset with missing files or no file_name")
-            missing_samples.show_samples()
-            if input(f"Remove {num_missing} samples with missing files? (y/n): ").lower() == "y":
-                missing_samples.remove_samples_from_dataset()
-                self.logger.info(f"{num_missing} samples with missing files removed")
-            self.logger.info("")
+        # get stage error / warning counts
+        stage_error_counts = []; stage_warning_counts = []
+        for stage in process_stages:
+            stage_error_counts.append(stage.error_queue.qsize())
+            stage_warning_counts.append(stage.warning_queue.qsize())
 
-        # search for any sample latents_file_name in splits that no longer exists
-        # if any found, prompt to clear latents metadata for those samples
-        missing_latents_samples = SampleList()
-        for split, index, sample in self.all_samples():
-            if sample["latents_file_name"] is not None:
-                if not os.path.isfile(os.path.join(config.DATASET_PATH, sample["latents_file_name"])):
-                    missing_latents_samples.add_sample(split, index)
-
-        num_missing_latents = len(missing_latents_samples)
-        if num_missing_latents > 0:
-            self.logger.warning(f"Found {num_missing_latents} samples with nonexistent latents_file_name")
-            missing_latents_samples.show_samples()
-            if input(f"Clear latents metadata for {num_missing_latents} samples? (y/n): ").lower() == "y":
-                for _, _, sample in missing_latents_samples:
-                    sample["latents_file_name"] = None
-                    sample["latents_file_size"] = None
-                    sample["latents_length"] = None
-                    sample["latents_num_variations"] = None
-                    sample["latents_quantized"] = None
-                    sample["latents_vae_model"] = None
-                    sample["latents_has_audio_embeddings"] = None
-                    sample["latents_has_text_embeddings"] = None
-                self.logger.info(f"Cleared latents metadata for {num_missing_latents} samples")
-            self.logger.info("")
-
-        # search for any samples with a file_name that is not in the source formats list
-        # if any found, prompt to remove them from splits
-        invalid_format_samples = SampleList()
-        valid_sample_file_formats = self.config.source_formats + self.config.dataset_formats
-        for split, index, sample in self.all_samples():
-            if os.path.splitext(sample["file_name"])[1].lower() not in valid_sample_file_formats:
-                invalid_format_samples.add_sample(split, index)
-
-        num_invalid_format = len(invalid_format_samples)
-        if num_invalid_format > 0:
-            self.logger.warning(f"Found {num_invalid_format} samples with file formats not in the source format list ({self.config.source_formats})")
-            invalid_format_samples.show_samples()
-            if input(f"Remove {num_invalid_format} samples with invalid file formats? (this will not delete the files) (y/n): ").lower() == "y":
-                invalid_format_samples.remove_samples_from_dataset()
-                self.logger.info(f"{num_invalid_format} samples with invalid file formats removed")
-            self.logger.info("")
-
-        # search for any samples with the same file_name in any splits
-        # if any found, prompt to remove duplicates
-        sample_files = set()
-        duplicate_samples = SampleList()
-        for split, index, sample in self.all_samples():
-            norm_path = os.path.normpath(sample["file_name"])
-            if norm_path in sample_files:
-                duplicate_samples.add_sample(split, index)
-            else:
-                sample_files.add(norm_path)
-
-        num_duplicates = len(duplicate_samples)
-        if num_duplicates > 0:
-            self.logger.warning(f"Found {num_duplicates} samples with duplicated file_names")
-            duplicate_samples.show_samples()
-            if input(f"Remove {num_duplicates} samples with duplicate file_names? (y/n): ").lower() == "y":
-                duplicate_samples.remove_samples_from_dataset()
-                self.logger.info(f"{num_duplicates} samples with duplicate file_names removed")
-            self.logger.info("")
-
-    def scan(self) -> None:
-
-        # search for any files (excluding dataset metadata and latents files) that are not in the source formats list
-        # if any found, prompt to permanently delete them
-        invalid_format_files = []
-        valid_dataset_file_formats = self.config.dataset_formats + self.config.source_formats + [".jsonl", ".json", ".safetensors", ".md"]
-        for root, _, files in os.walk(config.DATASET_PATH):
-            for file in files:
-                if os.path.splitext(file)[1].lower() not in valid_dataset_file_formats:
-                    invalid_format_files.append(os.path.join(root, file))
-
-        num_invalid_format_files = len(invalid_format_files)
-        if num_invalid_format_files > 0:
-            self.logger.warning(f"Found {num_invalid_format_files} files with formats not in the source format list ({self.config.source_formats})")
-            for file in invalid_format_files:
-                self.logger.debug(f'"{file}"')
-            if input(f"Delete {num_invalid_format_files} files with invalid formats? (WARNING: this is permanent and cannot be undone) (type 'delete' to confirm): ").lower() == "delete":
-                for file in invalid_format_files:
-                    os.remove(file)
-                self.logger.info(f"Deleted {num_invalid_format_files} files with invalid formats")
-            self.logger.info("")
-    
-        # search for any valid new source audio files not currently dataset
-        # if any found, prompt to add them to train split
-        sample_files = set()
-        for _, _, sample in self.all_samples():
-            sample_files.add(os.path.normpath(sample["file_name"]))
-
-        new_audio_files = []
-        valid_sample_formats = self.config.source_formats + self.config.dataset_formats
-        for root, _, files in os.walk(config.DATASET_PATH):
-            for file in files:
-                if os.path.splitext(file)[1].lower() in valid_sample_formats:
-                    rel_path = os.path.normpath(os.path.relpath(os.path.join(root, file), config.DATASET_PATH))
-                    if rel_path not in sample_files:
-                        new_audio_files.append(rel_path)
-
-        num_new_audio_files = len(new_audio_files)
-        if num_new_audio_files > 0:
-            self.logger.info(f"Found {num_new_audio_files} new audio files not currently in the dataset")
-            for file in new_audio_files:
-                self.logger.debug(f'"{file}"')
-            if input(f"Add {num_new_audio_files} new audio files to train split? (y/n): ").lower() == "y":
-                new_samples = []
-                for file in new_audio_files:
-                    new_sample = {"file_name": file}
-                    new_sample_latents_file = os.path.join(config.DATASET_PATH, os.path.splitext(file)[0] + ".safetensors")
-                    if os.path.isfile(new_sample_latents_file):
-                        new_sample["latents_file_name"] = os.path.relpath(new_sample_latents_file, config.DATASET_PATH)
-                    new_samples.append(new_sample)
-                self.splits["train"].add_samples(new_samples)
-                self.logger.info(f"Added {num_new_audio_files} new audio files to train split")
-            self.logger.info("")
-
-        # search for any .safetensors file that has a filename corresponding an existing sample in
-        # the dataset, but that sample does not have a latents_file_name set
-        # if any found, prompt to set latents_file_name to the existing .safetensors file
-        samples_with_safetensors = SampleList()
-        for split, index, sample in self.all_samples():
-            if sample["file_name"] is not None and sample["latents_file_name"] is None:
-                latents_file_name = f"{os.path.splitext(sample['file_name'])[0]}.safetensors"
-                if os.path.isfile(os.path.join(config.DATASET_PATH, latents_file_name)):
-                    samples_with_safetensors.add_sample(split, index)
+        # write error / warning summaries
+        if self.config.write_error_summary_logs == True:
+            for stage in process_stages:
+                try:
+                    if stage.error_queue.qsize() > 0:
+                        logger.info(""); logger.info(f"{stage.__class__.__name__} errors:")
+                        while stage.error_queue.qsize() > 0:
+                            log_handler.emit(stage.error_queue.get())
+                except: pass
+                
+                try:
+                    if stage.warning_queue.qsize() > 0:
+                        logger.info(""); logger.info(f"{stage.__class__.__name__} warnings:")
+                        while stage.warning_queue.qsize() > 0:
+                            log_handler.emit(stage.warning_queue.get())
+                except: pass
         
-        num_samples_with_safetensors = len(samples_with_safetensors)
-        if num_samples_with_safetensors > 0:
-            self.logger.warning(f"Found {num_samples_with_safetensors} samples with no latents_file_name but matching latents file exists")
-            samples_with_safetensors.show_samples()
-            if input(f"Use existing pre-encoded latents files for {num_samples_with_safetensors} samples? (y/n): ").lower() == "y":
-                for _, _, sample in samples_with_safetensors:
-                    sample["latents_file_name"] = f"{os.path.splitext(sample['file_name'])[0]}.safetensors"
-                self.logger.info(f"Set latents_file_name for {num_samples_with_safetensors} samples")
+        # summarize results
+        process_finish_time = datetime.now(); logger.info("")
+        try: process_stages[-1].summary_banner(logger)
+        except Exception as e:
+            logger.error("".join(format_exception(type(e), e, e.__traceback__)))
 
-            self.logger.info("")
+        for i, stage in enumerate(process_stages):
+            stage_name = stage.__class__.__name__
+            processed, total = stage.input_queue.get_processed_total()
+            errors, warnings = stage_error_counts[i], stage_warning_counts[i]
+            logger.info(f"{stage_name}: {processed}/{total} processed - {errors} errors, {warnings} warnings")
 
-        # search for any .safetensors file that isn't referenced as a latents_file_name in the dataset
-        # if any found, prompt to delete them
-        referenced_latents_files = set()
-        for _, _, sample in self.all_samples():
-            if sample["latents_file_name"] is not None:
-                referenced_latents_files.add(os.path.normpath(sample["latents_file_name"]))
+        logger.info(f"Process '{process_name}' {process_result} - time elapsed: {process_finish_time - process_start_time}\n")
 
-        unreferenced_latents_files = []
-        for root, _, files in os.walk(config.DATASET_PATH):
-            for file in files:
-                if os.path.splitext(file)[1].lower() == ".safetensors":
-                    rel_path = os.path.normpath(os.path.relpath(os.path.join(root, file), config.DATASET_PATH))
-                    if rel_path not in referenced_latents_files and os.path.dirname(rel_path).lower() != "dataset_infos":
-                        unreferenced_latents_files.append(rel_path)
+        # close logging process
+        log_handler.emit(None) # None value signals the log_worker process to gracefully end
+        _terminate_worker(log_worker, close=True)
 
-        num_unreferenced_latents_files = len(unreferenced_latents_files)
-        if num_unreferenced_latents_files > 0:
-            self.logger.warning(f"Found {num_unreferenced_latents_files} unreferenced .safetensors (latents) files")
-            for file in unreferenced_latents_files:
-                self.logger.debug(f'"{file}"')
-            if input(f"Delete {num_unreferenced_latents_files} unreferenced .safetensors (latents) files? (WARNING: this is permanent and cannot be undone) (type 'delete' to confirm): ").lower() == "delete":
-                for file in unreferenced_latents_files:
-                    os.remove(os.path.join(config.DATASET_PATH, file))
-                self.logger.info(f"Deleted {num_unreferenced_latents_files} unreferenced .safetensors (latents) files")
-            self.logger.info("")
+        # finally, release all memory/resources for all worker processes
+        for stage in process_stages:
+            stage._close()
 
-        # search for any empty folders, if any found prompt to delete
-        empty_folders = []
-        for root, dirs, files in os.walk(config.DATASET_PATH):
-            if len(dirs) == 0 and len(files) == 0:
-                empty_folders.append(root)
-        
-        if len(empty_folders) > 0:
-            self.logger.warning(f"Found {len(empty_folders)} empty folders in dataset ({config.DATASET_PATH})")
-            for folder in empty_folders:
-                self.logger.debug(f'"{folder}"')
-            if input(f"Delete {len(empty_folders)} empty folders? (WARNING: this is permanent and cannot be undone) (type 'delete' to confirm): ").lower() == "delete":
-                for folder in empty_folders:
-                    os.rmdir(folder)
-                self.logger.info(f"Deleted {len(empty_folders)} empty folders")
-            self.logger.info("")
+        return None
 
-    def transcode(self) -> None:
-
-        # search for any samples in splits that have any null audio metadata fields
-        # if any found, prompt to extract audio metadata
-        need_metadata_samples = SampleList()
-        metadata_check_keys = ["file_size", "sample_rate", "num_channels", "sample_length", "bit_rate"]
-        for split, index, sample in self.all_samples():
-            if any(sample[key] is None for key in metadata_check_keys):
-                need_metadata_samples.add_sample(split, index)
-
-        def get_audio_metadata(sample: dict) -> None:
-            if sample["file_name"] is None:
-                sample["file_size"] = None
-                sample["sample_rate"] = None
-                sample["num_channels"] = None
-                sample["sample_length"] = None
-                sample["bit_rate"] = None
-                return
-            audio_info = mutagen.File(os.path.join(config.DATASET_PATH, sample["file_name"])).info
-            sample["file_size"] = os.path.getsize(os.path.join(config.DATASET_PATH, sample["file_name"]))
-            sample["sample_rate"] = audio_info.sample_rate
-            sample["num_channels"] = audio_info.channels
-            sample["sample_length"] = int(audio_info.length * sample["sample_rate"])
-            sample["bit_rate"] = int(sample["file_size"] / 128 / audio_info.length)
-
-        num_need_metadata = len(need_metadata_samples)
-        if num_need_metadata > 0:
-            self.logger.warning(f"Found {num_need_metadata} samples with missing audio metadata")
-            need_metadata_samples.show_samples()
-            if input(f"Extract missing audio metadata for {num_need_metadata} samples? (y/n): ").lower() == "y":
-                failed_metadata_extraction_samples = SampleList()
-                for split, index, sample in tqdm(need_metadata_samples, total=num_need_metadata, mininterval=1):
-                    try:
-                        get_audio_metadata(sample)
-                    except Exception as e:
-                        failed_metadata_extraction_samples.add_sample(split, index, str(e))
-                        continue
-
-                num_failed_metadata = len(failed_metadata_extraction_samples)
-                if num_failed_metadata > 0:
-                    self.logger.warning(f"Failed to extract audio metadata for {len(failed_metadata_extraction_samples)} samples")
-                    failed_metadata_extraction_samples.show_samples()
-                self.logger.info(f"Extracted missing audio metadata for {num_need_metadata - num_failed_metadata} samples")
-
-            self.logger.info("")
-
-        # search for any samples with with sample_rate / sample_length / kbps < config values
-        # if any found, prompt to delete them. if not, prompt to remove them
-        invalid_audio_samples = SampleList()
-        min_sample_length = self.config.min_sample_length / self.config.sample_rate if self.config.min_sample_length is not None else None
-        for split, index, sample in self.all_samples():
-            if sample["sample_rate"] is not None and self.config.min_sample_rate is not None:
-                if sample["sample_rate"] < self.config.min_sample_rate:
-                    invalid_audio_samples.add_sample(split, index, f"sample_rate {sample['sample_rate']} < {self.config.min_sample_rate}")
-                    continue
-            if sample["sample_length"] is not None and sample["sample_rate"] is not None and min_sample_length is not None:
-                sample_length = sample["sample_length"] / sample["sample_rate"]
-                if sample_length < min_sample_length:
-                    invalid_audio_samples.add_sample(split, index, f"sample_length {sample_length:.2f}s < {min_sample_length:.2f}s")
-                    continue
-            if sample["bit_rate"] is not None and self.config.min_kbps is not None:
-                if sample["bit_rate"] < self.config.min_kbps:
-                    invalid_audio_samples.add_sample(split, index, f"kbps {sample['bit_rate']} < {self.config.min_kbps}")
-
-        num_invalid_audio = len(invalid_audio_samples)
-        if num_invalid_audio > 0:
-            self.logger.warning(f"Found {num_invalid_audio} samples with sample/bit rate or length below config minimum values")
-            invalid_audio_samples.show_samples()
-            if input(f"Delete {num_invalid_audio} samples with insufficient sample/bit rate or length? (WARNING: this is permanent and cannot be undone) (type 'delete' to confirm): ").lower() == "delete":
-                for _, _, sample in invalid_audio_samples:
-                    os.remove(os.path.join(config.DATASET_PATH, sample["file_name"]))
-                invalid_audio_samples.remove_samples_from_dataset()
-                self.logger.info(f"{num_invalid_audio} samples with insufficient sample/bit rate or length deleted")
-            elif input(f"Remove {num_invalid_audio} samples with insufficient sample/bit rate or length? (y/n): ").lower() == "y":
-                invalid_audio_samples.remove_samples_from_dataset()
-                self.logger.info(f"{num_invalid_audio} samples with insufficient sample/bit rate or length removed from dataset")
-            self.logger.info("")
-
-        # transcoding in dataset_processor removed, it is done better in an external tool (foobar2000)
-        
-    def filter(self) -> None:
-
-        # find any game ids with a low number of samples
-        # if any found, prompt to merge them into a "misc" game id
-        # else prompt to remove them
-        if self.config.min_num_class_samples is not None:
-            game_id_to_name = {v: k for k, v in self.dataset_info["game_id"].items()}
-            game_id_counts = {game_id: 0 for game_id in self.dataset_info["game_id"].values()}
-            for _, _, sample in self.all_samples():
-                if sample["game_id"] is not None:
-                    game_id_counts[sample["game_id"]] += 1
-
-            low_sample_game_ids = {}
-            total_low_samples = 0
-            for game_id, count in game_id_counts.items():
-                if count < self.config.min_num_class_samples and count > 0:
-                    low_sample_game_ids[game_id] = count
-                    total_low_samples += count
-
-            if len(low_sample_game_ids) > 0:
-                self.logger.warning(f"Found {len(low_sample_game_ids)} game ids with fewer than {self.config.min_num_class_samples} samples")
-                sorted_game_ids = dict(sorted(low_sample_game_ids.items(), key=lambda x: x[1]))
-                for game_id, count in sorted_game_ids.items():
-                    self.logger.debug(f"Game id '{game_id_to_name[game_id]}' has only {count} samples")
-                self.logger.debug(f"Total sample count in low_sample_game_ids: {total_low_samples}")
-
-                #input("")
-                #if input(f"Remove {len(low_sample_game_ids)} game ids with fewer than {self.config.min_class_samples} samples? (y/n): ").lower() == "y":
-
-        # todo: detect any duplicate / highly similar samples in splits,
-        # detect any abnormal / anomalous samples in splits
-        # if any found, prompt to remove them
-        pass
-    
-    def validate_metadata(self) -> None:
-        
-        # search for any samples in splits that have a latents_file_name and any null latents metadata fields
-        # if any found, prompt to extract latents metadata
-        need_metadata_samples = SampleList()
-        metadata_check_keys = [key for key in self.dataset_info["features"].keys() if key.startswith("latents_") and key != "latents_file_name"]
-        for split, index, sample in self.all_samples():
-            if sample["latents_file_name"] is not None:
-                if any(sample[key] is None for key in metadata_check_keys) or (sample["prompt"] is not None and sample["latents_has_text_embeddings"] == False):
-                    need_metadata_samples.add_sample(split, index)
-
-        num_need_metadata = len(need_metadata_samples)
-        if num_need_metadata > 0:
-            self.logger.warning(f"Found {num_need_metadata} samples with missing latents metadata")
-            need_metadata_samples.show_samples()
-            if input(f"Extract missing latents metadata for {num_need_metadata} samples? (y/n): ").lower() == "y":
-                failed_metadata_extraction_samples = SampleList()
-                for split, index, sample in tqdm(need_metadata_samples, total=num_need_metadata, mininterval=1):
-                    try:
-                        latents_file_path = os.path.join(config.DATASET_PATH, sample["latents_file_name"])
-                        sample["latents_file_size"] = os.path.getsize(latents_file_path)
-
-                        with ST.safe_open(latents_file_path, framework="pt") as f:
-                            latents_shape = f.get_slice("latents").get_shape()
-                            sample["latents_length"] = latents_shape[-1]
-                            sample["latents_num_variations"] = latents_shape[0]
-                            
-                            try:
-                                _ = f.get_slice("offset_and_range")
-                                sample["latents_quantized"] = True
-                            except Exception as _:
-                                sample["latents_quantized"] = False
-
-                            st_metadata = f.metadata()
-                            if st_metadata is not None:
-                                sample["latents_vae_model"] = st_metadata.get("latents_vae_model", None)
-
-                            try:
-                                _ = f.get_slice("clap_audio_embeddings")
-                                sample["latents_has_audio_embeddings"] = True
-                            except Exception as _:
-                                sample["latents_has_audio_embeddings"] = False
-                            
-                            try:
-                                _ = f.get_slice("clap_text_embeddings")
-                                sample["latents_has_text_embeddings"] = True
-                            except Exception as _:
-                                sample["latents_has_text_embeddings"] = False
-
-                    except Exception as e:
-                        failed_metadata_extraction_samples.add_sample(split, index, str(e))
-                        continue
-
-                num_failed_metadata = len(failed_metadata_extraction_samples)
-                if num_failed_metadata > 0:
-                    self.logger.warning(f"Failed to extract latents metadata for {len(failed_metadata_extraction_samples)} samples")
-                    failed_metadata_extraction_samples.show_samples()
-                self.logger.info(f"Extracted missing latents metadata for {num_need_metadata - num_failed_metadata} samples")
-
-            self.logger.info("")
-
-        # search for any system, game, or author ids that don't match the dataset_info
-        # if any found, prompt to clear invalid metadata
-        invalid_id_samples = SampleList()
-        for split, index, sample in self.all_samples():
-            if sample["system"] is not None:
-                ds_info_system_id = self.dataset_info["system_id"].get(sample["system"], None)
-                if ds_info_system_id != sample["system_id"]:
-                    invalid_id_samples.add_sample(split, index, f"system_id '{sample['system_id']}' != {ds_info_system_id}")
-                    continue
-            if sample["game"] is not None: 
-                ds_info_game_id = self.dataset_info["game_id"].get(sample["game"], None)
-                if ds_info_game_id != sample["game_id"]:
-                    invalid_id_samples.add_sample(split, index, f"game_id '{sample['game_id']}' != {ds_info_game_id}")
-                    continue
-            if sample["author"] is not None:
-                for i, author in enumerate(sample["author"]):
-                    ds_info_author_id = self.dataset_info["author_id"].get(author, None)
-                    if ds_info_author_id != sample["author_id"][i]:
-                        invalid_id_samples.add_sample(split, index, f"author_id '{sample['author_id'][i]}' != {ds_info_author_id}")
-                        break
-
-        num_invalid_id = len(invalid_id_samples)
-        if num_invalid_id > 0:
-            self.logger.warning(f"Found {num_invalid_id} samples with game, system, or author ids inconsistent with dataset_info")
-            invalid_id_samples.show_samples()
-            if input(f"Clear invalid id metadata for {num_invalid_id} samples? (y/n): ").lower() == "y":
-                for _, _, sample in invalid_id_samples:
-                    sample["system_id"] = None
-                    sample["game_id"] = None
-                    sample["author_id"] = None
-                self.logger.info(f"Cleared invalid id metadata for {num_invalid_id} samples")
-            self.logger.info("")
+    """    
+    def fill_metadata(self) -> None:
 
         # search for any samples in splits that have any null id metadata fields
         # if any found, prompt to extract metadata
@@ -837,36 +686,6 @@ class DatasetProcessor:
 
             self.logger.info("")
 
-        # search for any unused system, game, or author ids
-        # if any found, prompt to rebuild dataset_info / ids from current metadata
-        unused_system_ids, unused_game_ids, unused_author_ids = self.get_unused_ids()
-        if len(unused_system_ids) > 0 or len(unused_game_ids) > 0 or len(unused_author_ids) > 0:
-            self.logger.warning("Found unused system, game, or author ids in dataset info")
-            if len(unused_system_ids) > 0:
-                self.logger.warning(f"Unused system ids: {len(unused_system_ids)}")
-                self.logger.debug(f"{dict_str(unused_system_ids)}")
-            if len(unused_game_ids) > 0:
-                self.logger.warning(f"Unused game ids: {len(unused_game_ids)}")
-                self.logger.debug(f"{dict_str(unused_game_ids)}")
-            if len(unused_author_ids) > 0:
-                self.logger.warning(f"Unused author ids: {len(unused_author_ids)}")
-                self.logger.debug(f"{dict_str(unused_author_ids)}")
-
-            if input("Rebuild all dataset ids from current metadata? (WARNING: any models trained with current ids will have incorrect class labels) (type 'rebuild' to confirm): ").lower() == "rebuild":
-                self.dataset_info["system_id"] = {}
-                self.dataset_info["features"]["system_id"]["num_classes"] = 0
-                self.dataset_info["game_id"] = {}
-                self.dataset_info["features"]["game_id"]["num_classes"] = 0
-                self.dataset_info["author_id"] = {}
-                self.dataset_info["features"]["author_id"]["value_type"]["num_classes"] = 0
-
-                for _, _, sample in self.all_samples():
-                    sample["system_id"] = self.get_id("system_id", sample["system"])
-                    sample["game_id"] = self.get_id("game_id", sample["game"])
-                    sample["author_id"] = [self.get_id("author_id", author) for author in sample["author"]]
-
-                self.logger.info("Rebuilt all dataset ids from current metadata")
-            self.logger.info("")
 
         # search for any samples in splits that have any null prompt field
         # if any found, prompt to to create a default prompt for each sample
@@ -897,26 +716,7 @@ class DatasetProcessor:
                 self.logger.info(f"Created default prompt for {num_need_prompt} samples")
             self.logger.info("")
 
-    def train_validation_split(self) -> None:
-        # todo: prompt to resplit the aggregated dataset into train / validation splits
-        pass
-
-    def encode_latents(self) -> None:
-
-        # todo: pre-encoding latents and embeddings is done in separate scripts, ideally launching them from here would be nice
-        """
-        # if self.config.pre_encoded_latents_vae is null skip encode_latents step
-        if self.config.pre_encoded_latents_vae is None:
-            self.logger.warning("Skipping encode_latents because config.pre_encoded_latents_vae is not defined")
-
-        # search for any samples with a null latents_vae_model, or
-        # a latents_vae_model that doesn't match the config vae model name
-        # or a null latents_file_name
-        # if any found, prompt to encode them with configured vae and update metadata
-        # will need to launch subprocess to use accelerate
-        # accelerate config for pre_encoding is in config.CONFIG_PATH/dataset/dataset_accelerate.yaml
-        """
-        
+    def aggregate_embeddings(self) -> None:
 
         samples_with_audio_embeddings = SampleList()
         samples_with_text_embeddings = SampleList()
@@ -945,7 +745,7 @@ class DatasetProcessor:
 
                 for split, index, sample in tqdm(samples_with_embeddings, total=num_samples_with_embeddings, mininterval=1):
                     latents_path = os.path.join(config.DATASET_PATH, sample["latents_file_name"])
-                    with ST.safe_open(latents_path, framework="pt") as f:
+                    with safetensors.safe_open(latents_path, framework="pt") as f:
                         
                         if sample["latents_has_audio_embeddings"] == True:
                             dataset_embeddings_dict["_unconditional_audio"].add_(
@@ -970,78 +770,4 @@ class DatasetProcessor:
                 self.logger.info(f"Saving aggregated dataset embeddings to '{output_path}'...")
                 save_safetensors(dataset_embeddings_dict, output_path)
                 self.logger.info("")
-
- 
-    def save(self, dataset_path: Optional[str] = None) -> None:
-    
-        dataset_path = dataset_path or config.DATASET_PATH
-
-        # add total number of samples in train / validation splits to dataset_info
-        self.dataset_info["num_total_samples"] = self.num_samples()
-        self.dataset_info["num_train_samples"] = len(self.splits["train"].samples)
-        self.dataset_info["num_validation_samples"] = len(self.splits["validation"].samples)
-        
-        # add number of samples in training set for each system / game / author id to dataset_info
-        game_train_sample_counts = {game: 0 for game in self.dataset_info["game_id"].keys()}
-        system_train_sample_counts = {system: 0 for system in self.dataset_info["system_id"].keys()}
-        author_train_sample_counts = {author: 0 for author in self.dataset_info["author_id"].keys()}
-        for sample in self.splits["train"].samples:
-            if sample["system"] is not None: system_train_sample_counts[sample["system"]] += 1
-            if sample["game"] is not None: game_train_sample_counts[sample["game"]] += 1
-            if sample["author"] is not None:
-                for author in sample["author"]:
-                    author_train_sample_counts[author] += 1
-        
-        self.dataset_info["game_train_sample_counts"] = game_train_sample_counts
-        self.dataset_info["system_train_sample_counts"] = system_train_sample_counts
-        self.dataset_info["author_train_sample_counts"] = author_train_sample_counts
-
-        # prompt to save and backup existing metadata files to config.DEBUG_PATH
-
-        if os.path.isfile(self.dataset_info_path):
-            if self.backup_path is None:
-                backup_warning = " (WARNING: Dataset metadata backup is NOT enabled)"
-            else:
-                backup_warning = f" (Backing up to '{self.backup_path}')"
-        else:
-            backup_warning = " No existing dataset metadata to backup"
-            self.backup_path = None
-
-        if input(f"Save changes to dataset metadata? (path: '{dataset_path}') (y/n){backup_warning}: ").lower() == "y":
-            if self.backup_path is not None:
-                self.logger.info(f"Backing up dataset metadata to '{self.backup_path}'")
-                backup_dataset_info_path = os.path.join(self.backup_path, "dataset_infos", "dataset_info.json")
-                os.makedirs(os.path.dirname(backup_dataset_info_path), exist_ok=True)
-                
-                shutil.copy(self.dataset_info_path, backup_dataset_info_path)
-                for split in self.splits.values():
-                    shutil.copy(split.path, os.path.join(self.backup_path, f"{split.name}.jsonl"))
-
-            self.logger.info(f"Saving dataset metadata to '{dataset_path}'")
-            config.save_json(self.dataset_info, os.path.join(dataset_path, "dataset_infos", "dataset_info.json"))
-            for split in self.splits.values():
-                split.save(os.path.join(dataset_path, f"{split.name}.jsonl"))
-            self.logger.info(f"Saved dataset metadata to '{dataset_path}' successfully")
-        else:
-            self.logger.info(f"Finished without saving changes")
-
-    def process_dataset(self) -> None:
-        
-        self.validate_files()
-        self.scan()
-        self.transcode()
-        self.filter()
-        self.validate_metadata()
-        self.train_validation_split()
-        self.encode_latents()
-        self.save()
-
-
-if __name__ == "__main__":
-
-    from utils.dual_diffusion_utils import init_cuda
-
-    init_cuda()
-
-    processor = DatasetProcessor()
-    processor.process_dataset()
+    """

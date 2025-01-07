@@ -23,21 +23,37 @@
 from utils import config
 
 from dataclasses import dataclass
+from typing import Literal, Union
 import os
 
 import torch
 import laion_clap
 
 from modules.embeddings.embedding import DualDiffusionEmbedding, DualDiffusionEmbeddingConfig
-from utils.dual_diffusion_utils import normalize
+from utils.dual_diffusion_utils import normalize, load_safetensors
 
 
 @dataclass
 class CLAP_Config(DualDiffusionEmbeddingConfig):
+
+    sample_rate:           int = 48000
+    sample_crop_width:     int = 480000
+    sample_raw_channels:   int = 1
+    text_embedding_weight: float = 0.5
+    embedding_type: Literal["text", "audio", "sum", "cat", "none"] = "sum"
+    max_audio_batch:       int = 32
+    max_text_batch:        int = 32
+
     enable_fusion: bool = False
     audio_encoder: str = "HTSAT-base"
     text_encoder: str = "roberta"
     clap_model_filename: str = "music_audioset_epoch_15_esc_90.14.pt"
+
+    @property
+    def embedding_dim(self) -> int:
+        if self.embedding_type == "cat": return 1024
+        elif self.embedding_type != "none": return 512
+        else: return 0
 
 class CLAP_Embedding(DualDiffusionEmbedding):
 
@@ -48,7 +64,9 @@ class CLAP_Embedding(DualDiffusionEmbedding):
     def __init__(self, config: CLAP_Config) -> None:
         super().__init__()
         self.config = config
+
         self.clap_model = None
+        self.dataset_embeddings = None
 
     def load_clap_model(self) -> None:
         if self.module_path is not None:
@@ -65,10 +83,20 @@ class CLAP_Embedding(DualDiffusionEmbedding):
             enable_fusion=self.config.enable_fusion, amodel=self.config.audio_encoder, tmodel=self.config.text_encoder)
         self.clap_model.load_ckpt(clap_model_path, verbose=False)
         self.clap_model = self.clap_model.to(device=self.device, memory_format=self.memory_format)
+    
+    def load_dataset_embeddings(self) -> None:
+
+        if self.module_path is not None:
+            dataset_embeddings_path = os.path.join(self.module_path, "dataset_embeddings.safetensors")
+            if not os.path.isfile(dataset_embeddings_path):
+                dataset_embeddings_path = os.path.join(config.DATASET_PATH, "dataset_infos", "dataset_embeddings.safetensors")
+        else:
+            dataset_embeddings_path = os.path.join(config.DATASET_PATH, "dataset_infos", "dataset_embeddings.safetensors")
+        if not os.path.isfile(dataset_embeddings_path):
+            raise FileNotFoundError(f"Could not find dataset embeddings at '{dataset_embeddings_path}'")
         
-        if self.use_compile == True:
-            self.clap_model.get_audio_embedding_from_data = torch.compile(self.clap_model.get_audio_embedding_from_data, **self.compile_options)
-            self.clap_model.get_text_embedding = torch.compile(self.clap_model.get_text_embedding, **self.compile_options)
+        dataset_embeddings: dict[str, torch.Tensor] = load_safetensors(dataset_embeddings_path)
+        self.dataset_embeddings = {key: value[:] for key, value in dataset_embeddings.items()}
 
     def encode_audio(self, audio: torch.Tensor, normalize_audio: bool = True) -> torch.Tensor:
         if audio.ndim == 3:
@@ -97,3 +125,29 @@ class CLAP_Embedding(DualDiffusionEmbedding):
         text_batches = [text[i:i + self.config.max_text_batch] for i in range(0, len(text), self.config.max_text_batch)]
         text_embeddings = torch.cat([self.clap_model.get_text_embedding(batch, use_tensor=True) for batch in text_batches], dim=0)
         return normalize(text_embeddings).float()
+    
+    def encode_labels(self, labels: Union[int, torch.Tensor, list[int], dict[str, float]]) -> torch.Tensor:
+        
+        if self.dataset_embeddings is None:
+            self.load_dataset_embeddings()
+
+        if isinstance(labels, int):
+            labels = {}
+        if self.config.embedding_type == "sum":
+            unconditional_embedding = normalize(self.dataset_embeddings["_unconditional_audio"]).float().to(device=self.device)
+            sample_embeddings = torch.zeros(self.config.embedding_dim, device=self.device)
+            for game_name, weight in params.prompt.items():
+                sample_embeddings += self.dataset_embeddings[f"{game_name}_audio"].to(device=unet.device) * weight
+                sample_embeddings += self.dataset_embeddings[f"{game_name}_text"].to(device=unet.device) * weight
+            sample_embeddings = normalize(sample_embeddings).float()
+            unet_class_embeddings = unet.get_clap_embeddings(sample_embeddings, unconditional_embedding, conditioning_mask)
+        elif unet.config.label_dim == 1024:
+            unconditional_audio_embedding = normalize(self.dataset_embeddings["_unconditional_audio"]).float().to(device=unet.device)
+            unconditional_text_embedding = normalize(self.dataset_embeddings["_unconditional_text"]).float().to(device=unet.device)
+            unconditional_embedding = torch.cat((unconditional_audio_embedding, unconditional_text_embedding))
+            sample_embeddings = torch.zeros(unet.config.label_dim, device=unet.device)
+            for game_name, weight in params.prompt.items():
+                sample_embeddings += torch.cat((self.dataset_embeddings[f"{game_name}_audio"].to(device=unet.device) * weight,
+                                                self.dataset_embeddings[f"{game_name}_text"].to(device=unet.device) * weight))
+            sample_embeddings = normalize(sample_embeddings).float()
+            unet_class_embeddings = unet.get_clap_embeddings(sample_embeddings, unconditional_embedding, conditioning_mask)

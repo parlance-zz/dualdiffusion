@@ -31,41 +31,80 @@ import torch
 import safetensors.torch as ST
 from datasets import load_dataset
 
+from modules.formats.format import DualDiffusionFormatConfig
 from utils.dual_diffusion_utils import load_audio, dequantize_tensor
 
-@dataclass
-class DatasetTransformConfig:
-
-    sample_rate: int
-    sample_raw_channels: int
-    sample_raw_crop_width: int
-    use_pre_encoded_latents: bool
-    use_pre_encoded_audio_embeddings: bool
-    use_pre_encoded_text_embeddings: bool
-    latents_crop_width: int
-    t_scale: Optional[float] = None
 
 @dataclass
 class DatasetConfig:
-     
+
      data_dir: str
      cache_dir: str
-     sample_rate: int
-     sample_raw_channels: int
-     sample_raw_crop_width: int
-     use_pre_encoded_latents: bool
-     use_pre_encoded_audio_embeddings: bool
-     use_pre_encoded_text_embeddings: bool
+     sample_crop_width: int
      latents_crop_width: int
      num_proc: Optional[int] = None
-     t_scale: Optional[float] = None
      filter_invalid_samples: Optional[bool] = False
 
-class DatasetTransform(torch.nn.Module):
+class DualDiffusionDataset(torch.nn.Module):
 
-    def __init__(self, config: DatasetTransformConfig) -> None:
+    def __init__(self, dataset_config: DatasetConfig, format_config: DualDiffusionFormatConfig) -> None:
         super().__init__()
-        self.config = config
+        self.config = dataset_config
+        self.format_config = format_config
+
+        self.dataset_dict = load_dataset(
+            self.config.data_dir,
+            cache_dir=self.config.cache_dir,
+            num_proc=self.config.num_proc,
+        )
+        self.preprocess_dataset()
+        self.dataset_dict.set_transform(self)
+
+    def __getitem__(self, split: str) -> dict:
+        return self.dataset_dict[split]
+
+    def preprocess_dataset(self) -> None:
+        
+        def resolve_absolute_path(example):
+            if example["file_name"] is not None:
+                example["file_name"] = os.path.join(self.config.data_dir, example["file_name"])
+            if example["latents_file_name"] is not None:
+                example["latents_file_name"] = os.path.join(self.config.data_dir, example["latents_file_name"])
+            return example
+        
+        self.dataset_dict = self.dataset_dict.map(resolve_absolute_path)
+        
+        def invalid_sample_filter(example):
+            if (example["game_id"] is None and self.config.use_pre_encoded_audio_embeddings == False
+                    and self.config.use_pre_encoded_text_embeddings == False):
+                return False
+            
+            if self.config.use_pre_encoded_latents:
+                if example["latents_file_name"] is None:
+                    return False
+                if example["latents_length"] is not None:
+                    return example["latents_length"] >= self.config.latents_crop_width
+                if example.get("latents_has_audio_embeddings", False) == False and self.config.use_pre_encoded_audio_embeddings == True:
+                    return False
+                if example.get("latents_has_text_embeddings", False) == False and self.config.use_pre_encoded_text_embeddings == True:
+                    return False
+            else:
+                if example["file_name"] is None:
+                    return False
+                if example["sample_length"] is not None and example["num_channels"] is not None and example["sample_rate"] is not None:
+                    if example["sample_length"] < self.format_config.sample_raw_crop_width:
+                        return False
+                    if example["num_channels"] != self.config.sample_raw_channels:
+                        return False
+                    if example["sample_rate"] != self.config.sample_rate:
+                        return False
+                    return True
+                else:
+                    return False
+
+        pre_filter_n_samples = {split: len(ds) for split, ds in self.dataset_dict.items()}
+        if self.config.filter_invalid_samples: self.dataset_dict = self.dataset_dict.filter(invalid_sample_filter)
+        self.num_filtered_samples = {split: (len(ds) - pre_filter_n_samples[split]) for split, ds in self.dataset_dict.items()}
 
     def get_t(self, t: float) -> float:
         return t / self.config.sample_raw_crop_width * self.config.t_scale - self.config.t_scale/2
@@ -107,8 +146,11 @@ class DatasetTransform(torch.nn.Module):
                         sample_audio_embeddings = f.get_slice("clap_audio_embeddings")
                         seconds_per_latent_pixel = self.config.sample_raw_crop_width / self.config.sample_rate / self.config.latents_crop_width
                         audio_embed_start = int(t_offset * seconds_per_latent_pixel / 10 + 0.5)
-                        audio_embed_len = int(self.config.latents_crop_width * seconds_per_latent_pixel / 10 + 0.5)
-                        audio_embed_end = min(audio_embed_start + audio_embed_len, sample_audio_embeddings.get_shape()[-1])
+                        #audio_embed_len = int(self.config.latents_crop_width * seconds_per_latent_pixel / 10 + 0.5)
+                        #audio_embed_end = min(audio_embed_start + audio_embed_len, sample_audio_embeddings.get_shape()[-1])
+                        audio_embed_end = int((t_offset + self.config.latents_crop_width) * seconds_per_latent_pixel / 10 + 0.5)
+                        audio_embed_end = min(audio_embed_end, sample_audio_embeddings.get_shape()[-1])
+
                         sample_audio_embeddings = sample_audio_embeddings[audio_embed_start:audio_embed_end].mean(dim=0)
                         audio_embeddings.append(sample_audio_embeddings)
 
@@ -151,75 +193,3 @@ class DatasetTransform(torch.nn.Module):
             batch_data["text_embeddings"] = text_embeddings
 
         return batch_data
-
-class DualDiffusionDataset:
-
-    def __init__(self, dataset_config: DatasetConfig) -> None:
-        
-        self.config = dataset_config
-        self.dataset_dict = load_dataset(
-            self.config.data_dir,
-            cache_dir=self.config.cache_dir,
-            num_proc=self.config.num_proc,
-        )
-
-        self.preprocess_dataset()
-
-    def __getitem__(self, split: str) -> dict:
-        return self.dataset_dict[split]
-
-    def preprocess_dataset(self) -> None:
-        
-        def resolve_absolute_path(example):
-            if example["file_name"] is not None:
-                example["file_name"] = os.path.join(self.config.data_dir, example["file_name"])
-            if example["latents_file_name"] is not None:
-                example["latents_file_name"] = os.path.join(self.config.data_dir, example["latents_file_name"])
-            return example
-        
-        self.dataset_dict = self.dataset_dict.map(resolve_absolute_path)
-        
-        def invalid_sample_filter(example):
-            if (example["game_id"] is None and self.config.use_pre_encoded_audio_embeddings == False
-                    and self.config.use_pre_encoded_text_embeddings == False):
-                return False
-            
-            if self.config.use_pre_encoded_latents:
-                if example["latents_file_name"] is None:
-                    return False
-                if example["latents_length"] is not None:
-                    return example["latents_length"] >= self.config.latents_crop_width
-                if example.get("latents_has_audio_embeddings", False) == False and self.config.use_pre_encoded_audio_embeddings == True:
-                    return False
-                if example.get("latents_has_text_embeddings", False) == False and self.config.use_pre_encoded_text_embeddings == True:
-                    return False
-            else:
-                if example["file_name"] is None:
-                    return False
-                if example["sample_length"] is not None and example["num_channels"] is not None and example["sample_rate"] is not None:
-                    if example["sample_length"] < self.config.sample_raw_crop_width:
-                        return False
-                    if example["num_channels"] != self.config.sample_raw_channels:
-                        return False
-                    if example["sample_rate"] != self.config.sample_rate:
-                        return False
-                    return True
-                else:
-                    return False
-
-        pre_filter_n_samples = {split: len(ds) for split, ds in self.dataset_dict.items()}
-        if self.config.filter_invalid_samples: self.dataset_dict = self.dataset_dict.filter(invalid_sample_filter)
-        self.num_filtered_samples = {split: (len(ds) - pre_filter_n_samples[split]) for split, ds in self.dataset_dict.items()}
-
-        dataset_transform_config = DatasetTransformConfig(
-            sample_rate=self.config.sample_rate,
-            sample_raw_channels=self.config.sample_raw_channels,
-            sample_raw_crop_width=self.config.sample_raw_crop_width,
-            use_pre_encoded_latents=self.config.use_pre_encoded_latents,
-            use_pre_encoded_audio_embeddings=self.config.use_pre_encoded_audio_embeddings,
-            use_pre_encoded_text_embeddings=self.config.use_pre_encoded_text_embeddings,
-            latents_crop_width=self.config.latents_crop_width,
-            t_scale=self.config.t_scale
-        )
-        dataset_transform = DatasetTransform(dataset_transform_config)
-        self.dataset_dict.set_transform(dataset_transform)

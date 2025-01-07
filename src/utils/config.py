@@ -24,15 +24,44 @@ import os
 from dotenv import load_dotenv
 from typing import Union
 from json import dumps as json_dumps, load as json_load
+import shutil
 
 def load_json(json_path: str) -> dict:
     with open(json_path, "r") as f:
         return json_load(f)
     
-def save_json(data: Union[dict, list], json_path: str, indent: int = 2) -> None:
+def save_json(data: Union[dict, list], json_path: str,
+        indent: int = 2, copy_on_write: bool = False) -> None:
+    
     os.makedirs(os.path.dirname(json_path), exist_ok=True)
-    with open(json_path, "w") as f:
-        f.write(json_dumps(data, indent=indent))
+    
+    def write_fn(f, _data):
+        if os.path.splitext(json_path)[1].lower() == ".jsonl":
+            for i, item in enumerate(_data):
+                if i == len(_data) - 1: f.write(json_dumps(item))
+                else: f.write(json_dumps(item) + "\n")
+        else:
+            f.write(json_dumps(_data, indent=indent))
+            
+    if copy_on_write == True:
+        tmp_path = f"{json_path}.tmp"
+        try:
+            with open(tmp_path, "w") as f:
+                write_fn(f, data)
+
+            shutil.move(tmp_path, json_path)
+            if os.path.isfile(tmp_path):
+                os.remove(tmp_path)
+
+        except Exception as e:
+            try:
+                if os.path.isfile(tmp_path):
+                    os.remove(tmp_path)
+            except: pass
+            raise e
+    else:
+        with open(json_path, "w") as f:
+            write_fn(f, data)
 
 load_dotenv(override=True)
 
