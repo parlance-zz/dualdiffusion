@@ -182,4 +182,4 @@ if __name__ == "__main__":
         input=config.DATASET_PATH,
     )
 
-    os._exit(0)
+    exit(0)

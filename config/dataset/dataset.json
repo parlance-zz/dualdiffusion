@@ -27,6 +27,8 @@
   "integrity_check_delete_corrupt_files": false,
 
   "encode_model": "edm2_vt7_12d_4_clap2",
+  "encode_compile_models": true,
+  "encode_latents_batch_size": 1,
   "encode_latents_num_time_offset_augmentations": 8,
   "encode_latents_pitch_offset_augmentations": [],
   "encode_latents_stereo_mirroring_augmentation": true,  

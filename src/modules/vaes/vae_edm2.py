@@ -170,6 +170,7 @@ class AutoencoderKL_EDM2(DualDiffusionVAE):
         
         # Embedding.
         self.emb_label = MPConv(config.label_dim, cemb, kernel=())
+        self.emb_dim = cemb
 
         # Training uncertainty estimation.
         self.recon_loss_logvar = torch.nn.Parameter(torch.zeros(1))

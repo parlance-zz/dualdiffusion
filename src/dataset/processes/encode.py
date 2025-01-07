@@ -33,20 +33,14 @@ import safetensors.torch as safetensors
 
 from pipelines.dual_diffusion_pipeline import DualDiffusionPipeline
 from modules.formats.spectrogram import SpectrogramFormat, SpectrogramFormatConfig
+from modules.embeddings.embedding import DualDiffusionEmbedding
+from modules.vaes.vae import DualDiffusionVAE
 from dataset.dataset_processor import DatasetProcessor, DatasetProcessStage
 from utils.dual_diffusion_utils import (
     get_audio_metadata, load_audio, move_tensors_to_cpu,
-    save_safetensors, load_safetensors_ex
+    save_safetensors, load_safetensors_ex, init_cuda, normalize
 )
 
-
-def get_pitch_augmentation_format(original_config: SpectrogramFormatConfig,
-                                  shift_semitones: float) -> SpectrogramFormat:
-    shift_rate = 2 ** (shift_semitones / 12)
-    augmented_config = deepcopy(original_config)
-    augmented_config.min_frequency *= shift_rate
-    augmented_config.max_frequency *= shift_rate
-    return SpectrogramFormat(augmented_config)
 
 class EncodeLoad(DatasetProcessStage):
 
@@ -143,7 +137,7 @@ class EncodeLoad(DatasetProcessStage):
                 latents, latents_metadata = load_safetensors_ex(safetensors_file_path)
 
                 # if the prompt has changed (re)encode the new text embeddings
-                if "text_embedding_prompt" in latents_metadata:
+                if "prompt" in latents_metadata and prompt is not None:
                     if prompt != latents_metadata["prompt"]:
                         has_text_embeddings = False
             else:
@@ -168,37 +162,50 @@ class EncodeLoad(DatasetProcessStage):
 class EncodeProcess(DatasetProcessStage):
 
     def get_stage_type(self) -> Literal["io", "cpu", "cuda"]:
-        return "cpu"
+        return "cuda"
     
     def limit_output_queue_size(self) -> bool:
         return True
     
+    def get_pitch_augmentation_format(self, shift_semitones: float) -> SpectrogramFormat:
+        shift_rate = 2 ** (shift_semitones / 12)
+        augmented_config = deepcopy(self.format_config)
+        augmented_config.min_frequency *= shift_rate
+        augmented_config.max_frequency *= shift_rate
+        return SpectrogramFormat(augmented_config)
+
     @torch.inference_mode()
     def start_process(self):
+
+        init_cuda()
 
         # load pipeline and compile vae / embedding models
         model_path = os.path.join(config.MODELS_PATH, self.processor_config.encode_model)
         self.pipeline = DualDiffusionPipeline.from_pretrained(model_path,
             device={"vae": self.device, "format": self.device, "embedding": self.device})
         
-        self.pipeline.vae = self.pipeline.vae.to(torch.bfloat16)
+        self.vae: DualDiffusionVAE = self.pipeline.vae
+        self.embedding: DualDiffusionEmbedding = self.pipeline.embedding
+
+        self.vae = self.vae.to(dtype=torch.bfloat16)
         if self.processor_config.encode_compile_models == True:
-            self.pipeline.vae.compile(fullgraph=True, dynamic=True)
-            self.pipeline.embedding.compile(fullgraph=True, dynamic=True)
+            self.vae.compile(fullgraph=True, dynamic=True)
+            self.embedding.compile(fullgraph=True, dynamic=True)
         
         # encode latents setup
-        format_config: SpectrogramFormatConfig = self.pipeline.format.config
-        spectrogram_hop_length = format_config.hop_length
+        self.format: SpectrogramFormat = self.pipeline.format
+        self.format_config: SpectrogramFormatConfig = self.format.config
+        
         num_encode_offsets = self.processor_config.encode_latents_num_time_offset_augmentations
-        self.encode_offset_padding = spectrogram_hop_length * num_encode_offsets
-        encode_offsets = [i * spectrogram_hop_length for i in range(num_encode_offsets)]
-        batch_size = self.processor_config.encode_latents_batch_size
-        num_batches_per_sample = (num_encode_offsets + batch_size - 1) // batch_size
+        self.vae_encode_offset_padding = self.format_config.hop_length * num_encode_offsets
+        self.vae_encode_offsets = [i * self.format_config.hop_length for i in range(num_encode_offsets)]
+        self.vae_batch_size = self.processor_config.encode_latents_batch_size
+        self.vae_num_batches_per_sample = (num_encode_offsets + self.vae_batch_size - 1) // self.vae_batch_size
         
         pitch_shifts = self.processor_config.encode_latents_pitch_offset_augmentations
         pitch_augmentation_formats = [
-            get_pitch_augmentation_format(format_config, shift).to(self.device) for shift in pitch_shifts]
-        formats: list[SpectrogramFormat] = [self.pipeline.format] + pitch_augmentation_formats
+            self.get_pitch_augmentation_format(shift).to(self.device) for shift in pitch_shifts]
+        self.vae_encode_formats: list[SpectrogramFormat] = [self.format] + pitch_augmentation_formats
     
     @torch.inference_mode()
     def process(self, input_dict: dict) -> Optional[Union[dict, list[dict]]]:
@@ -212,72 +219,53 @@ class EncodeProcess(DatasetProcessStage):
 
         # move audio and latents to device
         if audio is not None: audio = audio.to(self.device)
-        latents = {tensor.to(self.device) for tensor in latents}
-        
+        latents = {name: tensor.to(self.device) for name, tensor in latents.items()}
+            
         # encode audio embeddings if needed
         if audio is not None and input_dict["has_audio_embeddings"] == False:
-            
-            # resample to embedding sample rate / channels
-            if sample_rate != 48000:
-                emb_audio = torchaudio.functional.resample(audio, sample_rate, 48000).mean(dim=0)
-            else:
-                emb_audio = audio.mean(dim=0)
-
-            # chunkify embedding audio
-            chunk_size = 48000 * 10
-            emb_audio = emb_audio[:emb_audio.shape[0] // chunk_size * chunk_size].reshape(-1, chunk_size)
-
-            # get embeddings in chunks using max_batch_size
-            audio_embeddings = torch.cat([
-                normalize(clap_model.get_audio_embedding_from_data(chunk, use_tensor=True)).float() for chunk in audio.split(max_batch_size)], dim=0)
+            latents["clap_audio_embeddings"] = self.embedding.encode_audio(audio, sample_rate=sample_rate).to(dtype=torch.bfloat16)
 
         # encode text embeddings if a prompt is available and they are not yet encoded
         if prompt is not None and input_dict["has_text_embeddings"] == False:
-            text_embeddings = normalize(clap_model.get_text_embedding([sample_prompt], use_tensor=True)).float()
+            latents["clap_text_embeddings"] = self.embedding.encode_text([prompt]).to(dtype=torch.bfloat16)
+            latents_metadata["prompt"] = prompt
 
         # encode latents
         if audio is not None and input_dict["has_latents"] == False:
-
-            crop_width = self.pipeline.format.sample_raw_crop_width(audio.shape[-1] - self.encode_offset_padding)
-
-            if sample_rate != self.processor_config.sample_rate:
+            
+            # resample audio to model format sample_rate
+            crop_width = self.format.sample_raw_crop_width(audio.shape[-1] - self.vae_encode_offset_padding)
+            if sample_rate != self.format_config.sample_rate:
                 audio = torchaudio.functional.resample(
-                    audio, sample_rate, self.processor_config.sample_rate)
-                
-            """
-            input_raw_samples = []
-            for offset in encode_offsets:
-                input_raw_offset_sample = input_raw_sample[:, offset:offset+crop_width].unsqueeze(0).to(device)
-                input_raw_samples.append(input_raw_offset_sample)
-                if stereo_mirroring:
-                    input_raw_samples.append(torch.flip(input_raw_sample, dims=1))
-            input_raw_sample = torch.cat(input_raw_samples, dim=0)
+                    audio, sample_rate, self.format_config.sample_rate)
+            
+            # create raw audio augmentations
+            input_audio = []
+            for offset in self.vae_encode_offsets:
+                input_raw_offset_sample = audio[:, offset:offset + crop_width].unsqueeze(0)
+                input_audio.append(input_raw_offset_sample)
+                if self.processor_config.encode_latents_stereo_mirroring_augmentation == True:
+                    input_audio.append(torch.flip(input_raw_offset_sample, dims=(1,)))
+            audio = torch.cat(input_audio, dim=0)
 
-            input_samples = []
-            for format in formats:
-                for b in range(num_batches_per_sample):
-                    batch_input_raw_sample = input_raw_sample[b*batch_size:(b+1)*batch_size]
+            # encode spectrograms of all audios
+            input_samples = []; bsz = self.processor_config.encode_latents_batch_size
+            for format in self.vae_encode_formats:
+                for b in range(self.vae_num_batches_per_sample):
+                    batch_input_raw_sample = audio[b*bsz:(b+1)*bsz]
                     input_sample = format.raw_to_sample(batch_input_raw_sample).type(torch.bfloat16)
                     input_samples.append(input_sample)
             input_sample = torch.cat(input_samples, dim=0)
             
-            vae_class_embeddings = pipeline.vae.get_class_embeddings(pipeline.get_class_labels(game_id, module_name="vae"))            
-            latents = []
-            for b in range(input_sample.shape[0] // batch_size):
-                batch_input_sample = input_sample[b*batch_size:(b+1)*batch_size]
-                batch_latents = pipeline.vae.encode(batch_input_sample, vae_class_embeddings, pipeline.format).mode()
-                latents.append(batch_latents)
-            latents = torch.cat(latents, dim=0).type(torch.bfloat16)
-
-            if quantize_latents:
-                latents_quantized, offset_and_range = quantize_tensor(latents, 256)
-                latents_dict = {"latents": latents_quantized.type(torch.uint8), "offset_and_range": offset_and_range}
-            else:
-                latents_dict = {"latents": latents}
-            existing_latents.update(latents_dict)
-            save_safetensors(existing_latents, output_path)
-            del existing_latents
-            """
+            # finally, encode the latents
+            vae_class_embeddings = latents["clap_audio_embeddings"][:, :self.vae.emb_dim].mean(dim=0, keepdim=True)
+            vae_class_embeddings = normalize(vae_class_embeddings).to(device=self.vae.device, dtype=self.vae.dtype)
+            encoded_latents: list[torch.Tensor] = []
+            for b in range(input_sample.shape[0] // bsz):
+                batch_input_sample = input_sample[b*bsz:(b+1)*bsz]
+                batch_latents = self.vae.encode(batch_input_sample, vae_class_embeddings, self.format).mode()
+                encoded_latents.append(batch_latents)
+            latents["latents"] = torch.cat(encoded_latents, dim=0).to(dtype=torch.bfloat16)
 
         return {
             "safetensors_file_path": safetensors_file_path,

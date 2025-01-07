@@ -48,7 +48,7 @@ class ClassLabels_Embedding(DualDiffusionEmbedding):
         super().__init__()
         self.config = config
 
-    def encode_audio(self, audio: torch.Tensor, normalize_audio: bool = True) -> torch.Tensor:
+    def encode_audio(self, audio: torch.Tensor, sample_rate: int) -> torch.Tensor:
         raise NotImplementedError("Method encode_audio is not implemented for ClassLabels_Embedding")
 
     def encode_text(self, text: list[str]) -> torch.Tensor:

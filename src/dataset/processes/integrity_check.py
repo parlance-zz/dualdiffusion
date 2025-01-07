@@ -79,4 +79,4 @@ if __name__ == "__main__":
         [IntegrityCheck()],
     )
 
-    os._exit(0)
+    exit(0)

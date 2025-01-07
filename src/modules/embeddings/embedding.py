@@ -97,7 +97,7 @@ class DualDiffusionEmbedding(DualDiffusionModule, ABC):
         return torch.nn.functional.conv1d(x.T.unsqueeze(0), y.T.unsqueeze(0), padding="same").squeeze(0).T
 
     @abstractmethod
-    def encode_audio(self, audio: torch.Tensor) -> torch.Tensor:
+    def encode_audio(self, audio: torch.Tensor, sample_rate: int) -> torch.Tensor:
         pass
     
     @abstractmethod

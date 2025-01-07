@@ -27,6 +27,7 @@ from typing import Optional, Union, Literal, Any
 from abc import ABC, abstractmethod
 from traceback import format_exception
 from queue import Full as QueueFullException
+from queue import Empty as QueueEmptyException
 from datetime import datetime
 from multiprocessing.synchronize import Lock, Event
 from copy import deepcopy
@@ -81,7 +82,14 @@ def _process_worker(stage: "DatasetProcessStage", rank: int,
         threading.Event().wait()
     
     while True:
-        input_dict: dict = stage.input_queue.get()
+        while True:
+            try: # oh how I wish this wasn't needed
+                with stage.critical_lock:
+                    input_dict: dict = stage.input_queue.get(timeout=0.1)
+                    break
+            except QueueEmptyException:
+                pass
+                
         if input_dict is None:
             try:
                 stage.finish_process()
@@ -89,7 +97,7 @@ def _process_worker(stage: "DatasetProcessStage", rank: int,
                 logger.error("".join(format_exception(type(e), e, e.__traceback__)))
 
             # flag worker as finished and wait forever
-            stage.finish_event.set()
+            with stage.critical_lock: stage.finish_event.set()
             threading.Event().wait()
 
         try:
@@ -98,13 +106,14 @@ def _process_worker(stage: "DatasetProcessStage", rank: int,
             output = stage.process(cloned_input_dict)
 
             if output is not None:
-                if isinstance(output, list):
-                    for item in output:
-                        stage.output_queue.put(item)
-                elif isinstance(output, dict):
-                    stage.output_queue.put(output)
-                else:
-                    raise ValueError(f"stage.process returned unrecognized type '{type(output)}'")
+                with stage.critical_lock: # oh how I wish this wasn't needed
+                    if isinstance(output, list):
+                        for item in output:
+                            stage.output_queue.put(item)
+                    elif isinstance(output, dict):
+                        stage.output_queue.put(output)
+                    else:
+                        raise ValueError(f"stage.process returned unrecognized type '{type(output)}'")
             else:
                 del cloned_input_dict
                 
@@ -121,7 +130,7 @@ def _log_worker(process_name: str, verbose: bool, log_queue: mp.Queue):
     logger = init_logging(process_name, group_name="dataset_processor", verbose=verbose)
     while True:
         record = log_queue.get()
-        if record is None: os._exit(0)
+        if record is None: exit(0)
 
         logger.handle(record)
         for handler in logger.handlers:
@@ -155,7 +164,7 @@ def _monitor_worker(input_queues: list["WorkQueue"], stage_names: list[str], fin
         update_progress(progress_bar, input_queue)
         progress_bar.close()
 
-    os._exit(0)
+    exit(0)
 
 def _terminate_worker(process: mp.Process, timeout: float = 0.25, close: bool = False) -> None:
 
@@ -299,7 +308,12 @@ class DatasetProcessStage(ABC):
         self.finish_event = finish_event
 
     # acquiring the associated critical lock before terminating each worker will prevent data corruption
-    def _terminate(self) -> None:
+    def _terminate(self, timeout: float = 0.25) -> None:
+
+        self._finish_worker_queue()
+        #time.sleep(timeout)
+        #return
+    
         for critical_lock, worker in zip(self.critical_locks, self.workers):
             with critical_lock:
                 worker.terminate()
@@ -310,6 +324,13 @@ class DatasetProcessStage(ABC):
 
     # should only be called after _ALL_ workers have terminated due to shared memory
     def _close(self) -> None:
+        #return
+        self.input_queue.queue.close()
+        self.output_queue.queue.close()
+        self.log_queue.close()
+        self.warning_queue.close()
+        self.error_queue.close()
+        
         for worker in self.workers:
             worker.close()
 
@@ -414,7 +435,10 @@ class DatasetProcessor:
     # process a pipeline of DatasetProcessStage objects in parallel with a specified input path or WorkQueue
     def process(self, process_name: str, process_stages: list[DatasetProcessStage],
                 input: Optional[Union[list[str], WorkQueue]] = None) -> None:
-    
+
+        # sadly required for cuda
+        mp.set_start_method("spawn", force=True)
+
         # first stage input is either a specified path, None (dataset path), or pre-filled WorkQueue
         if input is None:
             if config.DATASET_PATH is None:

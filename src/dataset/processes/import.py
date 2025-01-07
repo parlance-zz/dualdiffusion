@@ -146,4 +146,4 @@ if __name__ == "__main__":
         input=dataset_processor.config.import_paths,
     )
 
-    os._exit(0)
+    exit(0)

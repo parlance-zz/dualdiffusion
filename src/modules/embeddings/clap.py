@@ -27,6 +27,7 @@ from typing import Literal, Union
 import os
 
 import torch
+import torchaudio
 import laion_clap
 
 from modules.embeddings.embedding import DualDiffusionEmbedding, DualDiffusionEmbeddingConfig
@@ -98,19 +99,25 @@ class CLAP_Embedding(DualDiffusionEmbedding):
         dataset_embeddings: dict[str, torch.Tensor] = load_safetensors(dataset_embeddings_path)
         self.dataset_embeddings = {key: value[:] for key, value in dataset_embeddings.items()}
 
-    def encode_audio(self, audio: torch.Tensor, normalize_audio: bool = True) -> torch.Tensor:
-        if audio.ndim == 3:
-            audio = audio.mean(dim=1)  # downmix to mono
-        elif audio.ndim == 1:
-            audio = audio.unsqueeze(0) # add batch dimension
-        elif audio.ndim != 2:
+    def encode_audio(self, audio: torch.Tensor, sample_rate: int) -> torch.Tensor:
+
+        if audio.ndim == 2:
+            audio = audio.mean(dim=0) # downmix to mono
+        elif audio.ndim == 3:
+            audio = audio.mean(dim=1).squeeze(0)  # downmix to mono
+        elif audio.ndim != 1:
             raise ValueError("Tensor shape for encode_audio must be either (batch, channels, samples), (batch, samples), or (samples)")
         if self.clap_model is None:
             self.load_clap_model()
 
+        # move to model device and resample if needed
         audio = audio.to(device=self.device, dtype=torch.float32)
-        if normalize_audio == True:
-            audio = audio / (audio.abs().amax(dim=-1, keepdim=True) + 1e-4)
+        if sample_rate != self.config.sample_rate:
+            audio = torchaudio.functional.resample(audio, sample_rate, self.config.sample_rate)
+    
+        # chunkify embedding audio
+        chunk_size = self.config.sample_crop_width
+        audio = audio[:audio.shape[0] // chunk_size * chunk_size].reshape(-1, chunk_size)
         
         audio_embeddings = torch.cat([self.clap_model.get_audio_embedding_from_data(chunk, use_tensor=True)
             for chunk in audio.split(self.config.max_audio_batch)], dim=0)
@@ -151,3 +158,12 @@ class CLAP_Embedding(DualDiffusionEmbedding):
                                                 self.dataset_embeddings[f"{game_name}_text"].to(device=unet.device) * weight))
             sample_embeddings = normalize(sample_embeddings).float()
             unet_class_embeddings = unet.get_clap_embeddings(sample_embeddings, unconditional_embedding, conditioning_mask)
+
+    """
+    def compile(self, **kwargs) -> None:
+        if type(self).supports_compile == True:
+            super().compile(**kwargs)
+            self.encode_audio = torch.compile(self.encode_audio, **kwargs)
+            self.encode_text = torch.compile(self.encode_text, **kwargs)
+            self.encode_labels = torch.compile(self.encode_labels, **kwargs)
+    """
