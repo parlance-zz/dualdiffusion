@@ -33,6 +33,10 @@ from utils.dual_diffusion_utils import load_safetensors_ex
 
 class IntegrityCheck(DatasetProcessStage): # please note to run this process you need the "flac" utility in your environment path
     
+    def info_banner(self, logger: logging.Logger) -> None:
+        if self.processor_config.integrity_check_delete_corrupt_files == True:
+            logger.warning("WARNING: Automatic deletion of corrupt files is enabled")
+
     def summary_banner(self, logger: logging.Logger) -> None:
         logger.info(f"{self.output_queue.queue.qsize()} files ok, {self.error_queue.qsize()} files with errors")
 

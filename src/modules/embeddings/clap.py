@@ -68,6 +68,7 @@ class CLAP_Embedding(DualDiffusionEmbedding):
 
         self.clap_model = None
         self.dataset_embeddings = None
+        self.deferred_compile_options = None
 
     def load_clap_model(self) -> None:
         if self.module_path is not None:
@@ -117,6 +118,8 @@ class CLAP_Embedding(DualDiffusionEmbedding):
     
         # chunkify embedding audio
         chunk_size = self.config.sample_crop_width
+        if audio.shape[-1] < chunk_size:
+            raise ValueError(f"Cannot encode audio embedding, audio too short (len: {audio.shape[-1]})")
         audio = audio[:audio.shape[0] // chunk_size * chunk_size].reshape(-1, chunk_size)
         
         audio_embeddings = torch.cat([self.clap_model.get_audio_embedding_from_data(chunk, use_tensor=True)
@@ -158,12 +161,3 @@ class CLAP_Embedding(DualDiffusionEmbedding):
                                                 self.dataset_embeddings[f"{game_name}_text"].to(device=unet.device) * weight))
             sample_embeddings = normalize(sample_embeddings).float()
             unet_class_embeddings = unet.get_clap_embeddings(sample_embeddings, unconditional_embedding, conditioning_mask)
-
-    """
-    def compile(self, **kwargs) -> None:
-        if type(self).supports_compile == True:
-            super().compile(**kwargs)
-            self.encode_audio = torch.compile(self.encode_audio, **kwargs)
-            self.encode_text = torch.compile(self.encode_text, **kwargs)
-            self.encode_labels = torch.compile(self.encode_labels, **kwargs)
-    """

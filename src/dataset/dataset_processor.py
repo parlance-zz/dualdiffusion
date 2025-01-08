@@ -30,16 +30,19 @@ from queue import Full as QueueFullException
 from queue import Empty as QueueEmptyException
 from datetime import datetime
 from multiprocessing.synchronize import Lock, Event
+from multiprocessing.managers import SyncManager
 from copy import deepcopy
 import os
 import logging
 import time
 import signal
 import threading
+import atexit
 
 from tqdm.auto import tqdm
 import torch
 import torch.multiprocessing as mp
+#import multiprocessing as mp
 
 from utils.dual_diffusion_utils import (
     init_logging, init_cuda, get_available_torch_devices
@@ -72,7 +75,6 @@ def _process_worker(stage: "DatasetProcessStage", rank: int,
     # init process
     try:
         stage._init_process(rank, cuda_device, logger, critical_lock, finish_event)
-        time.sleep(0.1)
         stage.start_process()
     except Exception as e:
         logger.error("".join(format_exception(type(e), e, e.__traceback__)))
@@ -97,7 +99,7 @@ def _process_worker(stage: "DatasetProcessStage", rank: int,
                 logger.error("".join(format_exception(type(e), e, e.__traceback__)))
 
             # flag worker as finished and wait forever
-            with stage.critical_lock: stage.finish_event.set()
+            stage.finish_event.set()
             threading.Event().wait()
 
         try:
@@ -158,7 +160,7 @@ def _monitor_worker(input_queues: list["WorkQueue"], stage_names: list[str], fin
             update_progress(progress_bar, input_queue)
         
         if finish_event.is_set(): break
-        time.sleep(0.5)
+        time.sleep(0.25)
 
     for progress_bar, input_queue in zip(progress_bars, input_queues):
         update_progress(progress_bar, input_queue)
@@ -183,29 +185,29 @@ def _terminate_worker(process: mp.Process, timeout: float = 0.25, close: bool = 
 
 class WorkQueue: # normal Queue class behavior extended with progress tracking
 
-    def __init__(self, *args, **kwargs) -> None:
-        self.total_count = mp.Value("i", 0)  # 'i' means integer
-        self.processed_count = mp.Value("i", 0)
-        self.queue = mp.Queue(*args, **kwargs)
+    def __init__(self, mp_manager: SyncManager, *args, **kwargs) -> None:
+        self.total_count = mp_manager.Value("i", 0)  # 'i' means integer
+        self.processed_count = mp_manager.Value("i", 0)
+        self.count_lock = mp_manager.Lock()
+        self.queue = mp_manager.Queue(*args, **kwargs)
 
     def put(self, obj, *args, **kwargs) -> None:
         if obj is not None:
-            with self.total_count.get_lock():
+            with self.count_lock:
                 self.total_count.value += 1
         self.queue.put(obj, *args, **kwargs)
 
     def get(self, *args, **kwargs) -> Any:
         obj = self.queue.get(*args, **kwargs)
         if obj is not None:
-            with self.processed_count.get_lock():
+            with self.count_lock:
                 self.processed_count.value += 1
         return obj
 
     def get_processed_total(self) -> tuple[int, int]:
-        with self.total_count.get_lock():
-            with self.processed_count.get_lock():
-                total = self.total_count.value
-                processed = self.processed_count.value
+        with self.count_lock:
+            total = self.total_count.value
+            processed = self.processed_count.value
         return processed, total
 
 # dummy log handler that sends all log records to an mp queue and saves warnings and errors in separate queues
@@ -214,6 +216,8 @@ class WorkerLogHandler(logging.Handler):
                  process_name: Optional[str] = None) -> None:
         
         super().__init__(level=logging.DEBUG)
+        self.setFormatter(None)
+
         self.process_name = process_name or ""
 
         self.log_queue = log_queue
@@ -241,25 +245,25 @@ class DatasetProcessStage(ABC):
     def __init__(self) -> None:
         pass
 
-    def _start_worker_queue(self, input_queue: WorkQueue, log_queue: mp.Queue,
+    def _start_worker_queue(self, input_queue: WorkQueue, log_queue: mp.Queue, mp_manager: SyncManager,
                 num_proc: int, processor_config: "DatasetProcessorConfig") -> WorkQueue:
 
         self.processor_config = processor_config
         self.num_proc = num_proc
 
         self.log_queue = log_queue
-        self.warning_queue = mp.Queue()
-        self.error_queue = mp.Queue()
+        self.warning_queue = mp_manager.Queue()
+        self.error_queue = mp_manager.Queue()
 
         if self.limit_output_queue_size() == True:
             max_output_queue_size = max(num_proc * processor_config.buffer_memory_level, 1)
         else:
             max_output_queue_size = 0
         self.input_queue = input_queue
-        self.output_queue = WorkQueue(max_output_queue_size)
+        self.output_queue = WorkQueue(mp_manager, max_output_queue_size)
 
-        critical_locks = [mp.Lock() for _ in range(num_proc)]
-        finish_events = [mp.Event() for _ in range(num_proc)]
+        critical_locks = [mp_manager.Lock() for _ in range(num_proc)]
+        finish_events = [mp_manager.Event() for _ in range(num_proc)]
         workers: list[mp.Process] = []
 
         for rank in range(self.num_proc):
@@ -278,7 +282,7 @@ class DatasetProcessStage(ABC):
     # adds one None per worker process to the input queue to signal end of input
     # this should only be called after _ALL_ items have been added to the input queue
     # timeouts are necessary because if the main process blocks it will no longer respond to ctrl+c
-    def _finish_worker_queue(self) -> int: # returns total worker errors
+    def _finish_worker_queue(self, wait: bool = True) -> int: # returns total worker errors
 
         sentinels_sent = 0
         while sentinels_sent < len(self.workers):
@@ -288,11 +292,12 @@ class DatasetProcessStage(ABC):
             except QueueFullException:
                 time.sleep(0.1)
 
-        while True:
+        while wait == True:
             num_running = 0
             for finish_event in self.finish_events:
-                if finish_event.wait(timeout=0.01) == False:
+                if finish_event.is_set() == False:
                     num_running += 1
+                    break
 
             if num_running == 0: break
             time.sleep(0.1)
@@ -310,27 +315,23 @@ class DatasetProcessStage(ABC):
     # acquiring the associated critical lock before terminating each worker will prevent data corruption
     def _terminate(self, timeout: float = 0.25) -> None:
 
-        self._finish_worker_queue()
-        #time.sleep(timeout)
-        #return
-    
+        self._finish_worker_queue(wait=False)
+        time.sleep(timeout)
+
         for critical_lock, worker in zip(self.critical_locks, self.workers):
-            with critical_lock:
-                worker.terminate()
-        
+            critical_lock.acquire()
+            worker.terminate()
+
         for worker in self.workers:
             if worker.is_alive() == True:
-                worker.join()
+                try:
+                    worker.kill()
+                    worker.join()
+                except Exception as e:
+                    self.logger.error(f"Error shutting down worker processes: {e}")
 
     # should only be called after _ALL_ workers have terminated due to shared memory
     def _close(self) -> None:
-        #return
-        self.input_queue.queue.close()
-        self.output_queue.queue.close()
-        self.log_queue.close()
-        self.warning_queue.close()
-        self.error_queue.close()
-        
         for worker in self.workers:
             worker.close()
 
@@ -439,6 +440,9 @@ class DatasetProcessor:
         # sadly required for cuda
         mp.set_start_method("spawn", force=True)
 
+        # start multiprocessing manager
+        self.mp_manager = mp.Manager()
+
         # first stage input is either a specified path, None (dataset path), or pre-filled WorkQueue
         if input is None:
             if config.DATASET_PATH is None:
@@ -450,7 +454,7 @@ class DatasetProcessor:
 
         if isinstance(input, list):
             scan_paths = input
-            input_queue = WorkQueue()
+            input_queue = WorkQueue(self.mp_manager)
 
             for scan_path in scan_paths:
                 if not os.path.isdir(scan_path):
@@ -474,14 +478,14 @@ class DatasetProcessor:
                     raise ValueError(f"Selected cuda device '{device}' not available")
 
         # start logging process
-        log_queue = mp.Queue()
+        log_queue = self.mp_manager.Queue()
         log_worker = mp.Process(target=_log_worker, daemon=True,
             args=(process_name, self.config.verbose, log_queue))
         log_worker.start()
-
+        
         logger = logging.getLogger("DatasetProcessor")
         logger.setLevel(logging.DEBUG if self.config.verbose == True else logging.INFO)
-        warning_queue, error_queue = mp.Queue(), mp.Queue()
+        warning_queue, error_queue = self.mp_manager.Queue(), self.mp_manager.Queue()
         log_handler = WorkerLogHandler(log_queue, warning_queue, error_queue, "DatasetProcessor")
         logger.setLevel(logging.DEBUG)
         logger.addHandler(log_handler)
@@ -548,17 +552,41 @@ class DatasetProcessor:
 
             input_queues.append(input_queue)
             input_queue = stage._start_worker_queue(
-                input_queue, log_queue, num_proc, self.config)
+                input_queue, log_queue, self.mp_manager, num_proc, self.config)
 
         logger.info(""); process_stages[0].info_banner(logger); logger.info("")
         time.sleep(0.2)
 
         # start a process for monitoring progress of all stages
-        monitor_finish_event = mp.Event()
+        monitor_finish_event = self.mp_manager.Event()
         monitor_worker = mp.Process(target=_monitor_worker, daemon=True,
             args=(input_queues, stage_names, monitor_finish_event))
         monitor_worker.start()
 
+        # as a last resort register an atexit hook to attempt to kill any zombie processes
+        def cleanup_process():
+            for stage in process_stages:
+                for worker in stage.workers:
+                    try:
+                        worker.terminate()
+                        worker.kill()
+                    except: pass
+
+            try:
+                log_worker.terminate()
+                log_worker.kill()
+            except: pass
+            try:
+                monitor_worker.terminate()
+                monitor_worker.kill()
+            except: pass
+            try:
+                self.mp_manager.shutdown()
+            except: pass
+
+        atexit.register(cleanup_process)
+
+        # main processing loop
         process_result = "completed successfully"
         process_start_time = datetime.now()
         signal.signal(signal.SIGINT, original_sigint_handler)  # re-enable sigint as it will be caught
@@ -643,6 +671,8 @@ class DatasetProcessor:
         # finally, release all memory/resources for all worker processes
         for stage in process_stages:
             stage._close()
+
+        self.mp_manager.shutdown()
 
         return None
 

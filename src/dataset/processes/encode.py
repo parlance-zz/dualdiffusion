@@ -37,8 +37,8 @@ from modules.embeddings.embedding import DualDiffusionEmbedding
 from modules.vaes.vae import DualDiffusionVAE
 from dataset.dataset_processor import DatasetProcessor, DatasetProcessStage
 from utils.dual_diffusion_utils import (
-    get_audio_metadata, load_audio, move_tensors_to_cpu,
-    save_safetensors, load_safetensors_ex, init_cuda, normalize
+    get_audio_metadata, load_audio,
+    save_safetensors, load_safetensors_ex, normalize
 )
 
 
@@ -177,8 +177,6 @@ class EncodeProcess(DatasetProcessStage):
     @torch.inference_mode()
     def start_process(self):
 
-        init_cuda()
-
         # load pipeline and compile vae / embedding models
         model_path = os.path.join(config.MODELS_PATH, self.processor_config.encode_model)
         self.pipeline = DualDiffusionPipeline.from_pretrained(model_path,
@@ -190,7 +188,7 @@ class EncodeProcess(DatasetProcessStage):
         self.vae = self.vae.to(dtype=torch.bfloat16)
         if self.processor_config.encode_compile_models == True:
             self.vae.compile(fullgraph=True, dynamic=True)
-            self.embedding.compile(fullgraph=True, dynamic=True)
+            self.embedding.compile(fullgraph=False, dynamic=True)
         
         # encode latents setup
         self.format: SpectrogramFormat = self.pipeline.format
@@ -217,6 +215,11 @@ class EncodeProcess(DatasetProcessStage):
         latents: dict[str, torch.Tensor] = input_dict["latents"] or {}
         latents_metadata: dict[str, str] = input_dict["latents_metadata"] or {}
 
+        # if audio is shorter than 1 audio embedding chunk we can't use it
+        if audio.shape[-1] < self.embedding.config.sample_crop_width:
+            self.logger.debug(f"Skipping \"{input_dict['file_path']}\" due to insufficient length ({audio.shape[-1]})")
+            return None
+        
         # move audio and latents to device
         if audio is not None: audio = audio.to(self.device)
         latents = {name: tensor.to(self.device) for name, tensor in latents.items()}
@@ -266,10 +269,10 @@ class EncodeProcess(DatasetProcessStage):
                 batch_latents = self.vae.encode(batch_input_sample, vae_class_embeddings, self.format).mode()
                 encoded_latents.append(batch_latents)
             latents["latents"] = torch.cat(encoded_latents, dim=0).to(dtype=torch.bfloat16)
-
+    
         return {
             "safetensors_file_path": safetensors_file_path,
-            "latents": move_tensors_to_cpu(latents),
+            "latents": {tensor_name: tensor.cpu() for tensor_name, tensor in latents.items()},
             "latents_metadata": latents_metadata,
         }
 
@@ -319,4 +322,4 @@ if __name__ == "__main__":
         input=config.DATASET_PATH,
     )
 
-    os._exit(0)
+    exit(0)

@@ -15,8 +15,8 @@
   "import_filter_group": 1,
   "import_dst_path": "/mnt/vault/dataset/smd",
   "import_warn_file_size_mismatch": true,
-  "import_overwrite_if_larger": true,
-  "import_move_no_copy": true,
+  "import_overwrite_if_larger": false,
+  "import_move_no_copy": false,
   "import_min_tree_depth": 1,
   "import_max_tree_depth": 1,
 
