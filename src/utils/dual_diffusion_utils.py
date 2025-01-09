@@ -299,9 +299,10 @@ def save_audio(raw_samples: torch.Tensor,
 
     if copy_on_write == True:
         tmp_path = f"{output_path}.tmp"
+        file_ext = os.path.splitext(output_path)[1]
         try:
             torchaudio.save(tmp_path, raw_samples.cpu(),
-                sample_rate, bits_per_sample=bits_per_sample, compression=compression)
+                sample_rate, format=file_ext[1:], bits_per_sample=bits_per_sample, compression=compression)
             if metadata is not None:
                 update_audio_metadata(tmp_path, metadata)
 
