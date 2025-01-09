@@ -370,8 +370,6 @@ class DatasetProcessStage(ABC):
 @dataclass
 class DatasetProcessorConfig:
 
-    sample_rate: int                = 32000      # sample rate for dataset audio
-    num_channels: int               = 2          # mono or stereo for dataset audio
     max_num_proc: Optional[int]     = None       # set max number of (total) processes for cpu stages. default is 1/2 cpu cores
     buffer_memory_level: int        = 2          # higher values increase max queue sizes and memory usage
     cuda_devices: list[str]         = ("cuda",)  # list of devices to use in cuda stages ("cuda:0", "cuda:1", etc)
@@ -395,7 +393,8 @@ class DatasetProcessorConfig:
     # normalize process
     normalize_target_lufs: float               = -20.  # desired loudness level for dataset audio in the normalization process
     normalize_trim_silence: bool               = True  # removes any silence at the beginning or end of the audio file
-    normalize_trim_max_length: Optional[float] = 600   # truncates the length of the audio to this max length (in seconds)
+    normalize_trim_max_length: Optional[float] = 480   # if set, truncates the length of the audio to this max length (in seconds)
+    normalize_sample_rate: Optional[int]       = None  # if set, resamples audio to this sample rate during normalization (if needed)
 
     # integrity check process
     integrity_check_delete_corrupt_files: bool = False # delete any flac or safetensors files that fail integrity check

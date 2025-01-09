@@ -182,8 +182,9 @@ class EncodeProcess(DatasetProcessStage):
         self.pipeline = DualDiffusionPipeline.from_pretrained(model_path,
             device={"vae": self.device, "format": self.device, "embedding": self.device})
         
-        self.vae: DualDiffusionVAE = self.pipeline.vae
+        self.format: SpectrogramFormat = self.pipeline.format
         self.embedding: DualDiffusionEmbedding = self.pipeline.embedding
+        self.vae: DualDiffusionVAE = self.pipeline.vae
 
         self.vae = self.vae.to(dtype=torch.bfloat16)
         if self.processor_config.encode_compile_models == True:
@@ -191,7 +192,7 @@ class EncodeProcess(DatasetProcessStage):
             self.embedding.compile(fullgraph=False, dynamic=True)
         
         # encode latents setup
-        self.format: SpectrogramFormat = self.pipeline.format
+        
         self.format_config: SpectrogramFormatConfig = self.format.config
         
         num_encode_offsets = self.processor_config.encode_latents_num_time_offset_augmentations

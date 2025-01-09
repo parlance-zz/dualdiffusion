@@ -27,6 +27,7 @@ import logging
 import os
 
 import torch
+import mutagen
 
 from dataset.dataset_processor import DatasetProcessor, DatasetProcessStage
 from utils.dual_diffusion_utils import (
@@ -40,6 +41,8 @@ class NormalizeLoad(DatasetProcessStage):
     
     def info_banner(self, logger: logging.Logger) -> None:
         logger.info(f"Normalizing to target_lufs: {self.processor_config.normalize_target_lufs}")
+        if self.processor_config.normalize_sample_rate is not None:
+            logger.info(f"Target sample rate: {self.processor_config.normalize_sample_rate}hz")
         if self.processor_config.normalize_trim_max_length:
             logger.info(f"Trim max length: {self.processor_config.normalize_trim_max_length}s")
         if self.processor_config.normalize_trim_silence == True:
@@ -54,13 +57,26 @@ class NormalizeLoad(DatasetProcessStage):
         if os.path.splitext(input_dict["file_path"])[1].lower() == ".flac":
             
             target_lufs = self.processor_config.normalize_target_lufs
+            max_length = self.processor_config.normalize_trim_max_length
+            target_sample_rate = self.processor_config.normalize_sample_rate
+            do_normalize = False
 
             audio_path = input_dict["file_path"]
             audio_metadata = get_audio_metadata(audio_path)
             current_lufs = audio_metadata.get("post_norm_lufs", None)
             if current_lufs is not None: current_lufs = float(current_lufs[0])
+            if current_lufs != target_lufs: do_normalize = True
 
-            if current_lufs != target_lufs or self.processor_config.force_overwrite == True:
+            audio_info = mutagen.File(audio_path).info
+            current_length = audio_info.length
+            if max_length is not None and current_length > max_length:
+                do_normalize = True
+
+            current_sample_rate = audio_info.sample_rate
+            if target_sample_rate is not None and current_sample_rate != target_sample_rate:
+                do_normalize = True
+                
+            if do_normalize == True or self.processor_config.force_overwrite == True:
                 audio, sample_rate = load_audio(audio_path, return_sample_rate=True)
 
                 return {

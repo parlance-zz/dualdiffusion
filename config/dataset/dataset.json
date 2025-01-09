@@ -1,6 +1,4 @@
 {
-  "sample_rate": 32000,
-  "num_channels": 2,
   "max_num_proc": 12,
   "buffer_memory_level": 3,
   "cuda_devices": "cuda",
@@ -16,14 +14,15 @@
   "import_dst_path": "/mnt/vault/dataset/smd",
   "import_warn_file_size_mismatch": true,
   "import_overwrite_if_larger": false,
-  "import_move_no_copy": false,
+  "import_move_no_copy": true,
   "import_min_tree_depth": 1,
   "import_max_tree_depth": 1,
 
   "normalize_target_lufs": -20.0,
   "normalize_trim_silence": true,
-  "normalize_trim_max_length": 600,
-  
+  "normalize_trim_max_length": 480,
+  "normalize_sample_rate": null,
+
   "integrity_check_delete_corrupt_files": false,
 
   "encode_model": "edm2_vt7_12d_4_clap2",
