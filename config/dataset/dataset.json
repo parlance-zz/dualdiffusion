@@ -3,7 +3,7 @@
   "buffer_memory_level": 3,
   "cuda_devices": "cuda",
   "force_overwrite": false,
-  "copy_on_write": false,
+  "copy_on_write": true,
   "test_mode": false,
   "write_error_summary_logs": true,
   "verbose": false,
@@ -34,6 +34,7 @@
   "encode_latents_force_overwrite": false,
   "encode_audio_embeddings_force_overwrite": false,
   "encode_text_embeddings_force_overwrite": false,
+  "encode_embeddings_only": true,
 
   "clap_embedding_model": "edm2_vt7_12d_4_clap",
   "clap_embedding_labels": {

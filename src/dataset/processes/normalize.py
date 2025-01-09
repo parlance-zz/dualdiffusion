@@ -27,6 +27,7 @@ import logging
 import os
 
 import torch
+import torchaudio
 import mutagen
 
 from dataset.dataset_processor import DatasetProcessor, DatasetProcessStage
@@ -100,13 +101,20 @@ class NormalizeProcess(DatasetProcessStage):
     @torch.inference_mode()
     def process(self, input_dict: dict) -> Optional[Union[dict, list[dict]]]:
         
+        target_sample_rate = self.processor_config.normalize_sample_rate
+
         audio: torch.Tensor = input_dict["audio"]
         audio_path = input_dict["audio_path"]
         target_lufs = input_dict["target_lufs"]
         sample_rate = input_dict["sample_rate"]
         audio_metadata = input_dict["audio_metadata"]
 
-        # first trim the max length, if set
+        # first resample if needed
+        if target_sample_rate is not None and sample_rate != target_sample_rate:
+            audio = torchaudio.functional.resample(audio, sample_rate, target_sample_rate)
+            sample_rate = target_sample_rate
+
+        # trim the max length, if set
         if self.processor_config.normalize_trim_max_length is not None:
             max_samples = self.processor_config.normalize_trim_max_length * sample_rate
             if max_samples > 0 and audio.shape[-1] > max_samples:
@@ -140,6 +148,9 @@ class NormalizeProcess(DatasetProcessStage):
             effective_sample_rate = int((indices[0] / rfft.shape[-1]).item() * sample_rate)
             effective_sample_rate = (effective_sample_rate + 50) // 100 * 100 # round to nearest 100hz
             audio_metadata["effective_sample_rate"] = effective_sample_rate
+        else:
+            normalized_audio = audio
+            old_lufs = None
 
         return {
             "audio_path": audio_path,

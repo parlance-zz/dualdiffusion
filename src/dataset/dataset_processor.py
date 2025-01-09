@@ -400,15 +400,16 @@ class DatasetProcessorConfig:
     integrity_check_delete_corrupt_files: bool = False # delete any flac or safetensors files that fail integrity check
 
     # encode process
-    encode_model: Optional[str]                          = None
-    encode_compile_models: bool                          = True
-    encode_latents_batch_size: int                       = 1
-    encode_latents_force_overwrite: bool                 = False
-    encode_latents_num_time_offset_augmentations: int    = 8
-    encode_latents_pitch_offset_augmentations: list[int] = ()
-    encode_latents_stereo_mirroring_augmentation: bool   = True
-    encode_audio_embeddings_force_overwrite: bool        = False
-    encode_text_embeddings_force_overwrite: bool         = False
+    encode_model: Optional[str]                          = None  # use the format, vae, and embeddings from this model (under $MODELS_PATH)
+    encode_compile_models: bool                          = True  # compile the vae before encoding
+    encode_latents_batch_size: int                       = 1     # batch size for encoding latents. choose a value that works with your vram capacity
+    encode_latents_num_time_offset_augmentations: int    = 8     # add augmentations for sub-pixel (latent pixel) offsets
+    encode_latents_pitch_offset_augmentations: list[int] = ()    # add augmentations for list of pitch offsets (in semitones)
+    encode_latents_stereo_mirroring_augmentation: bool   = True  # add augmentation with swapped stereo channels
+    encode_latents_force_overwrite: bool                 = False # (re)encode and overwrite latents
+    encode_audio_embeddings_force_overwrite: bool        = False # (re)encode and overwrite existing audio embeddings
+    encode_text_embeddings_force_overwrite: bool         = False # (re)encode and overwrite existing text embeddings
+    encode_embeddings_only: bool                         = False # only encodes audio/text embeddings and skips latents
 
     clap_embedding_model: Optional[str] = None
     clap_embedding_labels: Optional[dict[str, list[str]]] = None
@@ -438,6 +439,8 @@ class DatasetProcessor:
 
         # sadly required for cuda
         mp.set_start_method("spawn", force=True)
+        #if "file_descriptor" in mp.get_all_sharing_strategies():
+        #    mp.set_sharing_strategy("file_descriptor")
 
         # start multiprocessing manager
         self.mp_manager = mp.Manager()
@@ -489,6 +492,8 @@ class DatasetProcessor:
         logger.setLevel(logging.DEBUG)
         logger.addHandler(log_handler)
         logger.info("")
+
+        #logger.info(f"Multiprocessing sharing strategy: {mp.get_sharing_strategy()}")
 
         # 3 second chance to abort if force overwrite is enabled
         if self.config.force_overwrite == True and self.config.test_mode == False:

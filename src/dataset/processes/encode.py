@@ -58,7 +58,7 @@ class EncodeLoad(DatasetProcessStage):
             logger.error(f"encode_model \"{encode_model_path}\" not found")
             raise ValueError()
         
-        if self.processor_config.encode_latents_force_overwrite == True:
+        if self.processor_config.encode_latents_force_overwrite == True and self.processor_config.encode_embeddings_only == False:
             logger.warning("WARNING: Force latents overwrite is enabled - existing data will be overwritten")
         if self.processor_config.encode_audio_embeddings_force_overwrite == True:
             logger.warning("WARNING: Force audio embeddings overwrite is enabled - existing data will be overwritten")
@@ -66,9 +66,13 @@ class EncodeLoad(DatasetProcessStage):
             logger.warning("WARNING: Force text embeddings overwrite is enabled - existing data will be overwritten")
         
         logger.info(f"Encode model: {self.processor_config.encode_model}  compile: {self.processor_config.encode_compile_models}")
-        logger.info(f"Latents number of time offset augmentations: {self.processor_config.encode_latents_num_time_offset_augmentations}")
-        logger.info(f"Latents number of pitch offset augmentations: {len(self.processor_config.encode_latents_pitch_offset_augmentations)}")
-        logger.info(f"Latents stereo mirroring augmentation: {self.processor_config.encode_latents_stereo_mirroring_augmentation}")
+        if self.processor_config.encode_embeddings_only == True:
+            logger.info(f"Skipping latents and encoding audio / text embeddings only")
+
+        if self.processor_config.encode_embeddings_only == False:
+            logger.info(f"Latents number of time offset augmentations: {self.processor_config.encode_latents_num_time_offset_augmentations}")
+            logger.info(f"Latents number of pitch offset augmentations: {len(self.processor_config.encode_latents_pitch_offset_augmentations)}")
+            logger.info(f"Latents stereo mirroring augmentation: {self.processor_config.encode_latents_stereo_mirroring_augmentation}")
 
     def limit_output_queue_size(self) -> bool:
         return True
