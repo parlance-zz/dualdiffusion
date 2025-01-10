@@ -29,7 +29,7 @@ from traceback import format_exception
 from queue import Full as QueueFullException
 from queue import Empty as QueueEmptyException
 from datetime import datetime
-from multiprocessing.synchronize import Lock, Event
+from multiprocessing.synchronize import Event
 from multiprocessing.managers import SyncManager
 from copy import deepcopy
 import os
@@ -50,7 +50,7 @@ from utils.dual_diffusion_utils import (
 
 
 def _process_worker(stage: "DatasetProcessStage", rank: int,
-        cuda_device: Optional[str], critical_lock: Lock, finish_event: Event) -> None:
+        cuda_device: Optional[str], finish_event: Event) -> None:
 
     # disable sigint, it will be handled by the main process
     signal.signal(signal.SIGINT, signal.SIG_IGN)
@@ -74,7 +74,7 @@ def _process_worker(stage: "DatasetProcessStage", rank: int,
 
     # init process
     try:
-        stage._init_process(rank, cuda_device, logger, critical_lock, finish_event)
+        stage._init_process(rank, cuda_device, logger, finish_event)
         stage.start_process()
     except Exception as e:
         logger.error("".join(format_exception(type(e), e, e.__traceback__)))
@@ -85,10 +85,9 @@ def _process_worker(stage: "DatasetProcessStage", rank: int,
     
     while True:
         while True:
-            try: # oh how I wish this wasn't needed
-                with stage.critical_lock:
-                    input_dict: dict = stage.input_queue.get(timeout=0.1)
-                    break
+            try:
+                input_dict: dict = stage.input_queue.get(timeout=0.1)
+                break
             except QueueEmptyException:
                 pass
                 
@@ -103,21 +102,17 @@ def _process_worker(stage: "DatasetProcessStage", rank: int,
             threading.Event().wait()
 
         try:
-            cloned_input_dict = deepcopy(input_dict)
-            del input_dict  # necessary to satisfy pytorch shared memory constraints
-            output = stage.process(cloned_input_dict)
+            output = stage.process(input_dict)
+            del input_dict
 
             if output is not None:
-                with stage.critical_lock: # oh how I wish this wasn't needed
-                    if isinstance(output, list):
-                        for item in output:
-                            stage.output_queue.put(item)
-                    elif isinstance(output, dict):
-                        stage.output_queue.put(output)
-                    else:
-                        raise ValueError(f"stage.process returned unrecognized type '{type(output)}'")
-            else:
-                del cloned_input_dict
+                if isinstance(output, list):
+                    for item in output:
+                        stage.output_queue.put(item)
+                elif isinstance(output, dict):
+                    stage.output_queue.put(output)
+                else:
+                    raise ValueError(f"stage.process returned unrecognized type '{type(output)}'")
                 
         except Exception as e:
             logger.error("".join(format_exception(type(e), e, e.__traceback__)))
@@ -145,7 +140,7 @@ def _monitor_worker(input_queues: list["WorkQueue"], stage_names: list[str], fin
 
     progress_bars = []
     for name in stage_names:
-        progress_bar = tqdm(total=1, smoothing=0.9)
+        progress_bar = tqdm(total=1, smoothing=0.99)
         progress_bar.set_description(name, refresh=False)
         progress_bars.append(progress_bar)
 
@@ -185,17 +180,24 @@ def _terminate_worker(process: mp.Process, timeout: float = 0.25, close: bool = 
 
 class WorkQueue: # normal Queue class behavior extended with progress tracking
 
-    def __init__(self, mp_manager: SyncManager, *args, **kwargs) -> None:
+    def __init__(self, mp_manager: SyncManager, maxsize: int = 0, *args, **kwargs) -> None:
+
         self.total_count = mp_manager.Value("i", 0)  # 'i' means integer
         self.processed_count = mp_manager.Value("i", 0)
         self.count_lock = mp_manager.Lock()
+
+        self.maxsize = maxsize
         self.queue = mp_manager.Queue(*args, **kwargs)
 
     def put(self, obj, *args, **kwargs) -> None:
+        if self.maxsize > 0 and obj is not None:
+            while self.queue.qsize() >= self.maxsize:
+                time.sleep(0.1)
+        self.queue.put(obj, *args, **kwargs)
+
         if obj is not None:
             with self.count_lock:
                 self.total_count.value += 1
-        self.queue.put(obj, *args, **kwargs)
 
     def get(self, *args, **kwargs) -> Any:
         obj = self.queue.get(*args, **kwargs)
@@ -239,7 +241,8 @@ class WorkerLogHandler(logging.Handler):
         self.log_queue.put(record)
 
 # main workhorse class for dataset processing. processes should subclass DatasetProcessStage and
-# implement process (required), and get_stage_type, start_process, finish_process, info_banner, summary_banner, limit_output_queue_size (optional)
+# implement process (required), and get_stage_type, start_process, finish_process,
+#   info_banner, summary_banner, limit_output_queue_size, get_proc_weight (optional)
 class DatasetProcessStage(ABC):
 
     def __init__(self) -> None:
@@ -256,25 +259,24 @@ class DatasetProcessStage(ABC):
         self.error_queue = mp_manager.Queue()
 
         if self.limit_output_queue_size() == True:
-            max_output_queue_size = max(num_proc * processor_config.buffer_memory_level, 1)
+            max_output_queue_size = max(num_proc * processor_config.buffer_memory_level, 1)    
         else:
             max_output_queue_size = 0
-        self.input_queue = input_queue
-        self.output_queue = WorkQueue(mp_manager, max_output_queue_size)
 
-        critical_locks = [mp_manager.Lock() for _ in range(num_proc)]
+        self.input_queue = input_queue
+        self.output_queue = WorkQueue(mp_manager, maxsize=max_output_queue_size)
+
         finish_events = [mp_manager.Event() for _ in range(num_proc)]
         workers: list[mp.Process] = []
 
         for rank in range(self.num_proc):
             cuda_device = self.processor_config.cuda_devices[rank] if self.get_stage_type() == "cuda" else None
             worker = mp.Process(target=_process_worker, daemon=True,
-                args=(self, rank, cuda_device, critical_locks[rank], finish_events[rank]))
+                args=(self, rank, cuda_device, finish_events[rank]))
             workers.append(worker)
             worker.start()
 
         self.workers = workers
-        self.critical_locks = critical_locks
         self.finish_events = finish_events
 
         return self.output_queue
@@ -305,21 +307,18 @@ class DatasetProcessStage(ABC):
         return self.error_queue.qsize(), self.warning_queue.qsize()
 
     def _init_process(self, rank: int, device: Optional[str],
-            logger: logging.Logger, critical_lock: Lock, finish_event: Event) -> None:
+            logger: logging.Logger, finish_event: Event) -> None:
         self.rank = rank
         self.device = device
         self.logger = logger
-        self.critical_lock = critical_lock
         self.finish_event = finish_event
 
-    # acquiring the associated critical lock before terminating each worker will prevent data corruption
     def _terminate(self, timeout: float = 0.25) -> None:
 
         self._finish_worker_queue(wait=False)
         time.sleep(timeout)
 
-        for critical_lock, worker in zip(self.critical_locks, self.workers):
-            critical_lock.acquire()
+        for worker in self.workers:
             worker.terminate()
 
         for worker in self.workers:
@@ -350,9 +349,13 @@ class DatasetProcessStage(ABC):
         return False
 
     # io stages get 1 process, cuda stages get 1 process per device, the remaining processes are
-    # evenly divided between any cpu stages until max_num_proc is reached
+    # divided between any cpu stages until max_num_proc is reached
     def get_stage_type(self) -> Literal["io", "cpu", "cuda"]:
         return "io"
+    
+    # higher values assign more processes to this stage
+    def get_proc_weight(self) -> float:
+        return 1
     
     @torch.inference_mode()
     def start_process(self) -> None:
@@ -374,7 +377,6 @@ class DatasetProcessorConfig:
     buffer_memory_level: int        = 2          # higher values increase max queue sizes and memory usage
     cuda_devices: list[str]         = ("cuda",)  # list of devices to use in cuda stages ("cuda:0", "cuda:1", etc)
     force_overwrite: bool           = False      # disables skipping files that have been previously processed
-    copy_on_write: bool             = True       # enable to guarantee data integrity in event of abnormal/sudden termination
     test_mode: bool                 = False      # disables moving, copying, or writing any changes to files
     write_error_summary_logs: bool  = True       # when the process is completed or aborted write a separate log file for each stage's errors/warnings
     verbose: bool                   = False      # prints debug logs to stdout
@@ -395,6 +397,9 @@ class DatasetProcessorConfig:
     normalize_trim_silence: bool               = True  # removes any silence at the beginning or end of the audio file
     normalize_trim_max_length: Optional[float] = 480   # if set, truncates the length of the audio to this max length (in seconds)
     normalize_sample_rate: Optional[int]       = None  # if set, resamples audio to this sample rate during normalization (if needed)
+    normalize_clipping_eps: float              = 2e-2  # controls sensitivity for clipping detection
+    normalize_silence_eps: float               = 6e-5  # controls sensitivity for leading / trailing silence trimming
+    normalize_frequency_eps: float             = 3e-5  # controls sensitivity for max frequency detection
 
     # integrity check process
     integrity_check_delete_corrupt_files: bool = False # delete any flac or safetensors files that fail integrity check
@@ -518,24 +523,24 @@ class DatasetProcessor:
         stage_types = [stage.get_stage_type() for stage in process_stages]
 
         remaining_num_procs = self.config.max_num_proc
-        num_cpu_stages = 0
-        stage_num_procs: list[int] = []
-
         for stage, stage_type in zip(process_stages, stage_types):
             if stage_type == "io":
-                stage_num_procs.append(1)
+                remaining_num_procs -= 1
             elif stage_type == "cuda":
-                stage_num_procs.append(len(self.config.cuda_devices))
-            elif stage_type == "cpu":
-                stage_num_procs.append(0)
-                num_cpu_stages += 1
-            else:
+                remaining_num_procs -= len(self.config.cuda_devices)
+            elif stage_type != "cpu":
                 raise ValueError(f"Unrecognized stage type '{stage_type}'")
-            
-            remaining_num_procs -= stage_num_procs[-1]
 
-        cpu_stage_procs = max(remaining_num_procs // max(num_cpu_stages, 1), 1)
-        stage_num_procs = [num_proc if num_proc > 0 else cpu_stage_procs for num_proc in stage_num_procs]
+        total_proc_weight = sum([stage.get_proc_weight() for stage in process_stages if stage.get_stage_type() == "cpu"])
+        
+        stage_num_procs: list[int] = []
+        for stage, stage_type in zip(process_stages, stage_types):
+            if stage_type == "cpu":
+                stage_num_procs.append(max(int(stage.get_proc_weight() / total_proc_weight * remaining_num_procs), 1))
+            elif stage_type == "io":
+                stage_num_procs.append(1)
+            else:
+                stage_num_procs.append(len(self.config.cuda_devices))
 
          # disable sigint to avoid data corruption
         original_sigint_handler = signal.getsignal(signal.SIGINT)
@@ -618,9 +623,9 @@ class DatasetProcessor:
             process_result = "aborted" if isinstance(e, KeyboardInterrupt) else "failed"
             logger.error("".join(format_exception(type(e), e, e.__traceback__)))
 
-        # safely terminate worker processes by acquiring each per-process critical section lock
+        # terminate worker processes
         # doing this safely requires reverse order because of pytorch shared memory
-        logger.info("Safely terminating worker processes...")
+        logger.info("Terminating worker processes...")
         for stage in reversed(process_stages):
             stage._terminate()
 

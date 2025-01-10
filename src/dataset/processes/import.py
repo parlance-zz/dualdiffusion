@@ -103,34 +103,29 @@ class Import(DatasetProcessStage):
                 write_file = True
 
             if write_file == True:
-                
-                with self.critical_lock: # task will not be terminated inside this block
-                    self.logger.debug(f"\"{src_path}\" -> \"{dst_path}\"")
+                self.logger.debug(f"\"{src_path}\" -> \"{dst_path}\"")
 
-                    if self.processor_config.test_mode == False: # test mode disallows writing changes
-                        os.makedirs(os.path.dirname(dst_path), exist_ok=True)
+                if self.processor_config.test_mode == False: # test mode disallows writing changes
+                    os.makedirs(os.path.dirname(dst_path), exist_ok=True)
 
-                         # copy_on_write not needed for move as it is already atomic
-                        if self.processor_config.import_move_no_copy == True:
-                            shutil.move(src_path, dst_path)
-                        
-                        # alternatively copy_on_write uses a temporary file to guarantee integrity
-                        elif self.processor_config.copy_on_write == True:
-                            tmp_path = f"{dst_path}.tmp"
+                    # copy_on_write not needed for move as it is already atomic
+                    if self.processor_config.import_move_no_copy == True:
+                        shutil.move(src_path, dst_path)
+                    else:
+                        # alternatively, copying uses a temporary file to guarantee integrity
+                        tmp_path = f"{dst_path}.tmp"
+                        try:
+                            shutil.copy2(src_path, tmp_path)
+                            shutil.move(tmp_path, dst_path)
+                            if os.path.isfile(tmp_path):
+                                os.remove(tmp_path)
+
+                        except Exception as e:
                             try:
-                                shutil.copy2(src_path, tmp_path)
-                                shutil.move(tmp_path, dst_path)
                                 if os.path.isfile(tmp_path):
                                     os.remove(tmp_path)
-
-                            except Exception as e:
-                                try:
-                                    if os.path.isfile(tmp_path):
-                                        os.remove(tmp_path)
-                                except: pass
-                                raise e
-                        else:
-                            shutil.copy2(src_path, dst_path)
+                            except: pass
+                            raise e
                     
                     return {} # return an empty dict to tally files moved/copied in summary
         

@@ -29,6 +29,7 @@ import os
 import torch
 import torchaudio
 import mutagen
+import pyloudnorm
 
 from dataset.dataset_processor import DatasetProcessor, DatasetProcessStage
 from utils.dual_diffusion_utils import (
@@ -40,14 +41,22 @@ class NormalizeLoad(DatasetProcessStage):
     def get_stage_type(self) -> Literal["io", "cpu", "cuda"]:
         return "cpu"
     
+    def get_proc_weight(self) -> float:
+        return 0.5
+    
     def info_banner(self, logger: logging.Logger) -> None:
         logger.info(f"Normalizing to target_lufs: {self.processor_config.normalize_target_lufs}")
+        
         if self.processor_config.normalize_sample_rate is not None:
             logger.info(f"Target sample rate: {self.processor_config.normalize_sample_rate}hz")
         if self.processor_config.normalize_trim_max_length:
             logger.info(f"Trim max length: {self.processor_config.normalize_trim_max_length}s")
         if self.processor_config.normalize_trim_silence == True:
             logger.info("Trim leading / trailing silence enabled")
+            logger.info(f"Silence detection eps: {self.processor_config.normalize_silence_eps}")
+
+        logger.info(f"Clipping detection eps: {self.processor_config.normalize_clipping_eps}")
+        logger.info(f"Max frequency detection eps: {self.processor_config.normalize_frequency_eps}")
 
     def limit_output_queue_size(self) -> bool:
         return True
@@ -95,21 +104,30 @@ class NormalizeProcess(DatasetProcessStage):
     def get_stage_type(self) -> Literal["io", "cpu", "cuda"]:
         return "cpu"
     
+    def get_proc_weight(self) -> float:
+        return 2
+    
     def limit_output_queue_size(self) -> bool:
         return True
     
+    @torch.inference_mode()
+    def start_process(self):
+        self.loudness_meters: dict[int, pyloudnorm.Meter] = {}
+
     @torch.inference_mode()
     def process(self, input_dict: dict) -> Optional[Union[dict, list[dict]]]:
         
         target_sample_rate = self.processor_config.normalize_sample_rate
 
         audio: torch.Tensor = input_dict["audio"]
+        old_length = audio.shape[-1]
         audio_path = input_dict["audio_path"]
         target_lufs = input_dict["target_lufs"]
         sample_rate = input_dict["sample_rate"]
         audio_metadata = input_dict["audio_metadata"]
-
+        
         # first resample if needed
+        old_sample_rate = sample_rate
         if target_sample_rate is not None and sample_rate != target_sample_rate:
             audio = torchaudio.functional.resample(audio, sample_rate, target_sample_rate)
             sample_rate = target_sample_rate
@@ -123,29 +141,33 @@ class NormalizeProcess(DatasetProcessStage):
         # then trim leading / trailing silence
         if self.processor_config.normalize_trim_silence == True:
             assert audio.ndim == 2
-            mask = audio.abs().mean(dim=0) > 6e-5
-            if len(mask) == 0:
-                indices = (0, 0)
-            else:
-                indices = torch.nonzero(mask)
+            mask = audio.abs().mean(dim=0) > self.processor_config.normalize_silence_eps
+            indices = torch.nonzero(mask)
+            if indices.numel() == 0: indices = (0,)
             audio = audio[:, indices[0]:indices[-1]]
 
         # count peaks and normalize loudness
-        if audio.shape[-1] >= 12800: # this is required for torchaudio.functional.loudness for some reason
-            pre_norm_peaks = get_num_clipped_samples(audio)
-            normalized_audio, old_lufs = normalize_lufs(raw_samples=audio,
-                sample_rate=sample_rate, target_lufs=target_lufs, return_old_lufs=True)
-            post_norm_peaks = get_num_clipped_samples(normalized_audio)
+        if audio.shape[-1] >= 12800: # this is required for loudness calculation
+            pre_norm_peaks = get_num_clipped_samples(audio / audio.abs().amax().clip(min=1e-8),
+                                                     eps=self.processor_config.normalize_clipping_eps)
+            if sample_rate not in self.loudness_meters:
+                self.loudness_meters[sample_rate] = pyloudnorm.Meter(sample_rate)
             
-            if "pre_norm_peaks" not in audio_metadata: # we want the preserve this from the original transcoded file
-                audio_metadata["pre_norm_peaks"] = pre_norm_peaks
+            old_lufs = self.loudness_meters[sample_rate].integrated_loudness(audio.T.numpy())
+            normalized_audio = (audio * (10. ** ((target_lufs - old_lufs) / 20.0))).clip(min=-1, max=1)
+            #normalized_audio, old_lufs = normalize_lufs(raw_samples=audio, sample_rate=sample_rate,
+            #    target_lufs=target_lufs, return_old_lufs=True)
+
+            post_norm_peaks = get_num_clipped_samples(normalized_audio)
+            audio_metadata["pre_norm_peaks"] = pre_norm_peaks
             audio_metadata["post_norm_peaks"] = post_norm_peaks
             audio_metadata["post_norm_lufs"] = target_lufs
 
             # add metadata for the "effective sample rate" (frequencies below which contain 99% of the signal energy)
-            rfft = torch.cumsum(torch.fft.rfft(normalized_audio, dim=-1, norm="ortho").abs().mean(dim=0), dim=0) + 1e-20
-            indices = torch.nonzero((rfft / rfft.amax()) > 0.9975)
-            effective_sample_rate = int((indices[0] / rfft.shape[-1]).item() * sample_rate)
+            rfft = torch.fft.rfft(normalized_audio, dim=-1, norm="ortho").abs().mean(dim=0)
+            indices = torch.nonzero((rfft / rfft.amax().clip(min=1e-10)) > self.processor_config.normalize_frequency_eps)
+            if indices.numel() == 0: indices = (0,)
+            effective_sample_rate = int((indices[-1] / rfft.shape[-1]).item() * sample_rate)
             effective_sample_rate = (effective_sample_rate + 50) // 100 * 100 # round to nearest 100hz
             audio_metadata["effective_sample_rate"] = effective_sample_rate
         else:
@@ -156,7 +178,10 @@ class NormalizeProcess(DatasetProcessStage):
             "audio_path": audio_path,
             "audio": normalized_audio,
             "audio_metadata": audio_metadata,
-            "sample_rate": sample_rate,
+            "old_sample_rate": old_sample_rate,
+            "new_sample_rate": sample_rate,
+            "old_length": old_length,
+            "new_length": audio.shape[-1],
             "old_lufs": old_lufs,
             "target_lufs": target_lufs,
         }
@@ -165,6 +190,9 @@ class NormalizeSave(DatasetProcessStage):
 
     def get_stage_type(self) -> Literal["io", "cpu", "cuda"]:
         return "cpu"
+    
+    def get_proc_weight(self) -> float:
+        return 0.5
     
     def summary_banner(self, logger: logging.Logger) -> None:
         verb = "Normalized"
@@ -176,22 +204,34 @@ class NormalizeSave(DatasetProcessStage):
     @torch.inference_mode()
     def process(self, input_dict: dict) -> Optional[Union[dict, list[dict]]]:
 
+        audio = input_dict["audio"]
         audio_path = input_dict["audio_path"]
+        old_sample_rate = input_dict["old_sample_rate"]
+        new_sample_rate = input_dict["new_sample_rate"]
+        old_length = input_dict["old_length"]
+        new_length = input_dict["new_length"]
         old_lufs = input_dict["old_lufs"]
-        target_lufs = input_dict["target_lufs"]
+        new_lufs = input_dict["target_lufs"]
         
-        with self.critical_lock:
-            self.logger.debug(f"\"{audio_path}\" lufs: {old_lufs} -> {target_lufs}")
-            
-            if self.processor_config.test_mode == False:
-                save_audio(
-                    raw_samples=input_dict["audio"],
-                    sample_rate=input_dict["sample_rate"],
-                    output_path=input_dict["audio_path"],
-                    target_lufs=None,
-                    metadata=input_dict["audio_metadata"],
-                    copy_on_write=self.processor_config.copy_on_write
-                )
+        info_str = ""
+        if old_lufs is not None:
+            info_str += f" {old_lufs}lufs -> {new_lufs}lufs"
+        if old_sample_rate != new_sample_rate:
+            info_str += f" {old_sample_rate}hz -> {new_sample_rate}hz"
+        if old_length != new_length:
+            info_str += f" {int(old_length/old_sample_rate)}s -> {int(new_length/new_sample_rate)}s"
+
+        self.logger.debug(f"\"{audio_path}\" ({info_str})")
+        
+        if self.processor_config.test_mode == False:
+            save_audio(
+                raw_samples=audio,
+                sample_rate=new_sample_rate,
+                output_path=audio_path,
+                target_lufs=None,
+                metadata=input_dict["audio_metadata"],
+                copy_on_write=True
+            )
 
         return {}
 

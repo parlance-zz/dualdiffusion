@@ -300,16 +300,15 @@ class EncodeSave(DatasetProcessStage):
         latents = input_dict["latents"]
         latents_metadata = input_dict["latents_metadata"]
 
-        with self.critical_lock:
-            self.logger.debug(f"saving \"{safetensors_file_path}\"")
-            
-            if self.processor_config.test_mode == False:
-                save_safetensors(
-                    tensors_dict=latents,
-                    output_path=safetensors_file_path,
-                    metadata=latents_metadata,
-                    copy_on_write=self.processor_config.copy_on_write
-                )
+        self.logger.debug(f"saving \"{safetensors_file_path}\"")
+        
+        if self.processor_config.test_mode == False:
+            save_safetensors(
+                tensors_dict=latents,
+                output_path=safetensors_file_path,
+                metadata=latents_metadata,
+                copy_on_write=True
+            )
 
         return {}
 

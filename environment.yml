@@ -24,4 +24,5 @@ dependencies:
     - mutagen
     - nicegui
     - laion-clap
+    - pyloudnorm
     - py7zr # required for dataset unzip util

@@ -98,7 +98,7 @@ class Build(DatasetProcessStage):
             "processor_config": self.processor_config.__dict__,
         }
         dataset_info_path = os.path.join(config.DATASET_PATH, "dataset_infos", "dataset_info.json")
-        config.save_json(dataset_info, dataset_info_path, copy_on_write=self.processor_config.copy_on_write)
+        config.save_json(dataset_info, dataset_info_path, copy_on_write=True)
 
         # write splits and summarize results
         summary_str = f"\nTotal samples: {len(dataset_samples)}\nSplits:"
@@ -106,7 +106,7 @@ class Build(DatasetProcessStage):
             summary_str += f"\n  {split}: {len(split_samples)} samples"
 
             split_path = os.path.join(config.DATASET_PATH, f"{split}.jsonl")
-            config.save_json(split_samples, split_path, copy_on_write=self.processor_config.copy_on_write)
+            config.save_json(split_samples, split_path, copy_on_write=True)
 
         logger.info(summary_str)
 

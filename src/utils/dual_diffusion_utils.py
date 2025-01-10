@@ -38,6 +38,7 @@ import safetensors.torch as safetensors
 import matplotlib.pyplot as plt
 import mutagen
 import mutagen.flac
+import soundfile
 
 from utils.roseus_colormap import ROSEUS_COLORMAP
 
@@ -253,7 +254,7 @@ def normalize_lufs(raw_samples: torch.Tensor,
 # get the number of clipped samples in a raw audio tensor
 # clipping is defined as at least 2 consecutive samples with an absolute value > 1.0
 @torch.inference_mode()
-def get_num_clipped_samples(raw_samples: torch.Tensor, eps: float = 5e-5) -> int:
+def get_num_clipped_samples(raw_samples: torch.Tensor, eps: float = 2e-2) -> int:
     clips = (raw_samples.abs() >= (1.0 - eps)).float()
     return int((clips[..., :-1] * clips[..., 1:]).sum().item())
     
@@ -301,8 +302,11 @@ def save_audio(raw_samples: torch.Tensor,
         tmp_path = f"{output_path}.tmp"
         file_ext = os.path.splitext(output_path)[1]
         try:
+            #sound_data = raw_samples.cpu().T.numpy()
+            #soundfile.write(tmp_path, sound_data)
             torchaudio.save(tmp_path, raw_samples.cpu(),
                 sample_rate, format=file_ext[1:], bits_per_sample=bits_per_sample, compression=compression)
+            
             if metadata is not None:
                 update_audio_metadata(tmp_path, metadata)
 
@@ -421,7 +425,7 @@ def load_audio(input_path: Union[str, bytes],
     elif not isinstance(input_path, str):
         raise ValueError(f"Unsupported input_path type: {type(input_path)}")
     
-    sample_len = torchaudio.info(input_path).num_frames
+    sample_len = soundfile.info(input_path).frames
     if sample_len < count:
         raise ValueError(f"Requested {count} samples, but only {sample_len} available")
     if start < 0:
@@ -432,12 +436,10 @@ def load_audio(input_path: Union[str, bytes],
         if sample_len < start + count:
             raise ValueError(f"Requested {start + count} samples, but only {sample_len} available")
 
-    tensor, sample_rate = torchaudio.load(input_path, frame_offset=start, num_frames=count)
+    sound, sample_rate = soundfile.read(input_path, frames=count, start=start, always_2d=True, dtype="float32")
+    assert sound.shape[0] == count or count == -1
 
-    if count >= 0:
-        tensor = tensor[..., :count] # for whatever reason torchaudio will return more samples than requested
-
-    return_vals = (tensor.to(device),)
+    return_vals = (torch.tensor(sound, device=device).T,)
     if return_sample_rate:
         return_vals += (sample_rate,)
     if return_start:
