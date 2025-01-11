@@ -505,6 +505,8 @@ class DatasetProcessor:
         logger.addHandler(log_handler)
         logger.info("")
 
+        if scan_paths is not None:
+            logger.info(f"Process scan path(s): {scan_paths}")
         #logger.info(f"Multiprocessing sharing strategy: {mp.get_sharing_strategy()}")
 
         # 3 second chance to abort if force overwrite is enabled
@@ -677,7 +679,7 @@ class DatasetProcessor:
             processed, total = stage.input_queue.get_processed_total()
             processed -= stage.skip_counter.value; total -= stage.skip_counter.value
             errors, warnings = stage_error_counts[i], stage_warning_counts[i]
-            logger.info(f"{stage_name}: {processed}/{total} processed ({stage.skip_counter} skipped)- {errors} errors, {warnings} warnings")
+            logger.info(f"{stage_name}: {processed}/{total} processed ({stage.skip_counter.value} skipped)- {errors} errors, {warnings} warnings")
 
         logger.info(f"Process '{process_name}' {process_result} - time elapsed: {process_finish_time - process_start_time}\n")
 

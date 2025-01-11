@@ -23,6 +23,7 @@
   "normalize_trim_silence": true,
   "normalize_trim_max_length": 480,
   "normalize_sample_rate": null,
+  "normalize_remove_dc_offset": true,
 
   "integrity_check_delete_corrupt_files": false,
 

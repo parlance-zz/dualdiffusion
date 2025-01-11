@@ -172,8 +172,8 @@ class NormalizeProcess(DatasetProcessStage):
 
             post_norm_peaks = get_num_clipped_samples(normalized_audio)
             if "pre_norm_peaks" not in audio_metadata: # keep result from first normalize
-                audio_metadata["pre_norm_peaks"] = f"{pre_norm_peaks / audio.shape[-1] * sample_rate}:.2f" # avg peaks per second
-            audio_metadata["post_norm_peaks"] = f"{post_norm_peaks / audio.shape[-1] * sample_rate}:.2f"
+                audio_metadata["pre_norm_peaks"] = f"{(pre_norm_peaks / audio.shape[-1] * sample_rate):.2f}" # avg peaks per second
+            audio_metadata["post_norm_peaks"] = f"{(post_norm_peaks / audio.shape[-1] * sample_rate):.2f}"
             audio_metadata["post_norm_lufs"] = target_lufs
 
             # add metadata for the "effective sample rate" (frequencies below which contain 99% of the signal energy)
