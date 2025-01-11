@@ -112,7 +112,10 @@ def _process_worker(stage: "DatasetProcessStage", rank: int,
                     stage.output_queue.put(output)
                 else:
                     raise ValueError(f"stage.process returned unrecognized type '{type(output)}'")
-                
+            else:
+                with stage.skip_counter_lock:
+                    stage.skip_counter.value += 1
+
         except Exception as e:
             logger.error("".join(format_exception(type(e), e, e.__traceback__)))
             try: del input_dict
@@ -256,7 +259,9 @@ class DatasetProcessStage(ABC):
         self.log_queue = log_queue
         self.warning_queue = mp_manager.Queue()
         self.error_queue = mp_manager.Queue()
-
+        self.skip_counter = mp_manager.Value("i", 0)
+        self.skip_counter_lock = mp_manager.Lock()
+        
         if self.limit_output_queue_size() == True:
             max_output_queue_size = max(num_proc * processor_config.buffer_memory_level, 1)    
         else:
@@ -389,6 +394,7 @@ class DatasetProcessorConfig:
     import_warn_file_size_mismatch: bool  = True       # write warnings to debug log if the existing destination file has a different size
     import_overwrite_if_larger: bool      = False      # if the file to be imported exists but is larger, import it and overwrite the existing file
     import_move_no_copy: bool             = True       # enable to move files instead of copying them
+    import_delete_short_samples: bool     = False      # instead of moving or copying, permanently delete the file if it is under the min_audio_length
     import_min_tree_depth: Optional[int]  = 1          # files with paths above min tree depth will use generated folder names
     import_max_tree_depth: Optional[int]  = 1          # folders below max tree depth in the source file path aren't included in destination path
 
@@ -669,8 +675,9 @@ class DatasetProcessor:
         for i, stage in enumerate(process_stages):
             stage_name = stage.__class__.__name__
             processed, total = stage.input_queue.get_processed_total()
+            processed -= stage.skip_counter.value; total -= stage.skip_counter.value
             errors, warnings = stage_error_counts[i], stage_warning_counts[i]
-            logger.info(f"{stage_name}: {processed}/{total} processed - {errors} errors, {warnings} warnings")
+            logger.info(f"{stage_name}: {processed}/{total} processed ({stage.skip_counter} skipped)- {errors} errors, {warnings} warnings")
 
         logger.info(f"Process '{process_name}' {process_result} - time elapsed: {process_finish_time - process_start_time}\n")
 

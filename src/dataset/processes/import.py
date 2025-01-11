@@ -39,8 +39,13 @@ class Import(DatasetProcessStage):
         root_dst_path = self.processor_config.import_dst_path or config.DATASET_PATH
         logger.info(f"Importing files from: {self.processor_config.import_paths}")
         logger.info(f"Importing files to: {root_dst_path}")
+        if self.processor_config.import_move_no_copy == True:
+            logger.info("WARNING: Moving imported files instead of copying: enabled")
         if self.processor_config.import_overwrite_if_larger == True:
             logger.info("WARNING: Overwrite destination files if source file is larger: enabled")
+        if self.processor_config.import_delete_short_samples == True:
+            if self.processor_config.min_audio_length is not None:
+                logger.info(f"WARNING: Deleting source files below minimum length ({self.processor_config.min_audio_length}s): enabled")
 
     def summary_banner(self, logger: logging.Logger) -> None:
         verb = "Moved" if self.processor_config.import_move_no_copy == True else "Copied"
@@ -70,11 +75,16 @@ class Import(DatasetProcessStage):
             src_rel_path = os.path.normpath(os.path.relpath(input_dict["file_path"], input_dict["scan_path"]))
             src_rel_dir: str = os.path.dirname(src_rel_path)
 
-            # if sample is too short skip it
-            audio_info = get_audio_info(input_dict["file_path"])
-            if (self.processor_config.min_audio_length is not None and
-                audio_info.duration < self.processor_config.min_audio_length): 
-                return None
+            # if sample is too short:
+            audio_info = get_audio_info(src_path)
+            min_length = self.processor_config.min_audio_length
+            if min_length is not None and audio_info.duration < min_length:
+                if self.processor_config.import_delete_short_samples != True:
+                    return None # skip it
+                else: # or delete it
+                    self.logger.debug(f"Deleting \"{src_path}\" source file length ({audio_info.duration}s) is below config min length ({min_length}s)")
+                    os.remove(src_path)
+                    return None
         
             # relative path normalization
             src_rel_dir_parts = [folder for folder in src_rel_dir.split(os.sep) if folder]

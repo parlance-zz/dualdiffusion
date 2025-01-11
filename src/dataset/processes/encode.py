@@ -67,7 +67,7 @@ class EncodeLoad(DatasetProcessStage):
         
         logger.info(f"Encode model: {self.processor_config.encode_model}  compile: {self.processor_config.encode_compile_models}")
         if self.processor_config.encode_embeddings_only == True:
-            logger.info(f"Skipping latents and encoding audio / text embeddings only")
+            logger.info(f"Skipping latents, encoding audio / text embeddings only")
 
         if self.processor_config.encode_embeddings_only == False:
             logger.info(f"Latents number of time offset augmentations: {self.processor_config.encode_latents_num_time_offset_augmentations}")
@@ -245,7 +245,7 @@ class EncodeProcess(DatasetProcessStage):
             latents_metadata["prompt"] = prompt
 
         # encode latents
-        if audio is not None and input_dict["has_latents"] == False:
+        if audio is not None and input_dict["has_latents"] == False and self.processor_config.encode_embeddings_only == False:
             
             # resample audio to model format sample_rate
             crop_width = self.format.sample_raw_crop_width(audio.shape[-1] - self.vae_encode_offset_padding)
