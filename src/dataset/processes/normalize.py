@@ -28,12 +28,12 @@ import os
 
 import torch
 import torchaudio
-import mutagen
 import pyloudnorm
 
 from dataset.dataset_processor import DatasetProcessor, DatasetProcessStage
 from utils.dual_diffusion_utils import (
-    get_audio_metadata, load_audio, save_audio, normalize_lufs, get_num_clipped_samples
+    load_audio, save_audio, get_num_clipped_samples,
+    get_audio_info, update_audio_metadata, get_audio_metadata
 )
 
 class NormalizeLoad(DatasetProcessStage):
@@ -51,6 +51,8 @@ class NormalizeLoad(DatasetProcessStage):
             logger.info(f"Target sample rate: {self.processor_config.normalize_sample_rate}hz")
         if self.processor_config.normalize_trim_max_length:
             logger.info(f"Trim max length: {self.processor_config.normalize_trim_max_length}s")
+        if self.processor_config.normalize_remove_dc_offset == True:
+            logger.info(f"Remove per-channel DC offset enabled")
         if self.processor_config.normalize_trim_silence == True:
             logger.info("Trim leading / trailing silence enabled")
             logger.info(f"Silence detection eps: {self.processor_config.normalize_silence_eps}")
@@ -77,8 +79,11 @@ class NormalizeLoad(DatasetProcessStage):
             if current_lufs is not None: current_lufs = float(current_lufs[0])
             if current_lufs != target_lufs: do_normalize = True
 
-            audio_info = mutagen.File(audio_path).info
-            current_length = audio_info.length
+            audio_info = get_audio_info(audio_path)
+            current_length = audio_info.duration
+            if (self.processor_config.min_audio_length is not None and
+                current_length < self.processor_config.min_audio_length):
+                return None # too short, skip
             if max_length is not None and current_length > max_length:
                 do_normalize = True
 
@@ -117,8 +122,6 @@ class NormalizeProcess(DatasetProcessStage):
     @torch.inference_mode()
     def process(self, input_dict: dict) -> Optional[Union[dict, list[dict]]]:
         
-        target_sample_rate = self.processor_config.normalize_sample_rate
-
         audio: torch.Tensor = input_dict["audio"]
         old_length = audio.shape[-1]
         audio_path = input_dict["audio_path"]
@@ -128,6 +131,7 @@ class NormalizeProcess(DatasetProcessStage):
         
         # first resample if needed
         old_sample_rate = sample_rate
+        target_sample_rate = self.processor_config.normalize_sample_rate
         if target_sample_rate is not None and sample_rate != target_sample_rate:
             audio = torchaudio.functional.resample(audio, sample_rate, target_sample_rate)
             sample_rate = target_sample_rate
@@ -137,6 +141,10 @@ class NormalizeProcess(DatasetProcessStage):
             max_samples = self.processor_config.normalize_trim_max_length * sample_rate
             if max_samples > 0 and audio.shape[-1] > max_samples:
                 audio = audio[..., :max_samples]
+        
+        # remove dc offset
+        if self.processor_config.normalize_remove_dc_offset == True:
+            audio -= audio.mean(dim=-1, keepdim=True)
 
         # then trim leading / trailing silence
         if self.processor_config.normalize_trim_silence == True:
@@ -146,21 +154,26 @@ class NormalizeProcess(DatasetProcessStage):
             if indices.numel() == 0: indices = (0,)
             audio = audio[:, indices[0]:indices[-1]]
 
+        # at this point if the sample has fallen below the minimum length, mark it as such then skip it
+        current_length = audio.shape[-1] / sample_rate
+        if current_length < self.processor_config.min_audio_length:
+            update_audio_metadata(audio_path, {"below_min_length": True}, copy_on_write=True)
+            return None
+
         # count peaks and normalize loudness
         if audio.shape[-1] >= 12800: # this is required for loudness calculation
             pre_norm_peaks = get_num_clipped_samples(audio / audio.abs().amax().clip(min=1e-8),
-                                                     eps=self.processor_config.normalize_clipping_eps)
+                                                eps=self.processor_config.normalize_clipping_eps)
             if sample_rate not in self.loudness_meters:
                 self.loudness_meters[sample_rate] = pyloudnorm.Meter(sample_rate)
             
-            old_lufs = self.loudness_meters[sample_rate].integrated_loudness(audio.T.numpy())
+            old_lufs = self.loudness_meters[sample_rate].integrated_loudness(audio.mean(dim=0, keepdim=True).T.numpy())
             normalized_audio = (audio * (10. ** ((target_lufs - old_lufs) / 20.0))).clip(min=-1, max=1)
-            #normalized_audio, old_lufs = normalize_lufs(raw_samples=audio, sample_rate=sample_rate,
-            #    target_lufs=target_lufs, return_old_lufs=True)
 
             post_norm_peaks = get_num_clipped_samples(normalized_audio)
-            audio_metadata["pre_norm_peaks"] = pre_norm_peaks
-            audio_metadata["post_norm_peaks"] = post_norm_peaks
+            if "pre_norm_peaks" not in audio_metadata: # keep result from first normalize
+                audio_metadata["pre_norm_peaks"] = f"{pre_norm_peaks / audio.shape[-1] * sample_rate}:.2f" # avg peaks per second
+            audio_metadata["post_norm_peaks"] = f"{post_norm_peaks / audio.shape[-1] * sample_rate}:.2f"
             audio_metadata["post_norm_lufs"] = target_lufs
 
             # add metadata for the "effective sample rate" (frequencies below which contain 99% of the signal energy)

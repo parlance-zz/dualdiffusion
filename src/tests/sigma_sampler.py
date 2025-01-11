@@ -22,14 +22,75 @@
 
 import utils.config as config
 
+from typing import Optional
 import os
 
+import matplotlib.pyplot as plt
 import numpy as np
 import torch
 
 from training.sigma_sampler import SigmaSampler, SigmaSamplerConfig
 from pipelines.dual_diffusion_pipeline import DualDiffusionPipeline
-from utils.dual_diffusion_utils import multi_plot, init_cuda
+from utils.dual_diffusion_utils import init_cuda
+
+
+def multi_plot(*args, layout: Optional[tuple[int, int]] = None,
+               figsize: Optional[tuple[int, int]] = None,
+               added_plots: Optional[dict] = None,
+               x_log_scale: bool = False,
+               y_log_scale: bool = False,
+               x_axis_range: Optional[tuple] = None,
+               y_axis_range: Optional[tuple] = None) -> None:
+
+    if config.NO_GUI: return
+    
+    layout = layout or (len(args), 1)
+    axes = np.atleast_2d(plt.subplots(layout[0],
+                                      layout[1],
+                                      figsize=figsize)[1])
+
+    for i, axis in enumerate(axes.flatten()):
+
+        if i < len(args):
+
+            y_values = args[i][0].detach().float().resolve_conj().cpu().numpy()
+            if x_axis_range is not None:
+                x_values = np.linspace(x_axis_range[0],
+                                       x_axis_range[1],
+                                       y_values.shape[-1])
+            else:
+                x_values = np.arange(y_values.shape[0])
+            axis.plot(x_values, y_values, label=args[i][1])
+            if y_axis_range is not None:
+                axis.set_ylim(ymin=y_axis_range[0], ymax=y_axis_range[1])
+
+            if added_plots is not None:
+                added_plot = added_plots.get(i, None)
+                if added_plot is not None:
+                    y_values = added_plot[0].detach().float().resolve_conj().cpu().numpy()
+                    if x_axis_range is not None:
+                        x_values = np.linspace(x_axis_range[0],
+                                               x_axis_range[1],
+                                               y_values.shape[-1])
+                    else:
+                        x_values = np.arange(y_values.shape[0])
+                    axis.plot(x_values, y_values, label=added_plot[1])
+            
+            axis.legend()
+            
+            if x_log_scale: axis.set_xscale("log")
+            if y_log_scale: axis.set_yscale("log")
+        else:
+            axis.axis("off")
+
+    figsize = plt.gcf().get_size_inches()
+    plt.subplots_adjust(left=0.6/figsize[0],
+                        bottom=0.25/figsize[1],
+                        right=1-0.1/figsize[0],
+                        top=1-0.1/figsize[1],
+                        wspace=1.8/figsize[0],
+                        hspace=1/figsize[1])
+    plt.show()
 
 @torch.inference_mode()
 def sigma_sampler_test():

@@ -37,7 +37,7 @@ from modules.embeddings.embedding import DualDiffusionEmbedding
 from modules.vaes.vae import DualDiffusionVAE
 from dataset.dataset_processor import DatasetProcessor, DatasetProcessStage
 from utils.dual_diffusion_utils import (
-    get_audio_metadata, load_audio,
+    get_audio_metadata, load_audio, get_audio_info,
     save_safetensors, load_safetensors_ex, normalize
 )
 
@@ -45,7 +45,7 @@ from utils.dual_diffusion_utils import (
 class EncodeLoad(DatasetProcessStage):
 
     def get_stage_type(self) -> Literal["io", "cpu", "cuda"]:
-        return "cpu"
+        return "io"
     
     def info_banner(self, logger: logging.Logger) -> None:
 
@@ -84,6 +84,12 @@ class EncodeLoad(DatasetProcessStage):
         file_ext = os.path.splitext(file_path)[1].lower()
 
         if file_ext == ".flac":
+            
+            # if sample is too short skip it
+            audio_info = get_audio_info(input_dict["file_path"])
+            if (self.processor_config.min_audio_length is not None and
+                audio_info.duration < self.processor_config.min_audio_length): 
+                return None
             
             # check if we've already encoded anything
             safetensors_file_path = f"{os.path.splitext(file_path)[0]}.safetensors"

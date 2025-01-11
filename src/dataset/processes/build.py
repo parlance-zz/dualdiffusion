@@ -31,7 +31,7 @@ import mutagen
 import safetensors.torch as safetensors
 
 from dataset.dataset_processor import DatasetProcessor, DatasetProcessStage
-from utils.dual_diffusion_utils import get_audio_metadata
+from utils.dual_diffusion_utils import get_audio_metadata, get_audio_info
 
 
 class Build(DatasetProcessStage):
@@ -157,10 +157,16 @@ class Build(DatasetProcessStage):
             sample_dict = self.get_dataset_sample(file_name)
 
             try:
-                audio_info = mutagen.File(file_path).info
-                sample_dict["sample_rate"] = int(audio_info.sample_rate)
-                sample_dict["num_channels"] = int(audio_info.channels)
-                sample_dict["sample_length"] = int(audio_info.length * audio_info.sample_rate)
+                # if sample is too short remove it from the dataset and skip it
+                audio_info = get_audio_info(file_path)
+                if (self.processor_config.min_audio_length is not None and
+                    audio_info.duration < self.processor_config.min_audio_length): 
+                    del self.dataset_samples[file_name]
+                    return None
+                
+                sample_dict["sample_rate"] = audio_info.sample_rate
+                sample_dict["num_channels"] = audio_info.channels
+                sample_dict["sample_length"] = audio_info.frames
             except Exception as e:
                 self.logger.error(f"Error reading audio info for \"{file_path}\": {e}")
 

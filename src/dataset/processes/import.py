@@ -31,6 +31,7 @@ import logging
 import torch
 
 from dataset.dataset_processor import DatasetProcessor, DatasetProcessStage
+from utils.dual_diffusion_utils import get_audio_info
 
 class Import(DatasetProcessStage):
 
@@ -69,6 +70,12 @@ class Import(DatasetProcessStage):
             src_rel_path = os.path.normpath(os.path.relpath(input_dict["file_path"], input_dict["scan_path"]))
             src_rel_dir: str = os.path.dirname(src_rel_path)
 
+            # if sample is too short skip it
+            audio_info = get_audio_info(input_dict["file_path"])
+            if (self.processor_config.min_audio_length is not None and
+                audio_info.duration < self.processor_config.min_audio_length): 
+                return None
+        
             # relative path normalization
             src_rel_dir_parts = [folder for folder in src_rel_dir.split(os.sep) if folder]
             if src_rel_dir_parts == ["."]: src_rel_dir_parts = []

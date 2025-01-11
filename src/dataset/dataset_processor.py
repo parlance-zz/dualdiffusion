@@ -31,7 +31,6 @@ from queue import Empty as QueueEmptyException
 from datetime import datetime
 from multiprocessing.synchronize import Event
 from multiprocessing.managers import SyncManager
-from copy import deepcopy
 import os
 import logging
 import time
@@ -373,6 +372,7 @@ class DatasetProcessStage(ABC):
 @dataclass
 class DatasetProcessorConfig:
 
+    min_audio_length: float         = 20         # skip importing or processing any samples shorter than this length (seconds)
     max_num_proc: Optional[int]     = None       # set max number of (total) processes for cpu stages. default is 1/2 cpu cores
     buffer_memory_level: int        = 2          # higher values increase max queue sizes and memory usage
     cuda_devices: list[str]         = ("cuda",)  # list of devices to use in cuda stages ("cuda:0", "cuda:1", etc)
@@ -397,6 +397,7 @@ class DatasetProcessorConfig:
     normalize_trim_silence: bool               = True  # removes any silence at the beginning or end of the audio file
     normalize_trim_max_length: Optional[float] = 480   # if set, truncates the length of the audio to this max length (in seconds)
     normalize_sample_rate: Optional[int]       = None  # if set, resamples audio to this sample rate during normalization (if needed)
+    normalize_remove_dc_offset: bool           = True  # zeros the mean / "zero frequency" of each audio channel if enabled
     normalize_clipping_eps: float              = 2e-2  # controls sensitivity for clipping detection
     normalize_silence_eps: float               = 6e-5  # controls sensitivity for leading / trailing silence trimming
     normalize_frequency_eps: float             = 3e-5  # controls sensitivity for max frequency detection

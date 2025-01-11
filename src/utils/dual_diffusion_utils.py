@@ -22,7 +22,7 @@
 
 from utils import config
 
-from io import BytesIO
+from dataclasses import dataclass
 from typing import Optional, Union, Any
 from json import dumps as json_dumps
 from datetime import datetime
@@ -35,12 +35,19 @@ import torch
 import torchaudio
 import cv2
 import safetensors.torch as safetensors
-import matplotlib.pyplot as plt
 import mutagen
 import mutagen.flac
-import soundfile
+import pyloudnorm
 
 from utils.roseus_colormap import ROSEUS_COLORMAP
+
+
+@dataclass
+class AudioInfo:
+    sample_rate: int
+    channels: int
+    frames: int
+    duration: float
 
 class TF32_Disabled: # disables reduced precision tensor cores inside the context
     def __enter__(self):
@@ -70,6 +77,25 @@ def init_cuda(default_device: Optional[torch.device] = None) -> None:
         
         if default_device is not None:
             torch.cuda.set_device(default_device)
+
+def get_available_torch_devices() -> list[str]:
+    available_devices = ["cpu"]
+    if torch.cuda.is_available():
+        for i in range(torch.cuda.device_count()):
+            available_devices.append(f"cuda{i}" if i > 0 else "cuda")
+
+    if torch.backends.mps.is_available():
+        available_devices.append("mps")
+
+    return available_devices
+
+def torch_dtype(dtype: Union[str, torch.dtype]) -> torch.dtype:
+    if isinstance(dtype, torch.dtype):
+        return dtype
+    elif isinstance(dtype, str):
+        return getattr(torch, dtype)
+    else:
+        raise ValueError(f"Unsupported dtype type: {dtype} ({type(dtype)})")
 
 def init_logging(name: Optional[str] = None, group_name: Optional[str] = None,
         format: Union[bool, str] = False, verbose: bool = False, log_to_file: bool = True) -> logging.Logger:
@@ -116,64 +142,6 @@ def init_logging(name: Optional[str] = None, group_name: Optional[str] = None,
 
     return logger
 
-def multi_plot(*args, layout: Optional[tuple[int, int]] = None,
-               figsize: Optional[tuple[int, int]] = None,
-               added_plots: Optional[dict] = None,
-               x_log_scale: bool = False,
-               y_log_scale: bool = False,
-               x_axis_range: Optional[tuple] = None,
-               y_axis_range: Optional[tuple] = None) -> None:
-
-    if config.NO_GUI: return
-    
-    layout = layout or (len(args), 1)
-    axes = np.atleast_2d(plt.subplots(layout[0],
-                                      layout[1],
-                                      figsize=figsize)[1])
-
-    for i, axis in enumerate(axes.flatten()):
-
-        if i < len(args):
-
-            y_values = args[i][0].detach().float().resolve_conj().cpu().numpy()
-            if x_axis_range is not None:
-                x_values = np.linspace(x_axis_range[0],
-                                       x_axis_range[1],
-                                       y_values.shape[-1])
-            else:
-                x_values = np.arange(y_values.shape[0])
-            axis.plot(x_values, y_values, label=args[i][1])
-            if y_axis_range is not None:
-                axis.set_ylim(ymin=y_axis_range[0], ymax=y_axis_range[1])
-
-            if added_plots is not None:
-                added_plot = added_plots.get(i, None)
-                if added_plot is not None:
-                    y_values = added_plot[0].detach().float().resolve_conj().cpu().numpy()
-                    if x_axis_range is not None:
-                        x_values = np.linspace(x_axis_range[0],
-                                               x_axis_range[1],
-                                               y_values.shape[-1])
-                    else:
-                        x_values = np.arange(y_values.shape[0])
-                    axis.plot(x_values, y_values, label=added_plot[1])
-            
-            axis.legend()
-            
-            if x_log_scale: axis.set_xscale("log")
-            if y_log_scale: axis.set_yscale("log")
-        else:
-            axis.axis("off")
-
-    figsize = plt.gcf().get_size_inches()
-    plt.subplots_adjust(left=0.6/figsize[0],
-                        bottom=0.25/figsize[1],
-                        right=1-0.1/figsize[0],
-                        top=1-0.1/figsize[1],
-                        wspace=1.8/figsize[0],
-                        hspace=1/figsize[1])
-    plt.show()
-
 def _is_json_serializable(value: Any) -> bool:
     if isinstance(value, (str, int, float, bool, type(None))):
         return True
@@ -192,73 +160,7 @@ def sanitize_filename(filename: str) -> str:
     return ("".join(c for c in filename
         if c.isalnum() or c in (" ",".","_","-","+","(",")","[","]","{","}"))).strip()
 
-def save_tensor_raw(tensor: torch.Tensor, output_path: str, copy_on_write: bool = False) -> None:
-
-    directory = os.path.dirname(output_path)
-    os.makedirs(directory, exist_ok=True)
-
-    if tensor.dtype in [torch.float16, torch.bfloat16]:
-        tensor = tensor.float()
-    elif tensor.dtype == torch.complex32:
-        tensor = tensor.to(torch.complex64)
-    
-    np_array = tensor.detach().resolve_conj().cpu().numpy()
-
-    if copy_on_write == True:
-        tmp_path = f"{output_path}.tmp"
-        try:
-            np_array.tofile(tmp_path)
-
-            shutil.move(tmp_path, output_path)
-            if os.path.isfile(tmp_path):
-                os.remove(tmp_path)
-
-        except Exception as e:
-            try:
-                if os.path.isfile(tmp_path):
-                    os.remove(tmp_path)
-            except: pass
-            raise e
-    else:
-        np_array.tofile(output_path)
-
-@torch.inference_mode()
-def normalize_lufs(raw_samples: torch.Tensor,
-                   sample_rate: int,
-                   target_lufs: float = -15.,
-                   return_old_lufs: bool = False) -> torch.Tensor:
-    
-    original_shape = raw_samples.shape
-    raw_samples = torch.nan_to_num(raw_samples, nan=0, posinf=0, neginf=0)
-    
-    if raw_samples.ndim == 1:
-        raw_samples = raw_samples.view(1, 1,-1)
-    elif raw_samples.ndim == 2:
-        raw_samples = raw_samples.view(1, raw_samples.shape[0], -1)
-    elif raw_samples.ndim != 3:
-        raise ValueError(f"Unsupported raw_samples shape: {raw_samples.shape}")
-    
-    raw_samples /= raw_samples.abs().amax(
-        dim=tuple(range(1, len(raw_samples.shape))), keepdim=True).clip(min=1e-16)
-    
-    current_lufs = torchaudio.functional.loudness(raw_samples, sample_rate)
-    gain = 10. ** ((target_lufs - current_lufs) / 20.0)
-    gain = gain.view((*gain.shape,) + (1,) * (raw_samples.ndim - gain.ndim))
-
-    normalized_raw_samples = (raw_samples * gain).view(original_shape)
-    if return_old_lufs:
-        return normalized_raw_samples, current_lufs.item()
-    else:
-        return normalized_raw_samples
-
-# get the number of clipped samples in a raw audio tensor
-# clipping is defined as at least 2 consecutive samples with an absolute value > 1.0
-@torch.inference_mode()
-def get_num_clipped_samples(raw_samples: torch.Tensor, eps: float = 2e-2) -> int:
-    clips = (raw_samples.abs() >= (1.0 - eps)).float()
-    return int((clips[..., :-1] * clips[..., 1:]).sum().item())
-    
-def get_no_clobber_filepath(filepath):
+def get_no_clobber_filepath(filepath: str) -> str:
 
     directory, filename = os.path.split(filepath)
     name, ext = os.path.splitext(filename)
@@ -273,40 +175,61 @@ def get_no_clobber_filepath(filepath):
     
     return unique_filepath
 
+@torch.inference_mode()
+def normalize_lufs(raw_samples: torch.Tensor,
+                   sample_rate: int,
+                   target_lufs: float = -15.,
+                   return_old_lufs: bool = False) -> torch.Tensor:
+    
+    if raw_samples.ndim != 2:
+        raise ValueError(f"Invalid shape for normalize_lufs: {raw_samples.shape}")
+    
+    meter = pyloudnorm.Meter(sample_rate)
+    old_lufs = meter.integrated_loudness(raw_samples.mean(dim=0, keepdim=True).T.cpu().numpy())
+    normalized_raw_samples = raw_samples * (10. ** ((target_lufs - old_lufs) / 20.0))
+
+    if return_old_lufs:
+        return normalized_raw_samples, old_lufs
+    else:
+        return normalized_raw_samples
+
+# get the number of clipped samples in a raw audio tensor
+# clipping is defined as at least 2 consecutive samples with an absolute value >= 1.0 - eps
+@torch.inference_mode()
+def get_num_clipped_samples(raw_samples: torch.Tensor, eps: float = 2e-2) -> int:
+    clips = (raw_samples.abs() >= (1.0 - eps)).float()
+    return int((clips[..., :-1] * clips[..., 1:]).sum().item())
+
 def save_audio(raw_samples: torch.Tensor,
                sample_rate: int,
                output_path: str,
                target_lufs: float = -15.,
                metadata: Optional[dict] = None,
                no_clobber: bool = False,
-               copy_on_write: bool = False,
-               compression: Optional[torchaudio.io.CodecConfig] = None) -> str:
+               copy_on_write: bool = False) -> None:
+
+    if raw_samples.ndim != 2:
+        raise ValueError(f"Invalid shape for save_audio: {raw_samples.shape}")
     
     raw_samples = raw_samples.detach().real.float()
-    if raw_samples.ndim == 1:
-        raw_samples = raw_samples.view(1, -1)
-
     if target_lufs is not None:
         raw_samples = normalize_lufs(raw_samples, sample_rate, target_lufs)
+    raw_samples = raw_samples.clip(min=-1, max=1)
 
     directory = os.path.dirname(output_path)
     os.makedirs(directory, exist_ok=True)
-    
     if no_clobber == True:
         output_path = get_no_clobber_filepath(output_path)
     
-    audio_format = os.path.splitext(output_path)[1].lower()
-    bits_per_sample = 16 if audio_format in [".wav", ".flac"] else None
-
+    audio_format = os.path.splitext(output_path)[1].lower()[1:]
+    bits_per_sample = 16 if audio_format in ["wav", "flac"] else None
+    
     if copy_on_write == True:
         tmp_path = f"{output_path}.tmp"
-        file_ext = os.path.splitext(output_path)[1]
         try:
-            #sound_data = raw_samples.cpu().T.numpy()
-            #soundfile.write(tmp_path, sound_data)
-            torchaudio.save(tmp_path, raw_samples.cpu(),
-                sample_rate, format=file_ext[1:], bits_per_sample=bits_per_sample, compression=compression)
-            
+            torchaudio.save(tmp_path, raw_samples.cpu(), sample_rate,
+                        format=audio_format, bits_per_sample=bits_per_sample)
+
             if metadata is not None:
                 update_audio_metadata(tmp_path, metadata)
 
@@ -321,12 +244,36 @@ def save_audio(raw_samples: torch.Tensor,
             except: pass
             raise e
     else:
-        torchaudio.save(output_path, raw_samples.cpu(),
-            sample_rate, bits_per_sample=bits_per_sample, compression=compression)
+        torchaudio.save(output_path, raw_samples.cpu(), sample_rate,
+                    format=audio_format, bits_per_sample=bits_per_sample)
+        
         if metadata is not None:
             update_audio_metadata(output_path, metadata)
 
-    return output_path
+def load_audio(input_path: str,
+               start: int = 0, count: int = -1,
+               return_sample_rate: bool = False,
+               device: Optional[torch.device] = None,
+               return_start: bool = False):
+
+    if start < 0:
+        if count < 0:
+            raise ValueError(f"If start < 0 count cannot be < 0")
+        sample_len = get_audio_info(input_path).frames
+        start = np.random.randint(0, sample_len - count + 1)
+
+    tensor, sample_rate = torchaudio.load(input_path, frame_offset=start, num_frames=count)
+    assert tensor.shape[-1] == count or count == -1
+
+    return_vals = (tensor.to(device=device),)
+    if return_sample_rate:
+        return_vals += (sample_rate,)
+    if return_start:
+        return_vals += (start,)
+    if len(return_vals) == 1:
+        return return_vals[0]
+    else:
+        return return_vals
 
 def update_audio_metadata(audio_path: str, metadata: Optional[dict] = None,
         rating: Optional[int] = None, clear_clap_fields: bool = False, copy_on_write: bool = False) -> None:
@@ -357,7 +304,7 @@ def update_audio_metadata(audio_path: str, metadata: Optional[dict] = None,
 
         for key in metadata:
             if audio_format != ".mp3":
-                audio_file[key] = metadata[key] if type(metadata[key]) not in [int, float] else str(metadata[key])
+                audio_file[key] = metadata[key] if type(metadata[key]) not in [bool, int, float] else str(metadata[key])
             else: audio_file[f"TXXX:{key}"] = mutagen.id3.TXXX(encoding=3, desc=key, text=metadata[key])
         
         # this works for windows explorer/media player but not VLC
@@ -395,65 +342,18 @@ def get_audio_metadata(audio_path: str) -> dict[str, list[str]]:
     
     return {key: audio_file[key] for key in audio_file.keys()}
 
-def torch_dtype(dtype: Union[str, torch.dtype]) -> torch.dtype:
-    if isinstance(dtype, torch.dtype):
-        return dtype
-    elif isinstance(dtype, str):
-        return getattr(torch, dtype)
-    else:
-        raise ValueError(f"Unsupported dtype type: {dtype} ({type(dtype)})")
-
-def get_available_torch_devices() -> list[str]:
-    available_devices = ["cpu"]
-    if torch.cuda.is_available():
-        for i in range(torch.cuda.device_count()):
-            available_devices.append(f"cuda{i}" if i > 0 else "cuda")
-
-    if torch.backends.mps.is_available():
-        available_devices.append("mps")
-
-    return available_devices
-        
-def load_audio(input_path: Union[str, bytes],
-               start: int = 0, count: int = -1,
-               return_sample_rate: bool = False,
-               device: Optional[torch.device] = None,
-               return_start:bool = False):
-
-    if isinstance(input_path, bytes):
-        input_path = BytesIO(input_path)
-    elif not isinstance(input_path, str):
-        raise ValueError(f"Unsupported input_path type: {type(input_path)}")
-    
-    sample_len = soundfile.info(input_path).frames
-    if sample_len < count:
-        raise ValueError(f"Requested {count} samples, but only {sample_len} available")
-    if start < 0:
-        if count < 0:
-            raise ValueError(f"If start < 0 count cannot be < 0")
-        start = np.random.randint(0, sample_len - count + 1)
-    elif start > 0 and count > 0:
-        if sample_len < start + count:
-            raise ValueError(f"Requested {start + count} samples, but only {sample_len} available")
-
-    sound, sample_rate = soundfile.read(input_path, frames=count, start=start, always_2d=True, dtype="float32")
-    assert sound.shape[0] == count or count == -1
-
-    return_vals = (torch.tensor(sound, device=device).T,)
-    if return_sample_rate:
-        return_vals += (sample_rate,)
-    if return_start:
-        return_vals += (start,)
-    if len(return_vals) == 1:
-        return return_vals[0]
-    else:
-        return return_vals
+def get_audio_info(input_path: str) -> AudioInfo:
+    audio_info: torchaudio.AudioMetaData = torchaudio.info(input_path)
+    return AudioInfo(
+        sample_rate=int(audio_info.sample_rate),
+        channels=int(audio_info.num_channels),
+        frames=int(audio_info.num_frames),
+        duration=float(audio_info.num_frames / audio_info.sample_rate),
+    )
 
 def save_safetensors(tensors_dict: dict[str, torch.Tensor], output_path: str,
-                     metadata: Optional[dict[str, str]] = None, copy_on_write: bool = False) -> None:
-    directory = os.path.dirname(output_path)
-    os.makedirs(directory, exist_ok=True)
-
+        metadata: Optional[dict[str, str]] = None, copy_on_write: bool = False) -> None:
+    
     for key in tensors_dict:
         val = tensors_dict[key]
         if torch.is_tensor(val):
@@ -461,6 +361,9 @@ def save_safetensors(tensors_dict: dict[str, torch.Tensor], output_path: str,
         else:
             val = torch.tensor(val)
         tensors_dict[key] = val
+
+    directory = os.path.dirname(output_path)
+    os.makedirs(directory, exist_ok=True)
 
     if copy_on_write == True:
         tmp_path = f"{output_path}.tmp"
@@ -480,10 +383,11 @@ def save_safetensors(tensors_dict: dict[str, torch.Tensor], output_path: str,
     else:
         safetensors.save_file(tensors_dict, output_path, metadata=metadata)
 
+# caution: does not actually load data from disk until tensors are copied (file handle remains open until disposed)
 def load_safetensors(input_path: str, device: Optional[torch.device] = None) -> dict[str, torch.Tensor]:
     return safetensors.load_file(input_path, device=device)
 
-def load_safetensors_ex(input_path: str, # returns metadata
+def load_safetensors_ex(input_path: str, # loads all data from disk, returns metadata
         device: Optional[torch.device] = None) -> tuple[dict[str, torch.Tensor], dict[str, str]]:  
     
     with open(input_path,'rb') as f:
@@ -515,6 +419,36 @@ def update_safetensors_metadata(safetensors_path: str, new_metadata: dict[str, s
 
     save_safetensors(tensors_dict, safetensors_path, metadata, copy_on_write=copy_on_write)
 
+def save_tensor_raw(tensor: torch.Tensor, output_path: str, copy_on_write: bool = False) -> None:
+
+    directory = os.path.dirname(output_path)
+    os.makedirs(directory, exist_ok=True)
+
+    if tensor.dtype in [torch.float16, torch.bfloat16]:
+        tensor = tensor.float()
+    elif tensor.dtype == torch.complex32:
+        tensor = tensor.to(torch.complex64)
+    
+    np_array = tensor.detach().resolve_conj().cpu().numpy()
+
+    if copy_on_write == True:
+        tmp_path = f"{output_path}.tmp"
+        try:
+            np_array.tofile(tmp_path)
+
+            shutil.move(tmp_path, output_path)
+            if os.path.isfile(tmp_path):
+                os.remove(tmp_path)
+
+        except Exception as e:
+            try:
+                if os.path.isfile(tmp_path):
+                    os.remove(tmp_path)
+            except: pass
+            raise e
+    else:
+        np_array.tofile(output_path)
+
 # calculate the size in bytes of all tensors in any number of nested dicts
 def get_tensor_dict_size(instance: Union[dict, torch.Tensor]):
     if torch.is_tensor(instance):
@@ -541,55 +475,6 @@ def move_tensors_to_cpu(instance: Union[dict, torch.Tensor, Any]) -> Any:
     return instance
 
 @torch.inference_mode()
-def get_fractal_noise2d(shape: tuple, degree: int = 1, **kwargs) -> torch.Tensor:
-    
-    noise_shape = shape[:-2] + (shape[-2]*2, shape[-1]*2)
-    noise_complex = torch.randn(noise_shape, **kwargs)
-    
-    linspace_x = torch.arange(0, noise_complex.shape[-2], device=noise_complex.device)
-    linspace_y = torch.arange(0, noise_complex.shape[-1], device=noise_complex.device)
-    linspace_x = (linspace_x - noise_complex.shape[-2]//2).square() / noise_complex.shape[-2]**2
-    linspace_y = (linspace_y - noise_complex.shape[-1]//2).square() / noise_complex.shape[-1]**2
-
-    linspace = (linspace_x.view(-1, 1) + linspace_y.view(1, -1)).pow(-degree/2)
-    linspace[noise_complex.shape[-2]//2, noise_complex.shape[-1]//2] = 0
-    linspace = linspace.view((1,)*(len(shape)-2) + (noise_complex.shape[-2], noise_complex.shape[-1]))
-    linspace = torch.roll(linspace, shifts=(linspace.shape[-2]//2, linspace.shape[-1]//2), dims=(-2, -1))
-
-    pink_noise = torch.fft.ifft2(noise_complex * linspace, norm="ortho").real[..., :shape[-2], :shape[-1]]
-    return (pink_noise / pink_noise.std(dim=(-2, -1), keepdim=True)).detach()
-
-def to_ulaw(x: torch.Tensor, u: float = 255.) -> torch.Tensor:
-
-    complex = False
-    if torch.is_complex(x):
-        complex = True
-        x = torch.view_as_real(x)
-
-    x = x / x.abs().amax(dim=tuple(range(x.ndim-2-int(complex), x.ndim)), keepdim=True)
-    x = torch.sign(x) * torch.log1p(u * x.abs()) / np.log(1 + u)
-
-    if complex:
-        x = torch.view_as_complex(x)
-    
-    return x
-
-def from_ulaw(x: torch.Tensor, u: float = 255.) -> torch.Tensor:
-
-    complex = False
-    if torch.is_complex(x):
-        complex = True
-        x = torch.view_as_real(x)
-
-    x = x / x.abs().amax(dim=tuple(range(x.ndim-2-int(complex), x.ndim)), keepdim=True)
-    x = torch.sign(x) * ((1 + u) ** x.abs() - 1) / u
-
-    if complex:
-        x = torch.view_as_complex(x)
-
-    return x
-
-@torch.no_grad()
 def quantize_tensor(x: torch.Tensor, levels: int) -> torch.Tensor:
     reduction_dims = tuple(range(1, x.ndim)) if x.ndim > 1 else (0,)
 
@@ -601,7 +486,7 @@ def quantize_tensor(x: torch.Tensor, levels: int) -> torch.Tensor:
     offset_and_range = torch.stack((min_val.flatten(), scale.flatten()), dim=-1)
     return quantized, offset_and_range
 
-@torch.no_grad()
+@torch.inference_mode()
 def dequantize_tensor(x: torch.Tensor, offset_and_range: torch.Tensor) -> torch.Tensor:
     view_dims = (-1,) + ((1,) * (x.ndim-1) if x.ndim > 1 else ())
     min_val, scale = offset_and_range.unbind(-1)
@@ -664,7 +549,56 @@ def show_img(np_img: np.ndarray, name: str, wait: int = 1) -> None:
 def close_img_window(name: str) -> None:
     if config.NO_GUI: return
     cv2.destroyWindow(name)
+
+@torch.inference_mode()
+def get_fractal_noise2d(shape: tuple, degree: int = 1, **kwargs) -> torch.Tensor:
     
+    noise_shape = shape[:-2] + (shape[-2]*2, shape[-1]*2)
+    noise_complex = torch.randn(noise_shape, **kwargs)
+    
+    linspace_x = torch.arange(0, noise_complex.shape[-2], device=noise_complex.device)
+    linspace_y = torch.arange(0, noise_complex.shape[-1], device=noise_complex.device)
+    linspace_x = (linspace_x - noise_complex.shape[-2]//2).square() / noise_complex.shape[-2]**2
+    linspace_y = (linspace_y - noise_complex.shape[-1]//2).square() / noise_complex.shape[-1]**2
+
+    linspace = (linspace_x.view(-1, 1) + linspace_y.view(1, -1)).pow(-degree/2)
+    linspace[noise_complex.shape[-2]//2, noise_complex.shape[-1]//2] = 0
+    linspace = linspace.view((1,)*(len(shape)-2) + (noise_complex.shape[-2], noise_complex.shape[-1]))
+    linspace = torch.roll(linspace, shifts=(linspace.shape[-2]//2, linspace.shape[-1]//2), dims=(-2, -1))
+
+    pink_noise = torch.fft.ifft2(noise_complex * linspace, norm="ortho").real[..., :shape[-2], :shape[-1]]
+    return (pink_noise / pink_noise.std(dim=(-2, -1), keepdim=True)).detach()
+
+def to_ulaw(x: torch.Tensor, u: float = 255.) -> torch.Tensor:
+
+    complex = False
+    if torch.is_complex(x):
+        complex = True
+        x = torch.view_as_real(x)
+
+    x = x / x.abs().amax(dim=tuple(range(x.ndim-2-int(complex), x.ndim)), keepdim=True)
+    x = torch.sign(x) * torch.log1p(u * x.abs()) / np.log(1 + u)
+
+    if complex:
+        x = torch.view_as_complex(x)
+    
+    return x
+
+def from_ulaw(x: torch.Tensor, u: float = 255.) -> torch.Tensor:
+
+    complex = False
+    if torch.is_complex(x):
+        complex = True
+        x = torch.view_as_real(x)
+
+    x = x / x.abs().amax(dim=tuple(range(x.ndim-2-int(complex), x.ndim)), keepdim=True)
+    x = torch.sign(x) * ((1 + u) ** x.abs() - 1) / u
+
+    if complex:
+        x = torch.view_as_complex(x)
+
+    return x
+
 def slerp(start: torch.Tensor,
           end: torch.Tensor,
           t: Union[float, torch.Tensor],

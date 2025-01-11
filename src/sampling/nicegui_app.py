@@ -55,11 +55,6 @@ class NiceGUIAppConfig:
     save_output_latents: bool = True
     hide_latents_after_generation: bool = True
     use_verbose_labels: bool = False
-
-    output_audio_format: str = ".flac"
-    output_audio_bitrate: Optional[int] = None
-    output_audio_compression_level: Optional[int]  = None
-    output_audio_qscale: Optional[int] = 9
     
     web_server_host: Optional[str] = None
     web_server_port: int = 3001
