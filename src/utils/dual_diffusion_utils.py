@@ -233,7 +233,7 @@ def save_audio(raw_samples: torch.Tensor,
             if metadata is not None:
                 update_audio_metadata(tmp_path, metadata)
 
-            shutil.move(tmp_path, output_path)
+            os.rename(tmp_path, output_path)
             if os.path.isfile(tmp_path):
                 os.remove(tmp_path)
 
@@ -319,7 +319,7 @@ def update_audio_metadata(audio_path: str, metadata: Optional[dict] = None,
             try:
                 shutil.copy2(audio_path, tmp_path)
                 audio_file.save(tmp_path)
-                shutil.move(tmp_path, audio_path)
+                os.rename(tmp_path, audio_path)
                 
                 if os.path.isfile(tmp_path):
                     os.remove(tmp_path)
@@ -370,7 +370,7 @@ def save_safetensors(tensors_dict: dict[str, torch.Tensor], output_path: str,
         try:
             safetensors.save_file(tensors_dict, tmp_path, metadata=metadata)
 
-            shutil.move(tmp_path, output_path)
+            os.rename(tmp_path, output_path)
             if os.path.isfile(tmp_path):
                 os.remove(tmp_path)
 
@@ -436,7 +436,7 @@ def save_tensor_raw(tensor: torch.Tensor, output_path: str, copy_on_write: bool 
         try:
             np_array.tofile(tmp_path)
 
-            shutil.move(tmp_path, output_path)
+            os.rename(tmp_path, output_path)
             if os.path.isfile(tmp_path):
                 os.remove(tmp_path)
 

@@ -194,7 +194,7 @@ class WorkQueue: # normal Queue class behavior extended with progress tracking
     def put(self, obj, *args, **kwargs) -> None:
         if self.maxsize > 0 and obj is not None:
             while self.queue.qsize() >= self.maxsize:
-                time.sleep(0.1)
+                time.sleep(0.01)
         self.queue.put(obj, *args, **kwargs)
 
         if obj is not None:
@@ -379,7 +379,7 @@ class DatasetProcessorConfig:
 
     min_audio_length: float         = 20         # skip importing or processing any samples shorter than this length (seconds)
     max_num_proc: Optional[int]     = None       # set max number of (total) processes for cpu stages. default is 1/2 cpu cores
-    buffer_memory_level: int        = 2          # higher values increase max queue sizes and memory usage
+    buffer_memory_level: int        = 5          # higher values increase max queue sizes and memory usage
     cuda_devices: list[str]         = ("cuda",)  # list of devices to use in cuda stages ("cuda:0", "cuda:1", etc)
     force_overwrite: bool           = False      # disables skipping files that have been previously processed
     test_mode: bool                 = False      # disables moving, copying, or writing any changes to files
@@ -407,6 +407,7 @@ class DatasetProcessorConfig:
     normalize_clipping_eps: float              = 2e-2  # controls sensitivity for clipping detection
     normalize_silence_eps: float               = 6e-5  # controls sensitivity for leading / trailing silence trimming
     normalize_frequency_eps: float             = 3e-5  # controls sensitivity for max frequency detection
+    normalize_max_peaks_per_second: float      = 10    # if normalizing to target lufs would cause clipping, back off until this level of clipping is reached
 
     # integrity check process
     integrity_check_delete_corrupt_files: bool = False # delete any flac or safetensors files that fail integrity check

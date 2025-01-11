@@ -49,7 +49,7 @@ def save_json(data: Union[dict, list], json_path: str,
             with open(tmp_path, "w") as f:
                 write_fn(f, data)
 
-            shutil.move(tmp_path, json_path)
+            os.rename(tmp_path, json_path)
             if os.path.isfile(tmp_path):
                 os.remove(tmp_path)
 

@@ -1,7 +1,7 @@
 {
-  "min_audio_length": 20,
+  "min_audio_length": 45,
   "max_num_proc": 12,
-  "buffer_memory_level": 3,
+  "buffer_memory_level": 8,
   "cuda_devices": "cuda",
   "force_overwrite": false,
   "test_mode": false,
@@ -11,7 +11,7 @@
   "import_paths": ["/mnt/vault/dataset_import/smd/to_transcode"],
   "import_filter_regex": "^t_[^_]*_(.*\\.flac)$",
   "import_filter_group": 1,
-  "import_dst_path": "/mnt/vault/dataset/smd",
+  "import_dst_path": "/mnt/dataset/dataset/smd",
   "import_warn_file_size_mismatch": true,
   "import_overwrite_if_larger": false,
   "import_move_no_copy": true,

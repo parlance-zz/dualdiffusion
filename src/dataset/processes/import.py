@@ -127,13 +127,14 @@ class Import(DatasetProcessStage):
 
                     # copy_on_write not needed for move as it is already atomic
                     if self.processor_config.import_move_no_copy == True:
-                        shutil.move(src_path, dst_path)
+                        try: os.rename(src_path, dst_path)
+                        except: shutil.move(src_path, dst_path)
                     else:
                         # alternatively, copying uses a temporary file to guarantee integrity
                         tmp_path = f"{dst_path}.tmp"
                         try:
                             shutil.copy2(src_path, tmp_path)
-                            shutil.move(tmp_path, dst_path)
+                            os.rename(tmp_path, dst_path)
                             if os.path.isfile(tmp_path):
                                 os.remove(tmp_path)
 

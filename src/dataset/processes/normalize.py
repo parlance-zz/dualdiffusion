@@ -46,7 +46,8 @@ class NormalizeLoad(DatasetProcessStage):
     
     def info_banner(self, logger: logging.Logger) -> None:
         logger.info(f"Normalizing to target_lufs: {self.processor_config.normalize_target_lufs}")
-        
+        logger.info(f"Max peaks per second after normalizing gain: {self.processor_config.normalize_max_peaks_per_second}")
+
         if self.processor_config.normalize_sample_rate is not None:
             logger.info(f"Target sample rate: {self.processor_config.normalize_sample_rate}hz")
         if self.processor_config.normalize_trim_max_length:
@@ -75,6 +76,13 @@ class NormalizeLoad(DatasetProcessStage):
 
             audio_path = input_dict["file_path"]
             audio_metadata = get_audio_metadata(audio_path)
+
+            # check if normalization _would_ put this sample below minimum length
+            if "below_min_length" in audio_metadata: # if so, skip it
+                post_norm_length = float(audio_metadata["below_min_length"][0]) 
+                if self.processor_config.min_audio_length is not None and post_norm_length < self.processor_config.min_audio_length:
+                    return None
+            
             current_lufs = audio_metadata.get("post_norm_lufs", None)
             if current_lufs is not None: current_lufs = float(current_lufs[0])
             if current_lufs != target_lufs: do_normalize = True
@@ -141,14 +149,27 @@ class NormalizeProcess(DatasetProcessStage):
             max_samples = self.processor_config.normalize_trim_max_length * sample_rate
             if max_samples > 0 and audio.shape[-1] > max_samples:
                 audio = audio[..., :max_samples]
-        
-        # remove dc offset
-        if self.processor_config.normalize_remove_dc_offset == True:
-            audio -= audio.mean(dim=-1, keepdim=True)
 
-        # then trim leading / trailing silence
+        # trim leading / trailing silence before dc offset removal
         if self.processor_config.normalize_trim_silence == True:
-            assert audio.ndim == 2
+            mask = audio.abs().mean(dim=0) > self.processor_config.normalize_silence_eps
+            indices = torch.nonzero(mask)
+            if indices.numel() == 0: indices = (0,)
+            audio = audio[:, indices[0]:indices[-1]]
+
+        # remove dc offset
+        dc_offset = audio.mean().item()
+        if "dc_offset" not in audio_metadata: # keep result from first normalize
+            audio_metadata["dc_offset"] = f"{dc_offset:.2f}"
+
+        if self.processor_config.normalize_remove_dc_offset == True:
+            # ensure we aren't going to make clipping even worse when removing dc offset
+            if dc_offset > 0: dc_offset = min(dc_offset, audio.amin().item() + 1)
+            if dc_offset < 0: dc_offset = max(dc_offset, audio.amax().item() - 1)
+            audio -= dc_offset
+
+        # then trim leading / trailing silence again _after_ dc offset removal
+        if self.processor_config.normalize_trim_silence == True:
             mask = audio.abs().mean(dim=0) > self.processor_config.normalize_silence_eps
             indices = torch.nonzero(mask)
             if indices.numel() == 0: indices = (0,)
@@ -156,9 +177,12 @@ class NormalizeProcess(DatasetProcessStage):
 
         # at this point if the sample has fallen below the minimum length, mark it as such then skip it
         current_length = audio.shape[-1] / sample_rate
-        if current_length < self.processor_config.min_audio_length:
-            update_audio_metadata(audio_path, {"below_min_length": True}, copy_on_write=True)
+        if self.processor_config.min_audio_length is not None and current_length < self.processor_config.min_audio_length:
+            update_audio_metadata(audio_path, {"below_min_length": current_length}, copy_on_write=True)
             return None
+        else:
+            if "below_min_length" in audio_metadata:   # if our min length has changed and this sample is now valid
+                del audio_metadata["below_min_length"] # remove the below min length metadata
 
         # count peaks and normalize loudness
         if audio.shape[-1] >= 12800: # this is required for loudness calculation
@@ -167,10 +191,15 @@ class NormalizeProcess(DatasetProcessStage):
             if sample_rate not in self.loudness_meters:
                 self.loudness_meters[sample_rate] = pyloudnorm.Meter(sample_rate)
             
-            old_lufs = self.loudness_meters[sample_rate].integrated_loudness(audio.mean(dim=0, keepdim=True).T.numpy())
+            old_lufs = self.loudness_meters[sample_rate].integrated_loudness(audio.T.numpy())
             normalized_audio = (audio * (10. ** ((target_lufs - old_lufs) / 20.0))).clip(min=-1, max=1)
 
-            post_norm_peaks = get_num_clipped_samples(normalized_audio)
+            while True: # limit peaking to acceptable levels, but unfortunately this means we can't reach our target gain
+                post_norm_peaks = get_num_clipped_samples(normalized_audio)
+                if post_norm_peaks <= self.processor_config.normalize_max_peaks_per_second: break
+                target_lufs -= 0.5
+                normalized_audio = (audio * (10. ** ((target_lufs - old_lufs) / 20.0))).clip(min=-1, max=1)
+
             if "pre_norm_peaks" not in audio_metadata: # keep result from first normalize
                 audio_metadata["pre_norm_peaks"] = f"{(pre_norm_peaks / audio.shape[-1] * sample_rate):.2f}" # avg peaks per second
             audio_metadata["post_norm_peaks"] = f"{(post_norm_peaks / audio.shape[-1] * sample_rate):.2f}"
