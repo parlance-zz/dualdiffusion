@@ -42,8 +42,8 @@ class CLAP_Config(DualDiffusionEmbeddingConfig):
     sample_raw_channels:   int = 1
     text_embedding_weight: float = 0.5
     embedding_type: Literal["text", "audio", "sum", "cat", "none"] = "sum"
-    max_audio_batch:       int = 32
-    max_text_batch:        int = 32
+    max_audio_batch:       int = -1
+    max_text_batch:        int = -1
 
     enable_fusion: bool = False
     audio_encoder: str = "HTSAT-base"
@@ -122,8 +122,11 @@ class CLAP_Embedding(DualDiffusionEmbedding):
             raise ValueError(f"Cannot encode audio embedding, audio too short (len: {audio.shape[-1]})")
         audio = audio[:audio.shape[0] // chunk_size * chunk_size].reshape(-1, chunk_size)
         
-        audio_embeddings = torch.cat([self.clap_model.get_audio_embedding_from_data(chunk, use_tensor=True)
-            for chunk in audio.split(self.config.max_audio_batch)], dim=0)
+        if self.config.max_audio_batch < 0:
+            audio_embeddings = self.clap_model.get_audio_embedding_from_data(audio, use_tensor=True)
+        else:
+            audio_embeddings = torch.cat([self.clap_model.get_audio_embedding_from_data(chunk, use_tensor=True)
+                for chunk in audio.split(self.config.max_audio_batch)], dim=0)
         return normalize(audio_embeddings).float()
 
     def encode_text(self, text: list[str]) -> torch.Tensor:
@@ -137,7 +140,8 @@ class CLAP_Embedding(DualDiffusionEmbedding):
         return normalize(text_embeddings).float()
     
     def encode_labels(self, labels: Union[int, torch.Tensor, list[int], dict[str, float]]) -> torch.Tensor:
-        
+        raise NotImplementedError()
+        """
         if self.dataset_embeddings is None:
             self.load_dataset_embeddings()
 
@@ -161,3 +165,4 @@ class CLAP_Embedding(DualDiffusionEmbedding):
                                                 self.dataset_embeddings[f"{game_name}_text"].to(device=unet.device) * weight))
             sample_embeddings = normalize(sample_embeddings).float()
             unet_class_embeddings = unet.get_clap_embeddings(sample_embeddings, unconditional_embedding, conditioning_mask)
+        """

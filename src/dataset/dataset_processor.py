@@ -142,7 +142,7 @@ def _monitor_worker(input_queues: list["WorkQueue"], stage_names: list[str], fin
 
     progress_bars = []
     for name in stage_names:
-        progress_bar = tqdm(total=1, smoothing=0.99)
+        progress_bar = tqdm(total=1, smoothing=0.1)
         progress_bar.set_description(name, refresh=False)
         progress_bars.append(progress_bar)
 
@@ -401,11 +401,11 @@ class DatasetProcessorConfig:
     # normalize process
     normalize_target_lufs: float               = -20.  # desired loudness level for dataset audio in the normalization process
     normalize_trim_silence: bool               = True  # removes any silence at the beginning or end of the audio file
-    normalize_trim_max_length: Optional[float] = 480   # if set, truncates the length of the audio to this max length (in seconds)
+    normalize_trim_max_length: Optional[float] = 180   # if set, truncates the length of the audio to this max length (in seconds)
     normalize_sample_rate: Optional[int]       = None  # if set, resamples audio to this sample rate during normalization (if needed)
     normalize_remove_dc_offset: bool           = True  # zeros the mean / "zero frequency" of each audio channel if enabled
     normalize_clipping_eps: float              = 2e-2  # controls sensitivity for clipping detection
-    normalize_silence_eps: float               = 6e-5  # controls sensitivity for leading / trailing silence trimming
+    normalize_silence_eps: float               = 8e-5  # controls sensitivity for leading / trailing silence trimming
     normalize_frequency_eps: float             = 3e-5  # controls sensitivity for max frequency detection
     normalize_max_peaks_per_second: float      = 10    # if normalizing to target lufs would cause clipping, back off until this level of clipping is reached
 
