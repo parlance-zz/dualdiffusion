@@ -104,9 +104,7 @@ class OptimizerConfig:
 
 @dataclass
 class DataLoaderConfig:
-    use_pre_encoded_latents: bool = True
-    use_pre_encoded_audio_embeddings: bool = False
-    use_pre_encoded_text_embeddings: bool = False
+    load_datatypes: list[Literal["audio", "latents", "audio_embeddings", "text_embeddings"]] = ("audio", "audio_embeddings")
     filter_invalid_samples: bool = True
     dataset_num_proc: Optional[int] = None
     dataloader_num_workers: Optional[int] = 4
@@ -468,19 +466,15 @@ class DualDiffusionTrainer:
         self.total_batch_size = self.local_batch_size * self.accelerator.num_processes
         self.validation_local_batch_size = self.config.validation_device_batch_size * self.config.validation_accumulation_steps
         self.validation_total_batch_size = self.validation_local_batch_size * self.accelerator.num_processes
-        
-        if ((self.config.dataloader.use_pre_encoded_audio_embeddings == True or self.config.dataloader.use_pre_encoded_audio_embeddings == True)
-                and self.config.dataloader.use_pre_encoded_latents == False):
-            raise ValueError("Cannot use pre-encoded audio or text embeddings without pre-encoded latents")
 
         dataset_config = DatasetConfig(
             data_dir=config.DATASET_PATH, cache_dir=config.CACHE_PATH,
-            sample_raw_crop_width=self.pipeline.format.sample_raw_crop_width(),
             latents_crop_width=self.latent_shape[-1] if self.latent_shape is not None else 0,
             num_proc=self.config.dataloader.dataset_num_proc,
+            load_datatypes=self.config.dataloader.load_datatypes,
             filter_invalid_samples=self.config.dataloader.filter_invalid_samples,
         )
-        self.dataset = DualDiffusionDataset(dataset_config)
+        self.dataset = DualDiffusionDataset(dataset_config, self.pipeline.format.config)
 
         self.train_dataloader = torch.utils.data.DataLoader(
             self.dataset["train"], shuffle=True,
@@ -713,7 +707,7 @@ class DualDiffusionTrainer:
                     for i, sample_path in enumerate(device_batch["sample_paths"]):
                         self.train_sample_logger.add_log(sample_path, module_logs["loss"][i])
 
-                    self.accelerator.backward(module_logs["loss"].mean())
+                    self.accelerator.backward(module_logs["loss"].sum())
 
                     if self.accelerator.sync_gradients:
                         assert self.accum_step == (self.config.gradient_accumulation_steps - 1), \

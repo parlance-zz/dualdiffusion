@@ -27,7 +27,6 @@ import os
 import logging
 
 import torch
-import mutagen
 import safetensors.torch as safetensors
 
 from dataset.dataset_processor import DatasetProcessor, DatasetProcessStage

@@ -29,7 +29,22 @@ import torch
 from modules.module import DualDiffusionModule, DualDiffusionModuleConfig
 from modules.formats.format import DualDiffusionFormat
 
-class IsotropicGaussianDistribution:
+
+class LatentsDistribution(ABC):
+    
+    @abstractmethod
+    def sample(self) -> torch.Tensor:
+        pass
+
+    @abstractmethod
+    def mode(self) -> torch.Tensor:
+        pass
+    
+    @abstractmethod
+    def kl(self, other: Optional["LatentsDistribution"] = None) -> torch.Tensor:
+        pass
+
+class IsotropicGaussianDistribution(LatentsDistribution):
 
     def __init__(self, parameters: torch.Tensor, logvar: torch.Tensor, deterministic: bool = False) -> None:
 
@@ -65,30 +80,45 @@ class IsotropicGaussianDistribution:
                 dim=reduction_dims,
             )
 
+class DegenerateDistribution(LatentsDistribution):
+
+    def __init__(self, parameters: torch.Tensor) -> None:
+        self.parameters = self.mean = parameters
+    
+    def sample(self) -> torch.Tensor:
+        return self.mean
+
+    def mode(self) -> torch.Tensor:
+        return self.mean
+    
+    def kl(self, other: Optional["IsotropicGaussianDistribution"] = None) -> torch.Tensor:
+
+        reduction_dims = tuple(range(0, len(self.mean.shape)))
+        if other is None:
+            return 0.5 * torch.mean(torch.pow(self.mean, 2), dim=reduction_dims)
+        else:
+            return 0.5 * torch.mean((self.mean - other.mean).square(), dim=reduction_dims)
+        
 @dataclass
 class DualDiffusionVAEConfig(DualDiffusionModuleConfig, ABC):
 
-    in_channels:     int = 2
-    out_channels:    int = 2
+    in_channels: int     = 2
+    in_num_freqs: int    = 256
+    in_channels_emb: int = 512
+    out_channels: int    = 2
     latent_channels: int = 4
-    label_dim:    int = 1
-    dropout:    float = 0.
-    target_snr: float = 16.
+    dropout: float       = 0.
 
 class DualDiffusionVAE(DualDiffusionModule, ABC):
 
     module_name: str = "vae"
 
     @abstractmethod
-    def get_class_embeddings(self, class_labels: torch.Tensor) -> torch.Tensor:
+    def get_embeddings(self, emb_in: torch.Tensor) -> torch.Tensor:
         pass
 
     @abstractmethod
     def get_recon_loss_logvar(self) -> torch.Tensor:
-        pass
-    
-    @abstractmethod
-    def get_target_snr(self) -> float:
         pass
     
     @abstractmethod
@@ -101,13 +131,13 @@ class DualDiffusionVAE(DualDiffusionModule, ABC):
 
     @abstractmethod
     def encode(self, x: torch.Tensor,
-               class_embeddings: torch.Tensor,
-               format: DualDiffusionFormat) -> IsotropicGaussianDistribution:
+               embeddings: torch.Tensor,
+               format: DualDiffusionFormat) -> LatentsDistribution:
         pass
     
     @abstractmethod
     def decode(self, x: torch.Tensor,
-               class_embeddings: torch.Tensor,
+               embeddings: torch.Tensor,
                format: DualDiffusionFormat) -> torch.Tensor:
         pass
 

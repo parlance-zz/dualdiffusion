@@ -24,7 +24,7 @@
 
 import os
 from dataclasses import dataclass
-from typing import Optional
+from typing import Optional, Literal
 
 import numpy as np
 import torch
@@ -40,10 +40,10 @@ class DatasetConfig:
 
      data_dir: str
      cache_dir: str
-     sample_crop_width: int
      latents_crop_width: int
      num_proc: Optional[int] = None
-     filter_invalid_samples: Optional[bool] = False
+     load_datatypes: list[Literal["audio", "latents", "audio_embeddings", "text_embeddings"]] = ("audio", "audio_embeddings")
+     filter_invalid_samples: Optional[bool] = True
 
 class DualDiffusionDataset(torch.nn.Module):
 
@@ -75,58 +75,40 @@ class DualDiffusionDataset(torch.nn.Module):
         self.dataset_dict = self.dataset_dict.map(resolve_absolute_path)
         
         def invalid_sample_filter(example):
-            if (example["game_id"] is None and self.config.use_pre_encoded_audio_embeddings == False
-                    and self.config.use_pre_encoded_text_embeddings == False):
-                return False
-            
-            if self.config.use_pre_encoded_latents:
-                if example["latents_file_name"] is None:
-                    return False
-                if example["latents_length"] is not None:
-                    return example["latents_length"] >= self.config.latents_crop_width
-                if example.get("latents_has_audio_embeddings", False) == False and self.config.use_pre_encoded_audio_embeddings == True:
-                    return False
-                if example.get("latents_has_text_embeddings", False) == False and self.config.use_pre_encoded_text_embeddings == True:
-                    return False
-            else:
-                if example["file_name"] is None:
-                    return False
-                if example["sample_length"] is not None and example["num_channels"] is not None and example["sample_rate"] is not None:
-                    if example["sample_length"] < self.format_config.sample_raw_crop_width:
-                        return False
-                    if example["num_channels"] != self.config.sample_raw_channels:
-                        return False
-                    if example["sample_rate"] != self.config.sample_rate:
-                        return False
-                    return True
-                else:
-                    return False
+            if not example["latents_has_audio_embeddings"] and "audio_embeddings" in self.config.load_datatypes: return False
+            if not example["latents_has_text_embeddings"] and "text_embeddings" in self.config.load_datatypes: return False
+
+            if "latents" in self.config.load_datatypes:
+                if example["latents_length"] < self.config.latents_crop_width: return False
+
+            if "audio" in self.config.load_datatypes:
+                if example["sample_length"] < self.format_config.sample_raw_length: return False
+                if example["sample_rate"] != self.format_config.sample_rate: return False
+
+            return True
 
         pre_filter_n_samples = {split: len(ds) for split, ds in self.dataset_dict.items()}
         if self.config.filter_invalid_samples: self.dataset_dict = self.dataset_dict.filter(invalid_sample_filter)
         self.num_filtered_samples = {split: (len(ds) - pre_filter_n_samples[split]) for split, ds in self.dataset_dict.items()}
-
-    def get_t(self, t: float) -> float:
-        return t / self.config.sample_raw_crop_width * self.config.t_scale - self.config.t_scale/2
     
     @torch.no_grad()
     def __call__(self, examples: dict) -> dict:
 
-        samples = []
-        paths = []
-        game_ids = []
-        t_ranges = []
-        audio_embeddings = []
-        text_embeddings = []
+        batch_audios = []
+        batch_latents = []
+        batch_paths = []
+        batch_audio_embeddings = []
+        batch_text_embeddings = []
 
         num_examples = len(next(iter(examples.values())))
         examples = [{key: examples[key][i] for key in examples} for i in range(num_examples)]
+        t_offset = None
 
         for train_sample in examples:
+            
+            batch_paths.append(file_path)
 
-            game_id = train_sample["game_id"]
-
-            if self.config.use_pre_encoded_latents:
+            if "latents" in self.config.load_datatypes:
                 file_path = train_sample["latents_file_name"]
                 with ST.safe_open(file_path, framework="pt") as f:
                     latents_slice = f.get_slice("latents")
@@ -134,62 +116,54 @@ class DualDiffusionDataset(torch.nn.Module):
 
                     latents_idx = np.random.randint(0, latents_shape[0]) # get random variation
                     t_offset = np.random.randint(0, latents_shape[-1] - self.config.latents_crop_width + 1)
-                    sample = latents_slice[latents_idx, ..., t_offset:t_offset + self.config.latents_crop_width]
+                    latents = latents_slice[latents_idx, ..., t_offset:t_offset + self.config.latents_crop_width]
 
-                    try:
-                        offset_and_range = f.get_slice("offset_and_range")
-                        sample = dequantize_tensor(sample, offset_and_range[latents_idx])
-                    except Exception as _:
-                        pass
-
-                    if self.config.use_pre_encoded_audio_embeddings == True:
-                        sample_audio_embeddings = f.get_slice("clap_audio_embeddings")
-                        seconds_per_latent_pixel = self.config.sample_raw_crop_width / self.config.sample_rate / self.config.latents_crop_width
-                        audio_embed_start = int(t_offset * seconds_per_latent_pixel / 10 + 0.5)
-                        #audio_embed_len = int(self.config.latents_crop_width * seconds_per_latent_pixel / 10 + 0.5)
-                        #audio_embed_end = min(audio_embed_start + audio_embed_len, sample_audio_embeddings.get_shape()[-1])
-                        audio_embed_end = int((t_offset + self.config.latents_crop_width) * seconds_per_latent_pixel / 10 + 0.5)
-                        audio_embed_end = min(audio_embed_end, sample_audio_embeddings.get_shape()[-1])
-
-                        sample_audio_embeddings = sample_audio_embeddings[audio_embed_start:audio_embed_end].mean(dim=0)
-                        audio_embeddings.append(sample_audio_embeddings)
-
-                    if self.config.use_pre_encoded_text_embeddings == True:
-                        sample_text_embeddings = f.get_slice("clap_text_embeddings")[:].mean(dim=0)
-                        text_embeddings.append(sample_text_embeddings)
-
-                assert sample.shape[2] == self.config.latents_crop_width
-            else:
-                file_path = train_sample["file_name"]
-                sample, sample_rate, t_offset = load_audio(file_path, start=-1,
-                                                           count=self.config.sample_raw_crop_width,
-                                                           return_sample_rate=True,
-                                                           return_start=True)
+                batch_latents.append(latents)
                 
-                assert sample_rate == self.config.sample_rate
-                assert sample.shape[0] == self.config.sample_raw_channels
-                assert sample.shape[1] == self.config.sample_raw_crop_width
-            
-            samples.append(sample)
-            paths.append(file_path)
-            game_ids.append(game_id)
+            if "audio_embeddings" in self.config.load_datatypes:
+                sample_audio_embeddings = f.get_slice("clap_audio_embeddings")
+                if t_offset is not None:
+                    batch_audio_embeddings.append(sample_audio_embeddings[:]) # todo: probably need to pad to max length in batch
+                else: # todo: remove these hard-coded constants with references to the pipeline embedding module config
+                    seconds_per_latent_pixel = self.format_config.sample_raw_length / self.format_config.sample_rate / self.config.latents_crop_width
+                    audio_embed_start = int(t_offset * seconds_per_latent_pixel / 10 + 0.5)
+                    audio_embed_end = int((t_offset + self.config.latents_crop_width) * seconds_per_latent_pixel / 10 + 0.5)
+                    audio_embed_end = min(audio_embed_end, sample_audio_embeddings.get_shape()[-1])
 
-            if self.config.t_scale is not None:
-                t_ranges.append(torch.tensor([self.get_t(t_offset),
-                    self.get_t(t_offset + self.config.sample_raw_crop_width)]))
-        
-        batch_data = {
-            "input": samples,
-            "sample_paths": paths,
-            "game_ids": game_ids,
-        }
+                    sample_audio_embeddings = sample_audio_embeddings[audio_embed_start:audio_embed_end].mean(dim=0)
+                    batch_audio_embeddings.append(sample_audio_embeddings)
 
-        if self.config.t_scale is not None:
-            batch_data["t_ranges"] = t_ranges
+            if "text_embeddings" in self.config.load_datatypes:
+                sample_text_embeddings = f.get_slice("clap_text_embeddings")[:].mean(dim=0)
+                batch_text_embeddings.append(sample_text_embeddings)
 
-        if self.config.use_pre_encoded_audio_embeddings == True:
-            batch_data["audio_embeddings"] = audio_embeddings
-        if self.config.use_pre_encoded_text_embeddings == True:
-            batch_data["text_embeddings"] = text_embeddings
+            if "audio" in self.config.load_datatypes:
+                file_path = train_sample["file_name"]
+                audio, sample_rate, t_offset = load_audio(file_path, start=-1,
+                                                    count=self.format_config.sample_raw_length,
+                                                    return_sample_rate=True, return_start=True)
+                
+                # duplicate to stereo or downmix to mono if needed
+                if audio.shape[0] < self.format_config.sample_raw_channels:
+                    audio = audio.repeat(self.format_config.sample_raw_channels // audio.shape[0], 1)
+                elif audio.shape[0] < self.format_config.sample_raw_channels:
+                    audio = audio.mean(dim=0, keepdim=True)
+
+                assert sample_rate == self.format_config.sample_rate
+                assert audio.shape[0] == self.format_config.sample_raw_channels
+                assert audio.shape[1] == self.format_config.sample_raw_length
+
+                batch_audios.append(audio)
+
+        batch_data = {}
+
+        if "latents" in self.config.load_datatypes:
+            batch_data["latents"] = batch_latents
+        if "audio_embeddings" in self.config.load_datatypes:
+            batch_data["audio_embeddings"] = batch_audio_embeddings
+        if "text_embeddings" in self.config.load_datatypes:
+            batch_data["text_embeddings"] = batch_text_embeddings
+        if "audio" in self.config.load_datatypes:
+            batch_data["audio"] = batch_audios
 
         return batch_data
