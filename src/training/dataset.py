@@ -85,10 +85,11 @@ class DualDiffusionDataset(torch.nn.Module):
             if not example["latents_has_text_embeddings"] and "text_embeddings" in self.config.load_datatypes: return False
 
             if "latents" in self.config.load_datatypes:
-                if example["latents_length"] < self.config.latents_crop_width: return False
+                if example["latents_length"] is None or example["latents_length"] < self.config.latents_crop_width: return False
 
             if "audio" in self.config.load_datatypes:
-                if example["sample_length"] < self.format_config.sample_raw_length: return False
+                if example["file_name"] is None: return False
+                if example["sample_length"] is None or example["sample_length"] < self.format_config.sample_raw_length: return False
                 if example["sample_rate"] != self.format_config.sample_rate: return False
 
             return True
