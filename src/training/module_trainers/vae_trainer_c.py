@@ -33,14 +33,14 @@ from utils.dual_diffusion_utils import dict_str
 
 
 @dataclass
-class VAETrainerConfig(ModuleTrainerConfig):
+class VAETrainer_C_Config(ModuleTrainerConfig):
 
     kl_loss_weight: float = 0.1
 
-class VAETrainer(ModuleTrainer):
+class VAETrainer_C(ModuleTrainer):
     
     @torch.no_grad()
-    def __init__(self, config: VAETrainerConfig, trainer: DualDiffusionTrainer) -> None:
+    def __init__(self, config: VAETrainer_C_Config, trainer: DualDiffusionTrainer) -> None:
 
         self.config = config
         self.trainer = trainer
@@ -62,34 +62,27 @@ class VAETrainer(ModuleTrainer):
 
     def train_batch(self, batch: dict) -> dict[str, torch.Tensor]:
 
-        samples = self.format.raw_to_sample(batch["input"])
+        samples = self.format.raw_to_sample(batch["audio"])
         if self.trainer.config.enable_channels_last == True:
             samples = samples.to(memory_format=torch.channels_last)
 
         sample_audio_embeddings = normalize(batch["audio_embeddings"])
         vae_emb = self.vae.get_embeddings(sample_audio_embeddings)
-
-        with torch.amp.autocast(enabled=self.trainer.mixed_precision_enabled, dtype=self.trainer.mixed_precision_dtype):
-            posterior, enc_states = self.vae.encode(samples, vae_emb, self.format, return_hidden_states=True)
-
-        latents: torch.Tensor = posterior.mode()
-        if self.trainer.config.enable_channels_last == True:
-            latents = latents.to(memory_format=torch.contiguous_format)
-
-        with torch.amp.autocast(enabled=self.trainer.mixed_precision_enabled, dtype=self.trainer.mixed_precision_dtype):
-            _, dec_states = self.vae.decode(latents, vae_emb, self.format, return_hidden_states=True)
+        
+        latents, _, enc_states, dec_states = self.vae(samples, vae_emb, self.format)
 
         recon_loss = torch.zeros((samples.shape[0]), device=self.trainer.accelerator.device)
-        for enc_state, dec_state in zip(enc_states, reversed(dec_states)):
-            recon_loss = recon_loss + torch.nn.functional.mse_loss(enc_state, dec_state, reduce=False).sum(dim=(1,2,3))
+        for (enc_state, dec_state) in zip(enc_states, reversed(dec_states)):
+            recon_loss = recon_loss + torch.nn.functional.mse_loss(enc_state[1].float(), dec_state[1].float(), reduction="none").sum(dim=(1,2,3)) / 65536
         
         recon_loss_logvar = self.vae.get_recon_loss_logvar()
         recon_loss = recon_loss / recon_loss_logvar.exp() + recon_loss_logvar
 
+        latents = latents.float()
         latents_pixel_var = latents.var(dim=1).clip(min=0.1)
         latents_pixel_mean = latents.mean(dim=1)
         kl_loss = (latents_pixel_mean.square() + latents_pixel_var - 1 - latents_pixel_var.log()).sum(dim=(1, 2))
-        
+
         loss = recon_loss + self.config.kl_loss_weight * kl_loss
         
         return {

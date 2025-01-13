@@ -197,9 +197,14 @@ class DualDiffusionTrainer:
         self.init_dataloader()
         self.init_torch_compile()
 
-        self.optimizer, self.train_dataloader, self.validation_dataloader, self.lr_scheduler = self.accelerator.prepare(
-            self.optimizer, self.train_dataloader, self.validation_dataloader, self.lr_scheduler
-        )
+        if self.config.num_validation_epochs > 0:
+            self.optimizer, self.train_dataloader, self.validation_dataloader, self.lr_scheduler = self.accelerator.prepare(
+                self.optimizer, self.train_dataloader, self.validation_dataloader, self.lr_scheduler
+            )
+        else:
+            self.optimizer, self.train_dataloader, self.lr_scheduler = self.accelerator.prepare(
+                self.optimizer, self.train_dataloader, self.lr_scheduler
+            )
 
     def init_accelerator(self) -> None:
 
@@ -476,6 +481,20 @@ class DualDiffusionTrainer:
         )
         self.dataset = DualDiffusionDataset(dataset_config, self.pipeline.format.config)
 
+        def custom_collate(input_batch: list[dict[str, torch.Tensor]]) -> dict[str, torch.Tensor]:
+            output_batch: dict[str, list] = {}
+            for batch in input_batch:
+                for datatype, data in batch.items():
+                    if datatype in output_batch:
+                        output_batch[datatype].append(data)
+                    else:
+                        output_batch[datatype] = [data]
+
+            for datatype, data in output_batch.items():
+                if isinstance(data[0], torch.Tensor):
+                    output_batch[datatype] = torch.stack(data) 
+            return output_batch
+
         self.train_dataloader = torch.utils.data.DataLoader(
             self.dataset["train"], shuffle=True,
             batch_size=self.local_batch_size,
@@ -483,13 +502,18 @@ class DualDiffusionTrainer:
             pin_memory=self.config.dataloader.pin_memory,
             persistent_workers=True if self.config.dataloader.dataloader_num_workers else False,
             prefetch_factor=self.config.dataloader.prefetch_factor if self.config.dataloader.dataloader_num_workers else None,
-            drop_last=True,
+            drop_last=True, collate_fn=custom_collate
         )
-        self.validation_dataloader = torch.utils.data.DataLoader(self.dataset["validation"], batch_size=1)
+
+        if self.config.num_validation_epochs > 0:
+            self.validation_dataloader = torch.utils.data.DataLoader(self.dataset["validation"], batch_size=1)
+        else:
+            self.validation_dataloader = None
 
         self.logger.info(f"Using dataset path {config.DATASET_PATH} with {dataset_config.num_proc or 1} dataset processes)")
         self.logger.info(f"  {len(self.dataset['train'])} train samples ({self.dataset.num_filtered_samples['train']} filtered)")
-        self.logger.info(f"  {len(self.dataset['validation'])} validation samples ({self.dataset.num_filtered_samples['validation']} filtered)")
+        if self.config.num_validation_epochs > 0:
+            self.logger.info(f"  {len(self.dataset['validation'])} validation samples ({self.dataset.num_filtered_samples['validation']} filtered)")
         self.logger.info(f"Using train dataloader with {self.config.dataloader.dataloader_num_workers or 0} workers")
         self.logger.info(f"  prefetch_factor = {self.config.dataloader.prefetch_factor}")
         self.logger.info(f"  pin_memory = {self.config.dataloader.pin_memory}")
@@ -628,9 +652,9 @@ class DualDiffusionTrainer:
         self.logger.info(f"  Total optimization steps for full run = {self.config.max_train_steps}")
         self.logger.info(f"  Total samples processed so far = {self.persistent_state.total_samples_processed}")
         self.logger.info(f"  Path to save/load checkpoints = {self.config.model_path}")
-        if not self.config.dataloader.use_pre_encoded_latents:
+        if "audio" in self.config.dataloader.load_datatypes:
             self.logger.info(f"  Sample shape: {self.sample_shape}")
-        if self.latent_shape is not None:
+        if "latents" in self.config.dataloader.load_datatypes:
             self.logger.info(f"  Latent shape: {self.latent_shape}")
 
         self.load_checkpoint()
@@ -689,7 +713,7 @@ class DualDiffusionTrainer:
             self.local_step = 0
 
         for local_batch in (self.resume_dataloader or self.train_dataloader):
-
+            
             train_logger.clear() # accumulates per-batch logs / statistics
             self.module_trainer.init_batch()
             
@@ -756,6 +780,7 @@ class DualDiffusionTrainer:
                 
                 if self.accelerator.is_main_process:
                     # if using strict checkpoint time, save it immediately instead of at the end of the epoch
+                    _save_checkpoint = False
                     if self.config.strict_checkpoint_time == True:
                         if (datetime.now() - self.last_checkpoint_time).total_seconds() >= self.config.min_checkpoint_time:
                             _save_checkpoint = True
@@ -783,9 +808,9 @@ class DualDiffusionTrainer:
         self.logger.info(f"  Epoch = {self.global_step // self.num_update_steps_per_epoch} (step: {self.global_step})")
         self.logger.info(f"  Num examples = {len(self.dataset['validation'])}")
         self.logger.info(f"  Total validation batch size (w. parallel, distributed & accumulation) = {self.validation_total_batch_size}")
-        if not self.config.dataloader.use_pre_encoded_latents:
+        if "audio" in self.config.dataloader.load_datatypes:
             self.logger.info(f"  Sample shape: {self.validation_sample_shape}")
-        if self.validation_latent_shape is not None:
+        if "latents" in self.config.dataloader.load_datatypes:
             self.logger.info(f"  Latent shape: {self.validation_latent_shape}")
 
         # create a backup copy of train weights and set model to eval mode

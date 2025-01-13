@@ -189,10 +189,7 @@ class SpectrogramFormat(DualDiffusionFormat):
     def raw_to_sample(self, raw_samples: torch.Tensor,
                       return_dict: bool = False) -> Union[torch.Tensor, dict]:
 
-        with torch.no_grad():        
-            samples = self.spectrogram_converter.audio_to_spectrogram(raw_samples)
-            samples /= samples.std(dim=(1,2,3), keepdim=True).clip(min=self.config.noise_floor)
-
+        samples = self.spectrogram_converter.audio_to_spectrogram(raw_samples) * 2
         if return_dict:
             return {"samples": samples, "raw_samples": raw_samples}
         else:
@@ -201,9 +198,7 @@ class SpectrogramFormat(DualDiffusionFormat):
     @torch.inference_mode()
     def sample_to_raw(self, samples: torch.Tensor, return_dict: bool = False) -> Union[torch.Tensor, dict]:
         
-        with torch.no_grad():
-            raw_samples = self.spectrogram_converter.spectrogram_to_audio(samples.clip(min=0))
-
+        raw_samples = self.spectrogram_converter.spectrogram_to_audio(samples.clip(min=0))
         if return_dict:
             return {"raw_samples": raw_samples, "samples": samples}
         else:

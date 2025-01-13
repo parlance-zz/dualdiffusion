@@ -1,0 +1,22 @@
+{
+  "last_global_step": 0,
+  "in_channels": 2,
+  "in_num_freqs": 256,
+  "in_channels_emb": 512,
+  "out_channels": 2,
+  "latent_channels": 8,
+  "dropout": 0,
+  "model_channels": 256,
+  "channel_mult": [
+    4,
+    3,
+    2,
+    1
+  ],
+  "channel_mult_emb": 4,
+  "num_layers_per_block": 1,
+  "noise_balance": 0.1,
+  "res_balance": 0.3,
+  "mlp_multiplier": 8,
+  "mlp_groups": 8
+}

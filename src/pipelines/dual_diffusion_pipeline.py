@@ -287,30 +287,6 @@ class DualDiffusionPipeline(torch.nn.Module):
         }
         pipeline.model_metadata = model_metadata
 
-        # load dataset info
-        dataset_info_path = os.path.join(model_path, "dataset_info.json")
-        if not os.path.isfile(dataset_info_path):
-            dataset_info_path = os.path.join(config.DATASET_PATH, "dataset_infos", "dataset_info.json")
-
-        if os.path.isfile(dataset_info_path):
-            pipeline.dataset_info = config.load_json(dataset_info_path)
-            pipeline.dataset_game_ids = pipeline.dataset_info["game_id"]
-            pipeline.dataset_game_names = {value: key for key, value in pipeline.dataset_info["game_id"].items()}
-        else:
-            pipeline.dataset_info = None
-            pipeline.dataset_game_names = None
-        
-        # load dataset embeddings
-        dataset_embeddings_path = os.path.join(model_path, "dataset_embeddings.safetensors")
-        if not os.path.isfile(dataset_embeddings_path):
-            dataset_embeddings_path = os.path.join(config.DATASET_PATH, "dataset_infos", "dataset_embeddings.safetensors")
-        
-        if os.path.isfile(dataset_embeddings_path):
-            dataset_embeddings: dict[str, torch.Tensor] = load_safetensors(dataset_embeddings_path)
-            pipeline.dataset_embeddings = {key: value[:] for key, value in dataset_embeddings.items()}
-        else:
-            pipeline.dataset_embeddings = None
-
         return pipeline
     
     @torch.no_grad()
@@ -390,7 +366,10 @@ class DualDiffusionPipeline(torch.nn.Module):
 
     def get_latent_shape(self, sample_shape: Union[torch.Size, tuple[int, int, int, int]]) -> torch.Size:
         latent_shape = self.vae.get_latent_shape(sample_shape)
-        return self.unet.get_latent_shape(latent_shape)
+        if hasattr(self, "unet"):
+            return self.unet.get_latent_shape(latent_shape)
+        else:
+            return latent_shape
     
     def get_sample_shape(self, bsz: int = 1, length: Optional[int] = None) -> tuple:
         sample_shape = self.format.get_sample_shape(bsz=bsz, length=length)
