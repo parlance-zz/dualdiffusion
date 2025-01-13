@@ -1,17 +1,16 @@
 {
-    "model_name": "edm2_vt7_12d_4",
+    "model_name": "edm2_vae_c1",
     "model_load_options": {
         "torch_dtype": "bfloat16",
         "device": "cuda",
         "load_checkpoints": true,
-        "load_emas": true
+        "load_emas": false
     },
-    "length": 1920000,
+    "length": 320000,
     "num_fgla_iters": 300,
     "sample_latents": true,
     "normalize_latents": true,
     "random_latents": false,
-    "quantize_latents": 0,
     "add_latent_noise": 0,
-    "test_samples": [[0, "spc/3 Ninjas Kick Back/3 Ninjas Kick Back - 01 Title Screen & Ending.safetensors"]]
+    "test_samples": ["spc/3 Ninjas Kick Back/01 Title Screen & Ending.spc.flac"]
 }

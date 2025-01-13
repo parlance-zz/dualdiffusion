@@ -30,7 +30,7 @@ import torch
 from pipelines.dual_diffusion_pipeline import DualDiffusionPipeline
 from utils.dual_diffusion_utils import (
     init_cuda, normalize, save_audio, load_audio, load_safetensors,
-    tensor_to_img, save_img, quantize_tensor, dequantize_tensor
+    tensor_to_img, save_img
 )
 
 @torch.inference_mode()
@@ -48,7 +48,6 @@ def vae_test() -> None:
     sample_latents = test_params["sample_latents"]
     normalize_latents = test_params["normalize_latents"]
     random_latents = test_params["random_latents"]
-    quantize_latents = test_params["quantize_latents"]
     add_latent_noise = test_params["add_latent_noise"]
 
     model_path = os.path.join(config.MODELS_PATH, model_name)
@@ -56,7 +55,6 @@ def vae_test() -> None:
     pipeline = DualDiffusionPipeline.from_pretrained(model_path, **model_load_options)
     
     pipeline.format.config.num_fgla_iters = num_fgla_iters
-    noise_floor = pipeline.format.config.noise_floor
     sample_rate = pipeline.format.config.sample_rate
     crop_width = pipeline.format.sample_raw_crop_width(length=length)
     last_global_step = pipeline.vae.config.last_global_step
@@ -72,25 +70,22 @@ def vae_test() -> None:
     start_time = datetime.datetime.now()
     point_similarity = latents_mean = latents_std = 0
 
-    for sample_game_id, filename in test_samples:
+    for filename in test_samples:
 
-        class_labels = pipeline.get_class_labels(sample_game_id)
-        vae_class_embeddings = pipeline.vae.get_class_embeddings(class_labels)
-        
         file_ext = os.path.splitext(filename)[1]
-        if file_ext.lower() != ".safetensors":
-            input_raw_sample = load_audio(os.path.join(dataset_path, filename), count=crop_width)
-            input_raw_sample = input_raw_sample.unsqueeze(0).to(pipeline.format.device)
-            input_sample = pipeline.format.raw_to_sample(input_raw_sample)
-            posterior = pipeline.vae.encode(input_sample.type(pipeline.vae.dtype),
-                                            vae_class_embeddings, pipeline.format)
-            latents = posterior.sample() if sample_latents else posterior.mode()
-        else:
-            latents = load_safetensors(os.path.join(dataset_path, filename))["latents"][0:1, :, :, :latent_shape[-1]].to(pipeline.vae.device)
-    
-        if quantize_latents > 0:
-            latents, offset_and_range = quantize_tensor(latents, quantize_latents)
-            latents = dequantize_tensor(latents, offset_and_range)
+        safetensors_file_name = os.path.join(f"{os.path.splitext(filename)[0]}.safetensors")
+        latents_dict = load_safetensors(os.path.join(dataset_path, safetensors_file_name))
+        #latents = latents_dict["latents"][0:1, :, :, :latent_shape[-1]].to(pipeline.vae.device)
+        audio_embedding = normalize(latents_dict["clap_audio_embeddings"].mean(dim=0, keepdim=True)).float()
+        vae_embeddings = pipeline.vae.get_embeddings(audio_embedding.to(dtype=pipeline.vae.dtype, device=pipeline.vae.device))
+
+        input_raw_sample = load_audio(os.path.join(dataset_path, filename), count=crop_width)
+        input_raw_sample = input_raw_sample.unsqueeze(0).to(pipeline.format.device)
+        input_sample = pipeline.format.raw_to_sample(input_raw_sample)
+        posterior = pipeline.vae.encode(input_sample.to(dtype=pipeline.vae.dtype),
+                                        vae_embeddings, pipeline.format)
+        latents = posterior.sample() if sample_latents else posterior.mode()
+        
         if add_latent_noise > 0:
             latents += torch.rand_like(latents) * add_latent_noise  
         if normalize_latents:
@@ -98,31 +93,32 @@ def vae_test() -> None:
         if random_latents:
             latents = torch.randn_like(latents)
 
-        output_sample = pipeline.vae.decode(latents, vae_class_embeddings, pipeline.format)
+        output_sample = pipeline.vae.decode(latents, vae_embeddings, pipeline.format)
         output_raw_sample = pipeline.format.sample_to_raw(output_sample.type(torch.float32))
 
         latents_mean += latents.mean().item()
         latents_std += latents.std().item()
+        latents_img = latents.view(latents.shape[0], 4, -1, latents.shape[2]).transpose(-1, -2)
 
         filename = os.path.basename(filename)
-        save_img(tensor_to_img(latents, flip_y=True), os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_latents.png')}"))
+        #save_img(tensor_to_img(latents_img, flip_y=True), os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_latents.png')}"))
         save_img(tensor_to_img(output_sample, flip_y=True), os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_output_sample.png')}"))
 
-        if file_ext.lower() != ".safetensors":
-            point_similarity += (output_sample - input_sample).abs().mean().item()
-            save_img(tensor_to_img(input_sample, flip_y=True), os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_input_sample.png')}"))
+        #if file_ext.lower() != ".safetensors":
+        point_similarity += (output_sample - input_sample).abs().mean().item()
+        save_img(tensor_to_img(input_sample, flip_y=True), os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_input_sample.png')}"))
 
-            input_raw_sample = pipeline.format.sample_to_raw(input_sample)
-            output_flac_file_path = os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_original.flac')}")
-            save_audio(input_raw_sample.squeeze(0), sample_rate, output_flac_file_path)
-            print(f"Saved flac output to {output_flac_file_path}")
+        input_raw_sample = pipeline.format.sample_to_raw(input_sample)
+        output_flac_file_path = os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_original.flac')}")
+        save_audio(input_raw_sample.squeeze(0), sample_rate, output_flac_file_path)
+        print(f"Saved flac output to {output_flac_file_path}")
 
         output_flac_file_path = os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_decoded.flac')}")
         save_audio(output_raw_sample.squeeze(0), sample_rate, output_flac_file_path)
         print(f"Saved flac output to {output_flac_file_path}")
 
-        latents_fft = torch.fft.rfft2(latents.float(), norm="ortho").abs().clip(min=noise_floor).log()
-        save_img(tensor_to_img(latents_fft, flip_y=True), os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_latents_fft_ln_psd.png')}"))
+        #latents_fft = torch.fft.rfft2(latents.float(), norm="ortho").abs().clip(min=noise_floor).log()
+        #save_img(tensor_to_img(latents_fft, flip_y=True), os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_latents_fft_ln_psd.png')}"))
 
     print(f"Finished in: {datetime.datetime.now() - start_time}")
     print(f"Point similarity: {point_similarity / len(test_samples)}")
