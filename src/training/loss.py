@@ -30,6 +30,8 @@ from modules.formats.frequency_scale import get_mel_density
 from modules.formats.format import DualDiffusionFormatConfig
 from utils.mclt import stft
 
+
+"""
 @dataclass
 class MultiscaleSpectralLoss1DConfig:
     block_widths: tuple[int] = (
@@ -138,12 +140,92 @@ class MultiscaleSpectralLoss1D:
             loss_imag = loss_imag + (error_imag * target_phase_weight).mean()
 
         return loss_real * self.loss_scale, loss_imag * self.loss_scale
+"""
+
+@dataclass
+class DualMultiscaleSpectralLoss1DConfig:
+    block_widths: tuple[int] = (8, 16, 32, 64)
+    block_overlap: int = 8
+    loss_scale: float = 0.06#4e-3
+
+class DualMultiscaleSpectralLoss1D:
+
+    def __init__(self, config: DualMultiscaleSpectralLoss1DConfig) -> None:
+        self.config = config
+
+    @torch.no_grad()
+    def _flat_top_window(self, x:torch.Tensor) -> torch.Tensor:
+        return (0.21557895 - 0.41663158 * torch.cos(x) + 0.277263158 * torch.cos(2*x)
+                - 0.083578947 * torch.cos(3*x) + 0.006947368 * torch.cos(4*x))
+
+    @torch.no_grad()
+    def get_flat_top_window_1d(self, block_width: int, device: Optional[torch.device] = None) -> torch.Tensor:
+        wx = torch.linspace(0, 2*torch.pi, block_width, device=device)
+        return self._flat_top_window(wx.view(1, 1, 1, 1,-1)).requires_grad_(False)
+    
+    def stft1d(self, x:torch.Tensor, block_width: int,
+               step: int, window: torch.Tensor) -> torch.Tensor:
+        #print(f"x_shape: {x.shape}  block_width: {block_width}  step: {step}")
+        padding = block_width // 2
+        x = torch.nn.functional.pad(x, (0, 0, padding, padding), mode="reflect")
+        #print(f"padded_x_shape: {x.shape}")
+        x = x.unfold(2, block_width, step)
+        #print(f"unfolded_x_shape: {x.shape}")
+        x = torch.fft.rfft(x * window, dim=-1, norm="backward")
+        #print(f"rfft_shape: {x.shape}")
+        if x.shape[1] == 2:
+            x = torch.stack((x[:, 0] + x[:, 1],
+                             x[:, 0] - x[:, 1]), dim=1)
+        elif x.shape[1] > 2:
+            x = torch.fft.fft(x, dim=1, norm="backward")
+        #print(f"final_shape: {x.shape}")
+        return x
+    
+    def __call__(self, sample: torch.Tensor, target: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+
+        sample = sample.permute(0, 2, 1, 3).contiguous()
+        target = target.permute(0, 2, 1, 3).contiguous()
+
+        loss_real = torch.zeros(1, device=target.device, dtype=torch.float64)
+        loss_imag = torch.zeros(1, device=target.device, dtype=torch.float64)
+        loss_scale = self.config.loss_scale / target.numel()
+
+        for block_width in self.config.block_widths:
+            
+            block_width = min(block_width, target.shape[-2])
+            step = max(block_width // self.config.block_overlap, 1)
+
+            with torch.no_grad():
+                
+                window = self.get_flat_top_window_1d(block_width, target.device)
+                #print(f"window_shape: {window.shape}")
+                blockfreq = torch.fft.rfftfreq(block_width, 1/block_width, device=target.device)
+                wavelength = block_width / (blockfreq+1)
+                real_loss_weight = (1 / wavelength * wavelength.amin()).requires_grad_(False)
+                #print(f"wave_length: {wavelength.shape}")
+                target_fft = self.stft1d(target, block_width, step, window)
+                target_fft_abs = target_fft.abs().requires_grad_(False)
+                target_fft_angle = target_fft.angle().requires_grad_(False)
+                loss_imag_weight = (wavelength.view((1,)*4 + wavelength.shape) / torch.pi).requires_grad_(False) * target_fft_abs
+                #print(f"loss_imag_weight: {loss_imag_weight.shape}")
+
+            sample_fft = self.stft1d(sample, block_width, step, window)
+            sample_fft_abs = sample_fft.abs()
+            
+            loss_real = loss_real + ((sample_fft_abs - target_fft_abs).abs() * real_loss_weight).type(torch.float64).sum()
+
+            error_imag = (sample_fft.angle() - target_fft_angle).abs()
+            error_imag_wrap_mask = (error_imag > torch.pi).detach().requires_grad_(False)
+            error_imag = torch.where(error_imag_wrap_mask, 2*torch.pi - error_imag, error_imag)
+            loss_imag = loss_imag + (error_imag * loss_imag_weight).type(torch.float64).sum()
+        
+        return (loss_real * loss_scale).float(), (loss_imag * loss_scale).float()
 
 @dataclass
 class DualMultiscaleSpectralLoss2DConfig:
     block_widths: tuple[int] = (8, 16, 32, 64)
     block_overlap: int = 8
-    loss_scale: float = 4e-3
+    loss_scale: float = 1.6e4#4e-3
 
 class DualMultiscaleSpectralLoss2D:
 
@@ -177,11 +259,7 @@ class DualMultiscaleSpectralLoss2D:
 
         return x
     
-    def __call__(self, sample_dict: dict[str, torch.Tensor],
-                 target_dict: dict[str, torch.Tensor]) -> tuple[torch.Tensor, torch.Tensor]:
-
-        target = target_dict["samples"]
-        sample = sample_dict["samples"]
+    def __call__(self, sample: torch.Tensor, target: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
 
         loss_real = torch.zeros(1, device=target.device, dtype=torch.float64)
         loss_imag = torch.zeros(1, device=target.device, dtype=torch.float64)
