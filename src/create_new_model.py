@@ -26,6 +26,7 @@ import os
 import shutil
 import importlib
 import inspect
+import readline
 
 import torch
 
@@ -62,11 +63,20 @@ def print_module_info(module: DualDiffusionModule, module_name: str) -> None:
 
 if __name__ == "__main__":
 
+    create_model_info_path = os.path.join(config.DEBUG_PATH, "create_model_info.json")
+    if os.path.exists(create_model_info_path) == True:
+        model_name = config.load_json(create_model_info_path)["last_model_name"]
+        readline.set_startup_hook(lambda: readline.insert_text(model_name))
+
     model_name = input(f"Enter model name: ")
     model_config_source_path = os.path.join(config.CONFIG_PATH, "models", model_name)
     if not os.path.isdir(model_config_source_path):
         raise FileNotFoundError(f"Model config path '{model_config_source_path}' not found")
     
+    readline.set_startup_hook()
+    if config.DEBUG_PATH is not None:
+        config.save_json({"last_model_name": model_name}, create_model_info_path)
+        
     # load and initialize model modules
     model_modules: dict[str, DualDiffusionModule] = {}
     model_index = config.load_json(os.path.join(model_config_source_path, "model_index.json"))
