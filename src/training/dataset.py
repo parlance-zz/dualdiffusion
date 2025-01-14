@@ -41,6 +41,7 @@ class DatasetConfig:
 
      data_dir: str
      cache_dir: str
+     sample_crop_width: int
      latents_crop_width: int
      num_proc: Optional[int] = None
      load_datatypes: list[Literal["audio", "latents", "audio_embeddings", "text_embeddings"]] = ("audio", "audio_embeddings")
@@ -89,7 +90,7 @@ class DualDiffusionDataset(torch.nn.Module):
 
             if "audio" in self.config.load_datatypes:
                 if example["file_name"] is None: return False
-                if example["sample_length"] is None or example["sample_length"] < self.format_config.sample_raw_length: return False
+                if example["sample_length"] is None or example["sample_length"] < self.config.sample_crop_width: return False
                 if example["sample_rate"] != self.format_config.sample_rate: return False
 
             return True
@@ -117,7 +118,7 @@ class DualDiffusionDataset(torch.nn.Module):
 
             if "audio" in self.config.load_datatypes:
                 audio, sample_rate, audio_t_offset = load_audio(train_sample["file_name"], start=-1,
-                                                    count=self.format_config.sample_raw_length,
+                                                    count=self.config.sample_crop_width,
                                                     return_sample_rate=True, return_start=True)
                 
                 # duplicate to stereo or downmix to mono if needed
@@ -128,7 +129,7 @@ class DualDiffusionDataset(torch.nn.Module):
 
                 assert sample_rate == self.format_config.sample_rate
                 assert audio.shape[0] == self.format_config.sample_raw_channels
-                assert audio.shape[1] == self.format_config.sample_raw_length
+                assert audio.shape[1] == self.config.sample_crop_width
 
                 batch_audios.append(audio)
 
@@ -151,9 +152,9 @@ class DualDiffusionDataset(torch.nn.Module):
                 if audio_t_offset is not None:
                     seconds_per_sample = 1 / self.format_config.sample_rate
                     audio_embed_start = int(audio_t_offset * seconds_per_sample / 10 + 0.5)
-                    audio_embed_end = int((audio_t_offset + self.format_config.sample_raw_length) * seconds_per_sample / 10 + 0.5)
+                    audio_embed_end = int((audio_t_offset + self.config.sample_crop_width) * seconds_per_sample / 10 + 0.5)
                 elif latents_t_offset is not None:
-                    seconds_per_latent_pixel = self.format_config.sample_raw_length / self.format_config.sample_rate / self.config.latents_crop_width
+                    seconds_per_latent_pixel = self.config.sample_crop_width / self.format_config.sample_rate / self.config.latents_crop_width
                     audio_embed_start = int(latents_t_offset * seconds_per_latent_pixel / 10 + 0.5)
                     audio_embed_end = int((latents_t_offset + self.config.latents_crop_width) * seconds_per_latent_pixel / 10 + 0.5)
                 else:

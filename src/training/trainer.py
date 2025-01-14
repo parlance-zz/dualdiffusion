@@ -476,6 +476,7 @@ class DualDiffusionTrainer:
 
         dataset_config = DatasetConfig(
             data_dir=config.DATASET_PATH, cache_dir=config.CACHE_PATH,
+            sample_crop_width=self.pipeline.format.sample_raw_crop_width(),
             latents_crop_width=self.latent_shape[-1] if self.latent_shape is not None else 0,
             num_proc=self.config.dataloader.dataset_num_proc,
             load_datatypes=self.config.dataloader.load_datatypes,
@@ -657,9 +658,9 @@ class DualDiffusionTrainer:
         self.logger.info(f"  Total optimization steps for full run = {self.config.max_train_steps}")
         self.logger.info(f"  Total samples processed so far = {self.persistent_state.total_samples_processed}")
         self.logger.info(f"  Path to save/load checkpoints = {self.config.model_path}")
-        if "audio" in self.config.dataloader.load_datatypes:
+        if self.sample_shape is not None:
             self.logger.info(f"  Sample shape: {self.sample_shape}")
-        if "latents" in self.config.dataloader.load_datatypes:
+        if self.latent_shape is not None:
             self.logger.info(f"  Latent shape: {self.latent_shape}")
 
         self.load_checkpoint()
@@ -814,9 +815,9 @@ class DualDiffusionTrainer:
         self.logger.info(f"  Epoch = {self.global_step // self.num_update_steps_per_epoch} (step: {self.global_step})")
         self.logger.info(f"  Num examples = {len(self.dataset['validation'])}")
         self.logger.info(f"  Total validation batch size (w. parallel, distributed & accumulation) = {self.validation_total_batch_size}")
-        if "audio" in self.config.dataloader.load_datatypes:
+        if self.validation_sample_shape is not None:
             self.logger.info(f"  Sample shape: {self.validation_sample_shape}")
-        if "latents" in self.config.dataloader.load_datatypes:
+        if self.validation_latent_shape is not None:
             self.logger.info(f"  Latent shape: {self.validation_latent_shape}")
 
         # create a backup copy of train weights and set model to eval mode
