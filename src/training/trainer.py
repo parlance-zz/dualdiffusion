@@ -34,6 +34,7 @@ import inspect
 from datetime import datetime
 from typing import Optional, Literal, Type, Union, Any
 from dataclasses import dataclass
+from traceback import format_exception
 
 import torch
 import torch.utils.checkpoint
@@ -406,6 +407,7 @@ class DualDiffusionTrainer:
                 self.persistent_state = TrainerPersistentState(**config.load_json(trainer_state_path))
                 self.logger.info(f"Loaded persistent trainer state from {trainer_state_path}")
             except Exception as e:
+                self.logger.error("".join(format_exception(type(e), e, e.__traceback__)))
                 self.logger.error(f"Error loading persistent trainer state from {trainer_state_path}: {e}")
                 if self.accelerator.is_main_process:
                     if input("Continue? (y/n): ").lower() not in ["y", "yes"]:
@@ -546,6 +548,7 @@ class DualDiffusionTrainer:
         try:
             shutil.copytree(source_src_path, save_path, dirs_exist_ok=True)
         except Exception as e:
+            self.logger.error("".join(format_exception(type(e), e, e.__traceback__)))
             self.logger.warning(f"Failed to copy source code from {source_src_path} to {save_path}: {e}")
 
         # copy logs
@@ -555,6 +558,7 @@ class DualDiffusionTrainer:
         try:
             shutil.copytree(source_logs_path, target_logs_path, dirs_exist_ok=True)
         except Exception as e:
+            self.logger.error("".join(format_exception(type(e), e, e.__traceback__)))
             self.logger.warning(f"Failed to copy logs from {source_logs_path} to {target_logs_path}: {e}")
 
         # delete old checkpoints AFTER saving new checkpoint
@@ -576,6 +580,7 @@ class DualDiffusionTrainer:
                             shutil.rmtree(removing_checkpoint)
 
             except Exception as e:
+                self.logger.error("".join(format_exception(type(e), e, e.__traceback__)))
                 self.logger.error(f"Error removing old checkpoints: {e}")
 
         self.last_checkpoint_time = datetime.now()
@@ -675,6 +680,7 @@ class DualDiffusionTrainer:
                 try:
                     config.save_json(self.train_sample_logger.get_logs(sorted=True), sample_log_path)
                 except Exception as e:
+                    self.logger.error("".join(format_exception(type(e), e, e.__traceback__)))
                     self.logger.warning(f"Error saving sample logs to {sample_log_path}: {e}")
 
                 # if strict checkpointing is disabled check if we should save one at the end of the epoch
@@ -880,6 +886,7 @@ class DualDiffusionTrainer:
             try:
                 config.save_json(self.validation_sample_logger.get_logs(sorted=True), sample_log_path)
             except Exception as e:
+                self.logger.error("".join(format_exception(type(e), e, e.__traceback__)))
                 self.logger.warning(f"Error saving validation sample logs to {sample_log_path}: {e}")
 
         return validation_logs
