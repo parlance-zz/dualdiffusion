@@ -190,6 +190,7 @@ class EMA_Manager:
             if config.get("name", None) is not None:
                 raise ValueError(f"Found unknown attribute 'name' in EMA_Config for ema_{name}")
             ema_config = EMA_Config(name, **config)
+            self.ema_configs[name] = ema_config
 
             if ema_config.num_switch_ema_epochs is not None:
                 if self.switch_ema_name is None:

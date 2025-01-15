@@ -24,7 +24,6 @@ import os
 from dotenv import load_dotenv
 from typing import Union
 from json import dumps as json_dumps, load as json_load
-import shutil
 
 def load_json(json_path: str) -> dict:
     with open(json_path, "r") as f:

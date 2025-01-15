@@ -4,6 +4,7 @@ __pycache__/
 models/*/
 dataset/*/
 debug/*/
+debug/*
 output/
 backup/
 old/
