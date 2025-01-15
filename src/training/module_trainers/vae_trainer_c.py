@@ -77,16 +77,16 @@ class VAETrainer_C(ModuleTrainer):
         recon_loss = torch.nn.functional.mse_loss(
             samples.clone().detach(), output_samples, reduction="none").mean(dim=(1,2,3))
         recon_loss_logvar = self.vae.get_recon_loss_logvar()
-        recon_loss = recon_loss / recon_loss_logvar.exp() + recon_loss_logvar
+        recon_loss_nll = recon_loss / recon_loss_logvar.exp() + recon_loss_logvar
 
         # diffusion loss
         noise = noise.float()
         noise_pred = noise_pred.float()
         noise_std = (recon_loss_logvar/2).exp().detach() * self.vae.config.noise_multiplier
         diff_loss = torch.nn.functional.mse_loss(
-            noise, noise_pred, reduction="none").mean(dim=(1,2,3,4)) / noise_std**2
+            noise, noise_pred, reduction="none").mean(dim=(1,2,3,4))
         diff_loss_logvar = self.vae.get_diff_loss_logvar()
-        diff_loss = diff_loss / diff_loss_logvar.exp() + diff_loss_logvar
+        diff_loss_nll = diff_loss / diff_loss_logvar.exp() + diff_loss_logvar
 
         # latents kl loss
         latents: torch.Tensor = latents.float()
@@ -112,7 +112,6 @@ class VAETrainer_C(ModuleTrainer):
             state_mean = state.mean(dim=(1,2,3,4))
             state_kl_loss = state_mean.square() + state_var - 1 - state_var.log()
             hidden_state_kl_loss = hidden_state_kl_loss + state_kl_loss
-            hidden_state_logs[f"enc_state_kl_loss/{i}"] = state_kl_loss.detach().cpu().mean()
 
         for i, state in enumerate(dec_states):
             state: torch.Tensor = state.float()
@@ -123,15 +122,17 @@ class VAETrainer_C(ModuleTrainer):
             state_mean = state.mean(dim=(1,2,3,4))
             state_kl_loss = state_mean.square() + state_var - 1 - state_var.log()
             hidden_state_kl_loss = hidden_state_kl_loss + state_kl_loss
-            hidden_state_logs[f"dec_state_kl_loss/{i}"] = state_kl_loss.detach().cpu().mean()
 
         kl_loss = latents_kl_loss + samples_kl_loss + hidden_state_kl_loss
 
         return_dict = {
-            "loss": recon_loss + diff_loss + self.config.kl_loss_weight * kl_loss,
-            "recon_loss": recon_loss.mean().detach(),
-            "kl_loss": kl_loss.mean().detach(),
-            "diff_loss": diff_loss.mean().detach(),
+            "loss": recon_loss_nll + diff_loss_nll + kl_loss * self.config.kl_loss_weight,
+            "loss/recon_nll": recon_loss_nll.mean().detach(),
+            "loss/recon": recon_loss.mean().detach(),
+            "loss/kl": kl_loss.mean().detach(),
+            "loss/diff_nll": diff_loss_nll.mean().detach(),
+            "loss/diff": diff_loss.mean().detach(),
+            "diff_noise_std": noise_std,
             "latents/mean": latents.mean().detach(),
             "latents/std": latents.std().detach(),
         }
