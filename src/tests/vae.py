@@ -33,6 +33,7 @@ from utils.dual_diffusion_utils import (
     tensor_to_img, save_img
 )
 
+
 @torch.inference_mode()
 def vae_test() -> None:
 
@@ -75,7 +76,6 @@ def vae_test() -> None:
         file_ext = os.path.splitext(filename)[1]
         safetensors_file_name = os.path.join(f"{os.path.splitext(filename)[0]}.safetensors")
         latents_dict = load_safetensors(os.path.join(dataset_path, safetensors_file_name))
-        #latents = latents_dict["latents"][0:1, :, :, :latent_shape[-1]].to(pipeline.vae.device)
         audio_embedding = normalize(latents_dict["clap_audio_embeddings"].mean(dim=0, keepdim=True)).float()
         vae_embeddings = pipeline.vae.get_embeddings(audio_embedding.to(dtype=pipeline.vae.dtype, device=pipeline.vae.device))
 
@@ -92,29 +92,31 @@ def vae_test() -> None:
             latents = normalize(latents).float()
         if random_latents:
             latents = torch.randn_like(latents)
-
+        
         output_sample = pipeline.vae.decode(latents, vae_embeddings, pipeline.format)
         output_raw_sample = pipeline.format.sample_to_raw(output_sample.type(torch.float32))
 
         latents_mean += latents.mean().item()
         latents_std += latents.std().item()
-        latents_img = latents.view(latents.shape[0], 4, -1, latents.shape[2]).transpose(-1, -2)
-
         filename = os.path.basename(filename)
-        #save_img(tensor_to_img(latents_img, flip_y=True), os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_latents.png')}"))
+
+        if latents.ndim == 5:
+            latents_img = torch.cat((latents[0, :, 0], latents[0, :, 1]), dim=1)
+        else:
+            latents_img = latents.view(latents.shape[0], 4, -1, latents.shape[2]).transpose(-1, -2)
+        save_img(tensor_to_img(latents_img, flip_y=True), os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_latents.png')}"))
         save_img(tensor_to_img(output_sample, flip_y=True), os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_output_sample.png')}"))
 
-        #if file_ext.lower() != ".safetensors":
         point_similarity += (output_sample - input_sample).abs().mean().item()
         save_img(tensor_to_img(input_sample, flip_y=True), os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_input_sample.png')}"))
 
         input_raw_sample = pipeline.format.sample_to_raw(input_sample)
         output_flac_file_path = os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_original.flac')}")
-        save_audio(input_raw_sample.squeeze(0), sample_rate, output_flac_file_path)
+        save_audio(input_raw_sample.squeeze(0), sample_rate, output_flac_file_path, target_lufs=None)
         print(f"Saved flac output to {output_flac_file_path}")
 
         output_flac_file_path = os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_decoded.flac')}")
-        save_audio(output_raw_sample.squeeze(0), sample_rate, output_flac_file_path)
+        save_audio(output_raw_sample.squeeze(0), sample_rate, output_flac_file_path, target_lufs=None)
         print(f"Saved flac output to {output_flac_file_path}")
 
         #latents_fft = torch.fft.rfft2(latents.float(), norm="ortho").abs().clip(min=noise_floor).log()

@@ -1,16 +1,21 @@
 {
-    "model_name": "edm2_vae_c1",
+    "model_name": "edm2_vae_c3",
     "model_load_options": {
         "torch_dtype": "bfloat16",
         "device": "cuda",
         "load_checkpoints": true,
         "load_emas": false
     },
-    "length": 320000,
+    "length": 480000,
     "num_fgla_iters": 300,
     "sample_latents": true,
-    "normalize_latents": true,
+    "normalize_latents": false,
     "random_latents": false,
     "add_latent_noise": 0,
-    "test_samples": ["spc/3 Ninjas Kick Back/01 Title Screen & Ending.spc.flac"]
+    "test_samples": [
+        "spc/3 Ninjas Kick Back/01 Title Screen & Ending.spc.flac",
+        "spc/Kirby Super Star/43 Taking Over the Halberd.spc.flac",
+        "spc/Mega Man X3/09 Blast Hornet.spc.flac",
+        "spc/Pilotwings/04 Light Plane.spc.flac"
+    ]
 }
