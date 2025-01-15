@@ -27,10 +27,10 @@ import torch
 
 from modules.formats.format import DualDiffusionFormat
 from modules.vaes.vae import DualDiffusionVAEConfig, DualDiffusionVAE, DegenerateDistribution
-from modules.mp_tools import normalize, resample_2d, mp_silu, mp_sum
+from modules.mp_tools import normalize, resample_1d, mp_silu, mp_sum
 
 @dataclass
-class DualDiffusionVAE_EDM2_C1_Config(DualDiffusionVAEConfig):
+class DualDiffusionVAE_EDM2_C2_Config(DualDiffusionVAEConfig):
 
     model_channels: int       = 1024         # Base multiplier for the number of channels.
     latent_channels: int      = 8
@@ -91,10 +91,9 @@ class Block(torch.nn.Module):
         resample_mode: Literal["keep", "up", "down"] = "keep",
         dropout: float         = 0.,       # Dropout probability.
         res_balance: float     = 0.3,      # Balance between main branch (0) and residual branch (1).
-        attn_balance: float    = 0.3,      # Balance between main branch (0) and self-attention (1).
         clip_act: float        = 256,      # Clip output activations. None = do not clip.
-        mlp_multiplier: int    = 1,        # Multiplier for the number of channels in the MLP.
-        mlp_groups: int        = 1,        # Number of groups for the MLP.
+        mlp_multiplier: int    = 2,        # Multiplier for the number of channels in the MLP.
+        mlp_groups: int        = 8,        # Number of groups for the MLP.
     ) -> None:
         super().__init__()
 
@@ -105,7 +104,6 @@ class Block(torch.nn.Module):
         self.resample_mode = resample_mode
         self.dropout = dropout
         self.res_balance = res_balance
-        self.attn_balance = attn_balance
         self.clip_act = clip_act
         
         self.conv_res0 = MPConv(out_channels if flavor == "enc" else in_channels,
@@ -119,13 +117,17 @@ class Block(torch.nn.Module):
 
     def forward(self, x: torch.Tensor, emb: torch.Tensor) -> torch.Tensor:
         
-        #x = resample(x, mode=self.resample_mode)
+        x = resample_1d(x, mode=self.resample_mode)
 
         if self.flavor == "enc":
             if self.conv_skip is not None:
                 x = self.conv_skip(x)
         #    x = normalize(x, dim=1) # pixel norm
-        x = normalize(x, dim=1) # pixel norm
+
+        #x = normalize(x, dim=1) # pixel norm
+
+        #x = normalize(x - x.mean(dim=1, keepdim=True), dim=1) # pixel norm
+        #x = normalize(x - x.mean(dim=(2,3), keepdim=True), dim=(2,3)) # channel norm
 
         y = self.conv_res0(mp_silu(x))
 
@@ -145,16 +147,17 @@ class Block(torch.nn.Module):
             x = x.clip_(-self.clip_act, self.clip_act)
         return x
 
-class AutoencoderKL_EDM2_C1(DualDiffusionVAE):
+class AutoencoderKL_EDM2_C2(DualDiffusionVAE):
 
-    def __init__(self, config: DualDiffusionVAE_EDM2_C1_Config) -> None:
+    def __init__(self, config: DualDiffusionVAE_EDM2_C2_Config) -> None:
         super().__init__()
         self.config = config
 
         block_kwargs = {"dropout": config.dropout,
                         "mlp_multiplier": config.mlp_multiplier,
                         "mlp_groups": config.mlp_groups,
-                        "res_balance": config.res_balance}
+                        "res_balance": 0.5} #"res_balance": 0.5}#config.res_balance}
+                        
         
         cblock = [config.model_channels * x for x in config.channel_mult]
         cemb = config.model_channels * config.channel_mult_emb if config.channel_mult_emb is not None else max(cblock)
@@ -180,7 +183,9 @@ class AutoencoderKL_EDM2_C1(DualDiffusionVAE):
             if level == 0:
                 cin = cout
                 cout = channels
-                self.enc[f"conv_in"] = MPConv(cin, cout, kernel=(2,3))
+                #self.enc[f"conv_in"] = MPConv(cin, cout, kernel=(2,3))
+                self.enc[f"conv_in"] = Block(level, cin, cout, cemb,
+                                                flavor="enc", **block_kwargs)
             else:
                 self.enc[f"block{level}_down"] = Block(level, cout, cout, cemb,
                                                     flavor="enc", resample_mode="down", **block_kwargs)
@@ -211,7 +216,8 @@ class AutoencoderKL_EDM2_C1(DualDiffusionVAE):
                 self.dec[f"block{level}_up"] = Block(level, cin, cout, cemb, flavor="dec",
                                                            resample_mode="up", **block_kwargs)
             
-        self.conv_out = MPConv(cout, config.in_num_freqs, kernel=(2,3))
+        #self.conv_out = MPConv(cout, config.in_num_freqs, kernel=(2,3))
+        self.conv_out = Block(level, cout, config.in_num_freqs, cemb, flavor="dec", **block_kwargs)
         
     def get_embeddings(self, emb_in: torch.Tensor) -> torch.Tensor:
         return self.emb_label(normalize(emb_in).to(device=self.device, dtype=self.dtype))
@@ -221,13 +227,15 @@ class AutoencoderKL_EDM2_C1(DualDiffusionVAE):
     
     def get_latent_shape(self, sample_shape: Union[torch.Size, tuple[int, int, int, int]]) -> torch.Size:
         if len(sample_shape) == 4:
-            return (sample_shape[0], self.config.latent_channels, self.config.in_channels, sample_shape[3])
+            return (sample_shape[0], self.config.latent_channels, self.config.in_channels,
+                    sample_shape[3] // 2 ** (self.num_levels-1))
         else:
             raise ValueError(f"Invalid sample shape: {sample_shape}")
         
     def get_sample_shape(self, latent_shape: Union[torch.Size, tuple[int, int, int, int]]) -> torch.Size:
         if len(latent_shape) == 4:
-            return (latent_shape[0], self.config.out_channels, self.config.in_num_freqs, latent_shape[3])
+            return (latent_shape[0], self.config.out_channels, self.config.in_num_freqs,
+                    latent_shape[3] * 2 ** (self.num_levels-1))
         else:
             raise ValueError(f"Invalid latent shape: {latent_shape}")
         
@@ -248,7 +256,8 @@ class AutoencoderKL_EDM2_C1(DualDiffusionVAE):
                 hidden_states.append((name, x))
             
             if "conv" in name:
-                x = block(torch.cat((x, torch.ones_like(x[:, :1])), dim=1))
+                #x = block(torch.cat((x, torch.ones_like(x[:, :1])), dim=1))
+                x = block(torch.cat((x, torch.ones_like(x[:, :1])), dim=1), embeddings)
             else:
                 x = block(x, embeddings)
 
@@ -281,7 +290,8 @@ class AutoencoderKL_EDM2_C1(DualDiffusionVAE):
             if return_hidden_states == True:
                 hidden_states.append((name, x))
 
-        output: torch.Tensor = self.conv_out(x, gain=self.out_gain)
+        #output: torch.Tensor = self.conv_out(x, gain=self.out_gain)
+        output: torch.Tensor = self.conv_out(x, embeddings) * self.out_gain
         if return_hidden_states == True:
             hidden_states.append(("conv_out", output))
 

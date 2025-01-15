@@ -28,7 +28,7 @@ import numpy as np
 
 from modules.formats.format import DualDiffusionFormat
 from modules.vaes.vae import DualDiffusionVAEConfig, DualDiffusionVAE, IsotropicGaussianDistribution
-from modules.mp_tools import MPConv, normalize, resample, mp_silu, mp_sum
+from modules.mp_tools import MPConv, normalize, resample_2d, mp_silu, mp_sum
 
 @dataclass
 class DualDiffusionVAE_EDM2Config(DualDiffusionVAEConfig):
@@ -97,7 +97,7 @@ class Block(torch.nn.Module):
 
     def forward(self, x: torch.Tensor, emb: torch.Tensor) -> torch.Tensor:
         
-        x = resample(x, mode=self.resample_mode)
+        x = resample_2d(x, mode=self.resample_mode)
 
         if self.flavor == "enc":
             if self.conv_skip is not None:

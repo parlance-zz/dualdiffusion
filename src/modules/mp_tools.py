@@ -46,14 +46,6 @@ def normalize(x: torch.Tensor, dim: Optional[Union[tuple, list]] = None,
         norm = torch.add(eps, norm, alpha=(norm.numel() / x.numel())**0.5)
         return (x.float() / norm).to(x.dtype)
 
-def resample(x: torch.Tensor, mode: Literal["keep", "down", "up"] = "keep") -> torch.Tensor:
-    if mode == "keep":
-        return x
-    elif mode == 'down':
-        return torch.nn.functional.avg_pool2d(x, 2) # should be multiplied by 2 to be magnitude preserving,
-    elif mode == 'up':                              # however, pixel norm is applied after downsampling so it doesn't matter
-        return torch.nn.functional.interpolate(x, scale_factor=2, mode="nearest")
-
 def resample_1d(x: torch.Tensor, mode: Literal["keep", "down", "up"] = "keep") -> torch.Tensor:
     if mode == "keep":
         return x
@@ -61,6 +53,26 @@ def resample_1d(x: torch.Tensor, mode: Literal["keep", "down", "up"] = "keep") -
         return torch.lerp(x[..., ::2], x[..., 1::2], 0.5)
     elif mode == 'up':
         return torch.repeat_interleave(x, 2, dim=-1)
+    
+def resample_2d(x: torch.Tensor, mode: Literal["keep", "down", "up"] = "keep") -> torch.Tensor:
+    if mode == "keep":
+        return x
+    elif mode == 'down':
+        return torch.nn.functional.avg_pool2d(x, 2) # should be multiplied by 2 to be magnitude preserving,
+    elif mode == 'up':                              # however, pixel norm is applied after downsampling so it doesn't matter
+        return torch.nn.functional.interpolate(x, scale_factor=2, mode="nearest")
+
+def resample_3d(x: torch.Tensor, mode: Literal["keep", "down", "up"] = "keep") -> torch.Tensor:
+    if mode == "keep":
+        return x
+    elif mode == 'down':
+        original_shape = x.shape
+        return torch.nn.functional.avg_pool2d(
+            x.view(x.shape[0]*x.shape[1], x.shape[2], x.shape[3], x.shape[4]), 2).view(
+                original_shape[0], original_shape[1], original_shape[2], original_shape[3]//2, original_shape[4]//2) * 2
+    elif mode == 'up':
+        #return torch.nn.functional.interpolate(x, scale_factor=(1,2,2), mode="nearest")
+        return x.repeat_interleave(2, dim=-1).repeat_interleave(2, dim=-2)
     
 #----------------------------------------------------------------------------
 # Magnitude-preserving SiLU (Equation 81).
