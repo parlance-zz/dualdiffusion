@@ -38,6 +38,9 @@
   "encode_text_embeddings_force_overwrite": false,
   "encode_embeddings_only": true,
 
+  "build_input_dataset_path": null,
+  "build_output_dataset_path": "/home/parlance/dualdiffusion/data",
+
   "clap_embedding_model": "edm2_vt7_12d_4_clap",
   "clap_embedding_labels": {
     "vocals": ["vocals", "singing", "female singer", "male singer", "voice", "speaking", "speech", "dialogue",

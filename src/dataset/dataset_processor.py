@@ -424,6 +424,10 @@ class DatasetProcessorConfig:
     encode_text_embeddings_force_overwrite: bool         = False # (re)encode and overwrite existing text embeddings
     encode_embeddings_only: bool                         = False # only encodes audio/text embeddings and skips latents
 
+    # build process
+    build_output_dataset_path: str    = None # if set, overrides the default output path of $DATASET_PATH
+    build_input_dataset_path: str     = None # if set, overrides the default input path of $DATASET_PATH
+    
     clap_embedding_model: Optional[str] = None
     clap_embedding_labels: Optional[dict[str, list[str]]] = None
     clap_embedding_tags: Optional[list[str]] = None

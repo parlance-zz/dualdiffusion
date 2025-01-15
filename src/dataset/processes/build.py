@@ -22,7 +22,7 @@
 
 from utils import config
 
-from typing import Optional, Union, Any
+from typing import Optional, Union, Any, Literal
 import os
 import logging
 
@@ -34,6 +34,13 @@ from utils.dual_diffusion_utils import get_audio_metadata, get_audio_info
 
 
 class Build(DatasetProcessStage):
+
+    def get_stage_type(self) -> Literal["io", "cpu", "cuda"]:
+        return "cpu"
+    
+    def info_banner(self, logger: logging.Logger):
+        logger.info(f"Input path: {self.processor_config.build_input_dataset_path or config.DATASET_PATH}")
+        logger.info(f"Output path: {self.processor_config.build_output_dataset_path or config.DATASET_PATH}")
 
     def summary_banner(self, logger: logging.Logger) -> None:
         
@@ -96,7 +103,9 @@ class Build(DatasetProcessStage):
             "total_num_samples": len(dataset_samples),
             "processor_config": self.processor_config.__dict__,
         }
-        dataset_info_path = os.path.join(config.DATASET_PATH, "dataset_infos", "dataset_info.json")
+
+        dataset_path = self.processor_config.build_output_dataset_path
+        dataset_info_path = os.path.join(dataset_path, "dataset_infos", "dataset_info.json")
         config.save_json(dataset_info, dataset_info_path, copy_on_write=True)
 
         # write splits and summarize results
@@ -104,7 +113,7 @@ class Build(DatasetProcessStage):
         for split, split_samples in dataset_splits.items():
             summary_str += f"\n  {split}: {len(split_samples)} samples"
 
-            split_path = os.path.join(config.DATASET_PATH, f"{split}.jsonl")
+            split_path = os.path.join(dataset_path, f"{split}.jsonl")
             config.save_json(split_samples, split_path, copy_on_write=True)
 
         logger.info(summary_str)
@@ -229,7 +238,7 @@ if __name__ == "__main__":
     dataset_processor.process(
         "Build",
         [Build()],
-        input=config.DATASET_PATH
+        input=dataset_processor.config.build_input_dataset_path or config.DATASET_PATH
     )
 
     exit(0)
