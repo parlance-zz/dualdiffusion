@@ -237,65 +237,26 @@ class AutoencoderKL_EDM2_D1(DualDiffusionVAE):
         else:
             raise ValueError(f"Invalid latent shape: {latent_shape}")
         
-    def encode(self, x: torch.Tensor, embeddings: torch.Tensor,
-               format: DualDiffusionFormat, return_hidden_states: bool = False) -> DegenerateDistribution:
-        raise NotImplementedError()
-    
-        x = x.unsqueeze(1)
-        embeddings = embeddings[0].unsqueeze(-1).unsqueeze(-1).unsqueeze(-1)
-
-        # keep record of encoder inputs
-        if return_hidden_states == True:
-            hidden_states: list[torch.Tensor] = []
+    def encode(self, x: torch.Tensor, embeddings: torch.Tensor, format: DualDiffusionFormat) -> DegenerateDistribution:
+        x_in = x.unsqueeze(1)
+        enc_embeddings = embeddings[0].unsqueeze(-1).unsqueeze(-1).unsqueeze(-1)
 
         for name, block in self.enc.items():
-            
-            if return_hidden_states == True:
-                hidden_states.append(x)
-                
-            if "conv" in name:
-                x = block(torch.cat((x, torch.ones_like(x[:, :1])), dim=1), embeddings)
-            else:
-                x = block(x, embeddings)
-        
-        if return_hidden_states == True:
-            hidden_states.append(x)
+            x_out = block(x_in, enc_embeddings)
+            x_in = x_out
 
-        latents = self.conv_latents_out(x, embeddings) * self.latents_out_gain
-
-        if return_hidden_states == True:
-            return DegenerateDistribution(latents), hidden_states
-        else:
-            return DegenerateDistribution(latents)
+        return DegenerateDistribution(x_out)
     
-    def decode(self, x: torch.Tensor, embeddings: torch.Tensor, format: DualDiffusionFormat,
-               return_hidden_states: bool = False, enc_states: list[torch.Tensor] = None) -> torch.Tensor:
-        raise NotImplementedError()
-        diff_embeddings = embeddings[1].unsqueeze(-1).unsqueeze(-1).unsqueeze(-1)
+    def decode(self, x: torch.Tensor, embeddings: torch.Tensor, format: DualDiffusionFormat) -> torch.Tensor:
 
-        # keep record of decoder outputs
-        if return_hidden_states == True:
-            hidden_states: list[torch.Tensor] = []
+        dec_embeddings = embeddings[1].unsqueeze(-1).unsqueeze(-1).unsqueeze(-1)
 
-        x = torch.cat((x, torch.ones_like(x[:, :1])), dim=1)
-        x = self.conv_latents_in(x, diff_embeddings)
-
-        if return_hidden_states == True:
-            hidden_states.append((x, self.conv_latents_in.error_logvar))
-
+        x_in = x
         for name, block in self.dec.items():
-            
-            x = block(x, diff_embeddings)
-            if return_hidden_states == True:
-                hidden_states.append((x, block.error_logvar))
+            x_out = block(x_in, dec_embeddings)
+            x_in = x_out
 
-        output: torch.Tensor = self.conv_out(x, diff_embeddings) * self.out_gain
-
-        if return_hidden_states == True:
-            hidden_states.append((output, self.conv_out.error_logvar))
-            return output.squeeze(1), hidden_states
-        else:
-            return output.squeeze(1)
+        return x_out
 
     def encode_train(self, x: torch.Tensor, embeddings: torch.Tensor) -> list[torch.Tensor]:
     
