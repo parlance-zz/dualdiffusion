@@ -63,14 +63,13 @@ class VAETrainer_D(ModuleTrainer):
 
     def train_batch(self, batch: dict) -> dict[str, torch.Tensor]:
 
-        samples = self.format.raw_to_sample(batch["audio"]).detach()
+        samples = self.format.raw_to_sample(batch["audio"]).detach().clone()
         if self.trainer.config.enable_channels_last == True:
             samples = samples.to(memory_format=torch.channels_last)
 
         sample_audio_embeddings = normalize(batch["audio_embeddings"])
         vae_emb = self.vae.get_embeddings(sample_audio_embeddings)
-        
-        latents, output_samples, enc_states, dec_states = self.vae(samples, vae_emb, self.format)
+        enc_states, dec_states = self.vae(samples, vae_emb)
 
         # recon input/output sample loss
         #output_samples: torch.Tensor = output_samples.float()
@@ -89,62 +88,49 @@ class VAETrainer_D(ModuleTrainer):
         #diff_loss_nll = diff_loss / diff_loss_logvar.exp() + diff_loss_logvar
 
         # latents kl loss
-        latents: torch.Tensor = latents.float()
-        latents_var = latents.var(dim=(1,2,3,4)).clip(min=0.1)
-        latents_mean = latents.mean(dim=(1,2,3,4))
-        latents_kl_loss = (latents_mean.square() + latents_var - 1 - latents_var.log())
+        latents: torch.Tensor = enc_states[-1][1].float()
+        latents_var = latents.var(dim=(2,3,4)).clip(min=0.1)
+        latents_mean = latents.mean(dim=(2,3,4))
+        latents_kl_loss = (latents_mean.square() + latents_var - 1 - latents_var.log()).mean(dim=1)
 
-        # input/output sample kl loss
-        relative_var = (output_samples.var(dim=(1,2,3)) / samples.var(dim=(1,2,3))).clip(min=0.1, max=10)
-        relative_mean = samples.mean(dim=(1,2,3)) - output_samples.mean(dim=(1,2,3))
-        samples_kl_loss = relative_mean.square() + relative_var - 1 - relative_var.log()
+        # state kl loss
+        output_states = [state[1] for state in enc_states + dec_states]
+        state_kl_loss = torch.zeros_like(latents_kl_loss)
+        for state in output_states:
+            state_var = state.var(dim=(1,2,3,4)).clip(min=0.1)
+            state_mean = state.mean(dim=(1,2,3,4))
+            state_kl_loss = state_kl_loss + (state_mean.square() + state_var - 1 - state_var.log())
+        
+        # total kl loss
+        kl_loss = latents_kl_loss + state_kl_loss
 
-        # hidden state losses
-        hidden_state_kl_loss = torch.zeros_like(samples_kl_loss)
-        hidden_state_recon_loss = torch.zeros_like(samples_kl_loss)
-        hidden_state_recon_loss_nll = torch.zeros_like(samples_kl_loss)
-        hidden_state_logs = {}
+        logs = {}
+        recon_loss = torch.zeros_like(state_kl_loss)
+        recon_loss_nll = torch.zeros_like(recon_loss)
+        for i, (enc_state, dec_state) in enumerate(zip(enc_states, reversed(dec_states))):
 
-        for i, (enc_state, (dec_state, error_logvar)) in enumerate(zip(enc_states, reversed(dec_states))):
+            enc_x_in, enc_x_out = enc_state
+            dec_x_in, dec_x_out, error_logvar = dec_state
 
-            enc_state = enc_state.float()
-            dec_state = dec_state.float()
+            state_recon_loss = torch.nn.functional.mse_loss(enc_x_in, dec_x_out,
+                                        reduction="none").mean(dim=(1,2,3,4))
+            state_recon_loss_nll = state_recon_loss / error_logvar.exp() + error_logvar
 
-            if i == 0: enc_state = enc_state.clone()
+            recon_loss = recon_loss + state_recon_loss
+            recon_loss_nll = recon_loss_nll + state_recon_loss_nll
 
-            hidden_state_logs[f"enc_state_std/{i}"] = enc_state.std().detach()
-            hidden_state_logs[f"enc_state_mean/{i}"] = enc_state.mean().detach()
-            hidden_state_logs[f"dec_state_std/{i}"] = dec_state.std().detach()
-            hidden_state_logs[f"dec_state_mean/{i}"] = dec_state.mean().detach()
+            logs[f"state_loss/{i}"] = state_recon_loss
+            logs[f"state_loss_nll/{i}"] = state_recon_loss_nll
 
-            if i > 0:
-                for state in (enc_state, dec_state):
-                    state_var = state.var(dim=(1,2,3,4)).clip(min=0.1)
-                    state_mean = state.mean(dim=(1,2,3,4))
-                    state_kl_loss = state_mean.square() + state_var - 1 - state_var.log()
-                    hidden_state_kl_loss = hidden_state_kl_loss + state_kl_loss
-
-            recon_loss = torch.nn.functional.mse_loss(enc_state, dec_state, reduction="none").mean(dim=(1,2,3,4))
-            recon_loss_nll = recon_loss / error_logvar.exp() + error_logvar
-
-            hidden_state_recon_loss = hidden_state_recon_loss + recon_loss
-            hidden_state_recon_loss_nll = hidden_state_recon_loss_nll + recon_loss_nll
-
-            hidden_state_logs[f"state_recon_loss/{i}"] = recon_loss.detach()
-            hidden_state_logs[f"state_recon_loss_nll/{i}"] = recon_loss_nll.detach()
-
-        kl_loss = latents_kl_loss + samples_kl_loss + hidden_state_kl_loss
-
-        return_dict = {
-            "loss": hidden_state_recon_loss_nll + kl_loss * self.config.kl_loss_weight,
+        logs.update({
+            "loss": kl_loss * self.config.kl_loss_weight + recon_loss_nll ,
             "loss/recon_nll": recon_loss_nll.mean().detach(),
-            "loss/recon": hidden_state_recon_loss.mean().detach(),
+            "loss/recon": state_recon_loss.mean().detach(),
             "loss/kl": kl_loss.mean().detach(),
             "latents/mean": latents.mean().detach(),
             "latents/std": latents.std().detach(),
-        }
-        return_dict.update(hidden_state_logs)
-        return return_dict
+        })
+        return logs
 
     @torch.no_grad()
     def finish_batch(self) -> dict[str, torch.Tensor]:
