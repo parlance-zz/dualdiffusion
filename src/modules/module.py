@@ -4,7 +4,8 @@ import os
 import inspect
 from typing import Optional, Type
 from abc import ABC
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
+from logging import getLogger
 
 import torch
 
@@ -46,7 +47,22 @@ class DualDiffusionModule(torch.nn.Module, ABC):
         config_class = cls.config_class or inspect.signature(cls.__init__).parameters["config"].annotation
         #module_name = cls.module_name or os.path.basename(module_path)
         module_name = os.path.basename(module_path)
-        module_config = config_class(**config.load_json(os.path.join(module_path, f"{module_name}.json")))
+
+        logger = getLogger()
+        module_config_dict = {}
+        module_config_fields = [field.name for field in fields(config_class)]
+        module_config_file_path = os.path.join(module_path, f"{module_name}.json")
+        module_config_file_dict = config.load_json(module_config_file_path)
+        for field, value in module_config_file_dict.items():
+            if field not in module_config_fields:
+                logger.warning(f"Warning: field '{field}' not found in module config dataclass '{config_class.__name__}', ignoring...")
+            else:
+                module_config_dict[field] = value
+        module_config = config_class(**module_config_dict)
+        for field in module_config_fields:
+            if field not in module_config_file_dict:
+                logger.warning(f"Warning: field '{field}' not found in config file '{module_config_file_path}',"
+                                f" initializing with default value '{getattr(module_config, field)}'")
 
         module = cls(module_config).requires_grad_(False).train(False)
         
