@@ -73,10 +73,9 @@ class VAETrainer_C(ModuleTrainer):
         latents, output_samples, noise, noise_pred, diff_output, enc_states, dec_states = self.vae(samples, vae_emb, self.format)
 
         # recon input/output sample loss
-        samples = samples.clone().detach()
         output_samples: torch.Tensor = output_samples.float()
         recon_loss = torch.nn.functional.mse_loss(
-            samples, output_samples, reduction="none").mean(dim=(1,2,3))
+            samples.clone().detach(), output_samples, reduction="none").mean(dim=(1,2,3))
         recon_loss_logvar = self.vae.get_recon_loss_logvar()
         recon_loss_nll = recon_loss / recon_loss_logvar.exp() + recon_loss_logvar
 
@@ -84,10 +83,8 @@ class VAETrainer_C(ModuleTrainer):
         noise = noise.float()
         noise_pred = noise_pred.float()
         noise_std = (recon_loss_logvar/2).exp().detach() * self.vae.config.noise_multiplier
-        #diff_loss = torch.nn.functional.mse_loss(
-        #    noise, noise_pred, reduction="none").mean(dim=(1,2,3,4))
         diff_loss = torch.nn.functional.mse_loss(
-            samples, diff_output, reduction="none").mean(dim=(1,2,3)) / noise_std**2
+            noise, noise_pred, reduction="none").mean(dim=(1,2,3,4))
         diff_loss_logvar = self.vae.get_diff_loss_logvar()
         diff_loss_nll = diff_loss / diff_loss_logvar.exp() + diff_loss_logvar
 
@@ -138,7 +135,6 @@ class VAETrainer_C(ModuleTrainer):
             "diff_noise_std": noise_std,
             "latents/mean": latents.mean().detach(),
             "latents/std": latents.std().detach(),
-            "diff_out_gain": self.vae.diff_out_gain.detach().cpu()
         }
         return_dict.update(hidden_state_logs)
         return return_dict

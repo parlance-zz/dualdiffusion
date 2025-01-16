@@ -164,7 +164,6 @@ class AutoencoderKL_EDM2_C3(DualDiffusionVAE):
 
         self.latents_out_gain = torch.nn.Parameter(torch.ones([]))
         self.out_gain = torch.nn.Parameter(torch.ones([]))
-        self.diff_out_gain = torch.nn.Parameter(torch.ones([]))
         
         # Embedding.
         self.emb_label = MPConv(config.in_channels_emb, cemb, kernel=())
@@ -300,19 +299,16 @@ class AutoencoderKL_EDM2_C3(DualDiffusionVAE):
 
         output: torch.Tensor = self.conv_out(x, embeddings) * self.out_gain
 
-        #noise_std = (self.recon_loss_logvar/2).exp().detach() * self.config.noise_multiplier
-        noise_std = (self.recon_loss_logvar/2).exp() * self.config.noise_multiplier
+        noise_std = (self.recon_loss_logvar/2).exp().detach() * self.config.noise_multiplier
         noise = torch.randn_like(output)
-        diff_input = output + noise * noise_std
-        #diff_input = output.detach() + noise * noise_std
-        #if true_samples is None:
-            #diff_input = output.detach() + noise * noise_std
-        #else:
-        #    diff_input = true_samples.unsqueeze(1).detach() + noise * noise_std
+        if true_samples is None:
+            diff_input = output.detach() + noise * noise_std
+        else:
+            diff_input = true_samples.unsqueeze(1).detach() + noise * noise_std
 
         h1 = self.diff_in(torch.cat((diff_input, torch.ones_like(x[:, :1])), dim=1), diff_embeddings)
         h2 = self.diff_mid(h1, diff_embeddings)
-        noise_pred = self.diff_out(torch.cat((h1, h2), dim=1), diff_embeddings) * self.diff_out_gain
+        noise_pred = self.diff_out(torch.cat((h1, h2), dim=1), diff_embeddings)
         diff_output: torch.Tensor = diff_input - noise_pred * noise_std
 
         if return_hidden_states == True:
