@@ -6,7 +6,7 @@
         "load_checkpoints": true,
         "load_emas": false
     },
-    "length": 480000,
+    "length": 768000,
     "num_fgla_iters": 300,
     "sample_latents": true,
     "normalize_latents": false,

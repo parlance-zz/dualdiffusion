@@ -198,7 +198,7 @@ class SpectrogramFormat(DualDiffusionFormat):
     @torch.inference_mode()
     def sample_to_raw(self, samples: torch.Tensor, return_dict: bool = False) -> Union[torch.Tensor, dict]:
         
-        raw_samples = self.spectrogram_converter.spectrogram_to_audio(samples.clip(min=0))
+        raw_samples = self.spectrogram_converter.spectrogram_to_audio(samples.clip(min=0) / 2)
         if return_dict:
             return {"raw_samples": raw_samples, "samples": samples}
         else:
