@@ -157,6 +157,7 @@ class AutoencoderKL_EDM2_C3(DualDiffusionVAE):
         
         cblock = [config.model_channels * x for x in config.channel_mult]
         cemb = config.model_channels * config.channel_mult_emb if config.channel_mult_emb is not None else max(cblock)
+        cemb *= self.config.mlp_multiplier
         cemb_diff = cblock[1] * self.config.mlp_multiplier
 
         self.num_levels = len(config.channel_mult)
