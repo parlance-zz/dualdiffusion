@@ -112,8 +112,12 @@ class VAETrainer_D(ModuleTrainer):
             enc_x_in, enc_x_out = enc_state
             dec_x_in, dec_x_out, error_logvar = dec_state
 
-            state_recon_loss = torch.nn.functional.mse_loss(enc_x_in, dec_x_out,
+            recon_loss1 = torch.nn.functional.mse_loss(enc_x_in, dec_x_out,
                                         reduction="none").mean(dim=(1,2,3,4))
+            recon_loss2 = torch.nn.functional.mse_loss(enc_x_out, dec_x_in,
+                                        reduction="none").mean(dim=(1,2,3,4))
+            
+            state_recon_loss = recon_loss1 + recon_loss2
             state_recon_loss_nll = state_recon_loss / error_logvar.exp() + error_logvar
 
             recon_loss = recon_loss + state_recon_loss
