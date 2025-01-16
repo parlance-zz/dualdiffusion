@@ -134,7 +134,7 @@ def solve_posthoc_coefficients(in_ofs: np.ndarray, in_std: np.ndarray,
 # get all emas in dir as dict with ema names as keys and filenames as values
 def find_emas_in_dir(module_path: str) -> dict[str, str]:
     ema_dict = {}
-    for path in os.listdir(module_path):
+    for path in reversed(sorted(os.listdir(module_path))):
         if os.path.isfile(os.path.join(module_path, path)):
             if path.startswith("ema_") and path.endswith(".safetensors"):
                 ema_name = path[len("ema_"):-len(".safetensors")]
