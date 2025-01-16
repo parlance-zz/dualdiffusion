@@ -30,7 +30,7 @@ import torch
 from pipelines.dual_diffusion_pipeline import DualDiffusionPipeline
 from utils.dual_diffusion_utils import (
     init_cuda, normalize, save_audio, load_audio, load_safetensors,
-    tensor_to_img, save_img
+    tensor_to_img, save_img, get_audio_info
 )
 
 
@@ -45,6 +45,7 @@ def vae_test() -> None:
     model_name = test_params["model_name"]
     model_load_options = test_params["model_load_options"]
     length = test_params["length"]
+    no_crop = test_params["no_crop"]
     num_fgla_iters = test_params["num_fgla_iters"]
     sample_latents = test_params["sample_latents"]
     normalize_latents = test_params["normalize_latents"]
@@ -57,7 +58,10 @@ def vae_test() -> None:
     
     pipeline.format.config.num_fgla_iters = num_fgla_iters
     sample_rate = pipeline.format.config.sample_rate
-    crop_width = pipeline.format.sample_raw_crop_width(length=length)
+    if no_crop == True:
+        crop_width = -1
+    else:
+        crop_width = pipeline.format.sample_raw_crop_width(length=length)
     last_global_step = pipeline.vae.config.last_global_step
 
     dataset_path = config.DATASET_PATH
@@ -72,14 +76,15 @@ def vae_test() -> None:
     point_similarity = latents_mean = latents_std = 0
 
     for filename in test_samples:
-
+        
         file_ext = os.path.splitext(filename)[1]
         safetensors_file_name = os.path.join(f"{os.path.splitext(filename)[0]}.safetensors")
         latents_dict = load_safetensors(os.path.join(dataset_path, safetensors_file_name))
         audio_embedding = normalize(latents_dict["clap_audio_embeddings"].mean(dim=0, keepdim=True)).float()
         vae_embeddings = pipeline.vae.get_embeddings(audio_embedding.to(dtype=pipeline.vae.dtype, device=pipeline.vae.device))
 
-        input_raw_sample = load_audio(os.path.join(dataset_path, filename), count=crop_width)
+        audio_len = get_audio_info(os.path.join(dataset_path, filename)).frames
+        input_raw_sample = load_audio(os.path.join(dataset_path, filename), count=min(crop_width, audio_len))
         input_raw_sample = input_raw_sample.unsqueeze(0).to(pipeline.format.device)
         input_sample = pipeline.format.raw_to_sample(input_raw_sample)
         posterior = pipeline.vae.encode(input_sample.to(dtype=pipeline.vae.dtype),

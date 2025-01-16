@@ -4,17 +4,20 @@
         "torch_dtype": "bfloat16",
         "device": "cuda",
         "load_checkpoints": true,
-        "load_emas": false
+        "load_emas": false,
+        "compile_options": null
     },
-    "length": 768000,
+    "length": 1472000,
+    "no_crop": false,
     "num_fgla_iters": 300,
     "sample_latents": true,
     "normalize_latents": false,
     "random_latents": false,
     "add_latent_noise": 0,
     "test_samples": [
-        "spc/3 Ninjas Kick Back/01 Title Screen & Ending.spc.flac",
-        "spc/Kirby Super Star/43 Taking Over the Halberd.spc.flac",
+        "psf/Mega Man X6/25. DYNAMO.xa.flac",
+        "psf/Mega Man X4/BGM2.XA.flac",
+        "spc/Kirby Super Star/53 Heart of Nova.spc.flac",
         "spc/Mega Man X3/09 Blast Hornet.spc.flac",
         "spc/Pilotwings/04 Light Plane.spc.flac"
     ]

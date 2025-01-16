@@ -498,7 +498,8 @@ def tensor_to_img(x: torch.Tensor,
                   rescale: bool = True,
                   flip_x: bool = False,
                   flip_y: bool = False,
-                  colormap: bool = False,) -> np.ndarray:
+                  colormap: bool = False,
+                  rgb_order: Optional[tuple[int, int, int]] = (0,2,1)) -> np.ndarray:
     
     x = x.clone().detach().real.float().resolve_conj().cpu()
     while x.ndim < 4: x.unsqueeze_(0)
@@ -515,6 +516,10 @@ def tensor_to_img(x: torch.Tensor,
     elif x.shape[-1] == 2:
         x = torch.cat((x, torch.zeros_like(x[..., 0:1])), dim=-1)
         x[..., 2], x[..., 1] = x[..., 1], 0
+    elif x.shape[-1] == 3 and rgb_order is not None:
+        _x = x.clone()
+        for i in range(3):
+            x[..., i] = _x[..., rgb_order[i]]
     elif x.shape[-1] > 4:
         raise ValueError(f"Unsupported number of channels in tensor_to_img: {x.shape[-1]}")
     
