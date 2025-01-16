@@ -1,7 +1,7 @@
 {
   "seed": 4000,
   "device_batch_size": 2,
-  "gradient_accumulation_steps": 4,
+  "gradient_accumulation_steps": 2,
   "validation_device_batch_size": 0,
   "validation_accumulation_steps": 0,
   "max_train_steps": 1000000,
@@ -25,8 +25,8 @@
     "min_learning_rate": 4e-4
   },
   "optimizer": {
-    "adam_beta1": 0.9,
-    "adam_beta2": 0.99,
+    "adam_beta1": 0.95,
+    "adam_beta2": 0.995,
     "adam_epsilon": 1e-8,
     "adam_weight_decay": 0,
     "max_grad_norm": 100
