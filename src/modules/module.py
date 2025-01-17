@@ -2,7 +2,7 @@ from utils import config
 
 import os
 import inspect
-from typing import Optional, Type
+from typing import Optional, Type, Union, Literal
 from abc import ABC
 from dataclasses import dataclass, fields
 from logging import getLogger
@@ -21,6 +21,7 @@ class DualDiffusionModule(torch.nn.Module, ABC):
     module_name: Optional[str] = None
     has_trainable_parameters: bool = True
     supports_half_precision: bool = True
+    supports_channels_last: Union[bool, Literal["3d"]] = True
     supports_compile: bool = True
 
     def __init__(self):
@@ -94,6 +95,12 @@ class DualDiffusionModule(torch.nn.Module, ABC):
                 dtype = torch_dtype(dtype)
             else:
                 dtype = torch.float32
+
+        if memory_format == torch.channels_last:
+            if type(self).supports_channels_last == False:
+                memory_format = None
+            elif type(self).supports_channels_last == "3d":
+                memory_format = torch.channels_last_3d
 
         super().to(device=device, dtype=dtype, memory_format=memory_format, **kwargs)
 
