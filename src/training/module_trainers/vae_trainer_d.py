@@ -89,35 +89,36 @@ class VAETrainer_D(ModuleTrainer):
 
         # latents kl loss
         latents: torch.Tensor = enc_states[-1][1].float()
-        latents_var = latents.var(dim=(2,3,4)).clip(min=0.1)
-        latents_mean = latents.mean(dim=(2,3,4))
-        latents_kl_loss = (latents_mean.square() + latents_var - 1 - latents_var.log()).mean(dim=1)
+        #latents_var = latents.var(dim=(2,3,4)).clip(min=0.1)
+        #latents_mean = latents.mean(dim=(2,3,4))
+        #latents_kl_loss = (latents_mean.square() + latents_var - 1 - latents_var.log()).mean(dim=1)
+        
 
         # state kl loss
         output_states = [state[1] for state in enc_states + dec_states]
-        state_kl_loss = torch.zeros_like(latents_kl_loss)
+        kl_loss = torch.zeros(samples.shape[0], device=self.trainer.accelerator.device)
         for state in output_states:
-            state_var = state.var(dim=(1,2,3,4)).clip(min=0.1)
-            state_mean = state.mean(dim=(1,2,3,4))
-            state_kl_loss = state_kl_loss + (state_mean.square() + state_var - 1 - state_var.log())
-        
-        # total kl loss
-        kl_loss = latents_kl_loss + state_kl_loss
+            #state_var = state.var(dim=(1,2,3,4)).clip(min=0.1)
+            #state_mean = state.mean(dim=(1,2,3,4))
+            if state.shape[1] > 1:
+                state_var = state.var(dim=1).clip(min=0.1)
+                state_mean = state.mean(dim=1)
+                kl_loss = kl_loss + (state_mean.square() + state_var - 1 - state_var.log()).mean(dim=(1,2,3))
 
         logs = {}
-        recon_loss = torch.zeros_like(state_kl_loss)
+        recon_loss = torch.zeros_like(kl_loss)
         recon_loss_nll = torch.zeros_like(recon_loss)
         for i, (enc_state, dec_state) in enumerate(zip(enc_states, reversed(dec_states))):
 
             enc_x_in, enc_x_out = enc_state
             dec_x_in, dec_x_out, error_logvar = dec_state
 
-            recon_loss1 = torch.nn.functional.mse_loss(enc_x_in, dec_x_out,
+            recon_loss1 = torch.nn.functional.mse_loss(enc_x_in.detach(), dec_x_out,
                                         reduction="none").mean(dim=(1,2,3,4))
-            recon_loss2 = torch.nn.functional.mse_loss(enc_x_out, dec_x_in,
-                                        reduction="none").mean(dim=(1,2,3,4))
+            #recon_loss2 = -torch.nn.functional.mse_loss(enc_x_in, dec_x_out.detach(),
+            #                            reduction="none").mean(dim=(1,2,3,4))
             
-            state_recon_loss = recon_loss1 + recon_loss2
+            state_recon_loss = recon_loss1 #+ recon_loss2
             state_recon_loss_nll = state_recon_loss / error_logvar.exp() + error_logvar
 
             recon_loss = recon_loss + state_recon_loss

@@ -253,10 +253,11 @@ class AutoencoderKL_EDM2_D1(DualDiffusionVAE):
 
         x_in = x
         for name, block in self.dec.items():
+            x_in = x_in + torch.randn_like(x_in) * 0.16 * 2**0.5
             x_out = block(x_in, dec_embeddings)
             x_in = x_out
 
-        return x_out
+        return x_out.squeeze(1)
 
     def encode_train(self, x: torch.Tensor, embeddings: torch.Tensor) -> list[torch.Tensor]:
     
@@ -278,6 +279,8 @@ class AutoencoderKL_EDM2_D1(DualDiffusionVAE):
 
         x_in = enc_states[-1][1]
         for (name, block), (enc_x_in, enc_x_out) in zip(self.dec.items(), reversed(enc_states)):
+            x_in = x_in + enc_x_out.detach() * 0.16 + torch.randn_like(x_in) * 0.16
+
             x_out = block(x_in, dec_embeddings)
             dec_states.append((x_in, x_out, block.error_logvar))
             x_in = x_out
