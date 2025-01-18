@@ -110,8 +110,7 @@ class DualDiffusionVAEConfig(DualDiffusionModuleConfig, ABC):
     latent_channels: int = 4
     dropout: float       = 0.
 
-    #latents_img_channel_order: Optional[tuple[int]] = (0,3,2,1) #None
-    latents_img_channel_order: Optional[tuple[int]] = (1,3,0,2) #None
+    latents_img_channel_order: Optional[tuple[int]] = None
 
 class DualDiffusionVAE(DualDiffusionModule, ABC):
 

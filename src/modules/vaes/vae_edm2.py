@@ -43,7 +43,10 @@ class DualDiffusionVAE_EDM2Config(DualDiffusionVAEConfig):
     mlp_multiplier: int = 1                  # Multiplier for the number of channels in the MLP.
     mlp_groups: int     = 1                  # Number of groups for the MLPs.
     add_mid_block_attention: bool = False    # Add attention layers in decoder mid-block
-    class_id_override: Optional[int] = None  # Override class id for class embeddings
+    class_id_override: Optional[int] = 0     # Override class id for class embeddings
+
+    target_snr: float = 32
+    label_dim: int = 512
 
 class Block(torch.nn.Module):
 
@@ -217,8 +220,16 @@ class AutoencoderKL_EDM2(DualDiffusionVAE):
                                                              use_attention=False, **block_kwargs)
         self.conv_out = MPConv(cout, config.out_channels, kernel=(3,3))
 
-    def get_class_embeddings(self, class_labels: torch.Tensor) -> torch.Tensor:
-        return mp_silu(self.emb_label(
+    def get_embeddings(self, class_labels: torch.Tensor) -> torch.Tensor:
+
+        # hack to avoid shape errors when a clap embedding is given instead of actual class labels
+        if class_labels.shape[-1] == 512 and self.config.label_dim != 512:
+            class_labels = torch.zeros((class_labels.shape[0], self.config.label_dim),
+                                       device=class_labels.device, dtype=class_labels.dtype)
+            class_labels[:, 0] = self.config.class_id_override
+
+        class_labels = torch.randn_like(class_labels) # mysteriously generates sharper output than
+        return mp_silu(self.emb_label(                # any class label it was trained on
             normalize(class_labels).to(device=self.device, dtype=self.dtype)))
 
     def get_recon_loss_logvar(self) -> torch.Tensor:
