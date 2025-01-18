@@ -39,15 +39,14 @@ class DualDiffusionVAE_EDM2_D1_Config(DualDiffusionVAEConfig):
     channel_mult_emb: Optional[int] = 5      # Multiplier for final embedding dimensionality.
     num_layers_per_block: int = 3            # Number of resnet blocks per resolution.
     res_balance: float        = 0.3          # Balance between main branch (0) and residual branch (1).
-    mlp_multiplier: int   = 2                # Multiplier for the number of channels in the MLP.
+    mlp_multiplier: int   = 1                # Multiplier for the number of channels in the MLP.
     mlp_groups: int       = 1                # Number of groups for the MLPs.
-    noise_multiplier: int = 2                # augments the amount of noise for the diffusion decoder
 
 class MPConv(torch.nn.Module):
 
     def __init__(self, in_channels: int, out_channels: int,
                  kernel: tuple[int, int], groups: int = 1, stride: int = 1,
-                 disable_weight_norm: bool = False) -> None:
+                 disable_weight_norm: bool = False, norm_dim: int = 1) -> None:
         super().__init__()
 
         self.in_channels = in_channels
@@ -55,6 +54,7 @@ class MPConv(torch.nn.Module):
         self.groups = groups
         self.stride = stride
         self.disable_weight_norm = disable_weight_norm
+        self.norm_dim = norm_dim
         
         self.weight = torch.nn.Parameter(torch.randn(out_channels, in_channels // groups, *kernel))
 
@@ -62,7 +62,7 @@ class MPConv(torch.nn.Module):
         
         w = self.weight.float()
         if self.training == True and self.disable_weight_norm == False:
-            w = normalize(w) # traditional weight normalization
+            w = normalize(w, dim=self.norm_dim) # traditional weight normalization
             
         w = w * (gain / w[0].numel()**0.5) # magnitude-preserving scaling
         w = w.to(x.dtype)
@@ -80,8 +80,8 @@ class MPConv(torch.nn.Module):
     @torch.no_grad()
     def normalize_weights(self):
         if self.disable_weight_norm == False:
-            self.weight.copy_(normalize(self.weight))
-
+            self.weight.copy_(normalize(self.weight, dim=self.norm_dim))
+   
 class Block(torch.nn.Module):
 
     def __init__(self,
@@ -92,11 +92,10 @@ class Block(torch.nn.Module):
         flavor: Literal["enc", "dec"] = "enc",
         resample_mode: Literal["keep", "up", "down"] = "keep",
         dropout: float         = 0.,       # Dropout probability.
-        res_balance: float     = 0.5,      # Balance between main branch (0) and residual branch (1).
+        res_balance: float     = 0.3,      # Balance between main branch (0) and residual branch (1).
         clip_act: float        = 256,      # Clip output activations. None = do not clip.
-        mlp_multiplier: int    = 2,        # Multiplier for the number of channels in the MLP.
+        mlp_multiplier: int    = 1,        # Multiplier for the number of channels in the MLP.
         mlp_groups: int        = 1,        # Number of groups for the MLP.
-        noise_multiplier: float = 1
 
     ) -> None:
         super().__init__()
@@ -109,31 +108,22 @@ class Block(torch.nn.Module):
         self.dropout = dropout
         self.res_balance = res_balance
         self.clip_act = clip_act
-        self.noise_multiplier = noise_multiplier
         
         self.conv_res0 = MPConv(out_channels if flavor == "enc" else in_channels,
                                 out_channels * mlp_multiplier, kernel=(2,3,3), groups=mlp_groups)
         self.conv_res1 = MPConv(out_channels * mlp_multiplier, out_channels, kernel=(2,3,3), groups=mlp_groups)
-        self.conv_skip = MPConv(in_channels, out_channels, kernel=(2,3,3), groups=1) if in_channels != out_channels else None
+        self.conv_skip = MPConv(in_channels, out_channels, kernel=(1,1,1), groups=1) if in_channels != out_channels else None
 
         self.emb_gain = torch.nn.Parameter(torch.zeros([]))
         self.emb_linear = MPConv(emb_channels, out_channels * mlp_multiplier,
                                  kernel=(1,1,1), groups=1) if emb_channels != 0 else None
 
-        self.error_logvar = torch.nn.Parameter(torch.zeros([])) if flavor == "dec" else None
-
     def forward(self, x: torch.Tensor, emb: torch.Tensor) -> torch.Tensor:
         
         x = resample_3d(x, mode=self.resample_mode)
 
-        #if self.flavor == "dec":
-        #    noise_std = 0.25#(self.error_logvar/2).exp().detach() * self.noise_multiplier
-        #    noise = torch.randn_like(x)
-        #    x = x + noise * noise_std
-
-        if self.flavor == "enc":
-            if self.conv_skip is not None:
-                x = self.conv_skip(x)
+        if self.flavor == "enc" and self.conv_skip is not None:
+            x = self.conv_skip(x)
 
         y = self.conv_res0(mp_silu(x))
 
@@ -148,10 +138,6 @@ class Block(torch.nn.Module):
         if self.flavor == "dec" and self.conv_skip is not None:
             x = self.conv_skip(x)
 
-        #if self.flavor == "dec":
-        #    x = x - y * noise_std
-        #else:
-        #    x = mp_sum(x, y, t=self.res_balance)
         x = mp_sum(x, y, t=self.res_balance)
 
         if self.clip_act is not None:
@@ -160,6 +146,8 @@ class Block(torch.nn.Module):
 
 class AutoencoderKL_EDM2_D1(DualDiffusionVAE):
 
+    supports_channels_last: Union[bool, Literal["3d"]] = "3d"
+
     def __init__(self, config: DualDiffusionVAE_EDM2_D1_Config) -> None:
         super().__init__()
         self.config = config
@@ -167,8 +155,7 @@ class AutoencoderKL_EDM2_D1(DualDiffusionVAE):
         block_kwargs = {"dropout": config.dropout,
                         "mlp_multiplier": config.mlp_multiplier,
                         "mlp_groups": config.mlp_groups,
-                        "res_balance": config.res_balance,
-                        "noise_multiplier": config.noise_multiplier} 
+                        "res_balance": config.res_balance} 
         
         cblock = [config.model_channels * x for x in config.channel_mult]
         cemb = config.model_channels * config.channel_mult_emb if config.channel_mult_emb is not None else max(cblock)
@@ -181,6 +168,8 @@ class AutoencoderKL_EDM2_D1(DualDiffusionVAE):
         self.emb_label_dec = MPConv(config.in_channels_emb, cemb, kernel=())
         self.emb_dim = cemb
         
+        self.recon_loss_logvar = torch.nn.Parameter(torch.zeros([]))
+
         # Encoder.
         self.enc = torch.nn.ModuleDict()
         self.dec = {}
@@ -213,14 +202,14 @@ class AutoencoderKL_EDM2_D1(DualDiffusionVAE):
         self.dec["conv_latents_in"] = Block(level, config.latent_channels, cout, cemb, flavor="dec", **block_kwargs)
 
         self.dec = torch.nn.ModuleDict({k:v for k,v in reversed(self.dec.items())})
-
+            
     def get_embeddings(self, emb_in: torch.Tensor) -> torch.Tensor:
         enc_embeddings = self.emb_label_enc(normalize(emb_in).to(device=self.device, dtype=self.dtype))
         dec_embeddings  = self.emb_label_dec(normalize(emb_in).to(device=self.device, dtype=self.dtype))
         return enc_embeddings, dec_embeddings
     
     def get_recon_loss_logvar(self) -> torch.Tensor:
-        raise NotImplementedError()
+        return self.recon_loss_logvar
     
     def get_latent_shape(self, sample_shape: Union[torch.Size, tuple[int, int, int, int]]) -> torch.Size:
         if len(sample_shape) == 4:
@@ -238,34 +227,31 @@ class AutoencoderKL_EDM2_D1(DualDiffusionVAE):
             raise ValueError(f"Invalid latent shape: {latent_shape}")
         
     def encode(self, x: torch.Tensor, embeddings: torch.Tensor, format: DualDiffusionFormat) -> DegenerateDistribution:
-        x_in = x.unsqueeze(1)
         enc_embeddings = embeddings[0].unsqueeze(-1).unsqueeze(-1).unsqueeze(-1)
 
-        for name, block in self.enc.items():
+        x_in = x.unsqueeze(1)
+        for block in self.enc.values():
             x_out = block(x_in, enc_embeddings)
             x_in = x_out
 
         return DegenerateDistribution(x_out)
     
     def decode(self, x: torch.Tensor, embeddings: torch.Tensor, format: DualDiffusionFormat) -> torch.Tensor:
-
         dec_embeddings = embeddings[1].unsqueeze(-1).unsqueeze(-1).unsqueeze(-1)
 
         x_in = x
-        for name, block in self.dec.items():
-            x_in = x_in + torch.randn_like(x_in) * 0.16 * 2**0.5
+        for block in self.dec.values():
             x_out = block(x_in, dec_embeddings)
             x_in = x_out
 
         return x_out.squeeze(1)
 
     def encode_train(self, x: torch.Tensor, embeddings: torch.Tensor) -> list[torch.Tensor]:
-    
-        x_in = x.unsqueeze(1)
         enc_embeddings = embeddings[0].unsqueeze(-1).unsqueeze(-1).unsqueeze(-1)
         enc_states: list[torch.Tensor] = []
 
-        for name, block in self.enc.items():
+        x_in = x.unsqueeze(1)
+        for block in self.enc.values():
             x_out = block(x_in, enc_embeddings)
             enc_states.append((x_in, x_out))
             x_in = x_out
@@ -273,22 +259,18 @@ class AutoencoderKL_EDM2_D1(DualDiffusionVAE):
         return enc_states
     
     def decode_train(self, enc_states: list[torch.Tensor], embeddings: torch.Tensor) -> list[torch.Tensor]:
-        
         dec_embeddings = embeddings[1].unsqueeze(-1).unsqueeze(-1).unsqueeze(-1)
         dec_states: list[torch.Tensor] = []
 
         x_in = enc_states[-1][1]
-        for (name, block), (enc_x_in, enc_x_out) in zip(self.dec.items(), reversed(enc_states)):
-            x_in = x_in + enc_x_out.detach() * 0.16 + torch.randn_like(x_in) * 0.16
-
+        for block in self.dec.values():
             x_out = block(x_in, dec_embeddings)
-            dec_states.append((x_in, x_out, block.error_logvar))
+            dec_states.append((x_in, x_out))
             x_in = x_out
 
         return dec_states
     
     def forward(self, samples: torch.Tensor, embeddings: torch.Tensor) -> tuple[list[torch.Tensor], list[torch.Tensor]]:
-
         embeddings = [embedding.to(dtype=torch.bfloat16) for embedding in embeddings]
 
         enc_states = self.encode_train(samples, embeddings)
