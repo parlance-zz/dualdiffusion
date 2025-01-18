@@ -33,7 +33,8 @@ import safetensors.torch as ST
 from datasets import load_dataset
 
 from modules.formats.format import DualDiffusionFormatConfig
-from utils.dual_diffusion_utils import load_audio, dequantize_tensor
+from modules.embeddings.clap import CLAP_Config
+from utils.dual_diffusion_utils import load_audio
 
 
 @dataclass
@@ -49,10 +50,11 @@ class DatasetConfig:
 
 class DualDiffusionDataset(torch.nn.Module):
 
-    def __init__(self, dataset_config: DatasetConfig, format_config: DualDiffusionFormatConfig) -> None:
+    def __init__(self, dataset_config: DatasetConfig, format_config: DualDiffusionFormatConfig, clap_config: CLAP_Config) -> None:
         super().__init__()
         self.config = dataset_config
         self.format_config = format_config
+        self.clap_config = clap_config
 
         split_files = glob(f"{self.config.data_dir}/*.jsonl")
         data_files = {os.path.splitext(os.path.basename(split_file))[0]: split_file for split_file in split_files}
@@ -148,20 +150,26 @@ class DualDiffusionDataset(torch.nn.Module):
                 with ST.safe_open(train_sample["latents_file_name"], framework="pt") as f:
                     sample_audio_embeddings = f.get_slice("clap_audio_embeddings")
 
-                # todo: remove these hard-coded constants with references to the pipeline embedding module config
+                audio_emb_duration = self.clap_config.audio_embedding_duration
+
                 if audio_t_offset is not None:
                     seconds_per_sample = 1 / self.format_config.sample_rate
-                    audio_embed_start = int(audio_t_offset * seconds_per_sample / 10 + 0.5)
-                    audio_embed_end = int((audio_t_offset + self.config.sample_crop_width) * seconds_per_sample / 10 + 0.5)
+                    audio_embed_start = int(audio_t_offset * seconds_per_sample / audio_emb_duration + 0.5)
+                    audio_embed_end = int((audio_t_offset + self.config.sample_crop_width) * seconds_per_sample / audio_emb_duration + 0.5)
                 elif latents_t_offset is not None:
                     seconds_per_latent_pixel = self.config.sample_crop_width / self.format_config.sample_rate / self.config.latents_crop_width
-                    audio_embed_start = int(latents_t_offset * seconds_per_latent_pixel / 10 + 0.5)
-                    audio_embed_end = int((latents_t_offset + self.config.latents_crop_width) * seconds_per_latent_pixel / 10 + 0.5)
+                    audio_embed_start = int(latents_t_offset * seconds_per_latent_pixel / audio_emb_duration + 0.5)
+                    audio_embed_end = int((latents_t_offset + self.config.latents_crop_width) * seconds_per_latent_pixel / audio_emb_duration + 0.5)
                 else:
                     audio_embed_start = 0
                     audio_embed_end = sample_audio_embeddings.get_shape()[0] + 1
                 
+                # handle an edge case when training VAEs with crop widths shorter than audio_emb_duration seconds
+                audio_embed_start = max(audio_embed_start, 0)
+                audio_embed_start = min(audio_embed_start, sample_audio_embeddings.get_shape()[0]-1)
+                audio_embed_end = max(audio_embed_end, 0)
                 audio_embed_end = min(audio_embed_end, sample_audio_embeddings.get_shape()[0])
+                
                 if audio_embed_start == audio_embed_end:
                     if audio_embed_start > 0: audio_embed_start -= 1
                     else: audio_embed_end += 1

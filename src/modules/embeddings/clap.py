@@ -56,6 +56,11 @@ class CLAP_Config(DualDiffusionEmbeddingConfig):
         elif self.embedding_type != "none": return 512
         else: return 0
 
+    @property
+    def audio_embedding_duration(self) -> int:
+        return self.sample_crop_width / self.sample_rate
+
+
 class CLAP_Embedding(DualDiffusionEmbedding):
 
     has_trainable_parameters: bool = False

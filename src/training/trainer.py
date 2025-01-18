@@ -482,7 +482,7 @@ class DualDiffusionTrainer:
             load_datatypes=self.config.dataloader.load_datatypes,
             filter_invalid_samples=self.config.dataloader.filter_invalid_samples,
         )
-        self.dataset = DualDiffusionDataset(dataset_config, self.pipeline.format.config)
+        self.dataset = DualDiffusionDataset(dataset_config, self.pipeline.format.config, self.pipeline.embedding.config)
 
         def custom_collate(input_batch: list[dict[str, torch.Tensor]]) -> dict[str, torch.Tensor]:
             output_batch: dict[str, list] = {}
