@@ -25,10 +25,11 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 
 import torch
+from numpy import ndarray
 
 from modules.module import DualDiffusionModule, DualDiffusionModuleConfig
 from modules.formats.format import DualDiffusionFormat
-
+from utils.dual_diffusion_utils import tensor_to_img
 
 class LatentsDistribution(ABC):
     
@@ -109,10 +110,13 @@ class DualDiffusionVAEConfig(DualDiffusionModuleConfig, ABC):
     latent_channels: int = 4
     dropout: float       = 0.
 
+    #latents_img_channel_order: Optional[tuple[int]] = (0,3,2,1) #None
+    latents_img_channel_order: Optional[tuple[int]] = (1,3,0,2) #None
+
 class DualDiffusionVAE(DualDiffusionModule, ABC):
 
     module_name: str = "vae"
-
+    
     @abstractmethod
     def get_embeddings(self, emb_in: torch.Tensor) -> torch.Tensor:
         pass
@@ -146,3 +150,8 @@ class DualDiffusionVAE(DualDiffusionModule, ABC):
             super().compile(**kwargs)
             self.encode = torch.compile(self.encode, **kwargs)
             self.decode = torch.compile(self.decode, **kwargs)
+
+    def latents_to_img(self, latents: torch.Tensor) -> ndarray:
+        if latents.ndim == 5:
+            latents = torch.cat((latents[0, :, 0], latents[0, :, 1]), dim=1)
+        return tensor_to_img(latents, flip_y=True, channel_order=self.config.latents_img_channel_order)
