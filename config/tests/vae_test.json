@@ -1,10 +1,10 @@
 {
-    "model_name": "edm2_vae_c3",
+    "model_name": "edm2_vae_d1",
     "model_load_options": {
         "torch_dtype": "bfloat16",
         "device": "cuda",
         "load_checkpoints": true,
-        "load_emas": false,
+        "load_emas": null,
         "compile_options": null
     },
     "length": 1472000,
@@ -15,10 +15,10 @@
     "random_latents": false,
     "add_latent_noise": 0,
     "test_samples": [
-        "psf/Mega Man X6/25. DYNAMO.xa.flac",
+        "spc/Pilotwings/04 Light Plane.spc.flac",
         "psf/Mega Man X4/BGM2.XA.flac",
-        "spc/Kirby Super Star/53 Heart of Nova.spc.flac",
+        "psf/Mega Man X6/25. DYNAMO.xa.flac",
         "spc/Mega Man X3/09 Blast Hornet.spc.flac",
-        "spc/Pilotwings/04 Light Plane.spc.flac"
+        "spc/Kirby Super Star/53 Heart of Nova.spc.flac"
     ]
 }

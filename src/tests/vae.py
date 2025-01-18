@@ -73,13 +73,16 @@ def vae_test() -> None:
     output_path = os.path.join(model_path, "output", "vae", f"step_{last_global_step}")
     os.makedirs(output_path, exist_ok=True)
     start_time = datetime.datetime.now()
-    point_similarity = latents_mean = latents_std = 0
+    avg_point_similarity = avg_latents_mean = avg_latents_std = 0
 
     for filename in test_samples:
         
+        print(f"\nfile: {filename}")
         file_ext = os.path.splitext(filename)[1]
+
         safetensors_file_name = os.path.join(f"{os.path.splitext(filename)[0]}.safetensors")
         latents_dict = load_safetensors(os.path.join(dataset_path, safetensors_file_name))
+
         audio_embedding = normalize(latents_dict["clap_audio_embeddings"].mean(dim=0, keepdim=True)).float()
         vae_embeddings = pipeline.vae.get_embeddings(audio_embedding.to(dtype=pipeline.vae.dtype, device=pipeline.vae.device))
 
@@ -87,6 +90,7 @@ def vae_test() -> None:
         input_raw_sample = load_audio(os.path.join(dataset_path, filename), count=min(crop_width, audio_len))
         input_raw_sample = input_raw_sample.unsqueeze(0).to(pipeline.format.device)
         input_sample = pipeline.format.raw_to_sample(input_raw_sample)
+        
         posterior = pipeline.vae.encode(input_sample.to(dtype=pipeline.vae.dtype),
                                         vae_embeddings, pipeline.format)
         latents = posterior.sample() if sample_latents else posterior.mode()
@@ -99,20 +103,24 @@ def vae_test() -> None:
             latents = torch.randn_like(latents)
         
         output_sample = pipeline.vae.decode(latents, vae_embeddings, pipeline.format)
-        output_raw_sample = pipeline.format.sample_to_raw(output_sample.type(torch.float32))
+        point_similarity = (output_sample - input_sample).abs().mean().item()
 
-        latents_mean += latents.mean().item()
-        latents_std += latents.std().item()
+        print(f"input   mean/std: {input_sample.mean().item():.4} {input_sample.std().item():.4}")
+        print(f"output  mean/std: {output_sample.mean().item():.4} {output_sample.std().item():.4}")
+        print(f"latents mean/std: {latents.mean().item():.4} {latents.std().item():.4}")
+        print(f"decoded point similarity: {point_similarity}")
+        
+        output_raw_sample = pipeline.format.sample_to_raw(output_sample.type(torch.float32))
+        
+        latents_mean = latents.mean().item()
+        latents_std = latents.std().item()
+        avg_point_similarity += point_similarity
+        avg_latents_mean += latents_mean
+        avg_latents_std += latents_std
         filename = os.path.basename(filename)
 
-        if latents.ndim == 5:
-            latents_img = torch.cat((latents[0, :, 0], latents[0, :, 1]), dim=1)
-        else:
-            latents_img = latents.view(latents.shape[0], 4, -1, latents.shape[2]).transpose(-1, -2)
-        save_img(tensor_to_img(latents_img, flip_y=True), os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_latents.png')}"))
+        save_img(pipeline.vae.latents_to_img(latents), os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_latents.png')}"))
         save_img(tensor_to_img(output_sample, flip_y=True), os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_output_sample.png')}"))
-
-        point_similarity += (output_sample - input_sample).abs().mean().item()
         save_img(tensor_to_img(input_sample, flip_y=True), os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_input_sample.png')}"))
 
         input_raw_sample = pipeline.format.sample_to_raw(input_sample)
@@ -127,10 +135,10 @@ def vae_test() -> None:
         #latents_fft = torch.fft.rfft2(latents.float(), norm="ortho").abs().clip(min=noise_floor).log()
         #save_img(tensor_to_img(latents_fft, flip_y=True), os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_latents_fft_ln_psd.png')}"))
 
-    print(f"Finished in: {datetime.datetime.now() - start_time}")
-    print(f"Point similarity: {point_similarity / len(test_samples)}")
-    print(f"Latents mean: {latents_mean / len(test_samples)}")
-    print(f"Latents std: {latents_std / len(test_samples)}")
+    print(f"\nFinished in: {datetime.datetime.now() - start_time}")
+    print(f"Avg Point similarity: {avg_point_similarity / len(test_samples)}")
+    print(f"Latents avg mean: {avg_latents_mean / len(test_samples)}")
+    print(f"Latents avg std: {avg_latents_std / len(test_samples)}")
 
 if __name__ == "__main__":
 
