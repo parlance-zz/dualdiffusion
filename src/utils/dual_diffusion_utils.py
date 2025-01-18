@@ -499,7 +499,7 @@ def tensor_to_img(x: torch.Tensor,
                   flip_x: bool = False,
                   flip_y: bool = False,
                   colormap: bool = False,
-                  rgb_order: Optional[tuple[int, int, int]] = (0,2,1)) -> np.ndarray:
+                  channel_order: Optional[tuple[int, int, int]] = None) -> np.ndarray:
     
     x = x.clone().detach().real.float().resolve_conj().cpu()
     while x.ndim < 4: x.unsqueeze_(0)
@@ -509,6 +509,11 @@ def tensor_to_img(x: torch.Tensor,
     if recenter: x -= x.amin(dim=(-3,-2,-1), keepdim=True)
     if rescale:  x /= x.amax(dim=(-3,-2,-1), keepdim=True).clip(min=1e-16)
 
+    if channel_order is not None:
+        _x = x.clone()
+        for i in range(3):
+            x[..., i] = _x[..., channel_order[i]]
+
     if x.shape[-1] == 4: # show alpha channel as pre-multiplied brightness
         x = x[..., :3] * x[..., 3:4]
         if recenter: x -= x.amin(dim=(-3,-2,-1), keepdim=True)
@@ -516,10 +521,6 @@ def tensor_to_img(x: torch.Tensor,
     elif x.shape[-1] == 2:
         x = torch.cat((x, torch.zeros_like(x[..., 0:1])), dim=-1)
         x[..., 2], x[..., 1] = x[..., 1], 0
-    elif x.shape[-1] == 3 and rgb_order is not None:
-        _x = x.clone()
-        for i in range(3):
-            x[..., i] = _x[..., rgb_order[i]]
     elif x.shape[-1] > 4:
         raise ValueError(f"Unsupported number of channels in tensor_to_img: {x.shape[-1]}")
     
