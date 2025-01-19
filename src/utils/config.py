@@ -23,9 +23,13 @@
 import os
 from dotenv import load_dotenv
 from typing import Union
-from json import dumps as json_dumps, load as json_load
+from json import dumps as json_dumps, load as json_load, loads as json_loads
 
 def load_json(json_path: str) -> dict:
+    if os.path.splitext(json_path)[1].lower() == ".jsonl":
+        with open(json_path, "r") as f:
+            return [json_loads(line) for line in f]
+    
     with open(json_path, "r") as f:
         return json_load(f)
     

@@ -24,6 +24,7 @@ from utils import config
 
 import os
 import datetime
+import random
 
 import torch
 
@@ -69,7 +70,7 @@ def vae_test() -> None:
     print(f"{model_metadata['model_metadata']}\n")
 
     dataset_path = config.DATASET_PATH
-    test_samples = test_params["test_samples"]
+    test_samples: list[str] = test_params["test_samples"] or []
     sample_shape = pipeline.get_sample_shape(length=length)
     latent_shape = pipeline.get_latent_shape(sample_shape)
     print(f"Sample shape: {sample_shape}  Latent shape: {latent_shape}")
@@ -79,7 +80,12 @@ def vae_test() -> None:
     start_time = datetime.datetime.now()
     avg_point_similarity = avg_latents_mean = avg_latents_std = 0
 
-    for filename in test_samples:
+    add_random_test_samples = test_params["add_random_test_samples"]
+    if add_random_test_samples > 0:
+        train_samples = config.load_json(os.path.join(config.DATASET_PATH, "train.jsonl"))
+        test_samples += [sample["file_name"] for sample in random.sample(train_samples, add_random_test_samples)]
+
+    for filename in test_samples:   
         
         print(f"\nfile: {filename}")
         file_ext = os.path.splitext(filename)[1]

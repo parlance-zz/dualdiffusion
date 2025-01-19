@@ -14,6 +14,7 @@
     "normalize_latents": false,
     "random_latents": false,
     "add_latent_noise": 0,
+    "add_random_test_samples": 4,
     "test_samples": [
         "spc/Pilotwings/04 Light Plane.spc.flac",
         "psf/Mega Man X4/BGM2.XA.flac",
