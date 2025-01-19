@@ -27,10 +27,11 @@ import datetime
 
 import torch
 
+from modules.embeddings.clap import CLAP_Embedding
 from pipelines.dual_diffusion_pipeline import DualDiffusionPipeline
 from utils.dual_diffusion_utils import (
     init_cuda, normalize, save_audio, load_audio, load_safetensors,
-    tensor_to_img, save_img, get_audio_info
+    tensor_to_img, save_img, get_audio_info, dict_str
 )
 
 
@@ -63,6 +64,9 @@ def vae_test() -> None:
     else:
         crop_width = pipeline.format.sample_raw_crop_width(length=length)
     last_global_step = pipeline.vae.config.last_global_step
+
+    model_metadata = {"model_metadata": dict_str(pipeline.model_metadata)}
+    print(f"{model_metadata['model_metadata']}\n")
 
     dataset_path = config.DATASET_PATH
     test_samples = test_params["test_samples"]
@@ -129,7 +133,7 @@ def vae_test() -> None:
         print(f"Saved flac output to {output_flac_file_path}")
 
         output_flac_file_path = os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_decoded.flac')}")
-        save_audio(output_raw_sample.squeeze(0), sample_rate, output_flac_file_path, target_lufs=None)
+        save_audio(output_raw_sample.squeeze(0), sample_rate, output_flac_file_path, metadata=model_metadata, target_lufs=None)
         print(f"Saved flac output to {output_flac_file_path}")
 
         #latents_fft = torch.fft.rfft2(latents.float(), norm="ortho").abs().clip(min=noise_floor).log()

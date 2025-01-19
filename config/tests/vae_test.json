@@ -4,7 +4,7 @@
         "torch_dtype": "bfloat16",
         "device": "cuda",
         "load_checkpoints": true,
-        "load_emas": null,
+        "load_emas": true,
         "compile_options": null
     },
     "length": 1472000,
