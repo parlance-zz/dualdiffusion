@@ -84,6 +84,7 @@ def vae_test() -> None:
     if add_random_test_samples > 0:
         train_samples = config.load_json(os.path.join(config.DATASET_PATH, "train.jsonl"))
         test_samples += [sample["file_name"] for sample in random.sample(train_samples, add_random_test_samples)]
+    copy_sample_source_files: bool = test_params["copy_sample_source_files"]
 
     for filename in test_samples:   
         
@@ -97,8 +98,8 @@ def vae_test() -> None:
         vae_embeddings = pipeline.vae.get_embeddings(audio_embedding.to(dtype=pipeline.vae.dtype, device=pipeline.vae.device))
 
         audio_len = get_audio_info(os.path.join(dataset_path, filename)).frames
-        input_raw_sample = load_audio(os.path.join(dataset_path, filename), count=min(crop_width, audio_len))
-        input_raw_sample = input_raw_sample.unsqueeze(0).to(pipeline.format.device)
+        source_raw_sample = load_audio(os.path.join(dataset_path, filename), count=min(crop_width, audio_len))
+        input_raw_sample = source_raw_sample.unsqueeze(0).to(pipeline.format.device)
         input_sample = pipeline.format.raw_to_sample(input_raw_sample)
         
         posterior = pipeline.vae.encode(input_sample.to(dtype=pipeline.vae.dtype),
@@ -142,6 +143,11 @@ def vae_test() -> None:
         save_audio(output_raw_sample.squeeze(0), sample_rate, output_flac_file_path, metadata=model_metadata, target_lufs=None)
         print(f"Saved flac output to {output_flac_file_path}")
 
+        if copy_sample_source_files == True:
+            output_flac_file_path = os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_source.flac')}")
+            save_audio(source_raw_sample, sample_rate, output_flac_file_path, target_lufs=None)
+            print(f"Saved flac output to {output_flac_file_path}")
+            
         #latents_fft = torch.fft.rfft2(latents.float(), norm="ortho").abs().clip(min=noise_floor).log()
         #save_img(tensor_to_img(latents_fft, flip_y=True), os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_latents_fft_ln_psd.png')}"))
 
