@@ -27,7 +27,7 @@ import torch
 
 from modules.formats.format import DualDiffusionFormat
 from modules.vaes.vae import DualDiffusionVAEConfig, DualDiffusionVAE, DegenerateDistribution
-from modules.mp_tools import normalize, resample_3d, mp_silu, mp_sum
+from modules.mp_tools import MPConv3D, normalize, resample_3d, mp_silu, mp_sum
 
 
 @dataclass
@@ -42,46 +42,7 @@ class DualDiffusionVAE_EDM2_D1_Config(DualDiffusionVAEConfig):
     mlp_multiplier: int   = 1                # Multiplier for the number of channels in the MLP.
     mlp_groups: int       = 1                # Number of groups for the MLPs.
 
-class MPConv(torch.nn.Module):
-
-    def __init__(self, in_channels: int, out_channels: int,
-                 kernel: tuple[int, int], groups: int = 1, stride: int = 1,
-                 disable_weight_norm: bool = False, norm_dim: int = 1) -> None:
-        super().__init__()
-
-        self.in_channels = in_channels
-        self.out_channels = out_channels
-        self.groups = groups
-        self.stride = stride
-        self.disable_weight_norm = disable_weight_norm
-        self.norm_dim = norm_dim
-        
-        self.weight = torch.nn.Parameter(torch.randn(out_channels, in_channels // groups, *kernel))
-
-    def forward(self, x: torch.Tensor, gain: Union[float, torch.Tensor] = 1.) -> torch.Tensor:
-        
-        w = self.weight.float()
-        if self.training == True and self.disable_weight_norm == False:
-            w = normalize(w, dim=self.norm_dim) # traditional weight normalization
-            
-        w = w * (gain / w[0].numel()**0.5) # magnitude-preserving scaling
-        w = w.to(x.dtype)
-
-        if w.ndim == 2:
-            return x @ w.t()
-        
-        if w.ndim == 5:
-            if w.shape[-3] == 2:
-                x = torch.cat((x, x[:, :, 0:1]), dim=2)
-            return torch.nn.functional.conv3d(x, w, padding=(0, w.shape[-2]//2, w.shape[-1]//2), groups=self.groups, stride=self.stride)
-        else:
-            return torch.nn.functional.conv2d(x, w, padding=(w.shape[-2]//2, w.shape[-1]//2), groups=self.groups, stride=self.stride)
-
-    @torch.no_grad()
-    def normalize_weights(self):
-        if self.disable_weight_norm == False:
-            self.weight.copy_(normalize(self.weight, dim=self.norm_dim))
-   
+  
 class Block(torch.nn.Module):
 
     def __init__(self,
@@ -109,13 +70,13 @@ class Block(torch.nn.Module):
         self.res_balance = res_balance
         self.clip_act = clip_act
         
-        self.conv_res0 = MPConv(out_channels if flavor == "enc" else in_channels,
+        self.conv_res0 = MPConv3D(out_channels if flavor == "enc" else in_channels,
                                 out_channels * mlp_multiplier, kernel=(2,3,3), groups=mlp_groups)
-        self.conv_res1 = MPConv(out_channels * mlp_multiplier, out_channels, kernel=(2,3,3), groups=mlp_groups)
-        self.conv_skip = MPConv(in_channels, out_channels, kernel=(1,1,1), groups=1) if in_channels != out_channels else None
+        self.conv_res1 = MPConv3D(out_channels * mlp_multiplier, out_channels, kernel=(2,3,3), groups=mlp_groups)
+        self.conv_skip = MPConv3D(in_channels, out_channels, kernel=(1,1,1), groups=1) if in_channels != out_channels else None
 
         self.emb_gain = torch.nn.Parameter(torch.zeros([]))
-        self.emb_linear = MPConv(emb_channels, out_channels * mlp_multiplier,
+        self.emb_linear = MPConv3D(emb_channels, out_channels * mlp_multiplier,
                                  kernel=(1,1,1), groups=1) if emb_channels != 0 else None
 
     def forward(self, x: torch.Tensor, emb: torch.Tensor) -> torch.Tensor:
@@ -164,8 +125,8 @@ class AutoencoderKL_EDM2_D1(DualDiffusionVAE):
         self.num_levels = len(config.channel_mult)
         
         # Embedding.
-        self.emb_label_enc = MPConv(config.in_channels_emb, cemb, kernel=())
-        self.emb_label_dec = MPConv(config.in_channels_emb, cemb, kernel=())
+        self.emb_label_enc = MPConv3D(config.in_channels_emb, cemb, kernel=())
+        self.emb_label_dec = MPConv3D(config.in_channels_emb, cemb, kernel=())
         self.emb_dim = cemb
         
         self.recon_loss_logvar = torch.nn.Parameter(torch.zeros([]))
