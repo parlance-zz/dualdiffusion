@@ -68,10 +68,9 @@ def resample_3d(x: torch.Tensor, mode: Literal["keep", "down", "up"] = "keep") -
     elif mode == 'down':
         original_shape = x.shape
         return torch.nn.functional.avg_pool2d(
-            x.view(x.shape[0]*x.shape[1], x.shape[2], x.shape[3], x.shape[4]), 2).view(
+            x.reshape(x.shape[0]*x.shape[1], x.shape[2], x.shape[3], x.shape[4]), 2).view(
                 original_shape[0], original_shape[1], original_shape[2], original_shape[3]//2, original_shape[4]//2) * 2
-    elif mode == 'up':
-        #return torch.nn.functional.interpolate(x, scale_factor=(1,2,2), mode="nearest")
+    elif mode == 'up': # torch.nn.functional.interpolate doesn't work properly with 5d tensors
         return x.repeat_interleave(2, dim=-1).repeat_interleave(2, dim=-2)
     
 #----------------------------------------------------------------------------
@@ -160,3 +159,43 @@ class MPConv(torch.nn.Module):
     def normalize_weights(self):
         if self.disable_weight_norm == False:
             self.weight.copy_(normalize(self.weight))
+
+class MPConv3D(torch.nn.Module):
+
+    def __init__(self, in_channels: int, out_channels: int,
+                 kernel: tuple[int, int], groups: int = 1, stride: int = 1,
+                 disable_weight_norm: bool = False, norm_dim: int = 1) -> None:
+        super().__init__()
+
+        self.in_channels = in_channels
+        self.out_channels = out_channels
+        self.groups = groups
+        self.stride = stride
+        self.disable_weight_norm = disable_weight_norm
+        self.norm_dim = norm_dim
+        
+        self.weight = torch.nn.Parameter(torch.randn(out_channels, in_channels // groups, *kernel))
+
+    def forward(self, x: torch.Tensor, gain: Union[float, torch.Tensor] = 1.) -> torch.Tensor:
+        
+        w = self.weight.float()
+        if self.training == True and self.disable_weight_norm == False:
+            w = normalize(w, dim=self.norm_dim) # traditional weight normalization
+            
+        w = w * (gain / w[0].numel()**0.5) # magnitude-preserving scaling
+        w = w.to(x.dtype)
+
+        if w.ndim == 2:
+            return x @ w.t()
+        
+        if w.ndim == 5:
+            if w.shape[-3] == 2:
+                x = torch.cat((x, x[:, :, 0:1]), dim=2)
+            return torch.nn.functional.conv3d(x, w, padding=(0, w.shape[-2]//2, w.shape[-1]//2), groups=self.groups, stride=self.stride)
+        else:
+            return torch.nn.functional.conv2d(x, w, padding=(w.shape[-2]//2, w.shape[-1]//2), groups=self.groups, stride=self.stride)
+
+    @torch.no_grad()
+    def normalize_weights(self):
+        if self.disable_weight_norm == False:
+            self.weight.copy_(normalize(self.weight, dim=self.norm_dim))
