@@ -266,7 +266,8 @@ class EMA_Manager:
 
         ema_metadata = {k: str(v) for k, v in self.ema_configs[ema_name].__dict__.items()}
         ema_metadata["global_step"] = str(self.trainer.global_step)
-
+        ema_metadata["total_samples_processed"] = str(self.trainer.persistent_state.total_samples_processed)
+        
         if archive == True:
             ema_save_path = os.path.join(save_directory, f"{self.trainer.global_step}_ema_{ema_name}.safetensors")
             state_dict = {k: v.to("cpu", dtype=torch.bfloat16) for k, v in self.ema_modules[ema_name].state_dict().items()}
