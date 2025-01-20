@@ -32,12 +32,10 @@ from modules.formats.format import DualDiffusionFormat
 @dataclass
 class DualDiffusionUNetConfig(DualDiffusionModuleConfig, ABC):
 
-    in_channels:  int = 4
-    out_channels: int = 4
-    use_t_ranges: bool = False
-    inpainting:   bool = False
-    label_dim: int = 1
-    #label_dropout: float = 0.1 #todo: remove, unused
+    in_channels:  int    = 4
+    out_channels: int    = 4
+    in_channels_emb: int = 512
+
     dropout:    float = 0.
     sigma_max:  float = 200.
     sigma_min:  float = 0.03
@@ -48,17 +46,11 @@ class DualDiffusionUNet(DualDiffusionModule, ABC):
     module_name: str = "unet"
 
     @abstractmethod
-    def get_class_embeddings(self, class_labels: torch.Tensor, conditioning_mask: torch.Tensor) -> torch.Tensor:
-        pass
-    
-    @abstractmethod
-    def get_clap_embeddings(self, clap_embeddings: torch.Tensor,
-        unconditional_clap_embedding: torch.Tensor, conditioning_mask: torch.Tensor) -> torch.Tensor:
+    def get_embeddings(self, emb_in: torch.Tensor, conditioning_mask: torch.Tensor) -> torch.Tensor:
         pass
         
     @abstractmethod
-    def get_sigma_loss_logvar(self, sigma: Optional[torch.Tensor] = None,
-            class_embeddings: Optional[torch.Tensor] = None) -> torch.Tensor:
+    def get_sigma_loss_logvar(self, sigma: Optional[torch.Tensor] = None) -> torch.Tensor:
         pass
     
     @abstractmethod
@@ -66,15 +58,9 @@ class DualDiffusionUNet(DualDiffusionModule, ABC):
         pass
 
     @abstractmethod
-    @torch.no_grad()
-    def convert_to_inpainting(self) -> None:
-        pass
-
-    @abstractmethod
     def forward(self, x_in: torch.Tensor,
                 sigma: torch.Tensor,
                 format: DualDiffusionFormat,
-                class_embeddings: Optional[torch.Tensor] = None,
-                t_ranges: Optional[torch.Tensor] = None,
+                embeddings: Optional[torch.Tensor] = None,
                 x_ref: Optional[torch.Tensor] = None) -> torch.Tensor:
         pass
