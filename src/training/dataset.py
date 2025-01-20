@@ -126,7 +126,7 @@ class DualDiffusionDataset(torch.nn.Module):
                 # duplicate to stereo or downmix to mono if needed
                 if audio.shape[0] < self.format_config.sample_raw_channels:
                     audio = audio.repeat(self.format_config.sample_raw_channels // audio.shape[0], 1)
-                elif audio.shape[0] < self.format_config.sample_raw_channels:
+                elif audio.shape[0] > self.format_config.sample_raw_channels:
                     audio = audio.mean(dim=0, keepdim=True)
 
                 assert sample_rate == self.format_config.sample_rate

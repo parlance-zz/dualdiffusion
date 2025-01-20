@@ -35,6 +35,7 @@ from utils.dual_diffusion_utils import dict_str
 @dataclass
 class VAETrainer_D_Config(ModuleTrainerConfig):
     kl_loss_weight: float = 0.1
+    add_latents_noise: float = 0
     
 class VAETrainer_D(ModuleTrainer):
     
@@ -67,7 +68,7 @@ class VAETrainer_D(ModuleTrainer):
 
         sample_audio_embeddings = normalize(batch["audio_embeddings"])
         vae_emb = self.vae.get_embeddings(sample_audio_embeddings)
-        enc_states, dec_states = self.vae(samples, vae_emb)
+        enc_states, dec_states = self.vae(samples, vae_emb, add_latents_noise=self.config.add_latents_noise)
 
         # latents kl loss
         latents: torch.Tensor = enc_states[-1][1]
