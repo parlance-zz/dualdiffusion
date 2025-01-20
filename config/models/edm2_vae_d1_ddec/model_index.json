@@ -1,0 +1,20 @@
+{
+  "modules": {
+    "vae": {
+      "package": "modules.vaes.vae_edm2_d1",
+      "class": "AutoencoderKL_EDM2_D1"
+    },
+    "ddec": {
+      "package": "modules.unets.unet_edm2_ddec",
+      "class": "DDec_UNet"
+    },
+    "format": {
+      "package": "modules.formats.spectrogram",
+      "class": "SpectrogramFormat"
+    },
+    "embedding": {
+      "package": "modules.embeddings.clap",
+      "class": "CLAP_Embedding"
+    }
+  }
+}
