@@ -208,6 +208,9 @@ def save_audio(raw_samples: torch.Tensor,
                no_clobber: bool = False,
                copy_on_write: bool = False) -> None:
 
+    if raw_samples.ndim == 3:
+        raw_samples = raw_samples.squeeze(0)
+    
     if raw_samples.ndim != 2:
         raise ValueError(f"Invalid shape for save_audio: {raw_samples.shape}")
     
