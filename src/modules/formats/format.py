@@ -46,15 +46,7 @@ class DualDiffusionFormat(DualDiffusionModule, ABC):
                                    # as torch.compile does not support complex operators
     
     @abstractmethod
-    def get_num_channels(self) -> tuple[int, int]:
-        pass
-    
-    @abstractmethod
     def sample_raw_crop_width(self, length: Optional[int] = None) -> int:
-        pass
-    
-    @abstractmethod
-    def get_num_channels(self) -> tuple[int, int]:
         pass
     
     @abstractmethod

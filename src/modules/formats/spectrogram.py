@@ -169,16 +169,12 @@ class SpectrogramFormat(DualDiffusionFormat):
         self.config = config
         self.spectrogram_converter = SpectrogramConverter(config)
     
-    def get_num_channels(self) -> tuple[int, int]:
-        in_channels = out_channels = self.config.sample_raw_channels
-        return (in_channels, out_channels)
-    
     def sample_raw_crop_width(self, length: Optional[int] = None) -> int:
         return self.spectrogram_converter.sample_raw_crop_width(length or self.config.sample_raw_length)
     
     def get_sample_shape(self, bsz: int = 1, length: Optional[int] = None) -> tuple:
 
-        _, num_output_channels = self.get_num_channels()
+        num_output_channels = self.config.sample_raw_channels
         crop_width = self.sample_raw_crop_width(length=length)
         audio_shape = torch.Size((bsz, num_output_channels, crop_width))
         
