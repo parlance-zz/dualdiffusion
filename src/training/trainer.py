@@ -715,6 +715,7 @@ class DualDiffusionTrainer:
 
         if self.resume_dataloader is not None:
             progress_bar.update(self.resume_step)
+            progress_bar.refresh()
             self.local_step = self.resume_step
         else:
             self.local_step = 0
