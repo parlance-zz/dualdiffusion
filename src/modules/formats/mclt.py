@@ -56,55 +56,40 @@ class DualMCLTFormat(DualDiffusionFormat):
         return (bsz, num_output_channels, num_mclt_bins, chunk_len,)
 
     @torch.inference_mode()
-    def raw_to_sample(self, raw_samples: torch.Tensor,
-                      return_dict: bool = False) -> Union[torch.Tensor, dict]:
+    def raw_to_sample(self, raw_samples: torch.Tensor) -> Union[torch.Tensor, dict]:
 
-        with torch.inference_mode():
-            samples_mdct = mclt(raw_samples,
-                                self.config.window_len,
-                                self.config.window_exponent)[:, :, 1:-2, :]
-            samples_mdct = samples_mdct.permute(0, 1, 3, 2)
-            samples_mdct *= torch.exp(2j * torch.pi * torch.rand(1, device=samples_mdct.device))
+        samples_mdct = mclt(raw_samples,
+                            self.config.window_len,
+                            self.config.window_exponent)[:, :, 1:-2, :]
+        samples_mdct = samples_mdct.permute(0, 1, 3, 2)
+        samples_mdct *= torch.exp(2j * torch.pi * torch.rand(1, device=samples_mdct.device))
 
-            samples_mdct_abs = samples_mdct.abs()
-            samples_mdct_abs_amax = samples_mdct_abs.amax(dim=(1,2,3), keepdim=True).clip(min=1e-5)
-            samples_mdct_abs = (samples_mdct_abs / samples_mdct_abs_amax).clip(min=self.config.noise_floor)
-            samples_abs_ln = samples_mdct_abs.log()
-            samples_qphase1 = samples_mdct.angle().abs()
-            samples = torch.cat((samples_abs_ln, samples_qphase1), dim=1)
+        samples_mdct_abs = samples_mdct.abs()
+        samples_mdct_abs_amax = samples_mdct_abs.amax(dim=(1,2,3), keepdim=True).clip(min=1e-5)
+        samples_mdct_abs = (samples_mdct_abs / samples_mdct_abs_amax).clip(min=self.config.noise_floor)
+        samples_abs_ln = samples_mdct_abs.log()
+        samples_qphase1 = samples_mdct.angle().abs()
+        samples = torch.cat((samples_abs_ln, samples_qphase1), dim=1)
 
-            samples_mdct /= samples_mdct_abs_amax
-            raw_samples = imclt(samples_mdct.permute(0, 1, 3, 2),
-                                window_degree=self.config.window_exponent).real
-
-        if return_dict:
-            samples_dict = {
-                "samples": samples,
-                "raw_samples": raw_samples,
-            }
-            return samples_dict
-        else:
-            return samples
+        samples_mdct /= samples_mdct_abs_amax
+        raw_samples = imclt(samples_mdct.permute(0, 1, 3, 2),
+                            window_degree=self.config.window_exponent).real
+        return samples
 
     @torch.inference_mode()
-    def sample_to_raw(self, samples: torch.Tensor,
-                      return_dict: bool = False) -> Union[torch.Tensor, dict]:
+    def sample_to_raw(self, samples: torch.Tensor) -> Union[torch.Tensor, dict]:
         
         samples_abs, samples_phase1 = samples.chunk(2, dim=1)
         samples_abs = samples_abs.exp()
         samples_phase = samples_phase1.cos()
         raw_samples = imclt((samples_abs * samples_phase).permute(0, 1, 3, 2),
                             window_degree=self.config.window_exponent).real
-
-        if return_dict:
-            return {"samples": samples, "raw_samples": raw_samples}
-        else:
-            return raw_samples
-        
+        return raw_samples
+    
+    @torch.no_grad()
     def get_ln_freqs(self, x: torch.Tensor) -> torch.Tensor:
         
-        with torch.no_grad():
-            ln_freqs = torch.linspace(0, self.config.sample_rate/2, x.shape[2] + 2, device=x.device)[1:-1].log2()
-            ln_freqs = ln_freqs.view(1, 1,-1, 1).repeat(x.shape[0], 1, 1, x.shape[3])
+        ln_freqs = torch.linspace(0, self.config.sample_rate/2, x.shape[2] + 2, device=x.device)[1:-1].log2()
+        ln_freqs = ln_freqs.view(1, 1,-1, 1).repeat(x.shape[0], 1, 1, x.shape[3])
 
-            return ((ln_freqs - ln_freqs.mean()) / ln_freqs.std()).to(x.dtype)
+        return ((ln_freqs - ln_freqs.mean()) / ln_freqs.std()).to(x.dtype)

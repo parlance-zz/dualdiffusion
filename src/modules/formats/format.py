@@ -56,17 +56,16 @@ class DualDiffusionFormat(DualDiffusionModule, ABC):
 
     @abstractmethod
     @torch.inference_mode()
-    def raw_to_sample(self, raw_samples: torch.Tensor,
-                      return_dict: bool = False) -> Union[torch.Tensor, dict]:
+    def raw_to_sample(self, raw_samples: torch.Tensor) -> Union[torch.Tensor, dict]:
         pass
 
     @abstractmethod
     @torch.inference_mode()
-    def sample_to_raw(self, samples: torch.Tensor,
-                      return_dict: bool = False) -> Union[torch.Tensor, dict]:
+    def sample_to_raw(self, samples: torch.Tensor) -> Union[torch.Tensor, dict]:
         pass
     
     @abstractmethod
+    @torch.no_grad()
     def get_ln_freqs(self, x: torch.Tensor) -> torch.Tensor:
         pass
 

@@ -182,23 +182,12 @@ class SpectrogramFormat(DualDiffusionFormat):
         return tuple(spectrogram_shape)
 
     @torch.inference_mode()
-    def raw_to_sample(self, raw_samples: torch.Tensor,
-                      return_dict: bool = False) -> Union[torch.Tensor, dict]:
-
-        samples = self.spectrogram_converter.audio_to_spectrogram(raw_samples) * 2
-        if return_dict:
-            return {"samples": samples, "raw_samples": raw_samples}
-        else:
-            return samples
+    def raw_to_sample(self, raw_samples: torch.Tensor) -> Union[torch.Tensor, dict]:
+        return self.spectrogram_converter.audio_to_spectrogram(raw_samples) * 2
 
     @torch.inference_mode()
-    def sample_to_raw(self, samples: torch.Tensor, return_dict: bool = False) -> Union[torch.Tensor, dict]:
-        
-        raw_samples = self.spectrogram_converter.spectrogram_to_audio(samples.clip(min=0) / 2)
-        if return_dict:
-            return {"raw_samples": raw_samples, "samples": samples}
-        else:
-            return raw_samples
+    def sample_to_raw(self, samples: torch.Tensor) -> Union[torch.Tensor, dict]:
+        return self.spectrogram_converter.spectrogram_to_audio(samples.clip(min=0) / 2)
     
     @torch.no_grad()
     def get_ln_freqs(self, x: torch.Tensor) -> torch.Tensor:        
