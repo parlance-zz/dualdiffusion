@@ -27,6 +27,8 @@ from dataclasses import dataclass
 import torch
 
 from modules.module import DualDiffusionModule, DualDiffusionModuleConfig
+from utils.dual_diffusion_utils import tensor_to_img
+
 
 @dataclass
 class DualDiffusionFormatConfig(DualDiffusionModuleConfig):
@@ -38,7 +40,6 @@ class DualDiffusionFormatConfig(DualDiffusionModuleConfig):
     t_scale: Optional[float] = None
     raw_to_sample_scale: float = 1
     sample_to_raw_scale: float = 1
-
 
 class DualDiffusionFormat(DualDiffusionModule, ABC):
 
@@ -77,3 +78,7 @@ class DualDiffusionFormat(DualDiffusionModule, ABC):
             super().compile(**kwargs)
             self.raw_to_sample = torch.compile(self.raw_to_sample, **kwargs)
             self.sample_to_raw = torch.compile(self.sample_to_raw, **kwargs)
+    
+    @torch.inference_mode()
+    def sample_to_img(self, sample: torch.Tensor):
+        return tensor_to_img(sample, flip_y=True)

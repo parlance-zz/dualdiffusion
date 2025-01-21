@@ -25,8 +25,10 @@ from dataclasses import dataclass
 
 import torch
 
-from utils.mclt import mclt, imclt
 from .format import DualDiffusionFormat, DualDiffusionFormatConfig
+from utils.mclt import mclt, imclt
+from utils.dual_diffusion_utils import tensor_to_img
+
 
 @dataclass
 class DualMCLTFormatConfig(DualDiffusionFormatConfig):
@@ -98,3 +100,7 @@ class DualMCLTFormat(DualDiffusionFormat):
         ln_freqs = ln_freqs.view(1, 1,-1, 1).repeat(x.shape[0], 1, 1, x.shape[3])
 
         return ((ln_freqs - ln_freqs.mean()) / ln_freqs.std()).to(x.dtype)
+    
+    @torch.inference_mode()
+    def sample_to_img(self, sample: torch.Tensor):
+        return tensor_to_img((torch.sign(sample) * sample.abs() **(1/4)), flip_y=True)
