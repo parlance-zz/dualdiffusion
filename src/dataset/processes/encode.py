@@ -237,12 +237,18 @@ class EncodeProcess(DatasetProcessStage):
             
         # encode audio embeddings if needed
         if audio is not None and input_dict["has_audio_embeddings"] == False:
+            self.logger.debug(f"encoding audio embeddings: \"{safetensors_file_path}\"")
             latents["clap_audio_embeddings"] = self.embedding.encode_audio(audio, sample_rate=sample_rate).to(dtype=torch.bfloat16)
+        elif input_dict["has_audio_embeddings"] == True:
+            self.logger.debug(f"existing audio embeddings: \"{safetensors_file_path}\"")
 
         # encode text embeddings if a prompt is available and they are not yet encoded
         if prompt is not None and input_dict["has_text_embeddings"] == False:
+            self.logger.debug(f"encoding text embeddings: \"{safetensors_file_path}\"")
             latents["clap_text_embeddings"] = self.embedding.encode_text([prompt]).to(dtype=torch.bfloat16)
             latents_metadata["prompt"] = prompt
+        elif input_dict["has_text_embeddings"] == True:
+            self.logger.debug(f"existing text embeddings: \"{safetensors_file_path}\"")
 
         # encode latents
         if audio is not None and input_dict["has_latents"] == False and self.processor_config.encode_embeddings_only == False:
@@ -272,15 +278,20 @@ class EncodeProcess(DatasetProcessStage):
             input_sample = torch.cat(input_samples, dim=0)
             
             # finally, encode the latents
-            vae_class_embeddings = latents["clap_audio_embeddings"][:, :self.vae.emb_dim].mean(dim=0, keepdim=True)
-            vae_class_embeddings = normalize(vae_class_embeddings).to(device=self.vae.device, dtype=self.vae.dtype)
+            self.logger.debug(f"encoding latents: \"{safetensors_file_path}\" ({input_sample.shape[0]} variations)")
+            audio_embeddings = latents["clap_audio_embeddings"].mean(dim=0, keepdim=True)
+            audio_embeddings = normalize(audio_embeddings).to(device=self.vae.device, dtype=self.vae.dtype)
+            vae_embeddings = self.vae.get_embeddings(audio_embeddings)
             encoded_latents: list[torch.Tensor] = []
             for b in range(input_sample.shape[0] // bsz):
                 batch_input_sample = input_sample[b*bsz:(b+1)*bsz]
-                batch_latents = self.vae.encode(batch_input_sample, vae_class_embeddings, self.format).mode()
+                batch_latents = self.vae.encode(batch_input_sample, vae_embeddings, self.format).mode()
                 encoded_latents.append(batch_latents)
             latents["latents"] = torch.cat(encoded_latents, dim=0).to(dtype=torch.bfloat16)
-    
+
+        elif input_dict["has_latents"] == True:
+            self.logger.debug(f"existing latents: \"{safetensors_file_path}\" ({latents['latents'].shape[0]} variations)")
+
         return {
             "safetensors_file_path": safetensors_file_path,
             "latents": {tensor_name: tensor.cpu() for tensor_name, tensor in latents.items()},
