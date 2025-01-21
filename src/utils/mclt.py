@@ -83,8 +83,7 @@ def mclt(x: torch.Tensor, block_width: int, window_fn: str ="hann",
     if remainder > 0:
         padding_right += block_width // 2 - remainder
 
-    pad_tuple = (padding_left, padding_right) + (0,0,) * (x.ndim-1)
-    x = torch.nn.functional.pad(x, pad_tuple).unfold(-1, block_width, block_width//2)
+    x = torch.nn.functional.pad(x, (padding_left, padding_right), mode="reflect").unfold(-1, block_width, block_width//2)
 
     N = x.shape[-1] // 2
     n = torch.arange(2*N, device=x.device)

@@ -60,7 +60,8 @@ class DualMCLTFormat(DualDiffusionFormat):
 
         samples_mdct = mclt(raw_samples,
                             self.config.window_len,
-                            self.config.window_exponent)[:, :, 1:-2, :]
+                            self.config.window_fn,
+                            self.config.window_exponent)
         samples_mdct = samples_mdct.permute(0, 1, 3, 2)
         samples_mdct *= torch.exp(2j * torch.pi * torch.rand(1, device=samples_mdct.device))
 
