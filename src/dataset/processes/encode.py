@@ -197,6 +197,10 @@ class EncodeProcess(DatasetProcessStage):
         self.embedding: DualDiffusionEmbedding = self.pipeline.embedding
         self.vae: DualDiffusionVAE = self.pipeline.vae
 
+        if self.vae.config.last_global_step == 0 and self.processor_config.encode_embeddings_only == False:
+            self.logger.error(f"Error: VAE has not been trained, unable to encode latents. Aborting...")
+            exit(1)
+
         self.vae = self.vae.to(dtype=torch.bfloat16)
         if self.processor_config.encode_compile_models == True:
             self.vae.compile(fullgraph=True, dynamic=True)
