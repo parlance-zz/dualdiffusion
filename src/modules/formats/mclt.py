@@ -35,6 +35,10 @@ class DualMCLTFormatConfig(DualDiffusionFormatConfig):
     window_fn: str = "hann"
     window_exponent: float = 0.5
 
+    # approximately unit variance for sample and 1:1 gain for reconstructed raw, for audio normalized to -20 lufs
+    raw_to_sample_scale: float = 19
+    sample_to_raw_scale: float = 1 / 19 / 0.5005
+
 class DualMCLTFormat(DualDiffusionFormat):
 
     def __init__(self, config: DualMCLTFormatConfig) -> None:
@@ -62,30 +66,30 @@ class DualMCLTFormat(DualDiffusionFormat):
                             self.config.window_len,
                             self.config.window_fn,
                             self.config.window_exponent)
-        samples_mdct = samples_mdct.permute(0, 1, 3, 2)
-        samples_mdct *= torch.exp(2j * torch.pi * torch.rand(1, device=samples_mdct.device))
+        samples_mdct = samples_mdct.permute(0, 1, 3, 2).contiguous()
+        #samples_mdct *= torch.exp(2j * torch.pi * torch.rand(1, device=samples_mdct.device))
 
-        samples_mdct_abs = samples_mdct.abs()
-        samples_mdct_abs_amax = samples_mdct_abs.amax(dim=(1,2,3), keepdim=True).clip(min=1e-5)
-        samples_mdct_abs = (samples_mdct_abs / samples_mdct_abs_amax).clip(min=self.config.noise_floor)
-        samples_abs_ln = samples_mdct_abs.log()
-        samples_qphase1 = samples_mdct.angle().abs()
-        samples = torch.cat((samples_abs_ln, samples_qphase1), dim=1)
+        #samples_mdct_abs = samples_mdct.abs()
+        #samples_mdct_abs_amax = samples_mdct_abs.amax(dim=(1,2,3), keepdim=True).clip(min=1e-5)
+        #samples_mdct_abs = (samples_mdct_abs / samples_mdct_abs_amax).clip(min=self.config.noise_floor)
+        #samples_abs_ln = samples_mdct_abs.log()
+        #amples_qphase1 = samples_mdct.angle().abs()
+        #samples = torch.cat((samples_abs_ln, samples_qphase1), dim=1)
 
-        samples_mdct /= samples_mdct_abs_amax
-        raw_samples = imclt(samples_mdct.permute(0, 1, 3, 2),
-                            window_degree=self.config.window_exponent).real
-        return samples
+        #samples_mdct /= samples_mdct_abs_amax
+
+        return samples_mdct.real * self.config.raw_to_sample_scale
 
     @torch.inference_mode()
     def sample_to_raw(self, samples: torch.Tensor) -> Union[torch.Tensor, dict]:
         
-        samples_abs, samples_phase1 = samples.chunk(2, dim=1)
-        samples_abs = samples_abs.exp()
-        samples_phase = samples_phase1.cos()
-        raw_samples = imclt((samples_abs * samples_phase).permute(0, 1, 3, 2),
-                            window_degree=self.config.window_exponent).real
-        return raw_samples
+        #samples_abs, samples_phase1 = samples.chunk(2, dim=1)
+        #samples_abs = samples_abs.exp()
+        #samples_phase = samples_phase1.cos()
+        #return imclt((samples_abs * samples_phase).permute(0, 1, 3, 2),
+        #                    window_degree=self.config.window_exponent).real
+
+        return imclt(samples.permute(0, 1, 3, 2), window_degree=self.config.window_exponent).real * self.config.sample_to_raw_scale # ?
     
     @torch.no_grad()
     def get_ln_freqs(self, x: torch.Tensor) -> torch.Tensor:

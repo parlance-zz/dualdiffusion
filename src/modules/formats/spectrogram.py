@@ -33,6 +33,10 @@ from .phase_recovery import PhaseRecovery
 @dataclass()
 class SpectrogramFormatConfig(DualDiffusionFormatConfig):
 
+    # these values are for audio pre-normalized to -20 lufs
+    raw_to_sample_scale: float = 2
+    sample_to_raw_scale: float = 0.5
+
     abs_exponent: float = 0.25
 
     # FFT parameters
@@ -183,11 +187,11 @@ class SpectrogramFormat(DualDiffusionFormat):
 
     @torch.inference_mode()
     def raw_to_sample(self, raw_samples: torch.Tensor) -> Union[torch.Tensor, dict]:
-        return self.spectrogram_converter.audio_to_spectrogram(raw_samples) * 2
+        return self.spectrogram_converter.audio_to_spectrogram(raw_samples) * self.config.raw_to_sample_scale
 
     @torch.inference_mode()
     def sample_to_raw(self, samples: torch.Tensor) -> Union[torch.Tensor, dict]:
-        return self.spectrogram_converter.spectrogram_to_audio(samples.clip(min=0) / 2)
+        return self.spectrogram_converter.spectrogram_to_audio(samples.clip(min=0) * self.config.sample_to_raw_scale)
     
     @torch.no_grad()
     def get_ln_freqs(self, x: torch.Tensor) -> torch.Tensor:        

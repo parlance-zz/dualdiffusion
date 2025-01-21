@@ -36,6 +36,9 @@ class DualDiffusionFormatConfig(DualDiffusionModuleConfig):
     sample_raw_channels: int = 2
     sample_raw_length: int = 1057570
     t_scale: Optional[float] = None
+    raw_to_sample_scale: float = 1
+    sample_to_raw_scale: float = 1
+
 
 class DualDiffusionFormat(DualDiffusionModule, ABC):
 
