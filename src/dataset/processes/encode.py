@@ -37,7 +37,7 @@ from modules.embeddings.embedding import DualDiffusionEmbedding
 from modules.vaes.vae import DualDiffusionVAE
 from dataset.dataset_processor import DatasetProcessor, DatasetProcessStage
 from utils.dual_diffusion_utils import (
-    get_audio_metadata, load_audio, get_audio_info,
+    get_audio_metadata, load_audio, get_audio_info, dict_str,
     save_safetensors, load_safetensors_ex, normalize
 )
 
@@ -189,9 +189,10 @@ class EncodeProcess(DatasetProcessStage):
 
         # load pipeline and compile vae / embedding models
         model_path = os.path.join(config.MODELS_PATH, self.processor_config.encode_model)
-        self.pipeline = DualDiffusionPipeline.from_pretrained(model_path,
+        self.pipeline = DualDiffusionPipeline.from_pretrained(model_path, load_checkpoints=True,
             device={"vae": self.device, "format": self.device, "embedding": self.device})
         
+        self.logger.info(f"Model metadata:\n{dict_str(self.pipeline.model_metadata)}")
         self.format: SpectrogramFormat = self.pipeline.format
         self.embedding: DualDiffusionEmbedding = self.pipeline.embedding
         self.vae: DualDiffusionVAE = self.pipeline.vae
