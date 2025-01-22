@@ -25,6 +25,7 @@ from utils import config
 from typing import Optional, Union, Any, Literal
 import os
 import logging
+import time
 
 import torch
 import safetensors.torch as safetensors
@@ -47,6 +48,7 @@ class Build(DatasetProcessStage):
         if completed != True: return
         
         # aggregate samples from each worker process
+        time.sleep(0.5)
         dataset_samples: dict[str, dict] = {}
         while self.output_queue.queue.qsize() > 0:
             process_dataset_samples_dict: dict[str, dict] = self.output_queue.get()

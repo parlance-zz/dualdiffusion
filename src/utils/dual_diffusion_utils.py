@@ -29,6 +29,7 @@ from datetime import datetime
 import os
 import logging
 import shutil
+import subprocess
 
 import numpy as np
 import torch
@@ -174,6 +175,17 @@ def get_no_clobber_filepath(filepath: str) -> str:
         counter += 1
     
     return unique_filepath
+
+def find_files(directory: str, name_pattern: str = "*") -> list[str]:
+    result = subprocess.run(
+        ["find", directory, "-iname", name_pattern, "-type", "f"],
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=True
+    )
+    #result.check_returncode()
+    return result.stdout.splitlines()
 
 @torch.inference_mode()
 def normalize_lufs(raw_samples: torch.Tensor,

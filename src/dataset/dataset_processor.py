@@ -41,10 +41,9 @@ import atexit
 from tqdm.auto import tqdm
 import torch
 import torch.multiprocessing as mp
-#import multiprocessing as mp
 
 from utils.dual_diffusion_utils import (
-    init_logging, init_cuda, get_available_torch_devices
+    init_logging, init_cuda, get_available_torch_devices, find_files
 )
 
 
@@ -100,26 +99,30 @@ def _process_worker(stage: "DatasetProcessStage", rank: int,
             stage.finish_event.set()
             threading.Event().wait()
 
-        try:
-            output = stage.process(input_dict)
-            del input_dict
+        if isinstance(input_dict, dict):
+            input_dicts = [input_dict]
+        else:
+            input_dicts = input_dict
+        assert isinstance(input_dicts, list)
 
-            if output is not None:
-                if isinstance(output, list):
-                    for item in output:
-                        stage.output_queue.put(item)
-                elif isinstance(output, dict):
-                    stage.output_queue.put(output)
+        for input_dict in input_dicts:
+            try:
+                output = stage.process(input_dict)
+                if output is not None:
+                    if not (isinstance(output, list) or isinstance(output, dict)):
+                        raise ValueError(f"stage.process returned unrecognized type '{type(output)}'")
+
+                    stage.output_queue.put(output)                    
                 else:
-                    raise ValueError(f"stage.process returned unrecognized type '{type(output)}'")
-            else:
-                with stage.skip_counter_lock:
-                    stage.skip_counter.value += 1
+                    with stage.skip_counter_lock:
+                        stage.skip_counter.value += 1
 
-        except Exception as e:
-            logger.error("".join(format_exception(type(e), e, e.__traceback__)))
-            try: del input_dict
-            except: pass
+            except Exception as e:
+                logger.error("".join(format_exception(type(e), e, e.__traceback__)))
+
+        try: del input_dicts
+        except: pass
+
 
 def _log_worker(process_name: str, verbose: bool, log_queue: mp.Queue):
 
@@ -182,30 +185,45 @@ def _terminate_worker(process: mp.Process, timeout: float = 0.25, close: bool = 
 
 class WorkQueue: # normal Queue class behavior extended with progress tracking
 
-    def __init__(self, mp_manager: SyncManager, maxsize: int = 0, *args, **kwargs) -> None:
+    def __init__(self, mp_manager: SyncManager, maxsize: int = 0, maxchunk: int = 100, *args, **kwargs) -> None:
 
         self.total_count = mp_manager.Value("i", 0)  # 'i' means integer
         self.processed_count = mp_manager.Value("i", 0)
         self.count_lock = mp_manager.Lock()
 
         self.maxsize = maxsize
+        self.maxchunk = maxchunk
         self.queue = mp_manager.Queue(*args, **kwargs)
 
-    def put(self, obj, *args, **kwargs) -> None:
+    def _put(self, obj, *args, **kwargs) -> None:
         if self.maxsize > 0 and obj is not None:
             while self.queue.qsize() >= self.maxsize:
                 time.sleep(0.01)
+        
         self.queue.put(obj, *args, **kwargs)
 
         if obj is not None:
             with self.count_lock:
-                self.total_count.value += 1
+                if isinstance(obj, list):
+                    self.total_count.value += len(obj)
+                else:
+                    self.total_count.value += 1
+
+    def put(self, obj, *args, **kwargs) -> None:
+        if isinstance(obj, list):
+            for i in range(0, len(obj), self.maxchunk):
+                self._put(obj[i:i+self.maxchunk], *args, **kwargs)
+        else:
+            self._put(obj, *args, **kwargs)
 
     def get(self, *args, **kwargs) -> Any:
         obj = self.queue.get(*args, **kwargs)
         if obj is not None:
             with self.count_lock:
-                self.processed_count.value += 1
+                if isinstance(obj, list):
+                    self.processed_count.value += len(obj)
+                else:
+                    self.processed_count.value += 1
         return obj
 
     def get_processed_total(self) -> tuple[int, int]:
@@ -383,6 +401,7 @@ class DatasetProcessorConfig:
     cuda_devices: list[str]         = ("cuda",)  # list of devices to use in cuda stages ("cuda:0", "cuda:1", etc)
     force_overwrite: bool           = False      # disables skipping files that have been previously processed
     test_mode: bool                 = False      # disables moving, copying, or writing any changes to files
+    use_fast_scan: bool             = True       # use the linux find tool instead of python's os.walk.
     write_error_summary_logs: bool  = True       # when the process is completed or aborted write a separate log file for each stage's errors/warnings
     verbose: bool                   = False      # prints debug logs to stdout
 
@@ -617,10 +636,14 @@ class DatasetProcessor:
             # if first stage input is a list of paths, scan the paths and fill the first input_queue
             if scan_paths is not None:
                 for scan_path in scan_paths:
-                    for root, _, files in os.walk(scan_path):
-                        for file in files:
-                            input_queues[0].put({"scan_path": scan_path, "file_path": os.path.join(root, file)})
-            
+                    if self.config.use_fast_scan == True:
+                        input_queues[0].put([{"scan_path": scan_path, "file_path": file_path}
+                                                for file_path in find_files(scan_path)])
+                    else:
+                        for root, _, files in os.walk(scan_path):
+                            for file in files:
+                                input_queues[0].put({"scan_path": scan_path, "file_path": os.path.join(root, file)})
+                    
             # wait for each stage to finish
             total_errors = 0; total_warnings = 0
             for stage in process_stages:
