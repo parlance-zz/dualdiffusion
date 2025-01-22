@@ -293,7 +293,8 @@ class EncodeProcess(DatasetProcessStage):
                 batch_latents = self.vae.encode(batch_input_sample, vae_embeddings, self.format).mode()
                 encoded_latents.append(batch_latents)
             latents["latents"] = torch.cat(encoded_latents, dim=0).to(dtype=torch.bfloat16)
-
+            assert latents["latents"].ndim == 4
+            
         elif input_dict["has_latents"] == True:
             self.logger.debug(f"existing latents: \"{safetensors_file_path}\" ({latents['latents'].shape[0]} variations)")
 
