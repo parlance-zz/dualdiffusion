@@ -269,7 +269,8 @@ def load_audio(input_path: str,
                start: int = 0, count: int = -1,
                return_sample_rate: bool = False,
                device: Optional[torch.device] = None,
-               return_start: bool = False):
+               return_start: bool = False,
+               force_stereo: bool = True):
 
     if start < 0:
         if count < 0:
@@ -280,6 +281,9 @@ def load_audio(input_path: str,
     tensor, sample_rate = torchaudio.load(input_path, frame_offset=start, num_frames=count)
     assert tensor.shape[-1] == count or count == -1
 
+    if tensor.shape[0] == 1 and force_stereo == True:
+        tensor = tensor.repeat(2, 1)
+        
     return_vals = (tensor.to(device=device),)
     if return_sample_rate:
         return_vals += (sample_rate,)
