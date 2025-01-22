@@ -84,11 +84,18 @@ class DualDiffusionDataset(torch.nn.Module):
         self.dataset_dict = self.dataset_dict.map(resolve_absolute_path)
         
         def invalid_sample_filter(example):
-            if not example["latents_has_audio_embeddings"] and "audio_embeddings" in self.config.load_datatypes: return False
-            if not example["latents_has_text_embeddings"] and "text_embeddings" in self.config.load_datatypes: return False
+            if "audio_embeddings" in self.config.load_datatypes:
+                if not example["latents_has_audio_embeddings"]: return False
+                if not example["latents_file_name"]: return False
+            
+            if "text_embeddings" in self.config.load_datatypes:
+                if not example["latents_has_text_embeddings"]: return False
+                if not example["latents_file_name"]: return False
 
             if "latents" in self.config.load_datatypes:
                 if example["latents_length"] is None or example["latents_length"] < self.config.latents_crop_width: return False
+                if not example["latents_file_name"]: return False
+                if not example["latents_num_variations"]: return False
 
             if "audio" in self.config.load_datatypes:
                 if example["file_name"] is None: return False
