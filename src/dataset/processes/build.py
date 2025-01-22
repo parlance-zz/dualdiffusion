@@ -48,7 +48,7 @@ class Build(DatasetProcessStage):
         if completed != True: return
         
         # aggregate samples from each worker process
-        time.sleep(0.5)
+        
         dataset_samples: dict[str, dict] = {}
         while self.output_queue.queue.qsize() > 0:
             process_dataset_samples_dict: dict[str, dict] = self.output_queue.get()
@@ -63,7 +63,7 @@ class Build(DatasetProcessStage):
 
         # build splits - todo: add option for auto-validation split
         dataset_splits: dict[str, list[dict]] = {}
-        dataset_samples = [*process_dataset_samples_dict.values()]
+        dataset_samples = [*dataset_samples.values()]
         for sample in dataset_samples: 
             if sample["split"] is None: sample["split"] = ["train"]
 
@@ -129,6 +129,13 @@ class Build(DatasetProcessStage):
             config.save_json(split_samples, split_path, copy_on_write=True)
 
         logger.info(summary_str)
+
+        # fix stage processed/skipped stats
+        self.input_queue.total_count.value = self.skip_counter.value
+        self.input_queue.processed_count.value = len(dataset_samples)
+        self.skip_counter.value -= len(dataset_samples)
+        self.input_queue.total_count.value += self.skip_counter.value
+        self.input_queue.processed_count.value += self.skip_counter.value
 
     def get_dataset_sample(self, file_name: str) -> dict[str, Any]:
 

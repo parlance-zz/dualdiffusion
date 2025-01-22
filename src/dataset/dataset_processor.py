@@ -185,7 +185,7 @@ def _terminate_worker(process: mp.Process, timeout: float = 0.25, close: bool = 
 
 class WorkQueue: # normal Queue class behavior extended with progress tracking
 
-    def __init__(self, mp_manager: SyncManager, maxsize: int = 0, maxchunk: int = 100, *args, **kwargs) -> None:
+    def __init__(self, mp_manager: SyncManager, maxsize: int = 0, maxchunk: int = 1000, *args, **kwargs) -> None:
 
         self.total_count = mp_manager.Value("i", 0)  # 'i' means integer
         self.processed_count = mp_manager.Value("i", 0)
@@ -211,8 +211,9 @@ class WorkQueue: # normal Queue class behavior extended with progress tracking
 
     def put(self, obj, *args, **kwargs) -> None:
         if isinstance(obj, list):
-            for i in range(0, len(obj), self.maxchunk):
-                self._put(obj[i:i+self.maxchunk], *args, **kwargs)
+            chunksize = min(len(obj) // 64, self.maxchunk)
+            for i in range(0, len(obj), chunksize):
+                self._put(obj[i:i+chunksize], *args, **kwargs)
         else:
             self._put(obj, *args, **kwargs)
 
