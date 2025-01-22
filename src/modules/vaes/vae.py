@@ -151,6 +151,9 @@ class DualDiffusionVAE(DualDiffusionModule, ABC):
             self.decode = torch.compile(self.decode, **kwargs)
 
     def latents_to_img(self, latents: torch.Tensor) -> ndarray:
-        if latents.ndim == 5:
-            latents = torch.cat((latents[0, :, 0], latents[0, :, 1]), dim=1)
+        if latents.shape[1] == 8:
+            latents = torch.cat((latents[:, 0::2], latents[:, 1::2]), dim=2)
+        elif latents.shape[1] > 4:
+            raise ValueError(f"Error: latents_to_img shape has invalid num channels: {latents.shape}")
+        
         return tensor_to_img(latents, flip_y=True, channel_order=self.config.latents_img_channel_order)

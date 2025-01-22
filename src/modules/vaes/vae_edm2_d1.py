@@ -174,16 +174,18 @@ class AutoencoderKL_EDM2_D1(DualDiffusionVAE):
     
     def get_latent_shape(self, sample_shape: Union[torch.Size, tuple[int, int, int, int]]) -> torch.Size:
         if len(sample_shape) == 4:
-            return (sample_shape[0], self.config.latent_channels, self.config.in_channels,
+            return (sample_shape[0], self.config.latent_channels * self.config.in_channels,
                     sample_shape[2] // 2 ** (self.num_levels-1),
                     sample_shape[3] // 2 ** (self.num_levels-1))
         else:
             raise ValueError(f"Invalid sample shape: {sample_shape}")
         
     def get_sample_shape(self, latent_shape: Union[torch.Size, tuple[int, int, int, int]]) -> torch.Size:
-        if len(latent_shape) == 5:
-            return (latent_shape[0], self.config.out_channels, self.config.in_num_freqs,
-                    latent_shape[4] * 2 ** (self.num_levels-1))
+        if len(latent_shape) == 4:
+            return (latent_shape[0],
+                    self.config.out_channels,
+                    latent_shape[2] * 2 ** (self.num_levels-1),
+                    latent_shape[3] * 2 ** (self.num_levels-1))
         else:
             raise ValueError(f"Invalid latent shape: {latent_shape}")
         
@@ -195,12 +197,14 @@ class AutoencoderKL_EDM2_D1(DualDiffusionVAE):
             x_out = block(x_in, enc_embeddings)
             x_in = x_out
 
-        return DegenerateDistribution(x_out)
+        return DegenerateDistribution(
+            x_out.view(
+                x_out.shape[0], x_out.shape[1]*x_out.shape[2], x_out.shape[3], x_out.shape[4]))
     
     def decode(self, x: torch.Tensor, embeddings: torch.Tensor, format: DualDiffusionFormat) -> torch.Tensor:
         dec_embeddings = embeddings[1].unsqueeze(-1).unsqueeze(-1).unsqueeze(-1)
 
-        x_in = x
+        x_in = x.view(x.shape[0], self.config.latent_channels, self.config.in_channels, x.shape[2], x.shape[3])
         for block in self.dec.values():
             x_out = block(x_in, dec_embeddings)
             x_in = x_out
