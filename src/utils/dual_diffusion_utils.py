@@ -346,12 +346,12 @@ def get_audio_metadata(audio_path: str) -> dict[str, list[str]]:
     return {key: audio_file[key] for key in audio_file.keys()}
 
 def get_audio_info(input_path: str) -> AudioInfo:
-    audio_info: torchaudio.AudioMetaData = torchaudio.info(input_path)
+    audio_info = mutagen.flac.FLAC(input_path)
     return AudioInfo(
-        sample_rate=int(audio_info.sample_rate),
-        channels=int(audio_info.num_channels),
-        frames=int(audio_info.num_frames),
-        duration=float(audio_info.num_frames / audio_info.sample_rate),
+        sample_rate=int(audio_info.info.sample_rate),
+        channels=int(audio_info.info.channels),
+        frames=int(audio_info.info.total_samples),
+        duration=float(audio_info.info.total_samples / audio_info.info.sample_rate),
     )
 
 def save_safetensors(tensors_dict: dict[str, torch.Tensor], output_path: str,

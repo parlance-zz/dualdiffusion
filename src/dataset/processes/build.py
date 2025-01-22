@@ -114,7 +114,7 @@ class Build(DatasetProcessStage):
             "processor_config": self.processor_config.__dict__,
         }
 
-        dataset_path = self.processor_config.build_output_dataset_path
+        dataset_path = self.processor_config.build_output_dataset_path or config.DATASET_PATH
         dataset_info_path = os.path.join(dataset_path, "dataset_infos", "dataset_info.json")
         config.save_json(dataset_info, dataset_info_path, copy_on_write=True)
 
