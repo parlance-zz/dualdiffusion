@@ -54,12 +54,12 @@ class UNetTrainerConfig(ModuleTrainerConfig):
     validation_sigma_dist_offset: float = 0.3
 
     num_loss_buckets: int = 10
+    invert_stereo_augmentation: bool = True
     input_perturbation: float = 0.
     noise_sample_bias: float = 0.
     conditioning_perturbation: float = 0.
     conditioning_dropout: float = 0.1
     continuous_conditioning_dropout: bool = False
-    text_embedding_weight: float = 0.
 
     inpainting_probability: float = 0.7
     inpainting_extend_probability: float = 0.2
@@ -87,50 +87,8 @@ class UNetTrainer(ModuleTrainer):
         if trainer.config.enable_model_compilation:
             self.module.compile(**trainer.config.compile_params)
 
-        if not trainer.config.dataloader.use_pre_encoded_latents:
-            
-            trainer.pipeline.format = trainer.pipeline.format.to(self.accelerator.device)
-            if trainer.config.enable_model_compilation:
-                trainer.pipeline.format.compile(**trainer.config.compile_params)
-
-            if hasattr(trainer.pipeline, "vae"):
-                if trainer.pipeline.vae.config.last_global_step == 0:
-                    self.logger.error("VAE model has not been trained, aborting training..."); exit(1)
-                    
-                trainer.pipeline.vae = trainer.pipeline.vae.to(trainer.accelerator.device).requires_grad_(False).eval()
-                if trainer.mixed_precision_enabled == True:
-                    trainer.pipeline.vae = trainer.pipeline.vae.to(dtype=trainer.mixed_precision_dtype)
-                if trainer.config.enable_model_compilation:
-                    trainer.pipeline.vae.compile(**trainer.config.compile_params)
-                
-                self.logger.info(f"Training diffusion model with VAE")
-            else:
-                self.logger.info(f"Training diffusion model without VAE")
-        else:
-            self.logger.info(f"Training diffusion model with pre-encoded latents")
-
-            if trainer.config.dataloader.use_pre_encoded_audio_embeddings == True:
-                self.logger.info(f"  Using pre-encoded audio embeddings")
-            if trainer.config.dataloader.use_pre_encoded_text_embeddings == True:
-                self.logger.info(f"  Using pre-encoded text embeddings")
-                self.logger.info(f"  Text embedding weight: {self.config.text_embedding_weight}")
-            
-            if (trainer.config.dataloader.use_pre_encoded_audio_embeddings == True
-                or trainer.config.dataloader.use_pre_encoded_text_embeddings == True):
-                self.unconditional_audio_embedding = None
-                self.unconditional_text_embedding = None
-
-                dataset_embeddings_path = os.path.join(self.trainer.dataset.config.data_dir, "dataset_infos", "dataset_embeddings.safetensors")
-                if not os.path.isfile(dataset_embeddings_path):
-                    self.logger.error(f"  Dataset embeddings not found at {dataset_embeddings_path}, aborting training..."); exit(1)
-                dataset_embeddings = load_safetensors(dataset_embeddings_path)
-                if trainer.config.dataloader.use_pre_encoded_audio_embeddings == True:
-                    self.unconditional_audio_embedding = normalize(dataset_embeddings["_unconditional_audio"][:].to(self.trainer.accelerator.device).unsqueeze(0)).float()
-                if trainer.config.dataloader.use_pre_encoded_text_embeddings == True:
-                    self.unconditional_text_embedding = normalize(dataset_embeddings["_unconditional_text"][:].to(self.trainer.accelerator.device).unsqueeze(0)).float()
-
-                self.logger.info(f"  Loaded dataset embeddings successfully from {dataset_embeddings_path}")
-        
+        self.logger.info(f"Training diffusion model with pre-encoded latents and embeddings")
+    
         if self.config.num_loss_buckets > 0:
             self.logger.info(f"Using {self.config.num_loss_buckets} loss buckets")
             self.unet_loss_buckets = torch.zeros(
@@ -141,6 +99,8 @@ class UNetTrainer(ModuleTrainer):
             self.logger.info("UNet loss buckets are disabled")
 
         # log unet trainer specific config / settings
+        if self.config.invert_stereo_augmentation == True:
+            self.logger.info(f"Invert-stereo Augmentation: {self.config.input_perturbation}")
         if self.config.input_perturbation > 0:
             self.logger.info(f"Using input perturbation: {self.config.input_perturbation}")
         else: self.logger.info("Input perturbation is disabled")
@@ -279,22 +239,13 @@ class UNetTrainer(ModuleTrainer):
 
     def train_batch(self, batch: dict) -> dict[str, torch.Tensor]:
 
-        raw_samples = batch["input"]
-        sample_game_ids = batch["game_ids"]
-        sample_t_ranges = batch["t_ranges"] if self.trainer.dataset.config.t_scale is not None else None
-        sample_audio_embeddings = normalize(batch["audio_embeddings"]) if self.trainer.dataset.config.use_pre_encoded_audio_embeddings else None
-        sample_text_embeddings = normalize(batch["text_embeddings"]) if self.trainer.dataset.config.use_pre_encoded_text_embeddings else None
-
-        # calculate sample embeddings if using pre-encoded audio/text embeddings
-        sample_embeddings = None
-        if sample_audio_embeddings is not None:
-            if sample_text_embeddings is not None and self.config.text_embedding_weight > 0:
-                sample_embeddings = normalize(mp_sum(sample_audio_embeddings, sample_text_embeddings, self.config.text_embedding_weight)).float()
-            else:
-                sample_embeddings = sample_audio_embeddings.float()
+        samples: torch.Tensor = batch["latents"].float()
+        if samples.ndim == 5:
+            samples = torch.cat(samples.unbind(dim=2), dim=1)
         else:
-            if sample_text_embeddings is not None:
-                sample_embeddings = sample_text_embeddings.float()
+            samples = samples.clone()
+        
+        audio_embeddings = normalize(batch["audio_embeddings"]).float().clone()
 
         if self.is_validation_batch == False:
             device_batch_size = self.trainer.config.device_batch_size
@@ -310,26 +261,12 @@ class UNetTrainer(ModuleTrainer):
         else: # normal conditioning dropout
             conditioning_mask = (torch.rand(device_batch_size,
                 generator=self.device_generator, device=self.trainer.accelerator.device) > self.config.conditioning_dropout).float()
-
-        if sample_embeddings is None:
-            class_labels = self.trainer.pipeline.get_class_labels(sample_game_ids, module_name="unet")
-            unet_class_embeddings = self.module.get_class_embeddings(class_labels, conditioning_mask)
-        else:
-            unet_class_embeddings = self.module.get_clap_embeddings(sample_embeddings,
-                                    self.unconditional_audio_embedding, conditioning_mask)
+            
+        unet_embeddings = self.module.get_embeddings(audio_embeddings, conditioning_mask)
 
         if self.config.conditioning_perturbation > 0 and self.is_validation_batch == False: # adds noise to the conditioning embedding while preserving variance
-            conditioning_perturbation = torch.randn(unet_class_embeddings.shape, device=unet_class_embeddings.device, generator=self.device_generator)
-            unet_class_embeddings = mp_sum(unet_class_embeddings, conditioning_perturbation, self.config.conditioning_perturbation)
-        
-        # pre-encoding latents is strongly recommended for performance / training efficiency
-        if self.trainer.config.dataloader.use_pre_encoded_latents:
-            samples = raw_samples.float()
-        else: # otherwise convert audio to spectrogram/format and encode latents with VAE
-            samples = self.trainer.pipeline.format.raw_to_sample(raw_samples)
-            vae_class_embeddings = self.trainer.pipeline.vae.get_class_embeddings(class_labels)
-            samples = self.trainer.pipeline.vae.encode(samples.to(self.trainer.pipeline.vae.dtype),
-                                                       vae_class_embeddings, self.trainer.pipeline.format).mode().float()
+            conditioning_perturbation = torch.randn(unet_embeddings.shape, device=unet_embeddings.device, generator=self.device_generator)
+            unet_embeddings = mp_sum(unet_embeddings, conditioning_perturbation, self.config.conditioning_perturbation)
 
         if self.is_validation_batch == False:
             assert samples.shape == self.trainer.latent_shape, f"Expected shape {self.trainer.latent_shape}, got {samples.shape}"
@@ -360,7 +297,7 @@ class UNetTrainer(ModuleTrainer):
             noise = noise.to(memory_format=torch.channels_last)
             ref_samples = ref_samples.to(memory_format=torch.channels_last) if ref_samples is not None else None
 
-        denoised = self.module(samples + noise, batch_sigma, self.trainer.pipeline.format, unet_class_embeddings, sample_t_ranges, ref_samples)
+        denoised = self.module(samples + noise, batch_sigma, self.trainer.pipeline.format, unet_embeddings, ref_samples)
         batch_loss_weight = (batch_sigma ** 2 + self.module.config.sigma_data ** 2) / (batch_sigma * self.module.config.sigma_data) ** 2
         batch_weighted_loss = torch.nn.functional.mse_loss(denoised, samples, reduction="none").mean(dim=(1,2,3)) * batch_loss_weight
 
@@ -371,7 +308,7 @@ class UNetTrainer(ModuleTrainer):
         if self.is_validation_batch == True:
             batch_loss = batch_weighted_loss
         else: # for train batches this takes the loss as the gaussian NLL with sigma-specific learned variance
-            error_logvar = self.module.get_sigma_loss_logvar(sigma=batch_sigma, class_embeddings=unet_class_embeddings)
+            error_logvar = self.module.get_sigma_loss_logvar(sigma=batch_sigma, class_embeddings=unet_embeddings)
             batch_loss = batch_weighted_loss / error_logvar.exp() + error_logvar
         
         # log loss bucketed by noise level range
@@ -383,7 +320,11 @@ class UNetTrainer(ModuleTrainer):
             self.unet_loss_buckets.index_add_(0, target_buckets, global_weighted_loss)
             self.unet_loss_bucket_counts.index_add_(0, target_buckets, torch.ones_like(global_weighted_loss))
 
-        return {"loss": batch_loss}
+        return {
+            "loss": batch_loss,
+            "latents/mean": samples.mean(),
+            "latents_std:": samples.std()
+        }
 
     @torch.no_grad()
     def finish_batch(self) -> dict[str, torch.Tensor]:

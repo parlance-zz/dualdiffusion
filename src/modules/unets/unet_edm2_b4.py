@@ -179,8 +179,8 @@ class UNet(DualDiffusionUNet):
         # Embedding.
         self.emb_fourier = MPFourier(cnoise)
         self.emb_noise = MPConv(cnoise, cemb, kernel=())
-        self.emb_label = MPConv(config.label_dim, cemb, kernel=()) if config.label_dim != 0 else None
-        self.emb_label_unconditional = MPConv(1, cemb, kernel=()) if config.label_dim != 0 else None
+        self.emb_label = MPConv(config.in_channels_emb, cemb, kernel=())
+        self.emb_label_unconditional = MPConv(1, cemb, kernel=())
 
         # Training uncertainty estimation.
         self.logvar_fourier = MPFourier(config.logvar_channels)
@@ -189,7 +189,6 @@ class UNet(DualDiffusionUNet):
         # Encoder.
         self.enc = torch.nn.ModuleDict()
         cout = config.in_channels + 2 # 1 extra const channel, 1 pos embedding channel
-        if config.inpainting: cout += config.in_channels + 1 # reference image/latents and mask channel
 
         for level, channels in enumerate(cblock):
             
@@ -230,49 +229,22 @@ class UNet(DualDiffusionUNet):
         self.out_gain = torch.nn.Parameter(torch.zeros([]))
         self.conv_out = MPConv(cout, config.out_channels, kernel=(3,3))
 
-    def get_class_embeddings(self, class_labels: torch.Tensor, conditioning_mask: torch.Tensor) -> torch.Tensor:
+    def get_embeddings(self, emb_in: torch.Tensor, conditioning_mask: torch.Tensor) -> torch.Tensor:
         u_embedding = self.emb_label_unconditional(torch.ones(1, device=self.device, dtype=self.dtype))
-        if self.config.label_dim != 0:
-            c_embedding = self.emb_label(normalize(class_labels).to(device=self.device, dtype=self.dtype))
-            return mp_sum(u_embedding, c_embedding, t=conditioning_mask.unsqueeze(1).to(self.device, self.dtype))
-        else:
-            return u_embedding
-    
-    def get_clap_embeddings(self, clap_embeddings: torch.Tensor,
-        unconditional_clap_embedding: torch.Tensor, conditioning_mask: torch.Tensor) -> torch.Tensor:
-        if self.config.label_dim != 0:
-            clap_embeddings = self.emb_label(normalize(clap_embeddings).to(device=self.device, dtype=self.dtype))
-            unconditional_clap_embedding = self.emb_label(normalize(unconditional_clap_embedding).to(device=self.device, dtype=self.dtype))
-            return mp_sum(unconditional_clap_embedding, clap_embeddings, t=conditioning_mask.unsqueeze(1).to(self.device, self.dtype))
-        else:
-            return unconditional_clap_embedding
+        c_embedding = self.emb_label(normalize(emb_in).to(device=self.device, dtype=self.dtype))
+        return mp_sum(u_embedding, c_embedding, t=conditioning_mask.unsqueeze(1).to(self.device, self.dtype))
         
-    def get_sigma_loss_logvar(self, sigma: Optional[torch.Tensor] = None, class_embeddings: Optional[torch.Tensor] = None) -> torch.Tensor:
+    def get_sigma_loss_logvar(self, sigma: Optional[torch.Tensor] = None) -> torch.Tensor:
         return self.logvar_linear(self.logvar_fourier(sigma.flatten().log() / 4)).view(-1, 1, 1, 1).float()
     
     def get_latent_shape(self, latent_shape: Union[torch.Size, tuple[int, int, int, int]]) -> torch.Size:
         return latent_shape[0:2] + ((latent_shape[2] // 2**(self.num_levels-1)) * 2**(self.num_levels-1),
                                     (latent_shape[3] // 2**(self.num_levels-1)) * 2**(self.num_levels-1))
 
-    @torch.no_grad()
-    def convert_to_inpainting(self) -> None:
-        if self.config.inpainting == True:
-            raise ValueError("Model is already configured for inpainting.")
-        self.config.inpainting = True
-
-        assert self.enc[f"conv_in"].groups == 1
-        existing_conv_in_shape = self.enc[f"conv_in"].weight.shape
-        inpainting_conv_in_weight = torch.zeros((existing_conv_in_shape[0], self.config.in_channels + 1,
-                                                 existing_conv_in_shape[2], existing_conv_in_shape[3]))
-        inpainting_conv_in_weight = inpainting_conv_in_weight.to(self.device, self.dtype)
-        self.enc[f"conv_in"].weight.data = torch.cat((self.enc[f"conv_in"].weight, inpainting_conv_in_weight), dim=1)
-        self.enc[f"conv_in"].in_channels += self.config.in_channels + 1
-
     def forward(self, x_in: torch.Tensor,
                 sigma: torch.Tensor,
                 format: DualDiffusionFormat,
-                class_embeddings: torch.Tensor,
-                t_ranges: Optional[torch.Tensor] = None,
+                embeddings: torch.Tensor,
                 x_ref: Optional[torch.Tensor] = None) -> torch.Tensor:
 
         with torch.no_grad():
@@ -288,13 +260,11 @@ class UNet(DualDiffusionUNet):
  
         # Embedding.
         emb = self.emb_noise(self.emb_fourier(c_noise))
-        if self.config.label_dim != 0:
-            emb = mp_sum(emb, class_embeddings.to(emb.dtype), t=self.config.label_balance)
+        emb = mp_sum(emb, embeddings.to(emb.dtype), t=self.config.label_balance)
         emb = mp_silu(emb).unsqueeze(2).unsqueeze(3).to(x.dtype)
 
         # Encoder.
         x = torch.cat((x, torch.ones_like(x[:, :1]), format.get_ln_freqs(x)), dim=1)
-        if self.config.inpainting: x = torch.cat((x, x_ref), dim=1)
 
         skips = []
         for name, block in self.enc.items():
@@ -310,8 +280,7 @@ class UNet(DualDiffusionUNet):
         x = self.conv_out(x, gain=self.out_gain)
         D_x = c_skip * x_in + c_out * x.float()
         
-        if self.config.inpainting == False and x_ref is not None:
+        if x_ref is not None:
             D_x = mp_sum(x_ref[:, :-1].float(), D_x, t=x_ref[:, -1:].float())
 
         return D_x
-    
