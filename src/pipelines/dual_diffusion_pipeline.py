@@ -200,7 +200,7 @@ class DualDiffusionPipeline(torch.nn.Module):
             module_inventory.checkpoints = sorted(module_inventory.checkpoints, key=lambda x: int(x.split("-")[1]))
 
             # get ema list for each checkpoint
-            module_inventory.emas[""] = find_emas_in_dir(os.path.join(model_path, module_name)).values()
+            module_inventory.emas[""] = list(find_emas_in_dir(os.path.join(model_path, module_name)).values())
             for checkpoint in module_inventory.checkpoints:
                 module_inventory.emas[checkpoint] = list(find_emas_in_dir(os.path.join(model_path, checkpoint, module_name)).values())
 
