@@ -45,13 +45,21 @@ class Build(DatasetProcessStage):
     def summary_banner(self, logger: logging.Logger) -> None:
         
         # aggregate samples from each worker process
-        dataset_samples: list[dict] = []
+        dataset_samples: dict[str, dict] = {}
         while self.output_queue.queue.qsize() > 0:
-            process_dataset_samples_dict: dict[str, Any] = self.output_queue.get()
-            dataset_samples += [*process_dataset_samples_dict.values()]
+            process_dataset_samples_dict: dict[str, dict] = self.output_queue.get()
+            for sample_name, sample_data in process_dataset_samples_dict.items():
+
+                if sample_name not in dataset_samples:
+                    dataset_samples[sample_name] = sample_data
+                    continue
+
+                dataset_samples[sample_name].update(
+                    {k: v for k, v in sample_data.items() if v is not None})
 
         # build splits - todo: add option for auto-validation split
         dataset_splits: dict[str, list[dict]] = {}
+        dataset_samples = [*process_dataset_samples_dict.values()]
         for sample in dataset_samples: 
             if sample["split"] is None: sample["split"] = ["train"]
 
