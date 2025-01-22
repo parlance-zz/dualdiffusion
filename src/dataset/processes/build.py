@@ -42,7 +42,9 @@ class Build(DatasetProcessStage):
         logger.info(f"Input path: {self.processor_config.build_input_dataset_path or config.DATASET_PATH}")
         logger.info(f"Output path: {self.processor_config.build_output_dataset_path or config.DATASET_PATH}")
 
-    def summary_banner(self, logger: logging.Logger) -> None:
+    def summary_banner(self, logger: logging.Logger, completed: bool) -> None:
+        
+        if completed != True: return
         
         # aggregate samples from each worker process
         dataset_samples: dict[str, dict] = {}

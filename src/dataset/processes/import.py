@@ -47,7 +47,7 @@ class Import(DatasetProcessStage):
             if self.processor_config.min_audio_length is not None:
                 logger.info(f"WARNING: Deleting source files below minimum length ({self.processor_config.min_audio_length}s): enabled")
 
-    def summary_banner(self, logger: logging.Logger) -> None:
+    def summary_banner(self, logger: logging.Logger, completed: bool) -> None:
         verb = "Moved" if self.processor_config.import_move_no_copy == True else "Copied"
         if self.processor_config.test_mode == True:
             logger.info(f"(Would have) {verb} {self.output_queue.queue.qsize()} files.")

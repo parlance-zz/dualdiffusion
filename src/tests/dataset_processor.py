@@ -34,8 +34,8 @@ class TestStage(DatasetProcessStage):
     def info_banner(self, logger):
         logger.info("<Info Banner>")
     
-    def summary_banner(self, logger):
-        logger.info("<Summary Banner>")
+    def summary_banner(self, logger, completed: bool):
+        logger.info(f"<Summary Banner> (completed: {completed})")
     
     @torch.inference_mode()
     def start_process(self):

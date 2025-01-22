@@ -344,7 +344,7 @@ class DatasetProcessStage(ABC):
     def info_banner(self, logger: logging.Logger) -> None:
         pass
 
-    def summary_banner(self, logger: logging.Logger) -> None:
+    def summary_banner(self, logger: logging.Logger, completed: bool) -> None:
         pass
     
     # if the stage output objects are large this can be overridden to return True
@@ -675,7 +675,7 @@ class DatasetProcessor:
         
         # summarize results
         process_finish_time = datetime.now(); logger.info("")
-        try: process_stages[-1].summary_banner(logger)
+        try: process_stages[-1].summary_banner(logger, completed=process_result not in ["failed", "aborted"])
         except Exception as e:
             logger.error("".join(format_exception(type(e), e, e.__traceback__)))
 

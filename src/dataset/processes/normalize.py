@@ -236,7 +236,7 @@ class NormalizeSave(DatasetProcessStage):
     def get_proc_weight(self) -> float:
         return 0.5
     
-    def summary_banner(self, logger: logging.Logger) -> None:
+    def summary_banner(self, logger: logging.Logger, completed: bool) -> None:
         verb = "Normalized"
         if self.processor_config.test_mode == True:
             logger.info(f"(Would have) {verb} {self.output_queue.queue.qsize()} files.")

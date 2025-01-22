@@ -37,7 +37,7 @@ class IntegrityCheck(DatasetProcessStage): # please note to run this process you
         if self.processor_config.integrity_check_delete_corrupt_files == True:
             logger.warning("WARNING: Automatic deletion of corrupt files is enabled")
 
-    def summary_banner(self, logger: logging.Logger) -> None:
+    def summary_banner(self, logger: logging.Logger, completed: bool) -> None:
         logger.info(f"{self.output_queue.queue.qsize()} files ok, {self.error_queue.qsize()} files with errors")
 
     @torch.inference_mode()

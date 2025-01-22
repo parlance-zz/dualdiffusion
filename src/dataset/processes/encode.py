@@ -308,7 +308,7 @@ class EncodeSave(DatasetProcessStage):
     def get_stage_type(self) -> Literal["io", "cpu", "cuda"]:
         return "io"
     
-    def summary_banner(self, logger: logging.Logger) -> None:
+    def summary_banner(self, logger: logging.Logger, completed: bool) -> None:
         verb = "Encoded"
         if self.processor_config.test_mode == True:
             logger.info(f"(Would have) {verb} {self.output_queue.queue.qsize()} files.")
