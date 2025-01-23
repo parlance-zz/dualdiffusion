@@ -80,8 +80,8 @@ class TrainLogger():
         for key, value in logs.items():
             self.add_log(key, value)
 
-    def get_logs(self, _sorted: bool = False) -> dict:
-        if _sorted == False:
+    def get_logs(self, sort: bool = False) -> dict:
+        if sort == False:
             return {key: value / self.counts[key] for key, value in self.channels.items()}
         else:
             return dict(sorted(self.get_logs().items(), key=lambda item: item[1]))
@@ -679,7 +679,7 @@ class DualDiffusionTrainer:
                 # save per-sample training loss statistics
                 sample_log_path = os.path.join(self.config.model_path, "tmp", "sample_loss.json")
                 try:
-                    config.save_json(self.train_sample_logger.get_logs(sorted=True), sample_log_path)
+                    config.save_json(self.train_sample_logger.get_logs(sort=True), sample_log_path)
                 except Exception as e:
                     self.logger.error("".join(format_exception(type(e), e, e.__traceback__)))
                     self.logger.warning(f"Error saving sample logs to {sample_log_path}: {e}")
@@ -886,7 +886,7 @@ class DualDiffusionTrainer:
         if self.accelerator.is_main_process:
             sample_log_path = os.path.join(self.config.model_path, "tmp", f"sample_loss_validation_ema_{ema_name}.json")
             try:
-                config.save_json(self.validation_sample_logger.get_logs(sorted=True), sample_log_path)
+                config.save_json(self.validation_sample_logger.get_logs(sort=True), sample_log_path)
             except Exception as e:
                 self.logger.error("".join(format_exception(type(e), e, e.__traceback__)))
                 self.logger.warning(f"Error saving validation sample logs to {sample_log_path}: {e}")
