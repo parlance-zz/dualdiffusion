@@ -260,7 +260,7 @@ class UNetTrainer(ModuleTrainer):
                     vae: DualDiffusionVAE = self.trainer.pipeline.vae
                     for i in range(samples.shape[0]):
                         latents_debug_img_path = os.path.join(config.DEBUG_PATH, "unet_trainer", f"latents_{i}.png")
-                        save_img(vae.latents_to_img(samples[0:1]), latents_debug_img_path)
+                        save_img(vae.latents_to_img(samples[i:i+1]), latents_debug_img_path)
 
             except Exception as e:
                 self.logger.error("".join(format_exception(type(e), e, e.__traceback__)))
