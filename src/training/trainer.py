@@ -80,8 +80,8 @@ class TrainLogger():
         for key, value in logs.items():
             self.add_log(key, value)
 
-    def get_logs(self, sorted: bool = False) -> dict:
-        if sorted == False:
+    def get_logs(self, _sorted: bool = False) -> dict:
+        if _sorted == False:
             return {key: value / self.counts[key] for key, value in self.channels.items()}
         else:
             return dict(sorted(self.get_logs().items(), key=lambda item: item[1]))
