@@ -253,7 +253,7 @@ class UNetTrainer(ModuleTrainer):
         samples = (samples - 0.0044) / 0.8715 # oops, todo: add bias and scale factors for latents to config
 
         # in our first train batch save the input latents to debug image files
-        if self.saved_debug_latents == False:
+        if self.trainer.accelerator.is_main_process == True and self.saved_debug_latents == False:
             try:
                 latents_debug_img_path = None
                 if config.DEBUG_PATH is not None:
