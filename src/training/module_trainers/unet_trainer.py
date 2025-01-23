@@ -20,8 +20,11 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
+from utils import config
+
 from dataclasses import dataclass
 from typing import Literal, Optional
+from traceback import format_exception
 import os
 
 import torch
@@ -30,8 +33,9 @@ from training.sigma_sampler import SigmaSamplerConfig, SigmaSampler
 from training.trainer import DualDiffusionTrainer
 from .module_trainer import ModuleTrainerConfig, ModuleTrainer
 from modules.unets.unet import DualDiffusionUNet
+from modules.vaes.vae import DualDiffusionVAE
 from modules.mp_tools import mp_sum
-from utils.dual_diffusion_utils import dict_str, normalize, load_safetensors
+from utils.dual_diffusion_utils import dict_str, normalize, save_img
 
 @dataclass
 class UNetTrainerConfig(ModuleTrainerConfig):
@@ -61,7 +65,7 @@ class UNetTrainerConfig(ModuleTrainerConfig):
     conditioning_dropout: float = 0.1
     continuous_conditioning_dropout: bool = False
 
-    inpainting_probability: float = 0.7
+    inpainting_probability: float = 0
     inpainting_extend_probability: float = 0.2
     inpainting_prepend_probability: float = 0.1
     inpainting_outpaint_min_width: int = 172
@@ -86,6 +90,8 @@ class UNetTrainer(ModuleTrainer):
 
         if trainer.config.enable_model_compilation:
             self.module.compile(**trainer.config.compile_params)
+
+        self.saved_debug_latents = False
 
         self.logger.info(f"Training diffusion model with pre-encoded latents and embeddings")
     
@@ -244,7 +250,24 @@ class UNetTrainer(ModuleTrainer):
             samples = torch.cat(samples.unbind(dim=2), dim=1)
         else:
             samples = samples.clone()
-        
+        samples = (samples - 0.0044) / 0.8715 # oops, todo: add bias and scale factors for latents to config
+
+        # in our first train batch save the input latents to debug image files
+        if self.saved_debug_latents == False:
+            try:
+                latents_debug_img_path = None
+                if config.DEBUG_PATH is not None:
+                    vae: DualDiffusionVAE = self.trainer.pipeline.vae
+                    for i in range(samples.shape[0]):
+                        latents_debug_img_path = os.path.join(config.DEBUG_PATH, "unet_trainer", f"latents_{i}.png")
+                        save_img(vae.latents_to_img(samples[0:1]), latents_debug_img_path)
+
+            except Exception as e:
+                self.logger.error("".join(format_exception(type(e), e, e.__traceback__)))
+                self.logger.error(f"Error saving debug lantents to '{latents_debug_img_path}': {e}")
+
+            self.saved_debug_latents = True
+
         audio_embeddings = normalize(batch["audio_embeddings"]).float().clone()
 
         if self.is_validation_batch == False:
@@ -285,7 +308,7 @@ class UNetTrainer(ModuleTrainer):
         # prepare model inputs
         noise = torch.randn(samples.shape, device=samples.device, generator=self.device_generator)
         samples = (samples * self.module.config.sigma_data).detach()
-        ref_samples = self.get_inpainting_ref_samples(samples) if self.config.inpainting_probability > 0 or self.module.config.inpainting == True else None
+        ref_samples = self.get_inpainting_ref_samples(samples) if self.config.inpainting_probability > 0 else None
         if self.is_validation_batch == False and self.config.noise_sample_bias > 0: # this has an effect similar to immiscible diffusion / rectified flow
             noise = (mp_sum(noise, samples, t=self.config.noise_sample_bias) * batch_sigma.view(-1, 1, 1, 1)).detach()
         else:
@@ -308,7 +331,7 @@ class UNetTrainer(ModuleTrainer):
         if self.is_validation_batch == True:
             batch_loss = batch_weighted_loss
         else: # for train batches this takes the loss as the gaussian NLL with sigma-specific learned variance
-            error_logvar = self.module.get_sigma_loss_logvar(sigma=batch_sigma, class_embeddings=unet_embeddings)
+            error_logvar = self.module.get_sigma_loss_logvar(sigma=batch_sigma)
             batch_loss = batch_weighted_loss / error_logvar.exp() + error_logvar
         
         # log loss bucketed by noise level range
@@ -323,7 +346,7 @@ class UNetTrainer(ModuleTrainer):
         return {
             "loss": batch_loss,
             "latents/mean": samples.mean(),
-            "latents_std:": samples.std()
+            "latents/std": samples.std()
         }
 
     @torch.no_grad()
