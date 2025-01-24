@@ -131,6 +131,7 @@ class MPConv(torch.nn.Module):
     def __init__(self, in_channels: int, out_channels: int,
                  kernel: tuple[int, int], groups: int = 1, stride: int = 1,
                  disable_weight_norm: bool = False) -> None:
+        
         super().__init__()
 
         self.in_channels = in_channels
@@ -156,7 +157,7 @@ class MPConv(torch.nn.Module):
         return torch.nn.functional.conv2d(x, w, padding=(w.shape[-2]//2, w.shape[-1]//2), groups=self.groups, stride=self.stride)
 
     @torch.no_grad()
-    def normalize_weights(self):
+    def normalize_weights(self) -> None:
         if self.disable_weight_norm == False:
             self.weight.copy_(normalize(self.weight))
 
@@ -165,6 +166,7 @@ class MPConv3D(torch.nn.Module):
     def __init__(self, in_channels: int, out_channels: int,
                  kernel: tuple[int, int], groups: int = 1, stride: int = 1,
                  disable_weight_norm: bool = False, norm_dim: int = 1) -> None:
+        
         super().__init__()
 
         self.in_channels = in_channels
@@ -196,6 +198,6 @@ class MPConv3D(torch.nn.Module):
             return torch.nn.functional.conv2d(x, w, padding=(w.shape[-2]//2, w.shape[-1]//2), groups=self.groups, stride=self.stride)
 
     @torch.no_grad()
-    def normalize_weights(self):
+    def normalize_weights(self) -> None:
         if self.disable_weight_norm == False:
             self.weight.copy_(normalize(self.weight, dim=self.norm_dim))

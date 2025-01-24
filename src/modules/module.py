@@ -11,6 +11,7 @@ import torch
 
 from utils.dual_diffusion_utils import load_safetensors, save_safetensors, torch_dtype, TF32_Disabled
 
+
 @dataclass
 class DualDiffusionModuleConfig(ABC):
     last_global_step: int = 0
