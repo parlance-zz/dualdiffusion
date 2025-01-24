@@ -512,10 +512,10 @@ def dequantize_tensor(x: torch.Tensor, offset_and_range: torch.Tensor) -> torch.
     return x * scale.view(view_dims) + min_val.view(view_dims)
 
 def tensor_5d_to_4d(x: torch.Tensor) -> torch.Tensor:
-    return x.view(x.shape[0], x.shape[1]*x.shape[2], x.shape[3], x.shape[4])
+    return x.reshape(x.shape[0], x.shape[1]*x.shape[2], x.shape[3], x.shape[4])
 
 def tensor_4d_to_5d(x: torch.Tensor, num_channels: int) -> torch.Tensor:
-    return x.view(x.shape[0], num_channels, -1, x.shape[2], x.shape[3])
+    return x.reshape(x.shape[0], num_channels, -1, x.shape[2], x.shape[3])
 
 @torch.inference_mode()
 def tensor_to_img(x: torch.Tensor,
