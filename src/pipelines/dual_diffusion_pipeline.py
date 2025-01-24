@@ -614,3 +614,164 @@ class DualDiffusionPipeline(torch.nn.Module):
             model_server_state["generate_latents"] = None
             model_server_state["generate_step"] = None
         return SampleOutput(raw_sample, spectrogram, params, debug_info, latents)
+    
+    @torch.inference_mode()
+    def diffusion_decode(self, params: SampleParams, quiet: bool = False,
+            audio_embedding: Optional[torch.Tensor] = None,
+            x_ref: Optional[torch.Tensor] = None) -> SampleOutput:
+
+        debug_info = {}
+        params = SampleParams(**params.__dict__).sanitize() # todo: this should be properly deepcopied because of tensor params
+        
+        unet: DualDiffusionUNet = self.ddec#self.unet
+        #if params.inpainting_mask is not None:
+        #    inpainting_unet: DualDiffusionUNet = getattr(self, "unet_inpainting", None)
+        #    unet = inpainting_unet or unet
+
+        params.seed = params.seed or int(np.random.randint(100000, 999999))
+        params.length = params.length or self.format.config.sample_raw_length
+        params.sigma_max = params.sigma_max or unet.config.sigma_max
+        params.sigma_min = params.sigma_min or unet.config.sigma_min
+        params.sigma_data = params.sigma_data or unet.config.sigma_data
+        #params.schedule_kwargs = params.schedule_kwargs or {}
+        params.prompt = params.prompt or {}
+        
+        if isinstance(params.input_audio, str):
+            if params.input_audio_pre_encoded == True:
+                input_audio = load_safetensors(params.input_audio)["latents"][0:1]
+            else:
+                input_sample_shape = self.get_sample_shape(bsz=1, length=params.length)
+                input_audio_sample_rate, input_audio = load_audio(
+                    params.input_audio, count=self.format.get_audio_shape(input_sample_shape), return_sample_rate=True)
+                if input_audio_sample_rate != self.format.config.sample_rate:
+                    input_audio = torchaudio.functional.resample(
+                        input_audio, input_audio_sample_rate, self.format.config.sample_rate)
+        else:
+            input_audio = params.input_audio
+
+        self.format.config.num_fgla_iters = params.num_fgla_iters # todo: this should be a runtime param, not config
+        generator = torch.Generator(device=unet.device).manual_seed(params.seed)
+        np_generator = np.random.default_rng(params.seed)
+        
+        #sample_shape = self.get_sample_shape(bsz=params.batch_size, length=params.length)
+        #if getattr(self, "vae", None) is not None:
+        #    latent_diffusion = True
+        #    sample_shape = self.get_latent_shape(sample_shape)
+        #else:
+        #    latent_diffusion = False
+        #debug_info["sample_shape"] = tuple(sample_shape)
+        #debug_info["latent_diffusion"] = latent_diffusion
+        sample_shape = x_ref.shape
+        
+        vae_class_embeddings = self.vae.get_embeddings(audio_embedding)
+        conditioning_mask = torch.cat((torch.ones(params.batch_size), torch.zeros(params.batch_size)))
+        unet_class_embeddings = unet.get_embeddings(audio_embedding, conditioning_mask)        
+
+        #unet_class_embeddings[:params.batch_size] = mp_sum(
+        #    unet_class_embeddings[:params.batch_size], unet_class_embeddings[params.batch_size:], params.conditioning_perturbation)            
+        debug_info["unet_class_embeddings mean"] = unet_class_embeddings.mean().item()
+        debug_info["unet_class_embeddings std"] = unet_class_embeddings.std().item()
+
+        if input_audio is not None:
+            if params.input_audio_pre_encoded == True:
+                input_audio_sample = input_audio.to(dtype=torch.float32, device=unet.device)
+            else:
+                while input_audio.ndim < 3: input_audio.unsqueeze_(0)
+                input_audio_sample = self.format.raw_to_sample(input_audio.float().to(self.format.device))
+                input_audio_sample = self.vae.encode(
+                    input_audio_sample.to(device=self.vae.device, dtype=self.vae.dtype),
+                    vae_class_embeddings, self.format).mode().to(dtype=torch.float32, device=unet.device)
+        else:
+            input_audio_sample = torch.zeros(sample_shape, device=unet.device)
+
+        if params.inpainting_mask is not None:
+            while params.inpainting_mask.ndim < input_audio_sample.ndim: params.inpainting_mask.unsqueeze_(0)
+            params.inpainting_mask = (params.inpainting_mask.to(unet.device) > 0.5).float()
+            ref_sample = torch.cat([input_audio_sample * (1 - params.inpainting_mask), params.inpainting_mask], dim=1)
+        else:
+            #ref_sample = torch.cat((torch.zeros_like(input_audio_sample),
+            #                        torch.ones_like(input_audio_sample[:, :1])), dim=1)
+            ref_sample = x_ref
+        input_ref_sample = ref_sample.repeat(2, 1, 1, 1)
+
+        start_timestep = 1
+        sigma_schedule = SamplingSchedule.get_schedule(params.schedule,
+            params.num_steps, start_timestep, device=unet.device,
+            sigma_max=params.sigma_max, sigma_min=params.sigma_min, rho=params.rho)#**params.schedule_kwargs)
+        sigma_schedule_list = sigma_schedule.tolist()
+        debug_info["sigma_schedule"] = sigma_schedule_list
+        
+        noise = torch.randn(sample_shape, device=unet.device, generator=generator)
+        sample = noise * sigma_schedule[0] + input_audio_sample * params.sigma_data
+
+        progress_bar = tqdm(total=params.num_steps, disable=quiet)
+        for i, (sigma_curr, sigma_next) in enumerate(zip(sigma_schedule_list[:-1], sigma_schedule_list[1:])):
+            
+            if params.seamless_loop == True:
+                loop_shift = int(np_generator.integers(0, sample.shape[-1]))
+                sample = torch.roll(sample, shifts=loop_shift, dims=-1)
+                sample = torch.cat((sample[..., -32:], sample, sample[..., :32]), dim=-1)
+                input_ref_sample = torch.roll(input_ref_sample, shifts=loop_shift, dims=-1)
+                input_ref_sample = torch.cat((input_ref_sample[..., -32:], input_ref_sample, input_ref_sample[..., :32]), dim=-1)
+            else:
+                loop_shift = None
+
+            input_sigma = torch.tensor([sigma_curr] * unet_class_embeddings.shape[0], device=unet.device)
+            input_sample = sample.repeat(2, 1, 1, 1)
+
+            if i > 0: last_cfg_model_output = cfg_model_output
+            else:
+                debug_info["sample_std"] = []
+                debug_info["cfg_output_curvature"] = []
+                debug_info["cfg_output_mean"] = []
+                debug_info["cfg_output_std"] = []
+                debug_info["effective_input_perturbation"] = []
+
+            model_output = unet(input_sample, input_sigma, self.format, unet_class_embeddings, input_ref_sample).float()
+            cfg_model_output = model_output[params.batch_size:].lerp(model_output[:params.batch_size], params.cfg_scale)
+            
+            old_sigma_next = sigma_next
+            effective_input_perturbation = float(params.input_perturbation * (1 - 1 / np.cosh(np.log(sigma_next * sigma_curr) / 2 + params.input_perturbation_offset))**2)
+            sigma_next *= (1 - (max(min(effective_input_perturbation, 1), 0)))
+            effective_input_perturbation = 1 - sigma_next / old_sigma_next
+            effective_input_perturbation = old_sigma_next - sigma_next
+            debug_info["effective_input_perturbation"].append(effective_input_perturbation)
+
+            if params.use_heun:
+                sigma_hat = max(old_sigma_next, params.sigma_min)
+                t_hat = sigma_hat / sigma_curr
+
+                input_sample_hat = torch.lerp(cfg_model_output, sample, t_hat).repeat(2, 1, 1, 1)
+                input_sigma_hat = torch.tensor([t_hat * sigma_curr] * unet_class_embeddings.shape[0], device=unet.device)
+
+                model_output_hat = unet(input_sample_hat, input_sigma_hat, self.format, unet_class_embeddings, input_ref_sample).float()
+                cfg_model_output_hat = model_output_hat[params.batch_size:].lerp(model_output_hat[:params.batch_size], params.cfg_scale)
+                cfg_model_output = torch.lerp(cfg_model_output, cfg_model_output_hat, 0.5)            
+            
+            t = sigma_next / sigma_curr if (i+1) < params.num_steps else 0
+            sample = torch.lerp(cfg_model_output, sample, t)
+
+            if loop_shift is not None:
+                sample = torch.roll(sample[..., 32:-32], shifts=-loop_shift, dims=-1)
+                input_ref_sample = torch.roll(input_ref_sample[..., 32:-32], shifts=-loop_shift, dims=-1)
+                cfg_model_output = torch.roll(cfg_model_output[..., 32:-32], shifts=-loop_shift, dims=-1)
+
+            if i+1 < params.num_steps:
+                p = max(old_sigma_next**2 - sigma_next**2, 0)**0.5
+                sample.add_(torch.randn(sample.shape, generator=generator,
+                    device=sample.device, dtype=sample.dtype), alpha=p)
+            
+            # log sampling debug info
+            debug_info["sample_std"].append(sample.std().item())
+            if i > 0: debug_info["cfg_output_curvature"].append(
+                get_cos_angle(last_cfg_model_output, cfg_model_output).mean().item())
+            debug_info["cfg_output_mean"].append(cfg_model_output.mean().item())
+            debug_info["cfg_output_std"].append(cfg_model_output.std().item())
+
+            progress_bar.update(1)
+        progress_bar.close()
+
+        debug_info["final_sample_mean"] = sample.mean().item()
+        debug_info["final_sample_std"] = sample.std().item()
+        return sample
+        #sample = normalize(sample).float() * params.sigma_data

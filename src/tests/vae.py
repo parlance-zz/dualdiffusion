@@ -29,7 +29,7 @@ import random
 import torch
 
 from modules.embeddings.clap import CLAP_Embedding
-from pipelines.dual_diffusion_pipeline import DualDiffusionPipeline
+from pipelines.dual_diffusion_pipeline import DualDiffusionPipeline, SampleParams, SampleOutput
 from utils.dual_diffusion_utils import (
     init_cuda, normalize, save_audio, load_audio, load_safetensors,
     tensor_to_img, save_img, get_audio_info, dict_str
@@ -64,7 +64,7 @@ def vae_test() -> None:
         crop_width = -1
     else:
         crop_width = pipeline.format.sample_raw_crop_width(length=length)
-    last_global_step = pipeline.vae.config.last_global_step
+    last_global_step = pipeline.ddec.config.last_global_step#pipeline.vae.config.last_global_step
 
     model_metadata = {"model_metadata": dict_str(pipeline.model_metadata)}
     print(f"{model_metadata['model_metadata']}\n")
@@ -114,6 +114,11 @@ def vae_test() -> None:
             latents = torch.randn_like(latents)
         
         output_sample = pipeline.vae.decode(latents, vae_embeddings, pipeline.format)
+        ddec_params = SampleParams(
+            num_steps=30, length=audio_len, cfg_scale=1.5, input_perturbation=0, use_heun=False
+        )
+        output_sample = pipeline.diffusion_decode(ddec_params, audio_embedding=audio_embedding, x_ref=output_sample)
+
         point_similarity = (output_sample - input_sample).abs().mean().item()
 
         print(f"input   mean/std: {input_sample.mean().item():.4} {input_sample.std().item():.4}")
@@ -131,16 +136,16 @@ def vae_test() -> None:
         filename = os.path.basename(filename)
 
         save_img(pipeline.vae.latents_to_img(latents), os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_latents.png')}"))
-        save_img(tensor_to_img(output_sample, flip_y=True), os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_output_sample.png')}"))
-        save_img(tensor_to_img(input_sample, flip_y=True), os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_input_sample.png')}"))
+        save_img(pipeline.format.sample_to_img(output_sample), os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_output_sample.png')}"))
+        save_img(pipeline.format.sample_to_img(input_sample), os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_input_sample.png')}"))
 
         input_raw_sample = pipeline.format.sample_to_raw(input_sample)
         output_flac_file_path = os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_original.flac')}")
-        save_audio(input_raw_sample.squeeze(0), sample_rate, output_flac_file_path, target_lufs=None)
+        save_audio(input_raw_sample, sample_rate, output_flac_file_path, target_lufs=None)
         print(f"Saved flac output to {output_flac_file_path}")
 
         output_flac_file_path = os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_decoded.flac')}")
-        save_audio(output_raw_sample.squeeze(0), sample_rate, output_flac_file_path, metadata=model_metadata, target_lufs=None)
+        save_audio(output_raw_sample, sample_rate, output_flac_file_path, metadata=model_metadata, target_lufs=None)
         print(f"Saved flac output to {output_flac_file_path}")
 
         if copy_sample_source_files == True:
