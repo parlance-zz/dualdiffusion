@@ -38,6 +38,7 @@ import torch
 from modules.unets.unet import DualDiffusionUNet, DualDiffusionUNetConfig
 from modules.mp_tools import MPConv3D, MPFourier, mp_cat, mp_silu, mp_sum, normalize, resample_3d
 from modules.formats.format import DualDiffusionFormat
+from utils.dual_diffusion_utils import tensor_4d_to_5d, tensor_5d_to_4d
 
 @dataclass
 class DDec_UNetConfig(DualDiffusionUNetConfig):
@@ -211,7 +212,8 @@ class DDec_UNet(DualDiffusionUNet):
             c_in = 1 / (self.config.sigma_data ** 2 + sigma ** 2).sqrt()
             c_noise = (sigma.flatten().log() / 4).to(self.dtype)
 
-            x = (c_in * x_in.unsqueeze(1)).to(dtype=torch.bfloat16)#.to(self.dtype)
+            x_in = tensor_4d_to_5d(x_in, num_channels=1)
+            x = (c_in * x_in).to(dtype=torch.bfloat16)#.to(self.dtype)
  
         # Embedding.
         emb = self.emb_noise(self.emb_fourier(c_noise))
@@ -219,7 +221,7 @@ class DDec_UNet(DualDiffusionUNet):
         emb = mp_silu(emb).unsqueeze(-1).unsqueeze(-1).unsqueeze(-1).to(dtype=torch.bfloat16)#.to(x.dtype)
 
         # Encoder.
-        x = torch.cat((x, x_ref.unsqueeze(1)), dim=1)
+        x = torch.cat((x, tensor_4d_to_5d(x_ref, num_channels=1)), dim=1)
 
         skips = []
         for name, block in self.enc.items():
@@ -232,8 +234,8 @@ class DDec_UNet(DualDiffusionUNet):
                 x = mp_cat(x, skips.pop(), t=self.config.concat_balance)
             x = block(x, emb)
 
-        x = self.conv_out(x, gain=self.out_gain)
-        D_x = c_skip * x_in.unsqueeze(1).float() + c_out * x.float()
+        x: torch.Tensor = self.conv_out(x, gain=self.out_gain)
+        D_x: torch.Tensor = c_skip * x_in.float() + c_out * x.float()
 
-        return D_x.squeeze(1)
+        return tensor_5d_to_4d(D_x)
     

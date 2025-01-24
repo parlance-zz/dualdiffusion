@@ -28,6 +28,7 @@ import torch
 from modules.formats.format import DualDiffusionFormat
 from modules.vaes.vae import DualDiffusionVAEConfig, DualDiffusionVAE, DegenerateDistribution
 from modules.mp_tools import MPConv3D, normalize, resample_3d, mp_silu, mp_sum
+from utils.dual_diffusion_utils import tensor_4d_to_5d, tensor_5d_to_4d
 
 
 @dataclass
@@ -42,7 +43,6 @@ class DualDiffusionVAE_EDM2_D1_Config(DualDiffusionVAEConfig):
     mlp_multiplier: int   = 1                # Multiplier for the number of channels in the MLP.
     mlp_groups: int       = 1                # Number of groups for the MLPs.
 
-  
 class Block(torch.nn.Module):
 
     def __init__(self,
@@ -189,33 +189,35 @@ class AutoencoderKL_EDM2_D1(DualDiffusionVAE):
         else:
             raise ValueError(f"Invalid latent shape: {latent_shape}")
         
-    def encode(self, x: torch.Tensor, embeddings: torch.Tensor, format: DualDiffusionFormat) -> DegenerateDistribution:
+    def encode(self, x: torch.Tensor, embeddings: torch.Tensor,
+            format: DualDiffusionFormat) -> DegenerateDistribution:
+        
         enc_embeddings = embeddings[0].unsqueeze(-1).unsqueeze(-1).unsqueeze(-1)
 
-        x_in = x.unsqueeze(1)
+        x_in = tensor_4d_to_5d(x, num_channels=1)
         for block in self.enc.values():
             x_out = block(x_in, enc_embeddings)
             x_in = x_out
 
-        return DegenerateDistribution(
-            x_out.view(
-                x_out.shape[0], x_out.shape[1]*x_out.shape[2], x_out.shape[3], x_out.shape[4]))
+        return DegenerateDistribution(tensor_5d_to_4d(x_out))
     
-    def decode(self, x: torch.Tensor, embeddings: torch.Tensor, format: DualDiffusionFormat) -> torch.Tensor:
+    def decode(self, x: torch.Tensor, embeddings: torch.Tensor,
+                format: DualDiffusionFormat) -> torch.Tensor:
+        
         dec_embeddings = embeddings[1].unsqueeze(-1).unsqueeze(-1).unsqueeze(-1)
 
-        x_in = x.view(x.shape[0], self.config.latent_channels, self.config.in_channels, x.shape[2], x.shape[3])
+        x_in = tensor_4d_to_5d(x, num_channels=self.config.latent_channels)
         for block in self.dec.values():
-            x_out = block(x_in, dec_embeddings)
+            x_out: torch.Tensor = block(x_in, dec_embeddings)
             x_in = x_out
 
-        return x_out.squeeze(1)
+        return tensor_5d_to_4d(x_out)
 
     def encode_train(self, x: torch.Tensor, embeddings: torch.Tensor) -> list[torch.Tensor]:
         enc_embeddings = embeddings[0].unsqueeze(-1).unsqueeze(-1).unsqueeze(-1)
         enc_states: list[torch.Tensor] = []
 
-        x_in = x.unsqueeze(1)
+        x_in = tensor_4d_to_5d(x, num_channels=1)
         for block in self.enc.values():
             x_out = block(x_in, enc_embeddings)
             enc_states.append((x_in, x_out))
@@ -223,13 +225,15 @@ class AutoencoderKL_EDM2_D1(DualDiffusionVAE):
 
         return enc_states
     
-    def decode_train(self, enc_states: list[torch.Tensor], embeddings: torch.Tensor, add_latents_noise: float = 0) -> list[torch.Tensor]:
+    def decode_train(self, enc_states: list[torch.Tensor], embeddings:
+            torch.Tensor, add_latents_noise: float = 0) -> list[torch.Tensor]:
+        
         dec_embeddings = embeddings[1].unsqueeze(-1).unsqueeze(-1).unsqueeze(-1)
         dec_states: list[torch.Tensor] = []
 
         x_in = enc_states[-1][1]
         if add_latents_noise > 0:
-            x_in = x_in + torch.randn_like(enc_states[-1][1]) * add_latents_noise
+            x_in = x_in + torch.randn_like(x_in) * add_latents_noise
 
         for block in self.dec.values():
             x_out = block(x_in, dec_embeddings)
@@ -238,9 +242,10 @@ class AutoencoderKL_EDM2_D1(DualDiffusionVAE):
 
         return dec_states
     
-    def forward(self, samples: torch.Tensor, embeddings: torch.Tensor, add_latents_noise: float = 0) -> tuple[list[torch.Tensor], list[torch.Tensor]]:
+    def forward(self, samples: torch.Tensor, embeddings: torch.Tensor,
+            add_latents_noise: float = 0) -> tuple[list[torch.Tensor], list[torch.Tensor]]:
+        
         embeddings = [embedding.to(dtype=torch.bfloat16) for embedding in embeddings]
-
         enc_states = self.encode_train(samples, embeddings)
         dec_states = self.decode_train(enc_states, embeddings, add_latents_noise=add_latents_noise)
 
