@@ -618,91 +618,39 @@ class DualDiffusionPipeline(torch.nn.Module):
     @torch.inference_mode()
     def diffusion_decode(self, params: SampleParams, quiet: bool = False,
             audio_embedding: Optional[torch.Tensor] = None,
-            x_ref: Optional[torch.Tensor] = None) -> SampleOutput:
+            x_ref: Optional[torch.Tensor] = None) -> torch.Tensor:
 
+        unet: DualDiffusionUNet = self.ddec
         debug_info = {}
-        params = SampleParams(**params.__dict__).sanitize() # todo: this should be properly deepcopied because of tensor params
         
-        unet: DualDiffusionUNet = self.ddec#self.unet
-        #if params.inpainting_mask is not None:
-        #    inpainting_unet: DualDiffusionUNet = getattr(self, "unet_inpainting", None)
-        #    unet = inpainting_unet or unet
-
+        params = SampleParams(**params.__dict__).sanitize() # todo: this should be properly deepcopied because of tensor params       
         params.seed = params.seed or int(np.random.randint(100000, 999999))
         params.length = params.length or self.format.config.sample_raw_length
         params.sigma_max = params.sigma_max or unet.config.sigma_max
         params.sigma_min = params.sigma_min or unet.config.sigma_min
         params.sigma_data = params.sigma_data or unet.config.sigma_data
-        #params.schedule_kwargs = params.schedule_kwargs or {}
-        params.prompt = params.prompt or {}
-        
-        if isinstance(params.input_audio, str):
-            if params.input_audio_pre_encoded == True:
-                input_audio = load_safetensors(params.input_audio)["latents"][0:1]
-            else:
-                input_sample_shape = self.get_sample_shape(bsz=1, length=params.length)
-                input_audio_sample_rate, input_audio = load_audio(
-                    params.input_audio, count=self.format.get_audio_shape(input_sample_shape), return_sample_rate=True)
-                if input_audio_sample_rate != self.format.config.sample_rate:
-                    input_audio = torchaudio.functional.resample(
-                        input_audio, input_audio_sample_rate, self.format.config.sample_rate)
-        else:
-            input_audio = params.input_audio
 
-        self.format.config.num_fgla_iters = params.num_fgla_iters # todo: this should be a runtime param, not config
         generator = torch.Generator(device=unet.device).manual_seed(params.seed)
         np_generator = np.random.default_rng(params.seed)
         
-        #sample_shape = self.get_sample_shape(bsz=params.batch_size, length=params.length)
-        #if getattr(self, "vae", None) is not None:
-        #    latent_diffusion = True
-        #    sample_shape = self.get_latent_shape(sample_shape)
-        #else:
-        #    latent_diffusion = False
-        #debug_info["sample_shape"] = tuple(sample_shape)
-        #debug_info["latent_diffusion"] = latent_diffusion
-        sample_shape = x_ref.shape
-        
-        vae_class_embeddings = self.vae.get_embeddings(audio_embedding)
         conditioning_mask = torch.cat((torch.ones(params.batch_size), torch.zeros(params.batch_size)))
-        unet_class_embeddings = unet.get_embeddings(audio_embedding, conditioning_mask)        
+        unet_class_embeddings = unet.get_embeddings(audio_embedding.to(
+            dtype=unet.dtype, device=unet.device), conditioning_mask.to(dtype=unet.dtype, device=unet.device))
 
-        #unet_class_embeddings[:params.batch_size] = mp_sum(
-        #    unet_class_embeddings[:params.batch_size], unet_class_embeddings[params.batch_size:], params.conditioning_perturbation)            
         debug_info["unet_class_embeddings mean"] = unet_class_embeddings.mean().item()
         debug_info["unet_class_embeddings std"] = unet_class_embeddings.std().item()
 
-        if input_audio is not None:
-            if params.input_audio_pre_encoded == True:
-                input_audio_sample = input_audio.to(dtype=torch.float32, device=unet.device)
-            else:
-                while input_audio.ndim < 3: input_audio.unsqueeze_(0)
-                input_audio_sample = self.format.raw_to_sample(input_audio.float().to(self.format.device))
-                input_audio_sample = self.vae.encode(
-                    input_audio_sample.to(device=self.vae.device, dtype=self.vae.dtype),
-                    vae_class_embeddings, self.format).mode().to(dtype=torch.float32, device=unet.device)
-        else:
-            input_audio_sample = torch.zeros(sample_shape, device=unet.device)
-
-        if params.inpainting_mask is not None:
-            while params.inpainting_mask.ndim < input_audio_sample.ndim: params.inpainting_mask.unsqueeze_(0)
-            params.inpainting_mask = (params.inpainting_mask.to(unet.device) > 0.5).float()
-            ref_sample = torch.cat([input_audio_sample * (1 - params.inpainting_mask), params.inpainting_mask], dim=1)
-        else:
-            #ref_sample = torch.cat((torch.zeros_like(input_audio_sample),
-            #                        torch.ones_like(input_audio_sample[:, :1])), dim=1)
-            ref_sample = x_ref
-        input_ref_sample = ref_sample.repeat(2, 1, 1, 1)
+        input_ref_sample = x_ref.repeat(2, 1, 1, 1)
 
         start_timestep = 1
         sigma_schedule = SamplingSchedule.get_schedule(params.schedule,
             params.num_steps, start_timestep, device=unet.device,
-            sigma_max=params.sigma_max, sigma_min=params.sigma_min, rho=params.rho)#**params.schedule_kwargs)
+            sigma_max=params.sigma_max, sigma_min=params.sigma_min, rho=params.rho)
         sigma_schedule_list = sigma_schedule.tolist()
         debug_info["sigma_schedule"] = sigma_schedule_list
         
-        noise = torch.randn(sample_shape, device=unet.device, generator=generator)
-        sample = noise * sigma_schedule[0] + input_audio_sample * params.sigma_data
+        noise = torch.randn(x_ref.shape, device=unet.device, generator=generator)
+        sample = noise * sigma_schedule[0]
 
         progress_bar = tqdm(total=params.num_steps, disable=quiet)
         for i, (sigma_curr, sigma_next) in enumerate(zip(sigma_schedule_list[:-1], sigma_schedule_list[1:])):

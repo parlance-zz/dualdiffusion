@@ -213,12 +213,12 @@ class DDec_UNet(DualDiffusionUNet):
             c_noise = (sigma.flatten().log() / 4).to(self.dtype)
 
             x_in = tensor_4d_to_5d(x_in, num_channels=1)
-            x = (c_in * x_in).to(dtype=torch.bfloat16)#.to(self.dtype)
+            x = (c_in * x_in).to(self.dtype)
  
         # Embedding.
         emb = self.emb_noise(self.emb_fourier(c_noise))
         emb = mp_sum(emb, embeddings.to(emb.dtype), t=self.config.label_balance)
-        emb = mp_silu(emb).unsqueeze(-1).unsqueeze(-1).unsqueeze(-1).to(dtype=torch.bfloat16)#.to(x.dtype)
+        emb = mp_silu(emb).unsqueeze(-1).unsqueeze(-1).unsqueeze(-1).to(x.dtype)
 
         # Encoder.
         x = torch.cat((x, tensor_4d_to_5d(x_ref, num_channels=1)), dim=1)

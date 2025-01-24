@@ -245,7 +245,6 @@ class AutoencoderKL_EDM2_D1(DualDiffusionVAE):
     def forward(self, samples: torch.Tensor, embeddings: torch.Tensor,
             add_latents_noise: float = 0) -> tuple[list[torch.Tensor], list[torch.Tensor]]:
         
-        embeddings = [embedding.to(dtype=torch.bfloat16) for embedding in embeddings]
         enc_states = self.encode_train(samples, embeddings)
         dec_states = self.decode_train(enc_states, embeddings, add_latents_noise=add_latents_noise)
 

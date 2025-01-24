@@ -30,6 +30,9 @@ import torch
 
 from modules.embeddings.clap import CLAP_Embedding
 from pipelines.dual_diffusion_pipeline import DualDiffusionPipeline, SampleParams, SampleOutput
+from modules.unets.unet_edm2_ddec import DDec_UNet
+from modules.vaes.vae_edm2_d1 import AutoencoderKL_EDM2_D1
+from modules.formats.spectrogram import SpectrogramFormat
 from utils.dual_diffusion_utils import (
     init_cuda, normalize, save_audio, load_audio, load_safetensors,
     tensor_to_img, save_img, get_audio_info, dict_str
@@ -57,15 +60,18 @@ def vae_test() -> None:
     model_path = os.path.join(config.MODELS_PATH, model_name)
     print(f"Loading DualDiffusion model from '{model_path}'...")
     pipeline = DualDiffusionPipeline.from_pretrained(model_path, **model_load_options)
-    
-    pipeline.format.config.num_fgla_iters = num_fgla_iters
-    sample_rate = pipeline.format.config.sample_rate
+    vae: AutoencoderKL_EDM2_D1 = pipeline.vae
+    ddec: DDec_UNet = pipeline.ddec
+    format: SpectrogramFormat = pipeline.format
+
+    format.config.num_fgla_iters = num_fgla_iters
+    sample_rate = format.config.sample_rate
     if no_crop == True:
         crop_width = -1
     else:
-        crop_width = pipeline.format.sample_raw_crop_width(length=length)
-    last_global_step = pipeline.ddec.config.last_global_step#pipeline.vae.config.last_global_step
-
+        crop_width = format.sample_raw_crop_width(length=length)
+    last_global_step = ddec.config.last_global_step
+    
     model_metadata = {"model_metadata": dict_str(pipeline.model_metadata)}
     print(f"{model_metadata['model_metadata']}\n")
 
@@ -95,15 +101,14 @@ def vae_test() -> None:
         latents_dict = load_safetensors(os.path.join(dataset_path, safetensors_file_name))
 
         audio_embedding = normalize(latents_dict["clap_audio_embeddings"].mean(dim=0, keepdim=True)).float()
-        vae_embeddings = pipeline.vae.get_embeddings(audio_embedding.to(dtype=pipeline.vae.dtype, device=pipeline.vae.device))
+        vae_embeddings = vae.get_embeddings(audio_embedding.to(dtype=vae.dtype, device=vae.device))
 
         audio_len = get_audio_info(os.path.join(dataset_path, filename)).frames
         source_raw_sample = load_audio(os.path.join(dataset_path, filename), count=min(crop_width, audio_len))
-        input_raw_sample = source_raw_sample.unsqueeze(0).to(pipeline.format.device)
-        input_sample = pipeline.format.raw_to_sample(input_raw_sample)
+        input_raw_sample = source_raw_sample.unsqueeze(0).to(format.device)
+        input_sample = format.raw_to_sample(input_raw_sample)
         
-        posterior = pipeline.vae.encode(input_sample.to(dtype=pipeline.vae.dtype),
-                                        vae_embeddings, pipeline.format)
+        posterior = vae.encode(input_sample.to(dtype=vae.dtype), vae_embeddings, format)
         latents = posterior.sample() if sample_latents else posterior.mode()
         
         if add_latent_noise > 0:
@@ -113,7 +118,7 @@ def vae_test() -> None:
         if random_latents:
             latents = torch.randn_like(latents)
         
-        output_sample = pipeline.vae.decode(latents, vae_embeddings, pipeline.format)
+        output_sample = vae.decode(latents, vae_embeddings, format)
         ddec_params = SampleParams(
             num_steps=30, length=audio_len, cfg_scale=1.5, input_perturbation=0, use_heun=False
         )
@@ -126,7 +131,7 @@ def vae_test() -> None:
         print(f"latents mean/std: {latents.mean().item():.4} {latents.std().item():.4}")
         print(f"decoded point similarity: {point_similarity}")
         
-        output_raw_sample = pipeline.format.sample_to_raw(output_sample.type(torch.float32))
+        output_raw_sample = format.sample_to_raw(output_sample.type(torch.float32))
         
         latents_mean = latents.mean().item()
         latents_std = latents.std().item()
@@ -135,11 +140,11 @@ def vae_test() -> None:
         avg_latents_std += latents_std
         filename = os.path.basename(filename)
 
-        save_img(pipeline.vae.latents_to_img(latents), os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_latents.png')}"))
-        save_img(pipeline.format.sample_to_img(output_sample), os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_output_sample.png')}"))
-        save_img(pipeline.format.sample_to_img(input_sample), os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_input_sample.png')}"))
+        save_img(vae.latents_to_img(latents), os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_latents.png')}"))
+        save_img(format.sample_to_img(output_sample), os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_output_sample.png')}"))
+        save_img(format.sample_to_img(input_sample), os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_input_sample.png')}"))
 
-        input_raw_sample = pipeline.format.sample_to_raw(input_sample)
+        input_raw_sample = format.sample_to_raw(input_sample)
         output_flac_file_path = os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_original.flac')}")
         save_audio(input_raw_sample, sample_rate, output_flac_file_path, target_lufs=None)
         print(f"Saved flac output to {output_flac_file_path}")

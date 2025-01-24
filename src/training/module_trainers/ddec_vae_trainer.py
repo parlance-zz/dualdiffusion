@@ -22,7 +22,6 @@
 
 from dataclasses import dataclass
 from typing import Literal, Optional
-#import os
 
 import torch
 
@@ -33,7 +32,8 @@ from modules.unets.unet import DualDiffusionUNet
 from modules.formats.spectrogram import SpectrogramFormat
 from modules.vaes.vae_edm2_d1 import DualDiffusionVAE
 from modules.mp_tools import normalize
-from utils.dual_diffusion_utils import dict_str #, load_safetensors
+from utils.dual_diffusion_utils import dict_str, tensor_5d_to_4d
+
 
 @dataclass
 class DiffusionDecoderTrainerConfig(ModuleTrainerConfig):
@@ -75,7 +75,7 @@ class DiffusionDecoder_VAETrainer(ModuleTrainer):
 
         self.format: SpectrogramFormat = trainer.pipeline.format.to(self.trainer.accelerator.device)
         self.vae: DualDiffusionVAE = trainer.pipeline.vae.to(
-            device=self.trainer.accelerator.device, dtype=torch.bfloat16).requires_grad_(False).eval()
+            device=self.trainer.accelerator.device, dtype=trainer.mixed_precision_dtype).requires_grad_(False).eval()
 
         if trainer.config.enable_channels_last == True:
             self.vae = self.vae.to(memory_format=torch.channels_last)
@@ -84,17 +84,7 @@ class DiffusionDecoder_VAETrainer(ModuleTrainer):
             self.format.compile(**trainer.config.compile_params)
 
         if self.vae.config.last_global_step == 0:
-            self.logger.error("VAE model has not been trained, aborting training..."); exit(1)
-
-        self.unconditional_audio_embedding = None
-        """
-        dataset_embeddings_path = os.path.join(self.trainer.dataset.config.data_dir, "dataset_infos", "dataset_embeddings.safetensors")
-        if not os.path.isfile(dataset_embeddings_path):
-            self.logger.error(f"  Dataset embeddings not found at {dataset_embeddings_path}, aborting training..."); exit(1)
-        dataset_embeddings = load_safetensors(dataset_embeddings_path)
-        self.unconditional_audio_embedding = normalize(dataset_embeddings["_unconditional_audio"][:].to(self.trainer.accelerator.device).unsqueeze(0)).float()
-        self.logger.info(f"  Loaded dataset embeddings successfully from {dataset_embeddings_path}")
-        """  
+            self.logger.error("VAE model has not been trained, aborting training..."); exit(1) 
         
         if self.config.num_loss_buckets > 0:
             self.logger.info(f"Using {self.config.num_loss_buckets} loss buckets")
@@ -190,15 +180,13 @@ class DiffusionDecoder_VAETrainer(ModuleTrainer):
     def train_batch(self, batch: dict) -> dict[str, torch.Tensor]:
 
         samples = self.format.raw_to_sample(batch["audio"]).detach().clone()
-        if self.trainer.config.enable_channels_last == True:
-            samples = samples.to(memory_format=torch.channels_last)
-
         sample_audio_embeddings = normalize(batch["audio_embeddings"])
-        vae_emb = self.vae.get_embeddings(sample_audio_embeddings)
-        enc_states, dec_states = self.vae(samples, vae_emb, add_latents_noise=self.config.latents_perturbation)
+        vae_emb = self.vae.get_embeddings(sample_audio_embeddings.to(dtype=self.vae.dtype))
+        enc_states, dec_states = self.vae(samples.to(dtype=self.vae.dtype),
+                                    vae_emb, add_latents_noise=self.config.latents_perturbation)
 
-        latents: torch.Tensor = enc_states[-1][1].float().detach()
-        ref_samples: torch.Tensor = dec_states[-1][1].squeeze(1).float().detach()
+        latents: torch.Tensor = tensor_5d_to_4d(enc_states[-1][1]).float().detach()
+        ref_samples: torch.Tensor = tensor_5d_to_4d(dec_states[-1][1]).detach()
 
         if self.is_validation_batch == False:
             device_batch_size = self.trainer.config.device_batch_size
@@ -220,10 +208,6 @@ class DiffusionDecoder_VAETrainer(ModuleTrainer):
         # prepare model inputs
         noise = torch.randn(samples.shape, device=samples.device, generator=self.device_generator)
         noise = (noise * batch_sigma.view(-1, 1, 1, 1)).detach()
-
-        # convert model inputs to channels_last memory format for performance, if enabled
-        if self.trainer.config.enable_channels_last == True:
-            noise = noise.to(memory_format=torch.channels_last)
 
         denoised = self.module(samples + noise, batch_sigma, self.format, unet_class_embeddings, ref_samples)
         batch_loss_weight = (batch_sigma ** 2 + self.module.config.sigma_data ** 2) / (batch_sigma * self.module.config.sigma_data) ** 2
