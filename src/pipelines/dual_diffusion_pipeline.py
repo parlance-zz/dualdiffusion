@@ -311,59 +311,6 @@ class DualDiffusionPipeline(torch.nn.Module):
         model_index = {"modules": model_modules}
         config.save_json(model_index, os.path.join(model_path, "model_index.json"))
 
-    def get_class_label(self, label_name: Union[str, int]) -> int:
-
-        if isinstance(label_name, int):
-            return label_name
-        elif isinstance(label_name, str):
-            if self.dataset_info is None:
-                raise ValueError("Unable to retrieve class label, pipeline.dataset_info not found")
-            else:
-                return self.dataset_game_ids[label_name]
-        else:
-            raise ValueError(f"Unknown label type '{type(label_name)}'")
-        
-    @torch.no_grad()
-    def get_class_labels(self, labels: Union[int, torch.Tensor, list[int], dict[str, float]],
-                         module_name: str = "unet") -> torch.Tensor:
-
-        module: DualDiffusionModule = getattr(self, module_name)
-        class_id_override = getattr(module.config, "class_id_override", None)
-
-        label_dim = module.config.label_dim
-        assert label_dim > 0, f"{module_name} label dim must be > 0, got {label_dim}"
-        
-        if isinstance(labels, int):
-            if class_id_override is not None:
-                labels = torch.tensor([class_id_override])
-            else:
-                labels = torch.tensor([labels])
-        
-        if isinstance(labels, torch.Tensor):
-            if labels.ndim < 1: labels = labels.unsqueeze(0)
-            if class_id_override is not None:
-                labels = labels.clone().fill_(class_id_override)
-            class_labels = torch.nn.functional.one_hot(labels, num_classes=label_dim)
-        
-        elif isinstance(labels, list):
-            if class_id_override is not None:
-                labels = [class_id_override for _ in labels]
-            class_labels = torch.zeros((1, label_dim))
-            class_labels = class_labels.index_fill_(1, torch.tensor(labels, dtype=torch.long), 1)
-        
-        elif isinstance(labels, dict):
-            _labels = {self.get_class_label(l): w for l, w in labels.items()}
-
-            class_ids = torch.tensor(list(_labels.keys()), dtype=torch.long)
-            if class_id_override is not None:
-                class_ids.fill_(class_id_override)
-            weights = torch.tensor(list(_labels.values())).float()
-            class_labels = torch.zeros((1, label_dim)).scatter_(1, class_ids.unsqueeze(0), weights.unsqueeze(0))
-        else:
-            raise ValueError(f"Unknown labels dtype '{type(labels)}'")
-        
-        return class_labels.to(device=module.device, dtype=module.dtype)
-
     def get_latent_shape(self, sample_shape: Union[torch.Size, tuple[int, int, int, int]]) -> torch.Size:
         latent_shape = self.vae.get_latent_shape(sample_shape)
         if hasattr(self, "unet"):
@@ -394,7 +341,7 @@ class DualDiffusionPipeline(torch.nn.Module):
         params.sigma_min = params.sigma_min or unet.config.sigma_min
         params.sigma_data = params.sigma_data or unet.config.sigma_data
         #params.schedule_kwargs = params.schedule_kwargs or {}
-        params.prompt = params.prompt or {}
+        #params.prompt = params.prompt or {}
         
         if isinstance(params.input_audio, str):
             if params.input_audio_pre_encoded == True:
@@ -618,9 +565,9 @@ class DualDiffusionPipeline(torch.nn.Module):
     @torch.inference_mode()
     def diffusion_decode(self, params: SampleParams, quiet: bool = False,
             audio_embedding: Optional[torch.Tensor] = None,
-            x_ref: Optional[torch.Tensor] = None) -> torch.Tensor:
+            x_ref: Optional[torch.Tensor] = None, module_name: str = "unet") -> torch.Tensor:
 
-        unet: DualDiffusionUNet = self.ddec
+        unet: DualDiffusionUNet = getattr(self, module_name)
         debug_info = {}
         
         params = SampleParams(**params.__dict__).sanitize() # todo: this should be properly deepcopied because of tensor params       
@@ -640,7 +587,13 @@ class DualDiffusionPipeline(torch.nn.Module):
         debug_info["unet_class_embeddings mean"] = unet_class_embeddings.mean().item()
         debug_info["unet_class_embeddings std"] = unet_class_embeddings.std().item()
 
-        input_ref_sample = x_ref.repeat(2, 1, 1, 1)
+        if x_ref is None:
+            sample_shape = self.get_sample_shape(bsz=params.batch_size, length=params.length)
+            sample_shape = self.get_latent_shape(sample_shape)
+            input_ref_sample = None
+        else:
+            sample_shape = x_ref.shape
+            input_ref_sample = x_ref.repeat(2, 1, 1, 1)
 
         start_timestep = 1
         sigma_schedule = SamplingSchedule.get_schedule(params.schedule,
@@ -649,7 +602,7 @@ class DualDiffusionPipeline(torch.nn.Module):
         sigma_schedule_list = sigma_schedule.tolist()
         debug_info["sigma_schedule"] = sigma_schedule_list
         
-        noise = torch.randn(x_ref.shape, device=unet.device, generator=generator)
+        noise = torch.randn(sample_shape, device=unet.device, generator=generator)
         sample = noise * sigma_schedule[0]
 
         progress_bar = tqdm(total=params.num_steps, disable=quiet)
