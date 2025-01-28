@@ -162,7 +162,7 @@ class PhaseRecovery(torch.nn.Module):
         self.register_buffer("window", window, persistent=False)
 
     @torch.inference_mode()
-    def forward(self, specgram: Tensor, n_fgla_iter: Optional[int] = None, show_tqdm: bool = True) -> Tensor:
+    def forward(self, specgram: Tensor, n_fgla_iter: Optional[int] = None, quiet: bool = False) -> Tensor:
 
         n_fgla_iter = n_fgla_iter or self.n_fgla_iter
 
@@ -180,7 +180,7 @@ class PhaseRecovery(torch.nn.Module):
                 self.stereo,
                 self.stereo_coherence,
                 manual_init=None,
-                show_tqdm=show_tqdm,
+                show_tqdm=not quiet,
             )
         else:
             wave_shape = wave.size()
