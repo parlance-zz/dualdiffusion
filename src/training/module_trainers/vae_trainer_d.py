@@ -68,7 +68,7 @@ class VAETrainer_D(ModuleTrainer):
 
         sample_audio_embeddings = normalize(batch["audio_embeddings"])
         vae_emb = self.vae.get_embeddings(sample_audio_embeddings)
-        enc_states, dec_states = self.vae(samples, vae_emb, add_latents_noise=self.config.add_latents_noise)
+        enc_states, dec_states, sigma = self.vae(samples, vae_emb, add_latents_noise=self.config.add_latents_noise)
 
         # latents kl loss
         latents: torch.Tensor = enc_states[-1][1]
@@ -90,11 +90,12 @@ class VAETrainer_D(ModuleTrainer):
 
         # recon loss
         recon_loss = (samples - output_samples).abs().mean(dim=(1,2,3))
+        #recon_loss = torch.nn.functional.mse_loss(output_samples, samples, reduction="none").mean(dim=(1,2,3))
         recon_loss_logvar = self.vae.get_recon_loss_logvar()
         recon_loss_nll = recon_loss / recon_loss_logvar.exp() + recon_loss_logvar
 
         return {
-            "loss": kl_loss * self.config.kl_loss_weight + recon_loss_nll,
+            "loss": kl_loss * self.config.kl_loss_weight + recon_loss_nll, # / sigma,
             "loss/recon_nll": recon_loss_nll.mean().detach(),
             "loss/recon": recon_loss.mean().detach(),
             "loss/kl": kl_loss.mean().detach(),

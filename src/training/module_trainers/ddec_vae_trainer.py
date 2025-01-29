@@ -56,8 +56,9 @@ class DiffusionDecoderTrainerConfig(ModuleTrainerConfig):
     validation_sigma_dist_offset: float = 0.3
 
     num_loss_buckets: int = 10
-    latents_perturbation: float = 0.1
+    latents_perturbation: float = 0.03
     conditioning_dropout: float = 0.1
+    consistency_batch_size: Optional[int] = 1
 
 class DiffusionDecoder_VAETrainer(ModuleTrainer):
     
@@ -182,7 +183,7 @@ class DiffusionDecoder_VAETrainer(ModuleTrainer):
         samples = self.format.raw_to_sample(batch["audio"]).detach().clone()
         sample_audio_embeddings = normalize(batch["audio_embeddings"])
         vae_emb = self.vae.get_embeddings(sample_audio_embeddings.to(dtype=self.vae.dtype))
-        enc_states, dec_states = self.vae(samples.to(dtype=self.vae.dtype),
+        enc_states, dec_states, sigma = self.vae(samples.to(dtype=self.vae.dtype),
                                     vae_emb, add_latents_noise=self.config.latents_perturbation)
 
         latents: torch.Tensor = tensor_5d_to_4d(enc_states[-1][1]).float().detach()
