@@ -1,0 +1,197 @@
+# MIT License
+#
+# Copyright (c) 2023 Christopher Friesen
+#
+# Permission is hereby granted, free of charge, to any person obtaining a copy
+# of this software and associated documentation files (the "Software"), to deal
+# in the Software without restriction, including without limitation the rights
+# to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+# copies of the Software, and to permit persons to whom the Software is
+# furnished to do so, subject to the following conditions:
+# 
+# The above copyright notice and this permission notice shall be included in all
+# copies or substantial portions of the Software.
+# 
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+# SOFTWARE.
+
+from utils import config
+
+import os
+import datetime
+import random
+
+import torch
+
+from pipelines.dual_diffusion_pipeline import DualDiffusionPipeline, SampleParams
+from modules.unets.unet_edm2_ddec import DDec_UNet
+from modules.vaes.vae_edm2_d1 import AutoencoderKL_EDM2_D1
+from modules.formats.spectrogram import SpectrogramFormat
+from utils.dual_diffusion_utils import (
+    init_cuda, normalize, save_audio, load_audio, load_safetensors,
+    save_img, dict_str, get_no_clobber_filepath, get_audio_metadata
+)
+
+
+@torch.inference_mode()
+def unet_test() -> None:
+
+    torch.manual_seed(0)
+    os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "max_split_size_mb:8192"
+
+    test_params = config.load_json(
+        os.path.join(config.CONFIG_PATH, "tests", "unet_test.json"))
+    
+    model_name = test_params["model_name"]
+    model_load_options = test_params["model_load_options"]
+    length = test_params["length"]
+    num_fgla_iters = test_params["num_fgla_iters"]
+    skip_ddec = test_params["skip_ddec"]
+
+    model_path = os.path.join(config.MODELS_PATH, model_name)
+    print(f"Loading DualDiffusion model from '{model_path}'...")
+    pipeline = DualDiffusionPipeline.from_pretrained(model_path, **model_load_options)
+    vae: AutoencoderKL_EDM2_D1 = pipeline.vae
+    ddec: DDec_UNet = pipeline.ddec
+    format: SpectrogramFormat = pipeline.format
+
+    ddec.compile(fullgraph=True, dynamic=False)
+    ddec.to(memory_format=torch.channels_last)
+    pipeline.unet.compile(fullgraph=True, dynamic=False)
+    pipeline.unet.to(memory_format=torch.channels_last)
+
+    format.config.num_fgla_iters = num_fgla_iters
+    sample_rate = format.config.sample_rate
+    crop_width = format.sample_raw_crop_width(length=length)
+    last_global_step = pipeline.unet.config.last_global_step
+
+    random_test_samples_seed = test_params["random_test_samples_seed"]
+    if random_test_samples_seed is None:
+        random_test_samples_seed = random.randint(1000, 9999)
+    random.seed(random_test_samples_seed)
+    print(f"Using random test samples seed: {random_test_samples_seed}")
+
+    base_seed = test_params["unet_params"].pop("seed")
+    if base_seed is None:
+        if random_test_samples_seed is None:
+            base_seed = random.randint(10, 100) * 10
+        else:
+            base_seed = random_test_samples_seed * 10
+
+    model_metadata = {"model_metadata": dict_str(pipeline.model_metadata)}
+    print(f"{model_metadata['model_metadata']}\n")
+
+    test_samples: list[str] = test_params["test_samples"] or []
+    sample_shape = pipeline.get_sample_shape(length=length)
+    latent_shape = pipeline.get_latent_shape(sample_shape)
+    print(f"Sample shape: {sample_shape}  Latent shape: {latent_shape}")
+    
+    output_path = os.path.join(model_path, "output", f"step_{last_global_step}")
+    os.makedirs(output_path, exist_ok=True)
+    start_time = datetime.datetime.now()
+    avg_latents_mean = avg_latents_std = 0
+
+    add_random_test_samples = test_params["add_random_test_samples"]
+    if add_random_test_samples > 0:
+        train_samples = config.load_json(os.path.join(config.DATASET_PATH, "train.jsonl"))
+        test_samples += [sample["file_name"] for sample in random.sample(train_samples, add_random_test_samples)]
+    copy_sample_source_files: bool = test_params["copy_sample_source_files"]
+
+    for i, filename in enumerate(test_samples):
+        
+        print(f"\nfile: {filename}")
+
+        safetensors_file_name = os.path.join(f"{os.path.splitext(filename)[0]}.safetensors")
+        safetensors_full_path = os.path.join(config.DATASET_PATH, safetensors_file_name)
+        if os.path.isfile(safetensors_full_path):
+            latents_dict = load_safetensors(safetensors_full_path)
+            clap_audio_embeddings = latents_dict["clap_audio_embeddings"]
+        else:
+            latents_dict = None
+            clap_audio_embeddings = None
+
+        audio_full_path = os.path.join(config.DATASET_PATH, filename)
+        if os.path.isfile(audio_full_path) == False:
+            audio_full_path = os.path.join(config.DEBUG_PATH, filename)
+        if os.path.isfile(audio_full_path) == False:
+            print(f"Error: Could not find {filename}, skipping...")
+            continue
+        input_audio, input_sample_rate = load_audio(audio_full_path, return_sample_rate=True, device=pipeline.embedding.device)
+        input_audio_metadata = get_audio_metadata(audio_full_path)
+        if clap_audio_embeddings is None:
+            clap_audio_embeddings = pipeline.embedding.encode_audio(input_audio, sample_rate=input_sample_rate)
+        input_sample = format.raw_to_sample(input_audio[:, :crop_width])
+
+        audio_embedding = normalize(clap_audio_embeddings.mean(dim=0, keepdim=True)).float()
+        vae_embeddings = vae.get_embeddings(audio_embedding.to(dtype=vae.dtype, device=vae.device))
+
+        unet_params = SampleParams(seed=base_seed + i, **test_params["unet_params"], prompt=filename)
+        pipeline.unet.to("cuda")
+        latents = pipeline.diffusion_decode(unet_params,
+            audio_embedding=audio_embedding)
+        pipeline.unet.to("cpu")
+
+        latents = latents / latents.std(dim=(1,2,3), keepdim=True)
+        output_sample = vae.decode(latents, vae_embeddings, format)
+        
+        if skip_ddec == False:
+            ddec_params = SampleParams(seed=unet_params.seed, **test_params["ddec_params"])
+            output_sample = pipeline.diffusion_decode(ddec_params,
+                audio_embedding=audio_embedding, x_ref=output_sample, module_name="ddec")
+        output_raw_sample = format.sample_to_raw(output_sample.float())
+
+        print(f"input   mean/std: {input_sample.mean().item():.4} {input_sample.std().item():.4}")
+        print(f"output  mean/std: {output_sample.mean().item():.4} {output_sample.std().item():.4}")
+        print(f"latents mean/std: {latents.mean().item():.4} {latents.std().item():.4}")
+        
+        latents_mean = latents.mean().item()
+        latents_std = latents.std().item()
+        avg_latents_mean += latents_mean
+        avg_latents_std += latents_std
+        
+        output_label = unet_params.get_label(pipeline.model_metadata)
+        output_latents_file_path = os.path.join(output_path, f"{output_label}_output_latents.png")
+        output_latents_file_path = get_no_clobber_filepath(output_latents_file_path)
+        save_img(vae.latents_to_img(latents), output_latents_file_path)
+
+        output_sample_file_path = os.path.join(output_path, f"{output_label}_output_sample.png")
+        output_sample_file_path = get_no_clobber_filepath(output_sample_file_path)
+        save_img(format.sample_to_img(output_sample), output_sample_file_path)
+
+        input_latents = latents_dict["latents"][0:1, ..., :latents.shape[-1]] if latents_dict is not None else None
+        if input_latents is not None:
+            output_latents_file_path = os.path.join(output_path, f"{output_label}_input_latents.png")
+            output_latents_file_path = get_no_clobber_filepath(output_latents_file_path)
+            save_img(vae.latents_to_img(input_latents), output_latents_file_path)
+
+        output_sample_file_path = os.path.join(output_path, f"{output_label}_input_sample.png")
+        output_sample_file_path = get_no_clobber_filepath(output_sample_file_path)
+        save_img(format.sample_to_img(input_sample), output_sample_file_path)
+
+        metadata = {**model_metadata, "diffusion_metadata": dict_str(unet_params.__dict__)}
+        metadata["ddec_metadata"] = dict_str(ddec_params.__dict__) if skip_ddec == False else "null"
+
+        output_flac_file_path = os.path.join(output_path, f"{output_label}.flac")
+        output_flac_file_path = get_no_clobber_filepath(output_flac_file_path)
+        save_audio(output_raw_sample, sample_rate, output_flac_file_path, metadata=metadata, target_lufs=None)
+        print(f"Saved flac output to {output_flac_file_path}")
+
+        if copy_sample_source_files == True:
+            output_flac_file_path = os.path.join(output_path, f"{output_label}_input_prompt.flac")
+            save_audio(input_audio, input_sample_rate,
+                output_flac_file_path, target_lufs=None, metadata=input_audio_metadata)
+            print(f"Saved flac output to {output_flac_file_path}")
+
+    print(f"\nFinished in: {datetime.datetime.now() - start_time}")
+    print(f"Latents avg mean: {avg_latents_mean / len(test_samples)}")
+    print(f"Latents avg std: {avg_latents_std / len(test_samples)}")
+
+if __name__ == "__main__":
+
+    init_cuda()
+    unet_test()

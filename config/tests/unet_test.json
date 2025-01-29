@@ -1,0 +1,44 @@
+{
+    "model_name": "edm2_vd1_aclap_1",
+    "model_load_options": {
+        "torch_dtype": "bfloat16",
+        "device": "cuda",
+        "load_checkpoints": true,
+        "load_emas": {
+            "unet": "ema_std0.1.safetensors",
+            "vae": "ema_std0.05.safetensors",
+            "ddec": "ema_std0.1.safetensors"
+        },
+        "compile_options": {
+            "fullgraph": true,
+            "dynamic": false
+        }
+    },
+    "length": 1472000,
+    "num_fgla_iters": 300,
+    "skip_ddec": false,
+    "copy_sample_source_files": true,
+    "random_test_samples_seed": 50,
+    "add_random_test_samples": 99,
+    "test_samples": [
+    ],
+    "unet_params": {
+        "seed": null,
+        "num_steps": 300,
+        "cfg_scale": 2,
+        "input_perturbation": 0.15,
+        "input_perturbation_offset": 0.5,
+        "sigma_min": 0.03,
+        "sigma_max": 8,
+        "use_heun": true
+    },
+    "ddec_params": {
+        "num_steps": 30,
+        "cfg_scale": 2,
+        "input_perturbation": 0,
+        "input_perturbation_offset": 0,
+        "sigma_min": null,
+        "sigma_max": null,
+        "use_heun": true
+    }
+}
