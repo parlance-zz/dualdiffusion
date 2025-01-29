@@ -434,6 +434,7 @@ class DatasetProcessorConfig:
 
     # encode process
     encode_model: Optional[str]                          = None  # use the format, vae, and embeddings from this model (under $MODELS_PATH)
+    encode_vae_ema: Union[str, bool]                     = True  # use the specified ema if str, the first ema if true, and no ema if false for latents encoding
     encode_compile_models: bool                          = True  # compile the vae before encoding
     encode_latents_batch_size: int                       = 1     # batch size for encoding latents. choose a value that works with your vram capacity
     encode_latents_num_time_offset_augmentations: int    = 8     # add augmentations for sub-pixel (latent pixel) offsets

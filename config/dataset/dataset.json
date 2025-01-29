@@ -5,6 +5,7 @@
   "cuda_devices": "cuda",
   "force_overwrite": false,
   "test_mode": false,
+  "use_fast_scan": true,
   "write_error_summary_logs": true,
   "verbose": false,
 
@@ -27,21 +28,22 @@
 
   "integrity_check_delete_corrupt_files": false,
 
-  "encode_model": "edm2_vt7_12d_4_clap2",
+  "encode_model": "edm2_vae_d1",
+  "encode_vae_ema": "ema_std0.05.safetensors",
   "encode_compile_models": true,
   "encode_latents_batch_size": 1,
   "encode_latents_num_time_offset_augmentations": 1,
   "encode_latents_pitch_offset_augmentations": [],
   "encode_latents_stereo_mirroring_augmentation": false,  
-  "encode_latents_force_overwrite": false,
+  "encode_latents_force_overwrite": true,
   "encode_audio_embeddings_force_overwrite": false,
   "encode_text_embeddings_force_overwrite": false,
-  "encode_embeddings_only": true,
+  "encode_embeddings_only": false,
 
   "build_input_dataset_path": null,
-  "build_output_dataset_path": "/home/parlance/dualdiffusion/data",
+  "build_output_dataset_path": null,
 
-  "clap_embedding_model": "edm2_vt7_12d_4_clap",
+  "clap_embedding_model": "edm2_vae_d1",
   "clap_embedding_labels": {
     "vocals": ["vocals", "singing", "female singer", "male singer", "voice", "speaking", "speech", "dialogue",
     "whispering", "screaming", "yelling", "chanting"],
