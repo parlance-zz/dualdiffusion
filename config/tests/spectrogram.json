@@ -5,9 +5,6 @@
   "noise_level": 0,
   "format_cfg_file": "spectrogram_format.json",
   "sample_filenames": [
-    "spc/Kirby Super Star/Kirby Super Star  [Kirby's Fun Pak] - 41 Halberd ~ Nightmare Warship.flac",
-    "spc/Mario's Super Picross/Mario no Super Picross - 109 Mario Puzzle 3.flac",
-    "spc/Megaman X3/Mega Man X3 - 09 Blast Hornet.flac",
-    "spc/Pilotwings/Pilotwings - 04 Light Plane.flac"
+    "spc/Pilotwings/04 Light Plane.spc.flac"
   ]
 }

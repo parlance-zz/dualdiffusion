@@ -35,7 +35,7 @@ from modules.vaes.vae_edm2_d1 import AutoencoderKL_EDM2_D1
 from modules.formats.spectrogram import SpectrogramFormat
 from utils.dual_diffusion_utils import (
     init_cuda, normalize, save_audio, load_audio, load_safetensors,
-    tensor_to_img, save_img, get_audio_info, dict_str
+    tensor_to_img, save_img, get_audio_info, dict_str, tensor_4d_to_5d
 )
 
 
@@ -61,7 +61,6 @@ def vae_test() -> None:
     print(f"Loading DualDiffusion model from '{model_path}'...")
     pipeline = DualDiffusionPipeline.from_pretrained(model_path, **model_load_options)
     vae: AutoencoderKL_EDM2_D1 = pipeline.vae
-    ddec: DDec_UNet = pipeline.ddec
     format: SpectrogramFormat = pipeline.format
 
     format.config.num_fgla_iters = num_fgla_iters
@@ -70,8 +69,12 @@ def vae_test() -> None:
         crop_width = -1
     else:
         crop_width = format.sample_raw_crop_width(length=length)
-    last_global_step = ddec.config.last_global_step
-    
+
+    if test_params["test_ddec"] == True:
+        ddec: DDec_UNet = pipeline.ddec
+        last_global_step = ddec.config.last_global_step
+    else:
+        last_global_step = vae.config.last_global_step
     model_metadata = {"model_metadata": dict_str(pipeline.model_metadata)}
     print(f"{model_metadata['model_metadata']}\n")
 
@@ -110,19 +113,22 @@ def vae_test() -> None:
         
         posterior = vae.encode(input_sample.to(dtype=vae.dtype), vae_embeddings, format)
         latents = posterior.sample() if sample_latents else posterior.mode()
-        
+        clean_latents = latents
+
         if add_latent_noise > 0:
-            latents += torch.rand_like(latents) * add_latent_noise  
+            latents = latents + torch.rand_like(latents) * add_latent_noise  
         if normalize_latents:
             latents = normalize(latents).float()
         if random_latents:
             latents = torch.randn_like(latents)
         
         output_sample = vae.decode(latents, vae_embeddings, format)
-        ddec_params = SampleParams(
-            num_steps=30, length=audio_len, cfg_scale=1.5, input_perturbation=0, use_heun=False
-        )
-        output_sample = pipeline.diffusion_decode(ddec_params, audio_embedding=audio_embedding, x_ref=output_sample)
+        if test_params["test_ddec"] == True:
+            ddec_params = SampleParams(
+                num_steps=30, length=audio_len, cfg_scale=1.5, input_perturbation=0, use_heun=False
+            )
+            output_sample = pipeline.diffusion_decode(
+                ddec_params, audio_embedding=audio_embedding, x_ref=output_sample)
 
         point_similarity = (output_sample - input_sample).abs().mean().item()
 
@@ -140,7 +146,7 @@ def vae_test() -> None:
         avg_latents_std += latents_std
         filename = os.path.basename(filename)
 
-        save_img(vae.latents_to_img(latents), os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_latents.png')}"))
+        save_img(vae.latents_to_img(clean_latents), os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_latents.png')}"))
         save_img(format.sample_to_img(output_sample), os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_output_sample.png')}"))
         save_img(format.sample_to_img(input_sample), os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_input_sample.png')}"))
 
@@ -157,9 +163,10 @@ def vae_test() -> None:
             output_flac_file_path = os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_source.flac')}")
             save_audio(source_raw_sample, sample_rate, output_flac_file_path, target_lufs=None)
             print(f"Saved flac output to {output_flac_file_path}")
-            
-        #latents_fft = torch.fft.rfft2(latents.float(), norm="ortho").abs().clip(min=noise_floor).log()
-        #save_img(tensor_to_img(latents_fft, flip_y=True), os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_latents_fft_ln_psd.png')}"))
+        
+        latents_fft = tensor_4d_to_5d(torch.fft.rfft2(clean_latents.float(), norm="ortho").abs().clip(min=1e-6).log(), num_channels=4)
+        save_img(tensor_to_img(latents_fft, flip_y=True), os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_latents_fft_ln_psd.png')}"))
+        latents_fft.cpu().numpy().tofile(os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_latents_fft_ln_psd.raw')}"))
 
     print(f"\nFinished in: {datetime.datetime.now() - start_time}")
     print(f"Avg Point similarity: {avg_point_similarity / len(test_samples)}")

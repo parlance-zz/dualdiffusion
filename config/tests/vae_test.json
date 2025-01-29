@@ -13,14 +13,11 @@
     "sample_latents": true,
     "normalize_latents": false,
     "random_latents": false,
-    "add_latent_noise": 0,
-    "add_random_test_samples": 4,
+    "add_latent_noise": 0.03,
+    "test_ddec": false,
+    "add_random_test_samples": 0,
     "copy_sample_source_files": true,
     "test_samples": [
-        "spc/Pilotwings/04 Light Plane.spc.flac",
-        "psf/Mega Man X4/BGM2.XA.flac",
-        "psf/Mega Man X6/25. DYNAMO.xa.flac",
-        "spc/Mega Man X3/09 Blast Hornet.spc.flac",
-        "spc/Kirby Super Star/53 Heart of Nova.spc.flac"
+        "spc/Pilotwings/04 Light Plane.spc.flac"
     ]
 }
