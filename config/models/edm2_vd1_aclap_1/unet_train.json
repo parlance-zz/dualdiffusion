@@ -1,14 +1,14 @@
 {
   "seed": 5000,
-  "device_batch_size": 10,
-  "gradient_accumulation_steps": 10,
-  "validation_device_batch_size": 10,
-  "validation_accumulation_steps": 6,
+  "device_batch_size": 6,
+  "gradient_accumulation_steps": 15,
+  "validation_device_batch_size": 6,
+  "validation_accumulation_steps": 10,
   "max_train_steps": 1000000,
   "min_checkpoint_time": 3600,
   "strict_checkpoint_time": false,
   "checkpoints_total_limit": 1,
-  "num_validation_epochs": 2,
+  "num_validation_epochs": 0,
   "enable_anomaly_detection": false,
   "enable_model_compilation": true,
   "enable_channels_last": true,
@@ -29,8 +29,7 @@
     "adam_beta2": 0.99,
     "adam_epsilon": 1e-8,
     "adam_weight_decay": 0,
-    "max_grad_norm": 1000,
-    "add_grad_noise": 0
+    "max_grad_norm": 1000
   },
   "emas": {
     "std0.05": {

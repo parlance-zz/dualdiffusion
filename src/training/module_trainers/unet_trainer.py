@@ -250,7 +250,6 @@ class UNetTrainer(ModuleTrainer):
             samples = torch.cat(samples.unbind(dim=2), dim=1)
         else:
             samples = samples.clone()
-        samples = (samples - 0.0044) / 0.8715 # oops, todo: add bias and scale factors for latents to config
 
         # in our first train batch save the input latents to debug image files
         if self.trainer.accelerator.is_main_process == True and self.saved_debug_latents == False:

@@ -58,7 +58,7 @@ class SampleParams:
     rho: float                  = 7.
     schedule: Optional[str]               = "edm2"
     #schedule_kwargs: Optional[dict]       = None
-    prompt: Optional[dict]                = None
+    prompt: Optional[str]                 = None
     use_heun: bool                        = True
     input_perturbation: float             = 1.
     input_perturbation_offset: float      = 0.
@@ -88,26 +88,21 @@ class SampleParams:
         metadata["timestamp"] = datetime.now().strftime(r"%m/%d/%Y %I:%M:%S %p")
         return {str(key): str(value) for key, value in metadata.items()}
     
-    def get_label(self, model_metadata: dict, dataset_game_ids: dict, verbose: bool = True) -> str:
+    def get_label(self, model_metadata: dict, verbose: bool = True) -> str:
         
         module_name = "unet"
-        #if self.inpainting_mask is not None: # I prefer having the step label from the main unet for now
-        #    if getattr(pipeline, "unet_inpainting", None) is not None:
-        #        module_name = "unet_inpainting"
 
         if verbose == True:
             last_global_step = model_metadata["last_global_step"][module_name]
             ema = None
             if module_name in model_metadata["load_emas"]:
-                ema = model_metadata["load_emas"][module_name].replace("ema_", "").replace(".safetensors", "")
-                ema = ema[:min(len(ema), 10)] # truncate beta string if longer than 8 digits
+                ema = model_metadata["load_emas"][module_name].replace(".safetensors", "")
+                ema = ema[:min(len(ema), 10)] + "_" # truncate beta string if longer than 8 digits
             else:
                 ema = None
-            top_game_name = sorted(self.prompt.items(), key=lambda x:x[1])[-1][0]
-            top_game_id = dataset_game_ids[top_game_name]
 
-            label = f"step_{last_global_step}_{int(self.num_steps)}_{'ema'+ema+'_' if ema else ''}cfg{self.cfg_scale}"
-            label += f"_sgm{self.sigma_max}-{self.sigma_min}_ip{self.input_perturbation}_ipo{self.input_perturbation_offset}_r{self.rho}_g{top_game_id}_s{int(self.seed)}"
+            label = f"step_{last_global_step}_{int(self.num_steps)}_{ema or ''}cfg{self.cfg_scale}"
+            label += f"_sgm{self.sigma_max}-{self.sigma_min}_ip{self.input_perturbation}_ipo{self.input_perturbation_offset}_r{self.rho}_s{int(self.seed)}"
         else:
             label = f"s{self.seed}"
         
@@ -651,8 +646,14 @@ class DualDiffusionPipeline(torch.nn.Module):
                 cfg_model_output_hat = model_output_hat[params.batch_size:].lerp(model_output_hat[:params.batch_size], params.cfg_scale)
                 cfg_model_output = torch.lerp(cfg_model_output, cfg_model_output_hat, 0.5)            
             
+            #if module_name == "ddec":
+            #    cfg_model_output = self.format.raw_to_sample(self.format.sample_to_raw(cfg_model_output, n_fgla_iters=1, quiet=True))
+
             t = sigma_next / sigma_curr if (i+1) < params.num_steps else 0
             sample = torch.lerp(cfg_model_output, sample, t)
+
+            #if module_name == "unet":
+            #    sample = normalize(sample).float() * (sigma_next**2 + params.sigma_data**2)**0.5
 
             if loop_shift is not None:
                 sample = torch.roll(sample[..., 32:-32], shifts=-loop_shift, dims=-1)
