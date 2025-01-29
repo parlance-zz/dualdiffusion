@@ -199,6 +199,7 @@ class AutoencoderKL_EDM2_D1(DualDiffusionVAE):
             x_out = block(x_in, enc_embeddings)
             x_in = x_out
 
+        x_out = x_out / x_out.std(dim=(1,2,3,4), keepdim=True)
         return DegenerateDistribution(tensor_5d_to_4d(x_out))
     
     def decode(self, x: torch.Tensor, embeddings: torch.Tensor,
@@ -233,19 +234,21 @@ class AutoencoderKL_EDM2_D1(DualDiffusionVAE):
 
         x_in = enc_states[-1][1]
         if add_latents_noise > 0:
-            x_in = x_in + torch.randn_like(x_in) * add_latents_noise
+            sigma = add_latents_noise / (torch.rand(x_in.shape[0], device=x_in.device, dtype=x_in.dtype)**2 + add_latents_noise).detach()
+            x_in = x_in + torch.randn_like(x_in) * sigma.view(-1,1,1,1,1)
+        x_in = x_in / x_in.std(dim=(1,2,3,4), keepdim=True).detach()
 
         for block in self.dec.values():
             x_out = block(x_in, dec_embeddings)
             dec_states.append((x_in, x_out))
             x_in = x_out
 
-        return dec_states
+        return dec_states, sigma
     
     def forward(self, samples: torch.Tensor, embeddings: torch.Tensor,
             add_latents_noise: float = 0) -> tuple[list[torch.Tensor], list[torch.Tensor]]:
         
         enc_states = self.encode_train(samples, embeddings)
-        dec_states = self.decode_train(enc_states, embeddings, add_latents_noise=add_latents_noise)
+        dec_states, sigma = self.decode_train(enc_states, embeddings, add_latents_noise=add_latents_noise)
 
-        return enc_states, dec_states
+        return enc_states, dec_states, sigma
