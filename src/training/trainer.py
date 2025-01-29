@@ -650,7 +650,8 @@ class DualDiffusionTrainer:
                 tmp_path = os.path.join(self.config.model_path, "tmp")
                 diff_output_path = os.path.join(tmp_path, "src_config_changes.diff")
                 compare_dirs(diff_output_path, checkpoint_full_path, tmp_path,
-                    ignore_patterns=["*_loss.json"], whitelist_patterns=["*.json", "*.py"])
+                    ignore_patterns=["*_loss.json", "trainer_state.json"],
+                    whitelist_patterns=["*.json", "*.py"])
 
         if self.global_step > 0:
             self.epoch = self.global_step // self.num_update_steps_per_epoch
