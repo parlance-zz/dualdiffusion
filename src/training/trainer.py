@@ -46,6 +46,7 @@ from tqdm.auto import tqdm
 
 from pipelines.dual_diffusion_pipeline import DualDiffusionPipeline
 from utils.dual_diffusion_utils import dict_str
+from utils.compare_dirs import compare_dirs
 from training.module_trainers.module_trainer import ModuleTrainer, ModuleTrainerConfig
 from training.ema import EMA_Manager
 from training.dataset import DatasetConfig, DualDiffusionDataset
@@ -429,9 +430,11 @@ class DualDiffusionTrainer:
             shutil.copytree(self.config.model_src_path, os.path.join(tmp_path, "src"),
                             ignore=shutil.ignore_patterns("*.pyc", "__pycache__"),
                             dirs_exist_ok=True)
-            shutil.copy(os.path.join(self.config.model_path, "model_index.json"), tmp_path)
+            
             if self.config.train_config_path is not None:
                 shutil.copy(self.config.train_config_path, tmp_path)
+
+            self.pipeline.save_pretrained(tmp_path, save_config_only=True)
 
     def init_lr_scheduler(self) -> None:
 
@@ -537,11 +540,8 @@ class DualDiffusionTrainer:
 
     def save_checkpoint(self) -> None:
         
-        # save model checkpoint and training / optimizer state
-        self.module.config.last_global_step = self.global_step
-        save_path = os.path.join(self.config.model_path, f"{self.config.module_name}_checkpoint-{self.global_step}")
-        self.accelerator.save_state(save_path)
-        self.logger.info(f"Saved state to {save_path}")
+        save_path = os.path.join(
+            self.config.model_path, f"{self.config.module_name}_checkpoint-{self.global_step}")
 
         # copy all source code / scripts / config to checkpoint folder for posterity
         source_src_path = os.path.join(self.config.model_path, "tmp")
@@ -551,6 +551,11 @@ class DualDiffusionTrainer:
         except Exception as e:
             self.logger.error("".join(format_exception(type(e), e, e.__traceback__)))
             self.logger.warning(f"Failed to copy source code from {source_src_path} to {save_path}: {e}")
+
+        # save model checkpoint and training / optimizer state
+        self.module.config.last_global_step = self.global_step
+        self.accelerator.save_state(save_path)
+        self.logger.info(f"Saved state to {save_path}")
 
         # copy logs
         source_logs_path = os.path.join(self.config.model_path, f"logs_{self.config.module_name}")
@@ -608,7 +613,8 @@ class DualDiffusionTrainer:
         else:
             self.global_step = int(path.split("-")[1])
             self.logger.info(f"Resuming from checkpoint {path} (global step: {self.global_step})")
-            self.accelerator.load_state(os.path.join(self.config.model_path, path))
+            checkpoint_full_path = os.path.join(self.config.model_path, path)
+            self.accelerator.load_state(checkpoint_full_path)
 
             # update any optimizer params that have changed
             updated_learn_rate = False; updated_adam_betas = False
@@ -637,6 +643,14 @@ class DualDiffusionTrainer:
                 self.logger.info(f"Using updated Adam weight decay: {self.config.optimizer.adam_weight_decay}")
             if updated_adam_eps:
                 self.logger.info(f"Using updated Adam epsilon: {self.config.optimizer.adam_epsilon}")
+
+            # any and all source code or config changes differences relative
+            # to the loaded checkpoint will be saved in this diff file
+            if self.accelerator.is_main_process:
+                tmp_path = os.path.join(self.config.model_path, "tmp")
+                diff_output_path = os.path.join(tmp_path, "src_config_changes.diff")
+                compare_dirs(diff_output_path, checkpoint_full_path, tmp_path,
+                    ignore_patterns=["*_loss.json"], whitelist_patterns=["*.json", "*.py"])
 
         if self.global_step > 0:
             self.epoch = self.global_step // self.num_update_steps_per_epoch

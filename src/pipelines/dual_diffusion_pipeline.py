@@ -290,7 +290,8 @@ class DualDiffusionPipeline(torch.nn.Module):
         return pipeline
     
     @torch.no_grad()
-    def save_pretrained(self, model_path: str, subfolder: Optional[str] = None) -> None:
+    def save_pretrained(self, model_path: str, subfolder: Optional[str] = None,
+                            save_config_only: bool = False) -> None:
         
         if subfolder is not None:
             model_path = os.path.join(model_path, subfolder)
@@ -306,7 +307,8 @@ class DualDiffusionPipeline(torch.nn.Module):
                 "class": module.__class__.__name__
             }
             model_modules[module_name] = module_import_dict
-            module.save_pretrained(model_path, subfolder=module_name)
+            module.save_pretrained(model_path, subfolder=module_name,
+                                   save_config_only=save_config_only)
 
         model_index = {"modules": model_modules}
         config.save_json(model_index, os.path.join(model_path, "model_index.json"))

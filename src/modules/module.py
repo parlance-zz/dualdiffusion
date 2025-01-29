@@ -75,7 +75,8 @@ class DualDiffusionModule(torch.nn.Module, ABC):
         return module.to(dtype=torch_dtype, device=device)
     
     @torch.no_grad()
-    def save_pretrained(self, module_path: str, subfolder: Optional[str] = None) -> None:
+    def save_pretrained(self, module_path: str, subfolder: Optional[str] = None,
+                        save_config_only: bool = False) -> None:
         
         if subfolder is not None:
             module_path = os.path.join(module_path, subfolder)
@@ -85,7 +86,7 @@ class DualDiffusionModule(torch.nn.Module, ABC):
         module_name = os.path.basename(module_path)
 
         config.save_json(self.config.__dict__, os.path.join(module_path, f"{module_name}.json"))
-        if type(self).has_trainable_parameters:
+        if type(self).has_trainable_parameters and save_config_only == False:
             save_safetensors(self.state_dict(), os.path.join(module_path, f"{module_name}.safetensors"))
 
     def to(self, device: Optional[torch.device] = None, dtype: Optional[torch.dtype] = None,
