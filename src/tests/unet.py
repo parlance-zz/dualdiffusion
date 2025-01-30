@@ -52,6 +52,7 @@ def unet_test() -> None:
     length = test_params["length"]
     num_fgla_iters = test_params["num_fgla_iters"]
     skip_ddec = test_params["skip_ddec"]
+    output_lufs = test_params["lufs"]
 
     model_path = os.path.join(config.MODELS_PATH, model_name)
     print(f"Loading DualDiffusion model from '{model_path}'...")
@@ -178,13 +179,13 @@ def unet_test() -> None:
 
         output_flac_file_path = os.path.join(output_path, f"{output_label}.flac")
         output_flac_file_path = get_no_clobber_filepath(output_flac_file_path)
-        save_audio(output_raw_sample, sample_rate, output_flac_file_path, metadata=metadata, target_lufs=None)
+        save_audio(output_raw_sample, sample_rate, output_flac_file_path, metadata=metadata, target_lufs=output_lufs)
         print(f"Saved flac output to {output_flac_file_path}")
 
         if copy_sample_source_files == True:
             output_flac_file_path = os.path.join(output_path, f"{output_label}_input_prompt.flac")
-            save_audio(input_audio, input_sample_rate,
-                output_flac_file_path, target_lufs=None, metadata=input_audio_metadata)
+            save_audio(input_audio, input_sample_rate, output_flac_file_path,
+                       target_lufs=output_lufs, metadata=input_audio_metadata)
             print(f"Saved flac output to {output_flac_file_path}")
 
     print(f"\nFinished in: {datetime.datetime.now() - start_time}")
