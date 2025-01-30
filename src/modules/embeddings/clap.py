@@ -28,7 +28,6 @@ import os
 
 import torch
 import torchaudio
-import laion_clap
 
 from modules.embeddings.embedding import DualDiffusionEmbedding, DualDiffusionEmbeddingConfig
 from utils.dual_diffusion_utils import normalize, load_safetensors
@@ -86,6 +85,7 @@ class CLAP_Embedding(DualDiffusionEmbedding):
         if not os.path.isfile(clap_model_path):
             raise FileNotFoundError(f"CLAP model file not found")
 
+        import laion_clap
         self.clap_model = laion_clap.CLAP_Module(device=self.device,
             enable_fusion=self.config.enable_fusion, amodel=self.config.audio_encoder, tmodel=self.config.text_encoder)
         self.clap_model.load_ckpt(clap_model_path, verbose=False)
