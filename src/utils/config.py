@@ -22,8 +22,12 @@
 
 import os
 from dotenv import load_dotenv
-from typing import Union
-from json import dumps as json_dumps, loads as json_loads
+from types import GenericAlias
+from typing import Union, Type, Optional, Any, get_args, get_origin
+from dataclasses import fields, is_dataclass
+from json import dumps as json_dumps, load as json_load, loads as json_loads
+from logging import getLogger
+
 from pyjson5 import load as json5_load
 
 
@@ -33,7 +37,7 @@ def load_json(json_path: str) -> dict:
             return [json_loads(line) for line in f]
     
     with open(json_path, "r") as f:
-        return json5_load(f)
+        return json_load(f)
     
 def save_json(data: Union[dict, list], json_path: str,
         indent: int = 2, copy_on_write: bool = False) -> None:
@@ -67,6 +71,81 @@ def save_json(data: Union[dict, list], json_path: str,
     else:
         with open(json_path, "w") as f:
             write_fn(f, data)
+
+def load_config(config_class: Type, path: str, data: Optional[dict] = None) -> Any:
+
+    # config classes are required to be dataclasses
+    if is_dataclass(config_class) == False:
+        raise ValueError(f"Error: Unable to load config '{path}', "
+                         f"'{config_class.__name__}' is not a dataclass")
+    
+    # load from file using json5 if data is None
+    if data is None:
+        try:
+            with open(path, "r") as f:
+                data: dict = json5_load(f)
+        except Exception as e:
+            raise ValueError(f"Error: Unable to load config '{path}', '{e}'")
+
+    elif isinstance(data, dict) == False: # data must be a dict if specified
+        raise ValueError(f"Error: Unable to load config '{path}', "
+                         f"expected dict for type(data), got '{type(data).__name__}'")
+    
+    # if the specified config class has a _config_path attribute,
+    # populate it when loading the config from a file path
+    if hasattr(config_class, "_config_path"):
+        data["_config_path"] = path
+        
+    logger = getLogger() # used for missing field/attribute warnings
+    config_fields: dict[str, type] = {field.name: field.type for field in fields(config_class)}
+    config_dict = {}
+
+    # build dict to instantiate specified dataclass from data
+    for field, value in data.items():
+        if field not in config_fields: # show warning and ignore if config data contains fields missing in the config class
+            logger.warning(f"Warning: field '{field}' not found in config dataclass '{config_class.__name__}', ignoring...")
+            continue
+        
+        # recursively instantiate nested data classes based on their type annotation
+        if is_dataclass(config_fields[field]):
+            if isinstance(value, dict) == True:
+                config_dict[field] = load_config(config_fields[field], path, value)
+            else:
+                raise ValueError(f"Error: Unable to load config, expected dict for type({field}), "
+                                 f"got '{type(value).__name__}'")
+
+        # same for lists of dataclasses
+        elif get_origin(config_fields[field]) is list and isinstance(config_fields[field], GenericAlias):
+
+            elem_type = get_args(config_fields[field])[0]
+            if is_dataclass(elem_type) and isinstance(value, list):
+                config_dict[field] = [load_config(elem_type, path, v) for v in value]
+            else:
+                config_dict[field] = value
+
+        # same for dicts of dataclasses
+        elif get_origin(config_fields[field]) is dict and isinstance(config_fields[field], GenericAlias):
+            
+            elem_type = get_args(config_fields[field])[1]
+            if is_dataclass(elem_type) and isinstance(value, dict):
+                config_dict[field] = {k: load_config(elem_type, path, v) for k,v in value.items()}
+            else:
+                config_dict[field] = value
+
+        else: # normal non-dataclass field
+            config_dict[field] = value
+
+    # finally instantiate the specified config dataclass
+    config = config_class(**config_dict)
+
+    # and show warning if any fields were missing and intialized with default values
+    for field in config_fields:
+        if field not in data:
+            logger.warning(f"Warning: field '{field}' not found in config file '{path}',"
+                            f" initializing with default value '{getattr(config, field)}'")
+    
+    return config
+
 
 load_dotenv(override=True)
 
