@@ -22,11 +22,9 @@
 
 from utils import config
 
-from typing import Optional
 from dataclasses import dataclass
 from pprint import pprint
-
-from utils.dual_diffusion_utils import dict_str
+import os
 
 
 @dataclass
@@ -75,4 +73,11 @@ if __name__ == "__main__":
     test_data["my_data_class_list"] = [{**test_data["my_data_class"]}, {**test_data["my_data_class"]}]
     test_data["my_data_class_dict"] = {"a": {**test_data["my_data_class"]}, "b": {**test_data["my_data_class"]}}
 
-    pprint(config.load_config(TestConfig, "fake_path.json", test_data))
+    test_config = config.load_config(TestConfig, "fake_path.json", test_data)
+    
+    if config.DEBUG_PATH is not None:
+        test_config_path = os.path.join(config.DEBUG_PATH, "load_config_test", "test_config.json")
+        config.save_config(test_config, test_config_path)
+        test_config = config.load_config(TestConfig, test_config_path)
+
+    pprint(test_config)

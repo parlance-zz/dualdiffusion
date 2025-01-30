@@ -146,6 +146,21 @@ def load_config(config_class: Type, path: str, data: Optional[dict] = None) -> A
     
     return config
 
+# recursively decomposes nested dataclasses into a json-friendly dict
+def _jsonify(obj: Any, path: Optional[str] = None) -> dict:
+    if is_dataclass(obj):
+        return _jsonify(obj.__dict__, path)
+    if isinstance(obj, (str, int, float, bool, type(None))):
+        return obj
+    if isinstance(obj, (list, tuple)):
+        return [_jsonify(v, path) for v in obj]
+    if isinstance(obj, dict):
+        return {k: _jsonify(v, path) for k,v in obj.items()}
+    
+    raise ValueError(f"Error: Unsupported type '{type(obj).__name__}' in save_config '{path}'")
+
+def save_config(config: Any, path: str) -> None:
+    save_json(_jsonify(config, path), path, copy_on_write=True)
 
 load_dotenv(override=True)
 
