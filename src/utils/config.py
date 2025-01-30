@@ -23,7 +23,9 @@
 import os
 from dotenv import load_dotenv
 from typing import Union
-from json import dumps as json_dumps, load as json_load, loads as json_loads
+from json import dumps as json_dumps, loads as json_loads
+from pyjson5 import load as json5_load
+
 
 def load_json(json_path: str) -> dict:
     if os.path.splitext(json_path)[1].lower() == ".jsonl":
@@ -31,7 +33,7 @@ def load_json(json_path: str) -> dict:
             return [json_loads(line) for line in f]
     
     with open(json_path, "r") as f:
-        return json_load(f)
+        return json5_load(f)
     
 def save_json(data: Union[dict, list], json_path: str,
         indent: int = 2, copy_on_write: bool = False) -> None:

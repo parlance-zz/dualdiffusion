@@ -4,25 +4,23 @@ channels:
   - nvidia
   - conda-forge
 dependencies:
-  - python=3.11 # 3.11 for laion-clap, otherwise 3.12
+  - python=3.11   # 3.11 req is for laion-clap, otherwise 3.12+
   - nvidia::cudatoolkit
   - pytorch::pytorch
-  #- ffmpeg<7::conda-forge # for torchaudio, replaces soundfile
   - pip
-  - numpy==1.23.5 # for laion-clap, otherwise *
-  - torchaudio
-  - torchvision
-  - librosa
+  - numpy==1.23.5 # 1.23.5 req is for laion-clap, otherwise *
+  - torchaudio    # for audio file i/o and spectrogram transforms
+  - librosa       # faster backend for torchaudio i/o
   - pip:
-    - datasets
-    - accelerate
-    - safetensors
-    - tensorboard
-    - opencv-python
-    - soundfile
-    - python-dotenv
-    - mutagen
-    - nicegui
-    - laion-clap
-    - pyloudnorm
-    - py7zr # required for dataset unzip util
+    - datasets      # load datasets for training
+    - accelerate    # multi-gpu/distributed training
+    - safetensors   # fast and safe tensor disk i/o
+    - tensorboard   # training logs monitoring web ui
+    - opencv-python # image i/o
+    - python-dotenv # environment config
+    - mutagen       # audio file metadata extraction and editing
+    - nicegui       # for interactive web ui
+    - laion-clap    # CLAP audio/text encoding
+    - pyloudnorm    # faster lufs without memory leak
+    - pyjson5       # json with comments and some formatting improvements
+    - py7zr         # (optional) for dataset unzip util
