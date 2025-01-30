@@ -10,6 +10,7 @@ from logging import getLogger
 import torch
 
 from utils.dual_diffusion_utils import load_safetensors, save_safetensors, torch_dtype, TF32_Disabled
+from training.ema import reconstruct_phema
 
 
 @dataclass
@@ -126,24 +127,38 @@ class DualDiffusionModule(torch.nn.Module, ABC):
                 self.normalize_weights = torch.compile(self.normalize_weights, **kwargs)
 
     @torch.no_grad()
-    def load_ema(self, ema_path: str) -> None:
-        with TF32_Disabled():
+    @TF32_Disabled()
+    def load_ema(self, ema_path: str, phema_path: Optional[str] = None) -> None:
+        if os.path.isfile(ema_path) == False:
+            
+            def extract_number_from_string(s):
+                num = next((s[i:] for i, c in enumerate(s) if c.isdigit() or c in "+-."), None)
+                str = "".join(c for c in num if c.isdigit() or c in "+-.") if num else None
+                return float(str.rstrip("+-."))
+
+            if os.path.basename(ema_path).split("_")[0] == "phema":
+
+                phema_std = extract_number_from_string(os.path.basename(ema_path).split("_")[1])
+                self.load_state_dict(reconstruct_phema(phema_std, phema_path))
+            else:
+                raise FileNotFoundError(f"Error: Could not find ema file '{ema_path}'")
+        else:
             self.load_state_dict(load_safetensors(ema_path))
-            self.normalize_weights()
+        self.normalize_weights()
 
     @torch.no_grad()
+    @TF32_Disabled()
     def blend_weights(self, other: "DualDiffusionModule", t: float = 0.5) -> None:
-        with TF32_Disabled():
-            for ((param_name, param), (other_param_name, other_param)) in zip(self.named_parameters(), other.named_parameters()):
-                if param.data.shape != other_param.data.shape:
-                    raise ValueError(f"Cannot blend parameters with different shapes: {param_name} {param.data.shape} != {other_param_name} {other_param.data.shape}")
-                param.data.lerp_(other_param.data, t)
-            self.normalize_weights()
+        for ((param_name, param), (other_param_name, other_param)) in zip(self.named_parameters(), other.named_parameters()):
+            if param.data.shape != other_param.data.shape:
+                raise ValueError(f"Cannot blend parameters with different shapes: {param_name} {param.data.shape} != {other_param_name} {other_param.data.shape}")
+            param.data.lerp_(other_param.data, t)
+        self.normalize_weights()
 
     @torch.no_grad()
     def normalize_weights(self) -> None:
         if type(self).has_trainable_parameters == False: return
         with TF32_Disabled():
             for module in self.modules():
-                if hasattr(module, "normalize_weights") and module != self:
+                if hasattr(module, "normalize_weights") and module is not self:
                     module.normalize_weights()

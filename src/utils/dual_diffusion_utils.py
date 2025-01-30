@@ -26,6 +26,7 @@ from dataclasses import dataclass
 from typing import Optional, Union, Any
 from json import dumps as json_dumps
 from datetime import datetime
+from contextlib import ContextDecorator
 import os
 import logging
 import shutil
@@ -50,7 +51,7 @@ class AudioInfo:
     frames: int
     duration: float
 
-class TF32_Disabled: # disables reduced precision tensor cores inside the context
+class TF32_Disabled(ContextDecorator): # disables reduced precision tensor cores inside the context
     def __enter__(self):
         self.original_matmul_allow_tf32 = torch.backends.cuda.matmul.allow_tf32
         self.original_cudnn_allow_tf32 = torch.backends.cudnn.allow_tf32

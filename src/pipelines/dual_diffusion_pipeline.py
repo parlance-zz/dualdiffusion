@@ -97,7 +97,7 @@ class SampleParams:
             ema = None
             if module_name in model_metadata["load_emas"]:
                 ema = model_metadata["load_emas"][module_name].replace(".safetensors", "")
-                ema = ema[:min(len(ema), 10)] + "_" # truncate beta string if longer than 8 digits
+                ema = ema[:15] + "_" # truncate ema name if longer than 15 characters
             else:
                 ema = None
 
@@ -262,7 +262,8 @@ class DualDiffusionPipeline(torch.nn.Module):
             # load and merge ema weights
             if module_name in load_emas:
                 ema_module_path = os.path.join(module_path, load_emas[module_name])
-                model_modules[module_name].load_ema(ema_module_path)
+                phema_module_path = os.path.join(model_path, f"{module_name}_ema_archive")
+                model_modules[module_name].load_ema(ema_module_path, phema_module_path)
         
         pipeline = DualDiffusionPipeline(model_modules).to(device=device, dtype=torch_dtype)
 

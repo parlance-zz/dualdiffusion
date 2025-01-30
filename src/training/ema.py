@@ -39,14 +39,16 @@ from typing import Optional, Any
 
 import torch
 import numpy as np
+import safetensors.torch as safetensors
+from tqdm.auto import tqdm
 
-from modules.module import DualDiffusionModule
 from utils.dual_diffusion_utils import TF32_Disabled, save_safetensors, load_safetensors
 
 # workaround for circular import, needed for type annotation only
 from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from training.trainer import DualDiffusionTrainer
+    from modules.module import DualDiffusionModule
 
 #----------------------------------------------------------------------------
 # beginning of nvidia code
@@ -142,6 +144,52 @@ def find_emas_in_dir(module_path: str) -> dict[str, str]:
 
     return ema_dict
 
+@TF32_Disabled()
+def reconstruct_phema(out_std: float, phema_path: str, quiet: bool = False) -> dict[str, torch.Tensor]:
+
+    # find all available emas and gather their metadata
+    emas = []
+    state_dict = None
+
+    for ema in [f for f in os.listdir(phema_path) if f.lower().endswith(".safetensors")]:
+        ema = {"path": os.path.join(phema_path, ema)}
+
+        # init output state dict from first ema in high precision
+        if state_dict is None:
+            state_dict = {k: torch.zeros_like(v, dtype=torch.float64) for k,v in safetensors.load_file(ema["path"]).items()}
+
+        with safetensors.safe_open(ema["path"], framework="pt") as f:
+            metadata = dict(f.metadata())
+            ema["std"] = float(metadata["std"])
+            ema["n_processed"] = int(metadata["total_samples_processed"])
+
+        emas.append(ema)
+
+    emas = sorted(emas, key=lambda x: (x["n_processed"], x["std"]))
+
+    # solve coefficients for desired std
+    out_n_processed = max([ema["n_processed"] for ema in emas]) # just assume we want to use all available emas for now
+    ph_coefs = solve_posthoc_coefficients(
+        np.array([ema["n_processed"] for ema in emas]),
+        np.array([ema["std"] for ema in emas]), np.array([out_n_processed]), np.array([out_std]))
+
+    # combine weighted combination of emas with calculated coefficients
+    progress_bar = tqdm(total=len(emas)) if quiet == False else None
+    for i, ema in enumerate(emas):
+        ema_state_dict = {k: v.to(torch.float64) for k,v in safetensors.load_file(ema["path"]).items()}
+        ema_coef = ph_coefs[i, 0]
+        for pi, pj in zip(ema_state_dict.values(), state_dict.values()):
+            pj += pi * ema_coef
+        
+        #print(ema["path"], ema_coef)
+        if progress_bar is not None:
+            progress_bar.update(1)
+
+    if progress_bar is not None:
+        progress_bar.close()
+
+    return {k: v.float() for k,v in state_dict.items()}
+
 @dataclass
 class EMA_Config:
     name: str
@@ -215,9 +263,10 @@ class EMA_Manager:
             torch._foreach_copy_(tuple(ema_module.parameters()), tuple(self.module.parameters()))
 
     @torch.no_grad() # update/step all emas with feedback (if any)
+    @TF32_Disabled()
     def update(self) -> None:
 
-        with torch.amp.autocast("cuda", enabled=False), TF32_Disabled():
+        with torch.amp.autocast("cuda", enabled=False):
             net_parameters = tuple(self.module.parameters())
             for name, config in self.ema_configs.items():
                 
