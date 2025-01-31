@@ -85,8 +85,8 @@ class NiceGUIApp:
 
     def __init__(self) -> None:
 
-        self.config = NiceGUIAppConfig(**config.load_json(
-            os.path.join(config.CONFIG_PATH, "sampling", "nicegui_app.json")))
+        self.config: NiceGUIAppConfig = config.load_config(NiceGUIAppConfig,
+            os.path.join(config.CONFIG_PATH, "sampling", "nicegui_app.json"))
         
         self.init_logging()
         self.logger.debug(f"NiceGUIAppConfig:\n{dict_str(self.config.__dict__)}")

@@ -93,7 +93,7 @@ if __name__ == "__main__":
         module_config_path = os.path.join(model_config_source_path, f"{module_name}.json")
         if not os.path.isfile(module_config_path):
             raise FileNotFoundError(f"Module config '{module_config_path}' not found")
-        module_config = module_config_class(**config.load_json(module_config_path))
+        module_config = config.load_config(module_config_class, module_config_path)
 
         model_modules[module_name] = module_class(module_config)
         print_module_info(model_modules[module_name], module_name)

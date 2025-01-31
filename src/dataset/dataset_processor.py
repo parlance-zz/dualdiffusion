@@ -462,8 +462,8 @@ class DatasetProcessor:
         if not os.path.isdir(config.CONFIG_PATH):
             raise FileNotFoundError(f"CONFIG_PATH '{config.CONFIG_PATH}' not found")
         
-        self.config = DatasetProcessorConfig(
-            **config.load_json(os.path.join(config.CONFIG_PATH, "dataset", "dataset.json")))
+        self.config: DatasetProcessorConfig = config.load_config(DatasetProcessorConfig,
+                                    os.path.join(config.CONFIG_PATH, "dataset", "dataset.json"))
         
         self.config.max_num_proc = self.config.max_num_proc or mp.cpu_count() // 2
         if self.config.cuda_devices is None:
