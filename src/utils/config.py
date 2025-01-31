@@ -72,7 +72,19 @@ def save_json(data: Union[dict, list], json_path: str,
         with open(json_path, "w") as f:
             write_fn(f, data)
 
-def load_config(config_class: Type, path: str, data: Optional[dict] = None) -> Any:
+# if type is Optional[T], return T, otherwise, return type
+def _unwrap_optional(_type: Type) -> Type:
+    
+    if get_origin(_type) is Union:
+        args = get_args(_type)
+
+        # type is optional if it is a Union between any non-none type(s) and a None type
+        non_none_types = [t for t in args if t is not type(None)]
+        if len(non_none_types) == 1:
+            return non_none_types[0]  
+    return _type
+
+def load_config(config_class: Type, path: str, data: Optional[dict] = None, quiet: bool = False) -> Any:
 
     # config classes are required to be dataclasses
     if is_dataclass(config_class) == False:
@@ -95,31 +107,38 @@ def load_config(config_class: Type, path: str, data: Optional[dict] = None) -> A
     # populate it when loading the config from a file path
     if hasattr(config_class, "_config_path"):
         data["_config_path"] = path
-        
-    logger = getLogger() # used for missing field/attribute warnings
-    config_fields: dict[str, type] = {field.name: field.type for field in fields(config_class)}
+    
+    # used for missing field/attribute warnings
+    logger = getLogger() if quiet == False else None
+
+    config_fields: dict[str, type] = {field.name: _unwrap_optional(field.type) for field in fields(config_class)}
     config_dict = {}
 
     # build dict to instantiate specified dataclass from data
     for field, value in data.items():
-        if field not in config_fields: # show warning and ignore if config data contains fields missing in the config class
-            logger.warning(f"Warning: field '{field}' not found in config dataclass '{config_class.__name__}', ignoring...")
+        if field not in config_fields:
+            if logger is not None: # show warning and ignore if config data contains fields missing in the config class
+                logger.warning(f"Warning: field '{field}' not found in config dataclass '{config_class.__name__}', ignoring...")
             continue
         
+        if type(value) is type(None):
+            config_dict[field] = None
+            continue
+
         # recursively instantiate nested data classes based on their type annotation
         if is_dataclass(config_fields[field]):
             if isinstance(value, dict) == True:
-                config_dict[field] = load_config(config_fields[field], path, value)
+                config_dict[field] = load_config(config_fields[field], path, value, quiet)
             else:
                 raise ValueError(f"Error: Unable to load config, expected dict for type({field}), "
-                                 f"got '{type(value).__name__}'")
+                                f"got '{type(value).__name__}'")
 
         # same for lists of dataclasses
         elif get_origin(config_fields[field]) is list and isinstance(config_fields[field], GenericAlias):
 
             elem_type = get_args(config_fields[field])[0]
             if is_dataclass(elem_type) and isinstance(value, list):
-                config_dict[field] = [load_config(elem_type, path, v) for v in value]
+                config_dict[field] = [load_config(elem_type, path, v, quiet) for v in value]
             else:
                 config_dict[field] = value
 
@@ -128,7 +147,7 @@ def load_config(config_class: Type, path: str, data: Optional[dict] = None) -> A
             
             elem_type = get_args(config_fields[field])[1]
             if is_dataclass(elem_type) and isinstance(value, dict):
-                config_dict[field] = {k: load_config(elem_type, path, v) for k,v in value.items()}
+                config_dict[field] = {k: load_config(elem_type, path, v, quiet) for k,v in value.items()}
             else:
                 config_dict[field] = value
 
@@ -140,7 +159,7 @@ def load_config(config_class: Type, path: str, data: Optional[dict] = None) -> A
 
     # and show warning if any fields were missing and intialized with default values
     for field in config_fields:
-        if field not in data:
+        if field not in data and logger is not None:
             logger.warning(f"Warning: field '{field}' not found in config file '{path}',"
                             f" initializing with default value '{getattr(config, field)}'")
     

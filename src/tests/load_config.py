@@ -22,6 +22,7 @@
 
 from utils import config
 
+from typing import Optional
 from dataclasses import dataclass
 from pprint import pprint
 import os
@@ -51,6 +52,10 @@ class TestConfig:
     my_data_class_list: list[TestSubClass]
     my_data_class_dict: dict[str, TestSubClass]
 
+    my_data_class_optional: Optional[TestSubClass] = None
+    my_data_class_optional2: Optional[TestSubClass] = None
+
+    my_untyped = 12
     my_str: str = "abcd"
     my_int: int = 5
     my_float: float = 10.0
@@ -72,12 +77,29 @@ if __name__ == "__main__":
     test_data["my_data_class"] = {**TestSubClass().__dict__}
     test_data["my_data_class_list"] = [{**test_data["my_data_class"]}, {**test_data["my_data_class"]}]
     test_data["my_data_class_dict"] = {"a": {**test_data["my_data_class"]}, "b": {**test_data["my_data_class"]}}
+    test_data["my_data_class_optional"] = {**TestSubClass().__dict__}
+    test_data["my_data_class_optional2"] = None
 
-    test_config = config.load_config(TestConfig, "fake_path.json", test_data)
-    
+    test_config: TestConfig = config.load_config(TestConfig, "fake_path.json", test_data)
+    pre_save_test_config = test_config
+
+    print("Pre-save config:")
+    pprint(test_config)
+    assert type(test_config.my_data_class) == TestSubClass
+    assert type(test_config.my_data_class_list[0]) == TestSubClass
+    assert type(test_config.my_data_class_dict["a"]) == TestSubClass
+    assert type(test_config.my_data_class_optional) == TestSubClass
+    assert type(test_config.my_data_class_optional2) == type(None)
+
     if config.DEBUG_PATH is not None:
         test_config_path = os.path.join(config.DEBUG_PATH, "load_config_test", "test_config.json")
         config.save_config(test_config, test_config_path)
         test_config = config.load_config(TestConfig, test_config_path)
 
+    print("\nPost-save config:")
     pprint(test_config)
+    assert type(test_config.my_data_class) == TestSubClass
+    assert type(test_config.my_data_class_list[0]) == TestSubClass
+    assert type(test_config.my_data_class_dict["a"]) == TestSubClass
+    assert type(test_config.my_data_class_optional) == TestSubClass
+    assert type(test_config.my_data_class_optional2) == type(None)
