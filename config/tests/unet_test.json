@@ -5,9 +5,10 @@
         "device": "cuda",
         "load_checkpoints": true,
         "load_emas": {
+            //"unet": "phema_std0.015.safetensors",
             "unet": "ema_std0.05.safetensors",
             "vae": "ema_std0.05.safetensors",
-            "ddec": "ema_std0.1.safetensors"
+            //"ddec": "ema_std0.05.safetensors"
         },
         "compile_options": {
             "fullgraph": true,
@@ -21,7 +22,6 @@
     "random_test_samples_seed": null,
     "add_random_test_samples": 90,
     "test_samples": [
-        "psf/Mega Man X6/11. BLAZE HEATNIX STAGE.xa.flac",
     ],
     "unet_params": {
         "seed": null,
