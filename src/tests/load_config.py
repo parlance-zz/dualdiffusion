@@ -42,11 +42,13 @@ class TestConfig:
     my_int_list: list[int]
     my_float_list: list[int]
     my_dict_list: list[dict[str, str]]
+    my_untyped_list: list
 
     my_str_dict: dict[str, str]
     my_int_dict: dict[str, int]
     my_float_dict: dict[str, float]
     my_dict_dict: dict[str, dict[str, str]]
+    my_untyped_dict: dict
 
     my_data_class: TestSubClass
     my_data_class_list: list[TestSubClass]
@@ -68,12 +70,14 @@ if __name__ == "__main__":
     test_data["my_int_list"] = [1,2,3]
     test_data["my_float_list"] = [4.,5.,6.]
     test_data["my_dict_list"] = [{"abc": "123"}, {"def": "456"}]
+    test_data["my_untyped_list"] = [7,8,9]
 
     test_data["my_str_dict"] = {"a": "d", "b": "e", "c": "f"}
     test_data["my_int_dict"] = {"a": 1, "b": 2, "c": 3}
     test_data["my_float_dict"] = {"a": 4., "b": 5., "c": 6.}
     test_data["my_dict_dict"] = {"x": {"abc": "123"}, "y": {"def": "456"}}
-
+    test_data["my_untyped_dict"] = {"u": 4, "y": {"v": "ijk"}}
+    
     test_data["my_data_class"] = {**TestSubClass().__dict__}
     test_data["my_data_class_list"] = [{**test_data["my_data_class"]}, {**test_data["my_data_class"]}]
     test_data["my_data_class_dict"] = {"a": {**test_data["my_data_class"]}, "b": {**test_data["my_data_class"]}}
@@ -81,7 +85,6 @@ if __name__ == "__main__":
     test_data["my_data_class_optional2"] = None
 
     test_config: TestConfig = config.load_config(TestConfig, "fake_path.json", test_data)
-    pre_save_test_config = test_config
 
     print("Pre-save config:")
     pprint(test_config)
@@ -93,8 +96,10 @@ if __name__ == "__main__":
 
     if config.DEBUG_PATH is not None:
         test_config_path = os.path.join(config.DEBUG_PATH, "load_config_test", "test_config.json")
+        pre_save_test_config = test_config
         config.save_config(test_config, test_config_path)
         test_config = config.load_config(TestConfig, test_config_path)
+        assert pre_save_test_config == test_config
 
     print("\nPost-save config:")
     pprint(test_config)
