@@ -21,15 +21,28 @@
 # SOFTWARE.
 
 import os
+
 import py7zr
 
 
 systems = ["2sf", "3do", "3sf", "dsf", "gcn", "hes", "psf", "psf2", "smd", "spc", "ssf", "usf", "wii", "wiiu"]
-root_source_folder = f'/mnt/vault'
-root_dest_folder = f'/mnt/vault'
+root_source_folder = f'/mnt/vault/dataset_import'
+root_dest_folder = f'/mnt/vault/dataset_import'
 zip_file_extensions = [".zip", ".7z", ".rar", ".tar", ".tar.gz", ".tar.bz2"]
-delete_archives_that_fail_to_extract = True
+delete_archives_that_fail_to_extract = False
 
+def get_directory_size(path: str) -> int:
+    total_size = 0
+    with os.scandir(path) as it:
+        for entry in it:
+            try:
+                if entry.is_file(follow_symlinks=False):
+                    total_size += entry.stat().st_size
+                elif entry.is_dir(follow_symlinks=False):
+                    total_size += get_directory_size(entry.path)  # recurse for subdirectories
+            except PermissionError:
+                pass  # skip files/directories without permission
+    return total_size
 
 if __name__ == "__main__":
 
@@ -62,21 +75,37 @@ if __name__ == "__main__":
                 subfolder_name = subfolder_name.replace("&amp;", "&").strip()
                 while subfolder_name[-1] == '.':
                     subfolder_name = subfolder_name[:-1]
-
                 subfolder_path = os.path.join(target_folder, subfolder_name)
+
+                # if extract target path exists, check if the sizes match. if mismatch extract anyway
                 if os.path.isdir(subfolder_path) == True:
-                    if len(os.listdir(subfolder_path)) > 0: # only skip if folder is not empty                    
-                        #print(f"Skipping {filename} as {subfolder_path} already exists")
-                        skipped_count += 1
-                        continue
+                    try:
+                        with py7zr.SevenZipFile(file_path, mode='r') as archive:
+                            total_uncompressed_size = 0
+                            for file in archive.list():
+                                total_uncompressed_size += file.uncompressed
+                        
+                        existing_subfolder_size = get_directory_size(subfolder_path)
+                        if (total_uncompressed_size // 1024) == (existing_subfolder_size // 1024):
+                            skipped_count += 1
+                            if skipped_count % 1000 == 0:
+                                print(f"Skipped {skipped_count} so far")
+                            continue
 
+                    except Exception as e:
+                        error_txt = f'Error verifying size for {filename}: {e}'
+                        print(error_txt)
+                        errors.append(error_txt)
+                        continue       
+                    
                 os.makedirs(subfolder_path, exist_ok=True)
-
                 print(f'Extracting {filename} to {subfolder_path}')
                 try:
                     with py7zr.SevenZipFile(file_path, mode='r') as archive:
                         archive.extractall(path=subfolder_path)
                     extracted_count += 1
+                    if extracted_count % 1000 == 0:
+                        print(f"Extracted {extracted_count} so far")
                 except Exception as e:
                     error_txt = f'Error extracting {filename}: {e}'
                     if delete_archives_that_fail_to_extract == True:
