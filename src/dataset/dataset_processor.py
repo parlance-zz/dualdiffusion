@@ -37,6 +37,7 @@ import time
 import signal
 import threading
 import atexit
+import platform
 
 from tqdm.auto import tqdm
 import torch
@@ -531,6 +532,11 @@ class DatasetProcessor:
         logger.addHandler(log_handler)
         logger.info("")
 
+        # fast scan is only supported on linux
+        if self.config.use_fast_scan == True and platform.system() != "Linux":
+            logger.warning(f"WARNING: Fast scan is not supported on platform '{platform.system()}', using normal scan...")
+            self.config.use_fast_scan = False
+        
         if scan_paths is not None:
             logger.info(f"Process scan path(s): {scan_paths}")
         #logger.info(f"Multiprocessing sharing strategy: {mp.get_sharing_strategy()}")
