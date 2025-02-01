@@ -148,7 +148,7 @@ class Import(DatasetProcessStage):
                         except: pass
                         raise e
                     
-                    return {} # return an empty dict to tally files moved/copied in summary
+                return {} # return an empty dict to tally files moved/copied in summary
         
         return None
 
