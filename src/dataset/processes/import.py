@@ -81,9 +81,10 @@ class Import(DatasetProcessStage):
             if min_length is not None and audio_info.duration < min_length:
                 if self.processor_config.import_delete_short_samples != True:
                     return None # skip it
-                else: # or delete it
+                else:           # or delete it
                     self.logger.debug(f"Deleting \"{src_path}\" source file length ({audio_info.duration}s) is below config min length ({min_length}s)")
-                    os.remove(src_path)
+                    if self.processor_config.test_mode == False: # only delete if not in test mode
+                        os.remove(src_path)
                     return None
         
             # relative path normalization
@@ -127,23 +128,25 @@ class Import(DatasetProcessStage):
 
                     # copy_on_write not needed for move as it is already atomic
                     if self.processor_config.import_move_no_copy == True:
-                        try: os.rename(src_path, dst_path)
-                        except: shutil.move(src_path, dst_path)
-                    else:
-                        # alternatively, copying uses a temporary file to guarantee integrity
-                        tmp_path = f"{dst_path}.tmp"
                         try:
-                            shutil.copy2(src_path, tmp_path)
-                            os.rename(tmp_path, dst_path)
+                            os.rename(src_path, dst_path)
+                            return {}
+                        except: pass
+                    
+                    # alternatively, copying uses a temporary file to guarantee integrity
+                    tmp_path = f"{dst_path}.tmp"
+                    try:
+                        shutil.copy2(src_path, tmp_path)
+                        os.rename(tmp_path, dst_path)
+                        if os.path.isfile(tmp_path):
+                            os.remove(tmp_path)
+
+                    except Exception as e:
+                        try:
                             if os.path.isfile(tmp_path):
                                 os.remove(tmp_path)
-
-                        except Exception as e:
-                            try:
-                                if os.path.isfile(tmp_path):
-                                    os.remove(tmp_path)
-                            except: pass
-                            raise e
+                        except: pass
+                        raise e
                     
                     return {} # return an empty dict to tally files moved/copied in summary
         
