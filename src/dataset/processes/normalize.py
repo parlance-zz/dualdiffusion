@@ -85,7 +85,8 @@ class NormalizeLoad(DatasetProcessStage):
             
             current_lufs = audio_metadata.get("post_norm_lufs", None)
             if current_lufs is not None: current_lufs = float(current_lufs[0])
-            if current_lufs != target_lufs: do_normalize = True
+            if current_lufs is None:# or (current_lufs - target_lufs)**2 >= 1:
+                do_normalize = True
 
             audio_info = get_audio_info(audio_path)
             current_length = audio_info.duration
