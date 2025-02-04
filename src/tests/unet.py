@@ -27,6 +27,7 @@ from typing import Optional
 import os
 import datetime
 import random
+import glob
 
 import torch
 
@@ -62,7 +63,7 @@ class UNetTestConfig:
 def unet_test() -> None:
 
     torch.manual_seed(0)
-    os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "max_split_size_mb:8192"
+    #os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "max_split_size_mb:8192"
 
     cfg: UNetTestConfig = config.load_config(UNetTestConfig,
         os.path.join(config.CONFIG_PATH, "tests", "unet_test.json"), quiet=True)
@@ -104,6 +105,21 @@ def unet_test() -> None:
     start_time = datetime.datetime.now()
     avg_latents_mean = avg_latents_std = 0
 
+    # if the test sample path is a directory, instead add all the flac files in that directory
+    expanded_test_samples = []
+    for filename in cfg.test_samples:
+        root = config.DATASET_PATH
+        audio_full_path = os.path.join(config.DATASET_PATH, filename)
+        if os.path.isdir(audio_full_path) == False:
+            root = config.DEBUG_PATH
+            audio_full_path = os.path.join(config.DEBUG_PATH, filename)
+        if os.path.isdir(audio_full_path) == True:
+            expanded_test_samples += [os.path.relpath(path, root) for path in glob.glob(f"{audio_full_path}/*.flac")]
+        else:
+            expanded_test_samples += [filename]
+    cfg.test_samples = expanded_test_samples
+    
+    # add random test samples from the dataset train split
     if cfg.add_random_test_samples > 0:
         train_samples = config.load_json(os.path.join(config.DATASET_PATH, "train.jsonl"))
         cfg.test_samples += [sample["file_name"] for sample in random.sample(train_samples, cfg.add_random_test_samples)]

@@ -6,9 +6,10 @@
         "load_checkpoints": true,
         "load_emas": {
             //"unet": "phema_std0.015.safetensors",
-            "unet": "ema_std0.05.safetensors",
+            "unet": "ema_std0.1.safetensors",
+            //"unet": "ema_std0.1.safetensors",
             "vae": "ema_std0.05.safetensors",
-            //"ddec": "ema_std0.05.safetensors"
+            "ddec": "ema_std0.1.safetensors"
         },
         "compile_options": {
             "fullgraph": true,
@@ -20,22 +21,41 @@
     "skip_ddec": false,
     "copy_sample_source_files": true,
     "random_test_samples_seed": null,
-    "add_random_test_samples": 90,
+    "add_random_test_samples": 0,
     "test_samples": [
+
     ],
     "unet_params": {
         "seed": null,
-        "num_steps": 400,
-        "cfg_scale": 2,
-        "input_perturbation": 0.15,
-        "input_perturbation_offset": 1,
-        "sigma_min": 0.1,
+        "num_steps": 300,
+        //"num_steps": 200,
+
+        //"cfg_scale": 2,
+        //"cfg_scale": 2.5,
+        //"cfg_scale": 1.5,
+        "cfg_scale": 1.62,
+        //"cfg_scale": 3,
+
+        //"input_perturbation": 0.15,
+        //"input_perturbation_offset": 1,
+        //"input_perturbation": 0.08,
+        //"input_perturbation_offset": 3.4,
+
+        "input_perturbation": 0.4,
+        "input_perturbation_offset": 0.6,
+
+        //"input_perturbation": 1,
+        //"input_perturbation_offset": 0,
+
+        //#"input_perturbation": 1,
+        //#"input_perturbation_offset": 0,
+        "sigma_min": 0.05,
         "sigma_max": 8,
         "use_heun": true
     },
     "ddec_params": {
         "num_steps": 30,
-        "cfg_scale": 2,
+        "cfg_scale": 1.62,
         "input_perturbation": 0,
         "input_perturbation_offset": 0,
         "sigma_min": null,
