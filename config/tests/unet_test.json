@@ -27,31 +27,40 @@
     ],
     "unet_params": {
         "seed": null,
-        "num_steps": 300,
         //"num_steps": 200,
 
         //"cfg_scale": 2,
         //"cfg_scale": 2.5,
         //"cfg_scale": 1.5,
-        "cfg_scale": 1.62,
         //"cfg_scale": 3,
+
+        // best settings as of 264k
+        "num_steps": 300,
+        "cfg_scale": 1.62,
+        "input_perturbation": 0.4,
+        "input_perturbation_offset": 0.6,
+        "sigma_min": 0.05,
+        "sigma_max": 200,
+        "use_heun": true,
+
+        //"input_perturbation": 0.5,
+        //"input_perturbation_offset": 0.7,
 
         //"input_perturbation": 0.15,
         //"input_perturbation_offset": 1,
         //"input_perturbation": 0.08,
         //"input_perturbation_offset": 3.4,
 
-        "input_perturbation": 0.4,
-        "input_perturbation_offset": 0.6,
+        // best settings as of 264k
+
 
         //"input_perturbation": 1,
         //"input_perturbation_offset": 0,
 
         //#"input_perturbation": 1,
         //#"input_perturbation_offset": 0,
-        "sigma_min": 0.05,
-        "sigma_max": 8,
-        "use_heun": true
+        
+        //"sigma_max": 8,
     },
     "ddec_params": {
         "num_steps": 30,
