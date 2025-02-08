@@ -27,6 +27,7 @@ import inspect
 from typing import Optional, Type, Union, Literal
 from abc import ABC
 from dataclasses import dataclass
+from logging import getLogger
 
 import torch
 
@@ -147,6 +148,11 @@ class DualDiffusionModule(torch.nn.Module, ABC):
 
                 phema_std = extract_number_from_string(os.path.basename(ema_path).split("_")[1])
                 self.load_state_dict(reconstruct_phema(phema_std, phema_path))
+
+                try: # attempt to save a cached copy of the computed post-hoc ema reconstruction
+                    save_safetensors(self.state_dict(), ema_path)
+                except Exception as e: # todo: there should probably be a quiet option for this
+                    getLogger().warning(f"Warning: Could not save reconstructed phema at {ema_path}")
             else:
                 raise FileNotFoundError(f"Error: Could not find ema file '{ema_path}'")
         else:
