@@ -85,12 +85,18 @@ class CLAP_Embedding(DualDiffusionEmbedding):
         if not os.path.isfile(clap_model_path):
             raise FileNotFoundError(f"CLAP model file not found")
 
+        # lazy load laion_clap
         import laion_clap
         self.clap_model = laion_clap.CLAP_Module(device=self.device,
             enable_fusion=self.config.enable_fusion, amodel=self.config.audio_encoder, tmodel=self.config.text_encoder)
         self.clap_model.load_ckpt(clap_model_path, verbose=False)
         self.clap_model = self.clap_model.to(device=self.device, memory_format=self.memory_format)
-    
+
+        # alternate model
+        #from transformers import ClapModel, ClapProcessor
+        #self.clap_model = ClapModel.from_pretrained("laion/larger_clap_music").to(device=self.device)
+        #self.clap_processor = ClapProcessor.from_pretrained("laion/larger_clap_music").to(device=self.device)
+
     def load_dataset_embeddings(self) -> None:
 
         if self.module_path is not None:
@@ -132,6 +138,11 @@ class CLAP_Embedding(DualDiffusionEmbedding):
         else:
             audio_embeddings = torch.cat([self.clap_model.get_audio_embedding_from_data(chunk, use_tensor=True)
                 for chunk in audio.split(self.config.max_audio_batch)], dim=0)
+
+        # alternate model
+        #audio_features = self.clap_processor(audios=[chunk.numpy() for chunk in audio.unbind()], return_tensors="pt")
+        #audio_embeddings = self.clap_model.get_audio_features(audio_features["input_features"])
+        
         return normalize(audio_embeddings).float()
 
     def encode_text(self, text: list[str]) -> torch.Tensor:
