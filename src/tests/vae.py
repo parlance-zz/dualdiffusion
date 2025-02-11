@@ -118,7 +118,7 @@ def vae_test() -> None:
         if add_latent_noise > 0:
             latents = latents + torch.rand_like(latents) * add_latent_noise  
         if normalize_latents:
-            latents = normalize(latents).float()
+            latents = normalize(latents).to(dtype=latents.dtype)
         if random_latents:
             latents = torch.randn_like(latents)
         

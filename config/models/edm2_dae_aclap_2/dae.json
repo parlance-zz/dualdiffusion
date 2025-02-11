@@ -1,0 +1,41 @@
+{
+  "last_global_step": 0,
+  "in_channels": 2,
+  "in_num_freqs": 256,
+  "in_channels_emb": 512,
+  "out_channels": 8,
+  "latent_channels": 4,
+  "dropout": 0,
+  "latents_img_channel_order": null,
+  "model_channels": 32,
+  "channel_mult": [
+    1,
+    2,
+    4,
+    4
+  ],
+  "channel_mult_emb": 4,
+  "num_layers_per_block": 2,
+  "res_balance": 0.4,
+  "mlp_multiplier": 1,
+  "mlp_groups": 1,
+  "ddec_model_channels": 32,
+  "ddec_logvar_channels": 128,
+  "ddec_channel_mult": [
+    1,
+    2,
+    4,
+    4
+  ],
+  "ddec_channel_mult_noise": 4,
+  "ddec_channel_mult_emb": 4,
+  "ddec_num_layers_per_block": 2,
+  "ddec_label_balance": 0.5,
+  "ddec_concat_balance": 0.5,
+  "ddec_res_balance": 0.4,
+  "ddec_mlp_multiplier": 1,
+  "ddec_mlp_groups": 1,
+  "ddec_sigma_max": 200,
+  "ddec_sigma_min": 0.03,
+  "ddec_sigma_data": 1
+}

@@ -28,7 +28,7 @@ import torch
 from modules.formats.format import DualDiffusionFormat
 from modules.vaes.vae import DualDiffusionVAEConfig, DualDiffusionVAE, DegenerateDistribution
 from modules.mp_tools import MPConv3D, MPFourier, normalize, resample_3d, mp_silu, mp_sum, mp_cat
-from utils.dual_diffusion_utils import tensor_4d_to_5d, tensor_5d_to_4d
+from utils.dual_diffusion_utils import TF32_Disabled, tensor_4d_to_5d, tensor_5d_to_4d
 
 
 @dataclass
@@ -221,7 +221,7 @@ class DiffusionAutoencoder_EDM2_D1(DualDiffusionVAE):
                 cout = channels
                 self.enc[f"conv_in"] = VAE_Block(level, cin, cout, cemb,
                                                 flavor="enc", **block_kwargs)
-                self.dec[f"conv_out"] = VAE_Block(level, cout, cin, cemb,
+                self.dec[f"conv_out"] = VAE_Block(level, cout, config.out_channels // config.in_channels, cemb,
                                                 flavor="dec", **block_kwargs)
             else:
                 self.enc[f"block{level}_down"] = VAE_Block(level, cout, cout, cemb,
@@ -267,7 +267,7 @@ class DiffusionAutoencoder_EDM2_D1(DualDiffusionVAE):
 
         # Encoder.
         self.ddec_enc = torch.nn.ModuleDict()
-        cout = 2
+        cout = 1 + config.out_channels // config.in_channels
 
         for level, channels in enumerate(cblock):
             
@@ -314,6 +314,9 @@ class DiffusionAutoencoder_EDM2_D1(DualDiffusionVAE):
         c_embedding = self.ddec_emb_label(normalize(emb_in).to(device=self.device, dtype=self.dtype))
         return mp_sum(u_embedding, c_embedding, t=conditioning_mask.unsqueeze(1).to(self.device, self.dtype))
     
+    def get_recon_loss_logvar(self) -> torch.Tensor:
+        pass
+    
     def get_sigma_loss_logvar(self, sigma: Optional[torch.Tensor] = None) -> torch.Tensor:
         return self.ddec_logvar_linear(self.ddec_logvar_fourier(sigma.flatten().log() / 4)).view(-1, 1, 1, 1).float()
     
@@ -328,7 +331,7 @@ class DiffusionAutoencoder_EDM2_D1(DualDiffusionVAE):
     def get_sample_shape(self, latent_shape: Union[torch.Size, tuple[int, int, int, int]]) -> torch.Size:
         if len(latent_shape) == 4:
             return (latent_shape[0],
-                    self.config.out_channels,
+                    self.config.in_channels,
                     latent_shape[2] * 2 ** (self.num_levels-1),
                     latent_shape[3] * 2 ** (self.num_levels-1))
         else:
@@ -343,9 +346,8 @@ class DiffusionAutoencoder_EDM2_D1(DualDiffusionVAE):
         for block in self.enc.values():
             x_out = block(x_in, enc_embeddings)
             x_in = x_out
-
-        x_out = x_out / x_out.std(dim=(1,2,3,4), keepdim=True)
-        return DegenerateDistribution(tensor_5d_to_4d(x_out))
+        
+        return DegenerateDistribution(tensor_5d_to_4d(normalize(x_out)))
     
     def decode(self, x: torch.Tensor, embeddings: torch.Tensor,
                 format: DualDiffusionFormat) -> torch.Tensor:
@@ -371,13 +373,21 @@ class DiffusionAutoencoder_EDM2_D1(DualDiffusionVAE):
 
         return enc_states
     
-    def decode_train(self, enc_states: list[torch.Tensor], embeddings: torch.Tensor) -> list[torch.Tensor]:
+    def decode_train(self, enc_states: list[torch.Tensor], embeddings: torch.Tensor, latents_perturbation: float) -> list[torch.Tensor]:
         
         dec_embeddings = embeddings[1].unsqueeze(-1).unsqueeze(-1).unsqueeze(-1)
         dec_states: list[torch.Tensor] = []
 
         x_in = enc_states[-1][1]
-        x_in = x_in / x_in.std(dim=(1,2,3,4), keepdim=True).detach()
+        #x_in = x_in / x_in.std(dim=(1,2,3,4), keepdim=True).detach()
+        if latents_perturbation > 0:
+            x_in = x_in + torch.randn_like(x_in) * latents_perturbation
+
+        with TF32_Disabled():
+            norm = torch.linalg.vector_norm(x_in, dim=(1,2,3,4),
+                                            keepdim=True, dtype=torch.float32)
+            norm = torch.add(1e-4, norm, alpha=(norm.numel() / x_in.numel())**0.5)
+            x_in = (x_in.float() / norm.detach()).to(x_in.dtype)
 
         for block in self.dec.values():
             x_out = block(x_in, dec_embeddings)
@@ -410,7 +420,7 @@ class DiffusionAutoencoder_EDM2_D1(DualDiffusionVAE):
         emb = mp_silu(emb).unsqueeze(-1).unsqueeze(-1).unsqueeze(-1).to(x.dtype)
 
         # Encoder.
-        x = torch.cat((x, tensor_4d_to_5d(x_ref, num_channels=1)), dim=1)
+        x = torch.cat((x, tensor_4d_to_5d(x_ref, num_channels=self.config.out_channels // self.config.in_channels)), dim=1)
 
         skips = []
         for name, block in self.ddec_enc.items():
@@ -428,12 +438,12 @@ class DiffusionAutoencoder_EDM2_D1(DualDiffusionVAE):
 
         return tensor_5d_to_4d(D_x)
     
-    def forward(self, samples: torch.Tensor, vae_embeddings: torch.Tensor,
+    def forward(self, samples: torch.Tensor, vae_embeddings: torch.Tensor, latents_perturbation: float,
                 noised_samples: torch.Tensor, sigma: torch.Tensor, format: DualDiffusionFormat,
                 ddec_embeddings: torch.Tensor) -> tuple[list[torch.Tensor], list[torch.Tensor], torch.Tensor]:
         
         enc_states = self.encode_train(samples, vae_embeddings)
-        dec_states = self.decode_train(enc_states, vae_embeddings)
+        dec_states = self.decode_train(enc_states, vae_embeddings, latents_perturbation)
 
         ref_samples: torch.Tensor = tensor_5d_to_4d(dec_states[-1][1])
         denoised = self.ddec_forward(noised_samples, sigma, format, ddec_embeddings, ref_samples)
