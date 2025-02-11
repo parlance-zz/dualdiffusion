@@ -1,8 +1,8 @@
 {
-    "paths": ["/mnt/vault/dataset_import/xbox/to_transcode2"],  // list of paths to move/copy from
+    "paths": ["/mnt/vault/dataset_import/psp/to_transcode"],  // list of paths to move/copy from
     "filter_regex": "^t_(.*\\.flac)$",                          // regex for filtering and transforming filenames (default: *.flac)
     "filter_group": 1,                                          // regex group for destination filename.
-    "dst_path": "/mnt/vault/dataset/xbox",                      // import destination path. default is $DATASET_PATH
+    "dst_path": "/mnt/vault/dataset/psp",                      // import destination path. default is $DATASET_PATH
     "warn_file_size_mismatch": true,                            // write warnings to debug log if the existing destination file has a different size
     "overwrite_if_larger": true,                                // if the file to be imported exists but is larger, import it and overwrite the existing file
     "move_no_copy": true,                                       // enable to move files instead of copying them
