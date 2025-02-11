@@ -35,13 +35,13 @@ from utils.dual_diffusion_utils import get_audio_metadata, get_audio_info
 
 
 @dataclass
-class BuildProcessConfig:
+class BuildSplitsProcessConfig:
     output_dataset_path: str = None  # if set, overrides the default output path of $DATASET_PATH
     input_dataset_path: str  = None  # if set, overrides the default input path of $DATASET_PATH
 
-class Build(DatasetProcessStage):
+class BuildSplits(DatasetProcessStage):
 
-    def __init__(self, process_config: BuildProcessConfig) -> None:
+    def __init__(self, process_config: BuildSplitsProcessConfig) -> None:
         self.process_config = process_config
         
     def get_stage_type(self) -> Literal["io", "cpu", "cuda"]:
@@ -272,13 +272,13 @@ class Build(DatasetProcessStage):
 
 if __name__ == "__main__":
 
-    process_config: BuildProcessConfig = config.load_config(BuildProcessConfig,
-                        os.path.join(config.CONFIG_PATH, "dataset", "build.json"))
+    process_config: BuildSplitsProcessConfig = config.load_config(BuildSplitsProcessConfig,
+                        os.path.join(config.CONFIG_PATH, "dataset", "build_splits.json"))
     
     dataset_processor = DatasetProcessor()
     dataset_processor.process(
         "Build",
-        [Build(process_config)],
+        [BuildSplits(process_config)],
         input=process_config.input_dataset_path or config.DATASET_PATH
     )
 
