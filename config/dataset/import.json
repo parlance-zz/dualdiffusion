@@ -1,0 +1,12 @@
+{
+    "paths": ["/mnt/vault/dataset_import/xbox/to_transcode2"],  // list of paths to move/copy from
+    "filter_regex": "^t_(.*\\.flac)$",                          // regex for filtering and transforming filenames (default: *.flac)
+    "filter_group": 1,                                          // regex group for destination filename.
+    "dst_path": "/mnt/vault/dataset/xbox",                      // import destination path. default is $DATASET_PATH
+    "warn_file_size_mismatch": true,                            // write warnings to debug log if the existing destination file has a different size
+    "overwrite_if_larger": true,                                // if the file to be imported exists but is larger, import it and overwrite the existing file
+    "move_no_copy": true,                                       // enable to move files instead of copying them
+    "delete_short_samples": true,                               // instead of moving or copying, permanently delete the file if it is under the min_audio_length
+    "min_tree_depth": 1,                                        // files with paths above min tree depth will use generated folder names
+    "max_tree_depth": 1,                                        // folders below max tree depth in the source file path aren't included in destination path
+}

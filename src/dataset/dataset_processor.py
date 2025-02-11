@@ -124,7 +124,6 @@ def _process_worker(stage: "DatasetProcessStage", rank: int,
         try: del input_dicts
         except: pass
 
-
 def _log_worker(process_name: str, verbose: bool, log_queue: mp.Queue):
 
     # disable sigint, it will be handled by the main process
@@ -396,7 +395,6 @@ class DatasetProcessStage(ABC):
 
 @dataclass
 class DatasetProcessorConfig:
-
     min_audio_length: float         = 20         # skip importing or processing any samples shorter than this length (seconds)
     max_num_proc: Optional[int]     = None       # set max number of (total) processes for cpu stages. default is 1/2 cpu cores
     buffer_memory_level: int        = 5          # higher values increase max queue sizes and memory usage
@@ -406,53 +404,6 @@ class DatasetProcessorConfig:
     use_fast_scan: bool             = True       # use the linux find tool instead of python's os.walk.
     write_error_summary_logs: bool  = True       # when the process is completed or aborted write a separate log file for each stage's errors/warnings
     verbose: bool                   = False      # prints debug logs to stdout
-
-    # import process
-    import_paths: list[str]        = ()                # list of paths to move/copy from
-    import_filter_regex: str       = None              # regex for filtering and transforming filenames (default: *.flac)
-    import_filter_group: int       = 0                 # regex group for destination filename.
-    import_dst_path: Optional[str] = None              # import destination path. default is $DATASET_PATH
-    import_warn_file_size_mismatch: bool  = True       # write warnings to debug log if the existing destination file has a different size
-    import_overwrite_if_larger: bool      = False      # if the file to be imported exists but is larger, import it and overwrite the existing file
-    import_move_no_copy: bool             = True       # enable to move files instead of copying them
-    import_delete_short_samples: bool     = False      # instead of moving or copying, permanently delete the file if it is under the min_audio_length
-    import_min_tree_depth: Optional[int]  = 1          # files with paths above min tree depth will use generated folder names
-    import_max_tree_depth: Optional[int]  = 1          # folders below max tree depth in the source file path aren't included in destination path
-
-    # normalize process
-    normalize_target_lufs: float               = -20.  # desired loudness level for dataset audio in the normalization process
-    normalize_trim_silence: bool               = True  # removes any silence at the beginning or end of the audio file
-    normalize_trim_max_length: Optional[float] = 180   # if set, truncates the length of the audio to this max length (in seconds)
-    normalize_sample_rate: Optional[int]       = None  # if set, resamples audio to this sample rate during normalization (if needed)
-    normalize_remove_dc_offset: bool           = True  # zeros the mean / "zero frequency" of each audio channel if enabled
-    normalize_clipping_eps: float              = 2e-2  # controls sensitivity for clipping detection
-    normalize_silence_eps: float               = 1e-4  # controls sensitivity for leading / trailing silence trimming
-    normalize_frequency_eps: float             = 3e-5  # controls sensitivity for max frequency detection
-    normalize_max_peaks_per_second: float      = 10    # if normalizing to target lufs would cause clipping, back off until this level of clipping is reached
-
-    # integrity check process
-    integrity_check_delete_corrupt_files: bool = False # delete any flac or safetensors files that fail integrity check
-
-    # encode process
-    encode_model: Optional[str]                          = None  # use the format, vae, and embeddings from this model (under $MODELS_PATH)
-    encode_vae_ema: Union[str, bool]                     = True  # use the specified ema if str, the first ema if true, and no ema if false for latents encoding
-    encode_compile_models: bool                          = True  # compile the vae before encoding
-    encode_latents_batch_size: int                       = 1     # batch size for encoding latents. choose a value that works with your vram capacity
-    encode_latents_num_time_offset_augmentations: int    = 8     # add augmentations for sub-pixel (latent pixel) offsets
-    encode_latents_pitch_offset_augmentations: list[int] = ()    # add augmentations for list of pitch offsets (in semitones)
-    encode_latents_stereo_mirroring_augmentation: bool   = True  # add augmentation with swapped stereo channels
-    encode_latents_force_overwrite: bool                 = False # (re)encode and overwrite latents
-    encode_audio_embeddings_force_overwrite: bool        = False # (re)encode and overwrite existing audio embeddings
-    encode_text_embeddings_force_overwrite: bool         = False # (re)encode and overwrite existing text embeddings
-    encode_embeddings_only: bool                         = False # only encodes audio/text embeddings and skips latents
-
-    # build process
-    build_output_dataset_path: str    = None # if set, overrides the default output path of $DATASET_PATH
-    build_input_dataset_path: str     = None # if set, overrides the default input path of $DATASET_PATH
-    
-    clap_embedding_model: Optional[str] = None
-    clap_embedding_labels: Optional[dict[str, list[str]]] = None
-    clap_embedding_tags: Optional[list[str]] = None
 
 class DatasetProcessor:
     
@@ -464,7 +415,7 @@ class DatasetProcessor:
             raise FileNotFoundError(f"CONFIG_PATH '{config.CONFIG_PATH}' not found")
         
         self.config: DatasetProcessorConfig = config.load_config(DatasetProcessorConfig,
-                                    os.path.join(config.CONFIG_PATH, "dataset", "dataset.json"))
+                        os.path.join(config.CONFIG_PATH, "dataset", "dataset_processor.json"))
         
         self.config.max_num_proc = self.config.max_num_proc or mp.cpu_count() // 2
         if self.config.cuda_devices is None:

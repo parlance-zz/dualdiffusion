@@ -23,6 +23,7 @@
 from utils import config
 
 from typing import Optional, Union, Literal
+from dataclasses import dataclass
 from copy import deepcopy
 import logging
 import os
@@ -41,38 +42,54 @@ from utils.dual_diffusion_utils import (
     save_safetensors, load_safetensors_ex, normalize
 )
 
+@dataclass
+class EncodeProcessConfig:
+    model: Optional[str]                          = None  # use the format, vae, and embeddings from this model (under $MODELS_PATH)
+    vae_ema: Union[str, bool]                     = True  # use the specified ema if str, the first ema if true, and no ema if false for latents encoding
+    compile_models: bool                          = True  # compile the vae before encoding
+    latents_batch_size: int                       = 1     # batch size for encoding latents. choose a value that works with your vram capacity
+    latents_num_time_offset_augmentations: int    = 8     # add augmentations for sub-pixel (latent pixel) offsets
+    latents_pitch_offset_augmentations: list[int] = ()    # add augmentations for list of pitch offsets (in semitones)
+    latents_stereo_mirroring_augmentation: bool   = True  # add augmentation with swapped stereo channels
+    latents_force_overwrite: bool                 = False # (re)encode and overwrite latents
+    audio_embeddings_force_overwrite: bool        = False # (re)encode and overwrite existing audio embeddings
+    text_embeddings_force_overwrite: bool         = False # (re)encode and overwrite existing text embeddings
+    embeddings_only: bool                         = False # only encodes audio/text embeddings and skips latents
 
 class EncodeLoad(DatasetProcessStage):
+
+    def __init__(self, process_config: EncodeProcessConfig) -> None:
+        self.process_config = process_config
 
     def get_stage_type(self) -> Literal["io", "cpu", "cuda"]:
         return "io"
     
     def info_banner(self, logger: logging.Logger) -> None:
 
-        if self.processor_config.encode_model is None:
+        if self.process_config.model is None:
             logger.error("encode_model undefined in DatasetProcessorConfig")
             raise ValueError()
         
-        encode_model_path = os.path.join(config.MODELS_PATH, self.processor_config.encode_model)
+        encode_model_path = os.path.join(config.MODELS_PATH, self.process_config.model)
         if os.path.isdir(encode_model_path) == False:
             logger.error(f"encode_model \"{encode_model_path}\" not found")
             raise ValueError()
         
-        if self.processor_config.encode_latents_force_overwrite == True and self.processor_config.encode_embeddings_only == False:
+        if self.process_config.latents_force_overwrite == True and self.process_config.embeddings_only == False:
             logger.warning("WARNING: Force latents overwrite is enabled - existing data will be overwritten")
-        if self.processor_config.encode_audio_embeddings_force_overwrite == True:
+        if self.process_config.audio_embeddings_force_overwrite == True:
             logger.warning("WARNING: Force audio embeddings overwrite is enabled - existing data will be overwritten")
-        if self.processor_config.encode_text_embeddings_force_overwrite == True:
+        if self.process_config.text_embeddings_force_overwrite == True:
             logger.warning("WARNING: Force text embeddings overwrite is enabled - existing data will be overwritten")
         
-        logger.info(f"Encode model: {self.processor_config.encode_model}  compile: {self.processor_config.encode_compile_models}")
-        if self.processor_config.encode_embeddings_only == True:
+        logger.info(f"Encode model: {self.process_config.model}  compile: {self.process_config.compile_models}")
+        if self.process_config.embeddings_only == True:
             logger.info(f"Skipping latents, encoding audio / text embeddings only")
 
-        if self.processor_config.encode_embeddings_only == False:
-            logger.info(f"Latents number of time offset augmentations: {self.processor_config.encode_latents_num_time_offset_augmentations}")
-            logger.info(f"Latents number of pitch offset augmentations: {len(self.processor_config.encode_latents_pitch_offset_augmentations)}")
-            logger.info(f"Latents stereo mirroring augmentation: {self.processor_config.encode_latents_stereo_mirroring_augmentation}")
+        if self.process_config.embeddings_only == False:
+            logger.info(f"Latents number of time offset augmentations: {self.process_config.latents_num_time_offset_augmentations}")
+            logger.info(f"Latents number of pitch offset augmentations: {len(self.process_config.latents_pitch_offset_augmentations)}")
+            logger.info(f"Latents stereo mirroring augmentation: {self.process_config.latents_stereo_mirroring_augmentation}")
 
     def limit_output_queue_size(self) -> bool:
         return True
@@ -117,9 +134,9 @@ class EncodeLoad(DatasetProcessStage):
                 has_audio_embeddings = False
                 has_text_embeddings = False
             
-            if self.processor_config.encode_latents_force_overwrite == True: has_latents = False
-            if self.processor_config.encode_audio_embeddings_force_overwrite == True: has_audio_embeddings = False
-            if self.processor_config.encode_text_embeddings_force_overwrite == True: has_text_embeddings = False
+            if self.process_config.latents_force_overwrite == True: has_latents = False
+            if self.process_config.audio_embeddings_force_overwrite == True: has_audio_embeddings = False
+            if self.process_config.text_embeddings_force_overwrite == True: has_text_embeddings = False
 
             # if we need to encode latents or audio embeddings, load the audio file content
             if has_latents == False or has_audio_embeddings == False:
@@ -171,6 +188,9 @@ class EncodeLoad(DatasetProcessStage):
 
 class EncodeProcess(DatasetProcessStage):
 
+    def __init__(self, process_config: EncodeProcessConfig) -> None:
+        self.process_config = process_config
+
     def get_stage_type(self) -> Literal["io", "cpu", "cuda"]:
         return "cuda"
     
@@ -188,23 +208,23 @@ class EncodeProcess(DatasetProcessStage):
     def start_process(self):
 
         # load pipeline and compile vae / embedding models
-        model_path = os.path.join(config.MODELS_PATH, self.processor_config.encode_model)
+        model_path = os.path.join(config.MODELS_PATH, self.process_config.model)
         self.pipeline = DualDiffusionPipeline.from_pretrained(
             model_path, load_checkpoints=True,
             device={"vae": self.device, "format": self.device, "embedding": self.device},
-            load_emas={"vae": self.processor_config.encode_vae_ema})
+            load_emas={"vae": self.process_config.vae_ema})
         
         self.logger.info(f"Model metadata:\n{dict_str(self.pipeline.model_metadata)}")
         self.format: SpectrogramFormat = self.pipeline.format
         self.embedding: DualDiffusionEmbedding = self.pipeline.embedding
         self.vae: DualDiffusionVAE = self.pipeline.vae
 
-        if self.vae.config.last_global_step == 0 and self.processor_config.encode_embeddings_only == False:
+        if self.vae.config.last_global_step == 0 and self.process_config.embeddings_only == False:
             self.logger.error(f"Error: VAE has not been trained, unable to encode latents. Aborting...")
             exit(1)
 
         self.vae = self.vae.to(dtype=torch.bfloat16)
-        if self.processor_config.encode_compile_models == True:
+        if self.process_config.compile_models == True:
             self.vae.compile(fullgraph=True, dynamic=True)
             self.embedding.compile(fullgraph=False, dynamic=True)
         
@@ -212,13 +232,13 @@ class EncodeProcess(DatasetProcessStage):
         
         self.format_config: SpectrogramFormatConfig = self.format.config
         
-        num_encode_offsets = self.processor_config.encode_latents_num_time_offset_augmentations
+        num_encode_offsets = self.process_config.latents_num_time_offset_augmentations
         self.vae_encode_offset_padding = self.format_config.hop_length * num_encode_offsets
         self.vae_encode_offsets = [i * self.format_config.hop_length for i in range(num_encode_offsets)]
-        self.vae_batch_size = self.processor_config.encode_latents_batch_size
+        self.vae_batch_size = self.process_config.latents_batch_size
         self.vae_num_batches_per_sample = (num_encode_offsets + self.vae_batch_size - 1) // self.vae_batch_size
         
-        pitch_shifts = self.processor_config.encode_latents_pitch_offset_augmentations
+        pitch_shifts = self.process_config.latents_pitch_offset_augmentations
         pitch_augmentation_formats = [
             self.get_pitch_augmentation_format(shift).to(self.device) for shift in pitch_shifts]
         self.vae_encode_formats: list[SpectrogramFormat] = [self.format] + pitch_augmentation_formats
@@ -258,7 +278,7 @@ class EncodeProcess(DatasetProcessStage):
             self.logger.debug(f"existing text embeddings: \"{safetensors_file_path}\"")
 
         # encode latents
-        if audio is not None and input_dict["has_latents"] == False and self.processor_config.encode_embeddings_only == False:
+        if audio is not None and input_dict["has_latents"] == False and self.process_config.embeddings_only == False:
             
             # resample audio to model format sample_rate
             crop_width = self.format.sample_raw_crop_width(audio.shape[-1] - self.vae_encode_offset_padding)
@@ -271,12 +291,12 @@ class EncodeProcess(DatasetProcessStage):
             for offset in self.vae_encode_offsets:
                 input_raw_offset_sample = audio[:, offset:offset + crop_width].unsqueeze(0)
                 input_audio.append(input_raw_offset_sample)
-                if self.processor_config.encode_latents_stereo_mirroring_augmentation == True:
+                if self.process_config.latents_stereo_mirroring_augmentation == True:
                     input_audio.append(torch.flip(input_raw_offset_sample, dims=(1,)))
             audio = torch.cat(input_audio, dim=0)
 
             # encode spectrograms of all audios
-            input_samples = []; bsz = self.processor_config.encode_latents_batch_size
+            input_samples = []; bsz = self.process_config.latents_batch_size
             for format in self.vae_encode_formats:
                 for b in range(self.vae_num_batches_per_sample):
                     batch_input_raw_sample = audio[b*bsz:(b+1)*bsz]
@@ -307,6 +327,9 @@ class EncodeProcess(DatasetProcessStage):
         }
 
 class EncodeSave(DatasetProcessStage):
+
+    def __init__(self, process_config: EncodeProcessConfig) -> None:
+        self.process_config = process_config
 
     def get_stage_type(self) -> Literal["io", "cpu", "cuda"]:
         return "io"
@@ -340,13 +363,16 @@ class EncodeSave(DatasetProcessStage):
 
 if __name__ == "__main__":
 
+    process_config: EncodeProcessConfig = config.load_config(EncodeProcessConfig,
+                        os.path.join(config.CONFIG_PATH, "dataset", "encode.json"))
+    
     dataset_processor = DatasetProcessor()
     dataset_processor.process(
         "Encode",
         [
-            EncodeLoad(),
-            EncodeProcess(),
-            EncodeSave()
+            EncodeLoad(process_config),
+            EncodeProcess(process_config),
+            EncodeSave(process_config)
         ],
         input=config.DATASET_PATH,
     )

@@ -1,0 +1,11 @@
+{
+  "min_audio_length": 45,             // skip importing or processing any samples shorter than this length (seconds)
+  "max_num_proc": 10,                 // set max number of (total) processes for cpu stages. default is 1/2 cpu cores
+  "buffer_memory_level": 8,           // higher values increase max queue sizes and memory usage
+  "cuda_devices": "cuda",             // list of devices to use in cuda stages ("cuda:0", "cuda:1", etc)
+  "force_overwrite": false,           // disables skipping files that have been previously processed
+  "test_mode": false,                 // disables moving, copying, or writing any changes to files
+  "use_fast_scan": true,              // use the linux find tool instead of python's os.walk.
+  "write_error_summary_logs": true,   // when the process is completed or aborted write a separate log file for each stage's errors/warnings
+  "verbose": false,                   // prints debug logs to stdout
+}

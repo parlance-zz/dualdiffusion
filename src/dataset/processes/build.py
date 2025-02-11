@@ -23,9 +23,9 @@
 from utils import config
 
 from typing import Optional, Union, Any, Literal
+from dataclasses import dataclass
 import os
 import logging
-import time
 
 import torch
 import safetensors.torch as safetensors
@@ -34,17 +34,26 @@ from dataset.dataset_processor import DatasetProcessor, DatasetProcessStage
 from utils.dual_diffusion_utils import get_audio_metadata, get_audio_info
 
 
+@dataclass
+class BuildProcessConfig:
+    output_dataset_path: str    = None # if set, overrides the default output path of $DATASET_PATH
+    input_dataset_path: str     = None # if set, overrides the default input path of $DATASET_PATH
+
 class Build(DatasetProcessStage):
 
+    def __init__(self, process_config: BuildProcessConfig) -> None:
+        self.process_config = process_config
+        
     def get_stage_type(self) -> Literal["io", "cpu", "cuda"]:
         return "cpu"
     
     def info_banner(self, logger: logging.Logger):
-        logger.info(f"Input path: {self.processor_config.build_input_dataset_path or config.DATASET_PATH}")
-        logger.info(f"Output path: {self.processor_config.build_output_dataset_path or config.DATASET_PATH}")
+        logger.info(f"Input path: {self.process_config.input_dataset_path or config.DATASET_PATH}")
+        logger.info(f"Output path: {self.process_config.output_dataset_path or config.DATASET_PATH}")
 
     def summary_banner(self, logger: logging.Logger, completed: bool) -> None:
         
+        # if the process was aborted don't write any split / dataset info files
         if completed != True: return
         
         # aggregate samples from each worker process
@@ -116,7 +125,7 @@ class Build(DatasetProcessStage):
             "processor_config": self.processor_config.__dict__,
         }
 
-        dataset_path = self.processor_config.build_output_dataset_path or config.DATASET_PATH
+        dataset_path = self.process_config.output_dataset_path or config.DATASET_PATH
         dataset_info_path = os.path.join(dataset_path, "dataset_infos", "dataset_info.json")
         config.save_json(dataset_info, dataset_info_path, copy_on_write=True)
 
@@ -253,11 +262,14 @@ class Build(DatasetProcessStage):
 
 if __name__ == "__main__":
 
+    process_config: BuildProcessConfig = config.load_config(BuildProcessConfig,
+                        os.path.join(config.CONFIG_PATH, "dataset", "build.json"))
+    
     dataset_processor = DatasetProcessor()
     dataset_processor.process(
         "Build",
-        [Build()],
-        input=dataset_processor.config.build_input_dataset_path or config.DATASET_PATH
+        [Build(process_config)],
+        input=process_config.input_dataset_path or config.DATASET_PATH
     )
 
     exit(0)

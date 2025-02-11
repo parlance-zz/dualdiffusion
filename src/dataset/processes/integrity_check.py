@@ -20,7 +20,10 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
+from utils import config
+
 from typing import Optional, Union
+from dataclasses import dataclass
 import os
 import logging
 import subprocess
@@ -31,10 +34,17 @@ from dataset.dataset_processor import DatasetProcessor, DatasetProcessStage
 from utils.dual_diffusion_utils import load_safetensors_ex
 
 
+@dataclass
+class IntegrityCheckProcessConfig:
+    delete_corrupt_files: bool = False # delete any flac or safetensors files that fail integrity check
+
 class IntegrityCheck(DatasetProcessStage): # please note to run this process you need the "flac" utility in your environment path
     
+    def __init__(self, process_config: IntegrityCheckProcessConfig) -> None:
+        self.process_config = process_config
+
     def info_banner(self, logger: logging.Logger) -> None:
-        if self.processor_config.integrity_check_delete_corrupt_files == True:
+        if self.process_config.delete_corrupt_files == True:
             logger.warning("WARNING: Automatic deletion of corrupt files is enabled")
 
     def summary_banner(self, logger: logging.Logger, completed: bool) -> None:
@@ -64,11 +74,10 @@ class IntegrityCheck(DatasetProcessStage): # please note to run this process you
             return None
 
         if corrupt_file == True:
-            if self.processor_config.integrity_check_delete_corrupt_files == True:
+            if self.process_config.delete_corrupt_files == True:
                 if self.processor_config.test_mode == False:
-                    with self.critical_lock:
-                        os.remove(file_path)
-                        self.logger.debug(f"deleted \"{file_path}\"")
+                    os.remove(file_path)
+                    self.logger.debug(f"deleted \"{file_path}\"")
                 else:
                     self.logger.debug(f"(would have) deleted \"{file_path}\"")
         else:
@@ -77,10 +86,13 @@ class IntegrityCheck(DatasetProcessStage): # please note to run this process you
         
 if __name__ == "__main__":
 
+    process_config: IntegrityCheckProcessConfig = config.load_config(IntegrityCheckProcessConfig,
+                        os.path.join(config.CONFIG_PATH, "dataset", "integrity_check.json"))
+    
     dataset_processor = DatasetProcessor()
     dataset_processor.process(
         "IntegrityCheck",
-        [IntegrityCheck()],
+        [IntegrityCheck(process_config)],
     )
 
     exit(0)

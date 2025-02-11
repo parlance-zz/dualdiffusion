@@ -1,0 +1,12 @@
+{
+    "target_lufs": -20.0,       // desired loudness level for dataset audio in the normalization process
+    "trim_silence": true,       // removes any silence at the beginning or end of the audio file
+    "trim_max_length": 180,     // if set, truncates the length of the audio to this max length (in seconds)
+    "sample_rate": null,        // if set, resamples audio to this sample rate during normalization (if needed)
+    "remove_dc_offset": true,   // zeros the mean / "zero frequency" of each audio channel if enabled
+
+    "clipping_eps": 2e-2,       // controls sensitivity for clipping detection
+    "silence_eps": 1e-4,        // controls sensitivity for leading / trailing silence trimming
+    "frequency_eps": 3e-5,      // controls sensitivity for max frequency detection
+    "max_peaks_per_second": 10, // if normalizing to target lufs would cause clipping, back off until this level of clipping is reached
+}

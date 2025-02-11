@@ -23,6 +23,16 @@
 #todo: label process tbd, old code below as reference
 
 """
+
+@dataclass
+class LabelProcessConfig:
+
+    clap_embedding_model: Optional[str] = None
+    clap_embedding_labels: Optional[dict[str, list[str]]] = None
+    clap_embedding_tags: Optional[list[str]] = None
+
+
+    
     if tags is not None: 
         tag_labels = {tag: [tag] for tag in tags}
         if labels is not None:
