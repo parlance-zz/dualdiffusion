@@ -36,8 +36,8 @@ from utils.dual_diffusion_utils import get_audio_metadata, get_audio_info
 
 @dataclass
 class BuildProcessConfig:
-    output_dataset_path: str    = None # if set, overrides the default output path of $DATASET_PATH
-    input_dataset_path: str     = None # if set, overrides the default input path of $DATASET_PATH
+    output_dataset_path: str = None  # if set, overrides the default output path of $DATASET_PATH
+    input_dataset_path: str  = None  # if set, overrides the default input path of $DATASET_PATH
 
 class Build(DatasetProcessStage):
 
@@ -156,6 +156,7 @@ class Build(DatasetProcessStage):
             "sample_rate": None,
             "num_channels": None,
             "sample_length": None,
+            "post_norm_lufs": None,
             "system": None,
             "game": None,
             "song": None,
@@ -208,15 +209,24 @@ class Build(DatasetProcessStage):
 
             try:
                 audio_metadata = get_audio_metadata(file_path)
-                for field in ["system", "game", "song", "prompt", "rating"]:
+                for field in ["system", "game", "song", "prompt", "rating", "post_norm_lufs"]:
                     sample_dict[field] = audio_metadata[field][0] if field in audio_metadata else None
 
+                # parse rating metadata as integer
                 if sample_dict["rating"] is not None:
                     try:
                         sample_dict["rating"] = int(sample_dict["rating"])
                     except Exception as e:
                         self.logger.warning(f"invalid rating \"{sample_dict['rating']}\" in \"{file_path}\"")
                         sample_dict["rating"] = None
+
+                # parse post_norm_lufs metadata as float
+                if sample_dict["post_norm_lufs"] is not None:
+                    try:
+                        sample_dict["post_norm_lufs"] = float(sample_dict["post_norm_lufs"])
+                    except Exception as e:
+                        self.logger.warning(f"invalid post_norm_lufs \"{sample_dict['post_norm_lufs']}\" in \"{file_path}\"")
+                        sample_dict["post_norm_lufs"] = None
 
                 if "split" in audio_metadata:
                     sample_dict["split"] = audio_metadata["split"]

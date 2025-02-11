@@ -45,8 +45,9 @@ class DatasetConfig:
      sample_crop_width: int
      latents_crop_width: int
      num_proc: Optional[int] = None
-     load_datatypes: list[Literal["audio", "latents", "audio_embeddings", "text_embeddings"]] = ("audio", "audio_embeddings")
-     filter_invalid_samples: Optional[bool] = True
+     load_datatypes: list[Literal["audio","latents", "audio_embeddings", "text_embeddings"]] = ("audio", "audio_embeddings")
+     filter_unnormalized_samples: bool = True 
+     filter_invalid_samples: bool      = True
 
 class DualDiffusionDataset(torch.nn.Module):
 
@@ -84,6 +85,10 @@ class DualDiffusionDataset(torch.nn.Module):
         self.dataset_dict = self.dataset_dict.map(resolve_absolute_path)
         
         def invalid_sample_filter(example):
+            
+            if self.config.filter_unnormalized_samples == True:
+                if example["post_norm_lufs"] is None: return False
+
             if "audio_embeddings" in self.config.load_datatypes:
                 if not example["latents_has_audio_embeddings"]: return False
                 if not example["latents_file_name"]: return False
