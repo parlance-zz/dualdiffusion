@@ -107,6 +107,8 @@ class BuildSplits(DatasetProcessStage):
                 "sample_rate": {"type": "int"},
                 "num_channels": {"type": "int"},
                 "sample_length": {"type": "int"},
+                "post_norm_lufs": {"type": "float"},
+                "effective_sample_rate": {"type": "int"},
                 "system": {"type": "string"},
                 "game": {"type": "string"},
                 "song": {"type": "string"},
@@ -159,6 +161,7 @@ class BuildSplits(DatasetProcessStage):
             "num_channels": None,
             "sample_length": None,
             "post_norm_lufs": None,
+            "effective_sample_rate": None,
             "system": None,
             "game": None,
             "song": None,
@@ -211,7 +214,7 @@ class BuildSplits(DatasetProcessStage):
 
             try:
                 audio_metadata = get_audio_metadata(file_path)
-                for field in ["system", "game", "song", "prompt", "rating", "post_norm_lufs"]:
+                for field in ["system", "game", "song", "prompt", "rating", "post_norm_lufs", "effective_sample_rate"]:
                     sample_dict[field] = audio_metadata[field][0] if field in audio_metadata else None
 
                 # parse rating metadata as integer
@@ -229,6 +232,14 @@ class BuildSplits(DatasetProcessStage):
                     except Exception as e:
                         self.logger.warning(f"invalid post_norm_lufs \"{sample_dict['post_norm_lufs']}\" in \"{file_path}\"")
                         sample_dict["post_norm_lufs"] = None
+
+                # parse effective_sample_rate metadata as integer
+                if sample_dict["effective_sample_rate"] is not None:
+                    try:
+                        sample_dict["effective_sample_rate"] = int(sample_dict["effective_sample_rate"])
+                    except Exception as e:
+                        self.logger.warning(f"invalid effective_sample_rate \"{sample_dict['effective_sample_rate']}\" in \"{file_path}\"")
+                        sample_dict["effective_sample_rate"] = None
 
                 if "split" in audio_metadata:
                     sample_dict["split"] = audio_metadata["split"]
