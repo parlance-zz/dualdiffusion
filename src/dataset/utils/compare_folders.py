@@ -4,8 +4,8 @@ import shutil
 import webbrowser
 
 
-root_path = "/mnt/vault/dataset"
-cutoff = 0.73
+root_path = "Y:/dataset"
+cutoff = 0.99#0.73
 
 def get_folders(path):
     """Retrieve the list of folders in the given path."""
@@ -27,19 +27,24 @@ def get_similarity_score(a, b):
 def decide(full_path_a, full_path_b):
     while True:
         _input = input(f"Keep (a/b)?: ").lower()
-        if _input == "a":
-            #shutil.rmtree(full_path_b)
-            print(f"Deleted {full_path_b}")
-            return
-        elif _input == "b":
-            #shutil.rmtree(full_path_a)
-            print(f"Deleted {full_path_a}")
-            return
-        elif _input == "c":
-            webbrowser.open(full_path_a)
-            webbrowser.open(full_path_b)
-        elif _input == "":
-            return
+        try:
+            if _input == "a":
+                shutil.rmtree(full_path_b)
+                print(f"Deleted {full_path_b}")
+                return
+            elif _input == "b":
+                shutil.rmtree(full_path_a)
+                print(f"Deleted {full_path_a}")
+                return
+            elif _input == "c":
+                print(full_path_a)
+                print(full_path_b)
+                webbrowser.open(full_path_a)
+                webbrowser.open(full_path_b)
+            elif _input == "":
+                return
+        except Exception as e:
+            print(e)
             
 def compare_folders(path_a, path_b, root_path, cutoff):
     
@@ -57,14 +62,14 @@ def compare_folders(path_a, path_b, root_path, cutoff):
             full_path_b = os.path.join(root_path, path_b, closest_matches[0])
             print(f"(a) {path_a}  {(get_folder_size(full_path_a)/1024/1024):.2f}mb  '{folder}'")
             print(f"(b) {path_b}  {(get_folder_size(full_path_b)/1024/1024):.2f}mb  '{closest_matches[0]}'")
-            decide(full_path_a, full_path_a)
+            decide(full_path_a, full_path_b)
         else:
             print(f"\nDuplicate:\n {folder}")
             full_path_a = os.path.join(root_path, path_a, folder)
             full_path_b = os.path.join(root_path, path_b, folder)
             print(f"(a) {path_a}  {(get_folder_size(full_path_a)/1024/1024):.2f}mb")
             print(f"(b) {path_b}  {(get_folder_size(full_path_b)/1024/1024):.2f}mb")
-            decide(full_path_a, full_path_a)
+            decide(full_path_a, full_path_b)
 
 
 if __name__ == "__main__":
