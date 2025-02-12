@@ -423,10 +423,6 @@ class DatasetProcessor:
         if isinstance(self.config.cuda_devices, str):
             self.config.cuda_devices = [self.config.cuda_devices]
 
-    # process a pipeline of DatasetProcessStage objects in parallel with a specified input path or WorkQueue
-    def process(self, process_name: str, process_stages: list[DatasetProcessStage],
-                input: Optional[Union[list[str], WorkQueue]] = None) -> None:
-
         # sadly required for cuda
         mp.set_start_method("spawn", force=True)
         #if "file_descriptor" in mp.get_all_sharing_strategies():
@@ -434,6 +430,10 @@ class DatasetProcessor:
 
         # start multiprocessing manager
         self.mp_manager = mp.Manager()
+
+    # process a pipeline of DatasetProcessStage objects in parallel with a specified input path or WorkQueue
+    def process(self, process_name: str, process_stages: list[DatasetProcessStage],
+                input: Optional[Union[list[str], WorkQueue]] = None) -> None:
 
         # first stage input is either a specified path, None (dataset path), or pre-filled WorkQueue
         if input is None:
