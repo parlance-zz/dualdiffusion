@@ -33,6 +33,7 @@ import safetensors.torch as safetensors
 from dataset.dataset_processor import DatasetProcessor, DatasetProcessStage
 from utils.dual_diffusion_utils import normalize, save_safetensors
 
+
 @dataclass
 class BuildEmbbedding_DB_ProcessConfig:
     pass
@@ -56,11 +57,15 @@ class BuildEmbeddingDB(DatasetProcessStage):
         # aggregate samples from each worker process
         sample_audio_embs: dict[str, torch.Tensor] = {}
         sample_text_embs: dict[str, torch.Tensor] = {}
-
+        
+        i, num_worker_outputs = 1, self.output_queue.queue.qsize()
         while self.output_queue.queue.qsize() > 0:
+            logger.info(f"Collecting data from worker processes ({i}/{num_worker_outputs})...")
             worker_output_dict: dict[str, dict] = self.output_queue.get()
             sample_audio_embs.update(**worker_output_dict["audio_embs"])
             sample_text_embs.update(**worker_output_dict["text_embs"])
+
+            i += 1
 
         logger.info(f"Found {len(sample_audio_embs)} samples with audio embeddings")
         if len(sample_audio_embs) > 0 and self.processor_config.test_mode == False:
