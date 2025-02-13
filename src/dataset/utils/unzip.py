@@ -25,7 +25,11 @@ import os
 import py7zr
 
 
-systems = ["2sf", "3do", "3sf", "dsf", "gcn", "hes", "psf", "psf2", "smd", "spc", "ssf", "usf", "wii", "wiiu"]
+systems = [
+    "2sf", "3do", "3sf", "dsf", "gcn", "hes", "psf", "psf2",
+    "smd", "spc", "ssf", "usf", "wii", "wiiu", "psf5",
+    "psf3", "xbox", "psp", "vita", "switch", "psf4", "pc"
+]
 root_source_folder = f'/mnt/vault/dataset_import'
 root_dest_folder = f'/mnt/vault/dataset_import'
 zip_file_extensions = [".zip", ".7z", ".rar", ".tar", ".tar.gz", ".tar.bz2"]
@@ -65,7 +69,8 @@ if __name__ == "__main__":
 
         for filename in os.listdir(source_folder):
             if os.path.splitext(filename)[1].lower() in zip_file_extensions:
-
+                
+                print(filename)
                 file_path = os.path.join(source_folder, filename)
                 subfolder_name = os.path.splitext(filename)[0]
                 

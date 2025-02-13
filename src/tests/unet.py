@@ -155,16 +155,16 @@ def unet_test() -> None:
         cfg.unet_params.seed = base_seed + i
         cfg.unet_params.prompt = filename
         pipeline.unet.to("cuda")
-        latents = pipeline.diffusion_decode(cfg.unet_params, audio_embedding=audio_embedding)
+        latents = pipeline.diffusion_decode(cfg.unet_params, audio_embedding=audio_embedding).float()
         pipeline.unet.to("cpu")
 
         latents = latents / latents.std(dim=(1,2,3), keepdim=True)
-        output_sample = vae.decode(latents, vae_embeddings, format)
+        output_sample = vae.decode(latents.to(dtype=vae.dtype), vae_embeddings, format)
         
         if cfg.skip_ddec == False:
             cfg.ddec_params.seed = cfg.unet_params.seed
             output_sample = pipeline.diffusion_decode(cfg.ddec_params,
-                audio_embedding=audio_embedding, x_ref=output_sample, module_name="ddec")
+                audio_embedding=audio_embedding, x_ref=output_sample.to(dtype=ddec.dtype), module_name="ddec")
         output_raw_sample = format.sample_to_raw(output_sample.float(), n_fgla_iters=cfg.num_fgla_iters)
 
         print(f"input   mean/std: {input_sample.mean().item():.4} {input_sample.std().item():.4}")

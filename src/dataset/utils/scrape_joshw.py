@@ -30,12 +30,16 @@ import time
 import shutil
 
 
-systems = ["2sf", "3do", "3sf", "dsf", "gcn", "hes", "psf", "psf2", "smd", "spc", "ssf", "usf", "wii", "wiiu"]
+systems = [
+    "2sf", "3do", "3sf", "dsf", "gcn", "hes", "psf", "psf2",
+    "smd", "spc", "ssf", "usf", "wii", "wiiu", "psf5", "x360",
+    "psf3", "xbox", "psp", "vita", "switch", "psf4", "pc"
+]
 pages = ["0-9", "a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m", "n", "o", "p", "q", "r", "s", "t", "u", "v", "w", "x", "y", "z"]
 allowed_file_extensions = [".zip", ".7z", ".rar", ".tar", ".tar.gz", ".tar.bz2"]
-root_downloads_dir = "/mnt/vault"
+root_downloads_dir = "/mnt/vault/dataset_import"
 minimum_disk_space_mb = 25000 # None
-request_throttle_delay_seconds = 0.2
+request_throttle_delay_seconds = 0.25
 
 
 class LinkParser(HTMLParser):

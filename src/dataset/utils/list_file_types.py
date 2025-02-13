@@ -1,60 +1,156 @@
+from dataset.dataset_processor import find_files
+
 from collections import defaultdict
 import os
-import shutil
 
-def count_file_types(root_path, examples_path, good_file_types, bad_file_types):
+def count_file_types(root_path, good_file_types, delete=False):
 
     good_file_types = good_file_types or []
-    bad_file_types = bad_file_types or []
-
-    examples = defaultdict(list)
     file_types = defaultdict(int)
 
-    for dirpath, _, filenames in os.walk(root_path):
-        for filename in filenames:
-            file_extension = os.path.splitext(filename)[1].lower()  # Get file extension in lowercase
-            if file_extension in bad_file_types: continue
-            if file_extension in good_file_types: continue
+    all_files = find_files(root_path)
+    for file in all_files:
+        if not os.path.isfile(file):
+            continue
+
+        file_extension = os.path.splitext(file)[1].lower()
+        if file_extension in good_file_types: continue
+        
+        if delete == True:
+            print(file)
+            os.remove(file)
+
+        file_types[file_extension] += 1
             
-            file_types[file_extension] += 1  # Count each file type
-            if file_types[file_extension] < 10 and file_extension.startswith(".mini") == False:
-                examples[file_extension] += [os.path.join(dirpath, filename)]
-
-    # Display the result
-    total_files = 0
-    print("File Type Counts:")
-    for file_type, count in sorted(file_types.items()):
+    sorted_file_types = sorted(file_types.items(), key=lambda item: item[1])
+    total_bad_files = 0
+    for file_type, count in sorted_file_types:
         print(f"{file_type or '[no extension]'}: {count}")
-        total_files += count
+        total_bad_files += count
     print("")
-    print(f"Total files: {total_files}")
-
-    #sorted_file_types = sorted(file_types.items(), key=lambda item: item[1])
-    #sorted_file_types = {k: v for k, v in sorted_file_types}
-    #for file_type, count in sorted(sorted_file_types.items()):
-    #    print(f"{file_type or '[no extension]'}: {count}")
-    #print("")
-
-    if examples_path is not None:
-        os.makedirs(examples_path, exist_ok=True)
-        for file_type, example_list in examples.items():
-            for example_path in example_list:
-                dest_path = os.path.join(examples_path, f"{file_type[1:]}_{os.path.basename(example_path)}")
-                if not os.path.isfile(dest_path):
-                    shutil.copy2(example_path, dest_path)
+    print(f"Found {total_bad_files}/{len(all_files)} bad files")
 
 
-root_path = "/mnt/vault/dataset_import/smd/to_transcode"
-examples_path = None#"/mnt/vault/dataset_import/smd/file_type_examples"
+good_file_types = [
+    # misc
+    ".dsf",
+    ".ape",
+    ".minissf",
+    ".ssf",
+    ".flac",
+    ".wav",
+    ".vpk",
+    ".xwb",
+    ".xag",
+    ".vig",
+    ".vgs",
+    ".vas",
+    ".txtp",
+    ".mus",
+    ".jstm",
+    ".tak",
+    ".svag",
+    ".str",
+    ".stream",
+    ".sng",
+    ".snd",
+    ".rws",
+    ".rstm",
+    ".rsd",
+    ".pcm",
+    ".ogg",
+    ".npsf",
+    ".musx",
+    ".musc",
+    ".mp3",
+    ".int",
+    ".hxd",
+    ".gms",
+    ".bik",
+    ".aus",
+    ".asf",
+    ".ads",
 
-good_file_types = [".mp3", ".flac", ".wav", ".ape", ".minipsf", ".minissf", ".psf", ".ssf", ".dsf", ".nsf", ".spc"]
-bad_file_types = [".7z", ".zip", ".rar", ".gz", ".bak", ".pak"
-                  ".jpg", ".jpeg", ".png", ".bmp", ".gif"
-                  ".c", "*.cpp", ".py", ".bat", ".vbs", ".ips"
-                  ".log", ".ini", ".nfo", ".info", ".md", ".txt", ".txtp", ".txth",
-                  ".bms", ".snd", ".wic", ".cpk", ".sam",
-                  ".m3u", ".m3u8", ".fpl",
-                  ""]
-# maybe .snd, .mus, .str, .p16, .txtp, .vgmstream
+    # psf2
+    ".adpcm",
+    ".minipsf",
+    ".minipsf2",
+    ".psf",
+    ".psf2",
+    ".psflib",
+    ".psf2lib",
+    ".ss2",
+    ".adx",
+    ".genh",
+    ".mib",
+    ".mic",
+    ".vag",
+    ".vgmstream",
 
-count_file_types(root_path, examples_path, None, None)
+    # psf3
+    ".msf",
+    ".at3",
+    ".wem",
+    ".fsb",
+    ".xvag",
+    ".hca",
+    ".sps",
+    ".aa3",
+    ".lwav",
+    ".aax",
+    ".nub",
+    ".awc",
+    ".snu",
+    ".sgb",
+    ".ac3",
+    ".nub2",
+    
+    # psf4
+    ".lopus",
+    ".bfstm",
+    ".ktss",
+    ".bwav",
+    ".kno",
+    ".m4a",
+    ".acm",
+    ".kns",
+    ".bfwav",
+    ".sab",
+    ".dsp",
+    ".rak",
+    ".logg",
+    ".ckd",
+    ".mab",
+    ".opus",
+    ".mp4",
+    ".webm",
+    ".wma",
+    
+    #xbox
+    ".wavm",
+    ".xwav",
+    ".rwx",
+
+    #psp
+    ".oma",
+    ".sgd",
+
+    #vita
+    ".at9",
+
+]
+
+#root_path = "/mnt/vault/dataset_import/psf4/to_transcode"
+#root_path = "/mnt/vault/dataset_import/pc/to_transcode"
+#root_path = "/mnt/vault/dataset_import/psf5/to_transcode"
+#root_path = "/mnt/vault/dataset_import/x360/to_transcode"
+
+root_path = "/mnt/vault/dataset_import/vita/to_transcode"
+delete = True
+
+if delete == True:
+    print(f"WARNING: This will delete all files that do not match known good file types")
+    prompt = "Overwrite existing model? (y/n): "
+    if input("Continue? (y/n):").lower() not in ["y","yes"]: exit()
+
+count_file_types(root_path, good_file_types, delete=delete)

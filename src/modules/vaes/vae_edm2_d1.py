@@ -233,9 +233,10 @@ class AutoencoderKL_EDM2_D1(DualDiffusionVAE):
         dec_states: list[torch.Tensor] = []
 
         x_in = enc_states[-1][1]
+        sigma = add_latents_noise
         if add_latents_noise > 0:
-            sigma = add_latents_noise / (torch.rand(x_in.shape[0], device=x_in.device, dtype=x_in.dtype)**2 + add_latents_noise).detach()
-            x_in = x_in + torch.randn_like(x_in) * sigma.view(-1,1,1,1,1)
+            #sigma = add_latents_noise / (torch.rand(x_in.shape[0], device=x_in.device, dtype=x_in.dtype)**2 + add_latents_noise).detach()
+            x_in = x_in + torch.randn_like(x_in) * sigma#* sigma.view(-1,1,1,1,1)
         x_in = x_in / x_in.std(dim=(1,2,3,4), keepdim=True).detach()
 
         for block in self.dec.values():

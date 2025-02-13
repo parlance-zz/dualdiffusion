@@ -1,29 +1,129 @@
 {
     "model_name": "edm2_vd1_aclap_1",
     "model_load_options": {
-        "torch_dtype": "bfloat16",
+        "torch_dtype": {
+            "unet": "bfloat16",
+            "ddec": "bfloat16",
+            "vae": "float32",
+        },
         "device": "cuda",
         "load_checkpoints": true,
         "load_emas": {
             //"unet": "phema_std0.015.safetensors",
-            "unet": "ema_std0.1.safetensors",
-            //"unet": "ema_std0.1.safetensors",
+            //"unet": "phema_std0.2.safetensors",
+            "unet": "ema_std0.1.safetensors", // best settings at 264k
+            //"unet": "ema_std0.05.safetensors",
             "vae": "ema_std0.05.safetensors",
             "ddec": "ema_std0.1.safetensors"
         },
-        "compile_options": {
-            "fullgraph": true,
-            "dynamic": false
-        }
+        "compile_options": null
     },
     "output_lufs": -16,
-    "num_fgla_iters": 300,
+    "num_fgla_iters": 300, // hq settings
+    //"num_fgla_iters": 150,
+
     "skip_ddec": false,
     "copy_sample_source_files": true,
     "random_test_samples_seed": null,
     "add_random_test_samples": 0,
     "test_samples": [
 
+        /*
+        "psf/Gradius Gaiden/SLPM-86042_BGM1_0000096c.XA.flac",
+        "3sf/Monster Hunter 3 Ultimate/_t_lobby_ML_T_SKB01.mca.flac",
+        "psf/Gradius Gaiden/SLPM-86042_BGM1_0000096c.XA.flac",
+        "3sf/Monster Hunter 3 Ultimate/_t_lobby_ML_T_SKB01.mca.flac",
+        "psf/Gradius Gaiden/SLPM-86042_BGM1_0000096c.XA.flac",
+        "3sf/Monster Hunter 3 Ultimate/_t_lobby_ML_T_SKB01.mca.flac",
+        "psf/Gradius Gaiden/SLPM-86042_BGM1_0000096c.XA.flac",
+        "3sf/Monster Hunter 3 Ultimate/_t_lobby_ML_T_SKB01.mca.flac",
+        "psf/Gradius Gaiden/SLPM-86042_BGM1_0000096c.XA.flac",
+        "3sf/Monster Hunter 3 Ultimate/_t_lobby_ML_T_SKB01.mca.flac",
+        "psf/Gradius Gaiden/SLPM-86042_BGM1_0000096c.XA.flac",
+        "3sf/Monster Hunter 3 Ultimate/_t_lobby_ML_T_SKB01.mca.flac",
+        "psf/Gradius Gaiden/SLPM-86042_BGM1_0000096c.XA.flac",
+        "3sf/Monster Hunter 3 Ultimate/_t_lobby_ML_T_SKB01.mca.flac",
+        "psf/Gradius Gaiden/SLPM-86042_BGM1_0000096c.XA.flac",
+        "3sf/Monster Hunter 3 Ultimate/_t_lobby_ML_T_SKB01.mca.flac",
+        */
+
+        /*
+        "3sf/Monster Hunter 3 Ultimate",
+        "3sf/Monster Hunter 4",
+        "3sf/Monster Hunter 4 Ultimate",
+        "3sf/Monster Hunter Generations",
+        "3sf/Monster Hunter XX",
+        */
+        /*
+        "psf/Gradius Gaiden/SLPM-86042_BGM1_0000096c.XA.flac",
+        "psf/Gradius Gaiden/SLPM-86042_BGM1_0000096c.XA.flac",
+        "psf/Gradius Gaiden/SLPM-86042_BGM1_0000096c.XA.flac",
+        "psf/Gradius Gaiden/SLPM-86042_BGM1_0000096c.XA.flac",
+        "psf/Gradius Gaiden/SLPM-86042_BGM1_0000096c.XA.flac",
+        "psf/Gradius Gaiden/SLPM-86042_BGM1_0000096c.XA.flac",
+        "psf/Gradius Gaiden/SLPM-86042_BGM1_0000096c.XA.flac",
+        "psf/Gradius Gaiden/SLPM-86042_BGM1_0000096c.XA.flac",
+        "psf/Gradius Gaiden/SLPM-86042_BGM1_0000096c.XA.flac",
+        */
+
+        //"smd/Sonic CD",
+        //"psf/Mega Man 8" // cool shit
+        //"psf/Suikoden 2",
+        //"psf/Mega Man X6",
+        //"psf/Contra - Legacy of War",
+        //"psf/Chrono Cross",
+        //"psf/Command & Conquer",
+        //"psf/Dance Dance Revolution - Konamix",
+        //"psf/Tony Hawk's Pro Skater 2",
+        //"psf/WipEout 3 - Special Edition",
+        //"psf/Star Wars - Episode I - The Phantom Menace",
+        //"psf/Street Fighter Alpha 3",
+        "psf/Gradius Gaiden",
+        //"psf/Descent Maximum",
+        //"psf/Command & Conquer - Red Alert",
+        
+
+
+        /*
+        "[TwoShot] LOOP4 PAD4.flac",
+        "[TwoShot] random 2 - Track 6.flac",
+        "[TwoShot] LOOP4 PAD4.flac",
+        "[TwoShot] random 2 - Track 6.flac",
+        "[TwoShot] LOOP4 PAD4.flac",
+        "[TwoShot] random 2 - Track 6.flac",
+        "[TwoShot] LOOP4 PAD4.flac",
+        "[TwoShot] random 2 - Track 6.flac",
+        "[TwoShot] LOOP4 PAD4.flac",
+        "[TwoShot] random 2 - Track 6.flac",
+        "[TwoShot] LOOP4 PAD4.flac",
+        "[TwoShot] random 2 - Track 6.flac",
+        "[TwoShot] LOOP4 PAD4.flac",
+        "[TwoShot] random 2 - Track 6.flac",
+        */
+
+        //"psf/Mega Man X6/11. BLAZE HEATNIX STAGE.xa.flac",
+        /*
+        "dick_pound-01.flac",
+        "dick_pound-02.flac",
+        "psf/Mega Man X6/11. BLAZE HEATNIX STAGE.xa.flac",
+        "psf/Final Fantasy VII/416 One-Winged Angel.minipsf.flac",
+        "psf/Final Fantasy VII/111 Fanfare.minipsf.flac",
+        "psf/Soul Blade/SLUS-00240_SOULXA_01016401_0000.xa.flac",
+        "psf/Tony Hawk's Pro Skater 2/_t_MOVIE_INTRO.XA.flac",
+        */
+        
+        //"psf/Tony Hawk's Pro Skater 2",
+        /*
+        "psf/Tony Hawk's Pro Skater 2/SLES-02908_05 Bad Religion - You.xa.flac",
+        "psf/Tony Hawk's Pro Skater 2/SLES-02908_07 Millencolin - No Cigar.xa.flac",
+        "psf/Tony Hawk's Pro Skater 2/SLES-02908_09 Dub Pistols - Cyclone.xa.flac",
+        "psf/Tony Hawk's Pro Skater 2/SLES-02908_11 Styles of Beyond - Subculture.xa.flac",
+        "psf/Tony Hawk's Pro Skater 2/SLES-02908_13 Fu Manchu - Evil Eye.xa.flac",
+        "psf/Tony Hawk's Pro Skater 2/SLES-02908_14 Alley Life - Out with the Old.xa.flac",
+        "psf/Tony Hawk's Pro Skater 2/SLES-02908_15 Swingin' Utters - Five Lessons Learned.xa.flac",
+        "psf/Tony Hawk's Pro Skater 2/SLES-02908_04 Naughty by Nature - Pin the Tail on the Donkey.xa.flac",
+        "psf/Tony Hawk's Pro Skater 2/SLES-02908_06 Powerman 5000 - When Worlds Collide.xa.flac",
+        */
     ],
     "unet_params": {
         "seed": null,
@@ -36,12 +136,22 @@
 
         // best settings as of 264k
         "num_steps": 300,
-        "cfg_scale": 1.62,
-        "input_perturbation": 0.4,
-        "input_perturbation_offset": 0.6,
+        "cfg_scale": 1.6,
+        //"input_perturbation": 0.4,
+        //"input_perturbation_offset": 0.6,
         "sigma_min": 0.05,
         "sigma_max": 200,
         "use_heun": true,
+
+        //"num_steps": 200,
+        //"cfg_scale": 1.5,
+        //"use_heun": false,
+
+        //"num_steps": 250,
+        //"sigma_min": 0.03,
+        "input_perturbation": 0.4,
+        "input_perturbation_offset": 0.5,
+        
 
         //"input_perturbation": 0.5,
         //"input_perturbation_offset": 0.7,
@@ -63,12 +173,18 @@
         //"sigma_max": 8,
     },
     "ddec_params": {
-        "num_steps": 30,
-        "cfg_scale": 1.62,
+        // best settings as of 264k
+        "num_steps": 30,      
+        //"cfg_scale": 1.62,
+        "use_heun": true,
+
+        //"num_steps": 15,
+        "cfg_scale": 1.5,
+        //"use_heun": false,
+
         "input_perturbation": 0,
         "input_perturbation_offset": 0,
         "sigma_min": null,
         "sigma_max": null,
-        "use_heun": true
     }
 }
