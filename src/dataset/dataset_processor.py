@@ -211,7 +211,7 @@ class WorkQueue: # normal Queue class behavior extended with progress tracking
 
     def put(self, obj, *args, **kwargs) -> None:
         if isinstance(obj, list):
-            chunksize = min(len(obj) // 64, self.maxchunk)
+            chunksize = max(min(len(obj) // 64, self.maxchunk), 1)
             for i in range(0, len(obj), chunksize):
                 self._put(obj[i:i+chunksize], *args, **kwargs)
         else:

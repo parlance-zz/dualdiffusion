@@ -46,7 +46,7 @@ class NormalizeProcessConfig:
     sample_rate: Optional[int]       = None  # if set, resamples audio to this sample rate during normalization (if needed)
     remove_dc_offset: bool           = True  # zeros the mean / "zero frequency" of each audio channel if enabled
     clipping_eps: float              = 2e-2  # controls sensitivity for clipping detection
-    silence_eps: float               = 1e-4  # controls sensitivity for leading / trailing silence trimming
+    silence_eps: float               = 2e-4  # controls sensitivity for leading / trailing silence trimming
     frequency_eps: float             = 3e-5  # controls sensitivity for max frequency detection
     max_peaks_per_second: float      = 10    # if normalizing to target lufs would cause clipping, back off until this level of clipping is reached
 
