@@ -20,12 +20,9 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
-from utils import config
-
 from typing import Optional, Union
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-import os
 
 import torch
 
@@ -40,31 +37,12 @@ class DualDiffusionEmbeddingConfig(DualDiffusionModuleConfig, ABC):
     def embedding_dim(self) -> int:
         pass
 
-
 class DualDiffusionEmbedding(DualDiffusionModule, ABC):
 
     module_name: str = "embedding"
     
     def __init__(self):
         super().__init__()
-
-        self.dataset_info = None
-        self.dataset_game_ids = None
-        self.dataset_game_names = None
-
-    def load_dataset_info(self) -> None:
-        if self.module_path is not None:
-            dataset_info_path = os.path.join(self.module_path, "dataset_info.json")
-            if not os.path.isfile(dataset_info_path):
-                dataset_info_path = os.path.join(config.DATASET_PATH, "dataset_infos", "dataset_info.json")
-        else:
-            dataset_info_path = os.path.join(config.DATASET_PATH, "dataset_infos", "dataset_info.json")
-        if not os.path.isfile(dataset_info_path):
-            raise FileNotFoundError(f"Could not find dataset info at '{dataset_info_path}'")
-
-        self.dataset_info = config.load_json(dataset_info_path)
-        self.dataset_game_ids = self.dataset_info["game_id"]
-        self.dataset_game_names = {value: key for key, value in self.dataset_info["game_id"].items()}
 
     # input shape: (batch, emb_dim) output shapes: (batch,), (emb_dim, emb_dim), (batch, n_components)
     def get_pca(self, embeddings: torch.Tensor, n_components: Optional[int] = None) -> torch.Tensor:

@@ -20,7 +20,8 @@ dependencies:
     - python-dotenv # environment config
     - mutagen       # audio file metadata extraction and editing
     - nicegui       # for interactive web ui
-    - laion-clap    # CLAP audio/text encoding
+    - transformers  # larger_clap_music
+    - laion-clap    # laion-clap (music_audioset_epoch_15_esc_90.14)
     - pyloudnorm    # faster lufs without memory leak
     - pyjson5       # json with comments and some formatting improvements
     - py7zr         # (optional) for dataset unzip util

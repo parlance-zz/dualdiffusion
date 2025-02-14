@@ -187,11 +187,8 @@ CONFIG_PATH = os.getenv("CONFIG_PATH")
 MODELS_PATH = os.getenv("MODELS_PATH")
 DEBUG_PATH = os.getenv("DEBUG_PATH")
 SRC_PATH = os.getenv("PYTHONPATH")
-CACHE_PATH = os.getenv("CACHE_PATH")
-
-FFMPEG_PATH = os.getenv("FFMPEG_PATH")
 DATASET_PATH = os.getenv("DATASET_PATH")
-
-CLAP_MODEL_PATH = os.getenv("CLAP_MODEL_PATH")
+CLAP_MODEL1_PATH = os.getenv("CLAP_MODEL1_PATH")
+CLAP_MODEL2_PATH = os.getenv("CLAP_MODEL2_PATH")
 
 NO_GUI = int(os.getenv("NO_GUI") or 0) == 1

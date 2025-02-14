@@ -1,0 +1,8 @@
+{
+    device: "cuda",
+    add_random_test_samples: 4,
+    test_text: [
+        "this is some test text to encode",
+        "some additional text"
+    ]
+}

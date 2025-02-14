@@ -24,13 +24,12 @@ from utils import config
 
 from dataclasses import dataclass
 from typing import Literal, Union
-import os
 
 import torch
 import torchaudio
 
 from modules.embeddings.embedding import DualDiffusionEmbedding, DualDiffusionEmbeddingConfig
-from utils.dual_diffusion_utils import normalize, load_safetensors
+from modules.mp_tools import normalize
 
 
 @dataclass
@@ -39,26 +38,18 @@ class CLAP_Config(DualDiffusionEmbeddingConfig):
     sample_rate:           int = 48000
     sample_crop_width:     int = 480000
     sample_raw_channels:   int = 1
-    text_embedding_weight: float = 0.5
-    embedding_type: Literal["text", "audio", "sum", "cat", "none"] = "sum"
-    max_audio_batch:       int = -1
-    max_text_batch:        int = -1
 
     enable_fusion: bool = False
     audio_encoder: str = "HTSAT-base"
     text_encoder: str = "roberta"
-    clap_model_filename: str = "music_audioset_epoch_15_esc_90.14.pt"
 
     @property
     def embedding_dim(self) -> int:
-        if self.embedding_type == "cat": return 1024
-        elif self.embedding_type != "none": return 512
-        else: return 0
+        return 1024
 
     @property
     def audio_embedding_duration(self) -> int:
         return self.sample_crop_width / self.sample_rate
-
 
 class CLAP_Embedding(DualDiffusionEmbedding):
 
@@ -70,46 +61,24 @@ class CLAP_Embedding(DualDiffusionEmbedding):
         super().__init__()
         self.config = config
 
-        self.clap_model = None
-        self.dataset_embeddings = None
-        self.deferred_compile_options = None
+        self.clap_model1 = None
+        self.clap_model2 = None
+        self.clap_processor = None
+        self.clap_tokenizer = None
 
     def load_clap_model(self) -> None:
-        if self.module_path is not None:
-            clap_model_path = os.path.join(self.module_path, self.config.clap_model_filename)
-            if not os.path.isfile(clap_model_path):
-                clap_model_path = config.CLAP_MODEL_PATH
-        else:
-            clap_model_path = config.CLAP_MODEL_PATH
+        # larger_clap_music
+        from transformers import ClapModel, ClapProcessor, AutoTokenizer
+        self.clap_model1: ClapModel = ClapModel.from_pretrained(config.CLAP_MODEL1_PATH).to(device=self.device, memory_format=self.memory_format)
+        self.clap_processor: ClapProcessor = ClapProcessor.from_pretrained(config.CLAP_MODEL1_PATH)
+        self.tokenizer: AutoTokenizer = AutoTokenizer.from_pretrained(config.CLAP_MODEL1_PATH)
 
-        if not os.path.isfile(clap_model_path):
-            raise FileNotFoundError(f"CLAP model file not found")
-
-        # lazy load laion_clap
+        # laion-clap
         import laion_clap
-        self.clap_model = laion_clap.CLAP_Module(device=self.device,
+        self.clap_model2 = laion_clap.CLAP_Module(device=self.device,
             enable_fusion=self.config.enable_fusion, amodel=self.config.audio_encoder, tmodel=self.config.text_encoder)
-        self.clap_model.load_ckpt(clap_model_path, verbose=False)
-        self.clap_model = self.clap_model.to(device=self.device, memory_format=self.memory_format)
-
-        # alternate model
-        #from transformers import ClapModel, ClapProcessor
-        #self.clap_model = ClapModel.from_pretrained("laion/larger_clap_music").to(device=self.device)
-        #self.clap_processor = ClapProcessor.from_pretrained("laion/larger_clap_music").to(device=self.device)
-
-    def load_dataset_embeddings(self) -> None:
-
-        if self.module_path is not None:
-            dataset_embeddings_path = os.path.join(self.module_path, "dataset_embeddings.safetensors")
-            if not os.path.isfile(dataset_embeddings_path):
-                dataset_embeddings_path = os.path.join(config.DATASET_PATH, "dataset_infos", "dataset_embeddings.safetensors")
-        else:
-            dataset_embeddings_path = os.path.join(config.DATASET_PATH, "dataset_infos", "dataset_embeddings.safetensors")
-        if not os.path.isfile(dataset_embeddings_path):
-            raise FileNotFoundError(f"Could not find dataset embeddings at '{dataset_embeddings_path}'")
-        
-        dataset_embeddings: dict[str, torch.Tensor] = load_safetensors(dataset_embeddings_path)
-        self.dataset_embeddings = {key: value[:] for key, value in dataset_embeddings.items()}
+        self.clap_model2.load_ckpt(config.CLAP_MODEL2_PATH, verbose=False)
+        self.clap_model2 = self.clap_model2.to(device=self.device, memory_format=self.memory_format)
 
     def encode_audio(self, audio: torch.Tensor, sample_rate: int) -> torch.Tensor:
 
@@ -119,7 +88,7 @@ class CLAP_Embedding(DualDiffusionEmbedding):
             audio = audio.mean(dim=1).squeeze(0)  # downmix to mono
         elif audio.ndim != 1:
             raise ValueError("Tensor shape for encode_audio must be either (batch, channels, samples), (batch, samples), or (samples)")
-        if self.clap_model is None:
+        if self.clap_model1 is None:
             self.load_clap_model()
 
         # move to model device and resample if needed
@@ -133,27 +102,24 @@ class CLAP_Embedding(DualDiffusionEmbedding):
             raise ValueError(f"Cannot encode audio embedding, audio too short (len: {audio.shape[-1]})")
         audio = audio[:audio.shape[0] // chunk_size * chunk_size].reshape(-1, chunk_size)
         
-        if self.config.max_audio_batch < 0:
-            audio_embeddings = self.clap_model.get_audio_embedding_from_data(audio, use_tensor=True)
-        else:
-            audio_embeddings = torch.cat([self.clap_model.get_audio_embedding_from_data(chunk, use_tensor=True)
-                for chunk in audio.split(self.config.max_audio_batch)], dim=0)
+        audio_features: torch.Tensor = self.clap_processor(audios=[chunk.cpu().numpy() for chunk in audio.unbind()],
+                                    return_tensors="pt", sampling_rate=self.config.sample_rate)["input_features"]
+        audio_embeddings1 = normalize(self.clap_model1.get_audio_features(audio_features.to(self.device)))
+        audio_embeddings2 = normalize(self.clap_model2.get_audio_embedding_from_data(audio, use_tensor=True))
 
-        # alternate model
-        #audio_features = self.clap_processor(audios=[chunk.numpy() for chunk in audio.unbind()], return_tensors="pt")
-        #audio_embeddings = self.clap_model.get_audio_features(audio_features["input_features"])
-        
-        return normalize(audio_embeddings).float()
+        return torch.cat((audio_embeddings1, audio_embeddings2), dim=1)
 
     def encode_text(self, text: list[str]) -> torch.Tensor:
         if not isinstance(text, list):
             raise ValueError("Parameter text must be list[str]")
-        if self.clap_model is None:
+        if self.clap_model1 is None:
             self.load_clap_model()
+        
+        tokens = self.tokenizer(text, return_tensors="pt", padding=True).to(device=self.device)
+        text_embeddings1 = normalize(self.clap_model1.get_text_features(**tokens))
+        text_embeddings2 = normalize(self.clap_model2.get_text_embedding(text, use_tensor=True))
 
-        text_batches = [text[i:i + self.config.max_text_batch] for i in range(0, len(text), self.config.max_text_batch)]
-        text_embeddings = torch.cat([self.clap_model.get_text_embedding(batch, use_tensor=True) for batch in text_batches], dim=0)
-        return normalize(text_embeddings).float()
+        return torch.cat((text_embeddings1, text_embeddings2), dim=1)
     
     def encode_labels(self, labels: Union[int, torch.Tensor, list[int], dict[str, float]]) -> torch.Tensor:
         raise NotImplementedError()

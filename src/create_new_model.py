@@ -144,10 +144,3 @@ accelerate launch \
 --model_path="{new_model_path}" \
 --train_config_path="{module_train_config_dest_path}"
 """)
-
-    # copy dataset info to model path if available
-    dataset_info_path = os.path.join(config.DATASET_PATH, "dataset_infos", "dataset_info.json")
-    if not os.path.isfile(dataset_info_path):
-        print(f"Warning: Unable to copy dataset info to model, file not found at '{dataset_info_path}'")
-    else:
-        shutil.copy(dataset_info_path, new_model_path)
