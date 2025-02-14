@@ -35,6 +35,7 @@ from utils.dual_diffusion_utils import tensor_to_img
 class DualDiffusionDAEConfig(DualDiffusionModuleConfig, ABC):
 
     in_channels: int     = 2
+    in_channels_emb: int = 1024
     in_num_freqs: int    = 256
     out_channels: int    = 2
     latent_channels: int = 4
@@ -45,6 +46,10 @@ class DualDiffusionDAE(DualDiffusionModule, ABC):
 
     module_name: str = "dae"
     
+    @abstractmethod
+    def get_embeddings(self, emb_in: torch.Tensor) -> torch.Tensor:
+        pass
+
     @abstractmethod
     def get_recon_loss_logvar(self) -> torch.Tensor:
         pass
@@ -58,15 +63,15 @@ class DualDiffusionDAE(DualDiffusionModule, ABC):
         pass
 
     @abstractmethod
-    def encode(self, x: torch.Tensor) -> torch.Tensor:
+    def encode(self, x: torch.Tensor, embeddings: torch.Tensor) -> torch.Tensor:
         pass
     
     @abstractmethod
-    def decode(self, x: torch.Tensor) -> torch.Tensor:
+    def decode(self, x: torch.Tensor, embeddings: torch.Tensor) -> torch.Tensor:
         pass
 
     @abstractmethod
-    def forward(self, samples: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+    def forward(self, samples: torch.Tensor, embeddings: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         pass
 
     def compile(self, **kwargs) -> None:

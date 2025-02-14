@@ -62,6 +62,7 @@
   "module_trainer_config": {
     "kl_loss_weight": 0.05,
     "kl_warmup_steps": 1000,
-    "add_latents_noise": 0
+    "octave_energy_kl_weight": 0,
+    "add_latents_noise": 0.01
   }
 }

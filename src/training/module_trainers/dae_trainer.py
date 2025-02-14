@@ -36,6 +36,7 @@ from utils.dual_diffusion_utils import dict_str, tensor_4d_to_5d
 class DAETrainer_Config(ModuleTrainerConfig):
     kl_loss_weight: float = 0.1
     kl_warmup_steps: int  = 1000
+    octave_energy_kl_weight: float = 0
     add_latents_noise: float = 0
     
 class DAETrainer(ModuleTrainer):
@@ -104,10 +105,11 @@ class DAETrainer(ModuleTrainer):
             octave_energies.append(octave_energy)
             total_octave_energy = total_octave_energy + octave_energy
 
-        avg_octave_energy = total_octave_energy / (len(images) - 1)
-        for energy in octave_energies:
-            relative_var = (energy / avg_octave_energy).clip(min=0.1, max=10)
-            kl_loss = kl_loss + (relative_var - 1 - relative_var.log()) / len(octave_energies)
+        if self.config.octave_energy_kl_weight > 0:
+            avg_octave_energy = total_octave_energy / (len(images) - 1)
+            for energy in octave_energies:
+                relative_var = (energy / avg_octave_energy).clip(min=0.1, max=10)
+                kl_loss = kl_loss + (relative_var - 1 - relative_var.log()) / len(octave_energies) * self.config.octave_energy_kl_weight
 
         # recon loss
         #recon_loss = torch.nn.functional.mse_loss(output_samples, samples, reduction="none").mean(dim=(1,2,3))
