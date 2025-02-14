@@ -45,7 +45,6 @@ def dataloader_test():
 
     dataset_config = DatasetConfig(
         data_dir=config.DATASET_PATH,
-        cache_dir=config.CACHE_PATH,
         sample_rate=format_config["sample_rate"],
         sample_raw_channels=format_config["sample_raw_channels"],
         sample_raw_crop_width=test_params["sample_raw_crop_width"],

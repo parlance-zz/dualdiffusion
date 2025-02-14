@@ -479,7 +479,7 @@ class DualDiffusionTrainer:
         self.validation_total_batch_size = self.validation_local_batch_size * self.accelerator.num_processes
 
         dataset_config = DatasetConfig(
-            data_dir=config.DATASET_PATH, cache_dir=config.CACHE_PATH,
+            data_dir=config.DATASET_PATH,
             sample_crop_width=self.pipeline.format.sample_raw_crop_width(),
             latents_crop_width=self.latent_shape[-1] if self.latent_shape is not None else 0,
             num_proc=self.config.dataloader.dataset_num_proc,
