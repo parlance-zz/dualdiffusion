@@ -310,16 +310,18 @@ class DualDiffusionPipeline(torch.nn.Module):
         config.save_json(model_index, os.path.join(model_path, "model_index.json"))
 
     def get_latent_shape(self, sample_shape: Union[torch.Size, tuple[int, int, int, int]]) -> torch.Size:
-        latent_shape = self.vae.get_latent_shape(sample_shape)
+        encoder = getattr(self, "vae", getattr(self, "dae"))
+        latent_shape = encoder.get_latent_shape(sample_shape)
         if hasattr(self, "unet"):
             return self.unet.get_latent_shape(latent_shape)
         else:
             return latent_shape
     
     def get_sample_shape(self, bsz: int = 1, length: Optional[int] = None) -> tuple:
+        encoder = getattr(self, "vae", getattr(self, "dae"))
         sample_shape = self.format.get_sample_shape(bsz=bsz, length=length)
         latent_shape = self.get_latent_shape(sample_shape)
-        return self.vae.get_sample_shape(latent_shape)
+        return encoder.get_sample_shape(latent_shape)
     
     @torch.inference_mode()
     def __call__(self, params: SampleParams, model_server_state: Optional[multiprocessing.managers.DictProxy] = None, quiet: bool = False) -> SampleOutput:

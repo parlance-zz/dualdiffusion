@@ -31,7 +31,7 @@ import torch
 from modules.embeddings.clap import CLAP_Embedding
 from pipelines.dual_diffusion_pipeline import DualDiffusionPipeline, SampleParams, SampleOutput
 from modules.unets.unet_edm2_ddec import DDec_UNet
-from modules.vaes.vae_edm2_d1 import AutoencoderKL_EDM2_D1
+from modules.daes.dae_edm2_a1 import DualDiffusionDAE_EDM2_A1
 from modules.formats.spectrogram import SpectrogramFormat
 from utils.dual_diffusion_utils import (
     init_cuda, normalize, save_audio, load_audio, load_safetensors,
@@ -40,27 +40,23 @@ from utils.dual_diffusion_utils import (
 
 
 @torch.inference_mode()
-def vae_test() -> None:
+def dae_test() -> None:
 
     torch.manual_seed(0)
 
     test_params = config.load_json(
-        os.path.join(config.CONFIG_PATH, "tests", "vae_test.json"))
+        os.path.join(config.CONFIG_PATH, "tests", "dae_test.json"))
     
     model_name = test_params["model_name"]
     model_load_options = test_params["model_load_options"]
     length = test_params["length"]
     no_crop = test_params["no_crop"]
     num_fgla_iters = test_params["num_fgla_iters"]
-    sample_latents = test_params["sample_latents"]
-    normalize_latents = test_params["normalize_latents"]
-    random_latents = test_params["random_latents"]
-    add_latent_noise = test_params["add_latent_noise"]
 
     model_path = os.path.join(config.MODELS_PATH, model_name)
     print(f"Loading DualDiffusion model from '{model_path}'...")
     pipeline = DualDiffusionPipeline.from_pretrained(model_path, **model_load_options)
-    vae: AutoencoderKL_EDM2_D1 = pipeline.vae
+    dae: DualDiffusionDAE_EDM2_A1 = pipeline.dae
     format: SpectrogramFormat = pipeline.format
 
     format.config.num_fgla_iters = num_fgla_iters
@@ -74,7 +70,7 @@ def vae_test() -> None:
         ddec: DDec_UNet = pipeline.ddec
         last_global_step = ddec.config.last_global_step
     else:
-        last_global_step = vae.config.last_global_step
+        last_global_step = dae.config.last_global_step
     model_metadata = {"model_metadata": dict_str(pipeline.model_metadata)}
     print(f"{model_metadata['model_metadata']}\n")
 
@@ -84,7 +80,7 @@ def vae_test() -> None:
     latent_shape = pipeline.get_latent_shape(sample_shape)
     print(f"Sample shape: {sample_shape}  Latent shape: {latent_shape}")
     
-    output_path = os.path.join(model_path, "output", "vae", f"step_{last_global_step}")
+    output_path = os.path.join(model_path, "output", "dae", f"step_{last_global_step}")
     os.makedirs(output_path, exist_ok=True)
     start_time = datetime.datetime.now()
     avg_point_similarity = avg_latents_mean = avg_latents_std = 0
@@ -102,27 +98,16 @@ def vae_test() -> None:
 
         safetensors_file_name = os.path.join(f"{os.path.splitext(filename)[0]}.safetensors")
         latents_dict = load_safetensors(os.path.join(dataset_path, safetensors_file_name))
-
         audio_embedding = normalize(latents_dict["clap_audio_embeddings"].mean(dim=0, keepdim=True)).float()
-        vae_embeddings = vae.get_embeddings(audio_embedding.to(dtype=vae.dtype, device=vae.device))
 
         audio_len = get_audio_info(os.path.join(dataset_path, filename)).frames
         source_raw_sample = load_audio(os.path.join(dataset_path, filename), count=min(crop_width, audio_len))
         input_raw_sample = source_raw_sample.unsqueeze(0).to(format.device)
         input_sample = format.raw_to_sample(input_raw_sample)
         
-        posterior = vae.encode(input_sample.to(dtype=vae.dtype), vae_embeddings, format)
-        latents = posterior.sample() if sample_latents else posterior.mode()
-        clean_latents = latents
+        latents = dae.encode(input_sample.to(dtype=dae.dtype))
+        output_sample = dae.decode(latents)
 
-        if add_latent_noise > 0:
-            latents = latents + torch.rand_like(latents) * add_latent_noise  
-        if normalize_latents:
-            latents = normalize(latents).to(dtype=latents.dtype)
-        if random_latents:
-            latents = torch.randn_like(latents)
-        
-        output_sample = vae.decode(latents, vae_embeddings, format)
         if test_params["test_ddec"] == True:
             ddec_params = SampleParams(
                 num_steps=30, length=audio_len, cfg_scale=1.5, input_perturbation=0, use_heun=False
@@ -146,7 +131,7 @@ def vae_test() -> None:
         avg_latents_std += latents_std
         filename = os.path.basename(filename)
 
-        save_img(vae.latents_to_img(clean_latents), os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_latents.png')}"))
+        save_img(dae.latents_to_img(latents), os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_latents.png')}"))
         save_img(format.sample_to_img(output_sample), os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_output_sample.png')}"))
         save_img(format.sample_to_img(input_sample), os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_input_sample.png')}"))
 
@@ -164,7 +149,7 @@ def vae_test() -> None:
             save_audio(source_raw_sample, sample_rate, output_flac_file_path, target_lufs=None)
             print(f"Saved flac output to {output_flac_file_path}")
         
-        latents_fft = tensor_4d_to_5d(torch.fft.rfft2(clean_latents.float(), norm="ortho").abs().clip(min=1e-6).log(), num_channels=4)
+        latents_fft = tensor_4d_to_5d(torch.fft.rfft2(latents.float(), norm="ortho").abs().clip(min=1e-6).log(), num_channels=4)
         save_img(tensor_to_img(latents_fft, flip_y=True), os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_latents_fft_ln_psd.png')}"))
         latents_fft.cpu().numpy().tofile(os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_latents_fft_ln_psd.raw')}"))
 
@@ -176,4 +161,4 @@ def vae_test() -> None:
 if __name__ == "__main__":
 
     init_cuda()
-    vae_test()
+    dae_test()

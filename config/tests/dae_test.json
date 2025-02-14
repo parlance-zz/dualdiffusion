@@ -1,5 +1,5 @@
 {
-    "model_name": "edm2_vae_d1",
+    "model_name": "edm2_dae_a1",
     "model_load_options": {
         "torch_dtype": "bfloat16",
         "device": "cuda",
@@ -10,12 +10,9 @@
     "length": 1472000,
     "no_crop": false,
     "num_fgla_iters": 300,
-    "sample_latents": true,
-    "normalize_latents": false,
-    "random_latents": false,
-    "add_latent_noise": 0.03,
+    "add_latent_noise": 0,
     "test_ddec": false,
-    "add_random_test_samples": 0,
+    "add_random_test_samples": 3,
     "copy_sample_source_files": true,
     "test_samples": [
         "spc/Pilotwings/04 Light Plane.spc.flac"

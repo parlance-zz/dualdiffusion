@@ -69,7 +69,7 @@ def resample_3d(x: torch.Tensor, mode: Literal["keep", "down", "up"] = "keep") -
         original_shape = x.shape
         return torch.nn.functional.avg_pool2d(
             x.reshape(x.shape[0]*x.shape[1], x.shape[2], x.shape[3], x.shape[4]), 2).view(
-                original_shape[0], original_shape[1], original_shape[2], original_shape[3]//2, original_shape[4]//2) * 2
+                original_shape[0], original_shape[1], original_shape[2], original_shape[3]//2, original_shape[4]//2)
     elif mode == 'up': # torch.nn.functional.interpolate doesn't work properly with 5d tensors
         return x.repeat_interleave(2, dim=-1).repeat_interleave(2, dim=-2)
     
