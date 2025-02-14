@@ -1,4 +1,4 @@
 {
-    "build_input_dataset_path": null,   // if set, overrides the default output path of $DATASET_PATH
-    "build_output_dataset_path": null,  // if set, overrides the default input path of $DATASET_PATH
+    "input_dataset_path": null,   // if set, overrides the default output path of $DATASET_PATH
+    "output_dataset_path": null,  // if set, overrides the default input path of $DATASET_PATH
 }
