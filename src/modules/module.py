@@ -128,6 +128,12 @@ class DualDiffusionModule(torch.nn.Module, ABC):
         else:
             return self
     
+    def cpu(self) -> "DualDiffusionModule":
+        return self.to(device="cpu")
+    
+    def cuda(self) -> "DualDiffusionModule":
+        return self.to(device="cuda")
+
     def compile(self, **kwargs) -> None:
         if type(self).supports_compile == True:
             self.forward = torch.compile(self.forward, **kwargs)
