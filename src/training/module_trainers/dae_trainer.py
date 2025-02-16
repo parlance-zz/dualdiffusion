@@ -26,7 +26,7 @@ import torch
 
 from modules.formats.format import DualDiffusionFormat
 from modules.daes.dae_edm2_a1 import DualDiffusionDAE_EDM2_A1
-from modules.mp_tools import resample_3d
+from modules.mp_tools import resample_3d, normalize
 from training.trainer import DualDiffusionTrainer
 from .module_trainer import ModuleTrainerConfig, ModuleTrainer
 from utils.dual_diffusion_utils import dict_str, tensor_4d_to_5d
@@ -66,8 +66,11 @@ class DAETrainer(ModuleTrainer):
         if self.trainer.config.enable_channels_last == True:
             samples = samples.to(memory_format=torch.channels_last)
 
+        sample_audio_embeddings = normalize(batch["audio_embeddings"])
+        dae_emb = self.dae.get_embeddings(sample_audio_embeddings)
+
         latents, hidden_states, output_samples = self.dae(
-            samples, add_latents_noise=self.config.add_latents_noise)
+            samples, dae_emb, add_latents_noise=self.config.add_latents_noise)
 
         # output state kl loss
         latents: torch.Tensor = tensor_4d_to_5d(latents, self.dae.config.latent_channels)

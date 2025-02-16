@@ -105,8 +105,9 @@ def dae_test() -> None:
         input_raw_sample = source_raw_sample.unsqueeze(0).to(format.device)
         input_sample = format.raw_to_sample(input_raw_sample)
         
-        latents = dae.encode(input_sample.to(dtype=dae.dtype))
-        output_sample = dae.decode(latents)
+        dae_embedding = dae.get_embeddings(audio_embedding).to(dtype=dae.dtype)
+        latents = dae.encode(input_sample.to(dtype=dae.dtype), dae_embedding)
+        output_sample = dae.decode(latents, dae_embedding)
 
         if test_params["test_ddec"] == True:
             ddec_params = SampleParams(

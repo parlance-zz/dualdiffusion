@@ -41,7 +41,6 @@ from utils.dual_diffusion_utils import load_audio
 class DatasetConfig:
 
      data_dir: str
-     cache_dir: str
      sample_crop_width: int
      latents_crop_width: int
      num_proc: Optional[int] = None
