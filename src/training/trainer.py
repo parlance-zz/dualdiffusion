@@ -673,7 +673,6 @@ class DualDiffusionTrainer:
         self.logger.info(f"  Gradient accumulation steps = {self.config.gradient_accumulation_steps}")
         self.logger.info(f"  Total train batch size (w. parallel, distributed & accumulation) = {self.total_batch_size}")
         self.logger.info(f"  Total optimization steps for full run = {self.config.max_train_steps}")
-        self.logger.info(f"  Total samples processed so far = {self.persistent_state.total_samples_processed}")
         self.logger.info(f"  Path to save/load checkpoints = {self.config.model_path}")
         if self.sample_shape is not None:
             self.logger.info(f"  Sample shape: {self.sample_shape}")

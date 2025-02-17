@@ -22,6 +22,8 @@
 
 # todo: t_scale should be redone, it isn't calculated correctly with pre-encoded latents
 
+from utils import config
+
 from dataclasses import dataclass
 from typing import Optional, Literal
 from glob import glob
@@ -30,7 +32,7 @@ import os
 import numpy as np
 import torch
 import safetensors.torch as ST
-from datasets import load_dataset
+from datasets import load_dataset, Features, Value, Sequence
 
 from modules.formats.format import DualDiffusionFormatConfig
 from modules.embeddings.clap import CLAP_Config
@@ -59,12 +61,28 @@ class DualDiffusionDataset(torch.nn.Module):
         split_files = glob(f"{self.config.data_dir}/*.jsonl")
         data_files = {os.path.splitext(os.path.basename(split_file))[0]: split_file for split_file in split_files}
 
+        # kind of stupid that I have to do this manually, thanks huggingface
+        dataset_info_path = os.path.join(self.config.data_dir, "dataset_infos", "dataset_info.json")
+        if os.path.isfile(dataset_info_path):
+            dataset_info = config.load_json(dataset_info_path)
+            features_dict = {}
+            for field_name, value_dict in dataset_info["features"].items():
+                if value_dict["type"] == "list":
+                    value = Sequence(Value(value_dict["value_type"]["type"]))
+                else:
+                    value = Value(value_dict["type"])
+                features_dict[field_name] = value
+
+            features = Features(features_dict)
+        else:
+            features = None
+
         self.dataset_dict = load_dataset(
             "json",
             data_files=data_files,
             num_proc=self.config.num_proc,
             keep_in_memory=True,
-
+            features=features
         )
         self.preprocess_dataset()
         self.dataset_dict.set_transform(self)
@@ -110,7 +128,7 @@ class DualDiffusionDataset(torch.nn.Module):
 
         pre_filter_n_samples = {split: len(ds) for split, ds in self.dataset_dict.items()}
         if self.config.filter_invalid_samples: self.dataset_dict = self.dataset_dict.filter(invalid_sample_filter)
-        self.num_filtered_samples = {split: (len(ds) - pre_filter_n_samples[split]) for split, ds in self.dataset_dict.items()}
+        self.num_filtered_samples = {split: (pre_filter_n_samples[split] - len(ds)) for split, ds in self.dataset_dict.items()}
     
     @torch.no_grad()
     def __call__(self, examples: dict) -> dict:
