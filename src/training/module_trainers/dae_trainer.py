@@ -86,6 +86,11 @@ class DAETrainer(ModuleTrainer):
             state_mean = latents.mean(dim=(2,3,4))
             kl_loss = kl_loss + (state_mean.square() + state_var - 1 - state_var.log()).mean(dim=1) * (weight / 2)
 
+            #if state is latents:
+            #    state_var = latents.var(dim=4).clip(min=0.1)
+            #    state_mean = latents.mean(dim=4)
+            #    kl_loss = kl_loss + (state_mean.square() + state_var - 1 - state_var.log()).mean(dim=(1,2,3)) * (weight / 2)
+
         # input/output sample kl loss
         relative_var = (output_samples.var(dim=(1,2,3)) / samples.var(dim=(1,2,3))).clip(min=0.1, max=10)
         relative_mean = samples.mean(dim=(1,2,3)) - output_samples.mean(dim=(1,2,3))
@@ -106,10 +111,12 @@ class DAETrainer(ModuleTrainer):
             octave_energy = (images[i] - resample_3d(images[i+1], "up")).square().mean(dim=(1,2,3,4))
             energy_logs[f"octave_energies/{i}"] = octave_energy.mean().detach()
             octave_energies.append(octave_energy)
-            total_octave_energy = total_octave_energy + octave_energy
+            #total_octave_energy = total_octave_energy + octave_energy
+            total_octave_energy = torch.max(total_octave_energy, octave_energy)
 
         if self.config.octave_energy_kl_weight > 0:
-            avg_octave_energy = total_octave_energy / (len(images) - 1)
+            #avg_octave_energy = total_octave_energy / (len(images) - 1)
+            avg_octave_energy = (total_octave_energy * 1.1).detach()
             for energy in octave_energies:
                 relative_var = (energy / avg_octave_energy).clip(min=0.1, max=10)
                 kl_loss = kl_loss + (relative_var - 1 - relative_var.log()) / len(octave_energies) * self.config.octave_energy_kl_weight

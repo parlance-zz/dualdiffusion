@@ -56,7 +56,7 @@ def dae_test() -> None:
     model_path = os.path.join(config.MODELS_PATH, model_name)
     print(f"Loading DualDiffusion model from '{model_path}'...")
     pipeline = DualDiffusionPipeline.from_pretrained(model_path, **model_load_options)
-    dae: DualDiffusionDAE_EDM2_A1 = pipeline.dae
+    dae: DualDiffusionDAE_EDM2_A1 = pipeline.dae#pipeline.vae
     format: SpectrogramFormat = pipeline.format
 
     format.config.num_fgla_iters = num_fgla_iters
@@ -105,7 +105,7 @@ def dae_test() -> None:
         input_raw_sample = source_raw_sample.unsqueeze(0).to(format.device)
         input_sample = format.raw_to_sample(input_raw_sample)
         
-        dae_embedding = dae.get_embeddings(audio_embedding).to(dtype=dae.dtype)
+        dae_embedding = dae.get_embeddings(audio_embedding)
         latents = dae.encode(input_sample.to(dtype=dae.dtype), dae_embedding)
         output_sample = dae.decode(latents, dae_embedding)
 

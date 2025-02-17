@@ -26,7 +26,7 @@ import torch
 
 from modules.formats.format import DualDiffusionFormat
 from modules.vaes.vae_edm2_d1 import AutoencoderKL_EDM2_D1
-from modules.mp_tools import normalize
+from modules.mp_tools import normalize, resample_3d
 from training.trainer import DualDiffusionTrainer
 from .module_trainer import ModuleTrainerConfig, ModuleTrainer
 from utils.dual_diffusion_utils import dict_str
@@ -68,7 +68,7 @@ class VAETrainer_D(ModuleTrainer):
 
         sample_audio_embeddings = normalize(batch["audio_embeddings"])
         vae_emb = self.vae.get_embeddings(sample_audio_embeddings)
-        enc_states, dec_states, sigma = self.vae(samples, vae_emb, add_latents_noise=self.config.add_latents_noise)
+        enc_states, dec_states = self.vae(samples, vae_emb, add_latents_noise=self.config.add_latents_noise)
 
         # latents kl loss
         latents: torch.Tensor = enc_states[-1][1]
@@ -88,19 +88,31 @@ class VAETrainer_D(ModuleTrainer):
         relative_mean = samples.mean(dim=(1,2,3)) - output_samples.mean(dim=(1,2,3))
         kl_loss = kl_loss + (relative_mean.square() + relative_var - 1 - relative_var.log())
 
+        # measure approximate energy in as many octaves as possible
+        downsampled = latents
+        images = []
+        while downsampled.shape[-1] % 2 == 0 and downsampled.shape[-2] % 2 == 0:
+            images.append(downsampled)
+            downsampled = resample_3d(downsampled, "down")
+
+        energy_logs = {}    
+        for i in range(len(images) - 1):
+            octave_energy = (images[i] - resample_3d(images[i+1], "up")).square().mean(dim=(1,2,3,4))
+            energy_logs[f"octave_energies/{i}"] = octave_energy.mean().detach()
+
         # recon loss
         recon_loss = (samples - output_samples).abs().mean(dim=(1,2,3))
-        #recon_loss = torch.nn.functional.mse_loss(output_samples, samples, reduction="none").mean(dim=(1,2,3))
         recon_loss_logvar = self.vae.get_recon_loss_logvar()
         recon_loss_nll = recon_loss / recon_loss_logvar.exp() + recon_loss_logvar
 
         return {
-            "loss": kl_loss * self.config.kl_loss_weight + recon_loss_nll, # / sigma,
+            "loss": kl_loss * self.config.kl_loss_weight + recon_loss_nll,
             "loss/recon_nll": recon_loss_nll.mean().detach(),
             "loss/recon": recon_loss.mean().detach(),
             "loss/kl": kl_loss.mean().detach(),
             "latents/mean": latents.mean().detach(),
             "latents/std": latents.std().detach(),
+            **energy_logs
         }
 
     @torch.no_grad()

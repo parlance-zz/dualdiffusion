@@ -12,9 +12,11 @@
     "num_fgla_iters": 300,
     "add_latent_noise": 0,
     "test_ddec": false,
-    "add_random_test_samples": 3,
+    "add_random_test_samples": 2,
     "copy_sample_source_files": true,
     "test_samples": [
-        "spc/Pilotwings/04 Light Plane.spc.flac"
+        "psf/Gradius Gaiden/SLPM-86042_BGM1_0000096c.XA.flac",
+        "psf/Final Fantasy VII/416 One-Winged Angel.minipsf.flac",
+        "psf/Soul Blade/SLUS-00240_SOULXA_01016401_0000.xa.flac"
     ]
 }
