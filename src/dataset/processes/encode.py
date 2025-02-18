@@ -312,7 +312,7 @@ class EncodeProcess(DatasetProcessStage):
             encoded_latents: list[torch.Tensor] = []
             for b in range(input_sample.shape[0] // bsz):
                 batch_input_sample = input_sample[b*bsz:(b+1)*bsz]
-                batch_latents = self.dae.encode(batch_input_sample, dae_embeddings, self.format)
+                batch_latents = self.dae.encode(batch_input_sample, dae_embeddings)
                 encoded_latents.append(batch_latents)
             latents["latents"] = torch.cat(encoded_latents, dim=0).to(dtype=torch.bfloat16)
             assert latents["latents"].ndim == 4
