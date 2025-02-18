@@ -111,10 +111,11 @@ def dae_test() -> None:
 
         if test_params["test_ddec"] == True:
             ddec_params = SampleParams(
-                num_steps=30, length=audio_len, cfg_scale=1.5, input_perturbation=0, use_heun=False
+                num_steps=30, length=audio_len, cfg_scale=1.5, input_perturbation=0, use_heun=True
             )
             output_sample = pipeline.diffusion_decode(
-                ddec_params, audio_embedding=audio_embedding, x_ref=output_sample)
+                ddec_params, audio_embedding=audio_embedding,
+                x_ref=output_sample.to(dtype=ddec.dtype), module_name="ddec")
 
         point_similarity = (output_sample - input_sample).abs().mean().item()
 
