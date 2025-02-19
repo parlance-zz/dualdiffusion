@@ -101,11 +101,14 @@ class DualDiffusionModule(torch.nn.Module, ABC):
     def to(self, device: Optional[torch.device] = None, dtype: Optional[torch.dtype] = None,
            memory_format: Optional[torch.memory_format] = None,**kwargs) -> "DualDiffusionModule":
         
+        if device is not None:
+            device = torch.device(device)
+
         if dtype is not None:
-            if type(self).supports_half_precision == True:
-                dtype = torch_dtype(dtype)
-            else:
-                dtype = torch.float32
+            dtype = torch_dtype(dtype)
+            if dtype is torch.float16 or dtype is torch.bfloat16:
+                if type(self).supports_half_precision == False:
+                    dtype = torch.float32
 
         if memory_format == torch.channels_last:
             if type(self).supports_channels_last == False:
@@ -120,19 +123,24 @@ class DualDiffusionModule(torch.nn.Module, ABC):
         self.memory_format = memory_format or self.memory_format
 
         return self
-    
+
+    def double(self) -> "DualDiffusionModule":
+        return self.to(dtype=torch.float64)
+        
+    def float(self) -> "DualDiffusionModule":
+        return self.to(dtype=torch.float32)
+        
     def half(self) -> "DualDiffusionModule":
-        if type(self).supports_half_precision == True:
-            self.dtype = torch.bfloat16
-            return self.to(dtype=torch.bfloat16)
-        else:
-            return self
+        return self.to(dtype=torch.bfloat16)
+        
+    def type(self, dtype: torch.dtype) -> "DualDiffusionModule":
+        return self.to(dtype=dtype)
+
+    def cpu(self, **kwargs) -> "DualDiffusionModule":
+        return self.to(device="cpu", **kwargs)
     
-    def cpu(self) -> "DualDiffusionModule":
-        return self.to(device="cpu")
-    
-    def cuda(self) -> "DualDiffusionModule":
-        return self.to(device="cuda")
+    def cuda(self, device: Optional[int] = None) -> "DualDiffusionModule":
+        return self.to(device="cuda" if device is None else f"cuda:{device}")
 
     def compile(self, **kwargs) -> None:
         if type(self).supports_compile == True:
