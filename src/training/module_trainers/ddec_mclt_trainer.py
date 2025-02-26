@@ -27,9 +27,8 @@ import torch
 
 from training.sigma_sampler import SigmaSamplerConfig, SigmaSampler
 from training.trainer import DualDiffusionTrainer
-from training.loss import DualMultiscaleSpectralLoss1DConfig, DualMultiscaleSpectralLoss1D
 from .module_trainer import ModuleTrainerConfig, ModuleTrainer
-from modules.unets.unet import DualDiffusionUNet
+from modules.unets.unet_edm2_ddec_mclt import DDec_MCLT_UNet
 from modules.formats.spectrogram import SpectrogramFormat
 from modules.formats.mclt import DualMCLTFormatConfig, DualMCLTFormat
 from modules.mp_tools import normalize
@@ -68,7 +67,7 @@ class DiffusionDecoder_MCLT_Trainer(ModuleTrainer):
         self.config = config
         self.trainer = trainer
         self.logger = trainer.logger
-        self.module: DualDiffusionUNet = trainer.module
+        self.module: DDec_MCLT_UNet = trainer.module
 
         self.is_validation_batch = False
         self.device_generator = None
@@ -78,7 +77,6 @@ class DiffusionDecoder_MCLT_Trainer(ModuleTrainer):
         self.mclt: DualMCLTFormat = DualMCLTFormat(DualMCLTFormatConfig()).to(self.trainer.accelerator.device)
         #self.vae: DualDiffusionVAE = trainer.pipeline.vae.to(
         #    device=self.trainer.accelerator.device, dtype=trainer.mixed_precision_dtype).requires_grad_(False).eval()
-        #self.loss = DualMultiscaleSpectralLoss1D(DualMultiscaleSpectralLoss1DConfig())
 
         #if trainer.config.enable_channels_last == True:
         #    self.vae = self.vae.to(memory_format=torch.channels_last)
@@ -86,7 +84,6 @@ class DiffusionDecoder_MCLT_Trainer(ModuleTrainer):
             self.module.compile(**trainer.config.compile_params)
             self.format.compile(**trainer.config.compile_params)
             self.mclt.compile(**trainer.config.compile_params)
-            #self.loss = torch.compile(self.loss, **trainer.config.compile_params)
 
         #if self.vae.config.last_global_step == 0:
         #    self.logger.error("VAE model has not been trained, aborting training..."); exit(1) 
@@ -184,14 +181,30 @@ class DiffusionDecoder_MCLT_Trainer(ModuleTrainer):
 
     def train_batch(self, batch: dict) -> dict[str, torch.Tensor]:
 
-        sample_audio_embeddings = normalize(batch["audio_embeddings"])
+        if self.is_validation_batch == False:
+            device_batch_size = self.trainer.config.device_batch_size
+            #assert latents.shape == self.trainer.latent_shape, f"Expected shape {self.trainer.latent_shape}, got {latents.shape}"
+            #assert samples.shape == self.trainer.sample_shape, f"Expected shape {self.trainer.sample_shape}, got {samples.shape}"
+        else:
+            device_batch_size = self.trainer.config.validation_device_batch_size
+            #assert latents.shape == self.trainer.validation_latent_shape, f"Expected shape {self.trainer.validation_latent_shape}, got {latents.shape}"
+            #assert samples.shape == self.trainer.validation_sample_shape, f"Expected shape {self.trainer.validation_sample_shape}, got {samples.shape}"
+
+        if "audio_embeddings" in batch:
+            sample_audio_embeddings = normalize(batch["audio_embeddings"])
+            conditioning_mask = (torch.rand(device_batch_size, generator=self.device_generator,
+                device=self.trainer.accelerator.device) > self.config.conditioning_dropout).float()
+            unet_class_embeddings = self.module.get_embeddings(sample_audio_embeddings, conditioning_mask)
+        else:
+            unet_class_embeddings = None
+        
         #vae_emb = self.vae.get_embeddings(sample_audio_embeddings.to(dtype=self.vae.dtype))
         #enc_states, dec_states, sigma = self.vae(samples.to(dtype=self.vae.dtype),
         #                            vae_emb, add_latents_noise=self.config.latents_perturbation)
 
         mclt_samples = self.mclt.raw_to_sample(batch["audio"]).clone().detach()
-        #raw_samples = batch["audio"].detach() * 15
-        ref_samples = (self.format.raw_to_sample(batch["audio"]) ** (1 / self.format.config.abs_exponent)).detach() / 125
+        #ref_samples = self.format.raw_to_sample(batch["audio"]).detach()
+        ref_samples = self.format.convert_to_abs_exp1(self.format.raw_to_sample(batch["audio"])).detach()
 
         """
         from utils.dual_diffusion_utils import tensor_to_img, save_img
@@ -203,33 +216,24 @@ class DiffusionDecoder_MCLT_Trainer(ModuleTrainer):
         exit()
         """
 
-        if self.is_validation_batch == False:
-            device_batch_size = self.trainer.config.device_batch_size
-            #assert latents.shape == self.trainer.latent_shape, f"Expected shape {self.trainer.latent_shape}, got {latents.shape}"
-            #assert samples.shape == self.trainer.sample_shape, f"Expected shape {self.trainer.sample_shape}, got {samples.shape}"
-        else:
-            device_batch_size = self.trainer.config.validation_device_batch_size
-            #assert latents.shape == self.trainer.validation_latent_shape, f"Expected shape {self.trainer.validation_latent_shape}, got {latents.shape}"
-            #assert samples.shape == self.trainer.validation_sample_shape, f"Expected shape {self.trainer.validation_sample_shape}, got {samples.shape}"
-
-        conditioning_mask = (torch.rand(device_batch_size,
-            generator=self.device_generator, device=self.trainer.accelerator.device) > self.config.conditioning_dropout).float()
-        unet_class_embeddings = self.module.get_embeddings(sample_audio_embeddings, conditioning_mask)
-
         # get the noise level for this sub-batch from the pre-calculated whole-batch sigma (required for stratified sampling)
         local_sigma = self.global_sigma[self.trainer.accelerator.local_process_index::self.trainer.accelerator.num_processes]
         batch_sigma = local_sigma[self.trainer.accum_step * device_batch_size:(self.trainer.accum_step+1) * device_batch_size]
 
         # prepare model inputs
         noise = torch.randn(mclt_samples.shape, device=mclt_samples.device, generator=self.device_generator)
+        if hasattr(self.module, "freq_stds"):
+            #noise *= self.module.freq_stds.view(1, 1,-1, 1)
+            mclt_samples /= self.module.freq_stds.view(1, 1,-1, 1)
         noise = (noise * batch_sigma.view(-1, 1, 1, 1)).detach()
 
-        denoised = self.module(mclt_samples + noise, batch_sigma, self.format, unet_class_embeddings, ref_samples)
+        denoised: torch.Tensor = self.module(mclt_samples + noise, batch_sigma, self.format, unet_class_embeddings, ref_samples)
         batch_loss_weight = (batch_sigma ** 2 + self.module.config.sigma_data ** 2) / (batch_sigma * self.module.config.sigma_data) ** 2
-        batch_weighted_loss = torch.nn.functional.mse_loss(denoised, mclt_samples, reduction="none").mean(dim=(1,2,3)) * batch_loss_weight
-
-        #denoised_raw_samples = self.mclt.sample_to_raw(denoised) * 15
-        #batch_weighted_loss = self.loss(denoised_raw_samples, raw_samples) * batch_loss_weight
+        if False:#hasattr(self.module, "freq_stds"):
+            batch_weighted_loss = torch.nn.functional.mse_loss(denoised, mclt_samples, reduction="none")
+            batch_weighted_loss = (batch_weighted_loss / self.module.freq_stds.view(1, 1,-1, 1)**2).mean(dim=(1,2,3)) * batch_loss_weight
+        else:
+            batch_weighted_loss = torch.nn.functional.mse_loss(denoised, mclt_samples, reduction="none").mean(dim=(1,2,3)) * batch_loss_weight
 
         if self.is_validation_batch == True:
             batch_loss = batch_weighted_loss
@@ -246,9 +250,13 @@ class DiffusionDecoder_MCLT_Trainer(ModuleTrainer):
             self.unet_loss_buckets.index_add_(0, target_buckets, global_weighted_loss)
             self.unet_loss_bucket_counts.index_add_(0, target_buckets, torch.ones_like(global_weighted_loss))
 
-        return {"loss": batch_loss,
+        relative_var = ((denoised.var(dim=3)+0.0005) / (mclt_samples.var(dim=3)+0.0005)).clip(min=0.1, max=10)
+        kl_loss = (relative_var - 1 - relative_var.log()).mean(dim=(1,2))
+
+        return {"loss": batch_loss,# + kl_loss * self.config.kl_loss_weight,
                 "std/input_samples": mclt_samples.std(),
-                "std/ref_samples": ref_samples.std()}
+                "std/ref_samples": ref_samples.std(),
+                "kl_loss": kl_loss.detach().mean()}
                 #"std/input_raw_samples": raw_samples.std()
                 #"std/output_raw_samples": denoised_raw_samples.std()}
 

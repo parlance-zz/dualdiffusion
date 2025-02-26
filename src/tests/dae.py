@@ -107,11 +107,18 @@ def dae_test() -> None:
         
         dae_embedding = dae.get_embeddings(audio_embedding)
         latents = dae.encode(input_sample.to(dtype=dae.dtype), dae_embedding)
-        output_sample = dae.decode(latents, dae_embedding)
+        #output_sample = dae.decode(latents, dae_embedding)
+        output_sample = (input_sample ** (1 / format.config.abs_exponent)) / 125
+        #output_sample = input_sample
 
         if test_params["test_ddec"] == True:
+            #ddec_params = SampleParams(
+            #    num_steps=100, length=audio_len, cfg_scale=1.5, input_perturbation=0,
+            #    use_heun=True, schedule="scale_invariant", rho=3.5, sigma_max=15, sigma_min=0.0003
+            #)
             ddec_params = SampleParams(
-                num_steps=30, length=audio_len, cfg_scale=1.5, input_perturbation=0, use_heun=True
+                num_steps=200, length=audio_len, cfg_scale=0, input_perturbation=0, input_perturbation_offset=0,
+                use_heun=True, schedule="edm2", rho=7, sigma_max=12.5, sigma_min=0.02
             )
             output_sample = pipeline.diffusion_decode(
                 ddec_params, audio_embedding=audio_embedding,
@@ -124,7 +131,10 @@ def dae_test() -> None:
         print(f"latents mean/std: {latents.mean().item():.4} {latents.std().item():.4}")
         print(f"decoded point similarity: {point_similarity}")
         
-        output_raw_sample = format.sample_to_raw(output_sample.type(torch.float32))
+        #output_raw_sample = format.sample_to_raw(output_sample.type(torch.float32))
+        from modules.formats.mclt import DualMCLTFormatConfig, DualMCLTFormat
+        mclt = DualMCLTFormat(DualMCLTFormatConfig())
+        output_raw_sample = mclt.sample_to_raw(output_sample.float())
         
         latents_mean = latents.mean().item()
         latents_std = latents.std().item()
@@ -132,6 +142,9 @@ def dae_test() -> None:
         avg_latents_mean += latents_mean
         avg_latents_std += latents_std
         filename = os.path.basename(filename)
+
+        metadata = {**model_metadata}
+        metadata["ddec_metadata"] = dict_str(ddec_params.__dict__) if test_params["test_ddec"] == True else "null"
 
         save_img(dae.latents_to_img(latents), os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_latents.png')}"))
         save_img(format.sample_to_img(output_sample), os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_output_sample.png')}"))
@@ -143,7 +156,7 @@ def dae_test() -> None:
         print(f"Saved flac output to {output_flac_file_path}")
 
         output_flac_file_path = os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_decoded.flac')}")
-        save_audio(output_raw_sample, sample_rate, output_flac_file_path, metadata=model_metadata, target_lufs=None)
+        save_audio(output_raw_sample, sample_rate, output_flac_file_path, metadata=metadata, target_lufs=None)
         print(f"Saved flac output to {output_flac_file_path}")
 
         if copy_sample_source_files == True:

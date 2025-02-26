@@ -112,6 +112,14 @@ if __name__ == "__main__":
         prompt = f"Create new model with config at '{new_model_path}'? (y/n): "
     if input(prompt).lower() not in ["y","yes"]: exit()
     
+    ln_psd_mclt_path = os.path.join(model_config_source_path, "ln_psd_mclt.raw")
+    if os.path.isfile(ln_psd_mclt_path):
+        import numpy as np
+        ln_psd_mclt_raw = np.fromfile(ln_psd_mclt_path, dtype=np.float32)
+        pipeline.ddec.freq_stds[:] = torch.Tensor(ln_psd_mclt_raw).exp()
+        print("Imported DDEC MCLT freq stds:")
+        print(pipeline.ddec.freq_stds)
+
     pipeline.save_pretrained(new_model_path)
     print(f"Created new DualDiffusion model with config at '{new_model_path}'")
 

@@ -36,6 +36,7 @@ class SpectrogramFormatConfig(DualDiffusionFormatConfig):
     # these values are for audio pre-normalized to -20 lufs
     raw_to_sample_scale: float = 2
     sample_to_raw_scale: float = 0.5
+    abs_exp1_scale: float      = 0.008
 
     abs_exponent: float = 0.25
 
@@ -200,3 +201,7 @@ class SpectrogramFormat(DualDiffusionFormat):
         ln_freqs = self.spectrogram_converter.freq_scale.get_unscaled(x.shape[2] + 2, device=x.device)[1:-1].log2()
         ln_freqs = ln_freqs.view(1, 1,-1, 1).repeat(x.shape[0], 1, 1, x.shape[3])
         return ((ln_freqs - ln_freqs.mean()) / ln_freqs.std()).to(x.dtype)
+    
+    @torch.inference_mode()
+    def convert_to_abs_exp1(self, samples: torch.Tensor):
+        return samples ** (1 / self.config.abs_exponent) * self.config.abs_exp1_scale

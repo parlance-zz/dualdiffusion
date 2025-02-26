@@ -62,6 +62,7 @@ def mclt_test() -> None:
                              random.sample(train_samples, cfg.add_random_test_samples)]
 
     psd = None
+    avg_std = 0
 
     for sample_filename in cfg.test_samples:
         base_filename = os.path.splitext(os.path.basename(sample_filename))[0]
@@ -75,8 +76,9 @@ def mclt_test() -> None:
         mclt_sample = mclt_format.raw_to_sample(input_raw_sample)
         output_raw_sample = mclt_format.sample_to_raw(mclt_sample + torch.randn_like(mclt_sample) * cfg.add_noise)
 
-        if psd is None: psd = mclt_sample.abs().square()
-        else: psd += mclt_sample.abs().square()
+        avg_std += mclt_sample.std()
+        if psd is None: psd = mclt_sample.abs().square().to(dtype=torch.float64)# * (torch.arange(0, 256, device=mclt_sample.device).view(1, 1,-1, 1)+0.5) * (70/256)
+        else: psd += mclt_sample.abs().square().to(dtype=torch.float64) #* (torch.arange(0, 256, device=mclt_sample.device).view(1, 1,-1, 1)+0.5) * (70/256)
 
         print(f"{sample_filename}:")
         print("  mlct_sample:", tensor_info_str(mclt_sample))
@@ -93,21 +95,32 @@ def mclt_test() -> None:
             print(f"  Saved flac output to {output_flac_file_path}")
 
         print("")
-    
-    def show_psd_info(psd: torch.Tensor, name: str) -> None:
-        print(f"avg power spectral density ({name}): {psd.square().mean().sqrt().item()}")
-        print("median power spectral density:", psd[psd.shape[0]//2].item())
-        print(psd, "\n")
-        save_tensor_raw(psd.log(), os.path.join(test_output_path, f"ln_psd_{name}.raw"))
+
+    print(f"avg mdct std: {avg_std / len(cfg.test_samples)}")
+    #exit()
 
     psd = (psd / len(cfg.test_samples)).mean(dim=(1,3)).sqrt().flatten()
-    show_psd_info(psd, "mclt")
-
     sigma_sampler = SigmaSampler(cfg.sigma_config)
     sigma_psd = sigma_sampler.sample(psd.shape[0], "cpu")
-    show_psd_info(sigma_psd, "sigma")
 
-    save_tensor_raw(sigma_psd.log() - psd.log().cpu(), os.path.join(test_output_path, f"ln_psd_diff.raw"))
+    save_tensor_raw(psd.log().float(), os.path.join(test_output_path, "ln_psd_mclt.raw"))
+    save_tensor_raw(sigma_psd.log(), os.path.join(test_output_path, "ln_psd_sigma.raw"))
+    save_tensor_raw(sigma_psd.log() - psd.log().cpu().float(), os.path.join(test_output_path, "ln_psd_diff.raw"))
+
+    print(f"avg power spectral density mclt:  {psd.square().mean().sqrt().item()}")
+    print(f"avg power spectral density sigma: {sigma_psd.square().mean().sqrt().item()}")
+    print("median power spectral density mclt:", psd[psd.shape[0]//2].item())
+    print("median power spectral density sigma:", sigma_psd[psd.shape[0]//2].item())
+    
+    masking = torch.zeros(psd.shape[0])
+
+    for i in range(psd.shape[0]):
+        hz = (0.5 + i) / psd.shape[0] * mclt_format.config.sample_rate / 2
+        masking[i] = (sigma_psd[i] > psd).float().mean()
+        print(f"  {hz}hz  mclt: {psd[i].item():.4f}  sigma: {sigma_psd[i].item():.4f}  "
+              f"diff: {(sigma_psd[i]-psd[i]).item():.4f}  masking: {(masking[i]).item():.4f}")
+        
+    save_tensor_raw(masking, os.path.join(test_output_path, "masking.raw"))
 
 
 if __name__ == "__main__":

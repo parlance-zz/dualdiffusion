@@ -584,8 +584,9 @@ class DualDiffusionPipeline(torch.nn.Module):
         unet_class_embeddings = unet.get_embeddings(audio_embedding.to(
             dtype=unet.dtype, device=unet.device), conditioning_mask.to(dtype=unet.dtype, device=unet.device))
 
-        debug_info["unet_class_embeddings mean"] = unet_class_embeddings.mean().item()
-        debug_info["unet_class_embeddings std"] = unet_class_embeddings.std().item()
+        if unet_class_embeddings is not None:
+            debug_info["unet_class_embeddings mean"] = unet_class_embeddings.mean().item()
+            debug_info["unet_class_embeddings std"] = unet_class_embeddings.std().item()
 
         if x_ref is None:
             sample_shape = self.get_sample_shape(bsz=params.batch_size, length=params.length)
@@ -593,7 +594,10 @@ class DualDiffusionPipeline(torch.nn.Module):
             input_ref_sample = None
         else:
             sample_shape = x_ref.shape
-            input_ref_sample = x_ref.repeat(2, 1, 1, 1)
+            if unet_class_embeddings is not None:
+                input_ref_sample = x_ref.repeat(2, 1, 1, 1)
+            else:
+                input_ref_sample = x_ref
 
         start_timestep = 1
         sigma_schedule = SamplingSchedule.get_schedule(params.schedule,
@@ -617,8 +621,12 @@ class DualDiffusionPipeline(torch.nn.Module):
             else:
                 loop_shift = None
 
-            input_sigma = torch.tensor([sigma_curr] * unet_class_embeddings.shape[0], device=unet.device)
-            input_sample = sample.repeat(2, 1, 1, 1)
+            if unet_class_embeddings is not None:
+                input_sigma = torch.tensor([sigma_curr] * unet_class_embeddings.shape[0], device=unet.device)
+                input_sample = sample.repeat(2, 1, 1, 1)
+            else:
+                input_sigma = torch.tensor([sigma_curr], device=unet.device)
+                input_sample = sample
 
             if i > 0: last_cfg_model_output = cfg_model_output
             else:
@@ -629,7 +637,10 @@ class DualDiffusionPipeline(torch.nn.Module):
                 debug_info["effective_input_perturbation"] = []
 
             model_output = unet(input_sample, input_sigma, self.format, unet_class_embeddings, input_ref_sample).float()
-            cfg_model_output = model_output[params.batch_size:].lerp(model_output[:params.batch_size], params.cfg_scale)
+            if unet_class_embeddings is not None:
+                cfg_model_output = model_output[params.batch_size:].lerp(model_output[:params.batch_size], params.cfg_scale)
+            else:
+                cfg_model_output = model_output
             
             old_sigma_next = sigma_next
             effective_input_perturbation = float(params.input_perturbation * (1 - 1 / np.cosh(np.log(sigma_next * sigma_curr) / 2 + params.input_perturbation_offset))**2)
@@ -642,11 +653,18 @@ class DualDiffusionPipeline(torch.nn.Module):
                 sigma_hat = max(old_sigma_next, params.sigma_min)
                 t_hat = sigma_hat / sigma_curr
 
-                input_sample_hat = torch.lerp(cfg_model_output, sample, t_hat).repeat(2, 1, 1, 1)
-                input_sigma_hat = torch.tensor([t_hat * sigma_curr] * unet_class_embeddings.shape[0], device=unet.device)
+                if unet_class_embeddings is not None:
+                    input_sigma_hat = torch.tensor([t_hat * sigma_curr] * unet_class_embeddings.shape[0], device=unet.device)
+                    input_sample_hat = torch.lerp(cfg_model_output, sample, t_hat).repeat(2, 1, 1, 1)
+                else:
+                    input_sigma_hat = torch.tensor([t_hat * sigma_curr], device=unet.device)
+                    input_sample_hat = torch.lerp(cfg_model_output, sample, t_hat)
 
                 model_output_hat = unet(input_sample_hat, input_sigma_hat, self.format, unet_class_embeddings, input_ref_sample).float()
-                cfg_model_output_hat = model_output_hat[params.batch_size:].lerp(model_output_hat[:params.batch_size], params.cfg_scale)
+                if unet_class_embeddings is not None:
+                    cfg_model_output_hat = model_output_hat[params.batch_size:].lerp(model_output_hat[:params.batch_size], params.cfg_scale)
+                else:
+                    cfg_model_output_hat = model_output_hat
                 cfg_model_output = torch.lerp(cfg_model_output, cfg_model_output_hat, 0.5)            
             
             #if module_name == "ddec":
@@ -680,5 +698,9 @@ class DualDiffusionPipeline(torch.nn.Module):
 
         debug_info["final_sample_mean"] = sample.mean().item()
         debug_info["final_sample_std"] = sample.std().item()
+
+        if hasattr(unet, "freq_stds"):
+            sample *= unet.freq_stds.view(1, 1,-1, 1)
+
         return sample
         #sample = normalize(sample).float() * params.sigma_data
