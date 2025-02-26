@@ -62,7 +62,7 @@ def compare_files(file1: str, file2: str) -> list[str]:
 
 def compare_dirs(output_path: str, dir1: str, dir2: str,
                 ignore_patterns: Optional[list[str]] = None,
-                whitelist_patterns: Optional[list[str]] = None) -> None:
+                whitelist_patterns: Optional[list[str]] = None) -> str:
     
     """Compare two directories and generate a diff-like output."""
     files1 = get_files_in_dir(dir1, ignore_patterns, whitelist_patterns)
@@ -86,12 +86,24 @@ def compare_dirs(output_path: str, dir1: str, dir2: str,
         if diff:
             diff_output.append(f"\nDiff for {file}:\n" + ''.join(diff))
 
-    with open(output_path, "w") as output_file:
-        if diff_output: output_file.write("\n".join(diff_output))
-        else: output_file.write("No differences found.")
+    if diff_output:
+        diff_output = "\n".join(diff_output)
+    else:
+        diff_output = "No differences found."
+    
+    if output_path is not None:
+        os.makedirs(os.path.dirname(output_path), exist_ok=True)
+        with open(output_path, "w") as output_file:
+            output_file.write(diff_output)
 
+    return diff_output
 
 if __name__ == "__main__":
-    compare_dirs("output.diff", "/home/parlance/dualdiffusion/src",
-        "/home/parlance/dualdiffusion/models/edm2_vae_d1_ddec/old_checkpoints/ddec_checkpoint-51847_pre-snr_loss_weighting/src",
+    diff_output = compare_dirs(
+        "/home/parlance/dualdiffusion/debug/compare_dirs/output.diff",
+        "/home/parlance/dualdiffusion/src",
+        "/home/parlance/dualdiffusion/models/edm2_ddec_mclt4/ddec_checkpoint-19557/src",
         ignore_patterns=["*.pyc"])
+    
+    print(diff_output)
+    
