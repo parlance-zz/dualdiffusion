@@ -257,6 +257,15 @@ class EMA_Manager:
     def get_validation_emas(self) -> list[str]:
         return [name for name, config in self.ema_configs.items() if config.include_in_validation == True]
 
+    def get_ema_betas(self) -> dict[str, float]:
+        betas = {}
+        for name, config in self.ema_configs.items():
+            betas[name] = config.beta or float(power_function_beta(std=config.std,
+                    t_next=self.trainer.persistent_state.total_samples_processed + self.trainer.total_batch_size,
+                        t_delta=self.trainer.total_batch_size))
+        
+        return betas
+
     @torch.no_grad() # reset all emas to the current state of the module
     def reset(self) -> None:
         for ema_module in self.ema_modules.values():

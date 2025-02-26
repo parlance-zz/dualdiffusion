@@ -787,6 +787,8 @@ class DualDiffusionTrainer:
                 # update emas and normalize weights
                 self.ema_manager.update()
                 self.module.normalize_weights()
+
+                train_logger.add_logs({f"ema_betas/{name}": beta for name, beta in self.ema_manager.get_ema_betas().items()})
                 
                 # update logs
                 train_logger.add_logs({"lr": self.lr_scheduler.get_last_lr()[0]})
