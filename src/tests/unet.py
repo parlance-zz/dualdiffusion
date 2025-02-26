@@ -33,7 +33,7 @@ import torch
 
 from pipelines.dual_diffusion_pipeline import DualDiffusionPipeline, SampleParams
 from modules.unets.unet_edm2_ddec import DDec_UNet
-from modules.vaes.vae_edm2_d1 import AutoencoderKL_EDM2_D1
+from modules.daes.dae import DualDiffusionDAE
 from modules.formats.spectrogram import SpectrogramFormat
 from utils.dual_diffusion_utils import (
     init_cuda, normalize, save_audio, load_audio, load_safetensors,
@@ -71,7 +71,7 @@ def unet_test() -> None:
     model_path = os.path.join(config.MODELS_PATH, cfg.model_name)
     print(f"Loading DualDiffusion model from '{model_path}'...")
     pipeline = DualDiffusionPipeline.from_pretrained(model_path, **cfg.model_load_options)
-    vae: AutoencoderKL_EDM2_D1 = pipeline.vae
+    dae: DualDiffusionDAE = pipeline.dae
     ddec: DDec_UNet = pipeline.ddec
     format: SpectrogramFormat = pipeline.format
 
@@ -150,16 +150,16 @@ def unet_test() -> None:
         input_sample = format.raw_to_sample(input_audio[:, :crop_width])
 
         audio_embedding = normalize(clap_audio_embeddings.mean(dim=0, keepdim=True)).float()
-        vae_embeddings = vae.get_embeddings(audio_embedding.to(dtype=vae.dtype, device=vae.device))
+        dae_embeddings = dae.get_embeddings(audio_embedding.to(dtype=dae.dtype, device=dae.device))
 
         cfg.unet_params.seed = base_seed + i
         cfg.unet_params.prompt = filename
-        pipeline.unet.to("cuda")
+        #pipeline.unet.to("cuda")
         latents = pipeline.diffusion_decode(cfg.unet_params, audio_embedding=audio_embedding).float()
-        pipeline.unet.to("cpu")
+        #pipeline.unet.to("cpu")
 
         latents = latents / latents.std(dim=(1,2,3), keepdim=True)
-        output_sample = vae.decode(latents.to(dtype=vae.dtype), vae_embeddings, format)
+        output_sample = dae.decode(latents.to(dtype=dae.dtype), dae_embeddings)
         
         if cfg.skip_ddec == False:
             cfg.ddec_params.seed = cfg.unet_params.seed
@@ -179,7 +179,7 @@ def unet_test() -> None:
         output_label = cfg.unet_params.get_label(pipeline.model_metadata)
         output_latents_file_path = os.path.join(output_path, f"{output_label}_output_latents.png")
         output_latents_file_path = get_no_clobber_filepath(output_latents_file_path)
-        save_img(vae.latents_to_img(latents), output_latents_file_path)
+        save_img(dae.latents_to_img(latents), output_latents_file_path)
 
         output_sample_file_path = os.path.join(output_path, f"{output_label}_output_sample.png")
         output_sample_file_path = get_no_clobber_filepath(output_sample_file_path)
@@ -189,7 +189,7 @@ def unet_test() -> None:
         if input_latents is not None:
             output_latents_file_path = os.path.join(output_path, f"{output_label}_input_latents.png")
             output_latents_file_path = get_no_clobber_filepath(output_latents_file_path)
-            save_img(vae.latents_to_img(input_latents), output_latents_file_path)
+            save_img(dae.latents_to_img(input_latents), output_latents_file_path)
 
         output_sample_file_path = os.path.join(output_path, f"{output_label}_input_sample.png")
         output_sample_file_path = get_no_clobber_filepath(output_sample_file_path)

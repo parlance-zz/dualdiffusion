@@ -186,6 +186,7 @@ class DDec_UNet(DualDiffusionUNet):
         self.conv_out = MPConv3D(cout, 1, kernel=(2,3,3))
 
     def get_embeddings(self, emb_in: torch.Tensor, conditioning_mask: torch.Tensor) -> torch.Tensor:
+        emb_in = emb_in[:, 512:]
         u_embedding = self.emb_label_unconditional(torch.ones(1, device=self.device, dtype=self.dtype))
         c_embedding = self.emb_label(normalize(emb_in).to(device=self.device, dtype=self.dtype))
         return mp_sum(u_embedding, c_embedding, t=conditioning_mask.unsqueeze(1).to(self.device, self.dtype))

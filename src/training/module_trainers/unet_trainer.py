@@ -33,7 +33,7 @@ from training.sigma_sampler import SigmaSamplerConfig, SigmaSampler
 from training.trainer import DualDiffusionTrainer
 from .module_trainer import ModuleTrainerConfig, ModuleTrainer
 from modules.unets.unet import DualDiffusionUNet
-from modules.vaes.vae import DualDiffusionVAE
+from modules.daes.dae import DualDiffusionDAE
 from modules.mp_tools import mp_sum
 from utils.dual_diffusion_utils import dict_str, normalize, save_img
 
@@ -256,10 +256,10 @@ class UNetTrainer(ModuleTrainer):
             try:
                 latents_debug_img_path = None
                 if config.DEBUG_PATH is not None:
-                    vae: DualDiffusionVAE = self.trainer.pipeline.vae
+                    dae: DualDiffusionDAE = self.trainer.pipeline.dae
                     for i in range(samples.shape[0]):
                         latents_debug_img_path = os.path.join(config.DEBUG_PATH, "unet_trainer", f"latents_{i}.png")
-                        save_img(vae.latents_to_img(samples[i:i+1]), latents_debug_img_path)
+                        save_img(dae.latents_to_img(samples[i:i+1]), latents_debug_img_path)
 
             except Exception as e:
                 self.logger.error("".join(format_exception(type(e), e, e.__traceback__)))
