@@ -1,26 +1,25 @@
 {
-    "reference_model_name": "edm2_vt7_12d_4_clap2",
+    "reference_model_name": "edm2_ddec_mclt4",
     "model_load_options": {
         "device": "cpu",
         "load_checkpoints": true,
-        "load_emas": false
+        "load_emas": true
     },
-    "reference_model_class_id": 387,
-    "use_unconditional_model_class_id": true,
-    "sigma_max": 200.0,
-    "sigma_min": 0.03,
+    "reference_module": "ddec",
+    "sigma_max": 32,
+    "sigma_min": 0.002,
     "sigma_data": 1.0,
-    "training_batch_size": 100,
+    "training_batch_size": 64,
     "batch_distribution": "ln_pdf",
-    "batch_dist_scale": 1.0,
-    "batch_dist_offset": 0.0,
+    "batch_dist_scale": 3,
+    "batch_dist_offset": 0,
     "batch_stratified_sampling": true,
-    "reference_batch_size": 100,
+    "reference_batch_size": 64,
     "reference_distribution": "ln_sech",
-    "reference_dist_scale": 1.0,
-    "reference_dist_offset": 0.4,
+    "reference_dist_scale": 1,
+    "reference_dist_offset": -0.275,
     "reference_stratified_sampling": true,
     "n_iter": 10000,
-    "n_histo_bins": 128,
+    "n_histo_bins": 127,
     "use_y_log_scale": false
   }

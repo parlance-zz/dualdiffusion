@@ -99,8 +99,6 @@ def sigma_sampler_test():
 
     reference_model_name = test_params["reference_model_name"]
     model_load_options = test_params["model_load_options"]
-    reference_model_class_id = test_params["reference_model_class_id"]
-    use_unconditional_model_class_id = test_params["use_unconditional_model_class_id"]
 
     sigma_max = test_params["sigma_max"]
     sigma_min = test_params["sigma_min"]
@@ -131,11 +129,9 @@ def sigma_sampler_test():
         print(f"Loading DualDiffusion model from '{model_path}'...")
         pipeline = DualDiffusionPipeline.from_pretrained(model_path, **model_load_options)
 
-        class_labels = pipeline.get_class_labels([reference_model_class_id])
-        conditioning_mask = torch.ones((1,), device=pipeline.unet.device) * float(not use_unconditional_model_class_id)
-        unet_class_embeddings = pipeline.unet.get_class_embeddings(class_labels, conditioning_mask).repeat(n_histo_bins, 1)
+        module = getattr(pipeline, test_params["reference_module"])
         sigma = torch.linspace(np.log(sigma_min), np.log(sigma_max), n_histo_bins).exp()
-        sigma_error = pipeline.unet.get_sigma_loss_logvar(sigma, unet_class_embeddings).float().flatten()
+        sigma_error = module.get_sigma_loss_logvar(sigma).float().flatten()
     
         if batch_distribution == "ln_pdf":
             batch_distribution_pdf = (-sigma_error * batch_dist_scale).exp()
