@@ -99,11 +99,24 @@ def compare_dirs(output_path: str, dir1: str, dir2: str,
     return diff_output
 
 if __name__ == "__main__":
+
+    target_path = "/home/parlance/dualdiffusion/models/edm2_ddec_mclt4/ddec_checkpoint-19557/src"
+    output_path = "/home/parlance/dualdiffusion/debug/compare_dirs"
     diff_output = compare_dirs(
-        "/home/parlance/dualdiffusion/debug/compare_dirs/output.diff",
+        os.path.join(output_path, "diff_output.diff"),
         "/home/parlance/dualdiffusion/src",
-        "/home/parlance/dualdiffusion/models/edm2_ddec_mclt4/ddec_checkpoint-19557/src",
-        ignore_patterns=["*.pyc"])
+        target_path, ignore_patterns=["*.pyc"])
     
     print(diff_output)
-    
+
+    import shutil
+    import re
+
+    for match in re.findall(r"^Diff for (.+):$", diff_output, re.MULTILINE):
+
+        file_path = os.path.join(target_path, match)
+        if os.path.isfile(file_path):
+
+            copy_path = os.path.join(output_path, "diff_files", match)
+            os.makedirs(os.path.dirname(copy_path), exist_ok=True)
+            shutil.copy2(file_path, copy_path)
