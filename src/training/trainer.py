@@ -103,6 +103,7 @@ class OptimizerConfig:
     adam_epsilon: float      = 1e-8
     adam_weight_decay: float = 0.
     max_grad_norm: float     = 1.
+    dynamic_grad_norm_ema_beta: Optional[float] = None
 
 @dataclass
 class DataLoaderConfig:
@@ -181,6 +182,7 @@ class DualDiffusionTrainerConfig:
 @dataclass
 class TrainerPersistentState:
     total_samples_processed: int = 0
+    dynamic_max_grad_norm: Optional[float] = None
 
 class DualDiffusionTrainer:
 
@@ -357,6 +359,10 @@ class DualDiffusionTrainer:
         self.logger.info(f"  AdamW beta1: {self.config.optimizer.adam_beta1} beta2: {self.config.optimizer.adam_beta2}")
         self.logger.info(f"  AdamW eps: {self.config.optimizer.adam_epsilon} weight decay: {self.config.optimizer.adam_weight_decay}")
         self.logger.info(f"  Gradient clipping max norm: {self.config.optimizer.max_grad_norm}")
+
+        if self.config.optimizer.dynamic_grad_norm_ema_beta is not None:
+            self.logger.info(f"  Dynamic max grad norm enabled (beta: {self.config.optimizer.dynamic_grad_norm_ema_beta})")
+            self.logger.info(f"  Current max grad norm: {self.persistent_state.dynamic_max_grad_norm or self.config.optimizer.max_grad_norm}")
         
     def init_checkpointing(self) -> None:
 
@@ -762,9 +768,21 @@ class DualDiffusionTrainer:
                             f"accum_step out of sync with sync_gradients: {self.accum_step} != {self.config.gradient_accumulation_steps - 1}"
                         
                         # clip grad norm and check for inf/nan grad
-                        grad_norm = self.accelerator.clip_grad_norm_(self.module.parameters(), self.config.optimizer.max_grad_norm)
-                        train_logger.add_log("grad_norm", grad_norm)
+                        if self.config.optimizer.dynamic_grad_norm_ema_beta is not None:
+                            if self.persistent_state.dynamic_max_grad_norm is None:
+                                self.persistent_state.dynamic_max_grad_norm = self.config.optimizer.max_grad_norm
+                            max_grad_norm = self.persistent_state.dynamic_max_grad_norm
 
+                        grad_norm = self.accelerator.clip_grad_norm_(self.module.parameters(), max_grad_norm)
+                        train_logger.add_log("grad_norm", grad_norm)
+                        train_logger.add_log("max_grad_norm", max_grad_norm)
+
+                        if self.config.optimizer.dynamic_grad_norm_ema_beta is not None:
+                            self.persistent_state.dynamic_max_grad_norm = (
+                                self.persistent_state.dynamic_max_grad_norm * self.config.optimizer.dynamic_grad_norm_ema_beta +
+                                float(grad_norm.item()) * (1 - self.config.optimizer.dynamic_grad_norm_ema_beta)
+                            )
+                        
                         if math.isinf(grad_norm) or math.isnan(grad_norm):
                             self.logger.warning(f"Warning: grad norm is {grad_norm} step={self.global_step}")
                         if math.isnan(grad_norm):
