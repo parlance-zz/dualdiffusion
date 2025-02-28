@@ -24,6 +24,7 @@ from dataclasses import dataclass
 from typing import Literal, Optional
 
 import torch
+import numpy as np
 
 from training.sigma_sampler import SigmaSamplerConfig, SigmaSampler
 from training.trainer import DualDiffusionTrainer
@@ -32,6 +33,7 @@ from modules.unets.unet_edm2_ddec_mclt import DDec_MCLT_UNet
 from modules.formats.spectrogram import SpectrogramFormat
 from modules.formats.mclt import DualMCLTFormatConfig, DualMCLTFormat
 from modules.mp_tools import normalize
+from modules.formats.frequency_scale import get_mel_density
 from utils.dual_diffusion_utils import dict_str
 
 
@@ -45,7 +47,7 @@ class DiffusionDecoder_MCLT_TrainerConfig(ModuleTrainerConfig):
     sigma_dist_scale: float = 1.0
     sigma_dist_offset: float = 0
     use_stratified_sigma_sampling: bool = True
-    sigma_pdf_resolution: Optional[int] = 128
+    sigma_pdf_resolution: Optional[int] = 127
     sigma_pdf_warmup_steps: Optional[int] = 30000
 
     validation_sigma_distribution: Literal["ln_normal", "ln_sech", "ln_sech^2",
@@ -55,7 +57,10 @@ class DiffusionDecoder_MCLT_TrainerConfig(ModuleTrainerConfig):
     validation_sigma_dist_scale: float = 1.0
     validation_sigma_dist_offset: float = 0
 
-    num_loss_buckets: int = 10
+    num_loss_buckets: int = 15
+    loss_buckets_sigma_min: float = 0.002
+    loss_buckets_sigma_max: float = 150
+
     latents_perturbation: float = 0.03
     conditioning_dropout: float = 0.1
 
@@ -135,10 +140,16 @@ class DiffusionDecoder_MCLT_Trainer(ModuleTrainer):
 
         # pre-calculate the per-sigma loss bucket names
         if self.config.num_loss_buckets > 0:
-            bucket_sigma = 2 / torch.linspace(torch.pi/2, 0, self.config.num_loss_buckets+1).tan()
+            bucket_sigma = torch.linspace(np.log(self.config.loss_buckets_sigma_min),
+                np.log(self.config.loss_buckets_sigma_max), self.config.num_loss_buckets + 1).exp()
             bucket_sigma[0] = 0; bucket_sigma[-1] = float("inf")
             self.bucket_names = [f"loss_σ_buckets/{bucket_sigma[i]:.2f} - {bucket_sigma[i+1]:.2f}"
                                  for i in range(self.config.num_loss_buckets)]
+
+        mclt_hz = torch.arange(0, self.mclt.config.window_len // 2, device=self.trainer.accelerator.device) + 0.5
+        mclt_hz = mclt_hz / (self.mclt.config.window_len // 2) * (self.format.config.sample_rate / 2)
+        self.mel_density = get_mel_density(mclt_hz)
+        self.mel_density = (self.mel_density / self.mel_density.mean()).view(1, 1,-1, 1).detach().requires_grad_(False)
 
     @torch.no_grad()
     def init_batch(self, validation: bool = False) -> None:
@@ -173,6 +184,7 @@ class DiffusionDecoder_MCLT_Trainer(ModuleTrainer):
                 self.module.logvar_fourier(ln_sigma/4)).float().flatten().detach()
             pdf_warmup_factor = min(1, self.trainer.global_step / (self.config.sigma_pdf_warmup_steps or 1))
             sigma_distribution_pdf = (-pdf_warmup_factor * self.config.sigma_dist_scale * ln_sigma_error).exp()
+            sigma_distribution_pdf = (sigma_distribution_pdf - 1).clip(min=1e-6)
             self.sigma_sampler.update_pdf(sigma_distribution_pdf)
         
         # sample whole-batch sigma and sync across all ranks / processes
@@ -203,18 +215,7 @@ class DiffusionDecoder_MCLT_Trainer(ModuleTrainer):
         #                            vae_emb, add_latents_noise=self.config.latents_perturbation)
 
         mclt_samples = self.mclt.raw_to_sample(batch["audio"]).clone().detach()
-        #ref_samples = self.format.raw_to_sample(batch["audio"]).detach()
-        ref_samples = self.format.convert_to_abs_exp1(self.format.raw_to_sample(batch["audio"])).detach()
-
-        """
-        from utils.dual_diffusion_utils import tensor_to_img, save_img
-        from utils import config
-        import os
-        for i in range(16):
-            save_img(tensor_to_img(mclt_samples[i]), os.path.join(config.DEBUG_PATH, "ddec_mclt", f"mclt_{i}.png"))
-            save_img(tensor_to_img(ref_samples[i]), os.path.join(config.DEBUG_PATH, "ddec_mclt", f"ref_{i}.png"))
-        exit()
-        """
+        ref_samples = self.format.convert_to_abs_exp1(self.format.raw_to_sample(batch["audio"])).clone().detach()
 
         # get the noise level for this sub-batch from the pre-calculated whole-batch sigma (required for stratified sampling)
         local_sigma = self.global_sigma[self.trainer.accelerator.local_process_index::self.trainer.accelerator.num_processes]
@@ -223,17 +224,13 @@ class DiffusionDecoder_MCLT_Trainer(ModuleTrainer):
         # prepare model inputs
         noise = torch.randn(mclt_samples.shape, device=mclt_samples.device, generator=self.device_generator)
         if hasattr(self.module, "freq_stds"):
-            #noise *= self.module.freq_stds.view(1, 1,-1, 1)
             mclt_samples /= self.module.freq_stds.view(1, 1,-1, 1)
         noise = (noise * batch_sigma.view(-1, 1, 1, 1)).detach()
 
         denoised: torch.Tensor = self.module(mclt_samples + noise, batch_sigma, self.format, unet_class_embeddings, ref_samples)
         batch_loss_weight = (batch_sigma ** 2 + self.module.config.sigma_data ** 2) / (batch_sigma * self.module.config.sigma_data) ** 2
-        if False:#hasattr(self.module, "freq_stds"):
-            batch_weighted_loss = torch.nn.functional.mse_loss(denoised, mclt_samples, reduction="none")
-            batch_weighted_loss = (batch_weighted_loss / self.module.freq_stds.view(1, 1,-1, 1)**2).mean(dim=(1,2,3)) * batch_loss_weight
-        else:
-            batch_weighted_loss = torch.nn.functional.mse_loss(denoised, mclt_samples, reduction="none").mean(dim=(1,2,3)) * batch_loss_weight
+        batch_weighted_loss = torch.nn.functional.mse_loss(denoised, mclt_samples, reduction="none")
+        batch_weighted_loss = (batch_weighted_loss * self.mel_density).mean(dim=(1,2,3)) * batch_loss_weight
 
         if self.is_validation_batch == True:
             batch_loss = batch_weighted_loss
@@ -244,21 +241,15 @@ class DiffusionDecoder_MCLT_Trainer(ModuleTrainer):
         # log loss bucketed by noise level range
         if self.config.num_loss_buckets > 0:
             global_weighted_loss = self.trainer.accelerator.gather(batch_weighted_loss.detach()).cpu()
-            global_sigma_quantiles = 1 - self.trainer.accelerator.gather(self.module.config.sigma_data / batch_sigma.detach() * 2).cpu().arctan() / (torch.pi/2)
-
+            global_sigma_quantiles = (batch_sigma.detach().log().cpu() - np.log(self.config.loss_buckets_sigma_min)) / (
+                np.log(self.config.loss_buckets_sigma_max) - np.log(self.config.loss_buckets_sigma_min))
             target_buckets = (global_sigma_quantiles * self.unet_loss_buckets.shape[0]).long().clip(min=0, max=self.unet_loss_buckets.shape[0] - 1)
             self.unet_loss_buckets.index_add_(0, target_buckets, global_weighted_loss)
             self.unet_loss_bucket_counts.index_add_(0, target_buckets, torch.ones_like(global_weighted_loss))
 
-        relative_var = ((denoised.var(dim=3)+0.0005) / (mclt_samples.var(dim=3)+0.0005)).clip(min=0.1, max=10)
-        kl_loss = (relative_var - 1 - relative_var.log()).mean(dim=(1,2))
-
-        return {"loss": batch_loss,# + kl_loss * self.config.kl_loss_weight,
+        return {"loss": batch_loss,
                 "std/input_samples": mclt_samples.std(),
-                "std/ref_samples": ref_samples.std(),
-                "kl_loss": kl_loss.detach().mean()}
-                #"std/input_raw_samples": raw_samples.std()
-                #"std/output_raw_samples": denoised_raw_samples.std()}
+                "std/ref_samples": ref_samples.std()}
 
     @torch.no_grad()
     def finish_batch(self) -> dict[str, torch.Tensor]:
