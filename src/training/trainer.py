@@ -779,14 +779,15 @@ class DualDiffusionTrainer:
                         else:
                             max_grad_norm = self.config.optimizer.max_grad_norm
 
-                        grad_norm = self.accelerator.clip_grad_norm_(self.module.parameters(), max_grad_norm)
+                        grad_norm = self.accelerator.clip_grad_norm_(self.module.parameters(), max_grad_norm).item()
                         train_logger.add_log("grad_norm", grad_norm)
                         train_logger.add_log("grad_norm/max", max_grad_norm)
+                        train_logger.add_log("grad_norm/clipped", min(max_grad_norm, grad_norm))
 
                         if self.config.optimizer.dynamic_grad_norm_ema_beta is not None:
                             self.persistent_state.dynamic_max_grad_norm = (
                                 self.persistent_state.dynamic_max_grad_norm * self.config.optimizer.dynamic_grad_norm_ema_beta +
-                                float(grad_norm.item()) * (1 - self.config.optimizer.dynamic_grad_norm_ema_beta)
+                                grad_norm * (1 - self.config.optimizer.dynamic_grad_norm_ema_beta)
                             )
                         
                         if math.isinf(grad_norm) or math.isnan(grad_norm):
