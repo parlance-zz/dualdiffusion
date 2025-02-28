@@ -1,10 +1,11 @@
 {
   "device": "cuda",
-  "audio_len": 1024000,
+  "audio_len": 640000,
   "quantize_level": 0,
   "noise_level": 0,
   "format_cfg_file": "spectrogram_format.json",
+  "add_random_test_samples": 5,
   "sample_filenames": [
-    "spc/Pilotwings/04 Light Plane.spc.flac"
+    "psf3/Gundam Battle Operation Next/BGM_009.adx.flac"
   ]
 }

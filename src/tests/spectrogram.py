@@ -24,6 +24,7 @@ import utils.config as config
 
 import os
 import timeit
+import random
 
 import torch
 
@@ -32,6 +33,7 @@ from utils.dual_diffusion_utils import (
     load_audio, tensor_to_img, save_img, save_audio,
     save_tensor_raw, init_cuda, quantize_tensor
 )
+
 
 @torch.inference_mode()
 def spectrogram_test() -> None:
@@ -45,6 +47,11 @@ def spectrogram_test() -> None:
     crop_width = spectrogram_format.sample_raw_crop_width(length=test_params["audio_len"])
     test_output_path = os.path.join(config.DEBUG_PATH, "spectrogram_test") if config.DEBUG_PATH is not None else None
     print("Test output path:", test_output_path)
+
+    add_random_test_samples = test_params["add_random_test_samples"]
+    if add_random_test_samples > 0:
+        train_samples = config.load_json(os.path.join(config.DATASET_PATH, "train.jsonl"))
+        test_params["sample_filenames"] += [sample["file_name"] for sample in random.sample(train_samples, add_random_test_samples)]
 
     audios = []
     for sample_filename in test_params["sample_filenames"]:
@@ -63,7 +70,8 @@ def spectrogram_test() -> None:
     start = timeit.default_timer()
     spectrogram = spectrogram_format.raw_to_sample(audio)
     print("Encode time: ", timeit.default_timer() - start)
-    
+    unscaled_spectrogram = spectrogram_format.raw_to_sample(audio, unscaled_spectrogram=True)
+
     if test_params["noise_level"] > 0:
         spectrogram += torch.randn_like(spectrogram) * test_params["noise_level"]
     if test_params["quantize_level"] > 0:
@@ -90,12 +98,18 @@ def spectrogram_test() -> None:
     decoded_audio = spectrogram_format.sample_to_raw(spectrogram)
     assert decoded_audio.shape == audio.shape
     print("Decode time: ", timeit.default_timer() - start)
+    unscaled_decoded_audio = spectrogram_format.sample_to_raw(unscaled_spectrogram, unscaled_spectrogram=True)
 
     if test_output_path is not None:
-        for decoded_audio, sample_filename in zip(decoded_audio.unbind(0), test_params["sample_filenames"]):
+        for decoded_audio, unscaled_decoded_audio, sample_filename in zip(decoded_audio.unbind(0), unscaled_decoded_audio.unbind(0), test_params["sample_filenames"]):
             base_filename = os.path.splitext(os.path.basename(sample_filename))[0]
+
             output_flac_file_path = os.path.join(test_output_path, f"{base_filename}_reconstructed.flac")
             save_audio(decoded_audio, spectrogram_format.config.sample_rate, output_flac_file_path)
+            print(f"Saved flac output to {output_flac_file_path}")
+
+            output_flac_file_path = os.path.join(test_output_path, f"{base_filename}_unscaled_reconstructed.flac")
+            save_audio(unscaled_decoded_audio, spectrogram_format.config.sample_rate, output_flac_file_path)
             print(f"Saved flac output to {output_flac_file_path}")
 
         save_tensor_raw(spectrogram_format.spectrogram_converter.spectrogram_func.window,

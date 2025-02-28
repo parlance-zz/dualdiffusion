@@ -64,7 +64,7 @@ def mclt_test() -> None:
     psd = None
     avg_std = 0
 
-    for sample_filename in cfg.test_samples:
+    for i, sample_filename in enumerate(cfg.test_samples):
         base_filename = os.path.splitext(os.path.basename(sample_filename))[0]
 
         input_raw_sample, sample_rate = load_audio(os.path.join(config.DATASET_PATH, sample_filename),
@@ -80,7 +80,7 @@ def mclt_test() -> None:
         if psd is None: psd = mclt_sample.abs().square().to(dtype=torch.float64)# * (torch.arange(0, 256, device=mclt_sample.device).view(1, 1,-1, 1)+0.5) * (70/256)
         else: psd += mclt_sample.abs().square().to(dtype=torch.float64) #* (torch.arange(0, 256, device=mclt_sample.device).view(1, 1,-1, 1)+0.5) * (70/256)
 
-        print(f"{sample_filename}:")
+        print(f"({i}/{len(cfg.test_samples)}) {sample_filename}:")
         print("  mlct_sample:", tensor_info_str(mclt_sample))
         print("  input_raw_sample: ", tensor_info_str(input_raw_sample))
         print("  output_raw_sample:", tensor_info_str(output_raw_sample))

@@ -9,12 +9,9 @@
         "sample_raw_channels": 2,
         "sample_raw_length": 1440000,
 
-        "raw_to_sample_scale": 19,
-        "sample_to_raw_scale": 0.105158,
-        
-        "window_len": 512,
-        "window_fn": "hann",
-        "window_exponent": 0.5
+        //"window_len": 512,
+        //"abs_exponent": 1,
+        //"raw_to_sample_scale": 19
     },
     "sigma_config":
     {
@@ -27,7 +24,7 @@
     },
     "add_noise": 0,
     "save_output": false,
-    "add_random_test_samples": 200,
+    "add_random_test_samples": 10000,
     "test_samples": [
     ]
 }
