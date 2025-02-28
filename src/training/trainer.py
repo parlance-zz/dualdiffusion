@@ -79,6 +79,8 @@ class TrainLogger():
 
     def add_logs(self, logs) -> None:
         for key, value in logs.items():
+            if value is None:
+                raise ValueError(f"Error: None value in add_logs for key {key}")
             self.add_log(key, value)
 
     def get_logs(self, sort: bool = False) -> dict:
@@ -809,7 +811,7 @@ class DualDiffusionTrainer:
             # weights have now been updated in the last optimizer step
             if self.accelerator.sync_gradients:
                 
-                # log total train time, total samples, and it/s stats
+                # log total train time, total samples processed, and it/s stats
                 if last_sync_time is not None:
                     self.persistent_state.total_train_hours += (
                         datetime.now() - last_sync_time).total_seconds() / 3600
@@ -818,15 +820,17 @@ class DualDiffusionTrainer:
                 last_sync_time = datetime.now()
 
                 train_logger.add_logs({
-                    "stats/total_samples_processed": self.persistent_state.total_samples_processed,
-                    "stats/it_per_second": progress_bar.format_dict["rate"]
-                })
+                    "stats/total_samples_processed": self.persistent_state.total_samples_processed})
+                if progress_bar.format_dict["rate"] is not None:
+                    train_logger.add_logs({
+                        "stats/it_per_second": progress_bar.format_dict["rate"]})
 
                 # update emas and normalize weights
                 self.ema_manager.update()
                 self.module.normalize_weights()
 
-                train_logger.add_logs({f"ema_betas/{name}": beta for name, beta in self.ema_manager.get_ema_betas().items()})
+                train_logger.add_logs({f"ema_betas/{name}": beta for
+                    name, beta in self.ema_manager.get_ema_betas().items()})
                 
                 # update logs
                 train_logger.add_logs({"learn_rate": self.lr_scheduler.get_last_lr()[0]})
