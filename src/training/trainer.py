@@ -183,6 +183,7 @@ class DualDiffusionTrainerConfig:
 @dataclass
 class TrainerPersistentState:
     total_samples_processed: int = 0
+    total_train_hours: float = 0
     dynamic_max_grad_norm: Optional[float] = None
 
 class DualDiffusionTrainer:
@@ -743,6 +744,8 @@ class DualDiffusionTrainer:
         else:
             self.local_step = 0
 
+        last_sync_time = None # used for tracking total training time
+
         for local_batch in (self.resume_dataloader or self.train_dataloader):
             
             train_logger.clear() # accumulates per-batch logs / statistics
@@ -805,6 +808,19 @@ class DualDiffusionTrainer:
             # weights have now been updated in the last optimizer step
             if self.accelerator.sync_gradients:
                 
+                # log total train time, total samples, and it/s stats
+                if last_sync_time is not None:
+                    self.persistent_state.total_train_hours += (
+                        datetime.now() - last_sync_time).total_seconds() / 3600
+                    train_logger.add_logs({
+                        "stats/total_train_hours": self.persistent_state.total_train_hours})
+                last_sync_time = datetime.now()
+
+                train_logger.add_logs({
+                    "stats/total_samples_processed": self.persistent_state.total_samples_processed,
+                    "stats/it_per_second": progress_bar.format_dict["rate"]
+                })
+
                 # update emas and normalize weights
                 self.ema_manager.update()
                 self.module.normalize_weights()
@@ -839,6 +855,7 @@ class DualDiffusionTrainer:
                         self.save_checkpoint()
                         if os.path.isfile(_save_checkpoint_path):
                             os.remove(_save_checkpoint_path)
+                        last_sync_time = datetime.now() # exclude checkpoint saving time from train total time
             else:
                 assert False, "finished local_batch but accelerator.sync_gradients isn't True"
             
