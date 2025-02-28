@@ -104,6 +104,7 @@ class OptimizerConfig:
     adam_weight_decay: float = 0.
     max_grad_norm: float     = 1.
     dynamic_grad_norm_ema_beta: Optional[float] = None
+    dynamic_grad_norm_scale: float = 1.414
 
 @dataclass
 class DataLoaderConfig:
@@ -771,11 +772,13 @@ class DualDiffusionTrainer:
                         if self.config.optimizer.dynamic_grad_norm_ema_beta is not None:
                             if self.persistent_state.dynamic_max_grad_norm is None:
                                 self.persistent_state.dynamic_max_grad_norm = self.config.optimizer.max_grad_norm
-                            max_grad_norm = self.persistent_state.dynamic_max_grad_norm
+                            max_grad_norm = self.persistent_state.dynamic_max_grad_norm * self.config.optimizer.dynamic_grad_norm_scale
+                        else:
+                            max_grad_norm = self.config.optimizer.max_grad_norm
 
                         grad_norm = self.accelerator.clip_grad_norm_(self.module.parameters(), max_grad_norm)
                         train_logger.add_log("grad_norm", grad_norm)
-                        train_logger.add_log("max_grad_norm", max_grad_norm)
+                        train_logger.add_log("grad_norm/max", max_grad_norm)
 
                         if self.config.optimizer.dynamic_grad_norm_ema_beta is not None:
                             self.persistent_state.dynamic_max_grad_norm = (
