@@ -828,7 +828,7 @@ class DualDiffusionTrainer:
                 train_logger.add_logs({f"ema_betas/{name}": beta for name, beta in self.ema_manager.get_ema_betas().items()})
                 
                 # update logs
-                train_logger.add_logs({"lr": self.lr_scheduler.get_last_lr()[0]})
+                train_logger.add_logs({"learn_rate": self.lr_scheduler.get_last_lr()[0]})
                 train_logger.add_logs(self.module_trainer.finish_batch())
                 logs = train_logger.get_logs()
                 self.accelerator.log(logs, step=self.global_step)
