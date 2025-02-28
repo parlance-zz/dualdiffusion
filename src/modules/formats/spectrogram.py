@@ -168,6 +168,17 @@ class SpectrogramConverter(torch.nn.Module):
         return self.inverse_spectrogram_func(
             amplitudes_linear, n_fgla_iter=n_fgla_iters or self.config.num_fgla_iters, quiet=quiet)
 
+    @torch.inference_mode()
+    def audio_to_unscaled_spectrogram(self, audio: torch.Tensor) -> torch.Tensor:
+        spectrogram_complex = self.spectrogram_func(audio)
+        return spectrogram_complex.abs() ** self.config.abs_exponent
+
+    @torch.inference_mode()
+    def unscaled_spectrogram_to_audio(self, spectrogram: torch.Tensor, n_fgla_iters: Optional[int] = None, quiet: bool = False) -> torch.Tensor:
+        amplitudes_linear = spectrogram ** (1 / self.config.abs_exponent)
+        return self.inverse_spectrogram_func(
+            amplitudes_linear, n_fgla_iter=n_fgla_iters or self.config.num_fgla_iters, quiet=quiet)
+    
 class SpectrogramFormat(DualDiffusionFormat):
 
     def __init__(self, config: SpectrogramFormatConfig) -> None:
@@ -188,13 +199,21 @@ class SpectrogramFormat(DualDiffusionFormat):
         return tuple(spectrogram_shape)
 
     @torch.inference_mode()
-    def raw_to_sample(self, raw_samples: torch.Tensor) -> Union[torch.Tensor, dict]:
-        return self.spectrogram_converter.audio_to_spectrogram(raw_samples) * self.config.raw_to_sample_scale
+    def raw_to_sample(self, raw_samples: torch.Tensor, unscaled_spectrogram: bool = False) -> torch.Tensor:
+        if unscaled_spectrogram == True:
+            return self.spectrogram_converter.audio_to_unscaled_spectrogram(raw_samples) * self.config.raw_to_sample_scale
+        else:
+            return self.spectrogram_converter.audio_to_spectrogram(raw_samples) * self.config.raw_to_sample_scale
 
     @torch.inference_mode()
-    def sample_to_raw(self, samples: torch.Tensor, n_fgla_iters: Optional[int] = None, quiet: bool = False) -> Union[torch.Tensor, dict]:
-        return self.spectrogram_converter.spectrogram_to_audio(
-            samples.clip(min=0) * self.config.sample_to_raw_scale, n_fgla_iters=n_fgla_iters, quiet=quiet)
+    def sample_to_raw(self, samples: torch.Tensor, n_fgla_iters: Optional[int] = None,
+                quiet: bool = False, unscaled_spectrogram: bool = False) -> torch.Tensor:
+        if unscaled_spectrogram == True:
+            return self.spectrogram_converter.unscaled_spectrogram_to_audio(
+                samples.clip(min=0) * self.config.sample_to_raw_scale, n_fgla_iters=n_fgla_iters, quiet=quiet)
+        else:
+            return self.spectrogram_converter.spectrogram_to_audio(
+                samples.clip(min=0) * self.config.sample_to_raw_scale, n_fgla_iters=n_fgla_iters, quiet=quiet)
     
     @torch.no_grad()
     def get_ln_freqs(self, x: torch.Tensor) -> torch.Tensor:        

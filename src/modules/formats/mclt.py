@@ -65,7 +65,7 @@ class DualMCLTFormat(DualDiffusionFormat):
         return (bsz, num_output_channels, num_mclt_bins, chunk_len,)
 
     @torch.inference_mode()
-    def raw_to_sample(self, raw_samples: torch.Tensor, random_phase_augmentation: bool = False) -> Union[torch.Tensor, dict]:
+    def raw_to_sample(self, raw_samples: torch.Tensor, random_phase_augmentation: bool = False) -> torch.Tensor:
 
         samples_mdct = mclt(raw_samples, self.config.window_len, "hann", 0.5).permute(0, 1, 3, 2).contiguous()
         if random_phase_augmentation == True:
@@ -73,8 +73,13 @@ class DualMCLTFormat(DualDiffusionFormat):
 
         return samples_mdct.real.abs() ** self.config.abs_exponent * samples_mdct.real.sign() * self.config.raw_to_sample_scale
 
+    @torch.no_grad()
+    def raw_to_psd(self, raw_samples: torch.Tensor) -> torch.Tensor:
+        samples_mdct = mclt(raw_samples, self.config.window_len, "hann", 0.5).permute(0, 1, 3, 2).contiguous()
+        return samples_mdct.abs() ** self.config.abs_exponent * self.config.raw_to_sample_scale
+    
     @torch.inference_mode()
-    def sample_to_raw(self, samples: torch.Tensor) -> Union[torch.Tensor, dict]:
+    def sample_to_raw(self, samples: torch.Tensor) -> torch.Tensor:
         
         samples = (samples.abs() / self.config.raw_to_sample_scale) ** (1/self.config.abs_exponent) * samples.sign() * self.config.sample_to_raw_scale
         return imclt(samples.permute(0, 1, 3, 2), window_fn="hann", window_degree=0.5).real
