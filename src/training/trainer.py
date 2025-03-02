@@ -49,7 +49,7 @@ from utils.dual_diffusion_utils import dict_str
 from utils.compare_dirs import compare_dirs
 from training.module_trainers.module_trainer import ModuleTrainer, ModuleTrainerConfig
 from training.ema import EMA_Manager
-from training.dataset import DatasetConfig, DualDiffusionDataset
+from training.dataset import DatasetConfig, DualDiffusionDataset, custom_collate
 from modules.module import DualDiffusionModule
 
 
@@ -498,20 +498,6 @@ class DualDiffusionTrainer:
             filter_invalid_samples=self.config.dataloader.filter_invalid_samples,
         )
         self.dataset = DualDiffusionDataset(dataset_config, self.pipeline.format.config, self.pipeline.embedding.config)
-
-        def custom_collate(input_batch: list[dict[str, torch.Tensor]]) -> dict[str, torch.Tensor]:
-            output_batch: dict[str, list] = {}
-            for batch in input_batch:
-                for datatype, data in batch.items():
-                    if datatype in output_batch:
-                        output_batch[datatype].append(data)
-                    else:
-                        output_batch[datatype] = [data]
-
-            for datatype, data in output_batch.items():
-                if isinstance(data[0], torch.Tensor):
-                    output_batch[datatype] = torch.stack(data) 
-            return output_batch
 
         self.train_dataloader = torch.utils.data.DataLoader(
             self.dataset["train"], shuffle=True,

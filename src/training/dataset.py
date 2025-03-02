@@ -39,6 +39,20 @@ from modules.embeddings.clap import CLAP_Config
 from utils.dual_diffusion_utils import load_audio
 
 
+def custom_collate(input_batch: list[dict[str, torch.Tensor]]) -> dict[str, torch.Tensor]:
+    output_batch: dict[str, list] = {}
+    for batch in input_batch:
+        for datatype, data in batch.items():
+            if datatype in output_batch:
+                output_batch[datatype].append(data)
+            else:
+                output_batch[datatype] = [data]
+
+    for datatype, data in output_batch.items():
+        if isinstance(data[0], torch.Tensor):
+            output_batch[datatype] = torch.stack(data) 
+    return output_batch
+
 @dataclass
 class DatasetConfig:
 
