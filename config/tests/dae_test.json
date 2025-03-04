@@ -1,22 +1,22 @@
 {
-    "model_name": "edm2_dae_a1",
+    "model_name": "edm2_ddec_mclt4",
     "model_load_options": {
         "torch_dtype": "bfloat16",
         "device": "cuda",
         "load_checkpoints": true,
-        "load_emas": true,
+        "load_emas": {
+            "ddec": "ema_std0.1.safetensors"
+        },
         "compile_options": null
     },
-    "length": 1472000,
+    "length": 1280000,
     "no_crop": false,
-    "num_fgla_iters": 300,
+    "num_fgla_iters": 100,
     "add_latent_noise": 0,
     "test_ddec": true,
-    "add_random_test_samples": 4,
+    "add_random_test_samples": 0,
     "copy_sample_source_files": true,
     "test_samples": [
-        "psf/Gradius Gaiden/SLPM-86042_BGM1_0000096c.XA.flac",
-        "psf/Final Fantasy VII/416 One-Winged Angel.minipsf.flac",
-        "psf/Soul Blade/SLUS-00240_SOULXA_01016401_0000.xa.flac"
+        "dsf/Metropolis Street Racer Prototype/file_15.adx.flac"
     ]
 }

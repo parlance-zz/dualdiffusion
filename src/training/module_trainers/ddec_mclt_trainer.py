@@ -93,6 +93,9 @@ class DiffusionDecoder_MCLT_Trainer(ModuleTrainer):
         #if self.vae.config.last_global_step == 0:
         #    self.logger.error("VAE model has not been trained, aborting training..."); exit(1) 
         
+        self.loss_weight = self.module.mel_density ** (1/4)
+        self.loss_weight = (self.loss_weight / self.loss_weight.square().mean().sqrt()).detach().requires_grad_(False)
+
         if self.config.num_loss_buckets > 0:
             self.logger.info(f"Using {self.config.num_loss_buckets} loss buckets")
             self.unet_loss_buckets = torch.zeros(
@@ -145,11 +148,6 @@ class DiffusionDecoder_MCLT_Trainer(ModuleTrainer):
             bucket_sigma[0] = 0; bucket_sigma[-1] = float("inf")
             self.bucket_names = [f"loss_σ_buckets/{bucket_sigma[i]:.2f} - {bucket_sigma[i+1]:.2f}"
                                  for i in range(self.config.num_loss_buckets)]
-
-        mclt_hz = torch.arange(0, self.mclt.config.window_len // 2, device=self.trainer.accelerator.device) + 0.5
-        mclt_hz = mclt_hz / (self.mclt.config.window_len // 2) * (self.format.config.sample_rate / 2)
-        self.mel_density = get_mel_density(mclt_hz)
-        self.mel_density = (self.mel_density / self.mel_density.mean()).view(1, 1,-1, 1).detach().requires_grad_(False)
 
     @torch.no_grad()
     def init_batch(self, validation: bool = False) -> None:
@@ -223,14 +221,19 @@ class DiffusionDecoder_MCLT_Trainer(ModuleTrainer):
 
         # prepare model inputs
         noise = torch.randn(mclt_samples.shape, device=mclt_samples.device, generator=self.device_generator)
-        if hasattr(self.module, "freq_stds"):
-            mclt_samples /= self.module.freq_stds.view(1, 1,-1, 1)
+        mclt_samples = mclt_samples / self.module.mel_density
         noise = (noise * batch_sigma.view(-1, 1, 1, 1)).detach()
 
         denoised: torch.Tensor = self.module(mclt_samples + noise, batch_sigma, self.format, unet_class_embeddings, ref_samples)
+        denoised = denoised * self.loss_weight
+        mclt_samples = mclt_samples * self.loss_weight
         batch_loss_weight = (batch_sigma ** 2 + self.module.config.sigma_data ** 2) / (batch_sigma * self.module.config.sigma_data) ** 2
-        batch_weighted_loss = torch.nn.functional.mse_loss(denoised, mclt_samples, reduction="none")
-        batch_weighted_loss = (batch_weighted_loss * self.mel_density).mean(dim=(1,2,3)) * batch_loss_weight
+        batch_weighted_loss = torch.nn.functional.mse_loss(denoised, mclt_samples, reduction="none").mean(dim=(1,2,3)) * batch_loss_weight
+        #batch_weighted_loss = torch.nn.functional.mse_loss(self.mclt.sample_to_raw(denoised) / 0.04848,
+        #    self.mclt.sample_to_raw(mclt_samples) / 0.04848, reduction="none").mean(dim=(1,2)) * batch_loss_weight
+        
+        #freq_loss_weight = self.module.freq_stds.view(1, 1,-1, 1)**2 / (self.module.freq_stds.view(1, 1,-1, 1)**2).mean()
+        #batch_weighted_loss = (batch_weighted_loss * freq_loss_weight).mean(dim=(1,2,3)) * batch_loss_weight
 
         if self.is_validation_batch == True:
             batch_loss = batch_weighted_loss
@@ -250,6 +253,7 @@ class DiffusionDecoder_MCLT_Trainer(ModuleTrainer):
         return {"loss": batch_loss,
                 "std/input_samples": mclt_samples.std(),
                 "std/ref_samples": ref_samples.std()}
+                #"std/raw_samples": self.mclt.sample_to_raw(mclt_samples).std(dim=(1,2)).mean()}
 
     @torch.no_grad()
     def finish_batch(self) -> dict[str, torch.Tensor]:

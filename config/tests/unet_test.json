@@ -25,16 +25,27 @@
     "skip_ddec": false,
     "copy_sample_source_files": true,
     "random_test_samples_seed": null,
-    "add_random_test_samples": 5,
+    "add_random_test_samples": 0,
     "test_samples": [
-
+        
+        "psf2/Shin Megami Tensei - Persona 3 FES",
+        
+        /*
         "dsf/Metropolis Street Racer Prototype/file_15.adx.flac",
         "3sf/Monster Hunter 3 Ultimate/_t_lobby_ML_T_SKB01.mca.flac",
         "psf/Gradius Gaiden/SLPM-86042_BGM1_0000096c.XA.flac",
         "xbox/Amped 2/_t_Soundtrack_Electronica~Dig This {by Micronaut}.wma.flac",
         "vita/Grisaia Phantom Trigger 01 & 02/MUSIC_00000013.at9.flac",
         "psf3/Gundam Battle Operation Next/BGM_009.adx.flac",
-
+        "xbox/AirForce Delta Storm/afdx_02.rwx.flac",
+        "xbox/AirForce Delta Storm/afdx_gra.rwx.flac",
+        "xbox/AirForce Delta Storm/afdx_m01.rwx.flac",
+        "xbox/AirForce Delta Storm/afdx_m08.rwx.flac",
+        "xbox/AirForce Delta Storm/afdx_m14.rwx.flac",
+        "xbox/AirForce Delta Storm/afdx_m21.rwx.flac",
+        "xbox/AirForce Delta Storm/afdx_z03.rwx.flac",
+        */
+        
         /*
         "psf/Gradius Gaiden/SLPM-86042_BGM1_0000096c.XA.flac",
         "3sf/Monster Hunter 3 Ultimate/_t_lobby_ML_T_SKB01.mca.flac",
