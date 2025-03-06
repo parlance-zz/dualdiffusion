@@ -699,9 +699,8 @@ class DualDiffusionPipeline(torch.nn.Module):
         debug_info["final_sample_mean"] = sample.mean().item()
         debug_info["final_sample_std"] = sample.std().item()
 
-        if hasattr(unet, "mel_density"):
-            sample *= unet.mel_density / 0.67
-            #sample *= unet.freq_stds.view(1, 1,-1, 1)
+        if hasattr(unet, "freq_scale"):
+            sample *= unet.freq_scale.view(1, 1,-1, 1)
 
         return sample
         #sample = normalize(sample).float() * params.sigma_data

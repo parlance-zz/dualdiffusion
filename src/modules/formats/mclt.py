@@ -37,8 +37,12 @@ class DualMCLTFormatConfig(DualDiffusionFormatConfig):
     sample_to_raw_scale: float = 1 / 0.5005
 
     # approximately unit variance for sample and 1:1 gain for reconstructed raw, for audio normalized to -20 lufs
-    abs_exponent: float = 1
-    raw_to_sample_scale: float = 19.37217829
+    #abs_exponent: float = 1
+    #raw_to_sample_scale: float = 19.37217829
+    
+    abs_exponent: float = 0.5
+    raw_to_sample_scale: float = 8.6682 #unit average variance
+    #raw_to_sample_scale: float = 15.1385848342 #unit median variance
     
     # approximately unit variance for sample and 1:1 gain for reconstructed raw, for audio normalized to -20 lufs
     #abs_exponent: float = 1/4

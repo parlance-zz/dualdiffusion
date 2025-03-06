@@ -132,3 +132,27 @@ def stft(x: torch.Tensor, block_width: int, window_fn: str = "hann", window_degr
     x = torch.fft.fft(x, norm="ortho", dim=-3) if add_channelwise_fft else x
 
     return x
+
+def mclt2(x: torch.Tensor) -> torch.Tensor:
+
+    N = x.shape[-1] // 2
+    n = torch.arange(2*N, device=x.device)
+    k = torch.arange(0.5, N + 0.5, device=x.device)
+    
+    pre_shift = torch.exp(-1j * torch.pi / 2 / N * n)
+    post_shift = torch.exp(-1j * torch.pi / 2 / N * (N + 1) * k)
+    
+    return torch.fft.fft(x * pre_shift, norm="forward")[..., :N] * post_shift * (2 * N ** 0.5)
+
+def imclt2(x: torch.Tensor) -> torch.Tensor:
+    
+    N = x.shape[-1]
+    n = torch.arange(2*N, device=x.device)
+    k = torch.arange(0.5, N + 0.5, device=x.device)
+
+    pre_shift = torch.exp(-1j * torch.pi / 2 / N * n)
+    post_shift = torch.exp(-1j * torch.pi / 2 / N * (N + 1) * k)
+
+    y = (torch.fft.ifft(x / post_shift, norm="backward", n=2*N) / pre_shift)
+
+    return y * (2 * N ** 0.5)

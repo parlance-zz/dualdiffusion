@@ -93,8 +93,15 @@ class DiffusionDecoder_MCLT_Trainer(ModuleTrainer):
         #if self.vae.config.last_global_step == 0:
         #    self.logger.error("VAE model has not been trained, aborting training..."); exit(1) 
         
-        self.loss_weight = self.module.mel_density ** (1/4)
-        self.loss_weight = (self.loss_weight / self.loss_weight.square().mean().sqrt()).detach().requires_grad_(False)
+        mclt_hz = torch.arange(0, self.module.config.in_channels) + 0.5
+        mclt_hz = mclt_hz / self.module.config.in_channels * self.module.config.audio_sample_rate / 2
+        mel_density = get_mel_density(mclt_hz)**0.5
+        mel_density /= mel_density.square().mean().sqrt()
+        self.mel_density = mel_density.view(1, 1,-1, 1).to(device=self.trainer.accelerator.device).detach().requires_grad_(False)
+
+        #self.loss_weight = self.module.mel_density ** (1/4)
+        #self.loss_weight = (self.loss_weight / self.loss_weight.square().mean().sqrt()).detach().requires_grad_(False)
+        #self.loss_weight = 1
 
         if self.config.num_loss_buckets > 0:
             self.logger.info(f"Using {self.config.num_loss_buckets} loss buckets")
@@ -146,7 +153,7 @@ class DiffusionDecoder_MCLT_Trainer(ModuleTrainer):
             bucket_sigma = torch.linspace(np.log(self.config.loss_buckets_sigma_min),
                 np.log(self.config.loss_buckets_sigma_max), self.config.num_loss_buckets + 1).exp()
             bucket_sigma[0] = 0; bucket_sigma[-1] = float("inf")
-            self.bucket_names = [f"loss_σ_buckets/{bucket_sigma[i]:.2f} - {bucket_sigma[i+1]:.2f}"
+            self.bucket_names = [f"loss_σ_buckets/{bucket_sigma[i]:.4f} - {bucket_sigma[i+1]:.4f}"
                                  for i in range(self.config.num_loss_buckets)]
 
     @torch.no_grad()
@@ -182,7 +189,7 @@ class DiffusionDecoder_MCLT_Trainer(ModuleTrainer):
                 self.module.logvar_fourier(ln_sigma/4)).float().flatten().detach()
             pdf_warmup_factor = min(1, self.trainer.global_step / (self.config.sigma_pdf_warmup_steps or 1))
             sigma_distribution_pdf = (-pdf_warmup_factor * self.config.sigma_dist_scale * ln_sigma_error).exp()
-            sigma_distribution_pdf = (sigma_distribution_pdf - 1).clip(min=1e-6)
+            sigma_distribution_pdf = (sigma_distribution_pdf - 0.8).clip(min=0.2)
             self.sigma_sampler.update_pdf(sigma_distribution_pdf)
         
         # sample whole-batch sigma and sync across all ranks / processes
@@ -213,7 +220,8 @@ class DiffusionDecoder_MCLT_Trainer(ModuleTrainer):
         #                            vae_emb, add_latents_noise=self.config.latents_perturbation)
 
         mclt_samples = self.mclt.raw_to_sample(batch["audio"]).clone().detach()
-        ref_samples = self.format.convert_to_abs_exp1(self.format.raw_to_sample(batch["audio"])).clone().detach()
+        #ref_samples = self.format.convert_to_abs_exp1(self.format.raw_to_sample(batch["audio"])).clone().detach()
+        ref_samples = self.format.raw_to_sample(batch["audio"]).clone().detach()
 
         # get the noise level for this sub-batch from the pre-calculated whole-batch sigma (required for stratified sampling)
         local_sigma = self.global_sigma[self.trainer.accelerator.local_process_index::self.trainer.accelerator.num_processes]
@@ -221,14 +229,24 @@ class DiffusionDecoder_MCLT_Trainer(ModuleTrainer):
 
         # prepare model inputs
         noise = torch.randn(mclt_samples.shape, device=mclt_samples.device, generator=self.device_generator)
-        mclt_samples = mclt_samples / self.module.mel_density
+        mclt_samples = mclt_samples / self.module.freq_scale.view(1, 1,-1, 1)
         noise = (noise * batch_sigma.view(-1, 1, 1, 1)).detach()
 
         denoised: torch.Tensor = self.module(mclt_samples + noise, batch_sigma, self.format, unet_class_embeddings, ref_samples)
-        denoised = denoised * self.loss_weight
-        mclt_samples = mclt_samples * self.loss_weight
+        denoised = denoised * self.mel_density
+        mclt_samples = mclt_samples * self.mel_density
+
         batch_loss_weight = (batch_sigma ** 2 + self.module.config.sigma_data ** 2) / (batch_sigma * self.module.config.sigma_data) ** 2
         batch_weighted_loss = torch.nn.functional.mse_loss(denoised, mclt_samples, reduction="none").mean(dim=(1,2,3)) * batch_loss_weight
+        #batch_weighted_loss = (torch.nn.functional.mse_loss(denoised, mclt_samples, reduction="none") * self.mel_density).mean(dim=(1,2,3)) * batch_loss_weight
+
+        #denoised = denoised * self.module.mel_density
+        #mclt_samples = mclt_samples * self.module.mel_density
+        #_batch_sigma = batch_sigma.view(-1,1,1,1) * self.module.mel_density
+        #batch_loss_weight = (_batch_sigma ** 2 + self.module.config.sigma_data ** 2) / (_batch_sigma * self.module.config.sigma_data) ** 2
+        #batch_weighted_loss = torch.nn.functional.mse_loss(denoised, mclt_samples, reduction="none") * batch_loss_weight
+        #batch_weighted_loss = batch_weighted_loss.mean(dim=(1,2,3))
+
         #batch_weighted_loss = torch.nn.functional.mse_loss(self.mclt.sample_to_raw(denoised) / 0.04848,
         #    self.mclt.sample_to_raw(mclt_samples) / 0.04848, reduction="none").mean(dim=(1,2)) * batch_loss_weight
         
@@ -239,6 +257,7 @@ class DiffusionDecoder_MCLT_Trainer(ModuleTrainer):
             batch_loss = batch_weighted_loss
         else: # for train batches this takes the loss as the gaussian NLL with sigma-specific learned variance
             error_logvar = self.module.get_sigma_loss_logvar(sigma=batch_sigma)
+            #error_logvar = self.module.get_sigma_loss_logvar(sigma=batch_sigma.flatten()).view(mclt_samples.shape[0], 1, mclt_samples.shape[2], 1)
             batch_loss = batch_weighted_loss / error_logvar.exp() + error_logvar
         
         # log loss bucketed by noise level range

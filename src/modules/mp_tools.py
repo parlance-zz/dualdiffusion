@@ -72,7 +72,31 @@ def resample_3d(x: torch.Tensor, mode: Literal["keep", "down", "up"] = "keep") -
                 original_shape[0], original_shape[1], original_shape[2], original_shape[3]//2, original_shape[4]//2)
     elif mode == 'up': # torch.nn.functional.interpolate doesn't work properly with 5d tensors
         return x.repeat_interleave(2, dim=-1).repeat_interleave(2, dim=-2)
+
+def wavelet_decompose2d(x: torch.Tensor, num_levels: int = 4):
     
+    wavelets = []
+    for i in range(num_levels):
+        x_down = resample_2d(x, mode="down")
+        if i == num_levels - 1:
+            wavelets.append(x)
+        else:
+            wavelets.append(x - resample_2d(x_down, mode="up"))
+            x = x_down
+    
+    return wavelets
+
+def wavelet_recompose2d(wavelets: list[torch.Tensor]):
+
+    x = [w for w in wavelets]
+    y = x.pop()
+
+    while len(x) > 0:
+        y = resample_2d(y, "up")
+        y = y + x.pop()
+    
+    return y
+
 #----------------------------------------------------------------------------
 # Magnitude-preserving SiLU (Equation 81).
 

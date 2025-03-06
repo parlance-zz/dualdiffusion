@@ -10,21 +10,21 @@
         "sample_raw_length": 1440000,
 
         //"window_len": 512,
-        //"abs_exponent": 1,
-        //"raw_to_sample_scale": 19
+        "abs_exponent": 0.5,
+        "raw_to_sample_scale": 8.6682
     },
     "sigma_config":
     {
         "use_static_sigma_sampling": true,
-        "sigma_max": 20,
-        "sigma_min": 0.0003,
-        "distribution": "ln_sech",
+        "sigma_max": 10,
+        "sigma_min": 0.05,
+        "distribution": "ln_normal",
         "dist_scale": 1,
-        "dist_offset": -1.5
+        "dist_offset": -0.7
     },
     "add_noise": 0,
     "save_output": false,
-    "add_random_test_samples": 10000,
+    "add_random_test_samples": 5000,
     "test_samples": [
     ]
 }
