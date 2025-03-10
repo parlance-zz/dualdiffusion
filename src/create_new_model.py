@@ -116,9 +116,9 @@ if __name__ == "__main__":
     if os.path.isfile(ln_psd_mclt_path):
         import numpy as np
         ln_psd_mclt_raw = np.fromfile(ln_psd_mclt_path, dtype=np.float32)
-        pipeline.ddec.freq_scale[:] = torch.Tensor(ln_psd_mclt_raw).exp()
-        print("Imported DDEC MCLT freq_scale:")
-        print(pipeline.ddec.freq_scale)
+        pipeline.ddec.freq_stds[:] = torch.Tensor(ln_psd_mclt_raw).exp()
+        print("Imported DDEC MCLT freq stds:")
+        print(pipeline.ddec.freq_stds)
 
     pipeline.save_pretrained(new_model_path)
     print(f"Created new DualDiffusion model with config at '{new_model_path}'")

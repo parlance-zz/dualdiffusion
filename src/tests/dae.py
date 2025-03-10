@@ -113,14 +113,27 @@ def dae_test() -> None:
         dae_embedding = dae.get_embeddings(audio_embedding)
         latents = dae.encode(input_sample.to(dtype=dae.dtype), dae_embedding)
         #output_sample = dae.decode(latents, dae_embedding)
-        #output_sample = (input_sample ** (1 / format.config.abs_exponent)) / 125
-        output_sample = input_sample
+        output_sample = format.convert_to_abs_exp1(input_sample)
+        #output_sample = input_sample
 
         if test_params["test_ddec"] == True:
+            #ddec_params = SampleParams(
+            #    num_steps=100, length=audio_len, cfg_scale=1.5, input_perturbation=0,
+            #    use_heun=True, schedule="scale_invariant", rho=3.5, sigma_max=15, sigma_min=0.0003
+            #)
             ddec_params = SampleParams(
+                #num_steps=500, length=audio_len, cfg_scale=0, input_perturbation=1, input_perturbation_offset=0,
+                #use_heun=False, schedule="cos", rho=7,
+                #sigma_max=8.5, sigma_min=0.013
+
+                #use_heun=False, schedule="cos", rho=7,
+                #sigma_max=100, sigma_min=0.00005
+                #use_heun=False, schedule="linear", rho=7,
+                #sigma_max=60, sigma_min=0.005
+
                 num_steps=300, length=audio_len, cfg_scale=0, input_perturbation=1, input_perturbation_offset=0,
-                use_heun=False, schedule="cos", rho=7,
-                sigma_max=8.5, sigma_min=0.013
+                use_heun=False, schedule="edm2", rho=7, sigma_max=60, sigma_min=0.003 #0.02
+                #use_heun=False, schedule="linear", rho=7, sigma_max=20, sigma_min=19.5 #0.02
             )
             output_sample = pipeline.diffusion_decode(
                 ddec_params, audio_embedding=audio_embedding,
@@ -152,10 +165,10 @@ def dae_test() -> None:
         save_img(format.sample_to_img(output_sample), os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_output_sample.png')}"))
         save_img(format.sample_to_img(input_sample), os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_input_sample.png')}"))
 
-        input_raw_sample = format.sample_to_raw(input_sample)
-        output_flac_file_path = os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_original.flac')}")
-        save_audio(input_raw_sample, sample_rate, output_flac_file_path, target_lufs=None)
-        print(f"Saved flac output to {output_flac_file_path}")
+        #input_raw_sample = format.sample_to_raw(input_sample)
+        #output_flac_file_path = os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_original.flac')}")
+        #save_audio(input_raw_sample, sample_rate, output_flac_file_path, target_lufs=None)
+        #print(f"Saved flac output to {output_flac_file_path}")
 
         output_flac_file_path = os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_decoded.flac')}")
         save_audio(output_raw_sample, sample_rate, output_flac_file_path, metadata=metadata, target_lufs=None)

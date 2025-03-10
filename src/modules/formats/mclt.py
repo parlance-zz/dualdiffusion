@@ -37,12 +37,8 @@ class DualMCLTFormatConfig(DualDiffusionFormatConfig):
     sample_to_raw_scale: float = 1 / 0.5005
 
     # approximately unit variance for sample and 1:1 gain for reconstructed raw, for audio normalized to -20 lufs
-    #abs_exponent: float = 1
-    #raw_to_sample_scale: float = 19.37217829
-    
-    abs_exponent: float = 0.5
-    raw_to_sample_scale: float = 8.6682 #unit average variance
-    #raw_to_sample_scale: float = 15.1385848342 #unit median variance
+    abs_exponent: float = 1
+    raw_to_sample_scale: float = 19.37217829
     
     # approximately unit variance for sample and 1:1 gain for reconstructed raw, for audio normalized to -20 lufs
     #abs_exponent: float = 1/4
@@ -73,7 +69,8 @@ class DualMCLTFormat(DualDiffusionFormat):
 
         samples_mdct = mclt(raw_samples, self.config.window_len, "hann", 0.5).permute(0, 1, 3, 2).contiguous()
         if random_phase_augmentation == True:
-            samples_mdct *= torch.exp(2j * torch.pi * torch.rand(1, device=samples_mdct.device))
+            phase_rotation = torch.exp(2j * torch.pi * torch.rand(samples_mdct.shape[0], device=samples_mdct.device)) 
+            samples_mdct *= phase_rotation.view(-1, 1, 1, 1)
 
         return samples_mdct.real.abs() ** self.config.abs_exponent * samples_mdct.real.sign() * self.config.raw_to_sample_scale
 

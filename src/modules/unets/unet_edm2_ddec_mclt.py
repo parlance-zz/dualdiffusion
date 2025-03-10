@@ -225,15 +225,14 @@ class DDec_MCLT_UNet(DualDiffusionUNet):
 
         self.num_levels = len(config.channel_mult)
 
-        #"""
         mclt_hz = torch.arange(0, config.in_channels) + 0.5
         mclt_hz = mclt_hz / config.in_channels * config.audio_sample_rate / 2
         mel_density = get_mel_density(mclt_hz)
         mel_density /= mel_density.square().mean().sqrt()
-        self.register_buffer('mel_density', mel_density, persistent=False)
-        #"""
-        
-        self.register_buffer('freq_scale', torch.zeros(config.in_channels))
+        mel_density = mel_density.view(1, 1,-1, 1)
+        self.register_buffer('mel_density', mel_density)
+
+        #self.register_buffer('freq_stds', torch.zeros(config.in_channels))
 
         # Embedding.
         self.emb_fourier = MPFourier(cnoise)
@@ -247,7 +246,7 @@ class DDec_MCLT_UNet(DualDiffusionUNet):
 
         # Encoder.
         self.enc = torch.nn.ModuleDict()
-        cout = config.in_channels * 2 + 1 # sample, ref sample and constant channel
+        cout = config.in_channels * 2
 
         for level, channels in enumerate(cblock):
             
@@ -331,7 +330,7 @@ class DDec_MCLT_UNet(DualDiffusionUNet):
         emb = emb.unsqueeze(-1).unsqueeze(-1)
 
         # Encoder.
-        x = torch.cat((x, x_ref.to(dtype=torch.bfloat16), torch.ones_like(x[:, :1])), dim=1)
+        x = torch.cat((x, x_ref.to(dtype=torch.bfloat16)), dim=1)
 
         skips = []
         for name, block in self.enc.items():
