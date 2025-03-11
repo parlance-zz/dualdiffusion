@@ -132,7 +132,7 @@ def dae_test() -> None:
                 #sigma_max=60, sigma_min=0.005
 
                 num_steps=300, length=audio_len, cfg_scale=0, input_perturbation=1, input_perturbation_offset=0,
-                use_heun=False, schedule="edm2", rho=7, sigma_max=60, sigma_min=0.003 #0.02
+                use_heun=False, schedule="edm2", rho=7, sigma_max=12, sigma_min=0.0003 #0.02
                 #use_heun=False, schedule="linear", rho=7, sigma_max=20, sigma_min=19.5 #0.02
             )
             output_sample = pipeline.diffusion_decode(

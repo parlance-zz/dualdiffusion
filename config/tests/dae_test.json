@@ -1,5 +1,5 @@
 {
-    "model_name": "edm2_ddec_mclt5",
+    "model_name": "edm2_ddec_mclt4",
     "model_load_options": {
         "torch_dtype": "bfloat16",
         "device": "cuda",
@@ -10,16 +10,14 @@
             "dynamic": false
         }
     },
-    "length": 720000,
+    "length": 1440000,
     "no_crop": false,
     "num_fgla_iters": 100,
     "add_latent_noise": 0,
     "test_ddec": true,
-    "add_random_test_samples": 0,
+    "add_random_test_samples": 9,
     "copy_sample_source_files": true,
     "test_samples": [
-        "dsf/Metropolis Street Racer Prototype/file_15.adx.flac",
-        "psf/Gradius Gaiden/SLPM-86042_BGM1_0000096c.XA.flac",
-        "switch/Shovel Knight - King of Cards/m_boss_blackknight_first.ogg.flac"
+        "dsf/Metropolis Street Racer Prototype/file_15.adx.flac"
     ]
 }
