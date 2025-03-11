@@ -25,7 +25,7 @@
     },
     "add_noise": 0,
     "save_output": false,
-    "add_random_test_samples": 1000,
+    "add_random_test_samples": 5000,
     "test_samples": [
     ]
 }
