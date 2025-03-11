@@ -256,9 +256,9 @@ class DiffusionDecoder_MCLT_Trainer(ModuleTrainer):
             self.unet_loss_bucket_counts.index_add_(0, target_buckets, torch.ones_like(global_weighted_loss))
 
         return {"loss": batch_loss,
-                "std/input_samples": mclt_samples.std(),
-                "std/ref_samples": ref_samples.std(),
-                "std/output_samples": denoised.std()}
+                "std/input_samples": mclt_samples.std(dim=(1,2,3)),
+                "std/ref_samples": ref_samples.std(dim=(1,2,3)),
+                "std/output_samples": denoised.std(dim=(1,2,3))}
 
     @torch.no_grad()
     def finish_batch(self) -> dict[str, torch.Tensor]:
