@@ -73,6 +73,9 @@ def resample_3d(x: torch.Tensor, mode: Literal["keep", "down", "up"] = "keep") -
     elif mode == 'up': # torch.nn.functional.interpolate doesn't work properly with 5d tensors
         return x.repeat_interleave(2, dim=-1).repeat_interleave(2, dim=-2)
 
+def midside_transform(x: torch.Tensor):
+    return torch.stack((x[:, 0] + x[:, 1], x[:, 0] - x[:, 1]), dim=1) * 0.5**0.5
+
 def wavelet_decompose2d(x: torch.Tensor, num_levels: int = 4):
     
     wavelets = []
@@ -96,6 +99,24 @@ def wavelet_recompose2d(wavelets: list[torch.Tensor]):
         y = y + x.pop()
     
     return y
+
+def space_to_channel2d(x: torch.Tensor) -> torch.Tensor:
+    B, C, H, W = x.shape
+    
+    x = x.view(B, C, H // 2, 2, W // 2, 2)  # reshape to split H and W into 2x2 blocks
+    x = x.permute(0, 1, 3, 5, 2, 4).reshape(B, C * 4, H // 2, W // 2)  # rearrange and reshape
+    
+    return x
+
+def channel_to_space2d(x: torch.Tensor) -> torch.Tensor:
+    B, C4, H_half, W_half = x.shape
+    
+    C = C4 // 4
+    x = x.view(B, C, 4, H_half, W_half)  # reshape to extract 4 channels per original channel
+    x = x.permute(0, 1, 3, 4, 2)  # move the split dimension to the last
+    x = x.reshape(B, C, H_half * 2, W_half * 2)  # merge back
+    
+    return x
 
 #----------------------------------------------------------------------------
 # Magnitude-preserving SiLU (Equation 81).
