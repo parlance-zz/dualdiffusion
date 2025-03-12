@@ -62,6 +62,7 @@ class DDec_MCLT_UNetConfig(DualDiffusionUNetConfig):
     mlp_groups: int        = 1               # Number of groups for the MLPs.
     emb_linear_groups: int = 1
     audio_sample_rate: float = 32000
+    mel_density_scale: float = 0.54
 
 class MPConv(torch.nn.Module):
 
@@ -232,7 +233,7 @@ class DDec_MCLT_UNet(DualDiffusionUNet):
         mclt_hz = mclt_hz / config.in_channels * config.audio_sample_rate / 2
         mel_density = get_mel_density(mclt_hz)
         mel_density /= mel_density.square().mean().sqrt()
-        mel_density = mel_density.view(1, 1,-1, 1)
+        mel_density = mel_density.view(1, 1,-1, 1) * config.mel_density_scale
         self.register_buffer('mel_density', mel_density)
 
         #self.register_buffer('freq_stds', torch.zeros(config.in_channels))
