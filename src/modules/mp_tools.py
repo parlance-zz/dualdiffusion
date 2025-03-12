@@ -73,10 +73,10 @@ def resample_3d(x: torch.Tensor, mode: Literal["keep", "down", "up"] = "keep") -
     elif mode == 'up': # torch.nn.functional.interpolate doesn't work properly with 5d tensors
         return x.repeat_interleave(2, dim=-1).repeat_interleave(2, dim=-2)
 
-def midside_transform(x: torch.Tensor):
+def midside_transform(x: torch.Tensor) -> torch.Tensor:
     return torch.stack((x[:, 0] + x[:, 1], x[:, 0] - x[:, 1]), dim=1) * 0.5**0.5
 
-def wavelet_decompose2d(x: torch.Tensor, num_levels: int = 4):
+def wavelet_decompose2d(x: torch.Tensor, num_levels: int = 4) -> list[torch.Tensor]:
     
     wavelets = []
     for i in range(num_levels):
@@ -89,7 +89,7 @@ def wavelet_decompose2d(x: torch.Tensor, num_levels: int = 4):
     
     return wavelets
 
-def wavelet_recompose2d(wavelets: list[torch.Tensor]):
+def wavelet_recompose2d(wavelets: list[torch.Tensor]) -> list[torch.Tensor]:
 
     x = [w for w in wavelets]
     y = x.pop()
@@ -100,7 +100,7 @@ def wavelet_recompose2d(wavelets: list[torch.Tensor]):
     
     return y
 
-def space_to_channel2d(x: torch.Tensor) -> torch.Tensor:
+def _space_to_channel2d(x: torch.Tensor) -> torch.Tensor:
     B, C, H, W = x.shape
     
     x = x.view(B, C, H // 2, 2, W // 2, 2)  # reshape to split H and W into 2x2 blocks
@@ -108,7 +108,7 @@ def space_to_channel2d(x: torch.Tensor) -> torch.Tensor:
     
     return x
 
-def channel_to_space2d(x: torch.Tensor) -> torch.Tensor:
+def _channel_to_space2d(x: torch.Tensor) -> torch.Tensor:
     B, C4, H_half, W_half = x.shape
     
     C = C4 // 4
@@ -118,6 +118,18 @@ def channel_to_space2d(x: torch.Tensor) -> torch.Tensor:
     
     return x
 
+def space_to_channel2d(x: Union[torch.Tensor, list[torch.Tensor]]) -> Union[torch.Tensor, list[torch.Tensor]]:
+    if isinstance(x, list):
+        return [_space_to_channel2d(y) for y in x]
+    else:
+        return _space_to_channel2d(x)
+    
+def channel_to_space2d(x: Union[torch.Tensor, list[torch.Tensor]]) -> Union[torch.Tensor, list[torch.Tensor]]:
+    if isinstance(x, list):
+        return [_channel_to_space2d(y) for y in x]
+    else:
+        return _channel_to_space2d(x)
+    
 #----------------------------------------------------------------------------
 # Magnitude-preserving SiLU (Equation 81).
 
