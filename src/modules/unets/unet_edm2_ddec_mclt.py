@@ -58,8 +58,9 @@ class DDec_MCLT_UNetConfig(DualDiffusionUNetConfig):
     res_balance: float        = 0.3          # Balance between main branch (0) and residual branch (1).
     attn_balance: float       = 0.3          # Balance between main branch (0) and self-attention (1).
     attn_levels: list[int]    = ()           # List of resolution levels to use self-attention.
-    mlp_multiplier: int = 1                  # Multiplier for the number of channels in the MLP.
-    mlp_groups: int     = 1                  # Number of groups for the MLPs.
+    mlp_multiplier: int    = 1               # Multiplier for the number of channels in the MLP.
+    mlp_groups: int        = 1               # Number of groups for the MLPs.
+    emb_linear_groups: int = 1
     audio_sample_rate: float = 32000
 
 class MPConv(torch.nn.Module):
@@ -117,6 +118,7 @@ class Block(torch.nn.Module):
         clip_act: float        = 256,      # Clip output activations. None = do not clip.
         mlp_multiplier: int    = 1,        # Multiplier for the number of channels in the MLP.
         mlp_groups: int        = 1,        # Number of groups for the MLP.
+        emb_linear_groups: int = 1,
         channels_per_head: int = 64,       # Number of channels per attention head.
         use_attention: bool    = False,    # Use self-attention in this block.
     ) -> None:
@@ -140,7 +142,7 @@ class Block(torch.nn.Module):
 
         self.emb_gain = torch.nn.Parameter(torch.zeros([]))
         self.emb_linear = MPConv(emb_channels, out_channels * mlp_multiplier,
-                                 kernel=(1,1), groups=1) if emb_channels != 0 else None
+                                 kernel=(1,1), groups=emb_linear_groups) if emb_channels != 0 else None
         
         if self.use_attention:
             self.emb_gain_qk = torch.nn.Parameter(torch.zeros([]))
@@ -214,6 +216,7 @@ class DDec_MCLT_UNet(DualDiffusionUNet):
         block_kwargs = {"dropout": config.dropout,
                         "mlp_multiplier": config.mlp_multiplier,
                         "mlp_groups": config.mlp_groups,
+                        "emb_linear_groups": config.emb_linear_groups,
                         "res_balance": config.res_balance,
                         "attn_balance": config.attn_balance,
                         "channels_per_head": config.channels_per_head}
@@ -324,17 +327,16 @@ class DDec_MCLT_UNet(DualDiffusionUNet):
             x = (c_in * x_in).to(dtype=torch.bfloat16)
  
         # Embedding.
-        emb = self.emb_noise(self.emb_fourier(c_noise)).to(dtype=torch.bfloat16)
+        emb = self.emb_noise(self.emb_fourier(c_noise))
         if self.config.in_channels_emb > 0:
-            emb = mp_silu(mp_sum(emb, embeddings.to(dtype=torch.bfloat16), t=self.config.label_balance))
-        emb = emb.unsqueeze(-1).unsqueeze(-1)
+            emb = mp_silu(mp_sum(emb, embeddings, t=self.config.label_balance))
+        emb = emb.unsqueeze(-1).unsqueeze(-1).to(dtype=torch.bfloat16)
 
         # Encoder.
         x = torch.cat((x, x_ref.to(dtype=torch.bfloat16)), dim=1)
 
         skips = []
         for name, block in self.enc.items():
-            #print("block:", name, "x.shape:", x.shape)
             x = block(x) if "conv" in name else block(x, emb)
             skips.append(x)
 

@@ -1,0 +1,31 @@
+{
+  "last_global_step": 0,
+  "in_channels": 256,
+  "out_channels": 256,
+  "in_channels_emb": 1024,
+  "dropout": 0,
+  "sigma_max": 200,
+  "sigma_min": 0.00003,
+  "sigma_data": 1,
+  "model_channels": 256,
+  "logvar_channels": 128,
+  "channel_mult": [
+    4,
+    4
+  ],
+  "double_midblock": true,
+  "midblock_attn": true,
+  "channel_mult_noise": 4,
+  "channel_mult_emb": 4,
+  "channels_per_head": 64,
+  "num_layers_per_block": 3,
+  "label_balance": 0.5,
+  "concat_balance": 0.5,
+  "res_balance": 0.3,
+  "attn_balance": 0.3,
+  "attn_levels": [],
+  "mlp_multiplier": 2,
+  "mlp_groups": 8,
+  "emb_linear_groups": 4,
+  "audio_sample_rate": 32000
+}

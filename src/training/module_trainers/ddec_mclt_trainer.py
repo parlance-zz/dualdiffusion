@@ -233,7 +233,7 @@ class DiffusionDecoder_MCLT_Trainer(ModuleTrainer):
         noise = torch.randn(mclt_samples.shape, device=mclt_samples.device, generator=self.device_generator)
         mclt_samples = mclt_samples / self.module.mel_density
         # bias the noise level a bit by the std of each input sample
-        batch_sigma = batch_sigma * mclt_samples.std(dim=(1,2,3)) / self.config.expected_sample_std
+        #batch_sigma = batch_sigma * mclt_samples.std(dim=(1,2,3)) / self.config.expected_sample_std
         noise = (noise * batch_sigma.view(-1, 1, 1, 1)).detach()
 
         denoised: torch.Tensor = self.module(mclt_samples + noise, batch_sigma, self.format, unet_class_embeddings, ref_samples)
