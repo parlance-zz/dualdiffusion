@@ -34,12 +34,27 @@ from dataclasses import dataclass
 from typing import Union, Optional, Literal
 
 import torch
+from librosa import B_weighting #,A_weighting
 
 from modules.unets.unet import DualDiffusionUNet, DualDiffusionUNetConfig
 from modules.mp_tools import MPFourier, mp_cat, mp_silu, mp_sum, normalize, resample_1d
 from modules.formats.frequency_scale import get_mel_density
 from modules.formats.format import DualDiffusionFormat
 
+
+def get_perceptual_scale(n_mclt_bins: int, sample_rate: int,
+                spread: float = 0.5, batch_size: int = 192) -> torch.Tensor:
+
+    mclt_hz = torch.arange(0, n_mclt_bins) + 0.5
+    mclt_hz = mclt_hz / n_mclt_bins * sample_rate / 2
+
+    scale = torch.cumsum(torch.Tensor(B_weighting(mclt_hz.numpy())).exp(), dim=0)
+    scale -= scale[0].item()
+    scale /= scale.amax()
+    scale = (scale * (1 - 1/batch_size) + 0.5/batch_size) * torch.pi/2
+    scale = (scale.cos() / scale.sin()) ** spread
+
+    return scale.float().detach().requires_grad_(False)
 
 @dataclass
 class DDec_MCLT_UNetConfig(DualDiffusionUNetConfig):
@@ -61,8 +76,6 @@ class DDec_MCLT_UNetConfig(DualDiffusionUNetConfig):
     mlp_multiplier: int    = 1               # Multiplier for the number of channels in the MLP.
     mlp_groups: int        = 1               # Number of groups for the MLPs.
     emb_linear_groups: int = 1
-    audio_sample_rate: float = 32000
-    mel_density_scale: float = 0.54
 
 class MPConv(torch.nn.Module):
 
@@ -229,14 +242,7 @@ class DDec_MCLT_UNet(DualDiffusionUNet):
 
         self.num_levels = len(config.channel_mult)
 
-        mclt_hz = torch.arange(0, config.in_channels) + 0.5
-        mclt_hz = mclt_hz / config.in_channels * config.audio_sample_rate / 2
-        mel_density = get_mel_density(mclt_hz)
-        mel_density /= mel_density.square().mean().sqrt()
-        mel_density = mel_density.view(1, 1,-1, 1) * config.mel_density_scale
-        self.register_buffer('mel_density', mel_density)
-
-        #self.register_buffer('freq_stds', torch.zeros(config.in_channels))
+        self.register_buffer("p_scale", torch.ones(config.in_channels))
 
         # Embedding.
         self.emb_fourier = MPFourier(cnoise)

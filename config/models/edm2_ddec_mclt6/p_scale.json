@@ -1,0 +1,7 @@
+{
+  "n_mclt_bins": 256,
+  "sample_rate": 32000,
+  "spread": 0.5,
+  "batch_size": 192,
+  "ln_psd_mclt_file": "ln_psd_mclt.raw"
+}

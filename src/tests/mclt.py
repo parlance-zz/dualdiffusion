@@ -27,10 +27,11 @@ import os
 import random
 
 import torch
+import numpy as np
+
 
 from modules.formats.mclt import DualMCLTFormat, DualMCLTFormatConfig
-from modules.formats.frequency_scale import get_mel_density
-from training.sigma_sampler import SigmaSampler, SigmaSamplerConfig
+from modules.unets.unet_edm2_ddec_mclt import get_perceptual_scale
 from utils.dual_diffusion_utils import (
     load_audio, tensor_info_str, save_audio, init_cuda, save_tensor_raw
 )
@@ -40,7 +41,8 @@ from utils.dual_diffusion_utils import (
 class MCLT_TestConfig:
     device: str
     format_config: DualMCLTFormatConfig
-    sigma_config: SigmaSamplerConfig
+    p_scale_bsz: int
+    p_scale_spread: float
     add_noise: float
     save_output: bool
     add_random_test_samples: int
@@ -49,21 +51,21 @@ class MCLT_TestConfig:
 @torch.inference_mode()
 def mclt_test() -> None:
     
+    test_output_path = os.path.join(config.DEBUG_PATH, "mclt_test")
     cfg: MCLT_TestConfig = config.load_config(
         MCLT_TestConfig, os.path.join(config.CONFIG_PATH, "tests", "mclt.json"))
-
+    
     mclt_format: DualMCLTFormat = DualMCLTFormat(cfg.format_config).to(device=cfg.device)
-
-    n_mclt_bins = cfg.format_config.window_len//2
-    mclt_hz = torch.arange(0, n_mclt_bins) + 0.5
-    mclt_hz = mclt_hz / n_mclt_bins * cfg.format_config.sample_rate / 2
-    mel_density = get_mel_density(mclt_hz)
-    mel_density /= mel_density.square().mean().sqrt()
-    mel_density = mel_density.view(1, 1,-1, 1).to(cfg.device)
-
     crop_width = mclt_format.sample_raw_crop_width()
-    test_output_path = os.path.join(config.DEBUG_PATH, "mclt_test")
 
+    p_scale_options = {
+        "n_mclt_bins": cfg.format_config.window_len//2,
+        "sample_rate": cfg.format_config.sample_rate,
+        "spread": cfg.p_scale_spread,
+        "batch_size": cfg.p_scale_bsz
+    }
+    p_scale = get_perceptual_scale(**p_scale_options).to(cfg.device)
+    
     if cfg.add_random_test_samples > 0:
         train_samples = config.load_json(os.path.join(config.DATASET_PATH, "train.jsonl"))
         cfg.test_samples += [sample["file_name"] for sample in
@@ -78,23 +80,23 @@ def mclt_test() -> None:
         base_filename = os.path.splitext(os.path.basename(sample_filename))[0]
 
         input_raw_sample, sample_rate = load_audio(os.path.join(config.DATASET_PATH, sample_filename),
-                            start=0, count=crop_width, device=cfg.device, return_sample_rate=True)
+                            start=-1, count=crop_width, device=cfg.device, return_sample_rate=True)
         input_raw_sample.unsqueeze_(0)
         assert sample_rate == mclt_format.config.sample_rate
         assert input_raw_sample.shape[1] == mclt_format.config.sample_raw_channels
 
         mclt_sample = mclt_format.raw_to_sample(input_raw_sample)
-        mclt_sample_scaled = mclt_sample / mel_density
+        mclt_sample_scaled = mclt_sample * p_scale.view(1, 1,-1, 1)
         output_raw_sample = mclt_format.sample_to_raw(mclt_sample + torch.randn_like(mclt_sample) * cfg.add_noise)
 
         avg_std += mclt_sample.std()
         avg_scaled_std += mclt_sample_scaled.std()
         if psd is None:
-            psd = mclt_sample.abs().square().to(dtype=torch.float64)
-            psd_scaled = mclt_sample_scaled.abs().square().to(dtype=torch.float64)
+            psd = mclt_sample.abs().to(dtype=torch.float64).square()
+            psd_scaled = mclt_sample_scaled.abs().to(dtype=torch.float64).square()
         else:
-            psd += mclt_sample.abs().square().to(dtype=torch.float64)
-            psd_scaled += mclt_sample_scaled.abs().square().to(dtype=torch.float64)
+            psd += mclt_sample.abs().to(dtype=torch.float64).square()
+            psd_scaled += mclt_sample_scaled.abs().to(dtype=torch.float64).square()
 
         print(f"({i}/{len(cfg.test_samples)}) {sample_filename}:")
         print("  mlct_sample:", tensor_info_str(mclt_sample))
@@ -115,7 +117,6 @@ def mclt_test() -> None:
 
     print(f"avg mdct std: {avg_std / len(cfg.test_samples)}")
     print(f"avg scaled mdct std: {avg_scaled_std / len(cfg.test_samples)}")
-    #exit()
 
     psd = (psd / len(cfg.test_samples)).mean(dim=(1,3)).sqrt().flatten()
     psd_scaled = (psd_scaled / len(cfg.test_samples)).mean(dim=(1,3)).sqrt().flatten()
@@ -132,6 +133,12 @@ def mclt_test() -> None:
         hz = (0.5 + i) / psd.shape[0] * mclt_format.config.sample_rate / 2
         print(f"  {hz}hz  mclt: {psd[i].item():.4f}  scaled: {psd_scaled[i].item():.4f}")
 
+    print("\np_scale sigma_max:", p_scale[0].item(), "p_scale sigma_min:", p_scale[-1].item())
+    save_tensor_raw(p_scale, os.path.join(test_output_path, "p_scale.raw"))
+    save_tensor_raw(p_scale.log(), os.path.join(test_output_path, "ln_p_scale.raw"))
+
+    p_scale_options["ln_psd_mclt_file"] = "ln_psd_mclt.raw"
+    config.save_json(p_scale_options, os.path.join(test_output_path, "p_scale.json"))
 
 if __name__ == "__main__":
 

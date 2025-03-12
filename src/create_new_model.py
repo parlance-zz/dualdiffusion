@@ -112,13 +112,19 @@ if __name__ == "__main__":
         prompt = f"Create new model with config at '{new_model_path}'? (y/n): "
     if input(prompt).lower() not in ["y","yes"]: exit()
     
-    ln_psd_mclt_path = os.path.join(model_config_source_path, "ln_psd_mclt.raw")
-    if os.path.isfile(ln_psd_mclt_path):
+    # perceptual scale weighting for mclt bins in ddec_mclt (generated in mclt_test)
+    p_scale_path = os.path.join(model_config_source_path, "p_scale.json")
+    if os.path.isfile(p_scale_path):
         import numpy as np
-        ln_psd_mclt_raw = np.fromfile(ln_psd_mclt_path, dtype=np.float32)
-        pipeline.ddec.freq_stds[:] = torch.Tensor(ln_psd_mclt_raw).exp()
-        print("Imported DDEC MCLT freq stds:")
-        print(pipeline.ddec.freq_stds)
+        from modules.unets.unet_edm2_ddec_mclt import get_perceptual_scale
+
+        p_scale_options = config.load_json(p_scale_path)
+        ln_psd_mclt_path = os.path.join(model_config_source_path, p_scale_options.pop("ln_psd_mclt_file"))
+        psd_mclt = torch.Tensor(np.fromfile(ln_psd_mclt_path, dtype=np.float32)).exp()
+        p_scale = get_perceptual_scale(**p_scale_options) / psd_mclt
+
+        pipeline.ddec.p_scale[:] = p_scale[:]
+        print("p_scale:", pipeline.ddec.p_scale)
 
     pipeline.save_pretrained(new_model_path)
     print(f"Created new DualDiffusion model with config at '{new_model_path}'")
