@@ -36,6 +36,7 @@ from datasets import load_dataset, Features, Value, Sequence
 
 from modules.formats.format import DualDiffusionFormatConfig
 from modules.embeddings.clap import CLAP_Config
+from modules.mp_tools import mp_sum, normalize
 from utils.dual_diffusion_utils import load_audio
 
 
@@ -188,7 +189,8 @@ class DualDiffusionDataset(torch.nn.Module):
                     latents = latents_slice[latents_idx, ..., latents_t_offset:latents_t_offset + self.config.latents_crop_width]
 
                 batch_latents.append(latents)
-                
+            
+            # load average cropped audio embedding with spherical bilinear filtering at the endpoints
             if "audio_embeddings" in self.config.load_datatypes:
                 with ST.safe_open(train_sample["latents_file_name"], framework="pt") as f:
                     sample_audio_embeddings = f.get_slice("clap_audio_embeddings")
@@ -197,32 +199,31 @@ class DualDiffusionDataset(torch.nn.Module):
 
                 if audio_t_offset is not None:
                     seconds_per_sample = 1 / self.format_config.sample_rate
-                    audio_embed_start = int(audio_t_offset * seconds_per_sample / audio_emb_duration + 0.5)
-                    audio_embed_end = int((audio_t_offset + self.config.sample_crop_width) * seconds_per_sample / audio_emb_duration + 0.5)
+                    audio_embed_start = audio_t_offset * seconds_per_sample / audio_emb_duration
+                    audio_embed_end = (audio_t_offset + self.config.sample_crop_width) * seconds_per_sample / audio_emb_duration
                 elif latents_t_offset is not None:
                     seconds_per_latent_pixel = self.config.sample_crop_width / self.format_config.sample_rate / self.config.latents_crop_width
-                    audio_embed_start = int(latents_t_offset * seconds_per_latent_pixel / audio_emb_duration + 0.5)
-                    audio_embed_end = int((latents_t_offset + self.config.latents_crop_width) * seconds_per_latent_pixel / audio_emb_duration + 0.5)
+                    audio_embed_start = latents_t_offset * seconds_per_latent_pixel / audio_emb_duration
+                    audio_embed_end = (latents_t_offset + self.config.latents_crop_width) * seconds_per_latent_pixel / audio_emb_duration
                 else:
                     audio_embed_start = 0
                     audio_embed_end = sample_audio_embeddings.get_shape()[0] + 1
                 
-                # handle an edge case when training VAEs with crop widths shorter than audio_emb_duration seconds
-                audio_embed_start = max(audio_embed_start, 0)
-                audio_embed_start = min(audio_embed_start, sample_audio_embeddings.get_shape()[0]-1)
-                audio_embed_end = max(audio_embed_end, 0)
-                audio_embed_end = min(audio_embed_end, sample_audio_embeddings.get_shape()[0])
+                emb_len = sample_audio_embeddings.get_shape()[0]
                 
-                if audio_embed_start == audio_embed_end:
-                    if audio_embed_start > 0: audio_embed_start -= 1
-                    else: audio_embed_end += 1
+                start = np.clip(audio_embed_start, 0, emb_len - 1)
+                end = np.clip(audio_embed_end, start, emb_len - 1)
+                start_int, start_frac = int(start), start % 1
+                end_int, end_frac = int(end), end % 1
 
-                assert audio_embed_start >= 0 and audio_embed_start < sample_audio_embeddings.get_shape()[0]
-                assert audio_embed_end > 0 and audio_embed_end <= sample_audio_embeddings.get_shape()[0]
-                assert audio_embed_start != audio_embed_end
+                selected = sample_audio_embeddings[start_int:end_int + 1]
 
-                sample_audio_embeddings = sample_audio_embeddings[audio_embed_start:audio_embed_end].mean(dim=0)
-                batch_audio_embeddings.append(sample_audio_embeddings)
+                if start_frac > 0:
+                    selected[0] = mp_sum(sample_audio_embeddings[start_int], sample_audio_embeddings[start_int + 1], start_frac)
+                if end_frac > 0:
+                    selected[-1] = mp_sum(sample_audio_embeddings[end_int], sample_audio_embeddings[end_int + 1], end_frac)
+
+                batch_audio_embeddings.append(normalize(selected.sum(dim=0)))
 
             if "text_embeddings" in self.config.load_datatypes:
                 with ST.safe_open(train_sample["latents_file_name"], framework="pt") as f:
