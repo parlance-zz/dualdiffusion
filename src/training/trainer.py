@@ -365,7 +365,8 @@ class DualDiffusionTrainer:
         self.logger.info(f"  Gradient clipping max norm: {self.config.optimizer.max_grad_norm}")
 
         if self.config.optimizer.dynamic_grad_norm_ema_beta is not None:
-            self.logger.info(f"  Dynamic max grad norm enabled (beta: {self.config.optimizer.dynamic_grad_norm_ema_beta})")
+            self.logger.info(f"  Dynamic max grad norm enabled (beta: {self.config.optimizer.dynamic_grad_norm_ema_beta}"
+                                                            f"  scale: {self.config.optimizer.dynamic_grad_norm_scale})")
             self.logger.info(f"  Current max grad norm: {self.persistent_state.dynamic_max_grad_norm or self.config.optimizer.max_grad_norm}")
         
     def init_checkpointing(self) -> None:
