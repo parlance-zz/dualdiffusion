@@ -73,12 +73,13 @@
     "num_loss_buckets": 12,
 
     "expected_sample_std": 1,
+    "noise_level_bias": true,
 
     "sigma_distribution": "ln_sech",
-    "sigma_override_max": 250,
-    "sigma_override_min": 0.004,
+    "sigma_override_max": 125,
+    "sigma_override_min": 0.002,
     "sigma_dist_scale": 1,
-    "sigma_dist_offset": 0,
+    "sigma_dist_offset": -0.64,
     "use_stratified_sigma_sampling": true,
     "sigma_pdf_resolution": 127,
     "sigma_pdf_warmup_steps": 1000,

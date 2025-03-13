@@ -15,7 +15,7 @@
     "add_random_test_samples": 0,
     "copy_sample_source_files": true,
     "test_samples": [
-        "psf3/Iron Man/_t_! movies_HUB_05_000001C2.adx.flac",
-        "dsf/Metropolis Street Racer Prototype/file_15.adx.flac"
+        "dsf/Metropolis Street Racer Prototype/file_15.adx.flac",
+        "psf3/Iron Man/_t_! movies_HUB_05_000001C2.adx.flac"
     ]
 }

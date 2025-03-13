@@ -117,15 +117,23 @@ if __name__ == "__main__":
     if os.path.isfile(p_scale_path):
         import numpy as np
         from modules.unets.unet_edm2_ddec_mclt import get_perceptual_scale
+        from utils.dual_diffusion_utils import save_tensor_raw
 
         p_scale_options = config.load_json(p_scale_path)
         ln_psd_mclt_path = os.path.join(model_config_source_path, p_scale_options.pop("ln_psd_mclt_file"))
         psd_mclt = torch.Tensor(np.fromfile(ln_psd_mclt_path, dtype=np.float32)).exp()
-        p_scale = get_perceptual_scale(**p_scale_options) / psd_mclt
-
+        p_scale = get_perceptual_scale(**p_scale_options) / psd_mclt / 1.892
+        
+        mclt_hz = torch.arange(0, 256) + 0.5
+        mclt_hz = mclt_hz / 256 * 32000 / 2
+        for i in range(256):
+            print(f"hz: {mclt_hz[i].item()} psd: {p_scale[i].item()}")
+        
+        save_tensor_raw(p_scale * psd_mclt, os.path.join(config.DEBUG_PATH, "p_scale.raw"))
+        save_tensor_raw(psd_mclt, os.path.join(config.DEBUG_PATH, "psd_mclt.raw"))
         pipeline.ddec.p_scale[:] = p_scale[:]
-        print("p_scale:", pipeline.ddec.p_scale)
-
+        #print("p_scale:", pipeline.ddec.p_scale)
+    exit()
     pipeline.save_pretrained(new_model_path)
     print(f"Created new DualDiffusion model with config at '{new_model_path}'")
 

@@ -223,4 +223,9 @@ class SpectrogramFormat(DualDiffusionFormat):
     
     @torch.inference_mode()
     def convert_to_abs_exp1(self, samples: torch.Tensor):
-        return samples ** (1 / self.config.abs_exponent) * self.config.abs_exp1_scale
+        abs1 = samples ** (1 / self.config.abs_exponent) * self.config.abs_exp1_scale
+
+        mel_freqs = self.spectrogram_converter.freq_scale.get_unscaled(
+            self.config.num_frequencies + 2, device=abs1.device)[1:-1]
+        
+        raise NotImplementedError() # todo: tbd

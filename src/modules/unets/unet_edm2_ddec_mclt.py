@@ -47,6 +47,9 @@ def get_perceptual_scale(n_mclt_bins: int, sample_rate: int,
     mclt_hz = torch.arange(0, n_mclt_bins) + 0.5
     mclt_hz = mclt_hz / n_mclt_bins * sample_rate / 2
 
+    #return (10 ** (torch.Tensor(B_weighting(mclt_hz.numpy())) / 20)) / 0.77
+    scale = 10 ** (torch.Tensor(B_weighting(mclt_hz.numpy())) / 20)
+
     scale = torch.cumsum(torch.Tensor(B_weighting(mclt_hz.numpy())).exp(), dim=0)
     scale -= scale[0].item()
     scale /= scale.amax()
