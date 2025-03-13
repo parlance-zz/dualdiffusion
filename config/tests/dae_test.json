@@ -1,5 +1,5 @@
 {
-    "model_name": "edm2_ddec_mclt4",
+    "model_name": "edm2_ddec_mclt5",
     "model_load_options": {
         "torch_dtype": "bfloat16",
         "device": "cuda",
@@ -15,9 +15,10 @@
     "num_fgla_iters": 100,
     "add_latent_noise": 0,
     "test_ddec": true,
-    "add_random_test_samples": 9,
+    "add_random_test_samples": 6,
     "copy_sample_source_files": true,
     "test_samples": [
-        "dsf/Metropolis Street Racer Prototype/file_15.adx.flac"
+        "dsf/Metropolis Street Racer Prototype/file_15.adx.flac",
+        "psf3/psf3/Iron Man/_t_! movies_HUB_05_000001C2.adx.flac"
     ]
 }

@@ -30,7 +30,8 @@ import torch
 
 from modules.embeddings.clap import CLAP_Embedding
 from pipelines.dual_diffusion_pipeline import DualDiffusionPipeline, SampleParams, SampleOutput
-from modules.unets.unet_edm2_ddec import DDec_UNet
+from modules.unets.unet_edm2_ddec_mclt import DDec_MCLT_UNet
+from modules.embeddings.clap import CLAP_Embedding
 from modules.daes.dae_edm2_a1 import DualDiffusionDAE_EDM2_A1
 from modules.formats.spectrogram import SpectrogramFormat
 from utils.dual_diffusion_utils import (
@@ -56,8 +57,9 @@ def dae_test() -> None:
     model_path = os.path.join(config.MODELS_PATH, model_name)
     print(f"Loading DualDiffusion model from '{model_path}'...")
     pipeline = DualDiffusionPipeline.from_pretrained(model_path, **model_load_options)
-    dae: DualDiffusionDAE_EDM2_A1 = pipeline.dae#pipeline.vae
+    dae: DualDiffusionDAE_EDM2_A1 = pipeline.dae
     format: SpectrogramFormat = pipeline.format
+    embedding: CLAP_Embedding = pipeline.embedding
 
     format.config.num_fgla_iters = num_fgla_iters
     sample_rate = format.config.sample_rate
@@ -67,7 +69,7 @@ def dae_test() -> None:
         crop_width = format.sample_raw_crop_width(length=length)
 
     if test_params["test_ddec"] == True:
-        ddec: DDec_UNet = pipeline.ddec
+        ddec: DDec_MCLT_UNet = pipeline.ddec
         last_global_step = ddec.config.last_global_step
     else:
         last_global_step = dae.config.last_global_step
@@ -100,16 +102,20 @@ def dae_test() -> None:
         if os.path.isfile(file_path) == False:
             file_path = os.path.join(config.DEBUG_PATH, filename)
 
-        #safetensors_file_name = os.path.join(f"{os.path.splitext(filename)[0]}.safetensors")
-        #latents_dict = load_safetensors(os.path.join(dataset_path, safetensors_file_name))
-        #audio_embedding = normalize(latents_dict["clap_audio_embeddings"].mean(dim=0, keepdim=True)).float()
-        audio_embedding = torch.ones(dae.config.in_channels_emb, device=dae.device)
-
         audio_len = get_audio_info(file_path).frames
         source_raw_sample = load_audio(file_path, count=min(crop_width, audio_len))
         input_raw_sample = source_raw_sample.unsqueeze(0).to(format.device)
         input_sample = format.raw_to_sample(input_raw_sample)
         
+        safetensors_file_name = os.path.join(f"{os.path.splitext(filename)[0]}.safetensors")
+        safetensors_file_path = os.path.join(dataset_path, safetensors_file_name)
+        if os.path.isfile(safetensors_file_path):
+            latents_dict = load_safetensors(safetensors_file_path)
+            audio_embedding = normalize(latents_dict["clap_audio_embeddings"].mean(dim=0, keepdim=True)).float()
+        else:
+            audio_embedding = normalize(embedding.encode_audio(
+                input_raw_sample, sample_rate=format.config.sample_rate).mean(dim=0, keepdim=True)).float()
+
         dae_embedding = dae.get_embeddings(audio_embedding)
         latents = dae.encode(input_sample.to(dtype=dae.dtype), dae_embedding)
         #output_sample = dae.decode(latents, dae_embedding)
@@ -122,18 +128,12 @@ def dae_test() -> None:
             #    use_heun=True, schedule="scale_invariant", rho=3.5, sigma_max=15, sigma_min=0.0003
             #)
             ddec_params = SampleParams(
-                #num_steps=500, length=audio_len, cfg_scale=0, input_perturbation=1, input_perturbation_offset=0,
-                #use_heun=False, schedule="cos", rho=7,
-                #sigma_max=8.5, sigma_min=0.013
+                # best
+                #num_steps=200, length=audio_len, cfg_scale=1.5, input_perturbation=1, input_perturbation_offset=0,
+                #use_heun=False, schedule="edm2", rho=7, sigma_max=12, sigma_min=0.0003 # best
 
-                #use_heun=False, schedule="cos", rho=7,
-                #sigma_max=100, sigma_min=0.00005
-                #use_heun=False, schedule="linear", rho=7,
-                #sigma_max=60, sigma_min=0.005
-
-                num_steps=300, length=audio_len, cfg_scale=0, input_perturbation=1, input_perturbation_offset=0,
-                use_heun=False, schedule="edm2", rho=7, sigma_max=12, sigma_min=0.0003 #0.02
-                #use_heun=False, schedule="linear", rho=7, sigma_max=20, sigma_min=19.5 #0.02
+                num_steps=300, length=audio_len, cfg_scale=1.5, input_perturbation=1, input_perturbation_offset=0,
+                use_heun=False, schedule="edm2", rho=7, sigma_max=20, sigma_min=0.005 #0.013
             )
             output_sample = pipeline.diffusion_decode(
                 ddec_params, audio_embedding=audio_embedding,
