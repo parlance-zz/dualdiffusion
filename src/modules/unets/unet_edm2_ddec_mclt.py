@@ -38,7 +38,6 @@ from librosa import B_weighting #,A_weighting
 
 from modules.unets.unet import DualDiffusionUNet, DualDiffusionUNetConfig
 from modules.mp_tools import MPFourier, mp_cat, mp_silu, mp_sum, normalize, resample_1d
-from modules.formats.frequency_scale import get_mel_density
 from modules.formats.format import DualDiffusionFormat
 
 
