@@ -105,8 +105,8 @@ class OptimizerConfig:
     adam_epsilon: float      = 1e-8
     adam_weight_decay: float = 0.
     max_grad_norm: float     = 1.
-    dynamic_grad_norm_ema_beta: Optional[float] = None
-    dynamic_grad_norm_scale: float = 1.414
+    dynamic_grad_norm_ema_beta: Optional[float] = 0.999
+    dynamic_grad_norm_scale: float = 3
 
 @dataclass
 class DataLoaderConfig:
