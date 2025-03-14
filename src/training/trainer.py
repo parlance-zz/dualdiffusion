@@ -753,7 +753,8 @@ class DualDiffusionTrainer:
                     for i, sample_path in enumerate(device_batch["sample_paths"]):
                         self.train_sample_logger.add_log(sample_path, module_logs["loss"][i])
 
-                    self.accelerator.backward(module_logs["loss"].sum())
+                    # loss is multiplied by grad accum steps for consistent grad norm
+                    self.accelerator.backward(module_logs["loss"].sum() * self.config.gradient_accumulation_steps)
 
                     if self.accelerator.sync_gradients:
                         assert self.accum_step == (self.config.gradient_accumulation_steps - 1), \
