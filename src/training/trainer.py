@@ -100,13 +100,13 @@ class LRScheduleConfig:
 
 @dataclass
 class OptimizerConfig:
-    adam_beta1: float        = 0.9
-    adam_beta2: float        = 0.99
-    adam_epsilon: float      = 1e-8
-    adam_weight_decay: float = 0.
-    max_grad_norm: float     = 1.
-    dynamic_grad_norm_ema_beta: Optional[float] = 0.999
-    dynamic_grad_norm_scale: float = 3
+    adam_beta1: float         = 0.9
+    adam_beta2: float         = 0.99
+    adam_epsilon: float       = 1e-8
+    adam_weight_decay: float  = 0.
+    max_grad_norm: float      = 1.
+    grad_norm_ema_beta: float = 0.999
+    dynamic_max_grad_norm_z: Optional[float] = 1.4
 
 @dataclass
 class DataLoaderConfig:
@@ -186,7 +186,8 @@ class DualDiffusionTrainerConfig:
 class TrainerPersistentState:
     total_samples_processed: int = 0
     total_train_hours: float = 0
-    dynamic_max_grad_norm: Optional[float] = None
+    grad_norm_logmean: float = 0
+    grad_norm_logvar: float = 0
 
 class DualDiffusionTrainer:
 
@@ -347,6 +348,31 @@ class DualDiffusionTrainer:
             self.logger.error(f"Validation is enabled (num_validation_epochs: {self.config.num_validation_epochs}) but found no EMAs with include_in_validation=True")
             exit(1)
 
+    def get_max_grad_norm(self) -> float:
+
+        max_grad_norm = self.config.optimizer.max_grad_norm
+        
+        # if dynamic_max_grad_norm_z is not None then use dynamic grad norm
+        if self.config.optimizer.dynamic_max_grad_norm_z is not None:
+            
+            grad_mean = math.exp(self.persistent_state.grad_norm_logmean)
+            grad_std = math.exp(self.persistent_state.grad_norm_logvar / 2)
+            max_grad_norm = grad_mean + grad_std * self.config.optimizer.dynamic_max_grad_norm_z
+
+        return max_grad_norm
+
+    def update_grad_norm_stats(self, grad_norm: float, eps: float = 1e-8) -> None:
+        
+        grad_norm = max(grad_norm, eps)
+        beta = self.config.optimizer.grad_norm_ema_beta
+
+        log_mean = self.persistent_state.grad_norm_logmean
+        log_var = self.persistent_state.grad_norm_logvar
+        grad_var = max((grad_norm - math.exp(log_mean)) ** 2, eps)
+
+        self.persistent_state.grad_norm_logmean = log_mean * beta + (1 - beta) * math.log(grad_norm)
+        self.persistent_state.grad_norm_logvar = log_var * beta + (1 - beta) * math.log(grad_var)
+
     def init_optimizer(self) -> None:
         
         self.optimizer = torch.optim.AdamW(
@@ -362,12 +388,13 @@ class DualDiffusionTrainer:
         self.logger.info(f"Using AdamW optimiser with learning rate {self.config.lr_schedule.learning_rate}")
         self.logger.info(f"  AdamW beta1: {self.config.optimizer.adam_beta1} beta2: {self.config.optimizer.adam_beta2}")
         self.logger.info(f"  AdamW eps: {self.config.optimizer.adam_epsilon} weight decay: {self.config.optimizer.adam_weight_decay}")
-        self.logger.info(f"  Gradient clipping max norm: {self.config.optimizer.max_grad_norm}")
-
-        if self.config.optimizer.dynamic_grad_norm_ema_beta is not None:
-            self.logger.info(f"  Dynamic max grad norm enabled (beta: {self.config.optimizer.dynamic_grad_norm_ema_beta})")
-            self.logger.info(f"  Current max grad norm: {self.persistent_state.dynamic_max_grad_norm or self.config.optimizer.max_grad_norm}")
         
+        if self.config.optimizer.dynamic_max_grad_norm_z is not None:
+            self.logger.info(f"  Dynamic max grad norm enabled (beta: {self.config.optimizer.grad_norm_ema_beta}"
+                             f"  max_z: {self.config.optimizer.dynamic_max_grad_norm_z})")
+        else:
+            self.logger.info(f"  Gradient clipping max norm: {self.config.optimizer.max_grad_norm}")
+
     def init_checkpointing(self) -> None:
 
         self.last_checkpoint_time = datetime.now()
@@ -761,23 +788,16 @@ class DualDiffusionTrainer:
                             f"accum_step out of sync with sync_gradients: {self.accum_step} != {self.config.gradient_accumulation_steps - 1}"
                         
                         # clip grad norm and check for inf/nan grad
-                        if self.config.optimizer.dynamic_grad_norm_ema_beta is not None:
-                            if self.persistent_state.dynamic_max_grad_norm is None:
-                                self.persistent_state.dynamic_max_grad_norm = self.config.optimizer.max_grad_norm
-                            max_grad_norm = self.persistent_state.dynamic_max_grad_norm * self.config.optimizer.dynamic_grad_norm_scale
-                        else:
-                            max_grad_norm = self.config.optimizer.max_grad_norm
+                        max_grad_norm = self.get_max_grad_norm()
 
                         grad_norm = self.accelerator.clip_grad_norm_(self.module.parameters(), max_grad_norm).item()
                         train_logger.add_log("grad_norm", grad_norm)
                         train_logger.add_log("grad_norm/max", max_grad_norm)
                         train_logger.add_log("grad_norm/clipped", min(max_grad_norm, grad_norm))
-
-                        if self.config.optimizer.dynamic_grad_norm_ema_beta is not None:
-                            self.persistent_state.dynamic_max_grad_norm = (
-                                self.persistent_state.dynamic_max_grad_norm * self.config.optimizer.dynamic_grad_norm_ema_beta +
-                                grad_norm * (1 - self.config.optimizer.dynamic_grad_norm_ema_beta)
-                            )
+                        train_logger.add_log("grad_norm/ema_mean", math.exp(self.persistent_state.grad_norm_logmean))
+                        train_logger.add_log("grad_norm/ema_std", math.exp(self.persistent_state.grad_norm_logvar/2))
+                        
+                        self.update_grad_norm_stats(grad_norm)
                         
                         if math.isinf(grad_norm) or math.isnan(grad_norm):
                             self.logger.warning(f"Warning: grad norm is {grad_norm} step={self.global_step}")
