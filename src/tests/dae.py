@@ -110,6 +110,8 @@ def dae_test() -> None:
         
         safetensors_file_name = os.path.join(f"{os.path.splitext(filename)[0]}.safetensors")
         safetensors_file_path = os.path.join(dataset_path, safetensors_file_name)
+        if os.path.isfile(safetensors_file_path) == False:
+            safetensors_file_path = os.path.join(config.DEBUG_PATH, safetensors_file_name)
         if os.path.isfile(safetensors_file_path):
             latents_dict = load_safetensors(safetensors_file_path)
             audio_embedding = normalize(latents_dict["clap_audio_embeddings"].mean(dim=0, keepdim=True)).float()
