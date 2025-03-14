@@ -311,6 +311,8 @@ class DualDiffusionPipeline(torch.nn.Module):
 
     def get_latent_shape(self, sample_shape: Union[torch.Size, tuple[int, int, int, int]]) -> torch.Size:
         encoder = getattr(self, "vae", getattr(self, "dae", None))
+        if encoder is None:
+            return None
         latent_shape = encoder.get_latent_shape(sample_shape)
         if hasattr(self, "unet"):
             return self.unet.get_latent_shape(latent_shape)
@@ -320,6 +322,8 @@ class DualDiffusionPipeline(torch.nn.Module):
     def get_sample_shape(self, bsz: int = 1, length: Optional[int] = None) -> tuple:
         encoder = getattr(self, "vae", getattr(self, "dae", None))
         sample_shape = self.format.get_sample_shape(bsz=bsz, length=length)
+        if encoder is None:
+            return sample_shape
         latent_shape = self.get_latent_shape(sample_shape)
         return encoder.get_sample_shape(latent_shape)
     
