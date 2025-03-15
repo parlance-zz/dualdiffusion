@@ -27,7 +27,7 @@ import torch
 import torchaudio
 
 from .format import DualDiffusionFormat, DualDiffusionFormatConfig
-from .frequency_scale import FrequencyScale
+from .frequency_scale import FrequencyScale, get_mel_density
 from .phase_recovery import PhaseRecovery
 
 @dataclass()
@@ -37,6 +37,7 @@ class SpectrogramFormatConfig(DualDiffusionFormatConfig):
     raw_to_sample_scale: float = 2
     sample_to_raw_scale: float = 0.5
     abs_exp1_scale: float      = 0.008
+    abs_exp1_mel_density: bool = False
 
     abs_exponent: float = 0.25
 
@@ -223,4 +224,12 @@ class SpectrogramFormat(DualDiffusionFormat):
     
     @torch.inference_mode()
     def convert_to_abs_exp1(self, samples: torch.Tensor):
-        return samples ** (1 / self.config.abs_exponent) * self.config.abs_exp1_scale
+
+        abs_exp1 = samples ** (1 / self.config.abs_exponent) * self.config.abs_exp1_scale
+
+        if self.config.abs_exp1_mel_density == True:
+            mel_freqs = self.spectrogram_converter.freq_scale.get_unscaled(
+                self.config.num_frequencies + 2, device=samples.device)[1:-1]
+            abs_exp1 /= get_mel_density(mel_freqs).view(1, 1,-1, 1)
+
+        return abs_exp1

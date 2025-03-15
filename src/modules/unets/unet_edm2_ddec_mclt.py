@@ -63,6 +63,7 @@ class DDec_MCLT_UNetConfig(DualDiffusionUNetConfig):
     emb_linear_groups: int = 1
     audio_sample_rate: float = 32000
     mel_density_scale: float = 0.54
+    add_constant_channel: bool = False
 
 class MPConv(torch.nn.Module):
 
@@ -250,7 +251,7 @@ class DDec_MCLT_UNet(DualDiffusionUNet):
 
         # Encoder.
         self.enc = torch.nn.ModuleDict()
-        cout = config.in_channels * 2
+        cout = config.in_channels * 2 + int(config.add_constant_channel)
 
         for level, channels in enumerate(cblock):
             
@@ -334,7 +335,8 @@ class DDec_MCLT_UNet(DualDiffusionUNet):
         emb = emb.unsqueeze(-1).unsqueeze(-1).to(dtype=torch.bfloat16)
 
         # Encoder.
-        x = torch.cat((x, x_ref.to(dtype=torch.bfloat16)), dim=1)
+        inputs = (x, x_ref.to(dtype=torch.bfloat16), torch.ones_like(x[:, :1])) if self.config.add_constant_channel else (x, x_ref.to(dtype=torch.bfloat16))
+        x = torch.cat(inputs, dim=1)
 
         skips = []
         for name, block in self.enc.items():
