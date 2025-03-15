@@ -105,8 +105,8 @@ class OptimizerConfig:
     adam_epsilon: float       = 1e-8
     adam_weight_decay: float  = 0.
     max_grad_norm: float      = 1.
-    grad_norm_ema_beta: float = 0.999
-    dynamic_max_grad_norm_z: Optional[float] = 2
+    grad_norm_ema_beta: float = 0.995
+    dynamic_max_grad_norm_z: Optional[float] = 3
 
 @dataclass
 class DataLoaderConfig:
@@ -371,7 +371,7 @@ class DualDiffusionTrainer:
         grad_var = max((grad_norm - math.exp(log_mean)) ** 2, eps)
 
         self.persistent_state.grad_norm_logmean = log_mean * beta + (1 - beta) * math.log(grad_norm)
-        self.persistent_state.grad_norm_logvar = log_var * beta + (1 - beta) * math.log(grad_var)
+        self.persistent_state.grad_norm_logvar = log_var * beta**2 + (1 - beta**2) * math.log(grad_var)
 
     def init_optimizer(self) -> None:
         
