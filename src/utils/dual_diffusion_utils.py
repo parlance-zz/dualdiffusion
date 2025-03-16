@@ -40,6 +40,7 @@ import safetensors.torch as safetensors
 import mutagen
 import mutagen.flac
 import pyloudnorm
+import librosa
 
 from utils.roseus_colormap import ROSEUS_COLORMAP
 
@@ -279,7 +280,11 @@ def load_audio(input_path: str,
         sample_len = get_audio_info(input_path).frames
         start = np.random.randint(0, sample_len - count + 1)
 
-    tensor, sample_rate = torchaudio.load(input_path, frame_offset=start, num_frames=count)
+    #tensor, sample_rate = torchaudio.load(input_path, frame_offset=start, num_frames=count)
+    sample_rate = get_audio_info(input_path).sample_rate
+    data, _ = librosa.load(input_path, sr=None, offset=start/sample_rate, duration=count/sample_rate, mono=False)
+    tensor = torch.from_numpy(data).float()
+
     assert tensor.shape[-1] == count or count == -1
 
     if tensor.shape[0] == 1 and force_stereo == True:
