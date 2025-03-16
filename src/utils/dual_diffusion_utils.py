@@ -272,7 +272,8 @@ def load_audio(input_path: str,
                return_sample_rate: bool = False,
                device: Optional[torch.device] = None,
                return_start: bool = False,
-               force_stereo: bool = True):
+               force_stereo: bool = True,
+               sample_rate: Optional[int] = None) -> Union[torch.Tensor, tuple[torch.Tensor, int]]:
 
     if start < 0:
         if count < 0:
@@ -281,8 +282,12 @@ def load_audio(input_path: str,
         start = np.random.randint(0, sample_len - count + 1)
 
     #tensor, sample_rate = torchaudio.load(input_path, frame_offset=start, num_frames=count)
-    sample_rate = get_audio_info(input_path).sample_rate
-    data, _ = librosa.load(input_path, sr=None, offset=start/sample_rate, duration=count/sample_rate, mono=False)
+    if sample_rate is None:
+        sample_rate = get_audio_info(input_path).sample_rate
+    data, returned_sample_rate = librosa.load(input_path, sr=None, offset=start/sample_rate, duration=count/sample_rate, mono=False)
+    if returned_sample_rate != sample_rate:
+        raise ValueError(f"Given sample rate ({sample_rate}) does not match file sample rate ({returned_sample_rate}) in {input_path}")
+    
     tensor = torch.from_numpy(data).float()
 
     assert tensor.shape[-1] == count or count == -1

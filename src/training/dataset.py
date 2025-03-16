@@ -165,7 +165,8 @@ class DualDiffusionDataset(torch.nn.Module):
             if "audio" in self.config.load_datatypes:
                 audio, sample_rate, audio_t_offset = load_audio(train_sample["file_name"], start=-1,
                                                     count=self.config.sample_crop_width,
-                                                    return_sample_rate=True, return_start=True)
+                                                    return_sample_rate=True, return_start=True,
+                                                    sample_rate=self.format_config.sample_rate)
                 
                 # duplicate to stereo or downmix to mono if needed
                 if audio.shape[0] < self.format_config.sample_raw_channels:
