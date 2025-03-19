@@ -34,8 +34,9 @@ from .phase_recovery import PhaseRecovery
 class SpectrogramFormatConfig(DualDiffusionFormatConfig):
 
     # these values are for audio pre-normalized to -20 lufs
-    raw_to_sample_scale: float = 2
-    sample_to_raw_scale: float = 0.5
+    raw_to_sample_scale: float = 2.247
+    sample_to_raw_scale: float = 0.445
+    sample_mean: float = 1.295
     abs_exp1_scale: float      = 0.008
     abs_exp1_mel_density: bool = False
 
@@ -155,7 +156,8 @@ class SpectrogramConverter(torch.nn.Module):
         return torch.Size(spectrogram_shape[:-2] + (audio_len,))
 
     def sample_raw_crop_width(self, audio_len: int) -> int:
-        spectrogram_len = self.get_spectrogram_shape(torch.Size((1, audio_len)))[-1] // 64 * 64
+        #spectrogram_len = self.get_spectrogram_shape(torch.Size((1, audio_len)))[-1] // 64 * 64
+        spectrogram_len = self.get_spectrogram_shape(torch.Size((1, audio_len)))[-1] // 256 * 256
         return self.get_audio_shape(torch.Size((1, spectrogram_len)))[-1]
 
     @torch.inference_mode()
@@ -202,19 +204,25 @@ class SpectrogramFormat(DualDiffusionFormat):
     @torch.inference_mode()
     def raw_to_sample(self, raw_samples: torch.Tensor, unscaled_spectrogram: bool = False) -> torch.Tensor:
         if unscaled_spectrogram == True:
-            return self.spectrogram_converter.audio_to_unscaled_spectrogram(raw_samples) * self.config.raw_to_sample_scale
+            return (self.spectrogram_converter.audio_to_unscaled_spectrogram(raw_samples) - self.config.sample_mean) * self.config.raw_to_sample_scale
         else:
-            return self.spectrogram_converter.audio_to_spectrogram(raw_samples) * self.config.raw_to_sample_scale
+            #return self.spectrogram_converter.audio_to_spectrogram(raw_samples) * self.config.raw_to_sample_scale
+            spec_samples = []
+            for raw_sample in raw_samples.unbind(0):
+                spec_samples.append(self.spectrogram_converter.audio_to_spectrogram(raw_sample.unsqueeze(0)) - self.config.sample_mean)
+            return torch.cat(spec_samples, dim=0) * self.config.raw_to_sample_scale
 
     @torch.inference_mode()
     def sample_to_raw(self, samples: torch.Tensor, n_fgla_iters: Optional[int] = None,
                 quiet: bool = False, unscaled_spectrogram: bool = False) -> torch.Tensor:
+        
+        samples = (samples / self.config.raw_to_sample_scale + self.config.sample_mean).clip(min=0)
         if unscaled_spectrogram == True:
             return self.spectrogram_converter.unscaled_spectrogram_to_audio(
-                samples.clip(min=0) * self.config.sample_to_raw_scale, n_fgla_iters=n_fgla_iters, quiet=quiet)
+                samples, n_fgla_iters=n_fgla_iters, quiet=quiet)
         else:
             return self.spectrogram_converter.spectrogram_to_audio(
-                samples.clip(min=0) * self.config.sample_to_raw_scale, n_fgla_iters=n_fgla_iters, quiet=quiet)
+                samples, n_fgla_iters=n_fgla_iters, quiet=quiet)
     
     @torch.no_grad()
     def get_ln_freqs(self, x: torch.Tensor) -> torch.Tensor:        
@@ -224,8 +232,9 @@ class SpectrogramFormat(DualDiffusionFormat):
     
     @torch.inference_mode()
     def convert_to_abs_exp1(self, samples: torch.Tensor):
-
-        abs_exp1 = samples ** (1 / self.config.abs_exponent) * self.config.abs_exp1_scale
+        
+        samples = (samples / self.config.raw_to_sample_scale + self.config.sample_mean) * 2
+        abs_exp1 = samples.clip(min=0) ** (1 / self.config.abs_exponent) * self.config.abs_exp1_scale
 
         if self.config.abs_exp1_mel_density == True:
             mel_freqs = self.spectrogram_converter.freq_scale.get_unscaled(

@@ -40,6 +40,7 @@ class DualDiffusionFormatConfig(DualDiffusionModuleConfig):
     t_scale: Optional[float] = None
     raw_to_sample_scale: float = 1
     sample_to_raw_scale: float = 1
+    sample_mean: float = 0
 
 class DualDiffusionFormat(DualDiffusionModule, ABC):
 
