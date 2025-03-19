@@ -183,32 +183,34 @@ def unet_test() -> None:
 
         print(f"input   mean/std: {input_sample.mean().item():.4} {input_sample.std().item():.4}")
         print(f"output  mean/std: {output_sample.mean().item():.4} {output_sample.std().item():.4}")
-        print(f"latents mean/std: {latents.mean().item():.4} {latents.std().item():.4}")
-        
-        latents_mean = latents.mean().item()
-        latents_std = latents.std().item()
-        avg_latents_mean += latents_mean
-        avg_latents_std += latents_std
         
         output_label = cfg.unet_params.get_label(pipeline.model_metadata)
 
-        if dae is not None:
-            latents_img = dae.latents_to_img(latents)
-        else:
-            latents_img = tensor_to_img(latents, flip_y=True)
-        output_latents_file_path = os.path.join(output_path, f"{output_label}_output_latents.png")
-        output_latents_file_path = get_no_clobber_filepath(output_latents_file_path)
-        save_img(latents_img, output_latents_file_path)
+        if latents is not None:
+            print(f"latents mean/std: {latents.mean().item():.4} {latents.std().item():.4}")
+            
+            latents_mean = latents.mean().item()
+            latents_std = latents.std().item()
+            avg_latents_mean += latents_mean
+            avg_latents_std += latents_std 
 
+            if dae is not None:
+                latents_img = dae.latents_to_img(latents)
+            else:
+                latents_img = tensor_to_img(latents, flip_y=True)
+            output_latents_file_path = os.path.join(output_path, f"{output_label}_output_latents.png")
+            output_latents_file_path = get_no_clobber_filepath(output_latents_file_path)
+            save_img(latents_img, output_latents_file_path)
+
+            input_latents = latents_dict["latents"][0:1, ..., :latents.shape[-1]] if latents_dict is not None else None
+            if input_latents is not None and dae is not None:
+                output_latents_file_path = os.path.join(output_path, f"{output_label}_input_latents.png")
+                output_latents_file_path = get_no_clobber_filepath(output_latents_file_path)
+                save_img(dae.latents_to_img(input_latents), output_latents_file_path)
+                
         output_sample_file_path = os.path.join(output_path, f"{output_label}_output_sample.png")
         output_sample_file_path = get_no_clobber_filepath(output_sample_file_path)
         save_img(format.sample_to_img(output_sample), output_sample_file_path)
-
-        input_latents = latents_dict["latents"][0:1, ..., :latents.shape[-1]] if latents_dict is not None else None
-        if input_latents is not None and dae is not None:
-            output_latents_file_path = os.path.join(output_path, f"{output_label}_input_latents.png")
-            output_latents_file_path = get_no_clobber_filepath(output_latents_file_path)
-            save_img(dae.latents_to_img(input_latents), output_latents_file_path)
 
         output_sample_file_path = os.path.join(output_path, f"{output_label}_input_sample.png")
         output_sample_file_path = get_no_clobber_filepath(output_sample_file_path)
