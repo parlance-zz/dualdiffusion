@@ -371,7 +371,7 @@ class DualDiffusionTrainer:
         grad_var = max((grad_norm - math.exp(log_mean)) ** 2, eps)
 
         self.persistent_state.grad_norm_logmean = log_mean * beta + (1 - beta) * math.log(grad_norm)
-        self.persistent_state.grad_norm_logvar = log_var * beta**2 + (1 - beta**2) * math.log(grad_var)
+        self.persistent_state.grad_norm_logvar = log_var * beta + (1 - beta) * math.log(grad_var)
 
     def init_optimizer(self) -> None:
         
@@ -781,7 +781,7 @@ class DualDiffusionTrainer:
                         self.train_sample_logger.add_log(sample_path, module_logs["loss"][i])
 
                     # loss is multiplied by grad accum steps for consistent grad norm
-                    self.accelerator.backward(module_logs["loss"].sum() * self.config.gradient_accumulation_steps)
+                    self.accelerator.backward(module_logs["loss"].sum() * (self.config.gradient_accumulation_steps * 160 / 256))
 
                     if self.accelerator.sync_gradients:
                         assert self.accum_step == (self.config.gradient_accumulation_steps - 1), \

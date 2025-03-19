@@ -611,7 +611,7 @@ class DualDiffusionPipeline(torch.nn.Module):
         debug_info["sigma_schedule"] = sigma_schedule_list
         
         noise = torch.randn(sample_shape, device=unet.device, generator=generator)
-        sample = noise * sigma_schedule[0]
+        sample = noise * (sigma_schedule[0]**2 + params.sigma_data**2)**0.5
 
         progress_bar = tqdm(total=params.num_steps, disable=quiet)
         for i, (sigma_curr, sigma_next) in enumerate(zip(sigma_schedule_list[:-1], sigma_schedule_list[1:])):
