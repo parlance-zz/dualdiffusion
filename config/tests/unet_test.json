@@ -15,9 +15,8 @@
         },
         "compile_options": null
     },
-    "output_lufs": -16,
+    "output_lufs": -16.5,
     "num_fgla_iters": 300, // hq settings
-    //"num_fgla_iters": 150,
 
     "skip_ddec": false,
     "copy_sample_source_files": true,
@@ -69,6 +68,7 @@
         "3sf/Monster Hunter Generations",
         "3sf/Monster Hunter XX",
         */
+
         /*
         "psf/Gradius Gaiden/SLPM-86042_BGM1_0000096c.XA.flac",
         "psf/Gradius Gaiden/SLPM-86042_BGM1_0000096c.XA.flac",
@@ -97,8 +97,6 @@
         //"psf/Descent Maximum",
         //"psf/Command & Conquer - Red Alert",
         
-
-
         /*
         "[TwoShot] LOOP4 PAD4.flac",
         "[TwoShot] random 2 - Track 6.flac",
@@ -142,70 +140,27 @@
     ],
     "unet_params": {
         "seed": null,
-        //"num_steps": 200,
 
-        //"cfg_scale": 2,
-        //"cfg_scale": 2.5,
-        //"cfg_scale": 1.5,
-        //"cfg_scale": 3,
-
-        // best settings as of 264k
-        //"num_steps": 300,
-        //"cfg_scale": 1.6,
-        //"input_perturbation": 0.4,
-        //"input_perturbation_offset": 0.6,
-        //"sigma_min": 0.05,
-        //"sigma_max": 200,
-        //"use_heun": true,
-
-
-        //"sigma_min": 0.01,
-        //"num_steps": 200,
-        //"cfg_scale": 1.5,
-        //"use_heun": false,
-
-        // best settings for ultra1 as of 127k
         "num_steps": 300,
-        "sigma_max": 200,
-        "sigma_min": 0.05,
-        "cfg_scale": 3,//2
+        "cfg_scale": 1.5,
+        "use_heun": true,
+
+        "sigma_max": 250,
+        "sigma_min": 0.025,
+        
         "input_perturbation": 0.4,
         "input_perturbation_offset": 0.6,
-        "use_heun": true,
-        
-
-        //"input_perturbation": 0.5,
-        //"input_perturbation_offset": 0.7,
-
-        //"input_perturbation": 0.15,
-        //"input_perturbation_offset": 1,
-        //"input_perturbation": 0.08,
-        //"input_perturbation_offset": 3.4,
-
-        // best settings as of 264k
-
-
-        //"input_perturbation": 1,
-        //"input_perturbation_offset": 0,
-
-        //#"input_perturbation": 1,
-        //#"input_perturbation_offset": 0,
-        
-        //"sigma_max": 8,
     },
     "ddec_params": {
-        // best settings as of 264k
-        "num_steps": 300,      
-        //"cfg_scale": 1.62,
+
+        "num_steps": 300,
+        "cfg_scale": 1.5,
         "use_heun": false,
 
-        //"num_steps": 15,
-        "cfg_scale": 1.5,
-        //"use_heun": false,
+        "sigma_max": 8,
+        "sigma_min": 0.0003,
 
         "input_perturbation": 1,
         "input_perturbation_offset": 0,
-        "sigma_min": 0.0003,
-        "sigma_max": 8,
     }
 }
