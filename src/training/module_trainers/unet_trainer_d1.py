@@ -206,8 +206,9 @@ class UNetTrainer_D1(ModuleTrainer):
         #enc_states, dec_states, sigma = self.vae(samples.to(dtype=self.vae.dtype),
         #                            vae_emb, add_latents_noise=self.config.latents_perturbation)
 
-        spec_samples = self.format.convert_to_abs_exp1(self.format.raw_to_sample(batch["audio"])).clone().detach()
-
+        #spec_samples = self.format.convert_to_abs_exp1(self.format.raw_to_sample(batch["audio"])).clone().detach()
+        spec_samples = self.format.raw_to_sample(batch["audio"]).clone().detach()
+        
         # get the noise level for this sub-batch from the pre-calculated whole-batch sigma (required for stratified sampling)
         local_sigma = self.global_sigma[self.trainer.accelerator.local_process_index::self.trainer.accelerator.num_processes]
         batch_sigma = local_sigma[self.trainer.accum_step * device_batch_size:(self.trainer.accum_step+1) * device_batch_size]
@@ -251,8 +252,10 @@ class UNetTrainer_D1(ModuleTrainer):
             self.unet_loss_bucket_counts.index_add_(0, target_buckets, torch.ones_like(global_weighted_loss))
 
         return {"loss": batch_loss,
-                "std/input_samples": spec_samples.square().mean(dim=(1,2,3)).sqrt(),
-                "std/output_samples": denoised.square().mean(dim=(1,2,3)).sqrt()}
+                "io_stats/input_std": spec_samples.std(dim=(1,2,3)),
+                "io_stats/input_mean": spec_samples.mean(dim=(1,2,3)),
+                "io_stats/output_std": denoised.std(dim=(1,2,3)),
+                "io_stats/output_mean": denoised.mean(dim=(1,2,3))}
 
     @torch.no_grad()
     def finish_batch(self) -> dict[str, torch.Tensor]:
