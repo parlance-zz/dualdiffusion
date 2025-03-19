@@ -38,7 +38,7 @@ from modules.module import DualDiffusionModule
 from modules.unets.unet import DualDiffusionUNet
 #from modules.mp_tools import mp_sum
 from utils.dual_diffusion_utils import (
-    normalize, load_safetensors, torch_dtype, load_audio, get_cos_angle
+    normalize, load_safetensors, torch_dtype, load_audio, get_cos_angle, tensor_info_str
 )
 from sampling.schedule import SamplingSchedule
 from training.ema import find_emas_in_dir
@@ -593,8 +593,11 @@ class DualDiffusionPipeline(torch.nn.Module):
             debug_info["unet_class_embeddings std"] = unet_class_embeddings.std().item()
 
         if x_ref is None:
-            sample_shape = self.get_sample_shape(bsz=params.batch_size, length=params.length)
-            sample_shape = self.get_latent_shape(sample_shape)
+            if getattr(self, "vae", None) is not None or getattr(self, "dae", None) is not None:
+                sample_shape = self.get_sample_shape(bsz=params.batch_size, length=params.length)
+                sample_shape = self.get_latent_shape(sample_shape)
+            else:
+                sample_shape = self.format.get_sample_shape(bsz=params.batch_size, length=params.length)
             input_ref_sample = None
         else:
             sample_shape = x_ref.shape
@@ -704,7 +707,6 @@ class DualDiffusionPipeline(torch.nn.Module):
         debug_info["final_sample_std"] = sample.std().item()
 
         if hasattr(unet, "mel_density"):
-            pass
             sample *= unet.mel_density
             #sample *= unet.freq_stds.view(1, 1,-1, 1)
 
