@@ -529,7 +529,9 @@ def tensor_4d_to_5d(x: torch.Tensor, num_channels: int) -> torch.Tensor:
     return x.reshape(x.shape[0], num_channels, -1, x.shape[2], x.shape[3])
 
 def tensor_info_str(x: torch.Tensor) -> str:
-    return f"shape: {list(x.shape)}  device: {x.device}  mean: {x.mean().item():.4f}  std: {x.std().item():.4f}"
+    info_str = f"shape: {list(x.shape)}  device: {x.device}  dtype: {x.dtype}"
+    info_str += f"  mean: {x.mean().item():.4f}  std: {x.std().item():.4f}  norm: {x.square().mean().sqrt().item():.4f}"
+    return info_str
 
 @torch.inference_mode()
 def tensor_to_img(x: torch.Tensor,
