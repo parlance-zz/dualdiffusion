@@ -1,34 +1,31 @@
 {
-    "model_name": "edm2_da1_aclap2_ultra1",
+    "model_name": "edm2_unet_aclap2_ultra_d1a",
     "model_load_options": {
         "torch_dtype": {
             "unet": "bfloat16",
             "ddec": "bfloat16",
-            "dae": "float32",
         },
         "device": "cuda",
         "load_checkpoints": true,
         "load_emas": {
             //"unet": "phema_std0.015.safetensors",
             //"unet": "phema_std0.2.safetensors",
-            //"unet": "ema_std0.1.safetensors", // best settings at 264k
             "unet": "ema_std0.05.safetensors",
-            "dae": "ema_std0.05.safetensors",
             "ddec": "ema_std0.1.safetensors"
         },
         "compile_options": null
     },
-    "output_lufs": -17,
+    "output_lufs": -16,
     "num_fgla_iters": 300, // hq settings
     //"num_fgla_iters": 150,
 
     "skip_ddec": false,
     "copy_sample_source_files": true,
     "random_test_samples_seed": null,
-    "add_random_test_samples": 0,
+    "add_random_test_samples": 5,
     "test_samples": [
         
-        "psf2/Shin Megami Tensei - Persona 3 FES",
+        //"psf2/Shin Megami Tensei - Persona 3 FES",
         
         /*
         "dsf/Metropolis Street Racer Prototype/file_15.adx.flac",
@@ -198,17 +195,17 @@
     },
     "ddec_params": {
         // best settings as of 264k
-        "num_steps": 30,      
+        "num_steps": 300,      
         //"cfg_scale": 1.62,
-        "use_heun": true,
+        "use_heun": false,
 
         //"num_steps": 15,
         "cfg_scale": 1.5,
         //"use_heun": false,
 
-        "input_perturbation": 0,
+        "input_perturbation": 1,
         "input_perturbation_offset": 0,
-        "sigma_min": null,
-        "sigma_max": null,
+        "sigma_min": 0.0003,
+        "sigma_max": 8,
     }
 }

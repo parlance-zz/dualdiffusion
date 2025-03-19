@@ -32,12 +32,14 @@ import glob
 import torch
 
 from pipelines.dual_diffusion_pipeline import DualDiffusionPipeline, SampleParams
-from modules.unets.unet_edm2_ddec import DDec_UNet
+from modules.unets.unet_edm2_ddec_mclt import DDec_MCLT_UNet
 from modules.daes.dae import DualDiffusionDAE
 from modules.formats.spectrogram import SpectrogramFormat
+from modules.formats.mclt import DualMCLTFormat, DualMCLTFormatConfig
 from utils.dual_diffusion_utils import (
     init_cuda, normalize, save_audio, load_audio, load_safetensors,
-    save_img, dict_str, get_no_clobber_filepath, get_audio_metadata
+    save_img, dict_str, get_no_clobber_filepath, get_audio_metadata,
+    tensor_to_img, tensor_info_str
 )
 
 
@@ -71,9 +73,10 @@ def unet_test() -> None:
     model_path = os.path.join(config.MODELS_PATH, cfg.model_name)
     print(f"Loading DualDiffusion model from '{model_path}'...")
     pipeline = DualDiffusionPipeline.from_pretrained(model_path, **cfg.model_load_options)
-    dae: DualDiffusionDAE = pipeline.dae
-    ddec: DDec_UNet = pipeline.ddec
+    dae: DualDiffusionDAE = getattr(pipeline, "dae", None)
+    ddec: DDec_MCLT_UNet = pipeline.ddec
     format: SpectrogramFormat = pipeline.format
+    mclt = DualMCLTFormat(DualMCLTFormatConfig())
 
     ddec.compile(fullgraph=True, dynamic=False)
     ddec.to(memory_format=torch.channels_last)
@@ -150,22 +153,33 @@ def unet_test() -> None:
         input_sample = format.raw_to_sample(input_audio[:, :crop_width])
 
         audio_embedding = normalize(clap_audio_embeddings.mean(dim=0, keepdim=True)).float()
-        dae_embeddings = dae.get_embeddings(audio_embedding.to(dtype=dae.dtype, device=dae.device))
+        if dae is not None:
+            dae_embeddings = dae.get_embeddings(audio_embedding.to(dtype=dae.dtype, device=dae.device))
+        else:
+            dae_embeddings = None
 
         cfg.unet_params.seed = base_seed + i
         cfg.unet_params.prompt = filename
-        #pipeline.unet.to("cuda")
-        latents = pipeline.diffusion_decode(cfg.unet_params, audio_embedding=audio_embedding).float()
-        #pipeline.unet.to("cpu")
-
-        latents = latents / latents.std(dim=(1,2,3), keepdim=True)
-        output_sample = dae.decode(latents.to(dtype=dae.dtype), dae_embeddings)
+        
+        unet_output = pipeline.diffusion_decode(cfg.unet_params, audio_embedding=audio_embedding).float()
+        if dae is not None:
+            latents = unet_output
+            output_sample = dae.decode(latents.to(dtype=dae.dtype), dae_embeddings)
+        else:
+            latents = None
+            output_sample = unet_output
         
         if cfg.skip_ddec == False:
+            x_ref = format.convert_to_abs_exp1(output_sample)
+            x_ref = x_ref.to(dtype=ddec.dtype)
+
             cfg.ddec_params.seed = cfg.unet_params.seed
-            output_sample = pipeline.diffusion_decode(cfg.ddec_params,
-                audio_embedding=audio_embedding, x_ref=output_sample.to(dtype=ddec.dtype), module_name="ddec")
-        output_raw_sample = format.sample_to_raw(output_sample.float(), n_fgla_iters=cfg.num_fgla_iters)
+            output_mclt_sample = pipeline.diffusion_decode(cfg.ddec_params,
+                audio_embedding=audio_embedding, x_ref=x_ref, module_name="ddec")
+            
+            output_raw_sample = mclt.sample_to_raw(output_mclt_sample.float())
+        else:
+            output_raw_sample = format.sample_to_raw(output_sample.float(), n_fgla_iters=cfg.num_fgla_iters)
 
         print(f"input   mean/std: {input_sample.mean().item():.4} {input_sample.std().item():.4}")
         print(f"output  mean/std: {output_sample.mean().item():.4} {output_sample.std().item():.4}")
@@ -177,16 +191,21 @@ def unet_test() -> None:
         avg_latents_std += latents_std
         
         output_label = cfg.unet_params.get_label(pipeline.model_metadata)
+
+        if dae is not None:
+            latents_img = dae.latents_to_img(latents)
+        else:
+            latents_img = tensor_to_img(latents, flip_y=True)
         output_latents_file_path = os.path.join(output_path, f"{output_label}_output_latents.png")
         output_latents_file_path = get_no_clobber_filepath(output_latents_file_path)
-        save_img(dae.latents_to_img(latents), output_latents_file_path)
+        save_img(latents_img, output_latents_file_path)
 
         output_sample_file_path = os.path.join(output_path, f"{output_label}_output_sample.png")
         output_sample_file_path = get_no_clobber_filepath(output_sample_file_path)
         save_img(format.sample_to_img(output_sample), output_sample_file_path)
 
         input_latents = latents_dict["latents"][0:1, ..., :latents.shape[-1]] if latents_dict is not None else None
-        if input_latents is not None:
+        if input_latents is not None and dae is not None:
             output_latents_file_path = os.path.join(output_path, f"{output_label}_input_latents.png")
             output_latents_file_path = get_no_clobber_filepath(output_latents_file_path)
             save_img(dae.latents_to_img(input_latents), output_latents_file_path)
