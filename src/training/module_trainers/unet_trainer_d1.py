@@ -215,8 +215,11 @@ class UNetTrainer_D1(ModuleTrainer):
 
         # prepare model inputs
         noise = torch.randn(spec_samples.shape, device=spec_samples.device, generator=self.device_generator)
+        
+        #spec_samples_fft = torch.fft.rfft2(spec_samples, norm="ortho").view(spec_samples.shape[0], -1)
 
         #quantiles = self.sigma_sampler._sample_uniform_stratified(device_batch_size)
+        #freq_indices = (quantiles * (spec_samples_fft.shape[1] - 1e-4)).to(dtype=torch.int32)
         #freq_indices = (quantiles * (mclt_samples.shape[2] - 1e-4)).to(dtype=torch.int32)
         #freq_indices = (quantiles * (mclt_samples.shape[3] - 1e-4)).to(dtype=torch.int32)
         #freq_indices = (quantiles * (mclt_samples.shape[3] + mclt_samples.shape[2] - 1e-4)).to(dtype=torch.int32)
@@ -224,9 +227,12 @@ class UNetTrainer_D1(ModuleTrainer):
         #freq_stds = mclt_samples.std(dim=(1,3))
         #freq_stds = mclt_samples.std(dim=(1,2))
         #freq_stds = torch.cat((mclt_samples.std(dim=(1,3)), mclt_samples.std(dim=(1,2))), dim=1)
-        #b = torch.arange(0, mclt_samples.shape[0], device=mclt_samples.device)
+        
+        #b = torch.arange(0, spec_samples.shape[0], device=spec_samples.device)
         #batch_sigma = (freq_stds[b, freq_indices]).clip(min=self.sigma_sampler.config.sigma_min,
         #                                                max=self.sigma_sampler.config.sigma_max)
+        #batch_sigma = spec_samples_fft[b, freq_indices].abs().clip(min=self.sigma_sampler.config.sigma_min,
+        #                                                           max=self.sigma_sampler.config.sigma_max)
         
         #if self.config.noise_level_bias == True: # bias the noise level a bit by the std of each input sample
         #    batch_sigma = batch_sigma * mclt_samples.std(dim=(1,2,3)) / self.config.expected_sample_std
@@ -250,7 +256,7 @@ class UNetTrainer_D1(ModuleTrainer):
             target_buckets = (global_sigma_quantiles * self.unet_loss_buckets.shape[0]).long().clip(min=0, max=self.unet_loss_buckets.shape[0] - 1)
             self.unet_loss_buckets.index_add_(0, target_buckets, global_weighted_loss)
             self.unet_loss_bucket_counts.index_add_(0, target_buckets, torch.ones_like(global_weighted_loss))
-
+        
         return {"loss": batch_loss,
                 "io_stats/input_std": spec_samples.std(dim=(1,2,3)),
                 "io_stats/input_mean": spec_samples.mean(dim=(1,2,3)),
@@ -259,7 +265,11 @@ class UNetTrainer_D1(ModuleTrainer):
 
     @torch.no_grad()
     def finish_batch(self) -> dict[str, torch.Tensor]:
-        logs = {}
+        logs = {
+            "io_stats/sigma_max": self.global_sigma.amax(),
+            "io_stats/sigma_min": self.global_sigma.amin(),
+            "io_stats/sigma_mean": (self.global_sigma.log().mean()).exp()
+        }
 
         # added sigma-bucketed loss to logs
         if self.config.num_loss_buckets > 0:
