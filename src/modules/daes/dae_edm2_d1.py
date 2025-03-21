@@ -324,7 +324,7 @@ class DAE_D1(DualDiffusionDAE):
         latents = self.encode(samples, dae_embeddings)
         latents_pre_norm_std = latents.std(dim=(1,2,3))
         if add_latents_noise > 0:
-            latents = normalize(latents + torch.randn_like(latents))
+            latents = normalize(latents + torch.randn_like(latents) * latents_pre_norm_std.view(-1, 1, 1, 1) * add_latents_noise)
         
         reconstructed = self.decode(latents, dae_embeddings)
 
