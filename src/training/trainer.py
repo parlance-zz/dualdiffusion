@@ -104,6 +104,7 @@ class OptimizerConfig:
     adam_beta2: float         = 0.99
     adam_epsilon: float       = 1e-8
     adam_weight_decay: float  = 0.
+    loss_scale: float         = 250.
     max_grad_norm: float      = 1.
     grad_norm_ema_beta: float = 0.995
     dynamic_max_grad_norm_z: Optional[float] = 3
@@ -781,7 +782,7 @@ class DualDiffusionTrainer:
                         self.train_sample_logger.add_log(sample_path, module_logs["loss"][i])
 
                     # loss is multiplied by grad accum steps for consistent grad norm
-                    self.accelerator.backward(module_logs["loss"].sum() * (self.config.gradient_accumulation_steps * 160 / 256))
+                    self.accelerator.backward(module_logs["loss"].mean() * self.config.optimizer.loss_scale)
 
                     if self.accelerator.sync_gradients:
                         assert self.accum_step == (self.config.gradient_accumulation_steps - 1), \
