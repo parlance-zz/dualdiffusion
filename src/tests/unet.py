@@ -70,7 +70,6 @@ def unet_test() -> None:
     cfg: UNetTestConfig = config.load_config(UNetTestConfig,
         os.path.join(config.CONFIG_PATH, "tests", "unet_test.json"), quiet=True)
 
-    config.MODELS_PATH = "/mnt/tars/dualdiffusion/models"
     model_path = os.path.join(config.MODELS_PATH, cfg.model_name)
     print(f"Loading DualDiffusion model from '{model_path}'...")
     pipeline = DualDiffusionPipeline.from_pretrained(model_path, **cfg.model_load_options)

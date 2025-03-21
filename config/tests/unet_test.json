@@ -18,18 +18,20 @@
     "output_lufs": -16.5,
     "num_fgla_iters": 300, // hq settings
 
-    "skip_ddec": false,
+    "skip_ddec": true,
     "copy_sample_source_files": true,
     "random_test_samples_seed": null,
-    "add_random_test_samples": 5,
+    "add_random_test_samples": 3,
     "test_samples": [
         
         //"psf2/Shin Megami Tensei - Persona 3 FES",
         
-        /*
+        
         "dsf/Metropolis Street Racer Prototype/file_15.adx.flac",
-        "3sf/Monster Hunter 3 Ultimate/_t_lobby_ML_T_SKB01.mca.flac",
         "psf/Gradius Gaiden/SLPM-86042_BGM1_0000096c.XA.flac",
+        /*
+        "3sf/Monster Hunter 3 Ultimate/_t_lobby_ML_T_SKB01.mca.flac",
+        
         "xbox/Amped 2/_t_Soundtrack_Electronica~Dig This {by Micronaut}.wma.flac",
         "vita/Grisaia Phantom Trigger 01 & 02/MUSIC_00000013.at9.flac",
         "psf3/Gundam Battle Operation Next/BGM_009.adx.flac",
@@ -142,13 +144,14 @@
         "seed": null,
 
         "num_steps": 300,
-        "cfg_scale": 1.5,
+        "cfg_scale": 1.6,//1.5,
         "use_heun": true,
+        "schedule": "edm2",
 
-        "sigma_max": 250,
-        "sigma_min": 0.025,
+        "sigma_max": 250, //250,
+        "sigma_min": 0.02,//0.025,
         
-        "input_perturbation": 0.4,
+        "input_perturbation": 0.5,//0.4,
         "input_perturbation_offset": 0.6,
     },
     "ddec_params": {
@@ -156,8 +159,9 @@
         "num_steps": 300,
         "cfg_scale": 1.5,
         "use_heun": false,
+        "schedule": "edm2",
 
-        "sigma_max": 8,
+        "sigma_max": 10,
         "sigma_min": 0.0003,
 
         "input_perturbation": 1,
