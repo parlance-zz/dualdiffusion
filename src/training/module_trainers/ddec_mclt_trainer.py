@@ -33,6 +33,7 @@ from modules.unets.unet_edm2_ddec_mclt import DDec_MCLT_UNet
 from modules.formats.spectrogram import SpectrogramFormat
 from modules.formats.mclt import DualMCLTFormatConfig, DualMCLTFormat
 from modules.mp_tools import normalize
+#from modules.formats.frequency_scale import _hz_to_mel, _mel_to_hz
 from utils.dual_diffusion_utils import dict_str
 
 
@@ -233,8 +234,22 @@ class DiffusionDecoder_MCLT_Trainer(ModuleTrainer):
         # prepare model inputs
         noise = torch.randn(mclt_samples.shape, device=mclt_samples.device, generator=self.device_generator)
         mclt_samples = mclt_samples / self.module.mel_density
-        if self.config.noise_level_bias == True: # bias the noise level a bit by the std of each input sample
-            batch_sigma = batch_sigma * mclt_samples.std(dim=(1,2,3)) / self.config.expected_sample_std
+        #quantiles = self.sigma_sampler._sample_uniform_stratified(device_batch_size)
+        #quantiles = _mel_to_hz(_hz_to_mel(self.format.config.sample_rate / 2) * quantiles)
+        #freq_indices = (quantiles / quantiles.amax() * (mclt_samples.shape[2] - 1e-4)).to(dtype=torch.int32)
+        #freq_indices = (quantiles * (mclt_samples.shape[2] - 1e-4)).to(dtype=torch.int32)
+        #freq_indices = (quantiles * (mclt_samples.shape[3] - 1e-4)).to(dtype=torch.int32)
+        #freq_indices = (quantiles * (mclt_samples.shape[3] + mclt_samples.shape[2] - 1e-4)).to(dtype=torch.int32)
+        
+        #freq_stds = mclt_samples.std(dim=(1,3))
+        #freq_stds = mclt_samples.std(dim=(1,2))
+        #freq_stds = torch.cat((mclt_samples.std(dim=(1,3)), mclt_samples.std(dim=(1,2))), dim=1)
+        #b = torch.arange(0, mclt_samples.shape[0], device=mclt_samples.device)
+        #batch_sigma = (freq_stds[b, freq_indices]).clip(min=self.sigma_sampler.config.sigma_min,
+        #                                                max=self.sigma_sampler.config.sigma_max)
+        
+        #if self.config.noise_level_bias == True: # bias the noise level a bit by the std of each input sample
+        #    batch_sigma = batch_sigma * mclt_samples.std(dim=(1,2,3)) / self.config.expected_sample_std
         noise = (noise * batch_sigma.view(-1, 1, 1, 1)).detach()
 
         denoised: torch.Tensor = self.module(mclt_samples + noise, batch_sigma, self.format, unet_class_embeddings, ref_samples)
