@@ -84,7 +84,7 @@ def wavelet_decompose2d(x: torch.Tensor, num_levels: int = 4) -> list[torch.Tens
         if i == num_levels - 1:
             wavelets.append(x)
         else:
-            wavelets.append(x - resample_2d(x_down, mode="up"))
+            wavelets.append(x - resample_2d(x_down, mode="up").detach())
             x = x_down
     
     return wavelets

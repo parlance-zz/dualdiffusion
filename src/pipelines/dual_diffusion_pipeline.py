@@ -568,10 +568,11 @@ class DualDiffusionPipeline(torch.nn.Module):
     
     @torch.inference_mode()
     def diffusion_decode(self, params: SampleParams, quiet: bool = False,
-            audio_embedding: Optional[torch.Tensor] = None,
-            x_ref: Optional[torch.Tensor] = None, module_name: str = "unet") -> torch.Tensor:
+            audio_embedding: Optional[torch.Tensor] = None, sample_shape: Optional[torch.Size] = None,
+            x_ref: Optional[torch.Tensor] = None, module: Optional[DualDiffusionUNet] = None) -> torch.Tensor:
 
-        unet: DualDiffusionUNet = getattr(self, module_name)
+        unet: DualDiffusionUNet = module or getattr(self, "unet")
+
         debug_info = {}
         
         params = SampleParams(**params.__dict__).sanitize() # todo: this should be properly deepcopied because of tensor params       
@@ -593,14 +594,15 @@ class DualDiffusionPipeline(torch.nn.Module):
             debug_info["unet_class_embeddings std"] = unet_class_embeddings.std().item()
 
         if x_ref is None:
-            if getattr(self, "vae", None) is not None or getattr(self, "dae", None) is not None:
-                sample_shape = self.get_sample_shape(bsz=params.batch_size, length=params.length)
-                sample_shape = self.get_latent_shape(sample_shape)
-            else:
-                sample_shape = self.format.get_sample_shape(bsz=params.batch_size, length=params.length)
+            if sample_shape is None:
+                if getattr(self, "vae", None) is not None or getattr(self, "dae", None) is not None:
+                    sample_shape = self.get_sample_shape(bsz=params.batch_size, length=params.length)
+                    sample_shape = self.get_latent_shape(sample_shape)
+                else:
+                    sample_shape = self.format.get_sample_shape(bsz=params.batch_size, length=params.length)
             input_ref_sample = None
         else:
-            sample_shape = x_ref.shape
+            sample_shape = sample_shape or x_ref.shape
             if unet_class_embeddings is not None:
                 input_ref_sample = x_ref.repeat(2, 1, 1, 1)
             else:

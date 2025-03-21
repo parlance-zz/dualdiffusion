@@ -70,6 +70,7 @@ def unet_test() -> None:
     cfg: UNetTestConfig = config.load_config(UNetTestConfig,
         os.path.join(config.CONFIG_PATH, "tests", "unet_test.json"), quiet=True)
 
+    config.MODELS_PATH = "/mnt/tars/dualdiffusion/models"
     model_path = os.path.join(config.MODELS_PATH, cfg.model_name)
     print(f"Loading DualDiffusion model from '{model_path}'...")
     pipeline = DualDiffusionPipeline.from_pretrained(model_path, **cfg.model_load_options)
@@ -155,14 +156,17 @@ def unet_test() -> None:
         audio_embedding = normalize(clap_audio_embeddings.mean(dim=0, keepdim=True)).float()
         if dae is not None:
             dae_embeddings = dae.get_embeddings(audio_embedding.to(dtype=dae.dtype, device=dae.device))
+            sample_shape = latent_shape
         else:
             dae_embeddings = None
 
         cfg.unet_params.seed = base_seed + i
         cfg.unet_params.prompt = filename
         
-        unet_output = pipeline.diffusion_decode(cfg.unet_params, audio_embedding=audio_embedding).float()
+        unet_output = pipeline.diffusion_decode(cfg.unet_params,
+            audio_embedding=audio_embedding, module=pipeline.unet).float()
         if dae is not None:
+            raise NotImplementedError("DAE not implemented")
             latents = unet_output
             output_sample = dae.decode(latents.to(dtype=dae.dtype), dae_embeddings)
         else:
@@ -172,6 +176,8 @@ def unet_test() -> None:
         if cfg.skip_ddec == False:
             x_ref = format.convert_to_abs_exp1(output_sample)
             x_ref = x_ref.to(dtype=ddec.dtype)
+
+            print(f"x_ref   mean/std: {x_ref.mean().item():.4} {x_ref.std().item():.4}")
 
             cfg.ddec_params.seed = cfg.unet_params.seed
             output_mclt_sample = pipeline.diffusion_decode(cfg.ddec_params,
