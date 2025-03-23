@@ -30,7 +30,31 @@ from numpy import ndarray
 from modules.module import DualDiffusionModule, DualDiffusionModuleConfig
 from utils.dual_diffusion_utils import tensor_to_img
 
-      
+
+def top4_pca_components(x: torch.Tensor) -> torch.Tensor:
+    B, C, H, W = x.shape
+    
+    result = torch.zeros((B, 4, H, W), device=x.device, dtype=x.dtype)
+    
+    for b in range(B):
+        # reshape to (H*W, C) for this batch item
+        x_b = x[b].reshape(C, H*W).transpose(0, 1)  # shape: (H*W, C)
+        
+        # center the data
+        mean_b = torch.mean(x_b, dim=0, keepdim=True)
+        x_b_centered = x_b - mean_b
+        
+        # do PCA using torch.pca_lowrank
+        U, S, V = torch.pca_lowrank(x_b_centered, q=4)
+        
+        # project data onto the top 4 principal components
+        projected_data = torch.matmul(x_b_centered, V)  # shape: (H*W, 4)
+        
+        # reshape back to (4, H, W)
+        result[b] = projected_data.transpose(0, 1).reshape(4, H, W) 
+    
+    return result
+
 @dataclass
 class DualDiffusionDAEConfig(DualDiffusionModuleConfig, ABC):
 
@@ -40,7 +64,9 @@ class DualDiffusionDAEConfig(DualDiffusionModuleConfig, ABC):
     out_channels: int    = 2
     latent_channels: int = 4
 
-    latents_img_channel_order: Optional[tuple[int]] = None
+    latents_img_split_stereo: bool = True
+    latents_img_use_pca: bool      = True
+    latents_img_channel_order: Optional[tuple[int]] = (1, 3, 2, 0)
 
 class DualDiffusionDAE(DualDiffusionModule, ABC):
 
@@ -82,10 +108,13 @@ class DualDiffusionDAE(DualDiffusionModule, ABC):
             self.forward = torch.compile(self.forward, **kwargs)
 
     def latents_to_img(self, latents: torch.Tensor) -> ndarray:
-        if latents.shape[1] == 8:
-            latents = torch.cat((latents[:, 0::2], latents[:, 1::2]), dim=2)
-        elif latents.shape[1] > 4:
-            raise ValueError(f"Error: latents_to_img shape has invalid num channels: {latents.shape}")
         
-        return tensor_to_img(latents, flip_y=True,
-            channel_order=self.config.latents_img_channel_order)
+        if self.config.latents_img_split_stereo == True:
+            latents = torch.cat((latents[:, 0::2], latents[:, 1::2]), dim=2)
+        
+        if self.config.latents_img_use_pca == True:
+            return tensor_to_img(top4_pca_components(latents.float()),
+                flip_y=True, channel_order=self.config.latents_img_channel_order)
+        else:
+            return tensor_to_img(latents, flip_y=True,
+                channel_order=self.config.latents_img_channel_order)
