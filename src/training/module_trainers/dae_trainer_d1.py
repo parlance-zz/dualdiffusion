@@ -23,7 +23,6 @@
 from dataclasses import dataclass
 
 import torch
-import numpy as np
 
 from training.trainer import DualDiffusionTrainer
 from .module_trainer import ModuleTrainerConfig, ModuleTrainer
@@ -36,9 +35,8 @@ from modules.mp_tools import normalize, wavelet_decompose2d
 class DAETrainer_D1_Config(ModuleTrainerConfig):
 
     add_latents_noise: float = 0
-    kl_loss_weight: float = 0.1
+    kl_loss_weight: float = 2e-2
     kl_warmup_steps: int  = 1000
-    freq_crop: int = 0
 
 class DAETrainer_D1(ModuleTrainer):
     
@@ -71,15 +69,6 @@ class DAETrainer_D1(ModuleTrainer):
 
     def train_batch(self, batch: dict) -> dict[str, torch.Tensor]:
 
-        if self.is_validation_batch == False:
-            device_batch_size = self.trainer.config.device_batch_size
-            #assert latents.shape == self.trainer.latent_shape, f"Expected shape {self.trainer.latent_shape}, got {latents.shape}"
-            #assert samples.shape == self.trainer.sample_shape, f"Expected shape {self.trainer.sample_shape}, got {samples.shape}"
-        else:
-            device_batch_size = self.trainer.config.validation_device_batch_size
-            #assert latents.shape == self.trainer.validation_latent_shape, f"Expected shape {self.trainer.validation_latent_shape}, got {latents.shape}"
-            #assert samples.shape == self.trainer.validation_sample_shape, f"Expected shape {self.trainer.validation_sample_shape}, got {samples.shape}"
-
         if "audio_embeddings" in batch:
             sample_audio_embeddings = normalize(batch["audio_embeddings"])
             dae_embeddings = self.module.get_embeddings(sample_audio_embeddings)
@@ -88,32 +77,32 @@ class DAETrainer_D1(ModuleTrainer):
         
         spec_samples = self.format.raw_to_sample(batch["audio"]).clone().detach()
 
-        if self.config.freq_crop > 0:
-            freq_crop_offset = np.random.randint(0, spec_samples.shape[2] - self.config.freq_crop + 1)
-            spec_samples = spec_samples[:, :, freq_crop_offset:freq_crop_offset + self.config.freq_crop, :]
-
         latents, reconstructed, latents_pre_norm_std = self.module(
             spec_samples, dae_embeddings, self.config.add_latents_noise)
 
-        spec_samples_wavelet = wavelet_decompose2d(spec_samples, self.module.num_levels)
-        reconstructed_wavelet = wavelet_decompose2d(reconstructed, self.module.num_levels)
+        spec_samples_wavelet = wavelet_decompose2d(spec_samples, 6)
+        reconstructed_wavelet = wavelet_decompose2d(reconstructed, 6)
+
         recon_loss = torch.zeros(spec_samples.shape[0], device=spec_samples.device)
+        kl_loss = latents.mean(dim=(1,2,3)).square() + latents_pre_norm_std.square() - 1 - latents_pre_norm_std.square().log()
 
         logs = {}
 
-        for spec_wavelet, recon_wavelet in zip(spec_samples_wavelet, reconstructed_wavelet):
-            loss_weight = 1 / spec_wavelet.square().mean(dim=(1,2,3)).clip(min=1e-8)
-            level_loss = torch.nn.functional.mse_loss(recon_wavelet, spec_wavelet, reduction="none").mean(dim=(1,2,3)) * loss_weight
-            recon_loss = recon_loss + level_loss * spec_wavelet[0].numel() / spec_samples_wavelet[0][0].numel()
+        for i, (spec_wavelet, recon_wavelet) in enumerate(zip(spec_samples_wavelet, reconstructed_wavelet)):
+            level_weight = (spec_wavelet[0].numel() / spec_samples_wavelet[0][0].numel()) ** 0.5 # ** 0.25
+            level_loss = torch.nn.functional.mse_loss(recon_wavelet, spec_wavelet, reduction="none").mean(dim=(1,2,3))
+            recon_loss = recon_loss + level_loss * level_weight
 
-            logs[f"loss/level{len(logs)}"] = level_loss
-            logs[f"loss_weight/level{len(logs)}"] = loss_weight
+            logs[f"loss/level{i}"] = level_loss
 
-        #recon_loss = (reconstructed - spec_samples).abs().mean(dim=(1,2,3))
+            relative_var = (recon_wavelet.var(dim=(1,2,3)) / spec_wavelet.var(dim=(1,2,3))).clip(min=0.1, max=10)
+            #level_rvar_kl_loss = relative_var - 1 - relative_var.log()
+            #kl_loss = kl_loss + level_rvar_kl_loss #* level_weight
+            logs[f"io_stats/rvar_level{i}"] = relative_var
+
         recon_loss_logvar = self.module.get_recon_loss_logvar()
         recon_loss_nll = recon_loss / recon_loss_logvar.exp() + recon_loss_logvar
 
-        kl_loss = latents.mean(dim=(1,2,3)).square()
         kl_loss_weight = self.config.kl_loss_weight
         if self.trainer.global_step < self.config.kl_warmup_steps:
             kl_loss_weight *= self.trainer.global_step / self.config.kl_warmup_steps

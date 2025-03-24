@@ -33,6 +33,7 @@
 from typing import Optional, Union, Literal
 
 import torch
+import numpy as np
 
 from utils.dual_diffusion_utils import TF32_Disabled
 
@@ -50,17 +51,17 @@ def resample_1d(x: torch.Tensor, mode: Literal["keep", "down", "up"] = "keep") -
     if mode == "keep":
         return x
     elif mode == 'down':
-        return torch.lerp(x[..., ::2], x[..., 1::2], 0.5)
+        return torch.lerp(x[..., ::2], x[..., 1::2], 0.5) # should be multiplied by 2**0.5 to be magnitude preserving,
     elif mode == 'up':
         return torch.repeat_interleave(x, 2, dim=-1)
     
-def resample_2d(x: torch.Tensor, mode: Literal["keep", "down", "up"] = "keep") -> torch.Tensor:
+def resample_2d(x: torch.Tensor, mode: Literal["keep", "down", "up"] = "keep", ratio: int = 2) -> torch.Tensor:
     if mode == "keep":
         return x
     elif mode == 'down':
-        return torch.nn.functional.avg_pool2d(x, 2) # should be multiplied by 2 to be magnitude preserving,
-    elif mode == 'up':                              # however, pixel norm is applied after downsampling so it doesn't matter
-        return torch.nn.functional.interpolate(x, scale_factor=2, mode="nearest")
+        return torch.nn.functional.avg_pool2d(x, ratio) # should be multiplied by 2 to be magnitude preserving,
+    elif mode == 'up':                              
+        return torch.nn.functional.interpolate(x, scale_factor=ratio, mode="nearest")
 
 def resample_3d(x: torch.Tensor, mode: Literal["keep", "down", "up"] = "keep") -> torch.Tensor:
     if mode == "keep":
@@ -100,35 +101,41 @@ def wavelet_recompose2d(wavelets: list[torch.Tensor]) -> list[torch.Tensor]:
     
     return y
 
-def _space_to_channel2d(x: torch.Tensor) -> torch.Tensor:
-    B, C, H, W = x.shape
+def space_to_channel3d(x: torch.Tensor) -> torch.Tensor:
+    B, C, Z, H, W = x.shape
     
-    x = x.view(B, C, H // 2, 2, W // 2, 2)  # reshape to split H and W into 2x2 blocks
-    x = x.permute(0, 1, 3, 5, 2, 4).reshape(B, C * 4, H // 2, W // 2)  # rearrange and reshape
+    x = x.view(B, C, Z, H // 2, 2, W // 2, 2)
+    x = x.permute(0, 1, 4, 6, 3, 5).reshape(B, C * 4, Z, H // 2, W // 2)
     
     return x
 
-def _channel_to_space2d(x: torch.Tensor) -> torch.Tensor:
+def channel_to_space3d(x: torch.Tensor) -> torch.Tensor:
+    B, C4, Z, H_half, W_half = x.shape
+    
+    C = C4 // 4 
+    x = x.view(B, C, 2, 2, Z, H_half, W_half)
+    x = x.permute(0, 1, 4, 5, 2, 6, 3)
+    x = x.reshape(B, C, Z, H_half * 2, W_half * 2)
+
+    return x
+
+def space_to_channel2d(x: torch.Tensor) -> torch.Tensor:
+    B, C, H, W = x.shape
+    
+    x = x.view(B, C, H // 2, 2, W // 2, 2)
+    x = x.permute(0, 1, 3, 5, 2, 4).reshape(B, C * 4, H // 2, W // 2)
+    
+    return x
+
+def channel_to_space2d(x: torch.Tensor) -> torch.Tensor:
     B, C4, H_half, W_half = x.shape
     
     C = C4 // 4
-    x = x.view(B, C, 4, H_half, W_half)  # reshape to extract 4 channels per original channel
-    x = x.permute(0, 1, 3, 4, 2)  # move the split dimension to the last
-    x = x.reshape(B, C, H_half * 2, W_half * 2)  # merge back
+    x = x.view(B, C, 2, 2, H_half, W_half)  
+    x = x.permute(0, 1, 4, 2, 5, 3)  
+    x = x.reshape(B, C, H_half * 2, W_half * 2) 
     
     return x
-
-def space_to_channel2d(x: Union[torch.Tensor, list[torch.Tensor]]) -> Union[torch.Tensor, list[torch.Tensor]]:
-    if isinstance(x, list):
-        return [_space_to_channel2d(y) for y in x]
-    else:
-        return _space_to_channel2d(x)
-    
-def channel_to_space2d(x: Union[torch.Tensor, list[torch.Tensor]]) -> Union[torch.Tensor, list[torch.Tensor]]:
-    if isinstance(x, list):
-        return [_channel_to_space2d(y) for y in x]
-    else:
-        return _channel_to_space2d(x)
     
 #----------------------------------------------------------------------------
 # Magnitude-preserving SiLU (Equation 81).

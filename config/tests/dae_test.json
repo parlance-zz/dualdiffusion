@@ -5,19 +5,19 @@
         "device": "cuda",
         "load_checkpoints": true,
         "load_emas": false,
-        "compile_options": {
-            "fullgraph": true,
-            "dynamic": true
-        }
+        "compile_options": null
     },
     "length": 1408768,
+    "output_lufs": -16.5,
     "no_crop": false,
     "num_fgla_iters": 300,
     "add_latent_noise": 0,
-    "test_ddec": false,
-    "add_random_test_samples": 7,
+    "synthesis": "fgla",
+    "add_random_test_samples": 6,
     "copy_sample_source_files": true,
+    "fgla_sample_source_files": false,
     "test_samples": [
+        "psf/Mega Man X4/BGM2.XA.flac",
         "psf/Kamaitachi no Yoru - Tokubetsu-hen/13 Tooi Hi no Genei.psf.flac",
         "dsf/Metropolis Street Racer Prototype/file_15.adx.flac",
         "psf3/Iron Man/_t_! movies_HUB_05_000001C2.adx.flac"

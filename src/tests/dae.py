@@ -37,7 +37,7 @@ from modules.daes.dae_edm2_d1 import DAE_D1
 from modules.formats.spectrogram import SpectrogramFormat
 from utils.dual_diffusion_utils import (
     init_cuda, normalize, save_audio, load_audio, load_safetensors,
-    tensor_to_img, save_img, get_audio_info, dict_str, tensor_4d_to_5d
+    save_img, get_audio_info, dict_str
 )
 
 
@@ -73,13 +73,15 @@ def dae_test() -> None:
     else:
         crop_width = format.sample_raw_crop_width(length=length)
 
-    if test_params["test_ddec"] == True and hasattr(pipeline, "ddec"):
+    if test_params["synthesis"] not in ["fgla", "ddec"]:
+        test_params["synthesis"] = None
+        
+    if test_params["synthesis"] == "ddec" and hasattr(pipeline, "ddec"):
         ddec: DDec_MCLT_UNet = pipeline.ddec
-        last_global_step = ddec.config.last_global_step
+        #last_global_step = ddec.config.last_global_step
     else:
         ddec = None
-        test_params["test_ddec"] = False
-        last_global_step = dae.config.last_global_step
+    last_global_step = dae.config.last_global_step
 
     model_metadata = {"model_metadata": dict_str(pipeline.model_metadata)}
     print(f"{model_metadata['model_metadata']}\n")
@@ -135,11 +137,21 @@ def dae_test() -> None:
                 output_sample = dae.decode(latents, dae_embedding).float()
                 dae_unet_params = None
 
+                # renormalize wavelet levels by measured relative var for each level in training
+                from modules.mp_tools import wavelet_decompose2d, wavelet_recompose2d
+                wavelets = wavelet_decompose2d(output_sample, num_levels=5)
+                wavelets[0] /= 0.60**0.5
+                wavelets[1] /= 0.74**0.5
+                wavelets[2] /= 0.90**0.5
+                wavelets[3] /= 0.99**0.5
+                output_sample = wavelet_recompose2d(wavelets)
+
             else: # melspec ddec
                 
                 x_ref = dae.decode(latents, dae_embedding)
 
                 dae_unet_params = SampleParams(
+                    seed=5000,
                     num_steps=200, length=audio_len, cfg_scale=1.5, input_perturbation=0.5, input_perturbation_offset=0,
                     use_heun=False, schedule="linear", rho=7, sigma_max=200, sigma_min=0.02
                 )
@@ -151,9 +163,10 @@ def dae_test() -> None:
             latents = None
             output_sample = input_sample
 
-        if test_params["test_ddec"] == True:
+        if ddec is not None:
             x_ref = format.convert_to_abs_exp1(output_sample)
             ddec_params = SampleParams(
+                seed=5000,
                 num_steps=300, length=audio_len, cfg_scale=1.5, input_perturbation=1, input_perturbation_offset=0,
                 use_heun=False, schedule="linear", rho=7, sigma_max=12, sigma_min=0.0003 #0.013
             )
@@ -163,8 +176,10 @@ def dae_test() -> None:
             
             output_raw_sample = mclt.sample_to_raw(mclt_output_sample.float())
         else:
-            mclt_output_sample = None
-            output_raw_sample = format.sample_to_raw(output_sample.float(), n_fgla_iters=num_fgla_iters)
+            if test_params["synthesis"] == "fgla":
+                output_raw_sample = format.sample_to_raw(output_sample.float(), n_fgla_iters=num_fgla_iters)
+            else:
+                output_raw_sample = None
 
         print(f"input   mean/std: {input_sample.mean().item():.4} {input_sample.std().item():.4}")
         print(f"output  mean/std: {output_sample.mean().item():.4} {output_sample.std().item():.4}")
@@ -181,9 +196,8 @@ def dae_test() -> None:
             print(f"decoded point similarity: {point_similarity}")
         
         filename = os.path.basename(filename)
-
         metadata = {**model_metadata}
-        metadata["ddec_metadata"] = dict_str(ddec_params.__dict__) if test_params["test_ddec"] == True else "null"
+        metadata["ddec_metadata"] = dict_str(ddec_params.__dict__) if ddec is not None else "null"
         metadata["dae_metadata"] = dict_str(dae_unet_params.__dict__) if dae_unet_params is not None else "null"
 
         if latents is not None:
@@ -191,18 +205,20 @@ def dae_test() -> None:
         save_img(format.sample_to_img(output_sample), os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_output_sample.png')}"))
         save_img(format.sample_to_img(input_sample), os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_input_sample.png')}"))
 
-        #input_raw_sample = format.sample_to_raw(input_sample)
-        #output_flac_file_path = os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_original.flac')}")
-        #save_audio(input_raw_sample, sample_rate, output_flac_file_path, target_lufs=None)
-        #print(f"Saved flac output to {output_flac_file_path}")
-
-        output_flac_file_path = os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_decoded.flac')}")
-        save_audio(output_raw_sample, sample_rate, output_flac_file_path, metadata=metadata, target_lufs=None)
-        print(f"Saved flac output to {output_flac_file_path}")
+        if output_raw_sample is not None:
+            output_flac_file_path = os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_decoded.flac')}")
+            save_audio(output_raw_sample, sample_rate, output_flac_file_path, metadata=metadata, target_lufs=test_params["output_lufs"])
+            print(f"Saved flac output to {output_flac_file_path}")
 
         if copy_sample_source_files == True:
             output_flac_file_path = os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_source.flac')}")
-            save_audio(source_raw_sample, sample_rate, output_flac_file_path, target_lufs=None)
+            save_audio(source_raw_sample, sample_rate, output_flac_file_path, target_lufs=test_params["output_lufs"])
+            print(f"Saved flac output to {output_flac_file_path}")
+
+        if test_params["fgla_sample_source_files"] == True:
+            input_raw_sample = format.sample_to_raw(input_sample)
+            output_flac_file_path = os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_input_fgla.flac')}")
+            save_audio(input_raw_sample, sample_rate, output_flac_file_path, target_lufs=test_params["output_lufs"])
             print(f"Saved flac output to {output_flac_file_path}")
 
     print(f"\nFinished in: {datetime.datetime.now() - start_time}")
@@ -210,6 +226,7 @@ def dae_test() -> None:
         print(f"Avg Point similarity: {avg_point_similarity / len(test_samples)}")
         print(f"Latents avg mean: {avg_latents_mean / len(test_samples)}")
         print(f"Latents avg std: {avg_latents_std / len(test_samples)}")
+
 
 if __name__ == "__main__":
 
