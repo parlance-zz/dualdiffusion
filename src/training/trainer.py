@@ -106,7 +106,8 @@ class OptimizerConfig:
     adam_weight_decay: float  = 0.
     loss_scale: float         = 250.
     max_grad_norm: float      = 1.
-    grad_norm_ema_beta: float = 0.995
+    grad_norm_std_ema_beta: float  = 0.999
+    grad_norm_mean_ema_beta: float = 0.99
     dynamic_max_grad_norm_z: Optional[float] = 3
 
 @dataclass
@@ -365,14 +366,15 @@ class DualDiffusionTrainer:
     def update_grad_norm_stats(self, grad_norm: float, eps: float = 1e-8) -> None:
         
         grad_norm = max(grad_norm, eps)
-        beta = self.config.optimizer.grad_norm_ema_beta
+        mean_beta = self.config.optimizer.grad_norm_mean_ema_beta
+        std_beta = self.config.optimizer.grad_norm_std_ema_beta
 
         log_mean = self.persistent_state.grad_norm_logmean
         log_var = self.persistent_state.grad_norm_logvar
         grad_var = max((grad_norm - math.exp(log_mean)) ** 2, eps)
 
-        self.persistent_state.grad_norm_logmean = log_mean * beta + (1 - beta) * math.log(grad_norm)
-        self.persistent_state.grad_norm_logvar = log_var * beta + (1 - beta) * math.log(grad_var)
+        self.persistent_state.grad_norm_logmean = log_mean * mean_beta + (1 - mean_beta) * math.log(grad_norm)
+        self.persistent_state.grad_norm_logvar = log_var * std_beta + (1 - std_beta) * math.log(grad_var)
 
     def init_optimizer(self) -> None:
         
@@ -391,7 +393,9 @@ class DualDiffusionTrainer:
         self.logger.info(f"  AdamW eps: {self.config.optimizer.adam_epsilon} weight decay: {self.config.optimizer.adam_weight_decay}")
         
         if self.config.optimizer.dynamic_max_grad_norm_z is not None:
-            self.logger.info(f"  Dynamic max grad norm enabled (beta: {self.config.optimizer.grad_norm_ema_beta}"
+            self.logger.info(f"  Dynamic max grad norm enabled"
+                             f"  std_ema_beta: {self.config.optimizer.grad_norm_std_ema_beta}"
+                             f"  mean_ema_beta: {self.config.optimizer.grad_norm_mean_ema_beta}"
                              f"  max_z: {self.config.optimizer.dynamic_max_grad_norm_z})")
         else:
             self.logger.info(f"  Gradient clipping max norm: {self.config.optimizer.max_grad_norm}")
