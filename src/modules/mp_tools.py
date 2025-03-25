@@ -229,7 +229,7 @@ class MPConv3D(torch.nn.Module):
 
     def __init__(self, in_channels: int, out_channels: int,
                  kernel: tuple[int, int], groups: int = 1, stride: int = 1,
-                 disable_weight_norm: bool = False, norm_dim: int = 1) -> None:
+                 disable_weight_norm: bool = False, norm_dim: int = 1, out_gain_param: bool = False) -> None:
         
         super().__init__()
 
@@ -242,7 +242,14 @@ class MPConv3D(torch.nn.Module):
         
         self.weight = torch.nn.Parameter(torch.randn(out_channels, in_channels // groups, *kernel))
 
-    def forward(self, x: torch.Tensor, gain: Union[float, torch.Tensor] = 1.) -> torch.Tensor:
+        if out_gain_param == True:
+            self.out_gain = torch.nn.Parameter(torch.ones([]))
+        else:
+            self.out_gain = None
+
+    def forward(self, x: torch.Tensor, gain: Optional[Union[float, torch.Tensor]] = None) -> torch.Tensor:
+        
+        gain = gain or self.out_gain or 1.
         
         w = self.weight.float()
         if self.training == True and self.disable_weight_norm == False:
