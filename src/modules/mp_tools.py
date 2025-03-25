@@ -249,7 +249,11 @@ class MPConv3D(torch.nn.Module):
 
     def forward(self, x: torch.Tensor, gain: Optional[Union[float, torch.Tensor]] = None) -> torch.Tensor:
         
-        gain = gain or self.out_gain or 1.
+        if self.out_gain is None:
+            if gain is None:
+                gain = 1.
+        else:
+            gain = self.out_gain
         
         w = self.weight.float()
         if self.training == True and self.disable_weight_norm == False:

@@ -55,12 +55,12 @@ class DAE_E1_Config(DualDiffusionDAEConfig):
     model_channels: int       = 32           # Base multiplier for the number of channels.
     channel_mult_enc: int     = 2 
     channel_mult_dec: list[int] = (2,2,4,4)  # Per-resolution multipliers for the number of channels.
-    channel_mult_dif: list[int] = (1,1,1,1)  # Per-resolution multipliers for the number of channels.
+    channel_mult_dif: list[int] = (1,1,2,2)  # Per-resolution multipliers for the number of channels.
     channel_mult_emb: int     = 4
     channels_per_head: int    = 64           # Number of channels per attention head.
     num_enc_layers: int       = 8       
     num_dec_layers_per_block: int = 3
-    num_dif_layers_per_block: int = 1
+    num_dif_layers_per_block: int = 2
     res_balance: float        = 0.35         # Balance between main branch (0) and residual branch (1).
     attn_balance: float       = 0.35         # Balance between main branch (0) and self-attention (1).
     attn_levels: list[int]    = ()           # List of resolution levels to use self-attention.
@@ -107,6 +107,9 @@ class Block(torch.nn.Module):
 
         if resample_mode == "up":
             in_channels = in_channels // 4
+            self.conv_skip = MPConv3D(in_channels, out_channels, kernel=(2,3,3))
+        else:
+            self.conv_skip = None
 
         self.conv_res0 = MPConv3D(in_channels, out_channels * mlp_multiplier, kernel=res_kernel, groups=mlp_groups)
         self.conv_res1 = MPConv3D(out_channels * mlp_multiplier, out_channels, kernel=res_kernel, groups=mlp_groups)
@@ -150,6 +153,9 @@ class Block(torch.nn.Module):
             y = torch.nn.functional.dropout(y, p=self.dropout) * (1. - self.dropout)**0.5
 
         y = self.conv_res1(y)
+
+        if self.flavor == "dec" and self.conv_skip is not None:
+            x = self.conv_skip(x)
 
         x = mp_sum(x, y, t=self.res_balance)
         
@@ -226,7 +232,7 @@ class DAE_E1(DualDiffusionDAE):
         self.enc[f"conv_in"] = MPConv3D(in_channels, enc_channels, kernel=(2,3,3))
         
         for idx in range(config.num_enc_layers):
-            self.enc[f"block{level}_layer{idx}"] = Block(0, enc_channels, enc_channels, cemb,
+            self.enc[f"block0_layer{idx}"] = Block(0, enc_channels, enc_channels, cemb,
                 use_attention=0 in config.attn_levels, flavor="enc", **block_kwargs)
 
         self.conv_latents_out = MPConv3D(enc_channels, config.latent_channels, kernel=(2,3,3))
