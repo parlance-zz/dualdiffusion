@@ -81,12 +81,12 @@ def wavelet_decompose2d(x: torch.Tensor, num_levels: int = 4) -> list[torch.Tens
     
     wavelets = []
     for i in range(num_levels):
-        x_down = resample_2d(x, mode="down")
         if i == num_levels - 1:
             wavelets.append(x)
         else:
+            x_down = resample_2d(x, mode="down")
             wavelets.append(x - resample_2d(x_down, mode="up"))
-            x = x_down
+            x = x_down #* 2
     
     return wavelets
 
@@ -96,8 +96,8 @@ def wavelet_recompose2d(wavelets: list[torch.Tensor]) -> list[torch.Tensor]:
     y = x.pop()
 
     while len(x) > 0:
-        y = resample_2d(y, "up")
-        y = y + x.pop()
+        #y = resample_2d(y, "up") * (2**(-(len(x) - 1))) + x.pop()
+        y = resample_2d(y, "up") + x.pop()
     
     return y
 

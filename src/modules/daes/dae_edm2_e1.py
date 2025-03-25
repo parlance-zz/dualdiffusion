@@ -31,7 +31,7 @@
 # SOFTWARE.
 
 from dataclasses import dataclass
-from typing import Union, Literal
+from typing import Union, Literal, Optional
 
 import torch
 
@@ -313,7 +313,7 @@ class DAE_E1(DualDiffusionDAE):
         return normalize(torch.nn.functional.avg_pool2d(latents, 2**(self.num_levels-1)))
 
     def decode(self, x: torch.Tensor, embeddings: torch.Tensor,
-            return_training_output: bool = False) -> Union[torch.Tensor, tuple[torch.Tensor, torch.Tensor, torch.Tensor]]:
+            return_training_output: bool = False, samples_wavelets: torch.Tensor = None) -> Union[torch.Tensor, tuple[torch.Tensor, torch.Tensor, torch.Tensor]]:
 
         x = tensor_4d_to_5d(x, num_channels=self.config.latent_channels).to(memory_format=torch.channels_last_3d)
 
@@ -336,7 +336,11 @@ class DAE_E1(DualDiffusionDAE):
                 noise = torch.randn_like(dec_out) * (self.recon_loss_logvar[dif.level] / 2).exp().detach()
                 dif_noise.append(tensor_5d_to_4d(noise))
 
-                y = dif["conv_dif_in"](dec_out.detach() + noise)
+                if samples_wavelets is None:
+                    y = dif["conv_dif_in"](dec_out.detach() + noise)
+                else:
+                    y = dif["conv_dif_in"](tensor_4d_to_5d(samples_wavelets.pop(), num_channels=1) + noise)
+
                 for idx in range(self.config.num_dif_layers_per_block):
                     y = dif[f"dif_layer{idx}"](y, embeddings)
                 
@@ -353,13 +357,18 @@ class DAE_E1(DualDiffusionDAE):
         if return_training_output == True:
             return dec_outputs, dif_outputs, dif_noise
         else:
-            return wavelet_recompose2d(dec_outputs) + wavelet_recompose2d(dif_noise) + wavelet_recompose2d(dif_outputs)
+            t = 0
+            dec_outputs = wavelet_recompose2d(dec_outputs)
+            dif_outputs = wavelet_recompose2d(dif_outputs)
+            dif_noise = wavelet_recompose2d(dif_noise)
+            return torch.lerp(dif_outputs + dif_noise, dec_outputs, t)
     
     def forward(self, samples: torch.Tensor, dae_embeddings: torch.Tensor) -> tuple[torch.Tensor, ...]:
         
         latents = self.encode(samples, dae_embeddings)
         latents_pre_norm_std = latents.std(dim=(1,2,3))
         
-        dec_outputs, dif_outputs, dif_noise = self.decode(latents, dae_embeddings, return_training_output=True)
+        samples_wavelets = wavelet_decompose2d(samples, self.num_levels)
+        dec_outputs, dif_outputs, dif_noise = self.decode(latents, dae_embeddings, return_training_output=True, samples_wavelets=samples_wavelets)
 
         return (latents, latents_pre_norm_std) + (dec_outputs, dif_outputs, dif_noise)

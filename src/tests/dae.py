@@ -33,7 +33,7 @@ from pipelines.dual_diffusion_pipeline import DualDiffusionPipeline, SampleParam
 from modules.unets.unet_edm2_ddec_mclt import DDec_MCLT_UNet
 from modules.formats.mclt import DualMCLTFormatConfig, DualMCLTFormat
 from modules.embeddings.clap import CLAP_Embedding
-from modules.daes.dae_edm2_d1 import DAE_D1
+from modules.daes.dae_edm2_e1 import DAE_E1
 from modules.formats.spectrogram import SpectrogramFormat
 from utils.dual_diffusion_utils import (
     init_cuda, normalize, save_audio, load_audio, load_safetensors,
@@ -58,7 +58,7 @@ def dae_test() -> None:
     model_path = os.path.join(config.MODELS_PATH, model_name)
     print(f"Loading DualDiffusion model from '{model_path}'...")
     pipeline = DualDiffusionPipeline.from_pretrained(model_path, **model_load_options)
-    dae: DAE_D1 = getattr(pipeline, "dae", None)
+    dae: DAE_E1 = getattr(pipeline, "dae", None)
     format: SpectrogramFormat = pipeline.format
     embedding: CLAP_Embedding = pipeline.embedding
     mclt = DualMCLTFormat(DualMCLTFormatConfig())
@@ -128,15 +128,29 @@ def dae_test() -> None:
             audio_embedding = normalize(embedding.encode_audio(
                 input_raw_sample, sample_rate=format.config.sample_rate).mean(dim=0, keepdim=True)).float()
 
+        filename = os.path.basename(filename)
+
         if dae is not None:
             dae_embedding = dae.get_embeddings(audio_embedding)
             latents = dae.encode(input_sample.to(dtype=dae.dtype), dae_embedding)
 
             if not hasattr(dae, "unet"):
 
-                output_sample = dae.decode(latents, dae_embedding).float()
+                #output_sample = dae.decode(latents, dae_embedding).float()
                 dae_unet_params = None
 
+                from modules.mp_tools import wavelet_recompose2d, wavelet_decompose2d
+                dec_outputs, dif_outputs, dif_noise = dae.decode(latents, dae_embedding, return_training_output=True)
+
+                t = 0
+                dec_outputs = wavelet_recompose2d(dec_outputs)
+                dif_noise = wavelet_recompose2d(dif_noise)
+                dif_outputs = wavelet_recompose2d(dif_outputs)
+                output_sample = torch.lerp(dif_outputs + dif_noise, dec_outputs, t)
+
+                save_img(format.sample_to_img(dec_outputs), os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_output_dec.png')}"))
+                save_img(format.sample_to_img(dif_outputs + dif_noise), os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_output_dif.png')}"))
+        
                 # renormalize wavelet levels by measured relative var for each level in training
                 """
                 from modules.mp_tools import wavelet_decompose2d, wavelet_recompose2d
@@ -147,7 +161,7 @@ def dae_test() -> None:
                 wavelets[3] /= 0.99**0.5
                 output_sample = wavelet_recompose2d(wavelets)
                 """
-                
+
             else: # melspec ddec
                 
                 x_ref = dae.decode(latents, dae_embedding)
@@ -197,7 +211,6 @@ def dae_test() -> None:
             avg_point_similarity += point_similarity
             print(f"decoded point similarity: {point_similarity}")
         
-        filename = os.path.basename(filename)
         metadata = {**model_metadata}
         metadata["ddec_metadata"] = dict_str(ddec_params.__dict__) if ddec is not None else "null"
         metadata["dae_metadata"] = dict_str(dae_unet_params.__dict__) if dae_unet_params is not None else "null"
