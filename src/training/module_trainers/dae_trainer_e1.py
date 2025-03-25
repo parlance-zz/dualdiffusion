@@ -34,7 +34,6 @@ from modules.mp_tools import normalize, wavelet_decompose2d, wavelet_recompose2d
 @dataclass
 class DAETrainer_E1_Config(ModuleTrainerConfig):
 
-    add_latents_noise: float = 0
     kl_loss_weight: float = 2e-2
     kl_warmup_steps: int  = 1000
 
@@ -96,10 +95,10 @@ class DAETrainer_E1(ModuleTrainer):
             dec_loss_nll = dec_loss_nll + _dec_loss / self.module.recon_loss_logvar[i].exp() + self.module.recon_loss_logvar[i]
             logs[f"loss/level{i}_dec"] = _dec_loss
 
-            _dif_loss = torch.nn.functional.mse_loss(dif, noise, reduction="none").mean(dim=(1,2,3))
+            _dif_loss = torch.nn.functional.mse_loss(dif, spec - dec.detach() - noise, reduction="none").mean(dim=(1,2,3))
             dif_loss = dif_loss + _dif_loss
             dif_loss_nll = dif_loss_nll + _dif_loss / self.module.recon_loss_logvar_dif[i].exp() + self.module.recon_loss_logvar_dif[i]
-            logs[f"loss/level_dif{i}"] = _dec_loss
+            logs[f"loss/level{i}_dif"] = _dif_loss
 
             logs[f"io_stats/level{i}_std_spec"] = spec.std(dim=(1,2,3))
             logs[f"io_stats/level{i}_std_dec"] = dec.std(dim=(1,2,3))
@@ -116,13 +115,13 @@ class DAETrainer_E1(ModuleTrainer):
             "loss/dif": dif_loss,
             "loss/kl": kl_loss,
             "loss_weight/kl": kl_loss_weight,
-            "io_stats/input_std": spec_samples.std(dim=(1,2,3)),
-            "io_stats/input_mean": spec_samples.mean(dim=(1,2,3)),
-            "io_stats/output_std": reconstructed.std(dim=(1,2,3)),
-            "io_stats/output_mean": reconstructed.mean(dim=(1,2,3)),
+            "io_stats/std_input": spec_samples.std(dim=(1,2,3)),
+            "io_stats/mean_input": spec_samples.mean(dim=(1,2,3)),
+            "io_stats/std_output": reconstructed.std(dim=(1,2,3)),
+            "io_stats/mean_output": reconstructed.mean(dim=(1,2,3)),
             "io_stats/latents_std": latents.std(dim=(1,2,3)),
             "io_stats/latents_mean": latents.mean(dim=(1,2,3)),
-            "io_stats/latents_pre_norm_std": latents_pre_norm_std
+            "io_stats/latents_std_pre-norm": latents_pre_norm_std
         })
 
         return logs

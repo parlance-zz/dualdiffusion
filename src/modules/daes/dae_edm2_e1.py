@@ -348,12 +348,12 @@ class DAE_E1(DualDiffusionDAE):
 
         dec_outputs.reverse()
         dif_outputs.reverse()
+        dif_noise.reverse()
 
         if return_training_output == True:
-            dif_noise.reverse()
             return dec_outputs, dif_outputs, dif_noise
         else:
-            return wavelet_recompose2d(dec_outputs) + wavelet_recompose2d(dif_noise) - wavelet_recompose2d(dif_outputs)
+            return wavelet_recompose2d(dec_outputs) + wavelet_recompose2d(dif_noise) + wavelet_recompose2d(dif_outputs)
     
     def forward(self, samples: torch.Tensor, dae_embeddings: torch.Tensor) -> tuple[torch.Tensor, ...]:
         

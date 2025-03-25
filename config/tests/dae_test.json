@@ -1,5 +1,5 @@
 {
-    "model_name": "edm2_dae_d1a",
+    "model_name": "edm2_dae_e1a",
     "model_load_options": {
         "torch_dtype": "bfloat16",
         "device": "cuda",
@@ -13,9 +13,9 @@
     "num_fgla_iters": 300,
     "add_latent_noise": 0,
     "synthesis": "fgla",
-    "add_random_test_samples": 6,
+    "add_random_test_samples": 0,
     "copy_sample_source_files": true,
-    "fgla_sample_source_files": false,
+    "fgla_sample_source_files": true,
     "test_samples": [
         "psf/Mega Man X4/BGM2.XA.flac",
         "psf/Kamaitachi no Yoru - Tokubetsu-hen/13 Tooi Hi no Genei.psf.flac",

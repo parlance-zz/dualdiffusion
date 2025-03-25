@@ -138,6 +138,7 @@ def dae_test() -> None:
                 dae_unet_params = None
 
                 # renormalize wavelet levels by measured relative var for each level in training
+                """
                 from modules.mp_tools import wavelet_decompose2d, wavelet_recompose2d
                 wavelets = wavelet_decompose2d(output_sample, num_levels=5)
                 wavelets[0] /= 0.60**0.5
@@ -145,7 +146,8 @@ def dae_test() -> None:
                 wavelets[2] /= 0.90**0.5
                 wavelets[3] /= 0.99**0.5
                 output_sample = wavelet_recompose2d(wavelets)
-
+                """
+                
             else: # melspec ddec
                 
                 x_ref = dae.decode(latents, dae_embedding)
