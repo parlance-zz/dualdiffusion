@@ -142,10 +142,11 @@ def dae_test() -> None:
                 from modules.mp_tools import wavelet_recompose2d, wavelet_decompose2d
                 dec_outputs, dif_outputs, dif_noise = dae.decode(latents, dae_embedding, return_training_output=True)
 
-                t = 0
-                dec_outputs = wavelet_recompose2d(dec_outputs)
-                dif_noise = wavelet_recompose2d(dif_noise)
-                dif_outputs = wavelet_recompose2d(dif_outputs)
+                t = 0.5
+                filtering="bicubic"
+                dec_outputs = wavelet_recompose2d(dec_outputs, filtering=filtering)
+                dif_noise = wavelet_recompose2d(dif_noise, filtering=filtering)
+                dif_outputs = wavelet_recompose2d(dif_outputs, filtering=filtering)
                 output_sample = torch.lerp(dif_outputs + dif_noise, dec_outputs, t)
 
                 save_img(format.sample_to_img(dec_outputs), os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_output_dec.png')}"))

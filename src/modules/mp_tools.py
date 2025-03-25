@@ -48,6 +48,7 @@ def normalize(x: torch.Tensor, dim: Optional[Union[tuple, list]] = None,
         return (x.float() / norm).to(x.dtype)
 
 def resample_1d(x: torch.Tensor, mode: Literal["keep", "down", "up"] = "keep") -> torch.Tensor:
+
     if mode == "keep":
         return x
     elif mode == 'down':
@@ -55,22 +56,27 @@ def resample_1d(x: torch.Tensor, mode: Literal["keep", "down", "up"] = "keep") -
     elif mode == 'up':
         return torch.repeat_interleave(x, 2, dim=-1)
     
-def resample_2d(x: torch.Tensor, mode: Literal["keep", "down", "up"] = "keep", ratio: int = 2) -> torch.Tensor:
+def resample_2d(x: torch.Tensor, mode: Literal["keep", "down", "up"] = "keep",
+                ratio: int = 2, filtering: str = "nearest") -> torch.Tensor:
+    
     if mode == "keep":
         return x
     elif mode == 'down':
         return torch.nn.functional.avg_pool2d(x, ratio) # should be multiplied by 2 to be magnitude preserving,
     elif mode == 'up':                              
-        return torch.nn.functional.interpolate(x, scale_factor=ratio, mode="nearest")
+        return torch.nn.functional.interpolate(x, scale_factor=ratio, mode=filtering)
 
 def resample_3d(x: torch.Tensor, mode: Literal["keep", "down", "up"] = "keep") -> torch.Tensor:
+
     if mode == "keep":
         return x
     elif mode == 'down':
+
         original_shape = x.shape
         return torch.nn.functional.avg_pool2d(
             x.reshape(x.shape[0]*x.shape[1], x.shape[2], x.shape[3], x.shape[4]), 2).view(
                 original_shape[0], original_shape[1], original_shape[2], original_shape[3]//2, original_shape[4]//2)
+    
     elif mode == 'up': # torch.nn.functional.interpolate doesn't work properly with 5d tensors
         return x.repeat_interleave(2, dim=-1).repeat_interleave(2, dim=-2)
 
@@ -90,14 +96,14 @@ def wavelet_decompose2d(x: torch.Tensor, num_levels: int = 4) -> list[torch.Tens
     
     return wavelets
 
-def wavelet_recompose2d(wavelets: list[torch.Tensor]) -> list[torch.Tensor]:
+def wavelet_recompose2d(wavelets: list[torch.Tensor], filtering: str = "nearest") -> list[torch.Tensor]:
 
     x = [w for w in wavelets]
     y = x.pop()
 
     while len(x) > 0:
         #y = resample_2d(y, "up") * (2**(-(len(x) - 1))) + x.pop()
-        y = resample_2d(y, "up") + x.pop()
+        y = resample_2d(y, "up", filtering=filtering) + x.pop()
     
     return y
 
