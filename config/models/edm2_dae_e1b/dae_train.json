@@ -29,8 +29,9 @@
     "adam_beta2": 0.99,
     "adam_epsilon": 1e-8,
     "adam_weight_decay": 0,
-    "max_grad_norm": 1,
-    "grad_norm_ema_beta": 0.999,
+    "max_grad_norm": 100,
+    "grad_norm_std_ema_beta": 0.9975,
+    "grad_norm_mean_ema_beta": 0.9925,
     "dynamic_max_grad_norm_z": 6
   },
   "emas": {
@@ -68,7 +69,7 @@
     "class": "DAETrainer_E1"
   },
   "module_trainer_config": {
-    "kl_loss_weight": 2e-2,
+    "kl_loss_weight": 1e-2,
     "kl_warmup_steps": 1000
   }
 }

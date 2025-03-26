@@ -31,7 +31,7 @@
 # SOFTWARE.
 
 from dataclasses import dataclass
-from typing import Union, Literal, Optional
+from typing import Union, Literal
 
 import torch
 
@@ -54,15 +54,13 @@ class DAE_E1_Config(DualDiffusionDAEConfig):
 
     model_channels: int       = 32           # Base multiplier for the number of channels.
     channel_mult_enc: int     = 2 
-    channel_mult_dec: list[int] = (2,2,4,4)  # Per-resolution multipliers for the number of channels.
-    channel_mult_dif: list[int] = (1,1,2,2)  # Per-resolution multipliers for the number of channels.
+    channel_mult_dec: list[int] = (4,4,4,4)  # Per-resolution multipliers for the number of channels.
     channel_mult_emb: int     = 4
     channels_per_head: int    = 64           # Number of channels per attention head.
     num_enc_layers: int       = 8       
-    num_dec_layers_per_block: int = 3
-    num_dif_layers_per_block: int = 2
-    res_balance: float        = 0.35         # Balance between main branch (0) and residual branch (1).
-    attn_balance: float       = 0.35         # Balance between main branch (0) and self-attention (1).
+    num_dec_layers_per_block: int = 4
+    res_balance: float        = 0.3          # Balance between main branch (0) and residual branch (1).
+    attn_balance: float       = 0.3          # Balance between main branch (0) and self-attention (1).
     attn_levels: list[int]    = ()           # List of resolution levels to use self-attention.
     mlp_multiplier: int    = 2               # Multiplier for the number of channels in the MLP.
     mlp_groups: int        = 1               # Number of groups for the MLPs.
@@ -209,12 +207,9 @@ class DAE_E1(DualDiffusionDAE):
 
         cemb = config.model_channels * config.channel_mult_emb * config.mlp_multiplier if config.in_channels_emb > 0 else 0
         cdec = [config.model_channels * m for m in config.channel_mult_dec]
-        cdif = [config.model_channels * m for m in config.channel_mult_dif]
 
-        assert len(cdec) == len(cdif) == self.num_levels
-
-        self.recon_loss_logvar = torch.nn.Parameter(torch.zeros(self.num_levels))
-        self.recon_loss_logvar_dif = torch.nn.Parameter(torch.zeros(self.num_levels))
+        self.total_recon_loss_logvar = torch.nn.Parameter(torch.zeros([]))
+        self.level_recon_loss_logvar = torch.nn.Parameter(torch.zeros(self.num_levels))
 
         # Embedding.
         if config.in_channels_emb > 0:
@@ -255,21 +250,7 @@ class DAE_E1(DualDiffusionDAE):
                 self.dec[f"block{level}_layer{idx}"] = Block(level, cout, cout, cemb,
                     use_attention=level in config.attn_levels, flavor="dec", **block_kwargs)
 
-            dif = torch.nn.ModuleDict()
-            dif.level = level
-            self.dec[f"block{level}_dif"] = dif
-
-            dif["conv_dec_out"] = MPConv3D(cout, out_channels, kernel=(2,3,3), out_gain_param=True)
-            dif["conv_dif_in"] = MPConv3D(out_channels, cdif[-1], kernel=(2,3,3))
-
-            for idx in range(config.num_dif_layers_per_block):
-                dif[f"dif_layer{idx}"] = Block(level, cdif[-1], cdif[-1], cemb,
-                    use_attention=level in config.attn_levels, flavor="dec", **block_kwargs)
-
-            dif[f"conv_dif_out"] = MPConv3D(cdif[-1], out_channels, kernel=(2,3,3), out_gain_param=True)
-
-            cin = cout
-            cdif.pop()
+            self.dec[f"block{level}_conv_out"] = MPConv3D(cout, out_channels, kernel=(2,3,3), out_gain_param=True)
             
     def get_embeddings(self, emb_in: torch.Tensor) -> torch.Tensor:
         if self.emb_label is not None:
@@ -278,7 +259,7 @@ class DAE_E1(DualDiffusionDAE):
             return None
     
     def get_recon_loss_logvar(self) -> torch.Tensor:
-        return self.recon_loss_logvar
+        return self.total_recon_loss_logvar
     
     def get_latent_shape(self, sample_shape: Union[torch.Size, tuple[int, int, int, int]]) -> torch.Size:
         if len(sample_shape) == 4:
@@ -313,15 +294,7 @@ class DAE_E1(DualDiffusionDAE):
         return normalize(torch.nn.functional.avg_pool2d(latents, 2**(self.num_levels-1)))
 
     def decode(self, x: torch.Tensor, embeddings: torch.Tensor,
-            return_training_output: bool = False, samples_wavelets: torch.Tensor = None) -> Union[torch.Tensor, tuple[torch.Tensor, torch.Tensor, torch.Tensor]]:
-
-        with torch.no_grad():
-            noise_h, noise_w = x.shape[2] * 2 ** (self.num_levels-1), x.shape[3] * 2 ** (self.num_levels-1)
-            noise = torch.randn((x.shape[0], self.config.in_channels*2, noise_h, noise_w), device=x.device, dtype=x.dtype)
-            noise_wavelets = wavelet_decompose2d(noise, self.num_levels)
-            for i in range(self.num_levels):
-                noise_wavelets[i] -= noise_wavelets[i].mean(dim=(1,2,3), keepdim=True)
-                noise_wavelets[i] /= noise_wavelets[i].std(dim=(1,2,3), keepdim=True)
+            return_training_output: bool = False) -> Union[torch.Tensor, tuple[torch.Tensor, torch.Tensor, torch.Tensor]]:
 
         x = tensor_4d_to_5d(x, num_channels=self.config.latent_channels).to(memory_format=torch.channels_last_3d)
 
@@ -333,66 +306,30 @@ class DAE_E1(DualDiffusionDAE):
         if embeddings is not None:
             embeddings = embeddings.unsqueeze(-1).unsqueeze(-1).unsqueeze(-1)
 
-        dec_outputs, dif_outputs, dif_noise = [], [], []
+        dec_outputs = []
         for name, block in self.dec.items():
-            if "dif" in name:
-                dif: torch.nn.ModuleDict = block
-
-                dec_out: torch.Tensor = dif["conv_dec_out"](x)
-
-                if samples_wavelets is None: # mitigate training/inference discrepancy by matching target variance
-                    target_var = dec_out.var(dim=(1,2,3,4), keepdim=True) + self.recon_loss_logvar[i].exp()
-                    dec_rescale_factor = (target_var / dec_out.var(dim=(1,2,3,4), keepdim=True))**0.5
-                    dec_out = dec_out * dec_rescale_factor.detach()
-                    
-                dec_outputs.append(tensor_5d_to_4d(dec_out))
-
-                #noise = torch.randn_like(dec_out) * (self.recon_loss_logvar[dif.level] / 2).exp().detach()
-                #dif_noise.append(tensor_5d_to_4d(noise))
-
-                noise = noise_wavelets[dif.level].detach() * (self.recon_loss_logvar[dif.level] / 2).exp().detach()
-                dif_noise.append(noise)
-                noise = tensor_4d_to_5d(noise, num_channels=1)
-
-                if samples_wavelets is None:
-                    y = dif["conv_dif_in"](dec_out.detach() + noise)
-                else:
-                    y = dif["conv_dif_in"](tensor_4d_to_5d(samples_wavelets.pop(), num_channels=1) + noise)
-
-                for idx in range(self.config.num_dif_layers_per_block):
-                    y = dif[f"dif_layer{idx}"](y, embeddings)
-                
-                dif_out: torch.Tensor = dif["conv_dif_out"](y)
-
-                if samples_wavelets is None:  # mitigate training/inference discrepancy by matching target variance
-                    target_var = dif_out.var(dim=(1,2,3,4), keepdim=True) + self.recon_loss_logvar_dif[i].exp()
-                    dif_rescale_factor = (target_var / dif_out.var(dim=(1,2,3,4), keepdim=True))**0.5
-                    dif_out = dif_out * dif_rescale_factor.detach()
-
-                dif_outputs.append(tensor_5d_to_4d(dif_out))
-
+            if "conv_out" in name:   
+                dec_outputs.append(tensor_5d_to_4d(block(x)))
             else:
                 x = block(x, embeddings)
 
         dec_outputs.reverse()
-        dif_outputs.reverse()
-        dif_noise.reverse()
 
         if return_training_output == True:
-            return dec_outputs, dif_outputs, dif_noise
+            return dec_outputs
         else:
-            t = 0
-            dec_outputs = wavelet_recompose2d(dec_outputs)
-            dif_outputs = wavelet_recompose2d(dif_outputs)
-            dif_noise = wavelet_recompose2d(dif_noise)
-            return torch.lerp(dif_outputs + dif_noise, dec_outputs, t)
+
+            for i in range(self.num_levels):
+                out_var = dec_outputs[i].var(dim=(1,2,3), keepdim=True)
+                target_var = out_var + self.level_recon_loss_logvar[i].exp().detach()
+                dec_outputs[i] *= (target_var / out_var)**0.5
+                
+            return wavelet_recompose2d(dec_outputs)
     
-    def forward(self, samples: torch.Tensor, dae_embeddings: torch.Tensor) -> tuple[torch.Tensor, ...]:
+    def forward(self, samples: torch.Tensor, dae_embeddings: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         
         latents = self.encode(samples, dae_embeddings)
         latents_pre_norm_std = latents.std(dim=(1,2,3))
-        
-        samples_wavelets = wavelet_decompose2d(samples, self.num_levels)
-        dec_outputs, dif_outputs, dif_noise = self.decode(latents, dae_embeddings, return_training_output=True, samples_wavelets=samples_wavelets)
 
-        return (latents, latents_pre_norm_std) + (dec_outputs, dif_outputs, dif_noise)
+        dec_outputs = self.decode(latents, dae_embeddings, return_training_output=True)
+        return (latents, latents_pre_norm_std, dec_outputs)

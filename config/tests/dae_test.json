@@ -1,10 +1,10 @@
 {
-    "model_name": "edm2_dae_e1a",
+    "model_name": "edm2_dae_e1b",
     "model_load_options": {
         "torch_dtype": "bfloat16",
         "device": "cuda",
         "load_checkpoints": true,
-        "load_emas": false,
+        "load_emas": true,
         "compile_options": null
     },
     "length": 1408768,

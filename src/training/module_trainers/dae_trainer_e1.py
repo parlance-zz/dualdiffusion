@@ -75,45 +75,36 @@ class DAETrainer_E1(ModuleTrainer):
         spec_samples = self.format.raw_to_sample(batch["audio"]).clone().detach()
         spec_wavelets = wavelet_decompose2d(spec_samples, self.module.num_levels)
 
-        latents, latents_pre_norm_std, dec_outputs, dif_outputs, dif_noise = self.module(spec_samples, dae_embeddings)
-        reconstructed = wavelet_recompose2d(dec_outputs)# + wavelet_recompose2d(dif_noise) - wavelet_recompose2d(dif_outputs)        
+        latents, latents_pre_norm_std, dec_outputs = self.module(spec_samples, dae_embeddings)
+        reconstructed = wavelet_recompose2d(dec_outputs)
 
         dec_loss = torch.zeros(spec_samples.shape[0], device=spec_samples.device)
-        dec_loss_nll = torch.zeros_like(dec_loss)
-        dif_loss = torch.zeros_like(dec_loss)
-        dif_loss_nll = torch.zeros_like(dec_loss)
-
         kl_loss = latents.mean(dim=(1,2,3)).square() + latents_pre_norm_std.square() - 1 - latents_pre_norm_std.square().log()
 
         logs = {}
 
-        for i, (spec, dec, dif, noise) in enumerate(zip(spec_wavelets, dec_outputs, dif_outputs, dif_noise)):
+        for i, (spec, dec) in enumerate(zip(spec_wavelets, dec_outputs)):
             
-            loss_weight = spec[0].numel() / spec_wavelets[0][0].numel()
+            #level_weight = (spec[0].numel() / spec_wavelets[0][0].numel())**0.5
+            level_weight = spec[0].numel() / spec_wavelets[0][0].numel()
+            level_dec_loss = torch.nn.functional.mse_loss(dec, spec, reduction="none").mean(dim=(1,2,3))
+            #dec_loss = dec_loss + level_dec_loss * level_weight
+            dec_loss = dec_loss + (level_dec_loss * level_weight).sqrt()
+            kl_loss = kl_loss + level_dec_loss.detach() / self.module.level_recon_loss_logvar[i].exp() + self.module.level_recon_loss_logvar[i]
 
-            _dec_loss = torch.nn.functional.mse_loss(dec, spec, reduction="none").mean(dim=(1,2,3))
-            dec_loss = dec_loss + _dec_loss
-            dec_loss_nll = dec_loss_nll + (_dec_loss / self.module.recon_loss_logvar[i].exp() + self.module.recon_loss_logvar[i]) * loss_weight
-            logs[f"loss/level{i}_dec"] = _dec_loss
-
-            _dif_loss = torch.nn.functional.mse_loss(dif, spec - noise, reduction="none").mean(dim=(1,2,3))
-            dif_loss = dif_loss + _dif_loss
-            dif_loss_nll = dif_loss_nll + (_dif_loss / self.module.recon_loss_logvar_dif[i].exp() + self.module.recon_loss_logvar_dif[i]) * loss_weight
-            logs[f"loss/level{i}_dif"] = _dif_loss
-
+            logs[f"loss/level{i}_dec"] = level_dec_loss.sqrt()
             logs[f"io_stats/level{i}_std_spec"] = spec.std(dim=(1,2,3))
             logs[f"io_stats/level{i}_std_dec"] = dec.std(dim=(1,2,3))
-            logs[f"io_stats/level{i}_std_noise"] = noise.std(dim=(1,2,3))
-            logs[f"io_stats/level{i}_std_dif"] = dif.std(dim=(1,2,3))
+
+        dec_loss_nll = dec_loss / self.module.total_recon_loss_logvar.exp() + self.module.total_recon_loss_logvar
 
         kl_loss_weight = self.config.kl_loss_weight
         if self.trainer.global_step < self.config.kl_warmup_steps:
             kl_loss_weight *= self.trainer.global_step / self.config.kl_warmup_steps
 
         logs.update({
-            "loss": dec_loss_nll + dif_loss_nll + kl_loss * kl_loss_weight,
+            "loss": dec_loss_nll + kl_loss * kl_loss_weight,
             "loss/dec": dec_loss,
-            "loss/dif": dif_loss,
             "loss/kl": kl_loss,
             "loss_weight/kl": kl_loss_weight,
             "io_stats/std_input": spec_samples.std(dim=(1,2,3)),

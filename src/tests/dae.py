@@ -136,47 +136,8 @@ def dae_test() -> None:
 
             if not hasattr(dae, "unet"):
 
-                #output_sample = dae.decode(latents, dae_embedding).float()
+                output_sample = dae.decode(latents, dae_embedding).float()
                 dae_unet_params = None
-
-                from modules.mp_tools import wavelet_recompose2d, wavelet_decompose2d
-                dec_outputs, dif_outputs, dif_noise = dae.decode(latents, dae_embedding, return_training_output=True)
-
-                for i in range(dae.num_levels):
-                    pass
-                
-                    #target_var = dec_outputs[i].var() + dae.recon_loss_logvar[i].exp()
-                    #dec_rescale_factor = (target_var / dec_outputs[i].var())**0.5
-                    #dec_outputs[i] *= dec_rescale_factor
-
-                    #target_var = dif_outputs[i].var() + dae.recon_loss_logvar_dif[i].exp()
-                    #dif_rescale_factor = (target_var / dif_outputs[i].var())**0.5
-                    #dif_outputs[i] *= dif_rescale_factor
-
-                    #print(f"level{i} dec rescale factor: {dec_rescale_factor:.4f}  dif rescale factor: {dif_rescale_factor:.4f}")
-                    #print(f"level{i} dif rescale factor: {dif_rescale_factor:.4f}")
-
-                    
-                t = 0.5
-                filtering = "nearest" #bicubic
-                dec_outputs = wavelet_recompose2d(dec_outputs)
-                dif_noise = wavelet_recompose2d(dif_noise, filtering=filtering)
-                dif_outputs = wavelet_recompose2d(dif_outputs, filtering=filtering)
-                output_sample = torch.lerp(dif_outputs + dif_noise, dec_outputs, t)
-
-                save_img(format.sample_to_img(dec_outputs), os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_output_dec.png')}"))
-                save_img(format.sample_to_img(dif_outputs + dif_noise), os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_output_dif.png')}"))
-        
-                # renormalize wavelet levels by measured relative var for each level in training
-                """
-                from modules.mp_tools import wavelet_decompose2d, wavelet_recompose2d
-                wavelets = wavelet_decompose2d(output_sample, num_levels=5)
-                wavelets[0] /= 0.60**0.5
-                wavelets[1] /= 0.74**0.5
-                wavelets[2] /= 0.90**0.5
-                wavelets[3] /= 0.99**0.5
-                output_sample = wavelet_recompose2d(wavelets)
-                """
 
             else: # melspec ddec
                 
