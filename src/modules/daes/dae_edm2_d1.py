@@ -36,7 +36,10 @@ from typing import Union, Optional, Literal
 import torch
 
 from modules.daes.dae import DualDiffusionDAE, DualDiffusionDAEConfig
-from modules.mp_tools import mp_silu, mp_sum, normalize, resample_3d, MPConv3D
+from modules.mp_tools import (
+    mp_silu, mp_sum, normalize, resample_3d, MPConv3D,
+    wavelet_decompose2d, wavelet_recompose2d
+)
 from utils.dual_diffusion_utils import tensor_4d_to_5d, tensor_5d_to_4d
 
 
@@ -64,6 +67,8 @@ class DAE_D1_Config(DualDiffusionDAEConfig):
     emb_linear_groups: int = 1
     add_constant_channel: bool = True
     add_pixel_norm: bool       = False
+
+    wavelet_rescale_factors: list[float] = (0.60, 0.74, 0.90, 0.98)
 
 class Block(torch.nn.Module):
 
@@ -302,7 +307,7 @@ class DAE_D1(DualDiffusionDAE):
         latents = normalize(self.conv_latents_out(x))
         return tensor_5d_to_4d(latents).to(memory_format=torch.channels_last)
     
-    def decode(self, x: torch.Tensor, embeddings: torch.Tensor) -> torch.Tensor:
+    def decode(self, x: torch.Tensor, embeddings: torch.Tensor, training: bool = False) -> torch.Tensor:
 
         x = tensor_4d_to_5d(x, num_channels=self.config.latent_channels).to(memory_format=torch.channels_last_3d)
         x = torch.cat((x, torch.ones_like(x[:, :1])), dim=1)
@@ -314,7 +319,18 @@ class DAE_D1(DualDiffusionDAE):
         for block in self.dec.values():
             x = block(x, embeddings)
 
-        return tensor_5d_to_4d(self.conv_out(x, gain=self.out_gain)).to(memory_format=torch.channels_last)
+        dec_out = tensor_5d_to_4d(self.conv_out(x, gain=self.out_gain)).to(memory_format=torch.channels_last)
+
+        # renormalize wavelet levels by measured relative var, but only in inference
+        if training == False and len(self.config.wavelet_rescale_factors) > 0: 
+            
+            wavelets = wavelet_decompose2d(dec_out, num_levels=len(self.config.wavelet_rescale_factors))
+            for i in range(len(self.config.wavelet_rescale_factors)):
+                wavelets[i] /= self.config.wavelet_rescale_factors[i]**0.5
+
+            dec_out = wavelet_recompose2d(wavelets)
+
+        return dec_out
     
     def forward(self, samples: torch.Tensor, dae_embeddings: torch.Tensor,
             add_latents_noise: float = 0) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
@@ -324,6 +340,6 @@ class DAE_D1(DualDiffusionDAE):
         if add_latents_noise > 0:
             latents = normalize(latents + torch.randn_like(latents) * latents_pre_norm_std.detach().view(-1, 1, 1, 1) * add_latents_noise)
         
-        reconstructed = self.decode(latents, dae_embeddings)
+        reconstructed = self.decode(latents, dae_embeddings, training=True)
 
         return latents, reconstructed, latents_pre_norm_std

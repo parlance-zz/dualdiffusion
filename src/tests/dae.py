@@ -33,7 +33,7 @@ from pipelines.dual_diffusion_pipeline import DualDiffusionPipeline, SampleParam
 from modules.unets.unet_edm2_ddec_mclt import DDec_MCLT_UNet
 from modules.formats.mclt import DualMCLTFormatConfig, DualMCLTFormat
 from modules.embeddings.clap import CLAP_Embedding
-from modules.daes.dae_edm2_e1 import DAE_E1
+from modules.daes.dae_edm2_d2 import DAE_D2
 from modules.formats.spectrogram import SpectrogramFormat
 from utils.dual_diffusion_utils import (
     init_cuda, normalize, save_audio, load_audio, load_safetensors,
@@ -58,7 +58,7 @@ def dae_test() -> None:
     model_path = os.path.join(config.MODELS_PATH, model_name)
     print(f"Loading DualDiffusion model from '{model_path}'...")
     pipeline = DualDiffusionPipeline.from_pretrained(model_path, **model_load_options)
-    dae: DAE_E1 = getattr(pipeline, "dae", None)
+    dae: DAE_D2 = getattr(pipeline, "dae", None)
     format: SpectrogramFormat = pipeline.format
     embedding: CLAP_Embedding = pipeline.embedding
     mclt = DualMCLTFormat(DualMCLTFormatConfig())
@@ -132,8 +132,11 @@ def dae_test() -> None:
 
         if dae is not None:
             dae_embedding = dae.get_embeddings(audio_embedding)
+            #latents, full_res_latents = dae.encode(input_sample.to(dtype=dae.dtype), dae_embedding, return_full_res=True)
             latents = dae.encode(input_sample.to(dtype=dae.dtype), dae_embedding)
 
+            #save_img(dae.latents_to_img(full_res_latents), os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_full_res_latents.png')}"))
+            
             if not hasattr(dae, "unet"):
 
                 output_sample = dae.decode(latents, dae_embedding).float()
