@@ -315,6 +315,14 @@ class DAE_E1(DualDiffusionDAE):
     def decode(self, x: torch.Tensor, embeddings: torch.Tensor,
             return_training_output: bool = False, samples_wavelets: torch.Tensor = None) -> Union[torch.Tensor, tuple[torch.Tensor, torch.Tensor, torch.Tensor]]:
 
+        with torch.no_grad():
+            noise_h, noise_w = x.shape[2] * 2 ** (self.num_levels-1), x.shape[3] * 2 ** (self.num_levels-1)
+            noise = torch.randn((x.shape[0], self.config.in_channels*2, noise_h, noise_w), device=x.device, dtype=x.dtype)
+            noise_wavelets = wavelet_decompose2d(noise, self.num_levels)
+            for i in range(self.num_levels):
+                noise_wavelets[i] -= noise_wavelets[i].mean(dim=(1,2,3), keepdim=True)
+                noise_wavelets[i] /= noise_wavelets[i].std(dim=(1,2,3), keepdim=True)
+
         x = tensor_4d_to_5d(x, num_channels=self.config.latent_channels).to(memory_format=torch.channels_last_3d)
 
         if self.config.add_constant_channel == True:
@@ -330,11 +338,21 @@ class DAE_E1(DualDiffusionDAE):
             if "dif" in name:
                 dif: torch.nn.ModuleDict = block
 
-                dec_out = dif["conv_dec_out"](x)
+                dec_out: torch.Tensor = dif["conv_dec_out"](x)
+
+                if samples_wavelets is None: # mitigate training/inference discrepancy by matching target variance
+                    target_var = dec_out.var(dim=(1,2,3,4), keepdim=True) + self.recon_loss_logvar[i].exp()
+                    dec_rescale_factor = (target_var / dec_out.var(dim=(1,2,3,4), keepdim=True))**0.5
+                    dec_out = dec_out * dec_rescale_factor.detach()
+                    
                 dec_outputs.append(tensor_5d_to_4d(dec_out))
 
-                noise = torch.randn_like(dec_out) * (self.recon_loss_logvar[dif.level] / 2).exp().detach()
-                dif_noise.append(tensor_5d_to_4d(noise))
+                #noise = torch.randn_like(dec_out) * (self.recon_loss_logvar[dif.level] / 2).exp().detach()
+                #dif_noise.append(tensor_5d_to_4d(noise))
+
+                noise = noise_wavelets[dif.level].detach() * (self.recon_loss_logvar[dif.level] / 2).exp().detach()
+                dif_noise.append(noise)
+                noise = tensor_4d_to_5d(noise, num_channels=1)
 
                 if samples_wavelets is None:
                     y = dif["conv_dif_in"](dec_out.detach() + noise)
@@ -344,7 +362,13 @@ class DAE_E1(DualDiffusionDAE):
                 for idx in range(self.config.num_dif_layers_per_block):
                     y = dif[f"dif_layer{idx}"](y, embeddings)
                 
-                dif_out = dif["conv_dif_out"](y)
+                dif_out: torch.Tensor = dif["conv_dif_out"](y)
+
+                if samples_wavelets is None:  # mitigate training/inference discrepancy by matching target variance
+                    target_var = dif_out.var(dim=(1,2,3,4), keepdim=True) + self.recon_loss_logvar_dif[i].exp()
+                    dif_rescale_factor = (target_var / dif_out.var(dim=(1,2,3,4), keepdim=True))**0.5
+                    dif_out = dif_out * dif_rescale_factor.detach()
+
                 dif_outputs.append(tensor_5d_to_4d(dif_out))
 
             else:

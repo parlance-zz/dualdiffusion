@@ -142,9 +142,24 @@ def dae_test() -> None:
                 from modules.mp_tools import wavelet_recompose2d, wavelet_decompose2d
                 dec_outputs, dif_outputs, dif_noise = dae.decode(latents, dae_embedding, return_training_output=True)
 
+                for i in range(dae.num_levels):
+                    pass
+                
+                    #target_var = dec_outputs[i].var() + dae.recon_loss_logvar[i].exp()
+                    #dec_rescale_factor = (target_var / dec_outputs[i].var())**0.5
+                    #dec_outputs[i] *= dec_rescale_factor
+
+                    #target_var = dif_outputs[i].var() + dae.recon_loss_logvar_dif[i].exp()
+                    #dif_rescale_factor = (target_var / dif_outputs[i].var())**0.5
+                    #dif_outputs[i] *= dif_rescale_factor
+
+                    #print(f"level{i} dec rescale factor: {dec_rescale_factor:.4f}  dif rescale factor: {dif_rescale_factor:.4f}")
+                    #print(f"level{i} dif rescale factor: {dif_rescale_factor:.4f}")
+
+                    
                 t = 0.5
-                filtering="bicubic"
-                dec_outputs = wavelet_recompose2d(dec_outputs, filtering=filtering)
+                filtering = "nearest" #bicubic
+                dec_outputs = wavelet_recompose2d(dec_outputs)
                 dif_noise = wavelet_recompose2d(dif_noise, filtering=filtering)
                 dif_outputs = wavelet_recompose2d(dif_outputs, filtering=filtering)
                 output_sample = torch.lerp(dif_outputs + dif_noise, dec_outputs, t)
