@@ -52,7 +52,6 @@ def dae_test() -> None:
     model_name = test_params["model_name"]
     model_load_options = test_params["model_load_options"]
     length = test_params["length"]
-    no_crop = test_params["no_crop"]
     num_fgla_iters = test_params["num_fgla_iters"]
 
     model_path = os.path.join(config.MODELS_PATH, model_name)

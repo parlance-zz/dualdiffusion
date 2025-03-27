@@ -1,0 +1,16 @@
+{
+  "modules": {
+    "dae": {
+      "package": "modules.daes.dae_edm2_d3",
+      "class": "DAE_D3"
+    },
+    "format": {
+      "package": "modules.formats.spectrogram",
+      "class": "SpectrogramFormat"
+    },
+    "embedding": {
+      "package": "modules.embeddings.clap",
+      "class": "CLAP_Embedding"
+    }
+  }
+}

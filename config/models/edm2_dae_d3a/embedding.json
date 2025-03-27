@@ -1,0 +1,9 @@
+{
+  "last_global_step": 0,
+  "sample_rate": 48000,
+  "sample_crop_width": 480000,
+  "sample_raw_channels": 1,
+  "enable_fusion": false,
+  "audio_encoder": "HTSAT-base",
+  "text_encoder": "roberta"
+}
