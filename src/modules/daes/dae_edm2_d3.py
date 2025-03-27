@@ -36,13 +36,9 @@ from typing import Union, Literal
 import torch
 
 from modules.daes.dae import DualDiffusionDAE, DualDiffusionDAEConfig
-from modules.mp_tools import (
-    mp_silu, mp_sum, normalize, MPConv3D, channel_to_space3d,
-    wavelet_decompose2d, wavelet_recompose2d, resample_3d
-)
+from modules.mp_tools import mp_silu, mp_sum, normalize, MPConv3D, resample_3d
 from utils.dual_diffusion_utils import tensor_4d_to_5d, tensor_5d_to_4d
 
-import math
 
 @dataclass
 class DAE_D3_Config(DualDiffusionDAEConfig):
@@ -54,8 +50,8 @@ class DAE_D3_Config(DualDiffusionDAEConfig):
     latent_channels: int = 4
 
     model_channels: int       = 32           # Base multiplier for the number of channels.
-    channel_mult_enc: int     = 4            # Multiplier for final embedding dimensionality.
-    channel_mult_dec: list[int] = (1,2,4,8)  # Multiplier for final embedding dimensionality.
+    channel_mult_enc: int     = 4            
+    channel_mult_dec: list[int] = (1,2,4,8)  
     channel_mult_emb: int     = 4            # Multiplier for final embedding dimensionality.
     channels_per_head: int    = 64           # Number of channels per attention head.
     num_enc_layers: int       = 6            # Number of resnet blocks per resolution.
@@ -63,13 +59,11 @@ class DAE_D3_Config(DualDiffusionDAEConfig):
     res_balance: float        = 0.3          # Balance between main branch (0) and residual branch (1).
     attn_balance: float       = 0.3          # Balance between main branch (0) and self-attention (1).
     attn_levels: list[int]    = ()           # List of resolution levels to use self-attention.
-    mlp_multiplier: int   = 2                # Multiplier for the number of channels in the MLP.
-    mlp_groups: int       = 1                # Number of groups for the MLPs.
+    mlp_multiplier: int    = 2               # Multiplier for the number of channels in the MLP.
+    mlp_groups: int        = 1               # Number of groups for the MLPs.
     emb_linear_groups: int = 1
     add_constant_channel: bool = True
     add_pixel_norm: bool       = False
-
-    wavelet_rescale_factors: list[float] = (0.60, 0.74, 0.90, 0.98)
     
 class Block(torch.nn.Module):
 
@@ -105,8 +99,6 @@ class Block(torch.nn.Module):
         self.attn_balance = attn_balance
         self.clip_act = clip_act
 
-        #if resample_mode == "up":
-        #    in_channels = in_channels // 4
         kernel = (1,3,3) if flavor == "enc" else (2,3,3)
 
         self.conv_res0 = MPConv3D(out_channels if flavor == "enc" else in_channels,
@@ -140,7 +132,6 @@ class Block(torch.nn.Module):
     def forward(self, x: torch.Tensor, emb: torch.Tensor) -> torch.Tensor:
         
         if self.resample_mode == "up":
-            #x = channel_to_space3d(x)
             x = resample_3d(x, "up")
 
         if self.flavor == "enc":
