@@ -42,6 +42,7 @@ from utils.dual_diffusion_utils import (
     save_safetensors, load_safetensors_ex, normalize
 )
 
+
 @dataclass
 class EncodeProcessConfig:
     model: Optional[str]                          = None  # use the format, dae, and embeddings from this model (under $MODELS_PATH)
@@ -52,6 +53,9 @@ class EncodeProcessConfig:
     latents_pitch_offset_augmentations: list[int] = ()    # add augmentations for list of pitch offsets (in semitones)
     latents_stereo_mirroring_augmentation: bool   = True  # add augmentation with swapped stereo channels
     latents_force_overwrite: bool                 = False # (re)encode and overwrite latents
+    latents_tiled_encode: bool                    = True  # enable tiled encoding for latents to save vram
+    latents_tiled_max_chunk_size: int             = 6144  # max chunk size for tiled encoding
+    latents_tiled_overlap: int                    = 256   # overlap size for tiled encoding
     audio_embeddings_force_overwrite: bool        = False # (re)encode and overwrite existing audio embeddings
     text_embeddings_force_overwrite: bool         = False # (re)encode and overwrite existing text embeddings
     embeddings_only: bool                         = False # only encodes audio/text embeddings and skips latents
@@ -62,7 +66,7 @@ class EncodeLoad(DatasetProcessStage):
         self.process_config = process_config
 
     def get_stage_type(self) -> Literal["io", "cpu", "cuda"]:
-        return "io"
+        return "cpu"
     
     def info_banner(self, logger: logging.Logger) -> None:
 
@@ -90,6 +94,11 @@ class EncodeLoad(DatasetProcessStage):
             logger.info(f"Latents number of time offset augmentations: {self.process_config.latents_num_time_offset_augmentations}")
             logger.info(f"Latents number of pitch offset augmentations: {len(self.process_config.latents_pitch_offset_augmentations)}")
             logger.info(f"Latents stereo mirroring augmentation: {self.process_config.latents_stereo_mirroring_augmentation}")
+            logger.info(f"Latents batch size: {self.process_config.latents_batch_size}")
+            logger.info(f"Tiled latents encoding: {self.process_config.latents_tiled_encode}")
+            if self.process_config.latents_tiled_encode == True:
+                logger.info(f"Tiled latents max chunk size: {self.process_config.latents_tiled_max_chunk_size}")
+                logger.info(f"Tiled latents overlap: {self.process_config.latents_tiled_overlap}")
 
     def limit_output_queue_size(self) -> bool:
         return True
@@ -233,11 +242,14 @@ class EncodeProcess(DatasetProcessStage):
         self.format_config: SpectrogramFormatConfig = self.format.config
         
         num_encode_offsets = self.process_config.latents_num_time_offset_augmentations
-        self.dae_encode_offset_padding = self.format_config.hop_length * num_encode_offsets
+        self.dae_encode_offset_padding = self.format_config.hop_length * num_encode_offsets if num_encode_offsets > 0 else 0
         self.dae_encode_offsets = [i * self.format_config.hop_length for i in range(num_encode_offsets)]
         self.dae_batch_size = self.process_config.latents_batch_size
         self.dae_num_batches_per_sample = (num_encode_offsets + self.dae_batch_size - 1) // self.dae_batch_size
-        
+        self.use_tiled_encode = self.process_config.latents_tiled_encode
+        self.tiled_max_chunk_size = self.process_config.latents_tiled_max_chunk_size
+        self.tiled_overlap = self.process_config.latents_tiled_overlap
+
         pitch_shifts = self.process_config.latents_pitch_offset_augmentations
         pitch_augmentation_formats = [
             self.get_pitch_augmentation_format(shift).to(self.device) for shift in pitch_shifts]
@@ -281,12 +293,13 @@ class EncodeProcess(DatasetProcessStage):
         if audio is not None and input_dict["has_latents"] == False and self.process_config.embeddings_only == False:
             
             # resample audio to model format sample_rate
-            crop_width = self.format.sample_raw_crop_width(audio.shape[-1] - self.dae_encode_offset_padding)
             if sample_rate != self.format_config.sample_rate:
                 audio = torchaudio.functional.resample(
                     audio, sample_rate, self.format_config.sample_rate)
-            
+
             # create raw audio augmentations
+            crop_width = self.format.sample_raw_crop_width(audio.shape[-1] - self.dae_encode_offset_padding)
+
             input_audio = []
             for offset in self.dae_encode_offsets:
                 input_raw_offset_sample = audio[:, offset:offset + crop_width].unsqueeze(0)
@@ -306,16 +319,27 @@ class EncodeProcess(DatasetProcessStage):
             
             # finally, encode the latents
             self.logger.debug(f"encoding latents: \"{safetensors_file_path}\" ({input_sample.shape[0]} variations)")
+
             audio_embeddings = latents["clap_audio_embeddings"].mean(dim=0, keepdim=True)
             audio_embeddings = normalize(audio_embeddings).to(device=self.dae.device, dtype=self.dae.dtype)
             dae_embeddings = self.dae.get_embeddings(audio_embeddings)
+
             encoded_latents: list[torch.Tensor] = []
             for b in range(input_sample.shape[0] // bsz):
                 batch_input_sample = input_sample[b*bsz:(b+1)*bsz]
-                batch_latents = self.dae.encode(batch_input_sample, dae_embeddings)
+
+                if self.use_tiled_encode == True:
+                    batch_latents = self.dae.tiled_encode(batch_input_sample, dae_embeddings,
+                                max_chunk=self.tiled_max_chunk_size, overlap=self.tiled_overlap)
+                else:
+                    batch_latents = self.dae.encode(batch_input_sample, dae_embeddings)
+
                 encoded_latents.append(batch_latents)
+
             latents["latents"] = torch.cat(encoded_latents, dim=0).to(dtype=torch.bfloat16)
             assert latents["latents"].ndim == 4
+            self.logger.debug(f"encoded latents shape: {latents['latents'].shape}")
+            self.logger.debug(f"target latents shape: {self.pipeline.get_latent_shape(self.pipeline.get_sample_shape(length=crop_width))}  ({crop_width/32000:.2f}s)")
             
         elif input_dict["has_latents"] == True:
             self.logger.debug(f"existing latents: \"{safetensors_file_path}\" ({latents['latents'].shape[0]} variations)")
@@ -332,7 +356,7 @@ class EncodeSave(DatasetProcessStage):
         self.process_config = process_config
 
     def get_stage_type(self) -> Literal["io", "cpu", "cuda"]:
-        return "io"
+        return "cpu"
     
     def summary_banner(self, logger: logging.Logger, completed: bool) -> None:
         verb = "Encoded"

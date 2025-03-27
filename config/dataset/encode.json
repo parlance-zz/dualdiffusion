@@ -1,13 +1,18 @@
 {
-    "model": "edm2_dae_a1",                         // use the format, vae, and embeddings from this model (under $MODELS_PATH)
-    "dae_ema": true,                                // use the specified ema if str, the first ema if true, and no ema if false for latents encoding
+    "model": "edm2_dae_d2a",                        // use the format, vae, and embeddings from this model (under $MODELS_PATH)
+    "dae_ema": false,                               // use the specified ema if str, the first ema if true, and no ema if false for latents encoding
     "compile_models": true,                         // compile the vae before encoding
+    
     "latents_batch_size": 1,                        // batch size for encoding latents. choose a value that works with your vram capacity
     "latents_num_time_offset_augmentations": 1,     // add augmentations for sub-pixel (latent pixel) offsets
     "latents_pitch_offset_augmentations": [],       // add augmentations for list of pitch offsets (in semitones)
     "latents_stereo_mirroring_augmentation": false, // add augmentation with swapped stereo channels
-    "latents_force_overwrite": false,               // (re)encode and overwrite latents
+    "latents_force_overwrite": true,                // (re)encode and overwrite latents
+    "latents_tiled_encode": true,                   // enable tiled encoding for latents to save vram
+    "latents_tiled_max_chunk_size": 6144,           // max chunk size for tiled encoding
+    "latents_tiled_overlap": 256,                   // overlap size for tiled encoding
+
     "audio_embeddings_force_overwrite": false,      // (re)encode and overwrite existing audio embeddings
     "text_embeddings_force_overwrite": false,       // (re)encode and overwrite existing text embeddings
-    "embeddings_only": true,                        // only encodes audio/text embeddings and skips latents
+    "embeddings_only": false,                       // only encodes audio/text embeddings and skips latents
 }
