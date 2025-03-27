@@ -1,17 +1,18 @@
 {
-    "model_name": "edm2_dae_e1b",
+    "model_name": "edm2_dae_d2a",
     "model_load_options": {
         "torch_dtype": "bfloat16",
         "device": "cuda",
         "load_checkpoints": true,
-        "load_emas": true,
+        "load_emas": false,
         "compile_options": null
     },
     "length": 1408768,
+    "latents_tiled_encode": false,
+    "latents_tiled_max_chunk_size": 6144,
+    "latents_tiled_overlap": 256,
     "output_lufs": -16.5,
-    "no_crop": false,
     "num_fgla_iters": 300,
-    "add_latent_noise": 0,
     "synthesis": "fgla",
     "add_random_test_samples": 0,
     "copy_sample_source_files": true,

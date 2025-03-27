@@ -95,7 +95,13 @@ class DualDiffusionDAE(DualDiffusionModule, ABC):
     @abstractmethod
     def decode(self, x: torch.Tensor, embeddings: torch.Tensor) -> torch.Tensor:
         pass
-
+    
+    def tiled_encode(self, x: torch.Tensor, embeddings: torch.Tensor, max_chunk: int = 6144, overlap: int = 256) -> torch.Tensor:
+        raise NotImplementedError(f"tiled_encode not implemented for {type(self).__name__}")
+    
+    def tiled_decode(self, x: torch.Tensor, embeddings: torch.Tensor, max_chunk: int = 6144, overlap: int = 256) -> torch.Tensor:
+        raise NotImplementedError(f"tiled_decode not implemented for {type(self).__name__}")
+    
     @abstractmethod
     def forward(self, samples: torch.Tensor, embeddings: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         pass

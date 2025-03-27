@@ -68,10 +68,6 @@ def dae_test() -> None:
 
     format.config.num_fgla_iters = num_fgla_iters
     sample_rate = format.config.sample_rate
-    if no_crop == True:
-        crop_width = -1
-    else:
-        crop_width = format.sample_raw_crop_width(length=length)
 
     if test_params["synthesis"] not in ["fgla", "ddec"]:
         test_params["synthesis"] = None
@@ -113,7 +109,8 @@ def dae_test() -> None:
             file_path = os.path.join(config.DEBUG_PATH, filename)
 
         audio_len = get_audio_info(file_path).frames
-        source_raw_sample = load_audio(file_path, count=min(crop_width, audio_len))
+        count = format.sample_raw_crop_width(length=min(length, audio_len))
+        source_raw_sample = load_audio(file_path, count=count)
         input_raw_sample = source_raw_sample.unsqueeze(0).to(format.device)
         input_sample = format.raw_to_sample(input_raw_sample)
         
@@ -132,10 +129,12 @@ def dae_test() -> None:
 
         if dae is not None:
             dae_embedding = dae.get_embeddings(audio_embedding)
-            #latents, full_res_latents = dae.encode(input_sample.to(dtype=dae.dtype), dae_embedding, return_full_res=True)
-            latents = dae.encode(input_sample.to(dtype=dae.dtype), dae_embedding)
 
-            #save_img(dae.latents_to_img(full_res_latents), os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_full_res_latents.png')}"))
+            if test_params["latents_tiled_encode"] == True:
+                latents = dae.tiled_encode(input_sample.to(dtype=dae.dtype), dae_embedding,
+                    max_chunk=test_params["latents_tiled_max_chunk_size"], overlap=test_params["latents_tiled_overlap"])
+            else:
+                latents = dae.encode(input_sample.to(dtype=dae.dtype), dae_embedding)
             
             if not hasattr(dae, "unet"):
 

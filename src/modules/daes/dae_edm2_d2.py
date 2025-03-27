@@ -293,7 +293,7 @@ class DAE_D2(DualDiffusionDAE):
         else:
             raise ValueError(f"Invalid latent shape: {latent_shape}")
         
-    def encode(self, x: torch.Tensor, embeddings: torch.Tensor, return_full_res: bool = False) -> torch.Tensor:
+    def encode(self, x: torch.Tensor, embeddings: torch.Tensor, normalize_latents: bool = True) -> torch.Tensor:
 
         x = tensor_4d_to_5d(x, num_channels=1).to(memory_format=torch.channels_last_3d)
         x = torch.cat((x, torch.ones_like(x[:, :1])), dim=1)
@@ -305,12 +305,9 @@ class DAE_D2(DualDiffusionDAE):
             x = block(x) if "conv" in name else block(x, embeddings)
         
         latents = tensor_5d_to_4d(self.conv_latents_out(x)).to(memory_format=torch.channels_last)
-        return normalize(torch.nn.functional.avg_pool2d(latents, self.config.downsample_ratio)) 
-    
-        full_res_latents = tensor_5d_to_4d(self.conv_latents_out(x)).to(memory_format=torch.channels_last)
-        latents = normalize(torch.nn.functional.avg_pool2d(full_res_latents, self.config.downsample_ratio))
-        if return_full_res == True:
-            return latents, full_res_latents
+        latents = torch.nn.functional.avg_pool2d(latents, self.config.downsample_ratio)
+        if normalize_latents == True:
+            return normalize(latents)
         else:
             return latents
 
@@ -342,11 +339,67 @@ class DAE_D2(DualDiffusionDAE):
     def forward(self, samples: torch.Tensor, dae_embeddings: torch.Tensor,
             add_latents_noise: float = 0) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         
-        latents = self.encode(samples, dae_embeddings)
+        latents = self.encode(samples, dae_embeddings, normalize_latents=False)
         latents_pre_norm_std = latents.std(dim=(1,2,3))
+        latents = normalize(latents)
         if add_latents_noise > 0:
             latents = normalize(latents + torch.randn_like(latents))
         
         reconstructed = self.decode(latents, dae_embeddings, training=True)
 
         return latents, reconstructed, latents_pre_norm_std
+
+    def tiled_encode(self, x: torch.Tensor, embeddings: torch.Tensor, max_chunk: int = 6144, overlap: int = 256) -> torch.Tensor:
+
+        x_w = x.shape[-1]
+        ds = self.config.downsample_ratio
+        
+        assert max_chunk % ds == 0, "max_chunk must be divisible by downsample ratio"
+        assert overlap % ds == 0, "overlap must be divisible by downsample ratio"
+        assert x_w % ds == 0, "sample length must be divisible by downsample ratio"
+
+        if x_w <= max_chunk:
+            return self.encode(x, embeddings)
+        
+        min_chunk_len = overlap * 3
+        out_overlap = overlap // ds
+        
+        latents_shape = (x.shape[0], self.config.latent_channels*2, x.shape[-2] // ds, x.shape[-1] // ds)
+        latents = torch.zeros(latents_shape, device=x.device, dtype=x.dtype)
+        
+        # encode latents in overlapping chunks
+        for w_start in range(0, x_w, max_chunk - overlap*2):
+
+            if w_start >= x_w:
+                break
+                
+            # sample boundaries including overlap
+            chunk_start = max(0, w_start)
+            chunk_end = min(x_w, w_start + max_chunk)
+            
+            # if last chunk is too small, extend it to the left
+            if chunk_end - chunk_start < min_chunk_len:
+                chunk_start -= min_chunk_len - (chunk_end - chunk_start)
+
+            chunk = x[:, :, :, chunk_start:chunk_end]
+            latents_chunk = self.encode(chunk, embeddings, normalize_latents=False)
+            
+            # latent boundaries including overlap
+            out_start = chunk_start // ds
+            out_end = chunk_end // ds
+            
+            # first chunk: keep left edge, other chunks: discard left overlap
+            is_first_chunk = (w_start == 0)
+            valid_start = 0 if is_first_chunk else out_overlap
+            
+            # last chunk: keep right edge, other chunks: discard right overlap
+            is_last_chunk = (chunk_end == x_w)
+            valid_end = latents_chunk.shape[3] if is_last_chunk else latents_chunk.shape[3] - out_overlap
+            
+            # latent boundaries excluding overlap
+            dest_start = out_start if is_first_chunk else out_start + out_overlap
+            dest_end = out_end if is_last_chunk else out_end - out_overlap
+            
+            latents[:, :, :, dest_start:dest_end] = latents_chunk[:, :, :, valid_start:valid_end]
+        
+        return normalize(latents)
