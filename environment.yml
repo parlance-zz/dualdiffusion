@@ -1,17 +1,16 @@
 name: dualdiffusion
 channels:
-  - pytorch
   - nvidia
   - conda-forge
 dependencies:
   - python=3.11   # 3.11 req is for laion-clap, otherwise 3.12+
   - nvidia::cudatoolkit
-  - pytorch::pytorch
   - pip
   - numpy==1.23.5 # 1.23.5 req is for laion-clap, otherwise *
-  - torchaudio    # for audio file i/o and spectrogram transforms
   - librosa       # faster backend for torchaudio i/o
   - pip:
+    - torch
+    - torchaudio    # for audio file i/o and spectrogram transforms
     - datasets      # load datasets for training
     - accelerate    # multi-gpu/distributed training
     - safetensors   # fast and safe tensor disk i/o
