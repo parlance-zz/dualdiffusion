@@ -48,6 +48,7 @@ class MSSLoss2D:
         self.steps = []
         self.windows = []
         self.loss_weights = []
+        self.phase_loss_weights = []
         
         for block_width in self.config.block_widths:
 
@@ -56,10 +57,16 @@ class MSSLoss2D:
             window /= window.square().mean().sqrt()
             self.windows.append(window.to(device=device).requires_grad_(False).detach())
 
-            blockfreq_y = torch.fft.fftfreq(block_width, 1/block_width).abs() + 1
-            blockfreq_x = torch.arange(block_width//2 + 1) + 1
-            loss_weight = (blockfreq_y.view(-1, 1) * blockfreq_x.view(1, -1)).float().to(device=device)
+            #blockfreq_y = torch.fft.fftfreq(block_width, 1/block_width).abs() + 1
+            #blockfreq_x = torch.arange(block_width//2 + 1) + 1
+            #loss_weight = (blockfreq_y.view(-1, 1) * blockfreq_x.view(1, -1)).float().to(device=device)
+            blockfreq_y = torch.fft.fftfreq(block_width, 1/block_width, device=device)
+            blockfreq_x = torch.arange(block_width//2 + 1, device=device)
+            wavelength = 1 / ((blockfreq_y.square().view(-1, 1) + blockfreq_x.square().view(1, -1)).sqrt() + 1)
+            loss_weight = (1 / wavelength * wavelength.amin()) * block_width**2
+        
             self.loss_weights.append(loss_weight.requires_grad_(False).detach())
+            self.phase_loss_weights.append((wavelength/torch.pi * block_width**2).requires_grad_(False).detach())
 
     @torch.no_grad()
     def _flat_top_window(self, x: torch.Tensor) -> torch.Tensor:
@@ -87,6 +94,7 @@ class MSSLoss2D:
     def mss_loss(self, sample: torch.Tensor, target: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
 
         loss = torch.zeros(target.shape[0], device=self.device)
+        phase_loss = torch.zeros(target.shape[0], device=self.device)
 
         for i, block_width in enumerate(self.config.block_widths):
             
@@ -97,14 +105,22 @@ class MSSLoss2D:
             with torch.no_grad():
                 target_fft = self.stft2d(target, block_width, step, window)
                 target_fft_abs = target_fft.abs().requires_grad_(False).detach()
+                target_fft_angle = target_fft.angle().requires_grad_(False).detach()
 
             sample_fft = self.stft2d(sample, block_width, step, window)
             sample_fft_abs = sample_fft.abs()
+            sample_fft_angle = sample_fft.angle()
             
             l1_loss = torch.nn.functional.l1_loss(sample_fft_abs.float(), target_fft_abs.float(), reduction="none")
             loss = loss + (l1_loss * loss_weight).mean(dim=(1,2,3,4,5))
-        
-        return loss
+
+            phase_loss_weight = self.phase_loss_weights[i] * target_fft_abs
+            phase_error = (sample_fft_angle - target_fft_angle).abs()
+            phase_error_wrap_mask = (phase_error > torch.pi).requires_grad_(False).detach()
+            phase_error = torch.where(phase_error_wrap_mask, 2*torch.pi - phase_error, phase_error)
+            phase_loss = phase_loss + (phase_error * phase_loss_weight).mean(dim=(1,2,3,4,5))
+   
+        return loss, phase_loss
 
     def compile(self, **kwargs) -> None:
         self.mss_loss = torch.compile(self.mss_loss, **kwargs)
@@ -114,6 +130,7 @@ class DAETrainer_D3_Config(ModuleTrainerConfig):
 
     kl_loss_weight: float = 2e-2
     kl_warmup_steps: int  = 1000
+    phase_loss_weight: float = 1
 
 class DAETrainer_D3(ModuleTrainer):
     
@@ -139,6 +156,7 @@ class DAETrainer_D3(ModuleTrainer):
 
         self.logger.info("Training DAE model:")
         self.logger.info(f"KL loss weight: {self.config.kl_loss_weight} KL warmup steps: {self.config.kl_warmup_steps}")
+        self.logger.info(f"Phase loss weight: {self.config.phase_loss_weight}")
 
     @torch.no_grad()
     def init_batch(self, validation: bool = False) -> None:
@@ -158,9 +176,13 @@ class DAETrainer_D3(ModuleTrainer):
         pre_norm_latents_var = pre_norm_latents.var(dim=(1,2,3))
         kl_loss = pre_norm_latents.mean(dim=(1,2,3)).square() + pre_norm_latents_var - 1 - pre_norm_latents_var.log()
 
-        recon_loss = self.mss_loss.mss_loss(reconstructed, spec_samples)
+        recon_loss, phase_loss = self.mss_loss.mss_loss(reconstructed, spec_samples)
+        recon_loss = recon_loss + phase_loss * self.config.phase_loss_weight
+
         recon_loss_logvar = self.module.get_recon_loss_logvar()
         recon_loss_nll = (recon_loss / 2) / recon_loss_logvar.exp() + recon_loss_logvar
+
+        point_loss = torch.nn.functional.l1_loss(reconstructed, spec_samples, reduction="none").mean(dim=(1,2,3))
 
         kl_loss_weight = self.config.kl_loss_weight
         if self.trainer.global_step < self.config.kl_warmup_steps:
@@ -169,8 +191,11 @@ class DAETrainer_D3(ModuleTrainer):
         return {
             "loss": recon_loss_nll + kl_loss * kl_loss_weight,
             "loss/recon": recon_loss,
+            "loss/phase": phase_loss,
+            "loss/point": point_loss,
             "loss/kl": kl_loss,
             "loss_weight/kl": kl_loss_weight,
+            "loss_weight/phase": self.config.phase_loss_weight,
             "io_stats/input_std": spec_samples.std(dim=(1,2,3)),
             "io_stats/input_mean": spec_samples.mean(dim=(1,2,3)),
             "io_stats/output_std": reconstructed.std(dim=(1,2,3)),

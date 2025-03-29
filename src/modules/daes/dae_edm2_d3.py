@@ -36,7 +36,7 @@ from typing import Union, Literal
 import torch
 
 from modules.daes.dae import DualDiffusionDAE, DualDiffusionDAEConfig
-from modules.mp_tools import mp_silu, mp_sum, normalize, MPConv3D, resample_3d
+from modules.mp_tools import mp_silu, mp_sum, normalize, MPConv3D, resample_3d, wavelet_decompose2d, wavelet_recompose2d
 from utils.dual_diffusion_utils import tensor_4d_to_5d, tensor_5d_to_4d
 
 
@@ -64,6 +64,8 @@ class DAE_D3_Config(DualDiffusionDAEConfig):
     emb_linear_groups: int = 1
     add_constant_channel: bool = True
     add_pixel_norm: bool       = False
+
+    wavelet_rescale_factors: list[float] = (0.78, 0.86, 0.96)
     
 class Block(torch.nn.Module):
 
@@ -312,7 +314,17 @@ class DAE_D3(DualDiffusionDAE):
         for block in self.dec.values():
             x = block(x, embeddings)
 
-        return tensor_5d_to_4d(self.conv_out(x, gain=self.out_gain)).to(memory_format=torch.channels_last)
+        # amplify high frequency details a bit
+        dec_out = tensor_5d_to_4d(self.conv_out(x, gain=self.out_gain)).to(memory_format=torch.channels_last)
+        if self.training == False and len(self.config.wavelet_rescale_factors) > 0: 
+            
+            wavelets = wavelet_decompose2d(dec_out, num_levels=len(self.config.wavelet_rescale_factors))
+            for i in range(len(self.config.wavelet_rescale_factors)):
+                wavelets[i] /= self.config.wavelet_rescale_factors[i]**0.5
+
+            dec_out = wavelet_recompose2d(wavelets)
+
+        return dec_out
     
     def forward(self, samples: torch.Tensor, dae_embeddings: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         
