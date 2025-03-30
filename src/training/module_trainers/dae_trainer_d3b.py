@@ -31,6 +31,9 @@ from modules.formats.spectrogram import SpectrogramFormat
 from modules.mp_tools import normalize, wavelet_decompose2d
 
 
+def add_midside(x: torch.Tensor) -> torch.Tensor:
+    return torch.cat((x, (x[:, 0:1] + x[:, 1:2])*0.5**0.5, (x[:, 0:1] - x[:, 1:2])*0.5**0.5), dim=1)
+
 @dataclass
 class MSSLoss2DConfig:
 
@@ -53,17 +56,26 @@ class MSSLoss2D:
         for block_width in self.config.block_widths:
 
             self.steps.append(max(block_width // self.config.block_overlap, 1))
-            #window = self.get_flat_top_window_2d_round(block_width)
-            window = self.get_flat_top_window_2d_square(block_width)
+            #window = self.get_flat_top_window_2d_square(block_width)
+            window = self.get_flat_top_window_2d_round(block_width)
             window /= window.square().mean().sqrt()
             self.windows.append(window.to(device=device).requires_grad_(False).detach())
 
+            """
             blockfreq_y = torch.fft.fftfreq(block_width, 1/block_width).abs() + 1
             blockfreq_x = torch.arange(block_width//2 + 1) + 1
             loss_weight = (blockfreq_y.view(-1, 1) * blockfreq_x.view(1, -1)).float().to(device=device)
             self.loss_weights.append(loss_weight.requires_grad_(False).detach())
-            self.phase_loss_weights.append((4/loss_weight).requires_grad_(False).detach())
-    
+            self.phase_loss_weights.append((4/loss_weight).requires_grad_(False).detach())"
+            """
+            blockfreq_y = torch.fft.fftfreq(block_width, 1/block_width, device=device)
+            blockfreq_x = torch.arange(block_width//2 + 1, device=device)
+            wavelength = 1 / ((blockfreq_y.square().view(-1, 1) + blockfreq_x.square().view(1, -1)).sqrt() + 1)
+            loss_weight = (1 / wavelength * wavelength.amin()) * block_width**2
+        
+            self.loss_weights.append(loss_weight.square().requires_grad_(False).detach())
+            self.phase_loss_weights.append((wavelength/torch.pi * block_width**2).requires_grad_(False).detach())
+ 
     @torch.no_grad()
     def _flat_top_window(self, x: torch.Tensor) -> torch.Tensor:
         return (0.21557895 - 0.41663158 * torch.cos(x) + 0.277263158 * torch.cos(2*x)
@@ -94,8 +106,9 @@ class MSSLoss2D:
         x = x.unfold(2, block_width, step).unfold(3, block_width, step)
 
         x = torch.fft.rfft2(x * window, norm="ortho")
-        if x.shape[1] == 2:
-            x = torch.stack((x[:, 0] + x[:, 1], x[:, 0] - x[:, 1]), dim=1)
+        x = add_midside(x)
+        #if x.shape[1] == 2:
+        #    x = torch.stack((x[:, 0] + x[:, 1], x[:, 0] - x[:, 1]), dim=1)
 
         return x
     
@@ -113,22 +126,22 @@ class MSSLoss2D:
             with torch.no_grad():
                 target_fft = self.stft2d(target, block_width, step, window)
                 target_fft_abs = target_fft.abs().requires_grad_(False).detach()
-                #target_fft_angle = target_fft.angle().requires_grad_(False).detach()
+                target_fft_angle = target_fft.angle().requires_grad_(False).detach()
 
             sample_fft = self.stft2d(sample, block_width, step, window)
             sample_fft_abs = sample_fft.abs()
-            #sample_fft_angle = sample_fft.angle()
+            sample_fft_angle = sample_fft.angle()
             
-            abs_error = torch.nn.functional.l1_loss(sample_fft_abs.float(), target_fft_abs.float(), reduction="none") * loss_weight
-            loss = loss + abs_error.mean(dim=(1,2,3,4,5))
+            #abs_error = torch.nn.functional.l1_loss(sample_fft_abs.float(), target_fft_abs.float(), reduction="none") * loss_weight
+            abs_error = torch.nn.functional.mse_loss(sample_fft_abs.float(), target_fft_abs.float(), reduction="none") * loss_weight
+            loss = loss + abs_error.mean(dim=(1,2,3,4,5)).clip(min=1e-6).sqrt()
 
-            #phase_loss_weight = self.phase_loss_weights[i] * target_fft_abs
-            #phase_error = (sample_fft_angle - target_fft_angle).abs()
-            #phase_error_wrap_mask = (phase_error > torch.pi).requires_grad_(False).detach()
-            #phase_error = torch.where(phase_error_wrap_mask, 2*torch.pi - phase_error, phase_error) * phase_loss_weight
+            phase_loss_weight = self.phase_loss_weights[i] * target_fft_abs
+            phase_error = (sample_fft_angle - target_fft_angle).abs()
+            phase_error_wrap_mask = (phase_error > torch.pi).requires_grad_(False).detach()
+            phase_error = torch.where(phase_error_wrap_mask, 2*torch.pi - phase_error, phase_error)
 
-            #phase_loss = phase_loss + (phase_error * phase_loss_weight).mean(dim=(1,2,3,4,5))
-            #phase_loss = phase_loss + phase_error.mean(dim=(1,2,3,4,5))
+            phase_loss = phase_loss + (phase_error * phase_loss_weight).mean(dim=(1,2,3,4,5))
 
         return loss, phase_loss
 
@@ -161,7 +174,8 @@ class WaveletLoss2D:
 
         for i, (spec_wavelet, recon_wavelet) in enumerate(zip(spec_samples_wavelet, reconstructed_wavelet)):
             level_weight = (spec_wavelet[0].numel() / spec_samples_wavelet[0][0].numel()) ** self.config.level_weight_degree
-            level_loss = torch.nn.functional.l1_loss(recon_wavelet, spec_wavelet, reduction="none").mean(dim=(1,2,3))#.clip(min=1e-10) ** self.config.level_loss_degree
+            #level_loss = torch.nn.functional.l1_loss(recon_wavelet, spec_wavelet, reduction="none").mean(dim=(1,2,3))#.clip(min=1e-10) ** self.config.level_loss_degree
+            level_loss = torch.nn.functional.mse_loss(recon_wavelet, spec_wavelet, reduction="none").mean(dim=(1,2,3)).clip(min=1e-6) ** 0.5
             loss = loss + level_loss * level_weight
 
             logs[f"loss/w_level{i}"] = level_loss
@@ -235,19 +249,18 @@ class DAETrainer_D3(ModuleTrainer):
         kl_loss = pre_norm_latents.mean(dim=(1,2,3)).square() + pre_norm_latents_var - 1 - pre_norm_latents_var.log()
 
         if self.config.wavelet_loss_weight > 0:
-            logs = self.wavelet_loss.wavelet_loss(reconstructed, spec_samples)
+            logs = self.wavelet_loss.wavelet_loss(add_midside(reconstructed), add_midside(spec_samples))
             recon_loss = logs["loss/wavelet"] * self.config.wavelet_loss_weight
         else:
             recon_loss = torch.zeros(spec_samples.shape[0], device=spec_samples.device)
 
         mss_loss, phase_loss = self.mss_loss.mss_loss(reconstructed, spec_samples)
-        recon_loss = recon_loss + mss_loss * self.config.mss_loss_weight #+ phase_loss * self.config.phase_loss_weight
+        recon_loss = recon_loss + mss_loss * self.config.mss_loss_weight + phase_loss * self.config.phase_loss_weight
 
         point_loss = torch.nn.functional.l1_loss(reconstructed, spec_samples, reduction="none").mean(dim=(1,2,3))
         #recon_loss = recon_loss + point_loss * self.config.point_loss_weight
 
         recon_loss_logvar = self.module.get_recon_loss_logvar()
-        #recon_loss_nll = (recon_loss / 2) / recon_loss_logvar.exp() + recon_loss_logvar
         recon_loss_nll = recon_loss / recon_loss_logvar.exp() + recon_loss_logvar
 
         kl_loss_weight = self.config.kl_loss_weight
