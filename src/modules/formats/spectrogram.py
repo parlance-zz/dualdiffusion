@@ -39,6 +39,7 @@ class SpectrogramFormatConfig(DualDiffusionFormatConfig):
     sample_mean: float = 1.295
     abs_exp1_scale: float      = 0.008
     abs_exp1_mel_density: bool = False
+    unscaled_psd_scale: float  = 0.625
 
     abs_exponent: float = 0.25
 
@@ -242,3 +243,10 @@ class SpectrogramFormat(DualDiffusionFormat):
             abs_exp1 /= get_mel_density(mel_freqs).view(1, 1,-1, 1)
 
         return abs_exp1
+
+    @torch.inference_mode()
+    def convert_to_unscaled_psd(self, samples: torch.Tensor):
+        
+        samples = (samples / self.config.raw_to_sample_scale + self.config.sample_mean).clip(min=0)
+        unscaled_psd = self.spectrogram_converter.freq_scale.unscale(samples ** (1 / self.config.abs_exponent))
+        return unscaled_psd.clip(min=0) * self.config.unscaled_psd_scale

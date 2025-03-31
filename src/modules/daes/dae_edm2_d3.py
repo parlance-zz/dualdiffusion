@@ -326,10 +326,12 @@ class DAE_D3(DualDiffusionDAE):
 
         return dec_out
     
-    def forward(self, samples: torch.Tensor, dae_embeddings: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    def forward(self, samples: torch.Tensor, dae_embeddings: torch.Tensor, add_latents_noise: float = 0) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         
         pre_norm_latents = self.encode(samples, dae_embeddings, normalize_latents=False)
         latents = normalize(pre_norm_latents)
+        if add_latents_noise > 0:
+            latents = normalize(latents + torch.randn_like(latents) * add_latents_noise)
         
         reconstructed = self.decode(latents, dae_embeddings)
         return latents, reconstructed, pre_norm_latents

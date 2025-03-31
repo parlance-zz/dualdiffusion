@@ -99,7 +99,7 @@ class FrequencyScale(torch.nn.Module):
     def unscale(self, spectrogram: torch.Tensor) -> torch.Tensor:
         # pack batch
         original_shape = spectrogram.size()
-        spectrogram = spectrogram.view(-1, original_shape[-2], original_shape[-1])
+        spectrogram = spectrogram.reshape(-1, original_shape[-2], original_shape[-1])
 
         unscaled = torch.relu(torch.linalg.lstsq(self.filters.transpose(-1, -2)[None],
                                spectrogram, driver=self.unscale_driver).solution)
