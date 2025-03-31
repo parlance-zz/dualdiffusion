@@ -87,7 +87,8 @@ class MSSLoss2D:
 
         x = torch.fft.rfft2(x * window, norm="ortho")
         if x.shape[1] == 2:
-            x = torch.stack((x[:, 0] + x[:, 1], x[:, 0] - x[:, 1]), dim=1)
+            #x = torch.stack((x[:, 0] + x[:, 1], x[:, 0] - x[:, 1]), dim=1)
+            x = torch.cat((x, (x[:, 0:1] + x[:, 1:2])*0.5**0.5, (x[:, 0:1] - x[:, 1:2])*0.5**0.5), dim=1)
 
         return x
     
