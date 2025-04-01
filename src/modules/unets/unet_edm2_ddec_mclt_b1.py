@@ -36,7 +36,7 @@ from typing import Union, Optional, Literal
 import torch
 
 from modules.unets.unet import DualDiffusionUNet, DualDiffusionUNetConfig
-from modules.mp_tools import MPFourier, MPConv3D, mp_cat, mp_silu, mp_sum, normalize, resample_1d
+from modules.mp_tools import MPFourier, MPConv3D, mp_cat, mp_silu, mp_sum, normalize, resample_3d
 from modules.formats.frequency_scale import get_mel_density
 from modules.formats.format import DualDiffusionFormat
 from utils.dual_diffusion_utils import tensor_5d_to_4d, tensor_4d_to_5d
@@ -128,7 +128,7 @@ class Block(torch.nn.Module):
 
     def forward(self, x: torch.Tensor, emb: torch.Tensor) -> torch.Tensor:
         
-        x = resample_1d(x, mode=self.resample_mode)
+        x = resample_3d(x, mode=self.resample_mode)
 
         if self.flavor == "enc":
             if self.conv_skip is not None:

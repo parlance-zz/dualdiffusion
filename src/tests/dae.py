@@ -73,10 +73,10 @@ def dae_test() -> None:
         
     if test_params["synthesis"] == "ddec" and hasattr(pipeline, "ddec"):
         ddec: DDec_MCLT_UNet = pipeline.ddec
-        #last_global_step = ddec.config.last_global_step
+        last_global_step = ddec.config.last_global_step
     else:
         ddec = None
-    last_global_step = dae.config.last_global_step
+        last_global_step = dae.config.last_global_step
 
     model_metadata = {"model_metadata": dict_str(pipeline.model_metadata)}
     print(f"{model_metadata['model_metadata']}\n")
@@ -158,7 +158,8 @@ def dae_test() -> None:
             output_sample = input_sample
 
         if ddec is not None:
-            x_ref = format.convert_to_abs_exp1(output_sample)
+            #x_ref = format.convert_to_abs_exp1(output_sample)
+            x_ref = format.convert_to_unscaled_psd(output_sample)
             ddec_params = SampleParams(
                 seed=5000,
                 num_steps=300, length=audio_len, cfg_scale=1.5, input_perturbation=1, input_perturbation_offset=0,
@@ -166,7 +167,7 @@ def dae_test() -> None:
             )
             mclt_output_sample = pipeline.diffusion_decode(
                 ddec_params, audio_embedding=audio_embedding,
-                sample_shape=x_ref.shape, x_ref=x_ref.to(dtype=ddec.dtype), module=ddec)
+                sample_shape=output_sample.shape, x_ref=x_ref.to(dtype=ddec.dtype), module=ddec)
             
             output_raw_sample = mclt.sample_to_raw(mclt_output_sample.float())
         else:
