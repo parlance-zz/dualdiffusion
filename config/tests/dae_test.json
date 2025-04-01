@@ -1,13 +1,14 @@
 {
-    "model_name": "edm2_dae_d3a",
+    "model_name": "edm2_ddec_mclt_b1a",
     "model_load_options": {
         "torch_dtype": "bfloat16",
         "device": "cuda",
         "load_checkpoints": true,
-        "load_emas": {
-            "ddec": "ema_std0.1.safetensors"
-        },
-        "compile_options": null
+        "load_emas": true,
+        "compile_options": {
+            "fullgraph": true,
+            "dynamic": true
+        }
     },
     "length": 1408768,
     "latents_tiled_encode": false,
@@ -17,8 +18,8 @@
     "num_fgla_iters": 300,
     "synthesis": "ddec",
     "add_random_test_samples": 5,
-    "copy_sample_source_files": false,
-    "fgla_sample_source_files": true,
+    "copy_sample_source_files": true,
+    "fgla_sample_source_files": false,
     "test_samples": [
         "dsf/Metropolis Street Racer Prototype/file_15.adx.flac",
         "psf3/Iron Man/_t_! movies_HUB_05_000001C2.adx.flac",

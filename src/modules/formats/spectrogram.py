@@ -40,7 +40,8 @@ class SpectrogramFormatConfig(DualDiffusionFormatConfig):
     abs_exp1_scale: float      = 0.008
     abs_exp1_mel_density: bool = False
     unscaled_psd_scale: float  = 0.625
-
+    unscaled_psd_mel_density: bool = False
+    unscaled_psd_num_fft_bins = 4096
     abs_exponent: float = 0.25
 
     # FFT parameters
@@ -148,6 +149,16 @@ class SpectrogramConverter(torch.nn.Module):
             filter_norm=config.freq_scale_norm,
         )
 
+        self.freq_scale_psd = FrequencyScale(
+            freq_scale=config.freq_scale_type,
+            freq_min=config.min_frequency,
+            freq_max=config.max_frequency,
+            sample_rate=config.sample_rate,
+            num_stft_bins=config.unscaled_psd_num_fft_bins,
+            num_filters=config.num_frequencies,
+            filter_norm=config.freq_scale_norm,
+        )
+
     def get_spectrogram_shape(self, audio_shape: torch.Size) -> torch.Size:
         num_frames = 1 + (audio_shape[-1] + self.config.padded_length - self.config.win_length) // self.config.hop_length
         return torch.Size(audio_shape[:-1] + (self.config.num_frequencies, num_frames))
@@ -247,6 +258,15 @@ class SpectrogramFormat(DualDiffusionFormat):
     @torch.inference_mode()
     def convert_to_unscaled_psd(self, samples: torch.Tensor):
         
+        #samples = (samples / self.config.raw_to_sample_scale + self.config.sample_mean).clip(min=0)
+        #unscaled_psd = self.spectrogram_converter.freq_scale.unscale(samples ** (1 / self.config.abs_exponent))
+        #return unscaled_psd.clip(min=0) * self.config.unscaled_psd_scale
+    
         samples = (samples / self.config.raw_to_sample_scale + self.config.sample_mean).clip(min=0)
-        unscaled_psd = self.spectrogram_converter.freq_scale.unscale(samples ** (1 / self.config.abs_exponent))
-        return unscaled_psd.clip(min=0) * self.config.unscaled_psd_scale
+        unscaled_psd = self.spectrogram_converter.freq_scale_psd.unscale(samples ** (1 / self.config.abs_exponent))
+
+        if self.config.unscaled_psd_mel_density == True:
+            fft_hz = torch.linspace(0, self.config.sample_rate / 2, self.config.unscaled_psd_num_fft_bins, device=unscaled_psd.device)
+            unscaled_psd /= get_mel_density(fft_hz).view(1, 1,-1, 1)
+
+        return unscaled_psd * self.config.unscaled_psd_scale
