@@ -289,8 +289,11 @@ def load_audio(input_path: str,
         raise ValueError(f"Given sample rate ({sample_rate}) does not match file sample rate ({returned_sample_rate}) in {input_path}")
     
     tensor = torch.from_numpy(data).float()
-
+    if tensor.ndim == 1:
+        tensor = tensor.unsqueeze(0)
+        
     assert tensor.shape[-1] == count or count == -1
+    assert tensor.ndim == 2
 
     if tensor.shape[0] == 1 and force_stereo == True:
         tensor = tensor.repeat(2, 1)
