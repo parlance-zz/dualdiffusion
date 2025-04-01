@@ -62,6 +62,7 @@ class DatasetConfig:
      latents_crop_width: int
      num_proc: Optional[int] = None
      load_datatypes: list[Literal["audio","latents", "audio_embeddings", "text_embeddings"]] = ("audio", "audio_embeddings")
+     load_splits: list[str] = ("train", "validation")
      filter_unnormalized_samples: bool = True 
      filter_invalid_samples: bool      = True
 
@@ -74,7 +75,11 @@ class DualDiffusionDataset(torch.nn.Module):
         self.clap_config = clap_config
 
         split_files = glob(f"{self.config.data_dir}/*.jsonl")
-        data_files = {os.path.splitext(os.path.basename(split_file))[0]: split_file for split_file in split_files}
+        data_files = {}
+        for split_file in split_files:
+            split_name = os.path.splitext(os.path.basename(split_file))[0]
+            if split_name in self.config.load_splits:
+                data_files[split_name] = split_file
 
         # kind of stupid that I have to do this manually, thanks huggingface
         dataset_info_path = os.path.join(self.config.data_dir, "dataset_infos", "dataset_info.json")

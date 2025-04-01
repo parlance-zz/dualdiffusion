@@ -113,6 +113,7 @@ class OptimizerConfig:
 @dataclass
 class DataLoaderConfig:
     load_datatypes: list[Literal["audio", "latents", "audio_embeddings", "text_embeddings"]] = ("audio", "audio_embeddings")
+    load_splits: list[str] = ("train", "validation")
     filter_unnormalized_samples: bool = True
     filter_invalid_samples: bool = True
     dataset_num_proc: Optional[int] = None
@@ -526,6 +527,7 @@ class DualDiffusionTrainer:
             latents_crop_width=self.latent_shape[-1] if self.latent_shape is not None else 0,
             num_proc=self.config.dataloader.dataset_num_proc,
             load_datatypes=self.config.dataloader.load_datatypes,
+            load_splits=self.config.dataloader.load_splits,
             filter_unnormalized_samples=self.config.dataloader.filter_unnormalized_samples,
             filter_invalid_samples=self.config.dataloader.filter_invalid_samples,
         )
