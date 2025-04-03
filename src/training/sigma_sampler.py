@@ -40,6 +40,7 @@ class SigmaSamplerConfig:
     use_stratified_sigma_sampling: bool = True
     use_static_sigma_sampling: bool = False
     sigma_pdf_resolution: Optional[int] = 127
+    sigma_pdf_sanitization: bool = True
 
     @property
     def ln_sigma_min(self) -> float:
@@ -72,6 +73,9 @@ class SigmaSampler():
             
             if self.config.dist_pdf is None:
                 self.config.dist_pdf = torch.ones(self.config.sigma_pdf_resolution)
+            if self.config.sigma_pdf_sanitization == True:
+                self.config.dist_pdf = self._sanitize_pdf(self.config.dist_pdf)
+                
             self.dist_pdf = self.config.dist_pdf / self.config.dist_pdf.sum()
             self.dist_cdf = torch.cat((torch.tensor([0.], device=self.dist_pdf.device), self.dist_pdf.cumsum(dim=0)))
 
@@ -144,7 +148,15 @@ class SigmaSampler():
         ln_sigma = quantiles * (self.config.ln_sigma_max - self.config.ln_sigma_min) + self.config.ln_sigma_min
         return ln_sigma.exp().clip(self.config.sigma_min, self.config.sigma_max)
     
+    def _sanitize_pdf(self, pdf: torch.Tensor) -> torch.Tensor:
+        max_idx = torch.argmax(pdf)
+        increasing_part = torch.cummax(pdf[:max_idx + 1], dim=0).values
+        decreasing_part = torch.cummin(pdf[max_idx:], dim=0).values
+        return torch.cat([increasing_part, decreasing_part[1:]])
+
     def update_pdf(self, pdf: torch.Tensor) -> None:
+        if self.config.sigma_pdf_sanitization == True:
+            pdf = self._sanitize_pdf(pdf)
         self.dist_pdf = pdf / pdf.sum()
         self.dist_cdf[1:] = self.dist_pdf.cumsum(dim=0)
 

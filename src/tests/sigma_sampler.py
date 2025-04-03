@@ -109,12 +109,14 @@ def sigma_sampler_test():
     batch_dist_scale = test_params["batch_dist_scale"]
     batch_dist_offset = test_params["batch_dist_offset"]
     batch_stratified_sampling = test_params["batch_stratified_sampling"]
+    batch_pdf_sanitization = test_params["batch_pdf_sanitization"]
 
     reference_batch_size = test_params["reference_batch_size"]
     reference_distribution = test_params["reference_distribution"]
     reference_dist_scale = test_params["reference_dist_scale"]
     reference_dist_offset = test_params["reference_dist_offset"]
     reference_stratified_sampling = test_params["reference_stratified_sampling"]
+    reference_pdf_sanitization = test_params["reference_pdf_sanitization"]
 
     n_iter = test_params["n_iter"]
     n_histo_bins = test_params["n_histo_bins"]
@@ -134,9 +136,9 @@ def sigma_sampler_test():
         sigma_error = module.get_sigma_loss_logvar(sigma).float().flatten()
     
         if batch_distribution == "ln_pdf":
-            batch_distribution_pdf = (-sigma_error * batch_dist_scale).exp()
+            batch_distribution_pdf = ((-sigma_error * batch_dist_scale).exp() - 0.8).clip(min=0.2)
         if reference_distribution == "ln_pdf":
-            reference_distribution_pdf = (-sigma_error * reference_dist_scale).exp()
+            reference_distribution_pdf = ((-sigma_error * reference_dist_scale).exp() - 0.8).clip(min=0.2)
 
     batch_sampler_config = SigmaSamplerConfig(
         sigma_max=sigma_max,
@@ -147,6 +149,7 @@ def sigma_sampler_test():
         dist_offset=batch_dist_offset,
         dist_pdf=batch_distribution_pdf,
         use_stratified_sigma_sampling=batch_stratified_sampling,
+        sigma_pdf_sanitization=batch_pdf_sanitization
     )
     batch_sampler = SigmaSampler(batch_sampler_config)
 
@@ -159,6 +162,7 @@ def sigma_sampler_test():
         dist_offset=reference_dist_offset,
         dist_pdf=reference_distribution_pdf,
         use_stratified_sigma_sampling=reference_stratified_sampling,
+        sigma_pdf_sanitization=reference_pdf_sanitization
     )
     reference_sampler = SigmaSampler(reference_sampler_config)
 
