@@ -225,9 +225,9 @@ class DualDiffusionDataset(torch.nn.Module):
                 selected = sample_audio_embeddings[start_int:end_int + 1]
 
                 if start_frac > 0:
-                    selected[0] = mp_sum(sample_audio_embeddings[start_int], sample_audio_embeddings[start_int + 1], start_frac)
+                    selected[0] = normalize(torch.lerp(sample_audio_embeddings[start_int], sample_audio_embeddings[start_int + 1], start_frac))
                 if end_frac > 0:
-                    selected[-1] = mp_sum(sample_audio_embeddings[end_int], sample_audio_embeddings[end_int + 1], end_frac)
+                    selected[-1] = normalize(torch.lerp(sample_audio_embeddings[end_int], sample_audio_embeddings[end_int + 1], end_frac))
 
                 batch_audio_embeddings.append(normalize(selected.sum(dim=0)))
 

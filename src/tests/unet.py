@@ -78,11 +78,6 @@ def unet_test() -> None:
     format: SpectrogramFormat = pipeline.format
     mclt = DualMCLTFormat(DualMCLTFormatConfig())
 
-    ddec.compile(fullgraph=True, dynamic=False)
-    ddec.to(memory_format=torch.channels_last)
-    pipeline.unet.compile(fullgraph=True, dynamic=False)
-    pipeline.unet.to(memory_format=torch.channels_last)
-
     sample_rate = format.config.sample_rate
     crop_width = format.sample_raw_crop_width(length=cfg.unet_params.length)
     last_global_step = pipeline.unet.config.last_global_step
@@ -165,22 +160,21 @@ def unet_test() -> None:
         unet_output = pipeline.diffusion_decode(cfg.unet_params,
             audio_embedding=audio_embedding, module=pipeline.unet).float()
         if dae is not None:
-            raise NotImplementedError("DAE not implemented")
             latents = unet_output
-            output_sample = dae.decode(latents.to(dtype=dae.dtype), dae_embeddings)
+            output_sample = dae.decode(latents.to(dtype=dae.dtype), dae_embeddings).float()
         else:
             latents = None
             output_sample = unet_output
         
         if cfg.skip_ddec == False:
-            x_ref = format.convert_to_abs_exp1(output_sample)
-            x_ref = x_ref.to(dtype=ddec.dtype)
-
+            #x_ref = format.convert_to_abs_exp1(output_sample)
+            #x_ref = x_ref.to(dtype=ddec.dtype)
+            x_ref = format.convert_to_unscaled_psd(output_sample.float()).to(dtype=ddec.dtype)
             print(f"x_ref   mean/std: {x_ref.mean().item():.4} {x_ref.std().item():.4}")
 
             cfg.ddec_params.seed = cfg.unet_params.seed
-            output_mclt_sample = pipeline.diffusion_decode(cfg.ddec_params,
-                audio_embedding=audio_embedding, x_ref=x_ref, module_name="ddec")
+            output_mclt_sample = pipeline.diffusion_decode(cfg.ddec_params, audio_embedding=audio_embedding,
+                                                    sample_shape=output_sample.shape, x_ref=x_ref, module=ddec)
             
             output_raw_sample = mclt.sample_to_raw(output_mclt_sample.float())
         else:

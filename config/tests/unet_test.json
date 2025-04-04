@@ -1,41 +1,41 @@
 {
-    "model_name": "edm2_unet_aclap2_ultra_d1a",
+    "model_name": "edm2_d3a_aclap2_ultra2",
     "model_load_options": {
-        "torch_dtype": {
-            "unet": "bfloat16",
-            "ddec": "bfloat16",
-        },
+        "torch_dtype": "bfloat16",
         "device": "cuda",
         "load_checkpoints": true,
         "load_emas": {
             //"unet": "phema_std0.015.safetensors",
             //"unet": "phema_std0.2.safetensors",
             "unet": "ema_std0.05.safetensors",
+            //"unet": "ema_std0.1.safetensors",
             "ddec": "ema_std0.1.safetensors"
         },
-        "compile_options": null
+        "compile_options": {
+            "fullgraph": true,
+            "dynamic": false
+        }
     },
-    "output_lufs": -16.5,
+    "output_lufs": -18.5,
     "num_fgla_iters": 300, // hq settings
 
-    "skip_ddec": true,
+    "skip_ddec": false,
     "copy_sample_source_files": true,
     "random_test_samples_seed": null,
-    "add_random_test_samples": 3,
+    "add_random_test_samples": 10,
     "test_samples": [
         
         //"psf2/Shin Megami Tensei - Persona 3 FES",
         
-        
+        "smd/Gunstar Heroes/18 - Last Party on the Moon.vgm.flac",
+        "smd/Gunstar Heroes/18 - Last Party on the Moon.vgm.flac",
         "dsf/Metropolis Street Racer Prototype/file_15.adx.flac",
         "psf/Gradius Gaiden/SLPM-86042_BGM1_0000096c.XA.flac",
-        /*
         "3sf/Monster Hunter 3 Ultimate/_t_lobby_ML_T_SKB01.mca.flac",
-        
-        "xbox/Amped 2/_t_Soundtrack_Electronica~Dig This {by Micronaut}.wma.flac",
         "vita/Grisaia Phantom Trigger 01 & 02/MUSIC_00000013.at9.flac",
         "psf3/Gundam Battle Operation Next/BGM_009.adx.flac",
-        "xbox/AirForce Delta Storm/afdx_02.rwx.flac",
+        "xbox/AirForce Delta Storm/afdx_02.rwx.flac"
+        /*
         "xbox/AirForce Delta Storm/afdx_gra.rwx.flac",
         "xbox/AirForce Delta Storm/afdx_m01.rwx.flac",
         "xbox/AirForce Delta Storm/afdx_m08.rwx.flac",
@@ -144,27 +144,31 @@
         "seed": null,
 
         "num_steps": 300,
-        "cfg_scale": 1.6,//1.5,
-        "use_heun": true,
+        "cfg_scale": 2.5, //3, //3.5,//3,
+        "use_heun": false, //true,
         "schedule": "edm2",
 
-        "sigma_max": 250, //250,
-        "sigma_min": 0.02,//0.025,
+        "sigma_max": 200, //250,
+        "sigma_min": 0.01,//0.025,
         
-        "input_perturbation": 0.5,//0.4,
-        "input_perturbation_offset": 0.6,
+        "input_perturbation": 0.99, //0.99, //0.5, //0.3,//0.4,
+        "input_perturbation_offset": 0.3
     },
     "ddec_params": {
 
-        "num_steps": 300,
+        "num_steps": 20,
         "cfg_scale": 1.5,
-        "use_heun": false,
+        "use_heun": true,
         "schedule": "edm2",
 
-        "sigma_max": 10,
-        "sigma_min": 0.0003,
+        //"sigma_max": 11,
+        //"sigma_min": 0.0002,
+        "sigma_max": 12,
+        "sigma_min": 0.001,
 
-        "input_perturbation": 1,
-        "input_perturbation_offset": 0,
+        //"input_perturbation": 0,
+        //"input_perturbation_offset": 0,
+        "input_perturbation": 0.04,
+        "input_perturbation_offset": -0.35
     }
 }
