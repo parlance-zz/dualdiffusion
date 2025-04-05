@@ -156,6 +156,7 @@ class DualDiffusionTrainerConfig:
     checkpoints_total_limit: int        = 1
     strict_checkpoint_time: bool        = False
 
+    enable_bf16_reduction_in_sdp: bool  = False
     enable_anomaly_detection: bool      = False
     enable_model_compilation: bool      = True
     enable_channels_last: bool          = True
@@ -299,11 +300,15 @@ class DualDiffusionTrainer:
         else:
             self.logger.info("Using random seed from system - Training may not be reproducible")
 
-        if self.config.enable_anomaly_detection:
+        if self.config.enable_anomaly_detection == True:
             torch.autograd.set_detect_anomaly(True)
             self.logger.info("Pytorch anomaly detection enabled")
         else:
             self.logger.info("Pytorch anomaly detection disabled")
+
+        if self.config.enable_bf16_reduction_in_sdp == True:
+            torch.backends.cuda.allow_fp16_bf16_reduction_math_sdp(True)
+            self.logger.info("BF16 reduction in Pytorch SDP enabled")
 
     def init_module_pipeline(self) -> None:
 
