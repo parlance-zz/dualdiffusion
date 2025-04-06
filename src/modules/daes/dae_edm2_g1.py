@@ -332,7 +332,6 @@ class DAE_G1(DualDiffusionDAE):
             embeddings = embeddings.unsqueeze(-1).unsqueeze(-1).unsqueeze(-1)
 
         for name, block in self.enc.items():
-            print(f"g1_enc_{name}", x.shape)
             x = block(x) if "conv" in name else block(x, embeddings)
         
         latents = tensor_5d_to_4d(self.conv_latents_out(x)).to(memory_format=torch.channels_last)
@@ -352,7 +351,6 @@ class DAE_G1(DualDiffusionDAE):
             embeddings = embeddings.unsqueeze(-1).unsqueeze(-1).unsqueeze(-1)
 
         for name, block in self.dec.items():
-            print(f"g1_dec_{name}", x.shape)
             x = block(x, embeddings)
 
         return tensor_5d_to_4d(normalize(x)).to(memory_format=torch.channels_last)

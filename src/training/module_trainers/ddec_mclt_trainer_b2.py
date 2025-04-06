@@ -38,9 +38,6 @@ from modules.mp_tools import normalize
 from utils.dual_diffusion_utils import dict_str
 
 
-def add_midside(x: torch.Tensor) -> torch.Tensor:
-    return torch.cat((x, (x[:, 0:1] + x[:, 1:2])*0.5**0.5, (x[:, 0:1] - x[:, 1:2])*0.5**0.5), dim=1)
-
 @dataclass
 class DiffusionDecoder_MCLT_Trainer_B2_Config(ModuleTrainerConfig):
 
@@ -70,6 +67,9 @@ class DiffusionDecoder_MCLT_Trainer_B2_Config(ModuleTrainerConfig):
     noise_level_bias: bool = False
     expected_sample_std: float = 1
 
+    kl_loss_weight: float = 2e-2
+    kl_warmup_steps: int  = 1000
+
 class DiffusionDecoder_MCLT_Trainer_B2(ModuleTrainer):
     
     @torch.no_grad()
@@ -78,7 +78,8 @@ class DiffusionDecoder_MCLT_Trainer_B2(ModuleTrainer):
         self.config = config
         self.trainer = trainer
         self.logger = trainer.logger
-        self.module: DDec_MCLT_UNet_B2 = trainer.module
+        self.ddec: DDec_MCLT_UNet_B2 = trainer.modules[trainer.config.train_modules.index("ddec")]
+        self.dae: DAE_G1 = trainer.modules[trainer.config.train_modules.index("dae")]
 
         self.is_validation_batch = False
         self.device_generator = None
@@ -86,20 +87,12 @@ class DiffusionDecoder_MCLT_Trainer_B2(ModuleTrainer):
 
         self.format: SpectrogramFormat = trainer.pipeline.format.to(self.trainer.accelerator.device)
         self.mclt: DualMCLTFormat = DualMCLTFormat(DualMCLTFormatConfig()).to(self.trainer.accelerator.device)
-        self.dae: DAE_G1 = trainer.pipeline.dae.to(
-            device=self.trainer.accelerator.device, dtype=trainer.mixed_precision_dtype).requires_grad_(False).eval()
-
-        if trainer.config.enable_channels_last == True:
-            self.dae = self.dae.to(memory_format=torch.channels_last_3d)
 
         if trainer.config.enable_model_compilation:
-            self.module.compile(**trainer.config.compile_params)
+            self.ddec.compile(**trainer.config.compile_params)
+            self.dae.compile(**trainer.config.compile_params)
             self.format.compile(**trainer.config.compile_params)
             self.mclt.compile(**trainer.config.compile_params)
-            self.dae.compile(**trainer.config.compile_params)
-
-        if self.dae.config.last_global_step == 0:
-            self.logger.error("DAE model has not been trained, aborting training..."); exit(1)
 
         if self.config.noise_level_bias == True:
             self.logger.info(f"Noise level bias enabled - expected sample std: {self.config.expected_sample_std}")
@@ -117,13 +110,13 @@ class DiffusionDecoder_MCLT_Trainer_B2(ModuleTrainer):
             self.logger.info(f"Using latents perturbation: {self.config.latents_perturbation}")
         else: self.logger.info("Latents perturbation is disabled")
 
-        self.logger.info(f"Dropout: {self.module.config.dropout} Conditioning dropout: {self.config.conditioning_dropout}")
+        self.logger.info(f"Conditioning dropout: {self.config.conditioning_dropout}")
 
         # sigma schedule / distribution for train batches
         sigma_sampler_config = SigmaSamplerConfig(
-            sigma_max=self.config.sigma_override_max or self.module.config.sigma_max,
-            sigma_min=self.config.sigma_override_min or self.module.config.sigma_min,
-            sigma_data=self.module.config.sigma_data,
+            sigma_max=self.config.sigma_override_max or self.ddec.config.sigma_max,
+            sigma_min=self.config.sigma_override_min or self.ddec.config.sigma_min,
+            sigma_data=self.ddec.config.sigma_data,
             distribution=self.config.sigma_distribution,
             dist_scale=self.config.sigma_dist_scale,
             dist_offset=self.config.sigma_dist_offset,
@@ -136,9 +129,9 @@ class DiffusionDecoder_MCLT_Trainer_B2(ModuleTrainer):
 
         # separate noise schedule / sigma distribution for validation batches
         validation_sigma_sampler_config = SigmaSamplerConfig(
-            sigma_max=self.config.validation_sigma_override_max or self.module.config.sigma_max,
-            sigma_min=self.config.validation_sigma_override_min or self.module.config.sigma_min,
-            sigma_data=self.module.config.sigma_data,
+            sigma_max=self.config.validation_sigma_override_max or self.ddec.config.sigma_max,
+            sigma_min=self.config.validation_sigma_override_min or self.ddec.config.sigma_min,
+            sigma_data=self.ddec.config.sigma_data,
             distribution=self.config.validation_sigma_distribution,
             dist_scale=self.config.validation_sigma_dist_scale,
             dist_offset=self.config.validation_sigma_dist_offset,
@@ -156,6 +149,9 @@ class DiffusionDecoder_MCLT_Trainer_B2(ModuleTrainer):
             bucket_sigma[0] = 0; bucket_sigma[-1] = float("inf")
             self.bucket_names = [f"loss_σ_buckets/{bucket_sigma[i]:.4f} - {bucket_sigma[i+1]:.4f}"
                                  for i in range(self.config.num_loss_buckets)]
+
+        self.logger.info("Training DAE/DDEC modules:")
+        self.logger.info(f"KL loss weight: {self.config.kl_loss_weight} KL warmup steps: {self.config.kl_warmup_steps}")
 
     @torch.no_grad()
     def init_batch(self, validation: bool = False) -> None:
@@ -186,8 +182,8 @@ class DiffusionDecoder_MCLT_Trainer_B2(ModuleTrainer):
                                       self.sigma_sampler.config.ln_sigma_max,
                                       self.config.sigma_pdf_resolution,
                                       device=self.trainer.accelerator.device)
-            ln_sigma_error = self.module.logvar_linear(
-                self.module.logvar_fourier(ln_sigma/4)).float().flatten().detach()
+            ln_sigma_error = self.ddec.logvar_linear(
+                self.ddec.logvar_fourier(ln_sigma/4)).float().flatten().detach()
             pdf_warmup_factor = min(1, self.trainer.global_step / (self.config.sigma_pdf_warmup_steps or 1))
             sigma_distribution_pdf = (-pdf_warmup_factor * self.config.sigma_dist_scale * ln_sigma_error).exp()
             sigma_distribution_pdf = (sigma_distribution_pdf - 0.8).clip(min=0.2)
@@ -209,7 +205,7 @@ class DiffusionDecoder_MCLT_Trainer_B2(ModuleTrainer):
 
             conditioning_mask = (torch.rand(device_batch_size, generator=self.device_generator,
                 device=self.trainer.accelerator.device) > self.config.conditioning_dropout).float()
-            unet_class_embeddings = self.module.get_embeddings(sample_audio_embeddings, conditioning_mask)
+            unet_class_embeddings = self.ddec.get_embeddings(sample_audio_embeddings, conditioning_mask)
 
             dae_class_embeddings = self.dae.get_embeddings(sample_audio_embeddings.to(dtype=self.dae.dtype))
         else:
@@ -218,12 +214,11 @@ class DiffusionDecoder_MCLT_Trainer_B2(ModuleTrainer):
         
         raw_samples: torch.Tensor = batch["audio"].clone()
 
-        mel_spec = self.format.raw_to_sample(raw_samples)
-        _, dae_mel_spec, _ = self.dae(mel_spec.to(dtype=self.dae.dtype),
+        mel_spec = self.format.raw_to_sample(raw_samples).detach()
+        latents, ref_samples, pre_norm_latents = self.dae(mel_spec,
             dae_class_embeddings, add_latents_noise=self.config.latents_perturbation)
 
         mclt_samples = self.mclt.raw_to_sample(raw_samples, random_phase_augmentation=True).detach()
-        ref_samples = self.format.convert_to_unscaled_psd(dae_mel_spec.float()).detach()
 
         # get the noise level for this sub-batch from the pre-calculated whole-batch sigma (required for stratified sampling)
         local_sigma = self.global_sigma[self.trainer.accelerator.local_process_index::self.trainer.accelerator.num_processes]
@@ -231,7 +226,7 @@ class DiffusionDecoder_MCLT_Trainer_B2(ModuleTrainer):
 
         # prepare model inputs
         noise = torch.randn(mclt_samples.shape, device=mclt_samples.device, generator=self.device_generator)
-        mclt_samples = mclt_samples / self.module.mel_density.squeeze(0)
+        mclt_samples = mclt_samples / self.ddec.mel_density.squeeze(0)
         #quantiles = self.sigma_sampler._sample_uniform_stratified(device_batch_size)
         #quantiles = _mel_to_hz(_hz_to_mel(self.format.config.sample_rate / 2) * quantiles)
         #freq_indices = (quantiles / quantiles.amax() * (mclt_samples.shape[2] - 1e-4)).to(dtype=torch.int32)
@@ -250,14 +245,14 @@ class DiffusionDecoder_MCLT_Trainer_B2(ModuleTrainer):
         #    batch_sigma = batch_sigma * mclt_samples.std(dim=(1,2,3)) / self.config.expected_sample_std
         noise = (noise * batch_sigma.view(-1, 1, 1, 1)).detach()
 
-        denoised: torch.Tensor = self.module(mclt_samples + noise, batch_sigma, self.format, unet_class_embeddings, ref_samples)
-        batch_loss_weight = (batch_sigma ** 2 + self.module.config.sigma_data ** 2) / (batch_sigma * self.module.config.sigma_data) ** 2
+        denoised: torch.Tensor = self.ddec(mclt_samples + noise, batch_sigma, self.format, unet_class_embeddings, ref_samples)
+        batch_loss_weight = (batch_sigma ** 2 + self.ddec.config.sigma_data ** 2) / (batch_sigma * self.ddec.config.sigma_data) ** 2
         batch_weighted_loss = torch.nn.functional.mse_loss(denoised, mclt_samples, reduction="none").mean(dim=(1,2,3)) * batch_loss_weight
         
         if self.is_validation_batch == True:
             batch_loss = batch_weighted_loss
         else: # for train batches this takes the loss as the gaussian NLL with sigma-specific learned variance
-            error_logvar = self.module.get_sigma_loss_logvar(sigma=batch_sigma)
+            error_logvar = self.ddec.get_sigma_loss_logvar(sigma=batch_sigma)
             batch_loss = batch_weighted_loss / error_logvar.exp() + error_logvar
 
         # log loss bucketed by noise level range
@@ -269,10 +264,33 @@ class DiffusionDecoder_MCLT_Trainer_B2(ModuleTrainer):
             self.unet_loss_buckets.index_add_(0, target_buckets, global_weighted_loss)
             self.unet_loss_bucket_counts.index_add_(0, target_buckets, torch.ones_like(global_weighted_loss))
 
-        return {"loss": batch_loss,
-                "std/input_samples": mclt_samples.std(dim=(1,2,3)),
-                "std/ref_samples": ref_samples.square().mean(dim=(1,2,3)).sqrt(),
-                "std/output_samples": denoised.std(dim=(1,2,3))}
+        pre_norm_latents_var: torch.Tensor = pre_norm_latents.var(dim=(1,2,3))
+        kl_loss = pre_norm_latents.mean(dim=(1,2,3)).square() + pre_norm_latents_var - 1 - pre_norm_latents_var.log()
+
+        kl_loss_weight = self.config.kl_loss_weight
+        if self.trainer.global_step < self.config.kl_warmup_steps:
+            kl_loss_weight *= self.trainer.global_step / self.config.kl_warmup_steps
+
+        return {"loss": batch_loss + kl_loss * kl_loss_weight,
+                "loss/kl": kl_loss,
+                "loss_weight/kl": kl_loss_weight,
+
+                "io_stats/mel_spec_std": mel_spec.std(dim=(1,2,3)),
+                "io_stats/mel_spec_mean": mel_spec.mean(dim=(1,2,3)),
+                "io_stats/mclt_spec_std": mclt_samples.std(dim=(1,2,3)),
+                "io_stats/mclt_spec_mean": mclt_samples.mean(dim=(1,2,3)),
+
+                "io_stats/x_ref_std": ref_samples.std(dim=(1,2,3)),
+                "io_stats/x_ref_mean": ref_samples.mean(dim=(1,2,3)),
+
+                "io_stats/denoised_std": denoised.std(dim=(1,2,3)),
+                "io_stats/denoised_mean": denoised.mean(dim=(1,2,3)),
+
+                "io_stats/latents_std": latents.std(dim=(1,2,3)),
+                "io_stats/latents_mean": latents.mean(dim=(1,2,3)),
+                "io_stats/latents_pre_norm_std": pre_norm_latents_var.sqrt()
+                
+                }
 
     @torch.no_grad()
     def finish_batch(self) -> dict[str, torch.Tensor]:

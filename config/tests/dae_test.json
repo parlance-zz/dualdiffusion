@@ -7,7 +7,7 @@
         "load_emas": false,
         "compile_options": null
     },
-    "length": 1408768,
+    "length": 1024000,
     "latents_tiled_encode": false,
     "latents_tiled_max_chunk_size": 6144,
     "latents_tiled_overlap": 256,

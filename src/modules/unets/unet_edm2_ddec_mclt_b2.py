@@ -300,7 +300,6 @@ class DDec_MCLT_UNet_B2(DualDiffusionUNet):
         emb = emb.unsqueeze(-1).unsqueeze(-1).unsqueeze(-1).to(dtype=torch.bfloat16)
 
         # Encoder.
-        print(x.shape, x_ref.shape)
         inputs = (x, x_ref, torch.ones_like(x[:, :1])) if self.config.add_constant_channel else (x, x_ref)
         x = torch.cat(inputs, dim=1)
 
