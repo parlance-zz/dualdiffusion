@@ -36,7 +36,7 @@ from typing import Union, Literal, Optional
 import torch
 
 from modules.daes.dae import DualDiffusionDAE, DualDiffusionDAEConfig
-from modules.mp_tools import mp_silu, mp_sum, normalize, resample_3d, MPConv3D
+from modules.mp_tools import mp_silu, mp_sum, normalize, resample_3d #MPConv3D
 from utils.dual_diffusion_utils import tensor_4d_to_5d, tensor_5d_to_4d
 
 
@@ -156,7 +156,7 @@ class Block(torch.nn.Module):
         self.clip_act = clip_act
 
         kernel = (1,3,3) #if flavor == "enc" else (2,3,3)
-        conv_class = MPConv3D_E if flavor == "enc" else MPConv3D
+        conv_class = MPConv3D_E #if flavor == "enc" else MPConv3D
 
         self.conv_res0 = conv_class(out_channels if flavor == "enc" else in_channels,
                         out_channels * mlp_multiplier, kernel=kernel, groups=mlp_groups)
@@ -253,7 +253,7 @@ class DAE_G1(DualDiffusionDAE):
 
         # embedding
         if config.in_channels_emb > 0:
-            self.emb_label = MPConv3D(config.in_channels_emb, cemb, kernel=())
+            self.emb_label = MPConv3D_E(config.in_channels_emb, cemb, kernel=())
             self.emb_dim = cemb
         else:
             cemb = 0
@@ -274,7 +274,7 @@ class DAE_G1(DualDiffusionDAE):
                 use_attention=False, flavor="enc", **block_kwargs)
 
         self.conv_latents_out = MPConv3D_E(enc_channels, config.latent_channels, kernel=(1,3,3))
-        self.conv_latents_in = MPConv3D(config.latent_channels + int(config.add_constant_channel), dec_channels[-1], kernel=(1,3,3))
+        self.conv_latents_in = MPConv3D_E(config.latent_channels + int(config.add_constant_channel), dec_channels[-1], kernel=(1,3,3))
 
         # decoder
         self.dec = torch.nn.ModuleDict()

@@ -1,6 +1,6 @@
 {
   "seed": 5000,
-  "device_batch_size": 2,
+  "device_batch_size": 8,
   "gradient_accumulation_steps": 12,
   "validation_device_batch_size": 0,
   "validation_accumulation_steps": 0,
@@ -9,8 +9,9 @@
   "strict_checkpoint_time": true,
   "checkpoints_total_limit": 1,
   "num_validation_epochs": 0,
+  "enable_bf16_reduction_in_sdp": false,
   "enable_anomaly_detection": false,
-  "enable_model_compilation": false,
+  "enable_model_compilation": true,
   "enable_channels_last": true,
   "compile_params": {
     "fullgraph": true,
@@ -74,6 +75,8 @@
     "num_loss_buckets": 12,
 
     "expected_sample_std": 1,
+    "kl_loss_weight":  2e-2,
+    "kl_warmup_steps": 1000,
 
     "sigma_distribution": "ln_pdf",
     "sigma_override_max": 16,

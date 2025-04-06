@@ -463,7 +463,7 @@ class DualDiffusionTrainer:
                 if hasattr(model, "normalize_weights"):
                     model.normalize_weights()
                     
-                if len(self.ema_managers > 0): # load / init EMA weights
+                if len(self.ema_managers) > 0: # load / init EMA weights
                     ema_load_errors = self.ema_managers[i].load(input_dir, subfolder=module_name, target_module=model)
                     
                     if len(ema_load_errors) > 0:

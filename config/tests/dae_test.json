@@ -7,7 +7,7 @@
         "load_emas": false,
         "compile_options": null
     },
-    "length": 1024000,
+    "length": 768000,
     "latents_tiled_encode": false,
     "latents_tiled_max_chunk_size": 6144,
     "latents_tiled_overlap": 256,
@@ -18,10 +18,5 @@
     "copy_sample_source_files": true,
     "fgla_sample_source_files": false,
     "test_samples": [
-        "smd/Gunstar Heroes/18 - Last Party on the Moon.vgm.flac",
-        "psp/StreetKix Freestyle/punk_metal_theme.at3.flac",
-        "3sf/Mysterious Stars 3D - Road to Idol/normal.dspadpcm.bcstm.flac",
-        "dsf/Metropolis Street Racer Prototype/file_15.adx.flac",
-        "psf3/Beyond - Two Souls/BigFile_PS3_d06_5709_1.mp3.flac"
     ]
 }

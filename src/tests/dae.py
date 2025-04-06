@@ -164,7 +164,7 @@ def dae_test() -> None:
             #"""
             ddec_params = SampleParams(
                 seed=5000,
-                num_steps=20, length=audio_len, cfg_scale=1.5, input_perturbation=0.01, input_perturbation_offset=-0.3,
+                num_steps=20, length=audio_len, cfg_scale=1.5, input_perturbation=0, input_perturbation_offset=-0.3,
                 use_heun=True, schedule="edm2", rho=7, sigma_max=11, sigma_min=0.0002 #0.0003 #0.013
             )
             #"""
