@@ -75,7 +75,8 @@ class DiffusionDecoder_MCLT_Trainer_B1(ModuleTrainer):
         self.config = config
         self.trainer = trainer
         self.logger = trainer.logger
-        self.module: DDec_MCLT_UNet_B1 = trainer.module
+        self.module: DDec_MCLT_UNet_B1 = trainer.modules[0]
+        assert len(trainer.modules) == 1
 
         self.is_validation_batch = False
         self.device_generator = None

@@ -185,7 +185,8 @@ class DualDiffusionTrainerConfig:
         train_config["module_trainer_config"] = module_trainer_config_class(**train_config["module_trainer_config"])
         train_config["module_trainer_class"] = module_trainer_class
 
-        if len(train_config["train_modules"]) == 0:
+        if "train_modules" not in train_config or len(train_config["train_modules"]) == 0:
+            assert train_config["module_name"]
             train_config["train_modules"] = [train_config["module_name"]]
         else:
             train_config["module_name"] = "_".join(train_config["train_modules"])
@@ -347,7 +348,8 @@ class DualDiffusionTrainer:
                 module.to(memory_format=torch.channels_last)
 
         self.modules = self.accelerator.prepare(*self.modules)
-        
+        if not isinstance(self.modules, (tuple, list)): self.modules = [self.modules]
+
         for module in self.modules:
             if hasattr(module, "normalize_weights"):
                 module.normalize_weights()
@@ -474,6 +476,9 @@ class DualDiffusionTrainer:
                         self.accelerator.wait_for_everyone()
                     else:
                         self.logger.info(f"Successfully loaded EMA weights for {module_name}")
+
+            while len(models) > 0:
+                models.pop()
 
             # load persistent trainer state
             trainer_state_path = os.path.join(input_dir, "trainer_state.json")
