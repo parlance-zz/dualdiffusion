@@ -138,6 +138,7 @@ class DualDiffusionTrainerConfig:
     module_trainer_class: Type
     module_trainer_config: ModuleTrainerConfig
 
+    train_modules: list[str]
     module_name: str
     model_path: str
     model_name: str
@@ -183,6 +184,11 @@ class DualDiffusionTrainerConfig:
         module_trainer_config_class = module_trainer_class.config_class or inspect.signature(module_trainer_class.__init__).parameters["config"].annotation
         train_config["module_trainer_config"] = module_trainer_config_class(**train_config["module_trainer_config"])
         train_config["module_trainer_class"] = module_trainer_class
+
+        if len(train_config["train_modules"]) == 0:
+            train_config["train_modules"] = [train_config["module_name"]]
+        else:
+            train_config["module_name"] = "_".join(train_config["train_modules"])
 
         return DualDiffusionTrainerConfig(**train_config)
 
@@ -314,10 +320,14 @@ class DualDiffusionTrainer:
 
         self.pipeline = DualDiffusionPipeline.from_pretrained(self.config.model_path)
 
-        if not hasattr(self.pipeline, self.config.module_name):
-            raise ValueError(f"Module type '{self.config.module_name}' not registered in loaded pipeline")
-        self.module: DualDiffusionModule = getattr(self.pipeline, self.config.module_name).requires_grad_(True).train()
-        self.module_class: Type[DualDiffusionModule] = type(self.module)
+        self.modules: list[DualDiffusionModule] = []; self.module_classes: list[type] = []
+        for module_name in self.config.train_modules:
+            if not hasattr(self.pipeline, module_name):
+                raise ValueError(f"Module type '{module_name}' not registered in loaded pipeline")
+            else:
+                module = getattr(self.pipeline, module_name).requires_grad_(True).train()
+                self.modules.append(module)
+                self.module_classes.append(type(module))
 
         self.sample_shape: tuple = self.pipeline.get_sample_shape(bsz=self.config.device_batch_size)
         self.validation_sample_shape: tuple = self.pipeline.get_sample_shape(bsz=self.config.validation_device_batch_size)
@@ -328,31 +338,36 @@ class DualDiffusionTrainer:
             self.latent_shape = None
             self.validation_latent_shape = None
 
-        self.logger.info(f"Module class: {self.module_class.__name__}")
+        self.logger.info(f"Module classes: {[c.__name__ for c in self.module_classes]}")
         self.logger.info(f"Module trainer class: {self.config.module_trainer_class.__name__}")
         self.logger.info(f"Model metadata: {dict_str(self.pipeline.model_metadata)}")
 
         if self.config.enable_channels_last == True:
-            self.module = self.module.to(memory_format=torch.channels_last)
+            for module in self.modules:
+                module.to(memory_format=torch.channels_last)
 
-        self.module = self.accelerator.prepare(self.module)
-        if isinstance(self.module, torch.nn.parallel.DistributedDataParallel):
-            self.module = self.module.module
+        self.modules = self.accelerator.prepare(*self.modules)
         
-        if hasattr(self.module, "normalize_weights"):
-            self.module.normalize_weights()
+        for module in self.modules:
+            if hasattr(module, "normalize_weights"):
+                module.normalize_weights()
         
     def init_ema_manager(self) -> None:
         
         self.config.emas = self.config.emas or {}
-        self.ema_manager = EMA_Manager(self.config.emas, self)
+        self.ema_managers: list[EMA_Manager] = []
+
+        if len(self.config.emas) > 0:
+            for module_name, module in zip(self.config.train_modules, self.modules):
+                self.ema_managers.append(EMA_Manager(module_name, module, self.config.emas, self))
+
         if len(self.config.emas) == 0:
             self.logger.info("Not using EMA")
         else:
             self.logger.info("EMA_Emanager config:")
             self.logger.info(dict_str(self.config.emas))
 
-        if len(self.ema_manager.get_validation_emas()) == 0 and self.config.num_validation_epochs > 0:
+        if any(len(m.get_validation_emas()) == 0 for m in self.ema_managers) and self.config.num_validation_epochs > 0:
             self.logger.error(f"Validation is enabled (num_validation_epochs: {self.config.num_validation_epochs}) but found no EMAs with include_in_validation=True")
             exit(1)
 
@@ -384,8 +399,12 @@ class DualDiffusionTrainer:
 
     def init_optimizer(self) -> None:
         
+        opt_params = []
+        for module in self.modules:
+            opt_params.extend(module.parameters())
+
         self.optimizer = torch.optim.AdamW(
-            self.module.parameters(),
+            opt_params,
             lr=self.config.lr_schedule.learning_rate,
             betas=(self.config.optimizer.adam_beta1, self.config.optimizer.adam_beta2),
             weight_decay=self.config.optimizer.adam_weight_decay,
@@ -415,41 +434,46 @@ class DualDiffusionTrainer:
                             weights: list[dict[str, torch.Tensor]], output_dir: str) -> None:
             if self.accelerator.is_main_process:
                 
-                if len(models) != 1: # as below, not sure why len(models) would be > 1
-                    self.logger.warning(f"Found {len(models)} models in save_model_hook, expected 1")
+                assert len(models) == len(weights) == len(self.config.train_modules) == len(self.modules)
+                if len(self.ema_managers) > 0: assert len(self.ema_managers) == len(self.config.train_modules)
 
-                for model in models:
-                    model.save_pretrained(output_dir, subfolder=self.config.module_name)
+                for i, (module_name, module) in enumerate(zip(self.config.train_modules, self.modules)):
+                    module.save_pretrained(output_dir, subfolder=module_name)
+
+                    if len(self.ema_managers) > 0:
+                        self.ema_managers[i].save(output_dir, subfolder=module_name)
+
                     weights.pop() # accelerate documentation says we need to do this, not sure why
 
-                self.ema_manager.save(output_dir, subfolder=self.config.module_name)
                 config.save_json(self.persistent_state.__dict__, os.path.join(output_dir, "trainer_state.json"))
 
         def load_model_hook(models: list[DualDiffusionModule], input_dir: str) -> None:
-            assert len(models) == 1 # not sure why len(models) would be > 1
-            model = models.pop()
 
-            # copy loaded state and config into model
-            load_model = self.module_class.from_pretrained(input_dir, subfolder=self.config.module_name)
-            model.config = load_model.config
-            model.load_state_dict(load_model.state_dict())
-            del load_model
+            assert len(models) == len(self.config.train_modules) == len(self.modules)
+            if len(self.ema_managers) > 0: assert len(self.ema_managers) == len(self.config.train_modules)
             
-            if hasattr(model, "normalize_weights"):
-                model.normalize_weights()
+            for i, (module_name, module_class, model) in enumerate(zip(self.config.train_modules, self.module_classes, models)):
+
+                # copy loaded state and config into model
+                load_model = module_class.from_pretrained(input_dir, subfolder=module_name)
+                model.config = load_model.config
+                model.load_state_dict(load_model.state_dict())
+                del load_model
                 
-            # load / init EMA weights
-            ema_load_errors = self.ema_manager.load(input_dir,
-                subfolder=self.config.module_name, target_module=model)
-            
-            if len(ema_load_errors) > 0:
-                self.logger.error("\n  ".join(["Errors loading EMA weights:"] + ema_load_errors))
-                if self.accelerator.is_main_process:
-                    if input("Continue? (y/n): ").lower() not in ["y", "yes"]:
-                        raise ValueError("Aborting training due to EMA load errors")
-                self.accelerator.wait_for_everyone()
-            elif len(self.ema_manager.ema_configs) > 0:
-                self.logger.info(f"Successfully loaded EMA weights")
+                if hasattr(model, "normalize_weights"):
+                    model.normalize_weights()
+                    
+                if len(self.ema_managers > 0): # load / init EMA weights
+                    ema_load_errors = self.ema_managers[i].load(input_dir, subfolder=module_name, target_module=model)
+                    
+                    if len(ema_load_errors) > 0:
+                        self.logger.error("\n  ".join([f"Errors loading EMA weights for {module_name}:"] + ema_load_errors))
+                        if self.accelerator.is_main_process:
+                            if input("Continue? (y/n): ").lower() not in ["y", "yes"]:
+                                raise ValueError("Aborting training due to EMA load errors")
+                        self.accelerator.wait_for_everyone()
+                    else:
+                        self.logger.info(f"Successfully loaded EMA weights for {module_name}")
 
             # load persistent trainer state
             trainer_state_path = os.path.join(input_dir, "trainer_state.json")
@@ -590,7 +614,8 @@ class DualDiffusionTrainer:
             self.logger.warning(f"Failed to copy source code from {source_src_path} to {save_path}: {e}")
 
         # save model checkpoint and training / optimizer state
-        self.module.config.last_global_step = self.global_step
+        for module in self.modules:
+            module.config.last_global_step = self.global_step
         self.accelerator.save_state(save_path)
         self.logger.info(f"Saved state to {save_path}")
 
@@ -644,9 +669,10 @@ class DualDiffusionTrainer:
 
         if path is None:
             self.logger.warning(f"No existing checkpoints found, starting a new training run.")
-            if self.module.config.last_global_step > 0:
-                self.logger.warning(f"Last global step in module config is {self.module.config.last_global_step}, but no checkpoint found")
-                # todo: set global_step/resume_step/first_epoch and override step counts in optimizer / lr scheduler
+            for module, module_name in zip(self.modules, self.config.train_modules):
+                if module.config.last_global_step > 0:
+                    self.logger.warning(f"Last global step in {module_name} module config is {module.config.last_global_step}, but no checkpoint found")
+                    # todo: set global_step/resume_step/first_epoch and override step counts in optimizer / lr scheduler
         else:
             self.global_step = int(path.split("-")[1])
             self.logger.info(f"Resuming from checkpoint {path} (global step: {self.global_step})")
@@ -747,9 +773,11 @@ class DualDiffusionTrainer:
                     self.run_validation()
 
             # do switch ema if enabled
-            switched_ema_name = self.ema_manager.switch_ema()
-            if switched_ema_name is not None:
-                self.logger.info(f"Loaded train weights from switch EMA: {switched_ema_name}")
+            if len(self.ema_managers) > 0:
+                for module_name, ema_manager in zip(self.config.train_modules, self.ema_managers):
+                    switched_ema_name = ema_manager.switch_ema()
+                    if switched_ema_name is not None:
+                        self.logger.info(f"Loaded train weights for {module_name} from switch EMA: {switched_ema_name}")
 
             if self.global_step >= self.config.max_train_steps: break
             else: self.epoch += 1
@@ -785,7 +813,7 @@ class DualDiffusionTrainer:
                     for key, value in local_batch.items()
                 }
 
-                with self.accelerator.accumulate(self.module):
+                with self.accelerator.accumulate(*self.modules):
 
                     module_logs = self.module_trainer.train_batch(device_batch)
                     train_logger.add_logs(module_logs)
@@ -802,7 +830,11 @@ class DualDiffusionTrainer:
                         # clip grad norm and check for inf/nan grad
                         max_grad_norm = self.get_max_grad_norm()
 
-                        grad_norm = self.accelerator.clip_grad_norm_(self.module.parameters(), max_grad_norm).item()
+                        opt_params = []
+                        for module in self.modules:
+                            opt_params.extend(module.parameters())
+
+                        grad_norm = self.accelerator.clip_grad_norm_(opt_params, max_grad_norm).item()
                         train_logger.add_log("grad_norm", grad_norm)
                         train_logger.add_log("grad_norm/max", max_grad_norm)
                         train_logger.add_log("grad_norm/clipped", min(max_grad_norm, grad_norm))
@@ -845,11 +877,15 @@ class DualDiffusionTrainer:
                         "stats/it_per_second": progress_bar.format_dict["rate"]})
 
                 # update emas and normalize weights
-                self.ema_manager.update()
-                self.module.normalize_weights()
+                for ema_manager in self.ema_managers:
+                    ema_manager.update()
+                for module in self.modules:
+                    module.normalize_weights()
 
-                train_logger.add_logs({f"ema_betas/{name}": beta for
-                    name, beta in self.ema_manager.get_ema_betas().items()})
+                # ema config is shared between train modules for now so we don't need to log all ema managers
+                if len(self.ema_managers) > 0: 
+                    train_logger.add_logs({f"ema_betas/{name}": beta for
+                        name, beta in self.ema_managers[0].get_ema_betas().items()})
                 
                 # update logs
                 train_logger.add_logs({"learn_rate": self.lr_scheduler.get_last_lr()[0]})
@@ -892,6 +928,8 @@ class DualDiffusionTrainer:
     @torch.no_grad()
     def run_validation(self):
 
+        raise NotImplementedError("Validation needs refactor for multi-module training")
+    
         self.logger.info("***** Running validation *****")
         self.logger.info(f"  Epoch = {self.global_step // self.num_update_steps_per_epoch} (step: {self.global_step})")
         self.logger.info(f"  Num examples = {len(self.dataset['validation'])}")
@@ -926,6 +964,8 @@ class DualDiffusionTrainer:
     @torch.inference_mode()
     def run_validation_epoch(self, ema_name: str) -> dict:
 
+        raise NotImplementedError("Validation needs refactor for multi-module training")
+    
         validation_logger = TrainLogger(self.accelerator)
         progress_bar = tqdm(total=len(self.validation_dataloader), disable=not self.accelerator.is_local_main_process)
         progress_bar.set_description(f"Validation ema_{ema_name}")
