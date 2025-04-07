@@ -189,8 +189,9 @@ class DualDiffusionPipeline(torch.nn.Module):
             # get and sort module checkpoints
             for path in os.listdir(model_path):
                 if os.path.isdir(os.path.join(model_path, path)):
-                    if path.startswith(f"{module_name}_checkpoint"):
-                        module_inventory.checkpoints.append(path)
+                    if module_name in path.split("_")[:-1]:
+                        if path.split("_")[-1].startswith(f"checkpoint-"):
+                            module_inventory.checkpoints.append(path)
 
             module_inventory.checkpoints = sorted(module_inventory.checkpoints, key=lambda x: int(x.split("-")[1]))
 
