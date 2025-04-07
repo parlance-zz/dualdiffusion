@@ -836,9 +836,20 @@ class DualDiffusionTrainer:
                         # clip grad norm and check for inf/nan grad
                         max_grad_norm = self.get_max_grad_norm()
 
-                        opt_params = []
-                        for module in self.modules:
-                            opt_params.extend(module.parameters())
+                        opt_params = [] # collect params for all train modules
+                        for module_name, module in zip(self.config.train_modules, self.modules):
+                            module_params = tuple(module.parameters())
+                            opt_params.extend(module_params)
+
+                            # if training multiple modules log individual module grad norms
+                            if len(self.config.train_modules) > 1:
+                                module_params = [p.grad for p in module_params if p.grad is not None]
+                                if len(module_params) > 0:
+                                    module_param_norms = torch._foreach_norm(module_params)
+                                    module_grad_norm = torch.linalg.vector_norm(torch.tensor(module_param_norms))
+                                    train_logger.add_log(f"grad_norm/{module_name}", module_grad_norm)
+                                else:
+                                    train_logger.add_log(f"grad_norm/{module_name}", 0)
 
                         grad_norm = self.accelerator.clip_grad_norm_(opt_params, max_grad_norm).item()
                         train_logger.add_log("grad_norm", grad_norm)
