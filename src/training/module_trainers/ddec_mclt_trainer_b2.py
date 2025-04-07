@@ -71,7 +71,8 @@ class DiffusionDecoder_MCLT_Trainer_B2_Config(ModuleTrainerConfig):
     kl_warmup_steps: int  = 1000
 
     mel_spec_loss_weight: float = 1
-    mel_spec_loss_warmup_steps: int = 6000
+    mel_spec_loss_warmup_steps: int = 5000
+    mel_spec_min_loss_weight: float = 0
 
 class DiffusionDecoder_MCLT_Trainer_B2(ModuleTrainer):
     
@@ -233,7 +234,7 @@ class DiffusionDecoder_MCLT_Trainer_B2(ModuleTrainer):
         
         mel_spec_loss = torch.nn.functional.mse_loss(recon_mel_spec, mel_spec, reduction="none").mean(dim=(1,2,3))
         mel_spec_loss_weight = self.config.mel_spec_loss_weight
-        mel_spec_loss_weight *= max(1 - self.trainer.global_step / (self.config.mel_spec_loss_warmup_steps + 1), 0)
+        mel_spec_loss_weight *= max(1 - self.trainer.global_step / (self.config.mel_spec_loss_warmup_steps + 1), self.config.mel_spec_min_loss_weight)
 
         #if self.config.noise_level_bias == True: # bias the noise level a bit by the std of each input sample
         #    batch_sigma = batch_sigma * mclt_samples.std(dim=(1,2,3)) / self.config.expected_sample_std

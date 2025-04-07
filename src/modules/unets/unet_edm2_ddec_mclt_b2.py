@@ -293,13 +293,11 @@ class DDec_MCLT_UNet_B2(DualDiffusionUNet):
             c_in = 1 / (self.config.sigma_data ** 2 + sigma ** 2).sqrt()
             c_noise = (sigma.flatten().log() / 4).to(self.dtype)
 
-            #x_ref = tensor_4d_to_5d(x_ref, self.config.in_channels_x_ref).to(dtype=torch.bfloat16)
-            #print("x_ref shape", x_ref.shape, "x_in shape", x_in.shape) 
-            x_ref = x_ref.view(x_ref.shape[0], x_ref.shape[1], self.config.in_num_freqs, self.psd_freqs_per_freq, x_ref.shape[3])
-            x_ref = x_ref.permute(0, 3, 1, 2, 4).contiguous(memory_format=torch.channels_last_3d).to(dtype=torch.bfloat16)
-
             x = (c_in * tensor_4d_to_5d(x_in, self.config.in_channels)).to(dtype=torch.bfloat16)
  
+        x_ref = x_ref.view(x_ref.shape[0], x_ref.shape[1], self.config.in_num_freqs, self.psd_freqs_per_freq, x_ref.shape[3])
+        x_ref = x_ref.permute(0, 3, 1, 2, 4).contiguous(memory_format=torch.channels_last_3d).to(dtype=torch.bfloat16)
+
         # Embedding.
         emb = self.emb_noise(self.emb_fourier(c_noise))
         if self.config.in_channels_emb > 0:

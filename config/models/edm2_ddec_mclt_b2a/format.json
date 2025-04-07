@@ -10,6 +10,7 @@
   "sample_mean": 1.2914494882,
   "abs_exp1_scale": 0.008,
   "abs_exp1_mel_density": false,
+  "unscaled_psd_num_fft_bins": 3328,
   "unscaled_psd_scale": 0.5,
   "unscaled_psd_mel_density": true,
   "abs_exponent": 0.25,

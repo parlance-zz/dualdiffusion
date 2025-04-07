@@ -204,7 +204,6 @@ def dae_test() -> None:
         metadata["ddec_metadata"] = dict_str(ddec_params.__dict__) if ddec is not None else "null"
         metadata["dae_metadata"] = dict_str(dae_unet_params.__dict__) if dae_unet_params is not None else "null"
 
-        format.config.abs_exp1_mel_density = True
         if latents is not None:
             save_img(dae.latents_to_img(latents), os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_latents.png')}"))
         save_img(format.sample_to_img(output_sample), os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_output_sample.png')}"))

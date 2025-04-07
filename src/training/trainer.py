@@ -189,6 +189,7 @@ class DualDiffusionTrainerConfig:
             assert train_config["module_name"]
             train_config["train_modules"] = [train_config["module_name"]]
         else:
+            train_config["train_modules"] = sorted(train_config["train_modules"])
             train_config["module_name"] = "_".join(train_config["train_modules"])
 
         return DualDiffusionTrainerConfig(**train_config)

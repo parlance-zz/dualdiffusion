@@ -81,11 +81,11 @@
     "sigma_distribution": "ln_pdf",
     "sigma_override_max": 16,
     "sigma_override_min": 0.00004,
-    "sigma_dist_scale": 2.5,
+    "sigma_dist_scale": 2.72,
     "sigma_dist_offset": 0,
     "use_stratified_sigma_sampling": true,
     "sigma_pdf_resolution": 127,
-    "sigma_pdf_warmup_steps": 5000,
+    "sigma_pdf_warmup_steps": 6000,
 
     "validation_sigma_distribution": "ln_sech",
     "validation_sigma_override_max": null,
