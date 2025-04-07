@@ -70,6 +70,9 @@ class DiffusionDecoder_MCLT_Trainer_B2_Config(ModuleTrainerConfig):
     kl_loss_weight: float = 2e-2
     kl_warmup_steps: int  = 1000
 
+    mel_spec_loss_weight: float = 1
+    mel_spec_loss_warmup_steps: int = 6000
+
 class DiffusionDecoder_MCLT_Trainer_B2(ModuleTrainer):
     
     @torch.no_grad()
@@ -214,35 +217,28 @@ class DiffusionDecoder_MCLT_Trainer_B2(ModuleTrainer):
         
         raw_samples: torch.Tensor = batch["audio"].clone()
 
-        mel_spec = self.format.raw_to_sample(raw_samples).detach()
-        latents, ref_samples, pre_norm_latents = self.dae(mel_spec,
+        mel_spec = self.format.raw_to_sample(raw_samples).clone().detach()
+        latents, recon_mel_spec, pre_norm_latents = self.dae(mel_spec,
             dae_class_embeddings, add_latents_noise=self.config.latents_perturbation)
 
-        mclt_samples = self.mclt.raw_to_sample(raw_samples, random_phase_augmentation=True).detach()
+        # prepare model inputs
+        mclt_samples: torch.Tensor = self.mclt.raw_to_sample(raw_samples, random_phase_augmentation=True).detach()
+        mclt_samples = mclt_samples / self.ddec.mel_density.squeeze(0)
 
         # get the noise level for this sub-batch from the pre-calculated whole-batch sigma (required for stratified sampling)
         local_sigma = self.global_sigma[self.trainer.accelerator.local_process_index::self.trainer.accelerator.num_processes]
         batch_sigma = local_sigma[self.trainer.accum_step * device_batch_size:(self.trainer.accum_step+1) * device_batch_size]
 
-        # prepare model inputs
         noise = torch.randn(mclt_samples.shape, device=mclt_samples.device, generator=self.device_generator)
-        mclt_samples = mclt_samples / self.ddec.mel_density.squeeze(0)
-        #quantiles = self.sigma_sampler._sample_uniform_stratified(device_batch_size)
-        #quantiles = _mel_to_hz(_hz_to_mel(self.format.config.sample_rate / 2) * quantiles)
-        #freq_indices = (quantiles / quantiles.amax() * (mclt_samples.shape[2] - 1e-4)).to(dtype=torch.int32)
-        #freq_indices = (quantiles * (mclt_samples.shape[2] - 1e-4)).to(dtype=torch.int32)
-        #freq_indices = (quantiles * (mclt_samples.shape[3] - 1e-4)).to(dtype=torch.int32)
-        #freq_indices = (quantiles * (mclt_samples.shape[3] + mclt_samples.shape[2] - 1e-4)).to(dtype=torch.int32)
         
-        #freq_stds = mclt_samples.std(dim=(1,3))
-        #freq_stds = mclt_samples.std(dim=(1,2))
-        #freq_stds = torch.cat((mclt_samples.std(dim=(1,3)), mclt_samples.std(dim=(1,2))), dim=1)
-        #b = torch.arange(0, mclt_samples.shape[0], device=mclt_samples.device)
-        #batch_sigma = (freq_stds[b, freq_indices]).clip(min=self.sigma_sampler.config.sigma_min,
-        #                                                max=self.sigma_sampler.config.sigma_max)
-        
+        mel_spec_loss = torch.nn.functional.mse_loss(recon_mel_spec, mel_spec, reduction="none").mean(dim=(1,2,3))
+        mel_spec_loss_weight = self.config.mel_spec_loss_weight
+        mel_spec_loss_weight *= max(1 - self.trainer.global_step / (self.config.mel_spec_loss_warmup_steps + 1), 0)
+
         #if self.config.noise_level_bias == True: # bias the noise level a bit by the std of each input sample
         #    batch_sigma = batch_sigma * mclt_samples.std(dim=(1,2,3)) / self.config.expected_sample_std
+
+        ref_samples = self.format.convert_to_unscaled_psd(recon_mel_spec.float())
         noise = (noise * batch_sigma.view(-1, 1, 1, 1)).detach()
 
         denoised: torch.Tensor = self.ddec(mclt_samples + noise, batch_sigma, self.format, unet_class_embeddings, ref_samples)
@@ -271,21 +267,23 @@ class DiffusionDecoder_MCLT_Trainer_B2(ModuleTrainer):
         if self.trainer.global_step < self.config.kl_warmup_steps:
             kl_loss_weight *= self.trainer.global_step / self.config.kl_warmup_steps
 
-        return {"loss": batch_loss + kl_loss * kl_loss_weight,
+        return {"loss": batch_loss + kl_loss * kl_loss_weight + mel_spec_loss * mel_spec_loss_weight,
                 "loss/kl": kl_loss,
+                "loss/mel_spec": mel_spec_loss,
+
                 "loss_weight/kl": kl_loss_weight,
+                "loss_weight/mel_spec": mel_spec_loss_weight,
 
                 "io_stats/mel_spec_std": mel_spec.std(dim=(1,2,3)),
                 "io_stats/mel_spec_mean": mel_spec.mean(dim=(1,2,3)),
                 "io_stats/mclt_spec_std": mclt_samples.std(dim=(1,2,3)),
                 "io_stats/mclt_spec_mean": mclt_samples.mean(dim=(1,2,3)),
-
+                "io_stats/recon_mel_spec_std": recon_mel_spec.std(dim=(1,2,3)),
+                "io_stats/recon_mel_spec_mean": recon_mel_spec.mean(dim=(1,2,3)),
                 "io_stats/x_ref_std": ref_samples.std(dim=(1,2,3)),
                 "io_stats/x_ref_mean": ref_samples.mean(dim=(1,2,3)),
-
                 "io_stats/denoised_std": denoised.std(dim=(1,2,3)),
                 "io_stats/denoised_mean": denoised.mean(dim=(1,2,3)),
-
                 "io_stats/latents_std": latents.std(dim=(1,2,3)),
                 "io_stats/latents_mean": latents.mean(dim=(1,2,3)),
                 "io_stats/latents_pre_norm_std": pre_norm_latents_var.sqrt()

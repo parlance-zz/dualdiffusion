@@ -44,6 +44,7 @@ from utils.dual_diffusion_utils import tensor_4d_to_5d, tensor_5d_to_4d
 class DAE_G1_Config(DualDiffusionDAEConfig):
 
     in_channels: int     = 1
+    out_channels: int    = 1
     in_channels_emb: int = 0
     in_num_freqs: int    = 256
     latent_channels: int = 4
@@ -57,7 +58,7 @@ class DAE_G1_Config(DualDiffusionDAEConfig):
     num_dec_layers_per_block: int = 2        # Number of resnet blocks per resolution.
     res_balance: float        = 0.3          # Balance between main branch (0) and residual branch (1).
     attn_balance: float       = 0.3          # Balance between main branch (0) and self-attention (1).
-    attn_levels: list[int]    = (2,3)        # List of resolution levels to use self-attention.
+    attn_levels: list[int]    = ()           # List of resolution levels to use self-attention.
     mlp_multiplier: int    = 2               # Multiplier for the number of channels in the MLP.
     mlp_groups: int        = 1               # Number of groups for the MLPs.
     emb_linear_groups: int = 1
@@ -249,6 +250,7 @@ class DAE_G1(DualDiffusionDAE):
 
         self.num_levels = len(config.channel_mult_dec)
         self.downsample_ratio = 2 ** (self.num_levels - 1)
+        self.out_gain = torch.nn.Parameter(torch.ones([]))
         self.recon_loss_logvar = torch.nn.Parameter(torch.zeros([]))
 
         # embedding
@@ -286,17 +288,18 @@ class DAE_G1(DualDiffusionDAE):
 
             if level == self.num_levels - 1:
                 self.dec[f"block{level}_in0"] = Block(level, cin, cout, cemb,
-                    use_attention=True, flavor="dec", **block_kwargs)
+                    use_attention=level in config.attn_levels, flavor="dec", **block_kwargs)
             else:
                 self.dec[f"block{level}_up"] = Block(level, cin, cout, cemb,
-                    use_attention=False, flavor="dec", resample_mode="up", **block_kwargs)
+                    use_attention=level in config.attn_levels, flavor="dec", resample_mode="up", **block_kwargs)
                 
             for idx in range(config.num_dec_layers_per_block):
-                use_attention = level in config.attn_levels and (idx == config.num_dec_layers_per_block - 1)
                 self.dec[f"block{level}_layer{idx}"] = Block(level, cout, cout, cemb,
-                    use_attention=use_attention, flavor="dec", **block_kwargs)
+                    use_attention=level in config.attn_levels, flavor="dec", **block_kwargs)
 
             cin = cout
+
+        self.conv_out = MPConv3D_E(cout, self.config.out_channels, kernel=(1,3,3))
 
     def get_embeddings(self, emb_in: torch.Tensor) -> torch.Tensor:
         if self.emb_label is not None:
@@ -353,7 +356,7 @@ class DAE_G1(DualDiffusionDAE):
         for name, block in self.dec.items():
             x = block(x, embeddings)
 
-        return tensor_5d_to_4d(normalize(x)).to(memory_format=torch.channels_last)
+        return tensor_5d_to_4d(self.conv_out(x, gain=self.out_gain)).to(memory_format=torch.channels_last)
     
     def forward(self, samples: torch.Tensor, dae_embeddings: torch.Tensor, add_latents_noise: float = 0) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         

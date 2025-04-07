@@ -48,11 +48,11 @@ class DDec_MCLT_UNet_B2_Config(DualDiffusionUNetConfig):
     in_channels:  int = 1
     out_channels: int = 1
     in_channels_emb: int = 0
-    in_channels_x_ref: int = 64
 
     sigma_max: float = 16
     sigma_min: float = 0.00004
     in_num_freqs: int = 256
+    in_psd_freqs: int = 3328
     mel_density_scale: float = 0.54
     audio_sample_rate: float = 32000
 
@@ -60,7 +60,7 @@ class DDec_MCLT_UNet_B2_Config(DualDiffusionUNetConfig):
     logvar_channels: int = 192               # Number of channels for training uncertainty estimation.
     channel_mult: list[int]    = (1,2,3,4)   # Per-resolution multipliers for the number of channels.
     double_midblock: bool      = True
-    midblock_attn: bool        = True
+    midblock_attn: bool        = False
     channel_mult_noise: Optional[int] = 4    # Multiplier for noise embedding dimensionality.
     channel_mult_emb: Optional[int]   = 4    # Multiplier for final embedding dimensionality.
     channels_per_head: int    = 16           # Number of channels per attention head.
@@ -201,6 +201,9 @@ class DDec_MCLT_UNet_B2(DualDiffusionUNet):
         mel_density = mel_density.view(1, 1, 1,-1, 1) * config.mel_density_scale
         self.register_buffer("mel_density", mel_density, persistent=False)
         
+        assert config.in_psd_freqs % config.in_num_freqs == 0
+        self.psd_freqs_per_freq = config.in_psd_freqs // config.in_num_freqs
+
         # Embedding.
         self.emb_fourier = MPFourier(cnoise)
         self.emb_noise = MPConv3D(cnoise, cemb, kernel=())
@@ -213,7 +216,7 @@ class DDec_MCLT_UNet_B2(DualDiffusionUNet):
 
         # Encoder.
         self.enc = torch.nn.ModuleDict()
-        cout = config.in_channels + self.config.in_channels_x_ref + int(config.add_constant_channel)
+        cout = config.in_channels + self.psd_freqs_per_freq + int(config.add_constant_channel)
 
         for level, channels in enumerate(cblock):
             
@@ -290,7 +293,11 @@ class DDec_MCLT_UNet_B2(DualDiffusionUNet):
             c_in = 1 / (self.config.sigma_data ** 2 + sigma ** 2).sqrt()
             c_noise = (sigma.flatten().log() / 4).to(self.dtype)
 
-            x_ref = tensor_4d_to_5d(x_ref, self.config.in_channels_x_ref).to(dtype=torch.bfloat16)
+            #x_ref = tensor_4d_to_5d(x_ref, self.config.in_channels_x_ref).to(dtype=torch.bfloat16)
+            #print("x_ref shape", x_ref.shape, "x_in shape", x_in.shape) 
+            x_ref = x_ref.view(x_ref.shape[0], x_ref.shape[1], self.config.in_num_freqs, self.psd_freqs_per_freq, x_ref.shape[3])
+            x_ref = x_ref.permute(0, 3, 1, 2, 4).contiguous(memory_format=torch.channels_last_3d).to(dtype=torch.bfloat16)
+
             x = (c_in * tensor_4d_to_5d(x_in, self.config.in_channels)).to(dtype=torch.bfloat16)
  
         # Embedding.

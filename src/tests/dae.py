@@ -159,8 +159,8 @@ def dae_test() -> None:
 
         if ddec is not None:
             #x_ref = format.convert_to_abs_exp1(output_sample)
-            #x_ref = format.convert_to_unscaled_psd(output_sample)
-            x_ref = output_sample
+            x_ref = format.convert_to_unscaled_psd(output_sample)
+            #x_ref = output_sample
             #"""
             ddec_params = SampleParams(
                 seed=5000,
@@ -175,10 +175,9 @@ def dae_test() -> None:
                 use_heun=True, schedule="edm2", rho=7, sigma_max=12, sigma_min=0.001 #0.0003 #0.013
             )
             """
-            mclt_sample_shape = (x_ref.shape[0], 2, x_ref.shape[2], x_ref.shape[3])
             mclt_output_sample = pipeline.diffusion_decode(
                 ddec_params, audio_embedding=audio_embedding,
-                sample_shape=mclt_sample_shape, x_ref=x_ref.to(dtype=ddec.dtype), module=ddec)
+                sample_shape=output_sample.shape, x_ref=x_ref.to(dtype=ddec.dtype), module=ddec)
             
             output_raw_sample = mclt.sample_to_raw(mclt_output_sample.float())
         else:
@@ -208,8 +207,7 @@ def dae_test() -> None:
         format.config.abs_exp1_mel_density = True
         if latents is not None:
             save_img(dae.latents_to_img(latents), os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_latents.png')}"))
-        #save_img(format.sample_to_img(output_sample), os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_output_sample.png')}"))
-        save_img(dae.latents_to_img(output_sample), os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_output_sample.png')}"))
+        save_img(format.sample_to_img(output_sample), os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_output_sample.png')}"))
         save_img(format.sample_to_img(format.convert_to_abs_exp1(input_sample)), os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_input_sample.png')}"))
 
         if output_raw_sample is not None:
