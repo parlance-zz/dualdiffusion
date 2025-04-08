@@ -4,19 +4,22 @@
         "torch_dtype": "bfloat16",
         "device": "cuda",
         "load_checkpoints": true,
-        "load_emas": false,
+        "load_emas": null,
         "compile_options": null
     },
-    "length": 768000,
+    "length": 1024000,
     "latents_tiled_encode": false,
     "latents_tiled_max_chunk_size": 6144,
     "latents_tiled_overlap": 256,
     "output_lufs": -18.5,
     "num_fgla_iters": 300,
     "synthesis": "ddec",
-    "add_random_test_samples": 6,
+    "add_random_test_samples": 7,
     "copy_sample_source_files": true,
     "fgla_sample_source_files": false,
     "test_samples": [
+        "dsf/Metropolis Street Racer Prototype/file_15.adx.flac",
+        "psf3/Iron Man/_t_! movies_HUB_05_000001C2.adx.flac",
+        "psf/Gradius Gaiden/SLPM-86042_BGM1_0000096c.XA.flac"
     ]
 }

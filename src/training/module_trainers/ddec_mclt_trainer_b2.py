@@ -62,15 +62,15 @@ class DiffusionDecoder_MCLT_Trainer_B2_Config(ModuleTrainerConfig):
     loss_buckets_sigma_min: float = 0.0005
     loss_buckets_sigma_max: float = 100
 
-    latents_perturbation: float = 0.01
+    latents_perturbation: float = 0.03
     conditioning_dropout: float = 0.1
     noise_level_bias: bool = False
     expected_sample_std: float = 1
 
-    kl_loss_weight: float = 2e-2
+    kl_loss_weight: float = 3e-3
     kl_warmup_steps: int  = 1000
 
-    mel_spec_loss_weight: float = 1
+    mel_spec_loss_weight: float = 0
     mel_spec_loss_warmup_steps: int = 5000
     mel_spec_min_loss_weight: float = 0
 
