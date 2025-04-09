@@ -7,7 +7,7 @@
   "max_train_steps": 1000000,
   "min_checkpoint_time": 3600,
   "strict_checkpoint_time": true,
-  "checkpoints_total_limit": 1,
+  "checkpoints_total_limit": 2,
   "num_validation_epochs": 0,
   "enable_bf16_reduction_in_sdp": false,
   "enable_anomaly_detection": false,
@@ -20,7 +20,7 @@
   "lr_schedule": {
     "learning_rate": 1e-2,
     "lr_schedule": "edm2",
-    "lr_warmup_steps": 2000,
+    "lr_warmup_steps": 5000,
     "lr_reference_steps": 50000,
     "lr_decay_exponent": 0.5,
     "min_learning_rate": 6e-4
@@ -70,22 +70,21 @@
     "class": "DiffusionDecoder_MCLT_Trainer_B2"
   },
   "module_trainer_config": {
-    "latents_perturbation": 0.03,
+    "latents_perturbation": 0,
     "conditioning_dropout": 0.1,
     "num_loss_buckets": 12,
 
-    "expected_sample_std": 1,
-    "kl_loss_weight":  2e-2,
-    "kl_warmup_steps": 1000,
+    "kl_loss_weight":  2e-3,
+    "kl_warmup_steps": 5000,
 
     "sigma_distribution": "ln_pdf",
     "sigma_override_max": 16,
     "sigma_override_min": 0.00004,
-    "sigma_dist_scale": 2.72,
+    "sigma_dist_scale": 2,
     "sigma_dist_offset": 0,
     "use_stratified_sigma_sampling": true,
     "sigma_pdf_resolution": 127,
-    "sigma_pdf_warmup_steps": 6000,
+    "sigma_pdf_warmup_steps": 5000,
 
     "validation_sigma_distribution": "ln_sech",
     "validation_sigma_override_max": null,

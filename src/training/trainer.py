@@ -828,7 +828,11 @@ class DualDiffusionTrainer:
 
                     # loss is multiplied by grad accum steps for consistent grad norm
                     self.accelerator.backward(module_logs["loss"].mean() * self.config.optimizer.loss_scale)
-
+                    # it'd be nice to use compilation for the backwards pass but currently errors out
+                    # with errors that are difficult to understand. tbd: debug this
+                    #with torch._dynamo.utils.maybe_enable_compiled_autograd(True, fullgraph=True, dynamic=False):
+                    #    self.accelerator.backward(module_logs["loss"].mean() * self.config.optimizer.loss_scale)
+                    
                     if self.accelerator.sync_gradients:
                         assert self.accum_step == (self.config.gradient_accumulation_steps - 1), \
                             f"accum_step out of sync with sync_gradients: {self.accum_step} != {self.config.gradient_accumulation_steps - 1}"

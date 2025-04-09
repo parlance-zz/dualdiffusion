@@ -7,8 +7,8 @@
         "load_emas": {
             //"unet": "phema_std0.015.safetensors",
             //"unet": "phema_std0.2.safetensors",
-            "unet": "ema_std0.05.safetensors",
-            //"unet": "ema_std0.1.safetensors",
+            //"unet": "ema_std0.05.safetensors",
+            "unet": "ema_std0.1.safetensors",
             "ddec": "ema_std0.1.safetensors"
         },
         "compile_options": {
@@ -16,25 +16,25 @@
             "dynamic": false
         }
     },
-    "output_lufs": -18.5,
+    "output_lufs": -18,
     "num_fgla_iters": 300, // hq settings
 
     "skip_ddec": false,
     "copy_sample_source_files": true,
     "random_test_samples_seed": null,
-    "add_random_test_samples": 10,
+    "add_random_test_samples": 12,
     "test_samples": [
         
         //"psf2/Shin Megami Tensei - Persona 3 FES",
-        
+        "switch/Arcaea/_t_songs_ignotus.ogg.flac",
         "smd/Gunstar Heroes/18 - Last Party on the Moon.vgm.flac",
         "smd/Gunstar Heroes/18 - Last Party on the Moon.vgm.flac",
         "dsf/Metropolis Street Racer Prototype/file_15.adx.flac",
         "psf/Gradius Gaiden/SLPM-86042_BGM1_0000096c.XA.flac",
         "3sf/Monster Hunter 3 Ultimate/_t_lobby_ML_T_SKB01.mca.flac",
-        "vita/Grisaia Phantom Trigger 01 & 02/MUSIC_00000013.at9.flac",
-        "psf3/Gundam Battle Operation Next/BGM_009.adx.flac",
-        "xbox/AirForce Delta Storm/afdx_02.rwx.flac"
+        "vita/Grisaia Phantom Trigger 01 & 02/MUSIC_00000013.at9.flac"
+        //"psf3/Gundam Battle Operation Next/BGM_009.adx.flac",
+        //"xbox/AirForce Delta Storm/afdx_02.rwx.flac"
         /*
         "xbox/AirForce Delta Storm/afdx_gra.rwx.flac",
         "xbox/AirForce Delta Storm/afdx_m01.rwx.flac",
@@ -144,15 +144,15 @@
         "seed": null,
 
         "num_steps": 300,
-        "cfg_scale": 2.5, //3, //3.5,//3,
-        "use_heun": false, //true,
+        "cfg_scale": 2, //3, //3.5,//3,
+        "use_heun": true, //true,
         "schedule": "edm2",
 
         "sigma_max": 200, //250,
         "sigma_min": 0.01,//0.025,
         
-        "input_perturbation": 0.99, //0.99, //0.5, //0.3,//0.4,
-        "input_perturbation_offset": 0.3
+        "input_perturbation": 0.3, //0.99, //0.5, //0.3,//0.4,
+        "input_perturbation_offset": 0.3 //0.3
     },
     "ddec_params": {
 
@@ -160,15 +160,16 @@
         "cfg_scale": 1.5,
         "use_heun": true,
         "schedule": "edm2",
+        "rho": 7,
 
         //"sigma_max": 11,
         //"sigma_min": 0.0002,
-        "sigma_max": 12,
-        "sigma_min": 0.001,
+        "sigma_max": 11,
+        "sigma_min": 0.0002,
 
         //"input_perturbation": 0,
         //"input_perturbation_offset": 0,
-        "input_perturbation": 0.04,
-        "input_perturbation_offset": -0.35
+        "input_perturbation": 0,
+        "input_perturbation_offset": -0.3
     }
 }
