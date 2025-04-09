@@ -160,11 +160,21 @@ def dae_test() -> None:
         if ddec is not None:
             #x_ref = format.convert_to_abs_exp1(output_sample)
             x_ref = format.convert_to_unscaled_psd(output_sample)
+            #x_ref = output_sample
+            #"""
             ddec_params = SampleParams(
                 seed=5000,
-                num_steps=300, length=audio_len, cfg_scale=1.5, input_perturbation=1, input_perturbation_offset=0,
-                use_heun=False, schedule="linear", rho=7, sigma_max=12, sigma_min=0.0003 #0.013
+                num_steps=20, length=audio_len, cfg_scale=1.5, input_perturbation=0, input_perturbation_offset=-0.3,
+                use_heun=True, schedule="edm2", rho=7, sigma_max=11, sigma_min=0.0002 #0.0003 #0.013
             )
+            #"""
+            """
+            ddec_params = SampleParams(
+                seed=5000,
+                num_steps=20, length=audio_len, cfg_scale=1.5, input_perturbation=0.5, input_perturbation_offset=-0.3,
+                use_heun=True, schedule="edm2", rho=7, sigma_max=12, sigma_min=0.001 #0.0003 #0.013
+            )
+            """
             mclt_output_sample = pipeline.diffusion_decode(
                 ddec_params, audio_embedding=audio_embedding,
                 sample_shape=output_sample.shape, x_ref=x_ref.to(dtype=ddec.dtype), module=ddec)
@@ -186,7 +196,7 @@ def dae_test() -> None:
             print(f"latents mean/std: {latents_mean:.4} {latents_std:.4}")
 
         if dae is not None:
-            point_similarity = (output_sample - input_sample).abs().mean().item()
+            point_similarity = 0#(output_sample - input_sample).abs().mean().item()
             avg_point_similarity += point_similarity
             print(f"decoded point similarity: {point_similarity}")
         
@@ -197,7 +207,7 @@ def dae_test() -> None:
         if latents is not None:
             save_img(dae.latents_to_img(latents), os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_latents.png')}"))
         save_img(format.sample_to_img(output_sample), os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_output_sample.png')}"))
-        save_img(format.sample_to_img(input_sample), os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_input_sample.png')}"))
+        save_img(format.sample_to_img(format.convert_to_abs_exp1(input_sample)), os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_input_sample.png')}"))
 
         if output_raw_sample is not None:
             output_flac_file_path = os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_decoded.flac')}")

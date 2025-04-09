@@ -1,26 +1,24 @@
 {
-    "model_name": "edm2_ddec_mclt_b1a",
+    "model_name": "edm2_ddec_mclt_b2a",
     "model_load_options": {
         "torch_dtype": "bfloat16",
         "device": "cuda",
         "load_checkpoints": true,
         "load_emas": true,
-        "compile_options": {
-            "fullgraph": true,
-            "dynamic": true
-        }
+        "compile_options": null
     },
-    "length": 1408768,
+    "length": 1024000,
     "latents_tiled_encode": false,
     "latents_tiled_max_chunk_size": 6144,
     "latents_tiled_overlap": 256,
-    "output_lufs": -16.5,
+    "output_lufs": -18.5,
     "num_fgla_iters": 300,
     "synthesis": "ddec",
-    "add_random_test_samples": 5,
+    "add_random_test_samples": 6,
     "copy_sample_source_files": true,
     "fgla_sample_source_files": false,
     "test_samples": [
+        "switch/Arcaea/_t_songs_ignotus.ogg.flac",
         "dsf/Metropolis Street Racer Prototype/file_15.adx.flac",
         "psf3/Iron Man/_t_! movies_HUB_05_000001C2.adx.flac",
         "psf/Gradius Gaiden/SLPM-86042_BGM1_0000096c.XA.flac"

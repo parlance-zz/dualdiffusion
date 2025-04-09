@@ -225,10 +225,11 @@ class EMA_Config:
 class EMA_Manager:
 
     @torch.no_grad()
-    def __init__(self, ema_configs: dict[str, dict[str, Any]], trainer: DualDiffusionTrainer) -> None:
+    def __init__(self, module_name: str, module: DualDiffusionModule, ema_configs: dict[str, dict[str, Any]], trainer: DualDiffusionTrainer) -> None:
 
         self.trainer: DualDiffusionTrainer = trainer
-        self.module: DualDiffusionModule = trainer.module
+        self.module: DualDiffusionModule = module
+        self.module_name: str = module_name
         self.ema_modules: dict[str, DualDiffusionModule] = {}
         self.ema_configs: dict[str, EMA_Config] = {}
         self.switch_ema_name = None
@@ -296,7 +297,7 @@ class EMA_Manager:
                     if config.num_archive_steps is not None and config.num_archive_steps > 0:
                         if self.trainer.global_step % config.num_archive_steps == 0 and self.trainer.global_step > 0:
                             self.save_ema(name, self.trainer.config.model_path,
-                                subfolder=f"{self.trainer.config.module_name}_ema_archive", archive=True)
+                                subfolder=f"{self.module_name}_ema_archive", archive=True)
 
     @torch.no_grad() # if enabled, load switch ema weights into train weights if it isn't warming up
     def switch_ema(self) -> Optional[str]:

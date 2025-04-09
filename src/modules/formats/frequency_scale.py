@@ -91,22 +91,22 @@ class FrequencyScale(torch.nn.Module):
         if (self.filters.max(dim=0).values == 0.0).any():
             print("Warning: At least one FrequencyScale filterbank has all zero values.")
 
-    @torch.no_grad()
     def scale(self, specgram: torch.Tensor) -> torch.Tensor:
         return torch.matmul(specgram.transpose(-1, -2), self.filters).transpose(-1, -2)
     
-    @torch.no_grad()
-    def unscale(self, spectrogram: torch.Tensor) -> torch.Tensor:
+    def unscale(self, spectrogram: torch.Tensor, rectify: bool = True) -> torch.Tensor:
         # pack batch
         original_shape = spectrogram.size()
         spectrogram = spectrogram.reshape(-1, original_shape[-2], original_shape[-1])
 
-        unscaled = torch.relu(torch.linalg.lstsq(self.filters.transpose(-1, -2)[None],
-                               spectrogram, driver=self.unscale_driver).solution)
+        unscaled = torch.linalg.lstsq(self.filters.transpose(-1, -2)[None], spectrogram, driver=self.unscale_driver).solution
+        
+        if rectify == True:
+            unscaled = torch.relu(unscaled)
+        
         # unpack batch
         return unscaled.view(original_shape[:-2] + (self.num_stft_bins, original_shape[-1]))
     
-    @torch.no_grad()
     def get_unscaled(self, num_points: int, device: Optional[torch.device] = None) -> torch.Tensor:
 
         scaled_freqs = torch.linspace(

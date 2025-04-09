@@ -1,0 +1,95 @@
+{
+  "seed": 5000,
+  "device_batch_size": 8,
+  "gradient_accumulation_steps": 12,
+  "validation_device_batch_size": 0,
+  "validation_accumulation_steps": 0,
+  "max_train_steps": 1000000,
+  "min_checkpoint_time": 3600,
+  "strict_checkpoint_time": true,
+  "checkpoints_total_limit": 2,
+  "num_validation_epochs": 0,
+  "enable_bf16_reduction_in_sdp": false,
+  "enable_anomaly_detection": false,
+  "enable_model_compilation": true,
+  "enable_channels_last": true,
+  "compile_params": {
+    "fullgraph": true,
+    "dynamic": false
+  },
+  "lr_schedule": {
+    "learning_rate": 1e-2,
+    "lr_schedule": "edm2",
+    "lr_warmup_steps": 5000,
+    "lr_reference_steps": 50000,
+    "lr_decay_exponent": 0.5,
+    "min_learning_rate": 6e-4
+  },
+  "optimizer": {
+    "adam_beta1": 0.9,
+    "adam_beta2": 0.99,
+    "adam_epsilon": 1e-8,
+    "adam_weight_decay": 0,
+    "max_grad_norm": 100,
+    "grad_norm_std_ema_beta": 0.9975,
+    "grad_norm_mean_ema_beta": 0.9925,
+    "dynamic_max_grad_norm_z": 6
+  },
+  "emas": {
+    "std0.05": {
+      "include_in_validation": false,
+      "cpu_offload": false,
+      "std": 0.05,
+      "num_archive_steps": 10000
+    },
+    "std0.1": {
+      "include_in_validation": false,
+      "cpu_offload": false,
+      "std": 0.1,
+      "num_archive_steps": 10000
+    }
+  },
+  "dataloader": {
+    "load_datatypes": ["audio"],
+    "filter_invalid_samples": true,
+    "filter_unnormalized_samples": true,
+    "dataset_num_proc": null,
+    "dataloader_num_workers": 6,
+    "pin_memory": false,
+    "prefetch_factor": 2
+  },
+  "logging": {
+    "logging_dir": null,
+    "tensorboard_http_port": 6006,
+    "tensorboard_num_scalars": 2000
+  },
+  
+  "train_modules": ["dae", "ddec"],
+  "module_trainer": {
+    "package": "training.module_trainers.ddec_mclt_trainer_b2",
+    "class": "DiffusionDecoder_MCLT_Trainer_B2"
+  },
+  "module_trainer_config": {
+    "latents_perturbation": 0,
+    "conditioning_dropout": 0.1,
+    "num_loss_buckets": 12,
+
+    "kl_loss_weight":  2e-3,
+    "kl_warmup_steps": 5000,
+
+    "sigma_distribution": "ln_pdf",
+    "sigma_override_max": 16,
+    "sigma_override_min": 0.00004,
+    "sigma_dist_scale": 2,
+    "sigma_dist_offset": 0,
+    "use_stratified_sigma_sampling": true,
+    "sigma_pdf_resolution": 127,
+    "sigma_pdf_warmup_steps": 5000,
+
+    "validation_sigma_distribution": "ln_sech",
+    "validation_sigma_override_max": null,
+    "validation_sigma_override_min": null,
+    "validation_sigma_dist_scale": 1.0,
+    "validation_sigma_dist_offset": 0
+  }
+}
