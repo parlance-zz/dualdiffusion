@@ -181,7 +181,7 @@ def reconstruct_phema(out_std: float, phema_path: str, quiet: bool = False) -> d
         for pi, pj in zip(ema_state_dict.values(), state_dict.values()):
             pj += pi * ema_coef
         
-        #print(ema["path"], ema_coef)
+        print(ema["path"], ema_coef)
         if progress_bar is not None:
             progress_bar.update(1)
 
@@ -195,6 +195,7 @@ class EMA_Config:
     name: str
     cpu_offload: bool                     = False # enable to save vram by keeping ema in system memory
     include_in_validation: bool           = True  # enable to calculate validation loss for this ema
+    use_float64: bool                     = False # if set, use float64 for ema weights instead of float32
     num_switch_ema_epochs: Optional[int]  = None  # if set, loads ema weights into train weights every n epochs
     beta: Optional[float]                 = None  # beta for classic ema (std must be None)
     std: Optional[float]                  = None  # std for power function ema (beta must be None)
@@ -246,9 +247,16 @@ class EMA_Manager:
                     self.switch_ema_name = name
                 else:
                     raise ValueError("Only one EMA can be designated as the switch EMA")
-                
+            
             ema_device = "cpu" if ema_config.cpu_offload == True else self.trainer.accelerator.device
-            self.ema_modules[name] = deepcopy(self.module).to(ema_device)
+            self.ema_modules[name] = deepcopy(self.module)
+
+            # if using float64 for ema weights, convert all parameters to float64
+            if ema_config.use_float64 == True:
+                for param in self.ema_modules[name].parameters():
+                    param.data = param.data.to(torch.float64)
+
+            self.ema_modules[name].to(ema_device)
 
             # may increase performance when using CPU offload
             if ema_device == "cpu":
@@ -267,17 +275,18 @@ class EMA_Manager:
         
         return betas
 
-    @torch.no_grad() # reset all emas to the current state of the module
-    def reset(self) -> None:
-        for ema_module in self.ema_modules.values():
-            torch._foreach_copy_(tuple(ema_module.parameters()), tuple(self.module.parameters()))
-
     @torch.no_grad() # update/step all emas with feedback (if any)
-    @TF32_Disabled()
+    @TF32_Disabled() # disable tensorfloat32 for ema updates
     def update(self) -> None:
 
-        with torch.amp.autocast("cuda", enabled=False):
+        with torch.amp.autocast("cuda", enabled=False): # disable automatic mixed-precision for ema updates
             net_parameters = tuple(self.module.parameters())
+
+            # if _any_ emas are using float64, create copy of train module params in float64
+            if any([self.ema_configs[name].use_float64 == True for name in self.ema_configs]):
+                net_parameters_64 = tuple(p.to(torch.float64) for p in net_parameters)
+            else: net_parameters_64 = None
+
             for name, config in self.ema_configs.items():
                 
                 # if using power function ema, calculate the effective beta
@@ -287,11 +296,17 @@ class EMA_Manager:
                 if config.num_warmup_steps is not None and config.num_warmup_steps > 0:
                     beta *= min(self.trainer.global_step / config.num_warmup_steps, 1)
 
+                _net_parameters = net_parameters_64 if config.use_float64 == True else net_parameters
                 ema_parameters = tuple(self.ema_modules[name].parameters())
-                torch._foreach_lerp_(ema_parameters, net_parameters, 1 - beta)
+                torch._foreach_lerp_(ema_parameters, _net_parameters, 1 - beta)
 
                 if config.feedback_beta is not None:
-                    torch._foreach_lerp_(net_parameters, ema_parameters, 1 - config.feedback_beta)
+                    
+                    # ema dtype conversion if needed
+                    if config.use_float64 == True:
+                        _ema_parameters = tuple(p.to(self.module.dtype) for p in ema_parameters)
+                    else: _ema_parameters = ema_parameters
+                    torch._foreach_lerp_(net_parameters, _ema_parameters, 1 - config.feedback_beta)
 
                 if self.trainer.accelerator.is_main_process == True:
                     if config.num_archive_steps is not None and config.num_archive_steps > 0:
@@ -355,7 +370,7 @@ class EMA_Manager:
             else:
                 error_str = f"Could not find EMA weights for {name} at {ema_load_path} - will init from train weights"
                 if target_module is not None:
-                    torch._foreach_copy_(tuple(self.ema_modules[name].parameters()), tuple(target_module.parameters()))
+                    self.ema_modules[name].load_state_dict(target_module.state_dict())
                     load_errors.append(error_str)
                 else: # error is fatal if no target_module is provided to initialize from
                     raise FileNotFoundError(error_str)
