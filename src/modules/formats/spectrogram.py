@@ -170,8 +170,7 @@ class SpectrogramConverter(torch.nn.Module):
         return torch.Size(spectrogram_shape[:-2] + (audio_len,))
 
     def sample_raw_crop_width(self, audio_len: int) -> int:
-        #spectrogram_len = self.get_spectrogram_shape(torch.Size((1, audio_len)))[-1] // 64 * 64
-        spectrogram_len = self.get_spectrogram_shape(torch.Size((1, audio_len)))[-1] // 256 * 256
+        spectrogram_len = self.get_spectrogram_shape(torch.Size((1, audio_len)))[-1] // 128 * 128
         return self.get_audio_shape(torch.Size((1, spectrogram_len)))[-1]
 
     @torch.inference_mode()
