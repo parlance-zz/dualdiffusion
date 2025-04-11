@@ -21,9 +21,11 @@
 # SOFTWARE.
 
 from typing import Optional, Literal
+from logging import getLogger
 
 import numpy as np
 import torch
+
 
 def _hz_to_mel(freq: float) -> float:
     return 2595.0 * np.log10(1.0 + (freq / 700.0))
@@ -46,9 +48,7 @@ def _create_triangular_filterbank(all_freqs: torch.Tensor, f_pts: torch.Tensor) 
     down_slopes = (-1.0 * slopes[:, :-2]) / f_diff[:-1]  # (n_freqs, n_filter)
     up_slopes = slopes[:, 2:] / f_diff[1:]  # (n_freqs, n_filter)
 
-    fb = torch.max(zero, torch.min(down_slopes, up_slopes))#+1)
-    #fb /= fb.amax(dim=0, keepdim=True)
-    
+    fb = torch.max(zero, torch.min(down_slopes, up_slopes))
     return fb
 
 class FrequencyScale(torch.nn.Module):
@@ -56,7 +56,7 @@ class FrequencyScale(torch.nn.Module):
     def __init__(
         self,
         freq_scale: Literal["mel", "log"] = "mel",
-        freq_min: float = 20.0,
+        freq_min: float = 0.0,
         freq_max: Optional[float] = None,
         sample_rate: int = 32000,
         num_stft_bins: int = 3201,
@@ -89,7 +89,7 @@ class FrequencyScale(torch.nn.Module):
         self.register_buffer("filters", self.get_filters())
 
         if (self.filters.max(dim=0).values == 0.0).any():
-            print("Warning: At least one FrequencyScale filterbank has all zero values.")
+            getLogger().warning("WARNING: At least one FrequencyScale filterbank has all zero values")
 
     def scale(self, specgram: torch.Tensor) -> torch.Tensor:
         return torch.matmul(specgram.transpose(-1, -2), self.filters).transpose(-1, -2)
