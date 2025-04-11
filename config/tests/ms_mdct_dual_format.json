@@ -2,6 +2,7 @@
     "device": "cuda",
     "add_random_test_samples": 0,
     "save_output": true,
+    "downsample_mdct_psd": false,
     "test_sample_verbose": false,
     "test_samples": [
         "switch/Arcaea/_t_songs_ignotus.ogg.flac",

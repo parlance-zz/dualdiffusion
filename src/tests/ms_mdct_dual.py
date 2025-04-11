@@ -42,6 +42,7 @@ class MS_MDCT_DualFormat_TestConfig:
     device: str
     save_output: bool
     test_sample_verbose: bool
+    downsample_mdct_psd: bool
     add_random_test_samples: int
     test_samples: list[str]
 
@@ -98,6 +99,10 @@ def ms_mdct_dual_format_test() -> None:
         raw_sample = load_audio(file_path, count=crop_width).unsqueeze(0).to(cfg.device)
         mel_spec = format.raw_to_mel_spec(raw_sample)
         mel_spec_mdct_psd = format.mel_spec_to_mdct_psd(mel_spec)
+
+        if cfg.downsample_mdct_psd == True:
+            mel_spec_mdct_psd = torch.nn.functional.interpolate(mel_spec_mdct_psd,
+                size=(cfg.format_config.mdct_num_frequencies, mel_spec_mdct_psd.shape[-1]), mode="area")
 
         mdct = format.raw_to_mdct(raw_sample)
         mdct_psd = format.raw_to_mdct_psd(raw_sample)
