@@ -278,11 +278,13 @@ class DiffusionDecoder_MCLT_Trainer_B2(ModuleTrainer):
 
     def random_crop(self, tensors: list[torch.Tensor], psd_freqs_per_freq: int) -> list[torch.Tensor]:
         b, c, h, w = tensors[1].shape
-        new_h, new_w = h - 8, w - 8
+        #new_h, new_w = h - 8, w - 8
+        new_h, new_w = h, w - 8
         
         # generate random offsets for each sample in the batch
-        tops = torch.randint(0, h - new_h, (b,), device=tensors[1].device)
+        #tops = torch.randint(0, h - new_h, (b,), device=tensors[1].device)
         lefts = torch.randint(0, w - new_w, (b,), device=tensors[1].device)
+        tops = torch.zeros_like(lefts)
         
         # create a meshgrid of batch indices
         batch_indices = torch.arange(b, device=tensors[1].device).view(b, 1, 1, 1).expand(-1, c, new_h, new_w)
@@ -338,6 +340,7 @@ class DiffusionDecoder_MCLT_Trainer_B2(ModuleTrainer):
         raw_samples: torch.Tensor = batch["audio"].clone()
 
         mel_spec = self.format.raw_to_sample(raw_samples).clone().detach()
+        mel_spec = self.format.convert_to_abs_exp1(mel_spec)
         latents, recon_mel_spec, pre_norm_latents = self.dae(mel_spec,
             dae_class_embeddings, add_latents_noise=self.config.latents_perturbation)
 
