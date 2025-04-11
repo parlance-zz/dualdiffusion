@@ -111,9 +111,8 @@ class MPConv3D_E(torch.nn.Module):
 
             if w.shape[-1] == 3 and w.shape[-2] == 3:
                 x = torch.cat((x[:, :, :, :, 0:1], x, x[:, :, :, :, -1:]), dim=4)
-                x = torch.cat((x[:, :, :, 0:1, :], x, x[:, :, :, -1:, :]), dim=3)
 
-            return torch.nn.functional.conv3d(x, w, padding=0, groups=self.groups, stride=self.stride)
+            return torch.nn.functional.conv3d(x, w, padding=(0, w.shape[-2]//2, 0), groups=self.groups, stride=self.stride)
         else:
             return torch.nn.functional.conv2d(x, w, padding=(w.shape[-2]//2, w.shape[-1]//2), groups=self.groups, stride=self.stride)
 
