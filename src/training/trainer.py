@@ -55,7 +55,7 @@ from modules.module import DualDiffusionModule
 
 class TrainLogger():
 
-    def __init__(self, accelerator: Accelerator) -> None:
+    def __init__(self, accelerator: Optional[Accelerator] = None) -> None:
 
         self.accelerator = accelerator
         self.channels: dict[str, float] = {}
@@ -68,7 +68,10 @@ class TrainLogger():
     @torch.inference_mode()
     def add_log(self, key: str, value: Union[torch.Tensor, float]) -> None:
         if torch.is_tensor(value):
-            value = self.accelerator.gather(value.detach()).mean().item()
+            if self.accelerator is not None:
+                value = self.accelerator.gather(value.detach()).mean().item()
+            else:
+                value = value.detach().mean().item()
 
         if key in self.channels:
             self.channels[key] += value
