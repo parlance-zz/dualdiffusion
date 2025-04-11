@@ -40,20 +40,21 @@ class MS_MDCT_DualFormatConfig(DualDiffusionFormatConfig):
     default_raw_length: int = 1408768
 
     # these values scale to unit norm for audio pre-normalized to -20 lufs
-    raw_to_mel_spec_scale: float = 1
-    mel_spec_to_mdct_psd_scale: float = 1
-    mdct_to_raw_scale: float = 1 / 0.5005
-    raw_to_mdct_scale: float = 19.37217829
+    raw_to_mel_spec_scale: float = 50.0
+    mel_spec_to_mdct_psd_scale: float = 0.18
+    mdct_to_raw_scale: float = 2.0
+    raw_to_mdct_scale: float = 12.1
 
     mdct_window_len: int = 512
-    mdct_psd_num_bins: int = 3328
+    mdct_psd_num_bins: int = 2048
     
     ms_width_alignment: int = 128
     ms_num_frequencies: int = 256
     ms_step_size_ms: int = 8
-    ms_window_duration_ms: int = 200
-    ms_padded_duration_ms: int = 200
-    ms_window_exponent: float = 24
+    ms_window_duration_ms: int = 128
+    ms_padded_duration_ms: int = 128
+    ms_window_exponent_low: float = 17
+    ms_window_exponent_high: float = 58
     ms_window_periodic: bool = True
     
     @property
@@ -83,29 +84,40 @@ class MS_MDCT_DualFormat(DualDiffusionFormat):
                           layout: torch.layout = torch.strided, device: torch.device = None,
                           requires_grad: bool = False, exponent: float = 1.) -> torch.Tensor:
         
-        return torch.hann_window(window_length, periodic=periodic, dtype=dtype,
+        window = torch.hann_window(window_length*2, periodic=periodic, dtype=dtype,
                 layout=layout, device=device, requires_grad=requires_grad) ** exponent
+        return window[window_length//2:-window_length//2]
     
     def __init__(self, config: MS_MDCT_DualFormatConfig) -> None:
         super().__init__()
         self.config = config
 
-        self.ms_spectrogram_func = torchaudio.transforms.Spectrogram(
+        self.ms_spectrogram_func_low = torchaudio.transforms.Spectrogram(
             n_fft=config.ms_frame_padded_length,
             win_length=config.ms_win_length,
             hop_length=config.ms_frame_hop_length,
-            pad=0,
             window_fn=MS_MDCT_DualFormat._hann_power_window,
-            power=1,
-            normalized=False,
+            power=1, normalized="window",
             wkwargs={
-                "exponent": config.ms_window_exponent,
+                "exponent": config.ms_window_exponent_low,
                 "periodic": config.ms_window_periodic,
                 "requires_grad": False
             },
-            center=True,
-            pad_mode="reflect",
-            onesided=True,
+            center=True, pad=0, pad_mode="reflect", onesided=True
+        )
+
+        self.ms_spectrogram_func_high = torchaudio.transforms.Spectrogram(
+            n_fft=config.ms_frame_padded_length,
+            win_length=config.ms_win_length,
+            hop_length=config.ms_frame_hop_length,
+            window_fn=MS_MDCT_DualFormat._hann_power_window,
+            power=1, normalized="window",
+            wkwargs={
+                "exponent": config.ms_window_exponent_high,
+                "periodic": config.ms_window_periodic,
+                "requires_grad": False
+            },
+            center=True, pad=0, pad_mode="reflect", onesided=True
         )
 
         self.ms_freq_scale = FrequencyScale(
@@ -132,9 +144,14 @@ class MS_MDCT_DualFormat(DualDiffusionFormat):
         self.register_buffer("ms_stft_hz", ms_stft_hz)
         self.register_buffer("ms_stft_mel_density", get_mel_density(ms_stft_hz).view(1, 1,-1, 1))
 
-        mdct_hz = (torch.arange(config.mdct_window_len//2) + 0.5) * config.sample_rate / config.mdct_window_len
+        mdct_hz = (torch.arange(config.mdct_num_frequencies) + 0.5) * config.sample_rate / config.mdct_window_len
         self.register_buffer("mdct_hz", mdct_hz)
         self.register_buffer("mdct_mel_density", get_mel_density(mdct_hz).view(1, 1,-1, 1))
+        
+        spec_blend_hz = torch.linspace(0, config.sample_rate / 2, config.ms_num_stft_bins)
+        spec_blend_mel_density = get_mel_density(spec_blend_hz)
+        spec_blend_mel_density = (spec_blend_mel_density / spec_blend_mel_density.amax()) ** 2
+        self.register_buffer("spec_blend_weight", spec_blend_mel_density.view(1, 1,-1, 1))
     
     # **************** mel-scale spectrogram methods ****************
 
@@ -160,8 +177,10 @@ class MS_MDCT_DualFormat(DualDiffusionFormat):
     def raw_to_mel_spec(self, raw_samples: torch.Tensor) -> torch.Tensor:
         mel_spec = []
         for raw_sample in raw_samples.unbind(0):
-            spec = self.ms_spectrogram_func(raw_sample.unsqueeze(0).float())
-            mel_spec.append(self.ms_freq_scale.scale(spec / self.ms_stft_mel_density))
+            spec_low = self.ms_spectrogram_func_low(raw_sample.unsqueeze(0).float())
+            spec_high = self.ms_spectrogram_func_high(raw_sample.unsqueeze(0).float())
+            spec_blended = spec_low * self.spec_blend_weight + spec_high * (1 - self.spec_blend_weight)
+            mel_spec.append(self.ms_freq_scale.scale(spec_blended / self.ms_stft_mel_density))
 
         return torch.cat(mel_spec, dim=0) * self.config.raw_to_mel_spec_scale
 
@@ -170,7 +189,7 @@ class MS_MDCT_DualFormat(DualDiffusionFormat):
     
     @torch.inference_mode()
     def mel_spec_to_img(self, mel_spec: torch.Tensor):
-        return tensor_to_img(mel_spec, flip_y=True)
+        return tensor_to_img(mel_spec.clip(min=0)**0.5, flip_y=True)
     
     # **************** mdct methods ****************
 
@@ -198,11 +217,11 @@ class MS_MDCT_DualFormat(DualDiffusionFormat):
     @torch.no_grad()
     def raw_to_mdct_psd(self, raw_samples: torch.Tensor) -> torch.Tensor:
         _mclt = mclt(raw_samples.float(), self.config.mdct_window_len, "hann", 0.5).permute(0, 1, 3, 2)
-        return _mclt.abs() / self.mdct_mel_density * self.config.raw_to_mdct_scale
+        return _mclt.abs() / self.mdct_mel_density * self.config.raw_to_mdct_scale / 2**0.5
     
     @torch.no_grad()
     def mdct_to_raw(self, mdct: torch.Tensor) -> torch.Tensor:
-        raw_samples = imclt((mdct * self.mdct_mel_density).permute(0, 1, 3, 2).contiguous(),
+        raw_samples = imclt((mdct * self.mdct_mel_density / self.config.raw_to_mdct_scale).permute(0, 1, 3, 2).contiguous(),
                             window_fn="hann", window_degree=0.5).real.contiguous()
         
         return raw_samples * self.config.mdct_to_raw_scale

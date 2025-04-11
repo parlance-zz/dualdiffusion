@@ -24,14 +24,14 @@ from utils import config
 
 from dataclasses import dataclass
 import os
-import datetime
 import random
 
 import torch
 
 from modules.formats.ms_mdct_dual import MS_MDCT_DualFormat, MS_MDCT_DualFormatConfig
+from training.trainer import TrainLogger as StatLogger
 from utils.dual_diffusion_utils import (
-    init_cuda, normalize, save_audio, load_audio,
+    init_cuda, save_audio, load_audio,
     save_img, get_audio_info, dict_str, tensor_info_str
 )
 
@@ -40,6 +40,8 @@ from utils.dual_diffusion_utils import (
 class MS_MDCT_DualFormat_TestConfig:
 
     device: str
+    save_output: bool
+    test_sample_verbose: bool
     add_random_test_samples: int
     test_samples: list[str]
 
@@ -63,10 +65,28 @@ def ms_mdct_dual_format_test() -> None:
 
     output_path = os.path.join(config.DEBUG_PATH, "ms_mdct_dual_format_test")
     os.makedirs(output_path, exist_ok=True)
+    
+    # save spectrogram stft windows for both low and high bands
+    wkwargs={
+        "exponent": cfg.format_config.ms_window_exponent_low,
+        "periodic": cfg.format_config.ms_window_periodic,
+    }
+    window_low = MS_MDCT_DualFormat._hann_power_window(cfg.format_config.ms_win_length, **wkwargs)
+    window_low.numpy().tofile(os.path.join(output_path, "window_low.raw"))
+
+    wkwargs={
+        "exponent": cfg.format_config.ms_window_exponent_high,
+        "periodic": cfg.format_config.ms_window_periodic,
+    }
+    window_high = MS_MDCT_DualFormat._hann_power_window(cfg.format_config.ms_win_length, **wkwargs)
+    window_high.numpy().tofile(os.path.join(output_path, "window_high.raw"))
+
+    stat_logger = StatLogger()
+    print(f"\nNum test_samples: {len(test_samples)}\n")
 
     for filename in test_samples:   
         
-        print(f"\nfile: {filename}")
+        print(f"file: {filename}")
 
         file_path = os.path.join(dataset_path, filename)
         if os.path.isfile(file_path) == False:
@@ -78,19 +98,30 @@ def ms_mdct_dual_format_test() -> None:
         raw_sample = load_audio(file_path, count=crop_width).unsqueeze(0).to(cfg.device)
         mel_spec = format.raw_to_mel_spec(raw_sample)
         mel_spec_mdct_psd = format.mel_spec_to_mdct_psd(mel_spec)
+
         mdct = format.raw_to_mdct(raw_sample)
         mdct_psd = format.raw_to_mdct_psd(raw_sample)
         raw_sample_mdct = format.mdct_to_raw(mdct)
-        
-        mel_spec_mdct_psd = torch.nn.functional.interpolate(mel_spec_mdct_psd,
-            size=(cfg.format_config.mdct_num_frequencies, mdct_psd.shape[-1]), mode="area")
-        
-        print("raw_sample:", tensor_info_str(raw_sample))
-        print("mel_spec:", tensor_info_str(mel_spec), f"(target shape: {format.get_mel_spec_shape(raw_length=raw_length)}")
-        print("mdct:", tensor_info_str(mdct), f"(target shape: {format.get_mdct_shape(raw_length=raw_length)}")
-        print("mel_spec_mdct_psd:", tensor_info_str(mel_spec_mdct_psd))
-        print("mdct_psd:", tensor_info_str(mdct_psd))
-        print("raw_sample_mdct:", tensor_info_str(raw_sample_mdct))
+
+        stat_logger.add_logs({
+            "raw_sample_norm": torch.linalg.vector_norm(raw_sample) / raw_sample.numel()**0.5,
+            "raw_sample_mdct_norm": torch.linalg.vector_norm(raw_sample_mdct) / raw_sample_mdct.numel()**0.5,
+            "mel_spec_norm": torch.linalg.vector_norm(mel_spec) / mel_spec.numel()**0.5,
+            "mel_spec_mdct_psd_norm": torch.linalg.vector_norm(mel_spec_mdct_psd) / mel_spec_mdct_psd.numel()**0.5,
+            "mdct_norm": torch.linalg.vector_norm(mdct) / mdct.numel()**0.5,
+            "mdct_psd_norm": torch.linalg.vector_norm(mdct_psd) / mdct_psd.numel()**0.5,
+        })
+
+        if cfg.test_sample_verbose == True:
+            print("raw_sample:", tensor_info_str(raw_sample))
+            print("mel_spec:", tensor_info_str(mel_spec), f"(target shape: {format.get_mel_spec_shape(raw_length=raw_length)}")
+            print("mdct:", tensor_info_str(mdct), f"(target shape: {format.get_mdct_shape(raw_length=raw_length)}")
+            print("mel_spec_mdct_psd:", tensor_info_str(mel_spec_mdct_psd))
+            print("mdct_psd:", tensor_info_str(mdct_psd))
+            print("raw_sample_mdct:", tensor_info_str(raw_sample_mdct), "\n")
+
+        if cfg.save_output == False:
+            continue
 
         filename = os.path.splitext(os.path.basename(filename))[0]
 
@@ -113,6 +144,9 @@ def ms_mdct_dual_format_test() -> None:
         mdct_psd_output_path = os.path.join(output_path, f"{filename}_mdct_psd.png")
         save_img(format.mdct_psd_to_img(mdct_psd), mdct_psd_output_path)
         print(f"Saved mdct_psd img to {mdct_psd_output_path}")
+
+    print("\nAverage stats:")
+    print(dict_str(stat_logger.get_logs()))
 
 if __name__ == "__main__":
 
