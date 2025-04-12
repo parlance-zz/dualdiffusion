@@ -231,6 +231,7 @@ class DiffusionDecoder_MDCT_Trainer_B2(ModuleTrainer):
 
         self.logger.info("Training DAE/DDEC modules:")
         self.logger.info(f"KL loss weight: {self.config.kl_loss_weight} KL warmup steps: {self.config.kl_warmup_steps}")
+        self.logger.info(f"MelSpec loss weight: {self.config.mel_spec_loss_weight}")
         self.logger.info(f"Random sub-pixel latent crop: {self.config.use_random_crop}")
 
     @torch.no_grad()
