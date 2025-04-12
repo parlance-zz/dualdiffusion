@@ -36,9 +36,8 @@ from tqdm.auto import tqdm
 
 from modules.module import DualDiffusionModule
 from modules.unets.unet import DualDiffusionUNet
-#from modules.mp_tools import mp_sum
 from utils.dual_diffusion_utils import (
-    normalize, load_safetensors, torch_dtype, load_audio, get_cos_angle, tensor_info_str
+    normalize, load_safetensors, torch_dtype, load_audio, get_cos_angle
 )
 from sampling.schedule import SamplingSchedule
 from training.ema import find_emas_in_dir
@@ -310,27 +309,27 @@ class DualDiffusionPipeline(torch.nn.Module):
         model_index = {"modules": model_modules}
         config.save_json(model_index, os.path.join(model_path, "model_index.json"))
 
-    def get_latent_shape(self, sample_shape: Union[torch.Size, tuple[int, int, int, int]]) -> torch.Size:
-        encoder = getattr(self, "vae", getattr(self, "dae", None))
+    def get_latent_shape(self, mel_spec_shape: Union[torch.Size, tuple[int, int, int, int]]) -> torch.Size:
+        encoder = getattr(self, "dae", None)
         if encoder is None:
             return None
-        latent_shape = encoder.get_latent_shape(sample_shape)
+        latent_shape = encoder.get_latent_shape(mel_spec_shape)
         if hasattr(self, "unet"):
             return self.unet.get_latent_shape(latent_shape)
         else:
             return latent_shape
     
-    def get_sample_shape(self, bsz: int = 1, length: Optional[int] = None) -> tuple:
-        encoder = getattr(self, "vae", getattr(self, "dae", None))
-        sample_shape = self.format.get_sample_shape(bsz=bsz, length=length)
+    def get_mel_spec_shape(self, bsz: int = 1, raw_length: Optional[int] = None) -> tuple:
+        encoder = getattr(self, "dae", None)
+        mel_spec_shape = self.format.get_mel_spec_shape(bsz=bsz, raw_length=raw_length)
         if encoder is None:
-            return sample_shape
-        latent_shape = self.get_latent_shape(sample_shape)
-        return encoder.get_sample_shape(latent_shape)
+            return mel_spec_shape
+        latent_shape = self.get_latent_shape(mel_spec_shape)
+        return encoder.get_mel_spec_shape(latent_shape)
     
     @torch.inference_mode()
     def __call__(self, params: SampleParams, model_server_state: Optional[multiprocessing.managers.DictProxy] = None, quiet: bool = False) -> SampleOutput:
-        
+        raise NotImplementedError()
         debug_info = {}
         params = SampleParams(**params.__dict__).sanitize() # todo: this should be properly deepcopied because of tensor params
         
@@ -341,7 +340,7 @@ class DualDiffusionPipeline(torch.nn.Module):
             unet = inpainting_unet or unet
 
         params.seed = params.seed or int(np.random.randint(100000, 999999))
-        params.length = params.length or self.format.config.sample_raw_length
+        params.length = params.length or self.format.config.default_raw_length
         params.sigma_max = params.sigma_max or unet.config.sigma_max
         params.sigma_min = params.sigma_min or unet.config.sigma_min
         params.sigma_data = params.sigma_data or unet.config.sigma_data
@@ -352,7 +351,7 @@ class DualDiffusionPipeline(torch.nn.Module):
             if params.input_audio_pre_encoded == True:
                 input_audio = load_safetensors(params.input_audio)["latents"][0:1]
             else:
-                input_sample_shape = self.get_sample_shape(bsz=1, length=params.length)
+                input_sample_shape = self.get_mel_spec_shape(bsz=1, raw_length=params.length)
                 input_audio_sample_rate, input_audio = load_audio(
                     params.input_audio, count=self.format.get_audio_shape(input_sample_shape), return_sample_rate=True)
                 if input_audio_sample_rate != self.format.config.sample_rate:
@@ -365,7 +364,7 @@ class DualDiffusionPipeline(torch.nn.Module):
         generator = torch.Generator(device=unet.device).manual_seed(params.seed)
         np_generator = np.random.default_rng(params.seed)
         
-        sample_shape = self.get_sample_shape(bsz=params.batch_size, length=params.length)
+        sample_shape = self.get_mel_spec_shape(bsz=params.batch_size, raw_length=params.length)
         if getattr(self, "vae", None) is not None:
             latent_diffusion = True
             sample_shape = self.get_latent_shape(sample_shape)
@@ -578,7 +577,7 @@ class DualDiffusionPipeline(torch.nn.Module):
         
         params = SampleParams(**params.__dict__).sanitize() # todo: this should be properly deepcopied because of tensor params       
         params.seed = params.seed or int(np.random.randint(100000, 999999))
-        params.length = params.length or self.format.config.sample_raw_length
+        params.length = params.length or self.format.config.default_raw_length
         params.sigma_max = params.sigma_max or unet.config.sigma_max
         params.sigma_min = params.sigma_min or unet.config.sigma_min
         params.sigma_data = params.sigma_data or unet.config.sigma_data
@@ -597,10 +596,10 @@ class DualDiffusionPipeline(torch.nn.Module):
         if x_ref is None:
             if sample_shape is None:
                 if getattr(self, "vae", None) is not None or getattr(self, "dae", None) is not None:
-                    sample_shape = self.get_sample_shape(bsz=params.batch_size, length=params.length)
+                    sample_shape = self.get_mel_spec_shape(bsz=params.batch_size, raw_length=params.length)
                     sample_shape = self.get_latent_shape(sample_shape)
                 else:
-                    sample_shape = self.format.get_sample_shape(bsz=params.batch_size, length=params.length)
+                    sample_shape = self.format.get_mel_spec_shape(bsz=params.batch_size, raw_length=params.length)
             input_ref_sample = None
         else:
             sample_shape = sample_shape or x_ref.shape

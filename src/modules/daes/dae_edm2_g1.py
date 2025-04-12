@@ -36,7 +36,7 @@ from typing import Union, Literal, Optional
 import torch
 
 from modules.daes.dae import DualDiffusionDAE, DualDiffusionDAEConfig
-from modules.mp_tools import mp_silu, mp_sum, normalize, resample_3d #MPConv3D
+from modules.mp_tools import mp_silu, mp_sum, normalize, resample_3d
 from utils.dual_diffusion_utils import tensor_4d_to_5d, tensor_5d_to_4d
 
 
@@ -309,15 +309,15 @@ class DAE_G1(DualDiffusionDAE):
     def get_recon_loss_logvar(self) -> torch.Tensor:
         return self.recon_loss_logvar
     
-    def get_latent_shape(self, sample_shape: Union[torch.Size, tuple[int, int, int, int]]) -> torch.Size:
-        if len(sample_shape) == 4:
-            return (sample_shape[0], self.config.latent_channels * 2,
-                    sample_shape[2] // 2 ** (self.num_levels-1),
-                    sample_shape[3] // 2 ** (self.num_levels-1))
+    def get_latent_shape(self, mel_spec_shape: Union[torch.Size, tuple[int, int, int, int]]) -> torch.Size:
+        if len(mel_spec_shape) == 4:
+            return (mel_spec_shape[0], self.config.latent_channels * 2,
+                    mel_spec_shape[2] // 2 ** (self.num_levels-1),
+                    mel_spec_shape[3] // 2 ** (self.num_levels-1))
         else:
-            raise ValueError(f"Invalid sample shape: {sample_shape}")
+            raise ValueError(f"Invalid sample shape: {mel_spec_shape}")
         
-    def get_sample_shape(self, latent_shape: Union[torch.Size, tuple[int, int, int, int]]) -> torch.Size:
+    def get_mel_spec_shape(self, latent_shape: Union[torch.Size, tuple[int, int, int, int]]) -> torch.Size:
         if len(latent_shape) == 4:
             return (latent_shape[0], 2,
                     latent_shape[2] * 2 ** (self.num_levels-1),

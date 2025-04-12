@@ -37,13 +37,12 @@ import torch
 
 from modules.unets.unet import DualDiffusionUNet, DualDiffusionUNetConfig
 from modules.mp_tools import MPFourier, MPConv3D, mp_cat, mp_silu, mp_sum, normalize, resample_3d
-from modules.formats.frequency_scale import get_mel_density
-from modules.formats.format import DualDiffusionFormat
+from modules.formats.ms_mdct_dual import MS_MDCT_DualFormat
 from utils.dual_diffusion_utils import tensor_5d_to_4d, tensor_4d_to_5d
 
 
 @dataclass
-class DDec_MCLT_UNet_B2_Config(DualDiffusionUNetConfig):
+class DDec_MDCT_UNet_B2_Config(DualDiffusionUNetConfig):
 
     in_channels:  int = 1
     out_channels: int = 1
@@ -52,9 +51,7 @@ class DDec_MCLT_UNet_B2_Config(DualDiffusionUNetConfig):
     sigma_max: float = 16
     sigma_min: float = 0.00004
     in_num_freqs: int = 256
-    in_psd_freqs: int = 3328
-    mel_density_scale: float = 0.54
-    audio_sample_rate: float = 32000
+    in_psd_freqs: int = 2048
 
     model_channels: int  = 32                # Base multiplier for the number of channels.
     logvar_channels: int = 192               # Number of channels for training uncertainty estimation.
@@ -171,11 +168,11 @@ class Block(torch.nn.Module):
 
         return x
 
-class DDec_MCLT_UNet_B2(DualDiffusionUNet):
+class DDec_MDCT_UNet_B2(DualDiffusionUNet):
 
     supports_channels_last: Union[bool, Literal["3d"]] = "3d"
 
-    def __init__(self, config: DDec_MCLT_UNet_B2_Config) -> None:
+    def __init__(self, config: DDec_MDCT_UNet_B2_Config) -> None:
         super().__init__()
         self.config = config
 
@@ -193,13 +190,6 @@ class DDec_MCLT_UNet_B2(DualDiffusionUNet):
         cemb *= self.config.mlp_multiplier
 
         self.num_levels = len(config.channel_mult)
-
-        mclt_hz = torch.arange(0, config.in_num_freqs) + 0.5
-        mclt_hz = mclt_hz / config.in_num_freqs * config.audio_sample_rate / 2
-        mel_density = get_mel_density(mclt_hz)
-        mel_density /= mel_density.square().mean().sqrt()
-        mel_density = mel_density.view(1, 1, 1,-1, 1) * config.mel_density_scale
-        self.register_buffer("mel_density", mel_density, persistent=False)
         
         assert config.in_psd_freqs % config.in_num_freqs == 0
         self.psd_freqs_per_freq = config.in_psd_freqs // config.in_num_freqs
@@ -280,7 +270,7 @@ class DDec_MCLT_UNet_B2(DualDiffusionUNet):
 
     def forward(self, x_in: torch.Tensor,
                 sigma: torch.Tensor,
-                format: DualDiffusionFormat,
+                format: MS_MDCT_DualFormat,
                 embeddings: torch.Tensor,
                 x_ref: Optional[torch.Tensor] = None) -> torch.Tensor:
 

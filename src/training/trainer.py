@@ -334,8 +334,8 @@ class DualDiffusionTrainer:
                 self.modules.append(module)
                 self.module_classes.append(type(module))
 
-        self.sample_shape: tuple = self.pipeline.get_sample_shape(bsz=self.config.device_batch_size)
-        self.validation_sample_shape: tuple = self.pipeline.get_sample_shape(bsz=self.config.validation_device_batch_size)
+        self.sample_shape: tuple = self.pipeline.get_mel_spec_shape(bsz=self.config.device_batch_size)
+        self.validation_sample_shape: tuple = self.pipeline.get_mel_spec_shape(bsz=self.config.validation_device_batch_size)
         if hasattr(self.pipeline, "vae") or hasattr(self.pipeline, "dae"):
             self.latent_shape: tuple = self.pipeline.get_latent_shape(self.sample_shape)
             self.validation_latent_shape: tuple = self.pipeline.get_latent_shape(self.validation_sample_shape)
@@ -561,7 +561,7 @@ class DualDiffusionTrainer:
 
         dataset_config = DatasetConfig(
             data_dir=config.DATASET_PATH,
-            sample_crop_width=self.pipeline.format.sample_raw_crop_width(),
+            raw_crop_width=self.pipeline.format.get_raw_crop_width(),
             latents_crop_width=self.latent_shape[-1] if self.latent_shape is not None else 0,
             num_proc=self.config.dataloader.dataset_num_proc,
             load_datatypes=self.config.dataloader.load_datatypes,

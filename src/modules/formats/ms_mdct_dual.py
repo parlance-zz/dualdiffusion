@@ -92,6 +92,9 @@ class MS_MDCT_DualFormat(DualDiffusionFormat):
         super().__init__()
         self.config = config
 
+        # mel-scale spectrogram is built from 2 spectrograms with different windows
+        # to maximize frequency resolution in lows and time resolution in highs
+
         self.ms_spectrogram_func_low = torchaudio.transforms.Spectrogram(
             n_fft=config.ms_frame_padded_length,
             win_length=config.ms_win_length,
@@ -120,6 +123,7 @@ class MS_MDCT_DualFormat(DualDiffusionFormat):
             center=True, pad=0, pad_mode="reflect", onesided=True
         )
 
+        # this scaled is used for filtering to create the mel-scale spectrogram
         self.ms_freq_scale = FrequencyScale(
             freq_scale="mel",
             freq_min=0,
@@ -130,6 +134,7 @@ class MS_MDCT_DualFormat(DualDiffusionFormat):
             filter_norm="slaney"
         )
 
+        # this scale is used for inverse filtering to create the conditioning for a mdct ddec model
         self.ms_freq_scale_mdct_psd = FrequencyScale(
             freq_scale="mel",
             freq_min=0,
@@ -185,7 +190,10 @@ class MS_MDCT_DualFormat(DualDiffusionFormat):
         return torch.cat(mel_spec, dim=0) * self.config.raw_to_mel_spec_scale
 
     def mel_spec_to_mdct_psd(self, mel_spec: torch.Tensor):
-        return self.ms_freq_scale_mdct_psd.unscale(mel_spec.float(), rectify=False) * self.config.mel_spec_to_mdct_psd_scale
+        mel_spec_mdct_psd = self.ms_freq_scale_mdct_psd.unscale(
+            mel_spec.float(), rectify=False) * self.config.mel_spec_to_mdct_psd_scale
+        
+        return mel_spec_mdct_psd.clip(min=0)
     
     @torch.inference_mode()
     def mel_spec_to_img(self, mel_spec: torch.Tensor):
@@ -227,5 +235,5 @@ class MS_MDCT_DualFormat(DualDiffusionFormat):
         return raw_samples * self.config.mdct_to_raw_scale
     
     @torch.inference_mode()
-    def mdct_psd_to_img(self, mdct: torch.Tensor):
-        return tensor_to_img(mdct, flip_y=True)
+    def mdct_psd_to_img(self, mdct_psd: torch.Tensor):
+        return tensor_to_img(mdct_psd.clip(min=0)**0.5, flip_y=True)
