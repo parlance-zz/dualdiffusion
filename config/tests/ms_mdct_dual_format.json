@@ -2,7 +2,8 @@
     "device": "cuda",
     "add_random_test_samples": 0,
     "save_output": true,
-    "downsample_mdct_psd": false,
+    "downsample_mdct_psd": true,
+    
     "test_sample_verbose": false,
     "test_samples": [
         "switch/Arcaea/_t_songs_ignotus.ogg.flac",
@@ -10,16 +11,47 @@
         "psf3/Iron Man/_t_! movies_HUB_05_000001C2.adx.flac",
         "psf/Gradius Gaiden/SLPM-86042_BGM1_0000096c.XA.flac"
     ],
+
+    /*
     "format_config": {
         "sample_rate": 32000,
         "num_raw_channels": 2,
         "default_raw_length": 1408768,
+
         "raw_to_mel_spec_scale": 50.0,
         "mel_spec_to_mdct_psd_scale": 0.18,
         "mdct_to_raw_scale": 2,
         "raw_to_mdct_scale": 12.1,
+
         "mdct_window_len": 512,
         "mdct_psd_num_bins": 2048,
+
+        "ms_abs_exponent": 1,
+        "ms_width_alignment": 128,
+        "ms_num_frequencies": 256,
+        "ms_step_size_ms": 8,
+        "ms_window_duration_ms": 128,
+        "ms_padded_duration_ms": 128,
+        "ms_window_exponent_low": 17,
+        "ms_window_exponent_high": 58,
+        "ms_window_periodic": true
+    }
+    */
+
+    "format_config": {
+        "sample_rate": 32000,
+        "num_raw_channels": 2,
+        "default_raw_length": 1408768,
+
+        "raw_to_mel_spec_scale": 9.6281,
+        "mel_spec_to_mdct_psd_scale": 0.104,
+        "mdct_to_raw_scale": 2,
+        "raw_to_mdct_scale": 12.1,
+
+        "mdct_window_len": 512,
+        "mdct_psd_num_bins": 2048,
+
+        "ms_abs_exponent": 0.5,
         "ms_width_alignment": 128,
         "ms_num_frequencies": 256,
         "ms_step_size_ms": 8,

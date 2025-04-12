@@ -45,6 +45,7 @@ class MS_MDCT_DualFormatConfig(DualDiffusionFormatConfig):
     mdct_to_raw_scale: float = 2.0
     raw_to_mdct_scale: float = 12.1
 
+    ms_abs_exponent: float = 1
     mdct_window_len: int = 512
     mdct_psd_num_bins: int = 2048
     
@@ -185,13 +186,13 @@ class MS_MDCT_DualFormat(DualDiffusionFormat):
             spec_low = self.ms_spectrogram_func_low(raw_sample.unsqueeze(0).float())
             spec_high = self.ms_spectrogram_func_high(raw_sample.unsqueeze(0).float())
             spec_blended = spec_low * self.spec_blend_weight + spec_high * (1 - self.spec_blend_weight)
-            mel_spec.append(self.ms_freq_scale.scale(spec_blended / self.ms_stft_mel_density))
+            mel_spec.append(self.ms_freq_scale.scale(spec_blended / self.ms_stft_mel_density) ** self.config.ms_abs_exponent)
 
         return torch.cat(mel_spec, dim=0) * self.config.raw_to_mel_spec_scale
 
     def mel_spec_to_mdct_psd(self, mel_spec: torch.Tensor):
         mel_spec_mdct_psd = self.ms_freq_scale_mdct_psd.unscale(
-            mel_spec.float(), rectify=False) * self.config.mel_spec_to_mdct_psd_scale
+            mel_spec.float() ** (1 / self.config.ms_abs_exponent), rectify=False) * self.config.mel_spec_to_mdct_psd_scale
         
         return mel_spec_mdct_psd.clip(min=0)
     
