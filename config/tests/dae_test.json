@@ -1,22 +1,23 @@
 {
-    "model_name": "edm2_ddec_mclt_b2a",
+    "model_name": "edm2_ddec_mdct_b2a",
     "model_load_options": {
         "torch_dtype": "bfloat16",
         "device": "cuda",
         "load_checkpoints": true,
-        "load_emas": true,
+        "load_emas": {
+            "dae": "ema_std0.05.safetensors",
+            "ddec": "ema_std0.05.safetensors"
+        },
         "compile_options": null
     },
-    "length": 1024000,
+    "length": 1408768,
     "latents_tiled_encode": false,
     "latents_tiled_max_chunk_size": 6144,
     "latents_tiled_overlap": 256,
     "output_lufs": -18.5,
-    "num_fgla_iters": 300,
-    "synthesis": "ddec",
+    "ddec_output": true,
     "add_random_test_samples": 6,
     "copy_sample_source_files": true,
-    "fgla_sample_source_files": false,
     "test_samples": [
         "switch/Arcaea/_t_songs_ignotus.ogg.flac",
         "dsf/Metropolis Street Racer Prototype/file_15.adx.flac",

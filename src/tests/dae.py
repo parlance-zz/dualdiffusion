@@ -30,11 +30,10 @@ import torch
 
 from modules.embeddings.clap import CLAP_Embedding
 from pipelines.dual_diffusion_pipeline import DualDiffusionPipeline, SampleParams
-from modules.unets.unet_edm2_ddec_mclt import DDec_MCLT_UNet
-from modules.formats.mclt import DualMCLTFormatConfig, DualMCLTFormat
+from modules.unets.unet_edm2_ddec_mdct_b2 import DDec_MDCT_UNet_B2
 from modules.embeddings.clap import CLAP_Embedding
-from modules.daes.dae_edm2_d2 import DAE_D2
-from modules.formats.spectrogram import SpectrogramFormat
+from modules.daes.dae_edm2_g1 import DAE_G1
+from modules.formats.ms_mdct_dual import MS_MDCT_DualFormat
 from utils.dual_diffusion_utils import (
     init_cuda, normalize, save_audio, load_audio, load_safetensors,
     save_img, get_audio_info, dict_str
@@ -52,27 +51,21 @@ def dae_test() -> None:
     model_name = test_params["model_name"]
     model_load_options = test_params["model_load_options"]
     length = test_params["length"]
-    num_fgla_iters = test_params["num_fgla_iters"]
 
     model_path = os.path.join(config.MODELS_PATH, model_name)
     print(f"Loading DualDiffusion model from '{model_path}'...")
     pipeline = DualDiffusionPipeline.from_pretrained(model_path, **model_load_options)
-    dae: DAE_D2 = getattr(pipeline, "dae", None)
-    format: SpectrogramFormat = pipeline.format
+    dae: DAE_G1 = getattr(pipeline, "dae", None)
+    format: MS_MDCT_DualFormat = pipeline.format
     embedding: CLAP_Embedding = pipeline.embedding
-    mclt = DualMCLTFormat(DualMCLTFormatConfig())
 
     if dae is not None and hasattr(dae, "unet"):
         dae.unet.to(dae.device)
 
-    format.config.num_fgla_iters = num_fgla_iters
     sample_rate = format.config.sample_rate
-
-    if test_params["synthesis"] not in ["fgla", "ddec"]:
-        test_params["synthesis"] = None
         
-    if test_params["synthesis"] == "ddec" and hasattr(pipeline, "ddec"):
-        ddec: DDec_MCLT_UNet = pipeline.ddec
+    if test_params["ddec_output"] == True and hasattr(pipeline, "ddec"):
+        ddec: DDec_MDCT_UNet_B2 = pipeline.ddec
         last_global_step = ddec.config.last_global_step
     else:
         ddec = None
@@ -83,14 +76,14 @@ def dae_test() -> None:
 
     dataset_path = config.DATASET_PATH
     test_samples: list[str] = test_params["test_samples"] or []
-    sample_shape = pipeline.get_sample_shape(length=length)
+    sample_shape = pipeline.get_mel_spec_shape(raw_length=length)
     latent_shape = pipeline.get_latent_shape(sample_shape)
     print(f"Sample shape: {sample_shape}  Latent shape: {latent_shape}")
     
     output_path = os.path.join(model_path, "output", "dae", f"step_{last_global_step}")
     os.makedirs(output_path, exist_ok=True)
     start_time = datetime.datetime.now()
-    avg_point_similarity = avg_latents_mean = avg_latents_std = 0
+    avg_latents_mean = avg_latents_std = 0
 
     add_random_test_samples = test_params["add_random_test_samples"]
     if add_random_test_samples > 0:
@@ -108,10 +101,10 @@ def dae_test() -> None:
             file_path = os.path.join(config.DEBUG_PATH, filename)
 
         audio_len = get_audio_info(file_path).frames
-        count = format.sample_raw_crop_width(length=min(length, audio_len))
+        count = format.get_raw_crop_width(raw_length=min(length, audio_len))
         source_raw_sample = load_audio(file_path, count=count)
         input_raw_sample = source_raw_sample.unsqueeze(0).to(format.device)
-        input_sample = format.raw_to_sample(input_raw_sample)
+        input_mel_spec = format.raw_to_mel_spec(input_raw_sample)
         
         safetensors_file_name = os.path.join(f"{os.path.splitext(filename)[0]}.safetensors")
         safetensors_file_path = os.path.join(dataset_path, safetensors_file_name)
@@ -130,84 +123,51 @@ def dae_test() -> None:
             dae_embedding = dae.get_embeddings(audio_embedding)
 
             if test_params["latents_tiled_encode"] == True:
-                latents = dae.tiled_encode(input_sample.to(dtype=dae.dtype), dae_embedding,
+                latents = dae.tiled_encode(input_mel_spec.to(dtype=dae.dtype), dae_embedding,
                     max_chunk=test_params["latents_tiled_max_chunk_size"], overlap=test_params["latents_tiled_overlap"])
             else:
-                latents = dae.encode(input_sample.to(dtype=dae.dtype), dae_embedding)
+                latents = dae.encode(input_mel_spec.to(dtype=dae.dtype), dae_embedding)
             
-            if not hasattr(dae, "unet"):
-
-                output_sample = dae.decode(latents, dae_embedding).float()
-                dae_unet_params = None
-
-            else: # melspec ddec
-                
-                x_ref = dae.decode(latents, dae_embedding)
-
-                dae_unet_params = SampleParams(
-                    seed=5000,
-                    num_steps=200, length=audio_len, cfg_scale=1.5, input_perturbation=0.5, input_perturbation_offset=0,
-                    use_heun=False, schedule="linear", rho=7, sigma_max=200, sigma_min=0.02
-                )
-                
-                output_sample = pipeline.diffusion_decode(
-                    dae_unet_params, audio_embedding=audio_embedding,
-                    sample_shape=sample_shape, x_ref=x_ref, module=dae.unet)
+            output_mel_spec = dae.decode(latents, dae_embedding).float()
         else:
             latents = None
-            output_sample = input_sample
+            output_mel_spec = input_mel_spec
 
         if ddec is not None:
-            #x_ref = format.convert_to_abs_exp1(output_sample)
-            x_ref = format.convert_to_unscaled_psd(output_sample)
-            #x_ref = output_sample
-            #"""
+            x_ref = format.mel_spec_to_mdct_psd(output_mel_spec)
+
             ddec_params = SampleParams(
                 seed=5000,
                 num_steps=20, length=audio_len, cfg_scale=1.5, input_perturbation=0, input_perturbation_offset=-0.3,
                 use_heun=True, schedule="edm2", rho=7, sigma_max=11, sigma_min=0.0002 #0.0003 #0.013
             )
-            #"""
-            """
-            ddec_params = SampleParams(
-                seed=5000,
-                num_steps=20, length=audio_len, cfg_scale=1.5, input_perturbation=0.5, input_perturbation_offset=-0.3,
-                use_heun=True, schedule="edm2", rho=7, sigma_max=12, sigma_min=0.001 #0.0003 #0.013
-            )
-            """
-            mclt_output_sample = pipeline.diffusion_decode(
-                ddec_params, audio_embedding=audio_embedding,
-                sample_shape=output_sample.shape, x_ref=x_ref.to(dtype=ddec.dtype), module=ddec)
-            
-            output_raw_sample = mclt.sample_to_raw(mclt_output_sample.float())
-        else:
-            if test_params["synthesis"] == "fgla":
-                output_raw_sample = format.sample_to_raw(output_sample.float(), n_fgla_iters=num_fgla_iters)
-            else:
-                output_raw_sample = None
 
-        print(f"input   mean/std: {input_sample.mean().item():.4} {input_sample.std().item():.4}")
-        print(f"output  mean/std: {output_sample.mean().item():.4} {output_sample.std().item():.4}")
+            mdct_output_sample = pipeline.diffusion_decode(
+                ddec_params, audio_embedding=audio_embedding,
+                sample_shape=output_mel_spec.shape, x_ref=x_ref.to(dtype=ddec.dtype), module=ddec)
+            
+            output_raw_sample = format.mdct_to_raw(mdct_output_sample.float())
+        else:
+            output_raw_sample = None
+
+        print(f"input   mean/std: {input_mel_spec.mean().item():.4} {input_mel_spec.std().item():.4}")
+        print(f"output  mean/std: {output_mel_spec.mean().item():.4} {output_mel_spec.std().item():.4}")
         if latents is not None:
             latents_mean = latents.mean().item()
             latents_std = latents.std().item()
             avg_latents_mean += latents_mean
             avg_latents_std += latents_std
             print(f"latents mean/std: {latents_mean:.4} {latents_std:.4}")
-
-        if dae is not None:
-            point_similarity = 0#(output_sample - input_sample).abs().mean().item()
-            avg_point_similarity += point_similarity
-            print(f"decoded point similarity: {point_similarity}")
         
         metadata = {**model_metadata}
         metadata["ddec_metadata"] = dict_str(ddec_params.__dict__) if ddec is not None else "null"
-        metadata["dae_metadata"] = dict_str(dae_unet_params.__dict__) if dae_unet_params is not None else "null"
 
         if latents is not None:
+            print(f"Latents channel order: {dae.config.latents_img_channel_order}")
             save_img(dae.latents_to_img(latents), os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_latents.png')}"))
-        save_img(format.sample_to_img(output_sample), os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_output_sample.png')}"))
-        save_img(format.sample_to_img(format.convert_to_abs_exp1(input_sample)), os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_input_sample.png')}"))
+        
+        save_img(format.mel_spec_to_img(output_mel_spec), os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_output_mel_spec.png')}"))
+        save_img(format.mel_spec_to_img(input_mel_spec), os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_input_mel_spec.png')}"))
 
         if output_raw_sample is not None:
             output_flac_file_path = os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_decoded.flac')}")
@@ -219,15 +179,8 @@ def dae_test() -> None:
             save_audio(source_raw_sample, sample_rate, output_flac_file_path, target_lufs=test_params["output_lufs"])
             print(f"Saved flac output to {output_flac_file_path}")
 
-        if test_params["fgla_sample_source_files"] == True:
-            input_raw_sample = format.sample_to_raw(input_sample)
-            output_flac_file_path = os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_input_fgla.flac')}")
-            save_audio(input_raw_sample, sample_rate, output_flac_file_path, target_lufs=test_params["output_lufs"])
-            print(f"Saved flac output to {output_flac_file_path}")
-
     print(f"\nFinished in: {datetime.datetime.now() - start_time}")
     if dae is not None:
-        print(f"Avg Point similarity: {avg_point_similarity / len(test_samples)}")
         print(f"Latents avg mean: {avg_latents_mean / len(test_samples)}")
         print(f"Latents avg std: {avg_latents_std / len(test_samples)}")
 
