@@ -192,13 +192,13 @@ class MS_MDCT_DualFormat(DualDiffusionFormat):
 
     def mel_spec_to_mdct_psd(self, mel_spec: torch.Tensor):
         mel_spec_mdct_psd = self.ms_freq_scale_mdct_psd.unscale(
-            mel_spec.float() ** (1 / self.config.ms_abs_exponent), rectify=False) * self.config.mel_spec_to_mdct_psd_scale
+            mel_spec.float(), rectify=False) ** (1 / self.config.ms_abs_exponent) * self.config.mel_spec_to_mdct_psd_scale
         
         return mel_spec_mdct_psd.clip(min=0)
     
     @torch.inference_mode()
     def mel_spec_to_img(self, mel_spec: torch.Tensor):
-        return tensor_to_img(mel_spec.clip(min=0)**0.5, flip_y=True)
+        return tensor_to_img((mel_spec - mel_spec.amin())**0.5, flip_y=True)
     
     # **************** mdct methods ****************
 
@@ -237,4 +237,4 @@ class MS_MDCT_DualFormat(DualDiffusionFormat):
     
     @torch.inference_mode()
     def mdct_psd_to_img(self, mdct_psd: torch.Tensor):
-        return tensor_to_img(mdct_psd.clip(min=0)**0.5, flip_y=True)
+        return tensor_to_img((mdct_psd - mdct_psd.amin())**0.5, flip_y=True)

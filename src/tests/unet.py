@@ -92,7 +92,7 @@ def unet_test() -> None:
     print(f"{model_metadata['model_metadata']}\n")
 
     cfg.test_samples = cfg.test_samples or []
-    sample_shape = pipeline.get_sample_shape(length=cfg.unet_params.length)
+    sample_shape = pipeline.get_mel_spec_shape(raw_length=cfg.unet_params.length)
     latent_shape = pipeline.get_latent_shape(sample_shape)
     print(f"Sample shape: {sample_shape}  Latent shape: {latent_shape}")
     print("UNet Params: ", dict_str(cfg.unet_params.__dict__))

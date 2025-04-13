@@ -148,6 +148,7 @@ def dae_test() -> None:
             
             output_raw_sample = format.mdct_to_raw(mdct_output_sample.float())
         else:
+            x_ref = None
             output_raw_sample = None
 
         print(f"input   mean/std: {input_mel_spec.mean().item():.4} {input_mel_spec.std().item():.4}")
@@ -166,7 +167,8 @@ def dae_test() -> None:
             print(f"Latents channel order: {dae.config.latents_img_channel_order}")
             save_img(dae.latents_to_img(latents), os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_latents.png')}"))
         
-        save_img(format.mel_spec_to_img(output_mel_spec), os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_output_mel_spec.png')}"))
+        if x_ref is not None:
+            save_img(format.mdct_psd_to_img(x_ref), os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_output_x_ref.png')}"))
         save_img(format.mel_spec_to_img(input_mel_spec), os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_input_mel_spec.png')}"))
 
         if output_raw_sample is not None:
