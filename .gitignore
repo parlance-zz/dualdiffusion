@@ -7,7 +7,6 @@ debug/*/
 debug/*
 output/
 backup/
-old/
 
 *.raw
 *.mp3
