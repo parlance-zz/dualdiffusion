@@ -96,10 +96,22 @@ def torch_dtype(dtype: Union[str, torch.dtype]) -> torch.dtype:
     if isinstance(dtype, torch.dtype):
         return dtype
     elif isinstance(dtype, str):
-        return getattr(torch, dtype)
+        _dtype = getattr(torch, dtype)
+        assert isinstance(_dtype, torch.dtype), f"Invalid dtype: {dtype}"
+        return _dtype
     else:
         raise ValueError(f"Unsupported dtype type: {dtype} ({type(dtype)})")
 
+def torch_memory_format(memory_format: Union[str, torch.memory_format]) -> torch.memory_format:
+    if isinstance(memory_format, torch.memory_format):
+        return memory_format
+    elif isinstance(memory_format, str):
+        memory_format = getattr(torch, memory_format)
+        assert isinstance(memory_format, torch.memory_format), f"Invalid memory format: {memory_format}"
+        return memory_format
+    else:
+        raise ValueError(f"Unsupported memory_format type: {memory_format} ({type(memory_format)})")
+    
 def init_logging(name: Optional[str] = None, group_name: Optional[str] = None,
         format: Union[bool, str] = False, verbose: bool = False, log_to_file: bool = True) -> logging.Logger:
 
