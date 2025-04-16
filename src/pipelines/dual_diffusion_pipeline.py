@@ -607,7 +607,7 @@ class DualDiffusionPipeline(torch.nn.Module):
 
         if x_ref is None:
             if sample_shape is None:
-                if getattr(self, "vae", None) is not None or getattr(self, "dae", None) is not None:
+                if getattr(self, "dae", None) is not None:
                     sample_shape = self.get_mel_spec_shape(bsz=params.batch_size, raw_length=params.length)
                     sample_shape = self.get_latent_shape(sample_shape)
                 else:

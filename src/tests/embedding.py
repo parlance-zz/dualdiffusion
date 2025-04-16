@@ -50,8 +50,8 @@ def embedding_test():
     test_samples = [sample["file_name"] for sample in random.sample(train_samples, cfg.add_random_test_samples)]
     
     for sample in test_samples:
-        audio = load_audio(os.path.join(config.DATASET_PATH, sample)).to(device=cfg.device)
-        audio_embeddings = clap.encode_audio(audio, sample_rate=32000)
+        audio, sample_rate = load_audio(os.path.join(config.DATASET_PATH, sample), return_sample_rate=True)
+        audio_embeddings = clap.encode_audio(audio.to(device=cfg.device), sample_rate=sample_rate)
         print(f"encoding audio: '{sample}'\n{tensor_info_str(audio_embeddings)}\n")
 
     if len(cfg.test_text) > 0:
