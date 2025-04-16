@@ -335,7 +335,7 @@ class DualDiffusionTrainer:
 
         self.sample_shape: tuple = self.pipeline.get_mel_spec_shape(bsz=self.config.device_batch_size)
         self.validation_sample_shape: tuple = self.pipeline.get_mel_spec_shape(bsz=self.config.validation_device_batch_size)
-        if hasattr(self.pipeline, "vae") or hasattr(self.pipeline, "dae"):
+        if hasattr(self.pipeline, "dae"):
             self.latent_shape: tuple = self.pipeline.get_latent_shape(self.sample_shape)
             self.validation_latent_shape: tuple = self.pipeline.get_latent_shape(self.validation_sample_shape)
         else:
