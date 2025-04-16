@@ -221,17 +221,19 @@ class MS_MDCT_DualFormat(DualDiffusionFormat):
             phase_rotation = torch.exp(2j * torch.pi * torch.rand(_mclt.shape[0], device=_mclt.device)) 
             _mclt *= phase_rotation.view(-1, 1, 1, 1)
 
-        return _mclt.real.contiguous() / self.mdct_mel_density * self.config.raw_to_mdct_scale
+        return _mclt.real.contiguous(memory_format=self.memory_format) / self.mdct_mel_density * self.config.raw_to_mdct_scale
     
     @torch.no_grad()
     def raw_to_mdct_psd(self, raw_samples: torch.Tensor) -> torch.Tensor:
         _mclt = mclt(raw_samples.float(), self.config.mdct_window_len, "hann", 0.5).permute(0, 1, 3, 2)
-        return _mclt.abs() / self.mdct_mel_density * self.config.raw_to_mdct_scale / 2**0.5
+        return _mclt.abs().contiguous(memory_format=self.memory_format) / self.mdct_mel_density * self.config.raw_to_mdct_scale / 2**0.5
     
     @torch.no_grad()
     def mdct_to_raw(self, mdct: torch.Tensor) -> torch.Tensor:
-        raw_samples = imclt((mdct * self.mdct_mel_density / self.config.raw_to_mdct_scale).permute(0, 1, 3, 2).contiguous(),
-                            window_fn="hann", window_degree=0.5).real.contiguous()
+
+        mdct = mdct * self.mdct_mel_density / self.config.raw_to_mdct_scale
+        raw_samples = imclt(mdct.permute(0, 1, 3, 2).contiguous(memory_format=self.memory_format),
+            window_fn="hann", window_degree=0.5).real.contiguous(memory_format=self.memory_format)
         
         return raw_samples * self.config.mdct_to_raw_scale
     
