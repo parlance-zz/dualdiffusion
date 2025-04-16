@@ -21,7 +21,7 @@
 # SOFTWARE.
 
 from dataclasses import dataclass
-from typing import Literal, Optional, Union
+from typing import Literal, Optional
 
 import torch
 import numpy as np
@@ -29,63 +29,67 @@ import numpy as np
 from training.sigma_sampler import SigmaSamplerConfig, SigmaSampler
 from training.trainer import DualDiffusionTrainer
 from training.module_trainers.module_trainer import ModuleTrainerConfig, ModuleTrainer
-from modules.unets.unet import DualDiffusionUNet
-from modules.mp_tools import mp_sum
-from utils.dual_diffusion_utils import dict_str, normalize
+from modules.daes.dae_edm2_h1 import DAE_H1
+from modules.unets.unet_edm2_ddec_mdct_b3 import DDec_MDCT_UNet_B3
+from modules.formats.ms_mdct_dual import MS_MDCT_DualFormat
+
+
+from modules.mp_tools import normalize
+from utils.dual_diffusion_utils import dict_str
 
 
 @dataclass
-class UNetTrainerConfig(ModuleTrainerConfig):
+class DiffusionDecoder_MDCT_Trainer_B3_Config(ModuleTrainerConfig):
 
     sigma_distribution: Literal["ln_normal", "ln_sech", "ln_sech^2",
-                                "ln_linear", "ln_pdf"] = "ln_sech"
-    sigma_override_max: Optional[float] = None
-    sigma_override_min: Optional[float] = None
-    sigma_dist_scale: float = 1.0
-    sigma_dist_offset: float = 0.3
+                                "ln_linear", "ln_pdf"] = "ln_pdf"
+    sigma_override_max: Optional[float] = 16
+    sigma_override_min: Optional[float] = 4e-5
+    sigma_dist_scale: float = 3.0
+    sigma_dist_offset: float = 0
     use_stratified_sigma_sampling: bool = True
     sigma_pdf_resolution: Optional[int] = 127
     sigma_pdf_warmup_steps: Optional[int] = 5000
-    sigma_pdf_offset: float = -0.8
-    sigma_pdf_min: float = 0.2
 
     validation_sigma_distribution: Literal["ln_normal", "ln_sech", "ln_sech^2",
                                             "ln_linear", "ln_pdf"] = "ln_sech"
     validation_sigma_override_max: Optional[float] = None
     validation_sigma_override_min: Optional[float] = None
     validation_sigma_dist_scale: float = 1.0
-    validation_sigma_dist_offset: float = 0.3
+    validation_sigma_dist_offset: float = 0
 
     num_loss_buckets: int = 12
-    loss_buckets_sigma_min: float = 0.01
-    loss_buckets_sigma_max: float = 200
+    loss_buckets_sigma_min: float = 0.0005
+    loss_buckets_sigma_max: float = 100
 
-    input_perturbation: float = 0
-    conditioning_perturbation: float = 0
+    latents_perturbation: float = 0
     conditioning_dropout: float = 0.1
 
-class UNetTrainer(ModuleTrainer):
+    kl_loss_weight: float = 2e-3
+    kl_warmup_steps: int  = 5000
+
+class DiffusionDecoder_MDCT_Trainer_B3(ModuleTrainer):
     
     @torch.no_grad()
-    def __init__(self, config: UNetTrainerConfig, trainer: DualDiffusionTrainer) -> None:
+    def __init__(self, config: DiffusionDecoder_MDCT_Trainer_B3_Config, trainer: DualDiffusionTrainer) -> None:
 
         self.config = config
         self.trainer = trainer
         self.logger = trainer.logger
-        self.module: DualDiffusionUNet = trainer.get_train_module("unet")
-
-        if trainer.config.enable_model_compilation:
-            self.module.compile(**trainer.config.compile_params)
-
-        self.unet_trainer_init()
-
-    @torch.no_grad()
-    def unet_trainer_init(self) -> None:
+        self.ddec: DDec_MDCT_UNet_B3 = trainer.modules[trainer.config.train_modules.index("ddec")]
+        self.dae: DAE_H1 = trainer.modules[trainer.config.train_modules.index("dae")]
 
         self.is_validation_batch = False
         self.device_generator = None
         self.cpu_generator = None
-    
+
+        self.format: MS_MDCT_DualFormat = trainer.pipeline.format.to(self.trainer.accelerator.device)
+        self.loss_weight = self.format.mdct_mel_density / torch.linalg.vector_norm(self.format.mdct_mel_density)
+
+        if trainer.config.enable_model_compilation:
+            self.ddec.compile(**trainer.config.compile_params)
+            self.dae.compile(**trainer.config.compile_params)
+
         if self.config.num_loss_buckets > 0:
             self.logger.info(f"Using {self.config.num_loss_buckets} loss buckets")
             self.unet_loss_buckets = torch.zeros(
@@ -95,28 +99,22 @@ class UNetTrainer(ModuleTrainer):
         else:
             self.logger.info("UNet loss buckets are disabled")
 
-        # log unet trainer specific config / settings
-        if self.config.input_perturbation > 0:
-            self.logger.info(f"Using input perturbation: {self.config.input_perturbation}")
-        else: self.logger.info("Input perturbation is disabled")
-        if self.config.conditioning_perturbation > 0:
-            self.config.conditioning_perturbation = min(self.config.conditioning_perturbation, 1)
-            self.logger.info(f"Using conditioning perturbation: {self.config.conditioning_perturbation}")
-        else: self.logger.info("Conditioning perturbation is disabled")
-        self.logger.info(f"Dropout: {self.module.config.dropout} Conditioning dropout: {self.config.conditioning_dropout}")
+        if self.config.latents_perturbation > 0:
+            self.logger.info(f"Using latents perturbation: {self.config.latents_perturbation}")
+        else: self.logger.info("Latents perturbation is disabled")
+
+        self.logger.info(f"Conditioning dropout: {self.config.conditioning_dropout}")
 
         # sigma schedule / distribution for train batches
         sigma_sampler_config = SigmaSamplerConfig(
-            sigma_max=self.config.sigma_override_max or self.module.config.sigma_max,
-            sigma_min=self.config.sigma_override_min or self.module.config.sigma_min,
-            sigma_data=self.module.config.sigma_data,
+            sigma_max=self.config.sigma_override_max or self.ddec.config.sigma_max,
+            sigma_min=self.config.sigma_override_min or self.ddec.config.sigma_min,
+            sigma_data=self.ddec.config.sigma_data,
             distribution=self.config.sigma_distribution,
             dist_scale=self.config.sigma_dist_scale,
             dist_offset=self.config.sigma_dist_offset,
             use_stratified_sigma_sampling=self.config.use_stratified_sigma_sampling,
             sigma_pdf_resolution=self.config.sigma_pdf_resolution,
-            sigma_pdf_offset=self.config.sigma_pdf_offset,
-            sigma_pdf_min=self.config.sigma_pdf_min
         )
         self.sigma_sampler = SigmaSampler(sigma_sampler_config)
         self.logger.info("SigmaSampler config:")
@@ -124,9 +122,9 @@ class UNetTrainer(ModuleTrainer):
 
         # separate noise schedule / sigma distribution for validation batches
         validation_sigma_sampler_config = SigmaSamplerConfig(
-            sigma_max=self.config.validation_sigma_override_max or self.module.config.sigma_max,
-            sigma_min=self.config.validation_sigma_override_min or self.module.config.sigma_min,
-            sigma_data=self.module.config.sigma_data,
+            sigma_max=self.config.validation_sigma_override_max or self.ddec.config.sigma_max,
+            sigma_min=self.config.validation_sigma_override_min or self.ddec.config.sigma_min,
+            sigma_data=self.ddec.config.sigma_data,
             distribution=self.config.validation_sigma_distribution,
             dist_scale=self.config.validation_sigma_dist_scale,
             dist_offset=self.config.validation_sigma_dist_offset,
@@ -144,9 +142,12 @@ class UNetTrainer(ModuleTrainer):
             bucket_sigma[0] = 0; bucket_sigma[-1] = float("inf")
             self.bucket_names = [f"loss_σ_buckets/{bucket_sigma[i]:.4f} - {bucket_sigma[i+1]:.4f}"
                                  for i in range(self.config.num_loss_buckets)]
-            
+
+        self.logger.info("Training DAE/DDEC modules:")
+        self.logger.info(f"KL loss weight: {self.config.kl_loss_weight} KL warmup steps: {self.config.kl_warmup_steps}")
+
     @torch.no_grad()
-    def init_batch(self, validation: bool = False) -> Optional[dict[str, Union[torch.Tensor, float]]]:
+    def init_batch(self, validation: bool = False) -> None:
         
         if validation == True: # use the same random values for every validation batch
             self.is_validation_batch = True
@@ -170,60 +171,68 @@ class UNetTrainer(ModuleTrainer):
 
         # if using dynamic sigma sampling with ln_pdf, update the pdf using the learned per-sigma error estimate
         if self.config.sigma_distribution == "ln_pdf" and validation == False:
+            ln_sigma = torch.linspace(self.sigma_sampler.config.ln_sigma_min,
+                                      self.sigma_sampler.config.ln_sigma_max,
+                                      self.config.sigma_pdf_resolution,
+                                      device=self.trainer.accelerator.device)
+            ln_sigma_error = self.ddec.logvar_linear(
+                self.ddec.logvar_fourier(ln_sigma/4)).float().flatten().detach()
             pdf_warmup_factor = min(1, self.trainer.global_step / (self.config.sigma_pdf_warmup_steps or 1))
-            self.sigma_sampler.update_pdf_from_logvar(self.module, pdf_warmup_factor)
+            sigma_distribution_pdf = (-pdf_warmup_factor * self.config.sigma_dist_scale * ln_sigma_error).exp()
+            sigma_distribution_pdf = (sigma_distribution_pdf - 0.8).clip(min=0.2)
+            self.sigma_sampler.update_pdf(sigma_distribution_pdf)
         
         # sample whole-batch sigma and sync across all ranks / processes
         self.global_sigma = sigma_sampler.sample(total_batch_size, device=self.trainer.accelerator.device)
         self.global_sigma = self.trainer.accelerator.gather(self.global_sigma.unsqueeze(0))[0]
 
-        return None
-
-    def train_batch(self, batch: dict) -> dict[str, Union[torch.Tensor, float]]:
-
-        samples: torch.Tensor = batch["latents"].float().clone()
-        audio_embeddings = normalize(batch["audio_embeddings"]).float().clone()
+    def train_batch(self, batch: dict) -> dict[str, torch.Tensor]:
 
         if self.is_validation_batch == False:
             device_batch_size = self.trainer.config.device_batch_size
         else:
             device_batch_size = self.trainer.config.validation_device_batch_size
-        
-        # normal conditioning dropout
-        conditioning_mask = (torch.rand(device_batch_size, generator=self.device_generator,
-            device=self.trainer.accelerator.device) > self.config.conditioning_dropout).float()
-        unet_embeddings = self.module.get_embeddings(audio_embeddings, conditioning_mask)
 
-        if self.config.conditioning_perturbation > 0 and self.is_validation_batch == False: # adds noise to the conditioning embedding while preserving variance
-            conditioning_perturbation = torch.randn(unet_embeddings.shape, device=unet_embeddings.device, generator=self.device_generator)
-            unet_embeddings = mp_sum(unet_embeddings, conditioning_perturbation, self.config.conditioning_perturbation)
-        
-        # add extra noise to the sample while preserving variance if input_perturbation is enabled
-        if self.config.input_perturbation > 0 and self.is_validation_batch == False:
-            input_perturbation = torch.randn(samples.shape, device=samples.device, generator=self.device_generator)
-            samples = mp_sum(samples, input_perturbation, self.config.input_perturbation)
+        if "audio_embeddings" in batch:
+            sample_audio_embeddings = normalize(batch["audio_embeddings"])
+
+            conditioning_mask = (torch.rand(device_batch_size, generator=self.device_generator,
+                device=self.trainer.accelerator.device) > self.config.conditioning_dropout).float()
+            unet_class_embeddings = self.ddec.get_embeddings(sample_audio_embeddings, conditioning_mask)
+
+            dae_class_embeddings = self.dae.get_embeddings(sample_audio_embeddings.to(dtype=self.dae.dtype))
+        else:
+            unet_class_embeddings = None
+            dae_class_embeddings = None
+
+        # prepare model inputs
+        raw_samples: torch.Tensor = batch["audio"].clone().requires_grad_(False).detach()
+        mdct_samples: torch.Tensor = self.format.raw_to_mdct(raw_samples, random_phase_augmentation=True).requires_grad_(False).detach()
+
+        latents, ref_samples, pre_norm_latents = self.dae(mdct_samples,
+            dae_class_embeddings, add_latents_noise=self.config.latents_perturbation)
 
         # get the noise level for this sub-batch from the pre-calculated whole-batch sigma (required for stratified sampling)
         local_sigma = self.global_sigma[self.trainer.accelerator.local_process_index::self.trainer.accelerator.num_processes]
         batch_sigma = local_sigma[self.trainer.accum_step * device_batch_size:(self.trainer.accum_step+1) * device_batch_size]
 
-        # prepare model inputs
-        noise = torch.randn(samples.shape, device=samples.device, generator=self.device_generator)
-        samples = (samples * self.module.config.sigma_data).detach()
+        noise = torch.randn(mdct_samples.shape, device=mdct_samples.device, generator=self.device_generator)
         noise = (noise * batch_sigma.view(-1, 1, 1, 1)).detach()
 
-        denoised = self.module(samples + noise, batch_sigma, self.trainer.pipeline.format, unet_embeddings, ref_samples)
-        batch_loss_weight = (batch_sigma ** 2 + self.module.config.sigma_data ** 2) / (batch_sigma * self.module.config.sigma_data) ** 2
-        batch_weighted_loss = torch.nn.functional.mse_loss(denoised, samples, reduction="none").mean(dim=(1,2,3)) * batch_loss_weight
-
+        denoised: torch.Tensor = self.ddec(mdct_samples.detach() + noise.detach(), batch_sigma, self.format, unet_class_embeddings, ref_samples)
+        batch_loss_weight = (batch_sigma ** 2 + self.ddec.config.sigma_data ** 2) / (batch_sigma * self.ddec.config.sigma_data) ** 2
+        batch_weighted_loss = torch.nn.functional.mse_loss(denoised, mdct_samples, reduction="none") * batch_loss_weight.view(-1, 1, 1, 1)
+        
         if self.is_validation_batch == True:
             batch_loss = batch_weighted_loss
         else: # for train batches this takes the loss as the gaussian NLL with sigma-specific learned variance
-            error_logvar = self.module.get_sigma_loss_logvar(sigma=batch_sigma)
+            error_logvar = self.ddec.get_sigma_loss_logvar(sigma=batch_sigma).view(-1, 1, 1, 1)
             batch_loss = batch_weighted_loss / error_logvar.exp() + error_logvar
-        
+            batch_loss = (batch_loss * self.loss_weight).mean(dim=(1,2,3))
+
         # log loss bucketed by noise level range
         if self.config.num_loss_buckets > 0:
+            batch_weighted_loss = batch_weighted_loss.mean(dim=(1,2,3))
             global_weighted_loss = self.trainer.accelerator.gather(batch_weighted_loss.detach()).cpu()
             global_sigma_quantiles = (batch_sigma.detach().log().cpu() - np.log(self.config.loss_buckets_sigma_min)) / (
                 np.log(self.config.loss_buckets_sigma_max) - np.log(self.config.loss_buckets_sigma_min))
@@ -231,14 +240,29 @@ class UNetTrainer(ModuleTrainer):
             self.unet_loss_buckets.index_add_(0, target_buckets, global_weighted_loss)
             self.unet_loss_bucket_counts.index_add_(0, target_buckets, torch.ones_like(global_weighted_loss))
 
-        return {
-            "loss": batch_loss,
-            "latents/mean": samples.mean(),
-            "latents/std": samples.std()
-        }
+        pre_norm_latents_var: torch.Tensor = pre_norm_latents.var(dim=(1,2,3))
+        kl_loss = pre_norm_latents.mean(dim=(1,2,3)).square() + pre_norm_latents_var - 1 - pre_norm_latents_var.log()
+
+        kl_loss_weight = self.config.kl_loss_weight
+        if self.trainer.global_step < self.config.kl_warmup_steps:
+            kl_loss_weight *= self.trainer.global_step / self.config.kl_warmup_steps
+
+        return {"loss": kl_loss * kl_loss_weight + batch_loss,
+                "loss/kl": kl_loss,
+                "loss_weight/kl": kl_loss_weight,
+                "io_stats/mdct_std": mdct_samples.std(dim=(1,2,3)),
+                "io_stats/mdct_mean": mdct_samples.mean(dim=(1,2,3)),
+                "io_stats/x_ref_std": ref_samples.std(dim=(1,2,3)),
+                "io_stats/x_ref_mean": ref_samples.mean(dim=(1,2,3)),
+                "io_stats/denoised_std": denoised.std(dim=(1,2,3)),
+                "io_stats/denoised_mean": denoised.mean(dim=(1,2,3)),
+                "io_stats/latents_std": latents.std(dim=(1,2,3)),
+                "io_stats/latents_mean": latents.mean(dim=(1,2,3)),
+                "io_stats/latents_pre_norm_std": pre_norm_latents_var.sqrt()
+            }
 
     @torch.no_grad()
-    def finish_batch(self) -> Optional[dict[str, Union[torch.Tensor, float]]]:
+    def finish_batch(self) -> dict[str, torch.Tensor]:
         logs = {}
 
         # added sigma-bucketed loss to logs

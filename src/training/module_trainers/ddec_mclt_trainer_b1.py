@@ -21,14 +21,14 @@
 # SOFTWARE.
 
 from dataclasses import dataclass
-from typing import Literal, Optional
+from typing import Literal, Optional, Union
 
 import torch
 import numpy as np
 
 from training.sigma_sampler import SigmaSamplerConfig, SigmaSampler
 from training.trainer import DualDiffusionTrainer
-from .module_trainer import ModuleTrainerConfig, ModuleTrainer
+from training.module_trainers.module_trainer import ModuleTrainerConfig, ModuleTrainer
 from modules.unets.unet_edm2_ddec_mclt_b1 import DDec_MCLT_UNet_B1
 from modules.formats.spectrogram import SpectrogramFormat
 from modules.formats.mclt import DualMCLTFormatConfig, DualMCLTFormat
@@ -156,7 +156,7 @@ class DiffusionDecoder_MCLT_Trainer_B1(ModuleTrainer):
                                  for i in range(self.config.num_loss_buckets)]
 
     @torch.no_grad()
-    def init_batch(self, validation: bool = False) -> None:
+    def init_batch(self, validation: bool = False) -> Optional[dict[str, Union[torch.Tensor, float]]]:
         
         if validation == True: # use the same random values for every validation batch
             self.is_validation_batch = True
@@ -195,7 +195,7 @@ class DiffusionDecoder_MCLT_Trainer_B1(ModuleTrainer):
         self.global_sigma = sigma_sampler.sample(total_batch_size, device=self.trainer.accelerator.device)
         self.global_sigma = self.trainer.accelerator.gather(self.global_sigma.unsqueeze(0))[0]
 
-    def train_batch(self, batch: dict) -> dict[str, torch.Tensor]:
+    def train_batch(self, batch: dict) -> dict[str, Union[torch.Tensor, float]]:
 
         if self.is_validation_batch == False:
             device_batch_size = self.trainer.config.device_batch_size
@@ -273,7 +273,7 @@ class DiffusionDecoder_MCLT_Trainer_B1(ModuleTrainer):
                 "std/output_samples": denoised.std(dim=(1,2,3))}
 
     @torch.no_grad()
-    def finish_batch(self) -> dict[str, torch.Tensor]:
+    def finish_batch(self) -> Optional[dict[str, Union[torch.Tensor, float]]]:
         logs = {}
 
         # added sigma-bucketed loss to logs

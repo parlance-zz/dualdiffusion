@@ -163,7 +163,6 @@ class DualDiffusionTrainerConfig:
     enable_bf16_reduction_in_sdp: bool  = False
     enable_anomaly_detection: bool      = False
     enable_model_compilation: bool      = True
-    enable_channels_last: bool          = True
     compile_params: Optional[dict]      = None
 
     @staticmethod
@@ -347,17 +346,19 @@ class DualDiffusionTrainer:
         self.logger.info(f"Module trainer class: {self.config.module_trainer_class.__name__}")
         self.logger.info(f"Model metadata: {dict_str(self.pipeline.model_metadata)}")
 
-        if self.config.enable_channels_last == True:
-            for module in self.modules:
-                module.to(memory_format=torch.channels_last)
-
         self.modules = self.accelerator.prepare(*self.modules)
         if not isinstance(self.modules, (tuple, list)): self.modules = [self.modules]
 
         for module in self.modules:
             if hasattr(module, "normalize_weights"):
                 module.normalize_weights()
+    
+    def get_train_module(self, module_name: str) -> DualDiffusionModule:
+        if module_name not in self.config.train_modules:
+            raise ValueError(f"Module {module_name} not found in config.train_modules")
         
+        return self.modules[self.config.train_modules.index(module_name)]
+
     def init_ema_manager(self) -> None:
         
         self.config.emas = self.config.emas or {}
@@ -813,7 +814,9 @@ class DualDiffusionTrainer:
         for local_batch in (self.resume_dataloader or self.train_dataloader):
             
             train_logger.clear() # accumulates per-batch logs / statistics
-            self.module_trainer.init_batch()
+            batch_init_logs = self.module_trainer.init_batch()
+            if batch_init_logs is not None:
+                train_logger.add_logs(batch_init_logs)
             
             for self.accum_step in range(self.config.gradient_accumulation_steps):
 
@@ -912,8 +915,11 @@ class DualDiffusionTrainer:
                         name, beta in self.ema_managers[0].get_ema_betas().items()})
                 
                 # update logs
+                batch_finish_logs = self.module_trainer.finish_batch()
+                if batch_finish_logs is not None:
+                    train_logger.add_logs(batch_finish_logs)
+                
                 train_logger.add_logs({"learn_rate": self.lr_scheduler.get_last_lr()[0]})
-                train_logger.add_logs(self.module_trainer.finish_batch())
                 logs = train_logger.get_logs()
                 self.accelerator.log(logs, step=self.global_step)
 

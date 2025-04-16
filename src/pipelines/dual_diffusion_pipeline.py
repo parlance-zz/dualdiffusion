@@ -37,7 +37,7 @@ from tqdm.auto import tqdm
 from modules.module import DualDiffusionModule
 from modules.unets.unet import DualDiffusionUNet
 from utils.dual_diffusion_utils import (
-    normalize, load_safetensors, torch_dtype, load_audio, get_cos_angle
+    normalize, load_safetensors, torch_dtype, torch_memory_format, load_audio, get_cos_angle
 )
 from sampling.schedule import SamplingSchedule
 from training.ema import find_emas_in_dir
@@ -136,6 +136,7 @@ class DualDiffusionPipeline(torch.nn.Module):
 
     def to(self, device: Optional[Union[dict[str, torch.device], torch.device]] = None,
                  dtype:  Optional[Union[dict[str, torch.dtype],  torch.dtype]]  = None,
+                 memory_format: Optional[Union[dict[str, torch.memory_format], torch.memory_format]] = None,
                  **kwargs) -> "DualDiffusionPipeline":
         
         if device is not None:
@@ -153,6 +154,14 @@ class DualDiffusionPipeline(torch.nn.Module):
             else:
                 for module in self.children():
                     module.to(dtype=torch_dtype(dtype))
+
+        if memory_format is not None:
+            if isinstance(memory_format, dict):
+                for module_name, memory_format in memory_format.items():
+                    getattr(self, module_name).to(memory_format=torch_memory_format(memory_format))
+            else:
+                for module in self.children():
+                    module.to(memory_format=torch_memory_format(memory_format))
 
         if len(kwargs) > 0:
             for module in self.children():
@@ -221,6 +230,7 @@ class DualDiffusionPipeline(torch.nn.Module):
     def from_pretrained(model_path: str,
                         torch_dtype: Union[dict[str, torch.dtype], torch.dtype] = torch.float32,
                         device: Optional[Union[dict[str, torch.device], torch.device]] = None,
+                        memory_format: Optional[Union[dict[str, torch.memory_format], torch.memory_format]] = "channels_last",
                         load_checkpoints: Optional[Union[dict[str, str], bool]] = False,
                         load_emas: Optional[Union[dict[str, str], bool]] = False,
                         compile_options: Optional[Union[dict[str, dict], dict]] = None) -> "DualDiffusionPipeline":
@@ -265,7 +275,8 @@ class DualDiffusionPipeline(torch.nn.Module):
                 phema_module_path = os.path.join(model_path, f"{module_name}_ema_archive")
                 model_modules[module_name].load_ema(ema_module_path, phema_module_path)
         
-        pipeline = DualDiffusionPipeline(model_modules).to(device=device, dtype=torch_dtype)
+        pipeline = DualDiffusionPipeline(model_modules).to(
+            device=device, dtype=torch_dtype, memory_format=memory_format)
 
         if compile_options is not None:
             pipeline.compile(compile_options)
@@ -273,8 +284,9 @@ class DualDiffusionPipeline(torch.nn.Module):
         model_metadata: dict[str, any] = {
             "model_path": model_path,
             "model_module_classes": {module_name: str(module_class)
-                                     for module_name, module_class in model_module_classes.items()},
+                for module_name, module_class in model_module_classes.items()},
             "torch_dtype": torch_dtype,
+            "memory_format": memory_format,
             "load_checkpoints": load_checkpoints,
             "load_emas": load_emas,
             "compile_options": compile_options,

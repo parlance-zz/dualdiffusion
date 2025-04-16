@@ -24,6 +24,7 @@ from dataclasses import dataclass
 from typing import Literal, Optional
 
 import torch
+import torchaudio
 import numpy as np
 
 from training.sigma_sampler import SigmaSamplerConfig, SigmaSampler
@@ -32,17 +33,107 @@ from training.module_trainers.module_trainer import ModuleTrainerConfig, ModuleT
 from modules.daes.dae_edm2_g1 import DAE_G1
 from modules.unets.unet_edm2_ddec_mdct_b2 import DDec_MDCT_UNet_B2
 from modules.formats.ms_mdct_dual import MS_MDCT_DualFormat
+from modules.formats.frequency_scale import get_mel_density
+
 
 from modules.mp_tools import normalize
 from utils.dual_diffusion_utils import dict_str
 
 
 @dataclass
+class MSSLoss1DConfig:
+
+    block_widths: tuple[int] = (64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768)
+    block_overlap: int = 2
+    sample_rate: float = 32000
+    loss_scale: float = 1#3e-7
+
+class MSSLoss1D:
+
+    @staticmethod
+    def _hann_power_window(window_length: int, periodic: bool = True, *, dtype: torch.dtype = None,
+                          layout: torch.layout = torch.strided, device: torch.device = None,
+                          requires_grad: bool = False, exponent: float = 1.) -> torch.Tensor:
+        
+        return torch.hann_window(window_length, periodic=periodic, dtype=dtype,
+                layout=layout, device=device, requires_grad=requires_grad) ** exponent
+    
+    @torch.no_grad()
+    def __init__(self, config: MSSLoss1DConfig, device: torch.device) -> None:
+
+        self.config = config
+        self.device = device
+
+        self.block_specs: list[torchaudio.transforms.Spectrogram] = []
+        self.loss_weights: list[torch.Tensor]= []
+        
+        for block_width in self.config.block_widths:
+            
+            block_spec = torchaudio.transforms.Spectrogram(
+                n_fft=block_width,
+                win_length=block_width,
+                hop_length=max(block_width // self.config.block_overlap, 1),
+                window_fn=MS_MDCT_DualFormat._hann_power_window,
+                power=None, normalized="window",
+                wkwargs={
+                    "exponent": 1,
+                    "periodic": True,
+                    "requires_grad": False
+                },
+                center=True, pad=0, pad_mode="reflect", onesided=True
+            )
+            self.block_specs.append(block_spec.to(device=device))
+
+            blockfreq = torch.fft.rfftfreq(block_width) * self.config.sample_rate
+            loss_weight = get_mel_density(blockfreq).view(1, 1,-1, 1).to(device=device)
+            self.loss_weights.append((loss_weight / loss_weight.amax() / torch.pi).requires_grad_(False).detach())
+
+    @torch.no_grad()
+    def _flat_top_window(self, x: torch.Tensor) -> torch.Tensor:
+        return (0.21557895 - 0.41663158 * torch.cos(x) + 0.277263158 * torch.cos(2*x)
+                - 0.083578947 * torch.cos(3*x) + 0.006947368 * torch.cos(4*x))
+
+    @torch.no_grad()
+    def get_flat_top_window_2d(self, block_width: int) -> torch.Tensor:
+        wx = (torch.arange(block_width) + 0.5) / block_width * 2 * torch.pi
+        return self._flat_top_window(wx.view(1, 1,-1, 1)) * self._flat_top_window(wx.view(1, 1, 1,-1))
+    
+    def mss_loss(self, sample: torch.Tensor, target: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+
+        loss = torch.zeros(target.shape[0], device=self.device)
+        phase_loss = torch.zeros_like(loss)
+
+        for spec, loss_weight in zip(self.block_specs, self.loss_weights):
+
+            with torch.no_grad():
+                target_fft: torch.Tensor = spec(target)
+                target_fft_abs = target_fft.abs().requires_grad_(False).detach()
+                target_fft_angle = target_fft.angle().requires_grad_(False).detach()
+                phase_loss_weight = ((target_fft_abs - target_fft_abs.amin(dim=2, keepdim=True)) * loss_weight).requires_grad_(False)
+
+            sample_fft: torch.Tensor = spec(sample)
+            sample_fft_abs = sample_fft.abs()
+            sample_fft_angle = sample_fft.angle()
+            
+            l1_loss = torch.nn.functional.l1_loss(sample_fft_abs.float(), target_fft_abs.float(), reduction="none")
+            loss = loss + l1_loss.mean(dim=(1,2,3))
+  
+            phase_error = (sample_fft_angle - target_fft_angle).abs()
+            phase_error_wrap_mask = (phase_error > torch.pi).detach().requires_grad_(False)
+            phase_error[phase_error_wrap_mask] = 2*torch.pi - phase_error[phase_error_wrap_mask]
+            phase_loss = phase_loss + (phase_error * phase_loss_weight).mean(dim=(1,2,3))
+        
+        return loss * self.config.loss_scale, phase_loss * self.config.loss_scale
+
+    def compile(self, **kwargs) -> None:
+        self.mss_loss = torch.compile(self.mss_loss, **kwargs)
+
+@dataclass
 class MSSLoss2DConfig:
 
-    block_widths: tuple[int] = (8, 16, 32, 64)
+    block_widths: tuple[int] = (8, 16, 32, 64, 128, 256)
     block_overlap: int = 8
-    loss_scale: float = 3e-7
+    loss_scale: float = 0.00636
 
 class MSSLoss2D:
 
@@ -66,7 +157,7 @@ class MSSLoss2D:
             blockfreq_y = torch.fft.fftfreq(block_width, 1/block_width, device=device)
             blockfreq_x = torch.arange(block_width//2 + 1, device=device)
             wavelength = 1 / ((blockfreq_y.square().view(-1, 1) + blockfreq_x.square().view(1, -1)).sqrt() + 1)
-            loss_weight = (1 / wavelength * wavelength.amin()) * block_width**2
+            loss_weight = (1 / wavelength * wavelength.amin()) * block_width#**2
             self.loss_weights.append(loss_weight.requires_grad_(False).detach())
 
     @torch.no_grad()
@@ -83,14 +174,13 @@ class MSSLoss2D:
                step: int, window: torch.Tensor) -> torch.Tensor:
         
         padding = block_width // 2
-        x = torch.nn.functional.pad(x, (padding, padding, padding, padding), mode="reflect")
+        x = torch.nn.functional.pad(x, (0, 0, padding, padding), mode="reflect")
         x = x.unfold(2, block_width, step).unfold(3, block_width, step)
 
         x = torch.fft.rfft2(x * window, norm="ortho")
 
-        #if x.shape[1] == 2: # mid-side t-form
-            #x = torch.stack((x[:, 0] + x[:, 1], x[:, 0] - x[:, 1]), dim=1)
-            #x = torch.cat((x, (x[:, 0:1] + x[:, 1:2])*0.5**0.5, (x[:, 0:1] - x[:, 1:2])*0.5**0.5), dim=1)
+        if x.shape[1] == 2: # mid-side t-form
+            x = torch.cat((x, (x[:, 0:1] + x[:, 1:2])*0.5**0.5, (x[:, 0:1] - x[:, 1:2])*0.5**0.5), dim=1)
 
         return x
     
@@ -143,13 +233,15 @@ class DiffusionDecoder_MDCT_Trainer_B2_Config(ModuleTrainerConfig):
     loss_buckets_sigma_min: float = 0.0005
     loss_buckets_sigma_max: float = 100
 
-    latents_perturbation: float = 0.1
+    latents_perturbation: float = 0
     conditioning_dropout: float = 0.1
 
     kl_loss_weight: float = 2e-3
     kl_warmup_steps: int  = 5000
-    use_random_crop: bool = True
-    mel_spec_loss_weight: float = 0.01
+    use_random_crop: bool = False
+    mel_spec_loss_weight: float = 0
+    mss_loss_weight: float = 1
+    mse_loss_weight: float = 0
 
 class DiffusionDecoder_MDCT_Trainer_B2(ModuleTrainer):
     
@@ -167,14 +259,16 @@ class DiffusionDecoder_MDCT_Trainer_B2(ModuleTrainer):
         self.cpu_generator = None
 
         self.format: MS_MDCT_DualFormat = trainer.pipeline.format.to(self.trainer.accelerator.device)
-        #self.mss_loss = MSSLoss2D(MSSLoss2DConfig(), device=trainer.accelerator.device)
+        self.mss_loss = MSSLoss2D(MSSLoss2DConfig(), device=trainer.accelerator.device)
+        #self.mss_loss = MSSLoss1D(MSSLoss1DConfig(), device=trainer.accelerator.device)
 
         if trainer.config.enable_model_compilation:
             self.ddec.compile(**trainer.config.compile_params)
             self.dae.compile(**trainer.config.compile_params)
-            #self.mss_loss.compile(**trainer.config.compile_params)
+            self.mss_loss.compile(**trainer.config.compile_params)
 
-            self.random_crop = torch.compile(self.random_crop, **trainer.config.compile_params)
+            if config.use_random_crop == True:
+                self.random_crop = torch.compile(self.random_crop, **trainer.config.compile_params)
 
         if self.config.num_loss_buckets > 0:
             self.logger.info(f"Using {self.config.num_loss_buckets} loss buckets")
@@ -361,16 +455,19 @@ class DiffusionDecoder_MDCT_Trainer_B2(ModuleTrainer):
 
         denoised: torch.Tensor = self.ddec(mdct_samples.detach() + noise.detach(), batch_sigma, self.format, unet_class_embeddings, ref_samples)
         batch_loss_weight = (batch_sigma ** 2 + self.ddec.config.sigma_data ** 2) / (batch_sigma * self.ddec.config.sigma_data) ** 2
-        batch_weighted_loss = torch.nn.functional.mse_loss(denoised, mdct_samples, reduction="none").mean(dim=(1,2,3)) * batch_loss_weight
+        mse_loss = torch.nn.functional.mse_loss(denoised, mdct_samples, reduction="none").mean(dim=(1,2,3)) * batch_loss_weight
+        mss_loss = self.mss_loss.mss_loss(denoised, mdct_samples) * batch_loss_weight**0.5
+        batch_weighted_loss = mse_loss * self.config.mse_loss_weight + mss_loss * self.config.mss_loss_weight
 
-        #mss_weighted_loss = self.mss_loss.mss_loss(denoised, mdct_samples) * batch_loss_weight
+        #mss_loss_abs, mss_loss_phase = self.mss_loss.mss_loss(self.format.mdct_to_raw(denoised), self.format.mdct_to_raw(mdct_samples).requires_grad_(False).detach())
+        #mss_loss_abs = mss_loss_abs * batch_loss_weight
+        #mss_loss_phase = mss_loss_phase * batch_loss_weight
         
         if self.is_validation_batch == True:
             batch_loss = batch_weighted_loss
         else: # for train batches this takes the loss as the gaussian NLL with sigma-specific learned variance
             error_logvar = self.ddec.get_sigma_loss_logvar(sigma=batch_sigma)
             batch_loss = batch_weighted_loss / error_logvar.exp() + error_logvar
-            #batch_loss = batch_loss * self.config.mse_loss_weight + mss_weighted_loss * self.config.mss_loss_weight
 
         # log loss bucketed by noise level range
         if self.config.num_loss_buckets > 0:
@@ -391,8 +488,11 @@ class DiffusionDecoder_MDCT_Trainer_B2(ModuleTrainer):
         return {"loss": kl_loss * kl_loss_weight + batch_loss + mel_spec_loss * self.config.mel_spec_loss_weight,
                 "loss/kl": kl_loss,
                 "loss/mel_spec": mel_spec_loss,
+                "loss/mss": mss_loss,
                 "loss_weight/kl": kl_loss_weight,
                 "loss_weight/mel_spec": self.config.mel_spec_loss_weight,
+                "loss_weight/mss": self.config.mss_loss_weight,
+                "loss_weight/mse": self.config.mse_loss_weight,
                 "io_stats/mel_spec_std": mel_spec.std(dim=(1,2,3)),
                 "io_stats/mel_spec_mean": mel_spec.mean(dim=(1,2,3)),
                 "io_stats/mdct_std": mdct_samples.std(dim=(1,2,3)),
