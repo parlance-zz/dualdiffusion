@@ -27,6 +27,9 @@ import torch
 import numpy as np
 from scipy.special import erf
 
+from modules.unets.unet import DualDiffusionUNet
+
+
 @dataclass
 class SigmaSamplerConfig:
 
@@ -35,12 +38,14 @@ class SigmaSamplerConfig:
     sigma_data: float = 1.
     distribution: Literal["ln_normal", "ln_sech", "ln_sech^2", "ln_linear", "ln_pdf", "scale_invariant"] = "ln_sech"
     dist_scale: float  = 1.
-    dist_offset: float = 0.1
+    dist_offset: float = 0.3
     dist_pdf: Optional[torch.Tensor] = None
     use_stratified_sigma_sampling: bool = True
     use_static_sigma_sampling: bool = False
-    sigma_pdf_resolution: Optional[int] = 127
+    sigma_pdf_resolution: int = 127
     sigma_pdf_sanitization: bool = True
+    sigma_pdf_offset: float = -0.8
+    sigma_pdf_min: float = 0.2
 
     @property
     def ln_sigma_min(self) -> float:
@@ -136,7 +141,7 @@ class SigmaSampler():
             quantiles = torch.rand(n_samples)
 
         low = np.tanh(self.config.ln_sigma_min); high = np.tanh(self.config.ln_sigma_max)
-        ln_sigma = (quantiles * (high - low) + low).atanh() * self.config.dist_scale + self.config.dist_offset
+        ln_sigma: torch.Tensor = (quantiles * (high - low) + low).atanh() * self.config.dist_scale + self.config.dist_offset
         ln_sigma[ln_sigma < self.config.ln_sigma_min] += self.config.ln_sigma_max - self.config.ln_sigma_min
         ln_sigma[ln_sigma > self.config.ln_sigma_max] -= self.config.ln_sigma_max - self.config.ln_sigma_min
         return ln_sigma.exp().clip(self.config.sigma_min, self.config.sigma_max)
@@ -160,6 +165,15 @@ class SigmaSampler():
         self.dist_pdf = pdf / pdf.sum()
         self.dist_cdf[1:] = self.dist_pdf.cumsum(dim=0)
 
+    def update_pdf_from_logvar(self, unet: DualDiffusionUNet, scale: float) -> None:
+        ln_sigma = torch.linspace(self.config.ln_sigma_min, self.config.ln_sigma_max,
+            self.config.sigma_pdf_resolution, device=unet.device)
+        ln_sigma_error = unet.get_sigma_loss_logvar(ln_sigma.exp()).float().flatten().detach()
+        
+        sigma_distribution_pdf = (-scale * self.config.dist_scale * ln_sigma_error).exp()
+        sigma_distribution_pdf = (sigma_distribution_pdf + self.config.sigma_pdf_offset).clip(min=self.config.sigma_pdf_min)
+        self.update_pdf(sigma_distribution_pdf)
+        
     def _sample_pdf(self, quantiles: torch.Tensor) -> torch.Tensor:
         quantiles = quantiles.to(self.dist_cdf.device)
 
