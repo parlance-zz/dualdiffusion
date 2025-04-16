@@ -42,6 +42,7 @@ class SigmaSamplerConfig:
     dist_pdf: Optional[torch.Tensor] = None
     use_stratified_sigma_sampling: bool = True
     use_static_sigma_sampling: bool = False
+    sigma_pdf_warmup_steps: int = 5000
     sigma_pdf_resolution: int = 127
     sigma_pdf_sanitization: bool = True
     sigma_pdf_offset: float = -0.8
@@ -165,12 +166,18 @@ class SigmaSampler():
         self.dist_pdf = pdf / pdf.sum()
         self.dist_cdf[1:] = self.dist_pdf.cumsum(dim=0)
 
-    def update_pdf_from_logvar(self, unet: DualDiffusionUNet, scale: float) -> None:
+    def update_pdf_from_logvar(self, unet: DualDiffusionUNet, global_step: int) -> None:
+        
+        if self.config.sigma_pdf_warmup_steps > 0:
+            warmup_scale = min(global_step / self.config.sigma_pdf_warmup_steps, 1)
+        else:
+            warmup_scale = 1
+
         ln_sigma = torch.linspace(self.config.ln_sigma_min, self.config.ln_sigma_max,
             self.config.sigma_pdf_resolution, device=unet.device)
         ln_sigma_error = unet.get_sigma_loss_logvar(ln_sigma.exp()).float().flatten().detach()
         
-        sigma_distribution_pdf = (-scale * self.config.dist_scale * ln_sigma_error).exp()
+        sigma_distribution_pdf = (-warmup_scale * self.config.dist_scale * ln_sigma_error).exp()
         sigma_distribution_pdf = (sigma_distribution_pdf + self.config.sigma_pdf_offset).clip(min=self.config.sigma_pdf_min)
         self.update_pdf(sigma_distribution_pdf)
         
