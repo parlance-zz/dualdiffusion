@@ -26,6 +26,7 @@ import torch
 from torch import Tensor
 from tqdm.auto import tqdm
 
+
 def _get_complex_dtype(real_dtype: torch.dtype):
     if real_dtype == torch.double:
         return torch.cdouble
