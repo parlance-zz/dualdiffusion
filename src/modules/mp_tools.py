@@ -33,7 +33,6 @@
 from typing import Optional, Union, Literal
 
 import torch
-import numpy as np
 
 from utils.dual_diffusion_utils import TF32_Disabled
 
@@ -102,7 +101,6 @@ def wavelet_recompose2d(wavelets: list[torch.Tensor], filtering: str = "nearest"
     y = x.pop()
 
     while len(x) > 0:
-        #y = resample_2d(y, "up") * (2**(-(len(x) - 1))) + x.pop()
         y = resample_2d(y, "up", filtering=filtering) + x.pop()
     
     return y
