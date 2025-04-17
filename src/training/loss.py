@@ -21,277 +21,182 @@
 # SOFTWARE.
 
 from dataclasses import dataclass
-from typing import Optional
 
 import torch
-import numpy as np
+import torchaudio
 
 from modules.formats.frequency_scale import get_mel_density
-from modules.formats.format import DualDiffusionFormatConfig
-from utils.mclt import stft
+from modules.formats.ms_mdct_dual import MS_MDCT_DualFormat
 
 
-"""
 @dataclass
-class MultiscaleSpectralLoss1DConfig:
-    block_widths: tuple[int] = (
-        32,
-        64,
-        128,
-        256,
-        512,
-        1024,
-        2048,
-        4096,
-        8192,
-        16384,
-        32768,
-        65536,
-        131072
-    )
-    block_overlap: int = 8
-    window_fn: str = "hann"
-    low_cutoff: int = 2
-    stereo_separation_weight: float = 0.5
-    use_mixed_mss: bool = False
+class MSSLoss1DConfig:
 
-class MultiscaleSpectralLoss1D:
+    block_widths: tuple[int] = (64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768)
+    block_overlap: int = 2
+    sample_rate: float = 32000
+    loss_scale: float = 1
 
-    def __init__(self, config: MultiscaleSpectralLoss1DConfig,
-                 format_config: DualDiffusionFormatConfig) -> None:
+class MSSLoss1D:
+
+    @staticmethod
+    def _hann_power_window(window_length: int, periodic: bool = True, *, dtype: torch.dtype = None,
+                          layout: torch.layout = torch.strided, device: torch.device = None,
+                          requires_grad: bool = False, exponent: float = 1.) -> torch.Tensor:
         
+        return torch.hann_window(window_length, periodic=periodic, dtype=dtype,
+                layout=layout, device=device, requires_grad=requires_grad) ** exponent
+    
+    @torch.no_grad()
+    def __init__(self, config: MSSLoss1DConfig, device: torch.device) -> None:
+
         self.config = config
-        self.format_config = format_config
-        self.loss_scale = 1 / len(self.config.block_widths)
+        self.device = device
 
-    def __call__(self, sample_dict: dict[str, torch.Tensor],
-                 target_dict: dict[str, torch.Tensor]) -> tuple[torch.Tensor, torch.Tensor]:
-
-        target = target_dict["raw_samples"]
-        sample = sample_dict["raw_samples"]
-
-        if self.config.use_mixed_mss:
-            sample_orig_phase = sample_dict["raw_samples_orig_phase"]
-            sample_orig_abs = sample_dict["raw_samples_orig_abs"]
-
-        noise_floor = self.format_config.noise_floor
-        sample_rate = self.format_config.sample_rate
-
-        loss_real = torch.zeros(1, device=target.device)
-        loss_imag = torch.zeros(1, device=target.device)
-
-        for block_width in self.block_widths:
+        self.block_specs: list[torchaudio.transforms.Spectrogram] = []
+        self.loss_weights: list[torch.Tensor]= []
+        
+        for block_width in self.config.block_widths:
             
-            block_width = min(block_width, target.shape[-1])
-            step = max(block_width // self.block_overlap, 1)
-            offset = np.random.randint(0, min(target.shape[-1] - block_width + 1, step))        
-            
-            if np.random.rand() < self.config.stereo_separation_weight:
-                add_channelwise_fft = self.format_config.sample_raw_channels > 1
-            else:
-                add_channelwise_fft = False
-            
-            with torch.no_grad():
-                target_fft = stft(target[:, :, offset:],
-                                  block_width,
-                                  window_fn=self.window_fn,
-                                  step=step,
-                                  add_channelwise_fft=add_channelwise_fft)[:, :, :, self.low_cutoff:]
-                target_fft_abs = target_fft.abs().clip(min=noise_floor).log().requires_grad_(False)
-                target_fft_angle = target_fft.angle().requires_grad_(False)
+            block_spec = torchaudio.transforms.Spectrogram(
+                n_fft=block_width,
+                win_length=block_width,
+                hop_length=max(block_width // self.config.block_overlap, 1),
+                window_fn=MS_MDCT_DualFormat._hann_power_window,
+                power=None, normalized="window",
+                wkwargs={
+                    "exponent": 1,
+                    "periodic": True,
+                    "requires_grad": False
+                },
+                center=True, pad=0, pad_mode="reflect", onesided=True
+            )
+            self.block_specs.append(block_spec.to(device=device))
 
-                block_hz = torch.linspace(self.low_cutoff / block_width * sample_rate, sample_rate/2, target_fft.shape[-1], device=target_fft.device)
-                mel_density = get_mel_density(block_hz).view(1, 1, 1,-1)
-                target_phase_weight = ((target_fft_abs - target_fft_abs.amin(dim=3, keepdim=True)) * mel_density).requires_grad_(False)
-
-            if self.config.use_mixed_mss:
-                sample_fft1_abs = stft(sample_orig_phase[:, :, offset:],
-                                    block_width,
-                                    window_fn=self.window_fn,
-                                    step=step,
-                                    add_channelwise_fft=add_channelwise_fft)[:, :, :, self.low_cutoff:].abs().clip(min=noise_floor).log()
-
-                sample_fft2_angle = stft(sample_orig_abs[:, :, offset:],
-                                        block_width,
-                                        window_fn=self.window_fn,
-                                        step=step,
-                                        add_channelwise_fft=add_channelwise_fft)[:, :, :, self.low_cutoff:].angle()
-
-                loss_real = loss_real + (sample_fft1_abs - target_fft_abs).abs().mean()
-
-                error_imag = (sample_fft2_angle - target_fft_angle).abs()
-                error_imag_wrap_mask = (error_imag > torch.pi).detach().requires_grad_(False)
-                error_imag[error_imag_wrap_mask] = 2*torch.pi - error_imag[error_imag_wrap_mask]
-                loss_imag = loss_imag + (error_imag * target_phase_weight).mean()
-                
-            sample_fft3 = stft(sample[:, :, offset:],
-                               block_width,
-                               window_fn=self.window_fn,
-                               step=step,
-                               add_channelwise_fft=add_channelwise_fft)[:, :, :, self.low_cutoff:]
-            sample_fft3_abs = sample_fft3.abs().clip(min=noise_floor).log()
-            sample_fft3_angle = sample_fft3.angle()
-            
-            loss_real = loss_real + (sample_fft3_abs - target_fft_abs).abs().mean()
-
-            error_imag = (sample_fft3_angle - target_fft_angle).abs()
-            error_imag_wrap_mask = (error_imag > torch.pi).detach().requires_grad_(False)
-            error_imag[error_imag_wrap_mask] = 2*torch.pi - error_imag[error_imag_wrap_mask]
-            loss_imag = loss_imag + (error_imag * target_phase_weight).mean()
-
-        return loss_real * self.loss_scale, loss_imag * self.loss_scale
-"""
-
-@dataclass
-class DualMultiscaleSpectralLoss1DConfig:
-    block_widths: tuple[int] = (8, 16, 32, 64)
-    block_overlap: int = 8
-    loss_scale: float = 0.06#4e-3
-
-class DualMultiscaleSpectralLoss1D:
-
-    def __init__(self, config: DualMultiscaleSpectralLoss1DConfig) -> None:
-        self.config = config
+            blockfreq = torch.fft.rfftfreq(block_width) * self.config.sample_rate
+            loss_weight = get_mel_density(blockfreq).view(1, 1,-1, 1).to(device=device)
+            self.loss_weights.append((loss_weight / loss_weight.amax() / torch.pi).requires_grad_(False).detach())
 
     @torch.no_grad()
-    def _flat_top_window(self, x:torch.Tensor) -> torch.Tensor:
+    def _flat_top_window(self, x: torch.Tensor) -> torch.Tensor:
         return (0.21557895 - 0.41663158 * torch.cos(x) + 0.277263158 * torch.cos(2*x)
                 - 0.083578947 * torch.cos(3*x) + 0.006947368 * torch.cos(4*x))
 
     @torch.no_grad()
-    def get_flat_top_window_1d(self, block_width: int, device: Optional[torch.device] = None) -> torch.Tensor:
-        wx = torch.linspace(0, 2*torch.pi, block_width, device=device)
-        return self._flat_top_window(wx.view(1, 1, 1, 1,-1)).requires_grad_(False)
+    def get_flat_top_window_2d(self, block_width: int) -> torch.Tensor:
+        wx = (torch.arange(block_width) + 0.5) / block_width * 2 * torch.pi
+        return self._flat_top_window(wx.view(1, 1,-1, 1)) * self._flat_top_window(wx.view(1, 1, 1,-1))
     
-    def stft1d(self, x:torch.Tensor, block_width: int,
+    def mss_loss(self, sample: torch.Tensor, target: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+
+        loss = torch.zeros(target.shape[0], device=self.device)
+        phase_loss = torch.zeros_like(loss)
+
+        for spec, loss_weight in zip(self.block_specs, self.loss_weights):
+
+            with torch.no_grad():
+                target_fft: torch.Tensor = spec(target)
+                target_fft_abs = target_fft.abs().requires_grad_(False).detach()
+                target_fft_angle = target_fft.angle().requires_grad_(False).detach()
+                phase_loss_weight = ((target_fft_abs - target_fft_abs.amin(dim=2, keepdim=True)) * loss_weight).requires_grad_(False)
+
+            sample_fft: torch.Tensor = spec(sample)
+            sample_fft_abs = sample_fft.abs()
+            sample_fft_angle = sample_fft.angle()
+            
+            l1_loss = torch.nn.functional.l1_loss(sample_fft_abs.float(), target_fft_abs.float(), reduction="none")
+            loss = loss + l1_loss.mean(dim=(1,2,3))
+  
+            phase_error = (sample_fft_angle - target_fft_angle).abs()
+            phase_error_wrap_mask = (phase_error > torch.pi).detach().requires_grad_(False)
+            phase_error[phase_error_wrap_mask] = 2*torch.pi - phase_error[phase_error_wrap_mask]
+            phase_loss = phase_loss + (phase_error * phase_loss_weight).mean(dim=(1,2,3))
+        
+        return loss * self.config.loss_scale, phase_loss * self.config.loss_scale
+
+    def compile(self, **kwargs) -> None:
+        self.mss_loss = torch.compile(self.mss_loss, **kwargs)
+
+@dataclass
+class MSSLoss2DConfig:
+
+    block_widths: tuple[int] = (8, 16, 32, 64, 128, 256)
+    block_overlap: int = 8
+    loss_scale: float = 0.00636
+
+class MSSLoss2D:
+
+    @torch.no_grad()
+    def __init__(self, config: MSSLoss2DConfig, device: torch.device) -> None:
+
+        self.config = config
+        self.device = device
+
+        self.steps = []
+        self.windows = []
+        self.loss_weights = []
+        
+        for block_width in self.config.block_widths:
+
+            self.steps.append(max(block_width // self.config.block_overlap, 1))
+            window = self.get_flat_top_window_2d(block_width)
+            window /= window.square().mean().sqrt()
+            self.windows.append(window.to(device=device).requires_grad_(False).detach())
+
+            blockfreq_y = torch.fft.fftfreq(block_width, 1/block_width, device=device)
+            blockfreq_x = torch.arange(block_width//2 + 1, device=device)
+            wavelength = 1 / ((blockfreq_y.square().view(-1, 1) + blockfreq_x.square().view(1, -1)).sqrt() + 1)
+            loss_weight = (1 / wavelength * wavelength.amin()) * block_width#**2
+            self.loss_weights.append(loss_weight.requires_grad_(False).detach())
+
+    @torch.no_grad()
+    def _flat_top_window(self, x: torch.Tensor) -> torch.Tensor:
+        return (0.21557895 - 0.41663158 * torch.cos(x) + 0.277263158 * torch.cos(2*x)
+                - 0.083578947 * torch.cos(3*x) + 0.006947368 * torch.cos(4*x))
+
+    @torch.no_grad()
+    def get_flat_top_window_2d(self, block_width: int) -> torch.Tensor:
+        wx = (torch.arange(block_width) + 0.5) / block_width * 2 * torch.pi
+        return self._flat_top_window(wx.view(1, 1,-1, 1)) * self._flat_top_window(wx.view(1, 1, 1,-1))
+    
+    def stft2d(self, x: torch.Tensor, block_width: int,
                step: int, window: torch.Tensor) -> torch.Tensor:
-        #print(f"x_shape: {x.shape}  block_width: {block_width}  step: {step}")
+        
         padding = block_width // 2
         x = torch.nn.functional.pad(x, (0, 0, padding, padding), mode="reflect")
-        #print(f"padded_x_shape: {x.shape}")
-        x = x.unfold(2, block_width, step)
-        #print(f"unfolded_x_shape: {x.shape}")
-        x = torch.fft.rfft(x * window, dim=-1, norm="backward")
-        #print(f"rfft_shape: {x.shape}")
-        if x.shape[1] == 2:
-            x = torch.stack((x[:, 0] + x[:, 1],
-                             x[:, 0] - x[:, 1]), dim=1)
-        elif x.shape[1] > 2:
-            x = torch.fft.fft(x, dim=1, norm="backward")
-        #print(f"final_shape: {x.shape}")
-        return x
-    
-    def __call__(self, sample: torch.Tensor, target: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-
-        sample = sample.permute(0, 2, 1, 3).contiguous()
-        target = target.permute(0, 2, 1, 3).contiguous()
-
-        loss_real = torch.zeros(1, device=target.device, dtype=torch.float64)
-        loss_imag = torch.zeros(1, device=target.device, dtype=torch.float64)
-        loss_scale = self.config.loss_scale / target.numel()
-
-        for block_width in self.config.block_widths:
-            
-            block_width = min(block_width, target.shape[-2])
-            step = max(block_width // self.config.block_overlap, 1)
-
-            with torch.no_grad():
-                
-                window = self.get_flat_top_window_1d(block_width, target.device)
-                #print(f"window_shape: {window.shape}")
-                blockfreq = torch.fft.rfftfreq(block_width, 1/block_width, device=target.device)
-                wavelength = block_width / (blockfreq+1)
-                real_loss_weight = (1 / wavelength * wavelength.amin()).requires_grad_(False)
-                #print(f"wave_length: {wavelength.shape}")
-                target_fft = self.stft1d(target, block_width, step, window)
-                target_fft_abs = target_fft.abs().requires_grad_(False)
-                target_fft_angle = target_fft.angle().requires_grad_(False)
-                loss_imag_weight = (wavelength.view((1,)*4 + wavelength.shape) / torch.pi).requires_grad_(False) * target_fft_abs
-                #print(f"loss_imag_weight: {loss_imag_weight.shape}")
-
-            sample_fft = self.stft1d(sample, block_width, step, window)
-            sample_fft_abs = sample_fft.abs()
-            
-            loss_real = loss_real + ((sample_fft_abs - target_fft_abs).abs() * real_loss_weight).type(torch.float64).sum()
-
-            error_imag = (sample_fft.angle() - target_fft_angle).abs()
-            error_imag_wrap_mask = (error_imag > torch.pi).detach().requires_grad_(False)
-            error_imag = torch.where(error_imag_wrap_mask, 2*torch.pi - error_imag, error_imag)
-            loss_imag = loss_imag + (error_imag * loss_imag_weight).type(torch.float64).sum()
-        
-        return (loss_real * loss_scale).float(), (loss_imag * loss_scale).float()
-
-@dataclass
-class DualMultiscaleSpectralLoss2DConfig:
-    block_widths: tuple[int] = (8, 16, 32, 64)
-    block_overlap: int = 8
-    loss_scale: float = 1.6e4#4e-3
-
-class DualMultiscaleSpectralLoss2D:
-
-    def __init__(self, config: DualMultiscaleSpectralLoss2DConfig) -> None:
-        self.config = config
-
-    @torch.no_grad()
-    def _flat_top_window(self, x:torch.Tensor) -> torch.Tensor:
-        return (0.21557895 - 0.41663158 * torch.cos(x) + 0.277263158 * torch.cos(2*x)
-                - 0.083578947 * torch.cos(3*x) + 0.006947368 * torch.cos(4*x))
-
-    @torch.no_grad()
-    def get_flat_top_window_2d(self, block_width: int, device: Optional[torch.device] = None) -> torch.Tensor:
-        wx = torch.linspace(0, 2*torch.pi, block_width, device=device)
-        return self._flat_top_window(wx.view(1, 1,-1, 1)) * self._flat_top_window(wx.view(1, 1, 1,-1)).requires_grad_(False)
-    
-    def stft2d(self, x:torch.Tensor, block_width: int,
-               step: int, window: torch.Tensor) -> torch.Tensor:
-        
-        padding = block_width // 2
-        x = torch.nn.functional.pad(x, (padding, padding, padding, padding), mode="reflect")
         x = x.unfold(2, block_width, step).unfold(3, block_width, step)
 
-        x = torch.fft.rfft2(x * window, norm="backward")
-        
-        if x.shape[1] == 2:
-            x = torch.stack((x[:, 0] + x[:, 1],
-                             x[:, 0] - x[:, 1]), dim=1)
-        elif x.shape[1] > 2:
-            x = torch.fft.fft(x, dim=1, norm="backward")
+        x = torch.fft.rfft2(x * window, norm="ortho")
+
+        #if x.shape[1] == 2: # mid-side t-form
+        #    x = torch.cat((x, (x[:, 0:1] + x[:, 1:2])*0.5**0.5, (x[:, 0:1] - x[:, 1:2])*0.5**0.5), dim=1)
 
         return x
     
-    def __call__(self, sample: torch.Tensor, target: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+    def mss_loss(self, sample: torch.Tensor, target: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
 
-        loss_real = torch.zeros(1, device=target.device, dtype=torch.float64)
-        loss_imag = torch.zeros(1, device=target.device, dtype=torch.float64)
-        loss_scale = self.config.loss_scale / target.numel()
+        loss = torch.zeros(target.shape[0], device=self.device)
 
-        for block_width in self.config.block_widths:
+        for i, block_width in enumerate(self.config.block_widths):
             
-            block_width = min(block_width, target.shape[-1], target.shape[-2])
-            step = max(block_width // self.config.block_overlap, 1)            
+            if block_width > target.shape[-1]:
+                continue
+
+            step = self.steps[i]
+            window = self.windows[i]
+            loss_weight = self.loss_weights[i]
 
             with torch.no_grad():
-                
-                window = self.get_flat_top_window_2d(block_width, target.device)
-
-                blockfreq_y = torch.fft.fftfreq(block_width, 1/block_width, device=target.device)
-                blockfreq_x = torch.arange(block_width//2 + 1, device=target.device)
-                wavelength = 1 / ((blockfreq_y.square().view(-1, 1) + blockfreq_x.square().view(1, -1)).sqrt() + 1)
-                real_loss_weight = (1 / wavelength * wavelength.amin()).requires_grad_(False)
-                
                 target_fft = self.stft2d(target, block_width, step, window)
-                target_fft_abs = target_fft.abs().requires_grad_(False)
-                target_fft_angle = target_fft.angle().requires_grad_(False)
-                loss_imag_weight = (wavelength.view((1,)*4 + wavelength.shape) / torch.pi).requires_grad_(False) * target_fft_abs
+                target_fft_abs = target_fft.abs().requires_grad_(False).detach()
 
             sample_fft = self.stft2d(sample, block_width, step, window)
             sample_fft_abs = sample_fft.abs()
             
-            loss_real = loss_real + ((sample_fft_abs - target_fft_abs).abs() * real_loss_weight).type(torch.float64).sum()
+            l1_loss = torch.nn.functional.l1_loss(sample_fft_abs.float(), target_fft_abs.float(), reduction="none")
+            loss = loss + (l1_loss * loss_weight).mean(dim=(1,2,3,4,5))
+   
+        return loss * self.config.loss_scale
 
-            error_imag = (sample_fft.angle() - target_fft_angle).abs()
-            error_imag_wrap_mask = (error_imag > torch.pi).detach().requires_grad_(False)
-            error_imag = torch.where(error_imag_wrap_mask, 2*torch.pi - error_imag, error_imag)
-            loss_imag = loss_imag + (error_imag * loss_imag_weight).type(torch.float64).sum()
-        
-        return (loss_real * loss_scale).float(), (loss_imag * loss_scale).float()
+    def compile(self, **kwargs) -> None:
+        self.mss_loss = torch.compile(self.mss_loss, **kwargs)
