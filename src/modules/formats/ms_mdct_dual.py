@@ -232,8 +232,8 @@ class MS_MDCT_DualFormat(DualDiffusionFormat):
     def mdct_to_raw(self, mdct: torch.Tensor) -> torch.Tensor:
 
         mdct = mdct * self.mdct_mel_density / self.config.raw_to_mdct_scale
-        raw_samples = imclt(mdct.permute(0, 1, 3, 2).contiguous(memory_format=self.memory_format),
-            window_fn="hann", window_degree=0.5).real.contiguous(memory_format=self.memory_format)
+        raw_samples = imclt(mdct.permute(0, 1, 3, 2).contiguous(),
+            window_fn="hann", window_degree=0.5).real.contiguous()
         
         return raw_samples * self.config.mdct_to_raw_scale
     
