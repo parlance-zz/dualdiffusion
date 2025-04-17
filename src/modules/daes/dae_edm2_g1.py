@@ -327,7 +327,7 @@ class DAE_G1(DualDiffusionDAE):
         
     def encode(self, x: torch.Tensor, embeddings: torch.Tensor, normalize_latents: bool = True) -> torch.Tensor:
 
-        x = tensor_4d_to_5d(x, num_channels=1).to(memory_format=torch.channels_last_3d)
+        x = tensor_4d_to_5d(x, num_channels=1)
         x = torch.cat((x, torch.ones_like(x[:, :1])), dim=1)
 
         if embeddings is not None:
@@ -336,7 +336,7 @@ class DAE_G1(DualDiffusionDAE):
         for name, block in self.enc.items():
             x = block(x) if "conv" in name else block(x, embeddings)
         
-        latents = tensor_5d_to_4d(self.conv_latents_out(x)).to(memory_format=torch.channels_last)
+        latents = tensor_5d_to_4d(self.conv_latents_out(x))
         latents = torch.nn.functional.avg_pool2d(latents, self.downsample_ratio)
         if normalize_latents == True:
             return normalize(latents)
@@ -345,7 +345,7 @@ class DAE_G1(DualDiffusionDAE):
 
     def decode(self, x: torch.Tensor, embeddings: torch.Tensor) -> torch.Tensor:
 
-        x = tensor_4d_to_5d(x, num_channels=self.config.latent_channels).to(memory_format=torch.channels_last_3d)
+        x = tensor_4d_to_5d(x, num_channels=self.config.latent_channels)
         x = torch.cat((x, torch.ones_like(x[:, :1])), dim=1)
         x = self.conv_latents_in(x)
 
@@ -355,7 +355,7 @@ class DAE_G1(DualDiffusionDAE):
         for name, block in self.dec.items():
             x = block(x, embeddings)
 
-        return tensor_5d_to_4d(self.conv_out(x, gain=self.out_gain)).to(memory_format=torch.channels_last)
+        return tensor_5d_to_4d(self.conv_out(x, gain=self.out_gain))
     
     def forward(self, samples: torch.Tensor, dae_embeddings: torch.Tensor, add_latents_noise: float = 0) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         
