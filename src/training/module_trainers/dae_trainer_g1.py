@@ -39,10 +39,10 @@ class DAETrainer_G1_Config(ModuleTrainerConfig):
 
     add_latents_noise: float = 0
 
-    kl_loss_weight: float = 1e-2
+    kl_loss_weight: float = 2e-2
     kl_warmup_steps: int  = 2000
 
-    point_loss_weight: float = 0.01
+    point_loss_weight: float = 10
     point_loss_warmup_steps: int = 2000
 
     mss_loss_2d_config: Optional[dict[str, Any]] = None
