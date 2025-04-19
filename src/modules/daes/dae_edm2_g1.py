@@ -331,7 +331,8 @@ class DAE_G1(DualDiffusionDAE):
     def encode(self, x: torch.Tensor, embeddings: torch.Tensor, normalize_latents: bool = True) -> torch.Tensor:
 
         x = tensor_4d_to_5d(x, num_channels=1)
-        x = torch.cat((x, torch.ones_like(x[:, :1])), dim=1)
+        if self.config.add_constant_channel == True:
+            x = torch.cat((x, torch.ones_like(x[:, :1])), dim=1)
 
         if embeddings is not None:
             embeddings = embeddings.unsqueeze(-1).unsqueeze(-1).unsqueeze(-1)
@@ -349,7 +350,8 @@ class DAE_G1(DualDiffusionDAE):
     def decode(self, x: torch.Tensor, embeddings: torch.Tensor) -> torch.Tensor:
 
         x = tensor_4d_to_5d(x, num_channels=self.config.latent_channels)
-        x = torch.cat((x, torch.ones_like(x[:, :1])), dim=1)
+        if self.config.add_constant_channel == True:
+            x = torch.cat((x, torch.ones_like(x[:, :1])), dim=1)
         x = self.conv_latents_in(x)
 
         if embeddings is not None:
