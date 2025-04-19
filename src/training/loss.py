@@ -155,10 +155,10 @@ class MSSLoss2D:
             
             if self.config.use_frequency_weight not in ["none", None]:
                 blockfreq_y = torch.fft.fftfreq(block_width, 1/block_width, device=device)
-                blockfreq_x = torch.arange(block_width//2 + 1, device=device)
+                blockfreq_x = torch.arange(block_width//2 + 1, device=device, dtype=torch.float32)
 
                 if self.config.use_frequency_weight == "product":
-                    loss_weight = (blockfreq_y.view(-1, 1) * blockfreq_x.view(1, -1)).float().to(device=device).requires_grad_(False).detach()
+                    loss_weight = (blockfreq_y.view(-1, 1).abs() + 1) * (blockfreq_x.view(1, -1).abs() + 1)
                 elif self.config.use_frequency_weight == "euclidean":
                     loss_weight = (blockfreq_y.square().view(-1, 1) + blockfreq_x.square().view(1, -1) + 1).sqrt()
                 else:
