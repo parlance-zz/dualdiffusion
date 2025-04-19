@@ -217,8 +217,8 @@ class DualDiffusionDataset(torch.nn.Module):
                 
                 emb_len = sample_audio_embeddings.get_shape()[0]
                 
-                start = np.clip(audio_embed_start, 0, emb_len - 1)
-                end = np.clip(audio_embed_end, start, emb_len - 1)
+                start = np.clip(audio_embed_start - 0.5, 0, emb_len - 1)
+                end = np.clip(audio_embed_end - 0.5, start, emb_len - 1)
                 start_int, start_frac = int(start), start % 1
                 end_int, end_frac = int(end), end % 1
 
