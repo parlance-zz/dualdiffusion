@@ -39,11 +39,11 @@ class DAETrainer_G1_Config(ModuleTrainerConfig):
 
     add_latents_noise: float = 0
 
-    kl_loss_weight: float = 2e-2
-    kl_warmup_steps: int  = 2500
+    kl_loss_weight: float = 1e-2
+    kl_warmup_steps: int  = 2000
 
-    point_loss_weight: float = 0.03
-    point_loss_warmup_steps: int = 500
+    point_loss_weight: float = 0.01
+    point_loss_warmup_steps: int = 2000
 
     mss_loss_2d_config: Optional[dict[str, Any]] = None
 
@@ -83,7 +83,7 @@ class DAETrainer_G1(ModuleTrainer):
         mel_spec = self.format.raw_to_mel_spec(batch["audio"]).detach()
         latents, reconstructed, pre_norm_latents = self.dae(mel_spec, dae_embeddings, add_latents_noise=self.config.add_latents_noise)
 
-        point_loss = torch.nn.functional.mse_loss(reconstructed, mel_spec, reduction="none").mean(dim=(1,2,3))
+        point_loss = torch.nn.functional.l1_loss(reconstructed, mel_spec, reduction="none").mean(dim=(1,2,3))
 
         recon_loss = self.mss_loss.mss_loss(reconstructed, mel_spec)
         recon_loss_logvar = self.dae.get_recon_loss_logvar()
