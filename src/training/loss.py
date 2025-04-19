@@ -21,6 +21,7 @@
 # SOFTWARE.
 
 from dataclasses import dataclass
+from typing import Literal
 
 import torch
 import torchaudio
@@ -120,14 +121,15 @@ class MSSLoss1D:
 @dataclass
 class MSSLoss2DConfig:
 
-    block_widths: tuple[int] = (8, 16, 32, 64, 128)
+    block_widths: tuple[int] = (8, 16, 32, 64)
     block_overlap: int = 8
-    block_width_weight_exponent: float = 0.5
+    block_width_weight_exponent: float = 0
 
-    use_frequency_weight: bool = False
+    use_frequency_weight: Literal["product", "euclidean", "none"] = "product"
     frequency_weight_exponent: float = 1
+    use_midside_transform: Literal["stack", "cat", "none"] = "stack"
     use_circular_window: bool = False
-    loss_scale: float = 0.00636
+    loss_scale: float = 0.5
 
 class MSSLoss2D:
 
@@ -151,12 +153,18 @@ class MSSLoss2D:
             window /= window.square().mean().sqrt()
             self.windows.append(window.to(device=device).requires_grad_(False).detach())
             
-            if self.config.use_frequency_weight == True:
+            if self.config.use_frequency_weight not in ["none", None]:
                 blockfreq_y = torch.fft.fftfreq(block_width, 1/block_width, device=device)
                 blockfreq_x = torch.arange(block_width//2 + 1, device=device)
-                #loss_weight = (blockfreq_y.view(-1, 1) * blockfreq_x.view(1, -1)).float().to(device=device)
-                wavelength = 1 / ((blockfreq_y.square().view(-1, 1) + blockfreq_x.square().view(1, -1)).sqrt() + 1) ** self.config.frequency_weight_exponent
-                loss_weight = (1 / wavelength * wavelength.amin()).requires_grad_(False).detach()
+
+                if self.config.use_frequency_weight == "product":
+                    loss_weight = (blockfreq_y.view(-1, 1) * blockfreq_x.view(1, -1)).float().to(device=device).requires_grad_(False).detach()
+                elif self.config.use_frequency_weight == "euclidean":
+                    loss_weight = (blockfreq_y.square().view(-1, 1) + blockfreq_x.square().view(1, -1) + 1).sqrt()
+                else:
+                    raise ValueError(f"Invalid frequency weight type: {self.config.use_frequency_weight}")
+                
+                loss_weight = (loss_weight ** self.config.frequency_weight_exponent).requires_grad_(False).detach()
             else:
                 loss_weight = 1
 
@@ -193,8 +201,13 @@ class MSSLoss2D:
 
         x = torch.fft.rfft2(x * window, norm="ortho")
 
-        #if x.shape[1] == 2: # mid-side t-form
-        #    x = torch.cat((x, (x[:, 0:1] + x[:, 1:2])*0.5**0.5, (x[:, 0:1] - x[:, 1:2])*0.5**0.5), dim=1)
+        if self.config.use_midside_transform not in ["none", None]:
+            if self.config.use_midside_transform == "stack":
+                x = torch.stack((x[:, 0] + x[:, 1], x[:, 0] - x[:, 1]), dim=1)
+            elif self.config.use_midside_transform == "cat":
+                x = torch.cat((x, (x[:, 0:1] + x[:, 1:2])*0.5**0.5, (x[:, 0:1] - x[:, 1:2])*0.5**0.5), dim=1)
+            else:
+                raise ValueError(f"Invalid midside transform type: {self.config.use_midside_transform}")
 
         return x
     
