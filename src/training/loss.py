@@ -120,8 +120,13 @@ class MSSLoss1D:
 @dataclass
 class MSSLoss2DConfig:
 
-    block_widths: tuple[int] = (8, 16, 32, 64, 128, 256)
+    block_widths: tuple[int] = (8, 16, 32, 64, 128)
     block_overlap: int = 8
+    block_width_weight_exponent: float = 0.5
+
+    use_frequency_weight: bool = False
+    frequency_weight_exponent: float = 1
+    use_circular_window: bool = False
     loss_scale: float = 0.00636
 
 class MSSLoss2D:
@@ -137,17 +142,25 @@ class MSSLoss2D:
         self.loss_weights = []
         
         for block_width in self.config.block_widths:
-
             self.steps.append(max(block_width // self.config.block_overlap, 1))
-            window = self.get_flat_top_window_2d(block_width)
+
+            if self.config.use_circular_window == True:
+                window = self.get_flat_top_window_2d_circular(block_width)
+            else:
+                window = self.get_flat_top_window_2d(block_width)
             window /= window.square().mean().sqrt()
             self.windows.append(window.to(device=device).requires_grad_(False).detach())
+            
+            if self.config.use_frequency_weight == True:
+                blockfreq_y = torch.fft.fftfreq(block_width, 1/block_width, device=device)
+                blockfreq_x = torch.arange(block_width//2 + 1, device=device)
+                #loss_weight = (blockfreq_y.view(-1, 1) * blockfreq_x.view(1, -1)).float().to(device=device)
+                wavelength = 1 / ((blockfreq_y.square().view(-1, 1) + blockfreq_x.square().view(1, -1)).sqrt() + 1) ** self.config.frequency_weight_exponent
+                loss_weight = (1 / wavelength * wavelength.amin()).requires_grad_(False).detach()
+            else:
+                loss_weight = 1
 
-            blockfreq_y = torch.fft.fftfreq(block_width, 1/block_width, device=device)
-            blockfreq_x = torch.arange(block_width//2 + 1, device=device)
-            wavelength = 1 / ((blockfreq_y.square().view(-1, 1) + blockfreq_x.square().view(1, -1)).sqrt() + 1)
-            loss_weight = (1 / wavelength * wavelength.amin()) * block_width#**2
-            self.loss_weights.append(loss_weight.requires_grad_(False).detach())
+            self.loss_weights.append(loss_weight * block_width**self.config.block_width_weight_exponent)
 
     @torch.no_grad()
     def _flat_top_window(self, x: torch.Tensor) -> torch.Tensor:
@@ -158,6 +171,18 @@ class MSSLoss2D:
     def get_flat_top_window_2d(self, block_width: int) -> torch.Tensor:
         wx = (torch.arange(block_width) + 0.5) / block_width * 2 * torch.pi
         return self._flat_top_window(wx.view(1, 1,-1, 1)) * self._flat_top_window(wx.view(1, 1, 1,-1))
+    
+    @torch.no_grad()
+    def create_distance_tensor(self, block_width: int) -> torch.Tensor:
+        x_coords = (torch.arange(block_width) + 0.5).repeat(block_width, 1)
+        y_coords = (torch.arange(block_width) + 0.5).view(-1, 1).repeat(1, block_width)
+        return torch.sqrt((x_coords - block_width/2) ** 2 + (y_coords - block_width/2) ** 2)
+
+    @torch.no_grad()
+    def get_flat_top_window_2d_circular(self, block_width: int) -> torch.Tensor:
+        dist = self.create_distance_tensor(block_width)
+        wx = (dist / (block_width/2 + 0.5)).clip(max=1) * torch.pi + torch.pi
+        return self._flat_top_window(wx)
     
     def stft2d(self, x: torch.Tensor, block_width: int,
                step: int, window: torch.Tensor) -> torch.Tensor:

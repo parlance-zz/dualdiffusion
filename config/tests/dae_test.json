@@ -1,21 +1,21 @@
 {
-    "model_name": "edm2_ddec_mdct_b2a",
+    "model_name": "edm2_ddec_mdct_b2b",
     "model_load_options": {
         "torch_dtype": "bfloat16",
         "device": "cuda",
         "load_checkpoints": true,
-        "load_emas": {
-            "dae": "ema_std0.05.safetensors",
-            "ddec": "ema_std0.05.safetensors"
-        },
-        "compile_options": null
+        "load_emas": false,
+        "compile_options": {
+            "fullgraph": true,
+            "dynamic": false
+        }
     },
     "length": 1408768,
     "latents_tiled_encode": false,
     "latents_tiled_max_chunk_size": 6144,
     "latents_tiled_overlap": 256,
     "output_lufs": -18.5,
-    "ddec_output": true,
+    "ddec_output": false,
     "add_random_test_samples": 6,
     "copy_sample_source_files": true,
     "test_samples": [

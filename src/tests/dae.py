@@ -132,10 +132,11 @@ def dae_test() -> None:
         else:
             latents = None
             output_mel_spec = input_mel_spec
+        
+        input_x_ref = format.mel_spec_to_mdct_psd(input_mel_spec)
+        x_ref = format.mel_spec_to_mdct_psd(output_mel_spec)
 
         if ddec is not None:
-            x_ref = format.mel_spec_to_mdct_psd(output_mel_spec)
-
             ddec_params = SampleParams(
                 seed=5000,
                 num_steps=20, length=audio_len, cfg_scale=1.5, input_perturbation=0, input_perturbation_offset=-0.3,
@@ -148,7 +149,6 @@ def dae_test() -> None:
             
             output_raw_sample = format.mdct_to_raw(mdct_output_sample.float())
         else:
-            x_ref = None
             output_raw_sample = None
 
         print(f"input   mean/std: {input_mel_spec.mean().item():.4} {input_mel_spec.std().item():.4}")
@@ -167,9 +167,11 @@ def dae_test() -> None:
             print(f"Latents channel order: {dae.config.latents_img_channel_order}")
             save_img(dae.latents_to_img(latents), os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_latents.png')}"))
         
+        save_img(format.mdct_psd_to_img(input_x_ref), os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_input_x_ref.png')}"))
         if x_ref is not None:
             save_img(format.mdct_psd_to_img(x_ref), os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_output_x_ref.png')}"))
         save_img(format.mel_spec_to_img(input_mel_spec), os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_input_mel_spec.png')}"))
+        save_img(format.mel_spec_to_img(output_mel_spec), os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_output_mel_spec.png')}"))
 
         if output_raw_sample is not None:
             output_flac_file_path = os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_decoded.flac')}")
