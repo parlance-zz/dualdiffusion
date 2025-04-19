@@ -69,6 +69,31 @@
         "num_raw_channels": 2,
         "default_raw_length": 1408768,
 
+        "raw_to_mel_spec_scale": 3.51,
+        "mel_spec_to_mdct_psd_scale": 0.065,
+        "mdct_to_raw_scale": 2,
+        "raw_to_mdct_scale": 12.16,
+
+        "mdct_window_len": 512,
+        "mdct_psd_num_bins": 2048,
+
+        "ms_abs_exponent": 0.25,
+        "ms_width_alignment": 128,
+        "ms_num_frequencies": 256,
+        "ms_step_size_ms": 8,
+        "ms_window_duration_ms": 128,
+        "ms_padded_duration_ms": 128,
+        "ms_window_exponent_low": 17,
+        "ms_window_exponent_high": 58,
+        "ms_window_periodic": true
+    }
+
+    /*
+    "format_config": {
+        "sample_rate": 32000,
+        "num_raw_channels": 2,
+        "default_raw_length": 1408768,
+
         "raw_to_mel_spec_scale": 1.93184,
         "mel_spec_to_mdct_psd_scale": 2.6e-8,
         "mdct_to_raw_scale": 2,
@@ -87,4 +112,5 @@
         "ms_window_exponent_high": 58,
         "ms_window_periodic": true
     }
+    */
 }
