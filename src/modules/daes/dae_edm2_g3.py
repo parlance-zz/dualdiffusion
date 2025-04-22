@@ -38,7 +38,6 @@ import torch
 from modules.daes.dae import DualDiffusionDAE, DualDiffusionDAEConfig
 from modules.mp_tools import mp_silu, mp_sum, normalize, resample_3d
 from utils.dual_diffusion_utils import tensor_4d_to_5d, tensor_5d_to_4d
-from training.loss.difference_of_gaussians import DoG_Loss2D, DoG_Loss2D_Config
 
 
 @dataclass
@@ -63,9 +62,6 @@ class DAE_G3_Config(DualDiffusionDAEConfig):
     mlp_multiplier: int    = 2               # Multiplier for the number of channels in the MLP.
     add_constant_channel: bool = True
     add_pixel_norm: bool       = False
-
-    dog_kernel_sizes: list[int] = (3,5,7,11)
-    dog_kernel_sigma: float = 0.34
 
 
 class MPConv3D_E(torch.nn.Module):
@@ -244,7 +240,6 @@ class DAE_G3(DualDiffusionDAE):
         super().__init__()
         self.config = config
 
-        assert len(config.dog_kernel_sizes) == config.latent_channels
         assert config.model_channels % config.latent_channels == 0
 
         block_kwargs = {"mlp_multiplier": config.mlp_multiplier,
@@ -261,12 +256,7 @@ class DAE_G3(DualDiffusionDAE):
         self.downsample_ratio = 2 ** (self.num_levels - 1)
         self.latents_out_gain = torch.nn.Parameter(torch.ones(config.latent_channels))
         self.out_gain = torch.nn.Parameter(torch.ones(config.latent_channels))
-        self.recon_loss_logvar = torch.nn.Parameter(torch.zeros([]))
-
-        self.dog_loss = DoG_Loss2D(DoG_Loss2D_Config(
-            kernel_sizes=config.dog_kernel_sizes,
-            kernel_sigma=config.dog_kernel_sigma,
-            channels=config.out_channels * 2))
+        self.recon_loss_logvar = torch.nn.Parameter(torch.zeros(config.latent_channels))
         
         # embedding
         if config.in_channels_emb > 0:
@@ -363,7 +353,7 @@ class DAE_G3(DualDiffusionDAE):
         else:
             return latents
 
-    def decode(self, x: torch.Tensor, embeddings: torch.Tensor, enhance: bool = True) -> torch.Tensor:
+    def decode(self, x: torch.Tensor, embeddings: torch.Tensor, training: bool = False) -> torch.Tensor:
 
         x = tensor_4d_to_5d(x, num_channels=self.config.latent_channels)
         ones = torch.ones_like(x[:, :1]).expand(-1, self.config.latent_channels, -1, -1, -1)
@@ -380,12 +370,10 @@ class DAE_G3(DualDiffusionDAE):
 
         x = self.conv_out(x) * self.out_gain.view(1,-1, 1, 1, 1)
 
-        decoded = tensor_5d_to_4d(x)
-
-        if enhance == True:
-            return self.dog_loss.reconstruct(decoded)
+        if training == True:
+            return tensor_5d_to_4d(x)
         else:
-            return decoded
+            return tensor_5d_to_4d(x.sum(dim=1, keepdim=True))
     
     def forward(self, samples: torch.Tensor, dae_embeddings: torch.Tensor,
             add_latents_noise: float = 0) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
@@ -395,10 +383,19 @@ class DAE_G3(DualDiffusionDAE):
         if add_latents_noise > 0:
             latents = normalize(latents + torch.randn_like(latents) * add_latents_noise, dim=(2,3))
         
-        reconstructed = self.decode(latents, dae_embeddings, enhance=False)
-        nll_loss, dog_losses = self.dog_loss(reconstructed, samples)
+        reconstructed = self.decode(latents, dae_embeddings, training=True)
 
-        return latents, reconstructed, pre_norm_latents, nll_loss, dog_losses
+        level_losses = []
+        target = samples
+        nll_loss = torch.zeros(reconstructed.shape[0], device=reconstructed.device, dtype=reconstructed.dtype)
+        for i in range(self.config.latent_channels):
+            level_loss = torch.nn.functional.mse_loss(reconstructed[:, i*2:i*2+2], target, reduction="none").mean(dim=(1,2,3))
+            nll_loss = nll_loss + (level_loss / self.recon_loss_logvar[i].exp() + self.recon_loss_logvar[i])
+
+            target = target - reconstructed[:, i*2:i*2+2].detach()
+            level_losses.append(level_loss)
+
+        return latents, reconstructed, pre_norm_latents, nll_loss, level_losses
 
     def tiled_encode(self, x: torch.Tensor, embeddings: torch.Tensor, max_chunk: int = 6144, overlap: int = 256) -> torch.Tensor:
 

@@ -67,7 +67,7 @@ class DAETrainer_G3(ModuleTrainer):
             dae_embeddings = None
         
         mel_spec = self.format.raw_to_mel_spec(batch["audio"]).detach()
-        latents, reconstructed, pre_norm_latents, nll_loss, dog_losses = self.dae(mel_spec, dae_embeddings, add_latents_noise=self.config.add_latents_noise)
+        latents, reconstructed, pre_norm_latents, nll_loss, level_losses = self.dae(mel_spec, dae_embeddings, add_latents_noise=self.config.add_latents_noise)
 
         pre_norm_latents_var = pre_norm_latents.var(dim=(2,3))
         kl_loss = pre_norm_latents.mean(dim=(2,3)).square() + pre_norm_latents_var - 1 - pre_norm_latents_var.log()
@@ -89,7 +89,7 @@ class DAETrainer_G3(ModuleTrainer):
             "io_stats/latents_pre_norm_std": pre_norm_latents_var.sqrt()
         }
 
-        for i, dog_loss in enumerate(dog_losses):
-            logs[f"loss/dog_{i}"] = dog_loss
+        for i, level_loss in enumerate(level_losses):
+            logs[f"loss/level_{i}"] = level_loss
         
         return logs
