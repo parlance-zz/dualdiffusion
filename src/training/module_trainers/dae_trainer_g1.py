@@ -27,7 +27,8 @@ import torch
 
 from training.trainer import DualDiffusionTrainer
 from training.module_trainers.module_trainer import ModuleTrainerConfig, ModuleTrainer
-from training.loss import MSSLoss2D, MSSLoss2DConfig
+from training.loss.multiscale_spectral import MSSLoss2D, MSSLoss2DConfig
+from training.loss.wavelet import WaveletLoss, WaveletLoss_Config
 from modules.daes.dae_edm2_g1 import DAE_G1
 from modules.formats.ms_mdct_dual import MS_MDCT_DualFormat
 from modules.mp_tools import normalize
@@ -59,12 +60,14 @@ class DAETrainer_G1(ModuleTrainer):
 
         config.mss_loss_2d_config = config.mss_loss_2d_config or {}
         self.mss_loss = MSSLoss2D(MSSLoss2DConfig(**config.mss_loss_2d_config), device=trainer.accelerator.device)
+        #self.wavelet_loss = WaveletLoss(WaveletLoss_Config())
         self.format: MS_MDCT_DualFormat = trainer.pipeline.format.to(self.trainer.accelerator.device)
 
         if trainer.config.enable_model_compilation == True:
             self.dae.compile(**trainer.config.compile_params)
             self.format.compile(**trainer.config.compile_params)
             self.mss_loss.compile(**trainer.config.compile_params)
+            #self.wavelet_loss.compile(**trainer.config.compile_params)
 
         self.logger.info("Training DAE model:")
         self.logger.info(f"KL loss weight: {self.config.kl_loss_weight} KL warmup steps: {self.config.kl_warmup_steps}")
@@ -86,6 +89,7 @@ class DAETrainer_G1(ModuleTrainer):
         point_loss = torch.nn.functional.l1_loss(reconstructed, mel_spec, reduction="none").mean(dim=(1,2,3))
 
         recon_loss = self.mss_loss.mss_loss(reconstructed, mel_spec)
+        #recon_loss, level_losses = self.wavelet_loss.wavelet_loss(reconstructed, mel_spec)
         recon_loss_logvar = self.dae.get_recon_loss_logvar()
         recon_loss_nll = recon_loss / recon_loss_logvar.exp() + recon_loss_logvar
 
@@ -102,7 +106,7 @@ class DAETrainer_G1(ModuleTrainer):
         else:
             point_loss_weight = 0
 
-        return {
+        logs = {
             "loss": recon_loss_nll + kl_loss * kl_loss_weight + point_loss * point_loss_weight,
             "loss/recon": recon_loss,
             "loss/point": point_loss,
@@ -117,3 +121,8 @@ class DAETrainer_G1(ModuleTrainer):
             "io_stats/latents_mean": latents.mean(dim=(1,2,3)),
             "io_stats/latents_pre_norm_std": pre_norm_latents_var.sqrt()
         }
+
+        #for i, level_loss in enumerate(level_losses):
+        #    logs[f"loss/w_level{i}"] = level_loss
+
+        return logs

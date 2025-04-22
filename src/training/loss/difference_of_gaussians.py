@@ -33,7 +33,6 @@ class DoG_Loss2D_Config:
     channels: int = 2
     kernel_sizes: list[int] = (3,5,7,11,17,27)
     kernel_sigma: float = 0.34
-    loss_scale: float = 1e3
 
 class GaussianKernel(nn.Module):
 
@@ -93,17 +92,16 @@ class DoG_Loss2D(nn.Module):
     
     def forward(self, sample: torch.Tensor, target: torch.Tensor) -> tuple[torch.Tensor, list[torch.Tensor]]:
         
-        sample_dogs = self.get_dogs(sample)
         with torch.no_grad():
             target_dogs = self.get_dogs(target)
 
         nll_loss = torch.zeros(sample.shape[0], device=sample.device)
         dog_losses = []
 
-        for i, (sample_dog, target_dog) in enumerate(zip(sample_dogs, target_dogs)):
-            loss_scale = self.config.loss_scale #if i < len(self.config.kernel_sizes) - 1 else 0.5
-            dog_loss = F.mse_loss(sample_dog, target_dog, reduction="none").mean(dim=(1,2,3)) * loss_scale
-            nll_loss = nll_loss + (dog_loss / self.mse_logvar[i].exp() + self.mse_logvar[i]) * 2**(-i)
+        for i, target_dog in enumerate(target_dogs):
+            sample_dog = sample[:, i*2:i*2+2, :, :]
+            dog_loss = F.mse_loss(sample_dog, target_dog, reduction="none").mean(dim=(1,2,3))
+            nll_loss = nll_loss + (dog_loss / self.mse_logvar[i].exp() + self.mse_logvar[i])
             dog_losses.append(dog_loss.detach())
 
         return nll_loss, dog_losses
@@ -111,12 +109,11 @@ class DoG_Loss2D(nn.Module):
     @torch.no_grad()
     def reconstruct(self, sample: torch.Tensor) -> torch.Tensor:
         
-        dogs = self.get_dogs(sample)
-        recon_image = torch.zeros_like(sample)
+        recon_image = torch.zeros_like(sample[:, 0:2])
+        for i in range(len(self.config.kernel_sizes)):
 
-        for i, dog in enumerate(dogs):
-
-            sample_energy = sample.var(dim=(1,2,3), keepdim=True)
+            dog = sample[:, i*2:i*2+2, :, :]
+            sample_energy = dog.var(dim=(1,2,3), keepdim=True)
             target_energy = sample_energy + self.mse_logvar[i].exp()
 
             mean = dog.mean(dim=(1,2,3), keepdim=True)
@@ -132,8 +129,8 @@ if __name__ == "__main__":
 
     output_path = os.path.join(config.DEBUG_PATH, "dog_test")
 
-    blur_dog = DoG_Loss2D(DoG_Loss2D_Config()).cuda()
-    image = torch.rand(1, 2, 256, 256).cuda()
+    blur_dog = DoG_Loss2D(DoG_Loss2D_Config())
+    image = torch.rand(1, 2, 256, 256)
     dogs = blur_dog.get_dogs(image)
 
     for i, dog in enumerate(dogs):

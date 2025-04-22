@@ -38,7 +38,7 @@ import torch
 from modules.daes.dae import DualDiffusionDAE, DualDiffusionDAEConfig
 from modules.mp_tools import mp_silu, mp_sum, normalize, resample_3d
 from utils.dual_diffusion_utils import tensor_4d_to_5d, tensor_5d_to_4d
-from utils.dog import DoG_Loss2D, DoG_Loss2D_Config
+from training.loss.difference_of_gaussians import DoG_Loss2D, DoG_Loss2D_Config
 
 
 @dataclass
@@ -61,12 +61,10 @@ class DAE_G3_Config(DualDiffusionDAEConfig):
     attn_balance: float       = 0.3          # Balance between main branch (0) and self-attention (1).
     attn_levels: list[int]    = ()           # List of resolution levels to use self-attention.
     mlp_multiplier: int    = 2               # Multiplier for the number of channels in the MLP.
-    mlp_groups: int        = 1               # Number of groups for the MLPs.
-    emb_linear_groups: int = 1
     add_constant_channel: bool = True
     add_pixel_norm: bool       = False
 
-    dog_kernel_sizes: list[int] = (3,5,7,11,17,27)
+    dog_kernel_sizes: list[int] = (3,5,7,11)
     dog_kernel_sigma: float = 0.34
 
 
@@ -86,6 +84,16 @@ class MPConv3D_E(torch.nn.Module):
         self.norm_dim = norm_dim
         
         self.weight = torch.nn.Parameter(torch.randn(out_channels, in_channels // groups, *kernel))
+
+        if self.weight.ndim == 5:
+            pad_w = kernel[2] // 2
+            pad_z = kernel[0] // 2
+            if pad_w != 0 or pad_z != 0:
+                self.padding = torch.nn.ReflectionPad3d((kernel[2] // 2, kernel[2] // 2, 0, 0, 0, kernel[0] // 2))
+            else:
+                self.padding = torch.nn.Identity()
+        else:
+            self.padding = None
 
         if out_gain_param == True:
             self.out_gain = torch.nn.Parameter(torch.ones([]))
@@ -111,13 +119,7 @@ class MPConv3D_E(torch.nn.Module):
             return x @ w.t()
         
         if w.ndim == 5:
-            if w.shape[-3] == 2:
-                x = torch.cat((x, x[:, :, 0:1]), dim=2)
-
-            if w.shape[-1] == 3 and w.shape[-2] == 3:
-                x = torch.cat((x[:, :, :, :, 0:1], x, x[:, :, :, :, -1:]), dim=4)
-
-            return torch.nn.functional.conv3d(x, w, padding=(0, w.shape[-2]//2, 0), groups=self.groups, stride=self.stride)
+            return torch.nn.functional.conv3d(self.padding(x), w, padding=(0, w.shape[-2]//2, 0), groups=self.groups, stride=self.stride)
         else:
             return torch.nn.functional.conv2d(x, w, padding=(w.shape[-2]//2, w.shape[-1]//2), groups=self.groups, stride=self.stride)
 
@@ -169,7 +171,7 @@ class Block(torch.nn.Module):
                     out_channels, kernel=kernel, groups=mlp_groups)
 
         if in_channels != out_channels or mlp_groups > 1:
-            self.conv_skip = conv_class(in_channels, out_channels, kernel=(1,1,1), groups=1)
+            self.conv_skip = conv_class(in_channels, out_channels, kernel=(1,1,1), groups=mlp_groups)
         else:
             self.conv_skip = None
 
@@ -178,8 +180,8 @@ class Block(torch.nn.Module):
             kernel=(1,1,1), groups=emb_linear_groups) if emb_channels != 0 else None
         
         if self.use_attention:
-            self.attn_qkv = conv_class(out_channels, out_channels * 3, kernel=(1,1,1))
-            self.attn_proj = conv_class(out_channels, out_channels, kernel=(1,1,1))
+            self.attn_qkv = conv_class(out_channels, out_channels * 3, kernel=(1,1,1), groups=mlp_groups)
+            self.attn_proj = conv_class(out_channels, out_channels, kernel=(1,1,1), groups=mlp_groups)
 
     def forward(self, x: torch.Tensor, emb: torch.Tensor) -> torch.Tensor:
         
@@ -242,9 +244,12 @@ class DAE_G3(DualDiffusionDAE):
         super().__init__()
         self.config = config
 
+        assert len(config.dog_kernel_sizes) == config.latent_channels
+        assert config.model_channels % config.latent_channels == 0
+
         block_kwargs = {"mlp_multiplier": config.mlp_multiplier,
-                        "mlp_groups": config.mlp_groups,
-                        "emb_linear_groups": config.emb_linear_groups,
+                        "mlp_groups": config.latent_channels,
+                        "emb_linear_groups": config.latent_channels,
                         "res_balance": config.res_balance,
                         "attn_balance": config.attn_balance,
                         "num_attn_heads": config.num_attn_heads,
@@ -254,7 +259,8 @@ class DAE_G3(DualDiffusionDAE):
 
         self.num_levels = len(config.channel_mult_dec)
         self.downsample_ratio = 2 ** (self.num_levels - 1)
-        self.out_gain = torch.nn.Parameter(torch.ones([]))
+        self.latents_out_gain = torch.nn.Parameter(torch.ones(config.latent_channels))
+        self.out_gain = torch.nn.Parameter(torch.ones(config.latent_channels))
         self.recon_loss_logvar = torch.nn.Parameter(torch.zeros([]))
 
         self.dog_loss = DoG_Loss2D(DoG_Loss2D_Config(
@@ -271,21 +277,22 @@ class DAE_G3(DualDiffusionDAE):
             self.emb_label = None
             self.emb_dim = 0
 
-        in_channels = 1 + int(config.add_constant_channel)
+        in_channels = 1 * config.latent_channels + int(config.add_constant_channel) * config.latent_channels
         enc_channels = config.model_channels * config.channel_mult_enc
         dec_channels = [config.model_channels * m for m in config.channel_mult_dec]
         level = 0
 
         # encoder
         self.enc = torch.nn.ModuleDict()
-        self.enc[f"conv_in"] = MPConv3D_E(in_channels, enc_channels, kernel=(1,3,3))
+        self.enc[f"conv_in"] = MPConv3D_E(in_channels, enc_channels, kernel=(1,3,3), groups=config.latent_channels)
         
         for idx in range(config.num_enc_layers):
             self.enc[f"block{level}_layer{idx}"] = Block(level, enc_channels, enc_channels, 0,
                 use_attention=False, flavor="enc", **block_kwargs)
 
-        self.conv_latents_out = MPConv3D_E(enc_channels, config.latent_channels, kernel=(1,3,3))
-        self.conv_latents_in = MPConv3D_E(config.latent_channels + int(config.add_constant_channel), dec_channels[-1], kernel=(1,3,3))
+        self.conv_latents_out = MPConv3D_E(enc_channels, config.latent_channels, kernel=(1,3,3), groups=config.latent_channels)
+        self.conv_latents_in = MPConv3D_E(config.latent_channels + int(config.add_constant_channel) * config.latent_channels,
+                                                                dec_channels[-1], kernel=(1,3,3), groups=config.latent_channels)
 
         # decoder
         self.dec = torch.nn.ModuleDict()
@@ -308,7 +315,7 @@ class DAE_G3(DualDiffusionDAE):
 
             cin = cout
 
-        self.conv_out = MPConv3D_E(cout, self.config.out_channels, kernel=(1,3,3))
+        self.conv_out = MPConv3D_E(cout, self.config.latent_channels, kernel=(1,3,3), groups=self.config.latent_channels)
 
     def get_embeddings(self, emb_in: torch.Tensor) -> torch.Tensor:
         if self.emb_label is not None:
@@ -339,6 +346,7 @@ class DAE_G3(DualDiffusionDAE):
 
         x = tensor_4d_to_5d(x, num_channels=1)
         x = torch.cat((x, torch.ones_like(x[:, :1])), dim=1)
+        x = x.repeat(1, self.config.latent_channels, 1, 1, 1)
 
         if embeddings is not None:
             embeddings = embeddings.unsqueeze(-1).unsqueeze(-1).unsqueeze(-1)
@@ -346,17 +354,22 @@ class DAE_G3(DualDiffusionDAE):
         for name, block in self.enc.items():
             x = block(x) if "conv" in name else block(x, embeddings)
         
-        latents = tensor_5d_to_4d(self.conv_latents_out(x))
+        x = self.conv_latents_out(x) * self.latents_out_gain.view(1,-1, 1, 1, 1)
+
+        latents = tensor_5d_to_4d(x)
         latents = torch.nn.functional.avg_pool2d(latents, self.downsample_ratio)
         if normalize_latents == True:
-            return normalize(latents)
+            return normalize(latents, dim=(2,3))
         else:
             return latents
 
     def decode(self, x: torch.Tensor, embeddings: torch.Tensor, enhance: bool = True) -> torch.Tensor:
 
         x = tensor_4d_to_5d(x, num_channels=self.config.latent_channels)
-        x = torch.cat((x, torch.ones_like(x[:, :1])), dim=1)
+        ones = torch.ones_like(x[:, :1]).expand(-1, self.config.latent_channels, -1, -1, -1)
+        b,c,z,h,w = x.shape
+        x = torch.stack((ones, x), dim=2).reshape(b, c*2, z, h, w)
+
         x = self.conv_latents_in(x)
 
         if embeddings is not None:
@@ -365,7 +378,9 @@ class DAE_G3(DualDiffusionDAE):
         for name, block in self.dec.items():
             x = block(x, embeddings)
 
-        decoded = tensor_5d_to_4d(self.conv_out(x, gain=self.out_gain))
+        x = self.conv_out(x) * self.out_gain.view(1,-1, 1, 1, 1)
+
+        decoded = tensor_5d_to_4d(x)
 
         if enhance == True:
             return self.dog_loss.reconstruct(decoded)
@@ -376,9 +391,9 @@ class DAE_G3(DualDiffusionDAE):
             add_latents_noise: float = 0) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         
         pre_norm_latents = self.encode(samples, dae_embeddings, normalize_latents=False)
-        latents = normalize(pre_norm_latents)
+        latents = normalize(pre_norm_latents, dim=(2,3))
         if add_latents_noise > 0:
-            latents = normalize(latents + torch.randn_like(latents) * add_latents_noise)
+            latents = normalize(latents + torch.randn_like(latents) * add_latents_noise, dim=(2,3))
         
         reconstructed = self.decode(latents, dae_embeddings, enhance=False)
         nll_loss, dog_losses = self.dog_loss(reconstructed, samples)

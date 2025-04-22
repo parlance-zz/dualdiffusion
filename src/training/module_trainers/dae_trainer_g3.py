@@ -69,8 +69,8 @@ class DAETrainer_G3(ModuleTrainer):
         mel_spec = self.format.raw_to_mel_spec(batch["audio"]).detach()
         latents, reconstructed, pre_norm_latents, nll_loss, dog_losses = self.dae(mel_spec, dae_embeddings, add_latents_noise=self.config.add_latents_noise)
 
-        pre_norm_latents_var = pre_norm_latents.var(dim=(1,2,3))
-        kl_loss = pre_norm_latents.mean(dim=(1,2,3)).square() + pre_norm_latents_var - 1 - pre_norm_latents_var.log()
+        pre_norm_latents_var = pre_norm_latents.var(dim=(2,3))
+        kl_loss = pre_norm_latents.mean(dim=(2,3)).square() + pre_norm_latents_var - 1 - pre_norm_latents_var.log()
 
         kl_loss_weight = self.config.kl_loss_weight
         if self.trainer.global_step < self.config.kl_warmup_steps:

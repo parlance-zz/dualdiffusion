@@ -146,12 +146,14 @@ class MSSLoss2D:
         for block_width in self.config.block_widths:
             self.steps.append(max(block_width // self.config.block_overlap, 1))
 
-            if self.config.use_circular_window == True:
-                window = self.get_flat_top_window_2d_circular(block_width)
-            else:
-                window = self.get_flat_top_window_2d(block_width)
+            #if self.config.use_circular_window == True:
+            #    window = self.get_flat_top_window_2d_circular(block_width)
+            #else:
+            #    window = self.get_flat_top_window_2d(block_width)
+            window = self.get_sin_power_window_2d(block_width)
             window /= window.square().mean().sqrt()
             self.windows.append(window.to(device=device).requires_grad_(False).detach())
+            #self.windows.append(1)
             
             if self.config.use_frequency_weight not in ["none", None]:
                 blockfreq_y = torch.fft.fftfreq(block_width, 1/block_width, device=device)
@@ -179,6 +181,15 @@ class MSSLoss2D:
     def get_flat_top_window_2d(self, block_width: int) -> torch.Tensor:
         wx = (torch.arange(block_width) + 0.5) / block_width * 2 * torch.pi
         return self._flat_top_window(wx.view(1, 1,-1, 1)) * self._flat_top_window(wx.view(1, 1, 1,-1))
+    
+    @torch.no_grad()
+    def _sin_power_window(self, x: torch.Tensor, e: float = 1) -> torch.Tensor:
+        return x.sin()**2#e
+    
+    @torch.no_grad()
+    def get_sin_power_window_2d(self, block_width: int, e: float = 1) -> torch.Tensor:
+        wx = (torch.arange(block_width) + 0.5) / block_width * torch.pi
+        return self._sin_power_window(wx.view(1, 1,-1, 1), e) * self._sin_power_window(wx.view(1, 1, 1,-1), e)
     
     @torch.no_grad()
     def create_distance_tensor(self, block_width: int) -> torch.Tensor:
