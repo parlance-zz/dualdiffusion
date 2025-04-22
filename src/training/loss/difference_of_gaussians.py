@@ -100,6 +100,10 @@ class DoG_Loss2D(nn.Module):
 
         for i, target_dog in enumerate(target_dogs):
             sample_dog = sample[:, i*2:i*2+2, :, :]
+            if i < len(self.config.kernel_sizes) - 1:
+                sample_dog = self.kernels[i](sample_dog) - self.kernels[i + 1](sample_dog)
+            else:
+                sample_dog = self.kernels[i](sample_dog)
             dog_loss = F.mse_loss(sample_dog, target_dog, reduction="none").mean(dim=(1,2,3))
             nll_loss = nll_loss + (dog_loss / self.mse_logvar[i].exp() + self.mse_logvar[i])
             dog_losses.append(dog_loss.detach())
@@ -112,12 +116,18 @@ class DoG_Loss2D(nn.Module):
         recon_image = torch.zeros_like(sample[:, 0:2])
         for i in range(len(self.config.kernel_sizes)):
 
-            dog = sample[:, i*2:i*2+2, :, :]
-            sample_energy = dog.var(dim=(1,2,3), keepdim=True)
+            sample_dog = sample[:, i*2:i*2+2, :, :]
+
+            if i < len(self.config.kernel_sizes) - 1:
+                sample_dog = self.kernels[i](sample_dog) - self.kernels[i + 1](sample_dog)
+            else:
+                sample_dog = self.kernels[i](sample_dog)
+
+            sample_energy = sample_dog.var(dim=(1,2,3), keepdim=True)
             target_energy = sample_energy + self.mse_logvar[i].exp()
 
-            mean = dog.mean(dim=(1,2,3), keepdim=True)
-            recon_image = recon_image + (dog - mean) * (target_energy / sample_energy).sqrt() + mean
+            mean = sample_dog.mean(dim=(1,2,3), keepdim=True)
+            recon_image = recon_image + (sample_dog - mean) * (target_energy / sample_energy).sqrt() + mean
 
         return recon_image
 
