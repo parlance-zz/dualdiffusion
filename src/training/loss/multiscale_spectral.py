@@ -129,7 +129,7 @@ class MSSLoss2DConfig:
     frequency_weight_exponent: float = 1
     use_midside_transform: Literal["stack", "cat", "none"] = "stack"
     use_circular_window: bool = False
-    loss_scale: float = 0.5
+    loss_scale: float = 10
 
 class MSSLoss2D:
 
