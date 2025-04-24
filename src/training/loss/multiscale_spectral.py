@@ -122,12 +122,12 @@ class MSSLoss1D:
 class MSSLoss2DConfig:
 
     block_widths: tuple[int] = (8, 16, 32, 64)
-    block_overlap: int = 8
-    block_width_weight_exponent: float = 0
+    block_overlap: int = 2
+    block_width_weight_exponent: float = -0.5
 
-    use_frequency_weight: Literal["product", "euclidean", "none"] = "product"
-    frequency_weight_exponent: float = 1
-    use_midside_transform: Literal["stack", "cat", "none"] = "stack"
+    use_frequency_weight: Literal["product", "euclidean", "none"] = "euclidean"
+    frequency_weight_exponent: float = 0.5
+    use_midside_transform: Literal["stack", "cat", "none"] = "none"
     use_circular_window: bool = False
     loss_scale: float = 10
 

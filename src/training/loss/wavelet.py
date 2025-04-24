@@ -25,13 +25,15 @@ from typing import Literal
 
 import torch
 
+from modules.mp_tools import wavelet_decompose2d
+
 
 @dataclass
 class WaveletLoss_Config:
 
-    levels: int = 7
-    level_weight_exponent: float = 1
-    use_midside_transform: Literal["stack", "cat", "none"] = "cat"
+    levels: int = 4
+    level_weight_exponent: float = 0.75
+    use_midside_transform: Literal["stack", "cat", "none"] = "none"
 
 class WaveletLoss:
 
@@ -56,44 +58,25 @@ class WaveletLoss:
                     y = torch.cat((y, (y[:, 0:1] + y[:, 1:2])*0.5**0.5, (y[:, 0:1] - y[:, 1:2])*0.5**0.5), dim=1)
             else:
                 raise ValueError(f"Invalid midside transform type: {self.config.use_midside_transform}")
-            
+        
+        wx = wavelet_decompose2d(x, num_levels=self.config.levels)
+        with torch.no_grad():
+            wy = wavelet_decompose2d(y, num_levels=self.config.levels)
+
         level_losses = []
         total_loss = torch.zeros(sample.shape[0], device=sample.device)
 
         for i in range(self.config.levels):
+            
+            x = wx[i]
+            y = wy[i]
 
-            dx = x[:, :, 1::2, ::2] - x[:, :, :-1:2, ::2]
-            with torch.no_grad():
-                dy = y[:, :, 1::2, ::2] - y[:, :, :-1:2, ::2]
-            #level_loss = torch.nn.functional.l1_loss(dx, dy, reduction="none").mean(dim=(1,2,3))
-            level_loss = torch.nn.functional.l1_loss(dx.square(), dy.square(), reduction="none").mean(dim=(1,2,3))
-
-            dx = x[:, :, ::2, 1::2] - x[:, :, ::2, :-1:2]
-            with torch.no_grad():
-                dy = y[:, :, ::2, 1::2] - y[:, :, ::2, :-1:2]
-            #level_loss = level_loss + torch.nn.functional.l1_loss(dx, dy, reduction="none").mean(dim=(1,2,3))
-            level_loss = level_loss + torch.nn.functional.l1_loss(dx.square(), dy.square(), reduction="none").mean(dim=(1,2,3))
-
-            dx = x[:, :, 1::2, 1::2] - x[:, :, :-1:2, :-1:2]
-            with torch.no_grad():
-                dy = y[:, :, 1::2, 1::2] - y[:, :, :-1:2, :-1:2]
-            #level_loss = level_loss + torch.nn.functional.l1_loss(dx, dy, reduction="none").mean(dim=(1,2,3))
-            level_loss = level_loss + torch.nn.functional.l1_loss(dx.square(), dy.square(), reduction="none").mean(dim=(1,2,3))
-
-            dx = x[:, :, 1::2, :-1:2] - x[:, :, :-1:2, 1::2]
-            with torch.no_grad():
-                dy = y[:, :, 1::2, :-1:2] - y[:, :, :-1:2, 1::2]
-            #level_loss = level_loss + torch.nn.functional.l1_loss(dx, dy, reduction="none").mean(dim=(1,2,3))
-            level_loss = level_loss + torch.nn.functional.l1_loss(dx.square(), dy.square(), reduction="none").mean(dim=(1,2,3))
-
-            level_losses.append(level_loss.detach())
             level_weight = 4**(-i * self.config.level_weight_exponent)
+
+            level_loss = torch.nn.functional.l1_loss(x, y, reduction="none").mean(dim=(1,2,3))
             total_loss = total_loss + level_loss * level_weight
 
-            if i < self.config.levels - 1:
-                x = torch.nn.functional.avg_pool2d(x, kernel_size=2)
-                with torch.no_grad():
-                    y = torch.nn.functional.avg_pool2d(y, kernel_size=2)
+            level_losses.append(level_loss.detach())
 
         return total_loss, level_losses
 
