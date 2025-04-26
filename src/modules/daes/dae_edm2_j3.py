@@ -136,6 +136,8 @@ class Block(torch.nn.Module):
         else:
             self.conv_skip = None
 
+        self.res_balance = torch.nn.Parameter(-torch.ones([]) * 0.7)
+
     def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         
         x = resample_3d(x, mode=self.resample_mode)
@@ -143,12 +145,11 @@ class Block(torch.nn.Module):
         y = self.conv_res0(mp_silu(x))
         y = self.conv_res1(mp_silu(y))
         
-        #if self.conv_skip is not None:
-        #    x = self.conv_skip(x)
+        if self.conv_skip is not None:
+            x = self.conv_skip(x)
         
-        #x = (x + y) * 0.5**0.5
-        #x = mp_sum(x, y, t=0.3)
-        x = y
+        t = self.res_balance.sigmoid()
+        x = torch.lerp(x, y, t) / ((1 - t) ** 2 + t ** 2) ** 0.5
         
         if self.clip_act is not None:
             x = x.clip_(-self.clip_act, self.clip_act)

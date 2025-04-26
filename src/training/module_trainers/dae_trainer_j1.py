@@ -29,7 +29,7 @@ from training.trainer import DualDiffusionTrainer
 from training.module_trainers.module_trainer import ModuleTrainerConfig, ModuleTrainer
 from training.loss.multiscale_spectral import MSSLoss2D, MSSLoss2DConfig
 from training.loss.wavelet import WaveletLoss, WaveletLoss_Config
-from modules.daes.dae_edm2_j1 import DAE_J1
+from modules.daes.dae_edm2_j3 import DAE_J3
 from modules.formats.ms_mdct_dual import MS_MDCT_DualFormat
 from modules.mp_tools import normalize
 from utils.dual_diffusion_utils import dict_str
@@ -60,7 +60,7 @@ class DAETrainer_J1(ModuleTrainer):
         self.trainer = trainer
         self.logger = trainer.logger
 
-        self.dae: DAE_J1 = trainer.get_train_module("dae")
+        self.dae: DAE_J3 = trainer.get_train_module("dae")
         self.format: MS_MDCT_DualFormat = trainer.pipeline.format.to(self.trainer.accelerator.device)
 
         config.wavelet_loss_config = config.wavelet_loss_config or {}
@@ -104,13 +104,17 @@ class DAETrainer_J1(ModuleTrainer):
         latents, reconstructed, latents_kld, hidden_kld = self.dae(mel_spec, dae_embeddings)
 
         point_loss_weight = self.config.point_loss_weight
-        if self.trainer.global_step < self.config.point_loss_warmup_steps:
-            point_loss_weight *= 1 - self.trainer.global_step / self.config.point_loss_warmup_steps
-        else:
-            point_loss_weight = 0
+        if self.config.point_loss_warmup_steps > 0:
+            if self.trainer.global_step < self.config.point_loss_warmup_steps:
+                point_loss_weight *= 1 - self.trainer.global_step / self.config.point_loss_warmup_steps
+            else:
+                point_loss_weight = 0
         point_loss = torch.nn.functional.l1_loss(reconstructed, mel_spec, reduction="none").mean(dim=(1,2,3))
 
-        recon_loss = torch.zeros(latents.shape[0], device=self.trainer.accelerator.device)
+        if point_loss_weight > 0:
+            recon_loss =  point_loss * point_loss_weight
+        else:
+            recon_loss = torch.zeros(mel_spec.shape[0], device=self.trainer.accelerator.device)
 
         if self.config.wavelet_loss_weight > 0:
             wavelet_loss, level_losses = self.wavelet_loss.wavelet_loss(reconstructed, mel_spec)
@@ -135,7 +139,7 @@ class DAETrainer_J1(ModuleTrainer):
             latents_kl_loss_weight *= warmup_scale
             hidden_kl_loss_weight *= warmup_scale
 
-        total_loss = recon_loss_nll + latents_kld * latents_kl_loss_weight + hidden_kld * hidden_kl_loss_weight + point_loss * point_loss_weight
+        total_loss = recon_loss_nll + latents_kld * latents_kl_loss_weight + hidden_kld * hidden_kl_loss_weight
         logs = {
             "loss": total_loss,
             "loss/recon": recon_loss,
@@ -162,5 +166,11 @@ class DAETrainer_J1(ModuleTrainer):
             logs["loss/wavelet"] = wavelet_loss
             for i, level_loss in enumerate(level_losses):
                 logs[f"loss/wlevel_{i}"] = level_loss
+
+        for name, block in self.dae.encoder.enc.items():
+            logs[f"res_t/enc_{name}"] = block.res_balance.sigmoid().detach()
+
+        for name, block in self.dae.dec.items():
+            logs[f"res_t/dec_{name}"] = block.res_balance.sigmoid().detach()
 
         return logs
