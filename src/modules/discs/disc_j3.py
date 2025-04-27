@@ -37,13 +37,12 @@ import torch
 
 from modules.discs.disc import DualDiffusionDiscriminator, DualDiffusionDiscriminatorConfig
 from modules.mp_tools import mp_silu, normalize, resample_3d
-from utils.dual_diffusion_utils import tensor_4d_to_5d, tensor_5d_to_4d
+from utils.dual_diffusion_utils import tensor_4d_to_5d, tensor_5d_to_4d, tensor_random_cat
 
 
 @dataclass
 class Discriminator_J3_Config(DualDiffusionDiscriminatorConfig):
 
-    in_channels: int     = 2
     in_channels_emb: int = 1024
     in_num_freqs: int    = 256
 
@@ -167,21 +166,21 @@ class Block(torch.nn.Module):
 
 class Discriminator(torch.nn.Module):
 
-    def __init__(self, in_channels: int, model_channels: int, emb_channels: int,
+    def __init__(self, model_channels: int, emb_channels: int,
             num_layers: int, block_kwargs: dict, kernel: tuple[int, int] = (1,3,3)) -> None:
         
         super().__init__()
 
         self.input_gain = torch.nn.Parameter(torch.ones([]))
         self.input_shift = torch.nn.Parameter(torch.zeros([]))
-        self.conv_in = MPConv3D_E(in_channels + 1, model_channels, kernel=kernel)
+        self.conv_in = MPConv3D_E(2 + 1, model_channels, kernel=kernel)
 
         self.disc = torch.nn.ModuleDict()
         for idx in range(num_layers):
             self.disc[f"layer{idx}"] = Block(0, model_channels, model_channels, emb_channels,
                                                             kernel=kernel, **block_kwargs)
 
-        self.conv_out = MPConv3D_E(model_channels, in_channels, kernel=kernel)
+        self.conv_out = MPConv3D_E(model_channels, 1, kernel=kernel)
 
     def forward(self, x: torch.Tensor, emb: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         
@@ -218,23 +217,29 @@ class Discriminator_J3(DualDiffusionDiscriminator):
             self.emb_label = None
             self.emb_dim = 0
 
-        self.disc = Discriminator(config.in_channels, config.model_channels, cemb,
-                                  config.num_layers, block_kwargs, kernel=(1,3,3))
+        self.disc = Discriminator(config.model_channels, cemb, config.num_layers, block_kwargs, kernel=(1,3,3))
 
     def get_embeddings(self, emb_in: torch.Tensor) -> torch.Tensor:
         if self.emb_label is not None:
             return self.emb_label(normalize(emb_in).to(device=self.device, dtype=self.dtype))
         else:
             return None
-    
+
     def forward(self, samples: torch.Tensor, target: torch.Tensor, embeddings: torch.Tensor, training: bool = False) -> tuple[torch.Tensor, ...]:
         
-        x = torch.cat((samples, target), dim=1)
-        y, hidden_kld = self.disc(tensor_4d_to_5d(x, num_channels=self.config.in_channels), embeddings)
+        if embeddings is not None:
+            embeddings = embeddings.unsqueeze(-1).unsqueeze(-1).unsqueeze(-1)
+            
+        if training == True:
+            x, labels = tensor_random_cat(samples, target)
+        else:
+            x = torch.cat((samples, target), dim=1)
 
+        y, hidden_kld = self.disc(tensor_4d_to_5d(x, num_channels=2), embeddings)
         logits = tensor_5d_to_4d(y)
 
         if training == False:
             return logits
         else:
-            return logits, hidden_kld
+            bce_loss = torch.nn.functional.binary_cross_entropy_with_logits(logits, labels, reduction="none").mean(dim=(1,2,3))
+            return bce_loss, hidden_kld

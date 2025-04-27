@@ -31,7 +31,6 @@ from modules.module import DualDiffusionModule, DualDiffusionModuleConfig
 @dataclass
 class DualDiffusionDiscriminatorConfig(DualDiffusionModuleConfig, ABC):
 
-    in_channels: int     = 2
     in_channels_emb: int = 1024
     in_num_freqs: int    = 256
 
