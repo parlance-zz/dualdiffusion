@@ -548,6 +548,27 @@ def tensor_info_str(x: torch.Tensor) -> str:
     info_str += f"  mean: {x.mean().item():.4f}  std: {x.std().item():.4f}  norm: {x.square().mean().sqrt().item():.4f}"
     return info_str
 
+# concatenate 2 tensors of shape (b, c, h, w) along the channel dimension in random order
+# returns the concatenated tensor and a label tensor of shape (b, c, h, w) where 1 means x1 is first
+def tensor_random_cat(x1: torch.Tensor, x2: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+    # x1, x2: (b, c, h, w)
+    b, c, h, w = x1.shape
+
+    # this mask indicates for each sample in the batch whether to flip the order
+    flip_mask = torch.randint(low=0, high=2, size=(b, 1, 1, 1), device=x1.device, dtype=torch.bool)
+
+    # concatenate in random order along channel dimension
+    first = torch.where(flip_mask, x2, x1)
+    second = torch.where(flip_mask, x1, x2)
+    concatenated = torch.cat([first, second], dim=1)  # (b, 2c, h, w)
+
+    # label 1 means "the first input is authentic", 0 means "the second input is authentic"
+    # mask: True means x2 is first, so x1 is second (not authentic), hence label 0
+    #       False means x1 is first, so label 1
+    labels = (~flip_mask).expand(-1, c, h, w).to(torch.float32)
+    
+    return concatenated, labels
+
 @torch.inference_mode()
 def tensor_to_img(x: torch.Tensor,
                   recenter: bool = True,
