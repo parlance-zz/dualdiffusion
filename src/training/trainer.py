@@ -355,7 +355,7 @@ class DualDiffusionTrainer:
     
     def get_train_module(self, module_name: str) -> DualDiffusionModule:
         if module_name not in self.config.train_modules:
-            raise ValueError(f"Module {module_name} not found in config.train_modules")
+            return None
         
         return self.modules[self.config.train_modules.index(module_name)]
 

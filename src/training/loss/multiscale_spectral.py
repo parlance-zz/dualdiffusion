@@ -243,6 +243,7 @@ class MSSLoss2D:
             sample_fft_abs = sample_fft.abs()
             
             l1_loss = torch.nn.functional.l1_loss(sample_fft_abs.float(), target_fft_abs.float(), reduction="none")
+            l1_loss[..., 0, 0] = 0
             loss = loss + (l1_loss * loss_weight).mean(dim=(1,2,3,4,5))
    
         return loss * self.config.loss_scale
