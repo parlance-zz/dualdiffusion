@@ -173,7 +173,7 @@ class Discriminator(torch.nn.Module):
 
         self.input_gain = torch.nn.Parameter(torch.ones([]))
         self.input_shift = torch.nn.Parameter(torch.zeros([]))
-        self.conv_in = MPConv3D_E(2 + 1, model_channels, kernel=kernel)
+        self.conv_in = MPConv3D_E(1 + 1, model_channels, kernel=kernel)
 
         self.disc = torch.nn.ModuleDict()
         for idx in range(num_layers):
@@ -225,18 +225,13 @@ class Discriminator_J3(DualDiffusionDiscriminator):
         else:
             return None
 
-    def forward(self, samples: torch.Tensor, target: torch.Tensor, embeddings: torch.Tensor, training: bool = False) -> tuple[torch.Tensor, ...]:
+    def forward(self, samples: torch.Tensor, labels: torch.Tensor, embeddings: torch.Tensor, training: bool = False) -> tuple[torch.Tensor, ...]:
         
         if embeddings is not None:
             embeddings = embeddings.unsqueeze(-1).unsqueeze(-1).unsqueeze(-1)
-            
-        if training == True:
-            x, labels = tensor_random_cat(samples, target)
-        else:
-            x = torch.cat((samples, target), dim=1)
 
-        y, hidden_kld = self.disc(tensor_4d_to_5d(x, num_channels=2), embeddings)
-        logits = tensor_5d_to_4d(y)
+        x, hidden_kld = self.disc(tensor_4d_to_5d(samples, num_channels=1), embeddings)
+        logits = tensor_5d_to_4d(x)
 
         if training == False:
             return logits
