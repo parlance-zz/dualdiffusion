@@ -163,6 +163,7 @@ class DualDiffusionTrainerConfig:
     enable_bf16_reduction_in_sdp: bool  = False
     enable_anomaly_detection: bool      = False
     enable_model_compilation: bool      = True
+    enable_debug_mode: bool             = False
     compile_params: Optional[dict]      = None
 
     @staticmethod
@@ -332,6 +333,10 @@ class DualDiffusionTrainer:
                 module = getattr(self.pipeline, module_name).requires_grad_(True).train()
                 self.modules.append(module)
                 self.module_classes.append(type(module))
+
+        if self.config.enable_debug_mode == True:
+            self.config.device_batch_size = 2
+            self.config.validation_device_batch_size = 2
 
         self.sample_shape: tuple = self.pipeline.get_mel_spec_shape(bsz=self.config.device_batch_size)
         self.validation_sample_shape: tuple = self.pipeline.get_mel_spec_shape(bsz=self.config.validation_device_batch_size)
@@ -555,6 +560,9 @@ class DualDiffusionTrainer:
    
     def init_dataloader(self) -> None:
         
+        if self.config.enable_debug_mode == True:
+            self.config.dataloader.load_splits = ["debug"]
+
         self.local_batch_size = self.config.device_batch_size * self.config.gradient_accumulation_steps
         self.total_batch_size = self.local_batch_size * self.accelerator.num_processes
         self.validation_local_batch_size = self.config.validation_device_batch_size * self.config.validation_accumulation_steps
@@ -572,8 +580,9 @@ class DualDiffusionTrainer:
         )
         self.dataset = DualDiffusionDataset(dataset_config, self.pipeline.format.config, self.pipeline.embedding.config)
 
+        self.train_split_name = self.config.dataloader.load_splits[0]
         self.train_dataloader = torch.utils.data.DataLoader(
-            self.dataset["train"], shuffle=True,
+            self.dataset[self.train_split_name], shuffle=True,
             batch_size=self.local_batch_size,
             num_workers=self.config.dataloader.dataloader_num_workers or 0,
             pin_memory=self.config.dataloader.pin_memory,
@@ -588,7 +597,7 @@ class DualDiffusionTrainer:
             self.validation_dataloader = None
 
         self.logger.info(f"Using dataset path {config.DATASET_PATH} with {dataset_config.num_proc or 1} dataset processes)")
-        self.logger.info(f"  {len(self.dataset['train'])} train samples ({self.dataset.num_filtered_samples['train']} filtered)")
+        self.logger.info(f"  {len(self.dataset[self.train_split_name])} samples ({self.dataset.num_filtered_samples[self.train_split_name]} filtered) in split '{self.train_split_name}'")
         if self.config.num_validation_epochs > 0:
             self.logger.info(f"  {len(self.dataset['validation'])} validation samples ({self.dataset.num_filtered_samples['validation']} filtered)")
         self.logger.info(f"Using train dataloader with {self.config.dataloader.dataloader_num_workers or 0} workers")
@@ -599,6 +608,11 @@ class DualDiffusionTrainer:
 
     def init_torch_compile(self) -> None:
 
+        if self.config.enable_debug_mode == True:
+            self.config.enable_model_compilation = False
+            self.logger.info("Debug mode enabled - skipping model compilation")
+            return
+        
         if self.config.enable_model_compilation:
             if platform.system() == "Linux":
                 self.config.compile_params = self.config.compile_params or {"fullgraph": True, "dynamic": False}
@@ -739,7 +753,7 @@ class DualDiffusionTrainer:
     def train(self) -> None:
 
         self.logger.info("***** Running training *****")
-        self.logger.info(f"  Num examples = {len(self.dataset['train'])}")
+        self.logger.info(f"  Num examples = {len(self.dataset[self.train_split_name])}")
         self.logger.info(f"  Instantaneous batch size per device = {self.config.device_batch_size}")
         self.logger.info(f"  Gradient accumulation steps = {self.config.gradient_accumulation_steps}")
         self.logger.info(f"  Total train batch size (w. parallel, distributed & accumulation) = {self.total_batch_size}")
