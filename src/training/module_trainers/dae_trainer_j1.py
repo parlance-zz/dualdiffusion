@@ -22,13 +22,14 @@
 
 from dataclasses import dataclass
 from typing import Union, Any, Optional
+from copy import deepcopy
 
 import torch
+import numpy as np
 
 from training.trainer import DualDiffusionTrainer
 from training.module_trainers.module_trainer import ModuleTrainerConfig, ModuleTrainer
 from training.loss.multiscale_spectral import MSSLoss2D, MSSLoss2DConfig
-from training.loss.wavelet import WaveletLoss, WaveletLoss_Config
 from modules.daes.dae_edm2_j3 import DAE_J3
 from modules.formats.ms_mdct_dual import MS_MDCT_DualFormat
 from modules.mp_tools import normalize
@@ -38,17 +39,14 @@ from utils.dual_diffusion_utils import dict_str
 @dataclass
 class DAETrainer_J1_Config(ModuleTrainerConfig):
 
-    latents_kl_loss_weight: float = 3e-2
-    hidden_kl_loss_weight: float = 1e-3
+    latents_kl_loss_weight: float = 6e-2
+    hidden_kl_loss_weight: float = 4e-3
     kl_warmup_steps: int = 1000
 
-    point_loss_weight: float = 0.5
-    point_loss_warmup_steps: int = 1000
+    point_loss_weight: float = 1
+    point_loss_warmup_steps: int = 100
 
-    wavelet_loss_weight: float = 10
-    wavelet_loss_config: Optional[dict[str, Any]] = None
-
-    mss_loss_weight : float = 1
+    mss_loss_weight: float = 1
     mss_loss_2d_config: Optional[dict[str, Any]] = None
 
 class DAETrainer_J1(ModuleTrainer):
@@ -63,17 +61,16 @@ class DAETrainer_J1(ModuleTrainer):
         self.dae: DAE_J3 = trainer.get_train_module("dae")
         self.format: MS_MDCT_DualFormat = trainer.pipeline.format.to(self.trainer.accelerator.device)
 
-        config.wavelet_loss_config = config.wavelet_loss_config or {}
-        self.wavelet_loss = WaveletLoss(WaveletLoss_Config(**config.wavelet_loss_config))
-
-        config.mss_loss_2d_config = config.mss_loss_2d_config or {}
-        self.mss_loss = MSSLoss2D(MSSLoss2DConfig(**config.mss_loss_2d_config), device=trainer.accelerator.device)
-        
         if trainer.config.enable_model_compilation == True:
             self.dae.compile(**trainer.config.compile_params)
             self.format.compile(**trainer.config.compile_params)
-            self.wavelet_loss.compile(**trainer.config.compile_params)
-            self.mss_loss.compile(**trainer.config.compile_params)
+
+        if config.mss_loss_weight > 0:
+            config.mss_loss_2d_config = config.mss_loss_2d_config or {}
+            self.mss_loss = MSSLoss2D(MSSLoss2DConfig(**config.mss_loss_2d_config), device=trainer.accelerator.device)
+
+            if trainer.config.enable_model_compilation == True:
+                self.mss_loss.compile(**trainer.config.compile_params)
 
         self.logger.info("Training DAE model:")
         self.logger.info(f"Latents KL loss weight: {self.config.latents_kl_loss_weight}")
@@ -82,22 +79,18 @@ class DAETrainer_J1(ModuleTrainer):
         self.logger.info(f"Point loss weight: {self.config.point_loss_weight}")
         self.logger.info(f"Point loss warmup steps: {self.config.point_loss_warmup_steps}")
 
-        self.logger.info(f"Wavelet loss weight: {self.config.wavelet_loss_weight}")
-        if self.config.wavelet_loss_weight > 0:
-            self.logger.info("WaveletLoss config:")
-            self.logger.info(dict_str(self.wavelet_loss.config.__dict__))
-
         self.logger.info(f"MSS loss weight: {self.config.mss_loss_weight}")
         if self.config.mss_loss_weight > 0:
             self.logger.info("MSS_Loss_2D config:")
             self.logger.info(dict_str(self.mss_loss.config.__dict__))
-
+    
     def train_batch(self, batch: dict) -> dict[str, Union[torch.Tensor, float]]:
 
         if "audio_embeddings" in batch:
             audio_embeddings = normalize(batch["audio_embeddings"]).detach()
             dae_embeddings = self.dae.get_embeddings(audio_embeddings)
         else:
+            audio_embeddings = None
             dae_embeddings = None
         
         mel_spec = self.format.raw_to_mel_spec(batch["audio"]).detach()
@@ -110,18 +103,12 @@ class DAETrainer_J1(ModuleTrainer):
             else:
                 point_loss_weight = 0
         point_loss = torch.nn.functional.l1_loss(reconstructed, mel_spec, reduction="none").mean(dim=(1,2,3))
+        point_loss_mse = torch.nn.functional.mse_loss(reconstructed, mel_spec, reduction="none").mean(dim=(1,2,3)).detach()
 
         if point_loss_weight > 0:
             recon_loss =  point_loss * point_loss_weight
         else:
             recon_loss = torch.zeros(mel_spec.shape[0], device=self.trainer.accelerator.device)
-
-        if self.config.wavelet_loss_weight > 0:
-            wavelet_loss, level_losses = self.wavelet_loss.wavelet_loss(reconstructed, mel_spec)
-            recon_loss = recon_loss + wavelet_loss * self.config.wavelet_loss_weight
-        else:
-            wavelet_loss = None
-            level_losses = None
         
         if self.config.mss_loss_weight > 0:
             mss_loss = self.mss_loss.mss_loss(reconstructed, mel_spec)
@@ -140,16 +127,17 @@ class DAETrainer_J1(ModuleTrainer):
             hidden_kl_loss_weight *= warmup_scale
 
         total_loss = recon_loss_nll + latents_kld * latents_kl_loss_weight + hidden_kld * hidden_kl_loss_weight
+
         logs = {
             "loss": total_loss,
             "loss/recon": recon_loss,
             "loss/point": point_loss,
+            "loss/point_mse": point_loss_mse,
             "loss/kl_latents": latents_kld,
             "loss/kl_hidden": hidden_kld,
             "loss_weight/kl_latents": latents_kl_loss_weight,
             "loss_weight/kl_hidden": hidden_kl_loss_weight,
             "loss_weight/point": point_loss_weight,
-            "loss_weight/wavelet": self.config.wavelet_loss_weight,
             "loss_weight/mss": self.config.mss_loss_weight,
             "io_stats/mel_spec_std": mel_spec.std(dim=(1,2,3)),
             "io_stats/mel_spec_mean": mel_spec.mean(dim=(1,2,3)),
@@ -158,14 +146,9 @@ class DAETrainer_J1(ModuleTrainer):
             "io_stats/latents_std": latents.std(dim=(1,2,3)),
             "io_stats/latents_mean": latents.mean(dim=(1,2,3))
         }
-
+        
         if mss_loss is not None:
             logs["loss/mss"] = mss_loss
-
-        if wavelet_loss is not None:
-            logs["loss/wavelet"] = wavelet_loss
-            for i, level_loss in enumerate(level_losses):
-                logs[f"loss/wlevel_{i}"] = level_loss
 
         for name, block in self.dae.encoder.enc.items():
             logs[f"res_t/enc_{name}"] = block.res_balance.sigmoid().detach()
