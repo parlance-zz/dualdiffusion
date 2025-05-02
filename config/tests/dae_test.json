@@ -1,5 +1,5 @@
 {
-    "model_name": "edm2_ddec_mdct_b2b",
+    "model_name": "edm2_dae_j3a",
     "model_load_options": {
         "torch_dtype": "bfloat16",
         "device": "cuda",
@@ -14,11 +14,14 @@
     "latents_tiled_encode": false,
     "latents_tiled_max_chunk_size": 6144,
     "latents_tiled_overlap": 256,
+    "latents_img_use_pca": true,
+    "latents_save_full_res": false,
     "output_lufs": -18.5,
     "ddec_output": false,
-    "add_random_test_samples": 6,
+    "add_random_test_samples": 15,
     "copy_sample_source_files": true,
     "test_samples": [
+        "psf/Karyujou/karyujou_01.psf.flac",
         "switch/Arcaea/_t_songs_ignotus.ogg.flac",
         "dsf/Metropolis Street Racer Prototype/file_15.adx.flac",
         "psf3/Iron Man/_t_! movies_HUB_05_000001C2.adx.flac",

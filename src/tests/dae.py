@@ -32,7 +32,7 @@ from modules.embeddings.clap import CLAP_Embedding
 from pipelines.dual_diffusion_pipeline import DualDiffusionPipeline, SampleParams
 from modules.unets.unet_edm2_ddec_mdct_b2 import DDec_MDCT_UNet_B2
 from modules.embeddings.clap import CLAP_Embedding
-from modules.daes.dae_edm2_g1 import DAE_G1
+from modules.daes.dae_edm2_j3 import DAE_J3
 from modules.formats.ms_mdct_dual import MS_MDCT_DualFormat
 from utils.dual_diffusion_utils import (
     init_cuda, normalize, save_audio, load_audio, load_safetensors,
@@ -55,7 +55,7 @@ def dae_test() -> None:
     model_path = os.path.join(config.MODELS_PATH, model_name)
     print(f"Loading DualDiffusion model from '{model_path}'...")
     pipeline = DualDiffusionPipeline.from_pretrained(model_path, **model_load_options)
-    dae: DAE_G1 = getattr(pipeline, "dae", None)
+    dae: DAE_J3 = getattr(pipeline, "dae", None)
     format: MS_MDCT_DualFormat = pipeline.format
     embedding: CLAP_Embedding = pipeline.embedding
 
@@ -79,7 +79,10 @@ def dae_test() -> None:
     sample_shape = pipeline.get_mel_spec_shape(raw_length=length)
     latent_shape = pipeline.get_latent_shape(sample_shape)
     print(f"Sample shape: {sample_shape}  Latent shape: {latent_shape}")
-    
+
+    if test_params.get("latents_img_use_pca", None) is not None:
+        dae.config.latents_img_use_pca = test_params["latents_img_use_pca"]
+
     output_path = os.path.join(model_path, "output", "dae", f"step_{last_global_step}")
     os.makedirs(output_path, exist_ok=True)
     start_time = datetime.datetime.now()
@@ -126,7 +129,7 @@ def dae_test() -> None:
                 latents = dae.tiled_encode(input_mel_spec.to(dtype=dae.dtype), dae_embedding,
                     max_chunk=test_params["latents_tiled_max_chunk_size"], overlap=test_params["latents_tiled_overlap"])
             else:
-                latents = dae.encode(input_mel_spec.to(dtype=dae.dtype), dae_embedding)
+                latents, _, full_res_latents = dae.encode(input_mel_spec.to(dtype=dae.dtype), dae_embedding, training=True)
             
             output_mel_spec = dae.decode(latents, dae_embedding).float()
         else:
@@ -164,8 +167,9 @@ def dae_test() -> None:
         metadata["ddec_metadata"] = dict_str(ddec_params.__dict__) if ddec is not None else "null"
 
         if latents is not None:
-            print(f"Latents channel order: {dae.config.latents_img_channel_order}")
             save_img(dae.latents_to_img(latents), os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_latents.png')}"))
+            if test_params.get("latents_save_full_res", False) == True:
+                save_img(dae.latents_to_img(full_res_latents), os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_full_latents.png')}"))
         
         save_img(format.mdct_psd_to_img(input_x_ref), os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_input_x_ref.png')}"))
         if x_ref is not None:
