@@ -31,14 +31,33 @@
 # SOFTWARE.
 
 from dataclasses import dataclass
-from typing import Union, Literal, Optional
+from typing import Union, Literal
 
 import torch
 
 from modules.daes.dae import DualDiffusionDAE, DualDiffusionDAEConfig
-from modules.mp_tools import mp_silu, mp_sum, mp_cat, normalize, resample_3d, channel_to_space3d
+from modules.mp_tools import mp_silu, normalize, resample_3d, channel_to_space3d
 from utils.dual_diffusion_utils import tensor_4d_to_5d, tensor_5d_to_4d
 
+
+# applies a (circular) brick-wall low-pass filter preserving only the lowest 1/downsample frequencies
+def lowpass_2d(x: torch.Tensor, downsample: int = 8) -> torch.Tensor:
+    
+    b, c, h, w = x.shape
+    x_dtype = x.dtype
+    
+    x_f = torch.fft.rfft2(x.float(), norm="ortho")
+    
+    with torch.no_grad():
+        freq_h = torch.fft.fftfreq(h, device=x.device)
+        freq_w = torch.fft.rfftfreq(w, device=x.device)
+        freq_grid_h, freq_grid_w = torch.meshgrid(freq_h, freq_w, indexing="ij")
+
+        dist_from_center = torch.sqrt(freq_grid_h**2 + freq_grid_w**2)
+        norm_dist = dist_from_center / (dist_from_center.max() + 1e-10)
+        mask = (norm_dist <= (1 / downsample)).unsqueeze(0).unsqueeze(0)
+    
+    return torch.fft.irfft2(x_f * mask, s=(h, w), norm="ortho").to(dtype=x_dtype)
 
 @dataclass
 class DAE_J3_Config(DualDiffusionDAEConfig):
@@ -303,12 +322,13 @@ class DAE_J3(DualDiffusionDAE):
     def encode(self, x: torch.Tensor, embeddings: torch.Tensor, training: bool = False) -> torch.Tensor:
         
         x, hidden_kld = self.encoder(tensor_4d_to_5d(x, num_channels=1))
-        latents = torch.nn.functional.avg_pool2d(tensor_5d_to_4d(x), self.downsample_ratio)
+        full_res_latents = tensor_5d_to_4d(x)
+        latents = torch.nn.functional.avg_pool2d(lowpass_2d(full_res_latents), self.downsample_ratio)
 
         if training == False:
             return latents
         else:
-            return latents, hidden_kld
+            return latents, hidden_kld, full_res_latents
 
     def decode(self, x: torch.Tensor, embeddings: torch.Tensor, training: bool = False) -> torch.Tensor:
         
@@ -332,7 +352,7 @@ class DAE_J3(DualDiffusionDAE):
     
     def forward(self, samples: torch.Tensor, dae_embeddings: torch.Tensor) -> tuple[torch.Tensor, ...]:
         
-        latents, enc_hidden_kld = self.encode(samples, dae_embeddings, training=True)
+        latents, enc_hidden_kld, _ = self.encode(samples, dae_embeddings, training=True)
         decoded, dec_hidden_kld = self.decode(latents, dae_embeddings, training=True)
 
         latents_mean = latents.mean(dim=(1,2,3))
