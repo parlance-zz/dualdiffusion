@@ -317,19 +317,27 @@ class MPConv3D(torch.nn.Module):
 
 class FilteredDownsample2D(torch.nn.Module):
 
-    def __init__(self, channels: int, kernel: int = 31, stride: int = 8) -> None:
+    def __init__(self, channels: int, kernel: int = 31, stride: int = 8, use_3d_shape: bool = False) -> None:
         super(FilteredDownsample2D, self).__init__()
 
+        self.use_3d_shape = use_3d_shape
         self.stride = stride
         self.pad = torch.nn.ReflectionPad2d([kernel//2, kernel//2, kernel//2, kernel//2])
 
         k = np.array(self._pascal_row(kernel - 1))
         filter = torch.Tensor(k[:, None] * k[None, :]).to(torch.float64)
         filter = (filter / filter.sum()).float()
-        self.register_buffer("filter", filter[None, None, :, :].expand((channels, 1, kernel, kernel)), persistent=False)
+
+        if use_3d_shape == True:
+            self.register_buffer("filter", filter[None, None, None, :, :].expand((channels, 1, 1, kernel, kernel)), persistent=False)
+        else:
+            self.register_buffer("filter", filter[None, None, :, :].expand((channels, 1, kernel, kernel)), persistent=False)
 
     def _pascal_row(self, n: int) -> list[int]:
         return [math.comb(n, k) for k in range(n + 1)]
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return torch.nn.functional.conv2d(self.pad(x), self.filter, stride=self.stride, groups=x.shape[1])
+        if self.use_3d_shape == True:
+            return torch.nn.functional.conv2d(self.pad(x), self.filter.squeeze(1), stride=self.stride, groups=x.shape[1])
+        else:
+            return torch.nn.functional.conv2d(self.pad(x), self.filter, stride=self.stride, groups=x.shape[1])

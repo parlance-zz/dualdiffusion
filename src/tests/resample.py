@@ -37,7 +37,7 @@ def lowpass_downsample(x: torch.Tensor, blur_width: float, circular: bool) -> to
     return torch.nn.functional.avg_pool2d(x, 8)
 
 def filtered_downsample(x: torch.Tensor) -> torch.Tensor:
-    blur = FilteredDownsample2D(1, kernel=31, stride=8)
+    blur = FilteredDownsample2D(1, kernel=31, stride=8, use_3d_shape=True)
     return blur(x)
 
 @torch.inference_mode()
