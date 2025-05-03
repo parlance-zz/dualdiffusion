@@ -326,7 +326,7 @@ class FilteredDownsample2D(torch.nn.Module):
         k = np.array(self._pascal_row(kernel - 1))
         filter = torch.Tensor(k[:, None] * k[None, :]).to(torch.float64)
         filter = (filter / filter.sum()).float()
-        self.register_buffer("filter", filter[None, None, :, :].expand((channels, 1, kernel, kernel)))
+        self.register_buffer("filter", filter[None, None, :, :].expand((channels, 1, kernel, kernel)), persistent=False)
 
     def _pascal_row(self, n: int) -> list[int]:
         return [math.comb(n, k) for k in range(n + 1)]
