@@ -31,8 +31,10 @@
 # SOFTWARE.
 
 from typing import Optional, Union, Literal
+import math
 
 import torch
+import numpy as np
 
 from utils.dual_diffusion_utils import TF32_Disabled
 
@@ -78,6 +80,48 @@ def resample_3d(x: torch.Tensor, mode: Literal["keep", "down", "up"] = "keep") -
     
     elif mode == 'up': # torch.nn.functional.interpolate doesn't work properly with 5d tensors
         return x.repeat_interleave(2, dim=-1).repeat_interleave(2, dim=-2)
+
+# applies a brick-wall low-pass filter preserving only the lowest 1/downsample frequencies
+def lowpass_2d(x: torch.Tensor, blur_width: float = 16, use_circular_filter: bool = True) -> torch.Tensor:
+    
+    b, c, h, w = x.shape
+    x_dtype = x.dtype
+    
+    # add padding to reduce boundary artifacts
+    pad_h, pad_w = h // 2, w // 2
+    x_padded = torch.nn.functional.pad(x, (pad_w, pad_w, pad_h, pad_h), mode="reflect")
+    
+    # compute 2d real fft on padded input
+    x_f = torch.fft.rfft2(x_padded.float(), norm="ortho")
+    
+    # build proper circular frequency mask with absolute cutoff
+    with torch.no_grad():
+        padded_h, padded_w = h + 2 * pad_h, w + 2 * pad_w
+        freq_h = torch.fft.fftfreq(padded_h, device=x.device)
+        freq_w = torch.fft.rfftfreq(padded_w, device=x.device)
+        
+        # create 2d coordinate grid
+        freq_grid_h, freq_grid_w = torch.meshgrid(freq_h, freq_w, indexing="ij")
+        
+        # calculate absolute distance from center (dc component) in cycles per pixel
+        if use_circular_filter == True:
+            dist_from_center = torch.sqrt(freq_grid_h**2 + freq_grid_w**2)
+        else:
+            dist_from_center = torch.maximum(torch.abs(freq_grid_h), torch.abs(freq_grid_w))
+        
+        # create mask using absolute cutoff frequency (cycles per pixel)
+        mask = (dist_from_center <= (1/blur_width)).unsqueeze(0).unsqueeze(0)
+    
+    # apply mask
+    x_f_filtered = x_f * mask
+    
+    # inverse real fft
+    x_filtered = torch.fft.irfft2(x_f_filtered, s=(padded_h, padded_w), norm="ortho")
+    
+    # crop to original size
+    x_filtered = x_filtered[:, :, pad_h:pad_h+h, pad_w:pad_w+w]
+    
+    return x_filtered.to(dtype=x_dtype)
 
 def midside_transform(x: torch.Tensor) -> torch.Tensor:
     return torch.stack((x[:, 0] + x[:, 1], x[:, 0] - x[:, 1]), dim=1) * 0.5**0.5
@@ -233,7 +277,7 @@ class MPConv3D(torch.nn.Module):
 
     def __init__(self, in_channels: int, out_channels: int,
                  kernel: tuple[int, int], groups: int = 1, stride: int = 1,
-                 disable_weight_norm: bool = False, norm_dim: int = 1, out_gain_param: bool = False) -> None:
+                 disable_weight_norm: bool = False) -> None:
         
         super().__init__()
 
@@ -242,26 +286,14 @@ class MPConv3D(torch.nn.Module):
         self.groups = groups
         self.stride = stride
         self.disable_weight_norm = disable_weight_norm
-        self.norm_dim = norm_dim
         
         self.weight = torch.nn.Parameter(torch.randn(out_channels, in_channels // groups, *kernel))
 
-        if out_gain_param == True:
-            self.out_gain = torch.nn.Parameter(torch.ones([]))
-        else:
-            self.out_gain = None
-
-    def forward(self, x: torch.Tensor, gain: Optional[Union[float, torch.Tensor]] = None) -> torch.Tensor:
-        
-        if self.out_gain is None:
-            if gain is None:
-                gain = 1.
-        else:
-            gain = self.out_gain
+    def forward(self, x: torch.Tensor, gain: Union[float, torch.Tensor] = 1.) -> torch.Tensor:
         
         w = self.weight.float()
         if self.training == True and self.disable_weight_norm == False:
-            w = normalize(w, dim=self.norm_dim) # traditional weight normalization
+            w = normalize(w) # traditional weight normalization
             
         w = w * (gain / w[0].numel()**0.5) # magnitude-preserving scaling
         w = w.to(x.dtype)
@@ -281,4 +313,23 @@ class MPConv3D(torch.nn.Module):
     @torch.no_grad()
     def normalize_weights(self) -> None:
         if self.disable_weight_norm == False:
-            self.weight.copy_(normalize(self.weight, dim=self.norm_dim))
+            self.weight.copy_(normalize(self.weight))
+
+class FilteredDownsample2D(torch.nn.Module):
+
+    def __init__(self, channels: int, kernel: int = 31, stride: int = 8) -> None:
+        super(FilteredDownsample2D, self).__init__()
+
+        self.stride = stride
+        self.pad = torch.nn.ReflectionPad2d([kernel//2, kernel//2, kernel//2, kernel//2])
+
+        k = np.array(self._pascal_row(kernel - 1))
+        filter = torch.Tensor(k[:, None] * k[None, :]).to(torch.float64)
+        filter = (filter / filter.sum()).float()
+        self.register_buffer("filter", filter[None, None, :, :].expand((channels, 1, kernel, kernel)))
+
+    def _pascal_row(self, n: int) -> list[int]:
+        return [math.comb(n, k) for k in range(n + 1)]
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return torch.nn.functional.conv2d(self.pad(x), self.filter, stride=self.stride, groups=x.shape[1])
