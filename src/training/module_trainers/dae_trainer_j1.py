@@ -22,10 +22,8 @@
 
 from dataclasses import dataclass
 from typing import Union, Any, Optional
-from copy import deepcopy
 
 import torch
-import numpy as np
 
 from training.trainer import DualDiffusionTrainer
 from training.module_trainers.module_trainer import ModuleTrainerConfig, ModuleTrainer
@@ -35,6 +33,14 @@ from modules.formats.ms_mdct_dual import MS_MDCT_DualFormat
 from modules.mp_tools import normalize
 from utils.dual_diffusion_utils import dict_str
 
+
+def random_stereo_augmentation(x: torch.Tensor) -> torch.Tensor:
+    
+    output = x.clone()
+    flip_mask = (torch.rand(x.shape[0]) > 0.5).to(x.device)
+    output[flip_mask] = output[flip_mask].flip(dims=(1,))
+    
+    return output
 
 @dataclass
 class DAETrainer_J1_Config(ModuleTrainerConfig):
@@ -93,7 +99,8 @@ class DAETrainer_J1(ModuleTrainer):
             audio_embeddings = None
             dae_embeddings = None
         
-        mel_spec = self.format.raw_to_mel_spec(batch["audio"]).detach()
+        raw_audio = random_stereo_augmentation(batch["audio"])
+        mel_spec = self.format.raw_to_mel_spec(raw_audio).detach()
         latents, reconstructed, latents_kld, hidden_kld = self.dae(mel_spec, dae_embeddings)
 
         point_loss_weight = self.config.point_loss_weight
