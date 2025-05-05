@@ -171,9 +171,10 @@ def dae_test() -> None:
             if test_params.get("latents_save_full_res", False) == True:
                 save_img(dae.latents_to_img(full_res_latents), os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_full_latents.png')}"))
         
-        save_img(format.mdct_psd_to_img(input_x_ref), os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_input_x_ref.png')}"))
-        if x_ref is not None:
-            save_img(format.mdct_psd_to_img(x_ref), os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_output_x_ref.png')}"))
+        if test_params.get("xref_output", False) == True:
+            save_img(format.mdct_psd_to_img(input_x_ref), os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_input_x_ref.png')}"))
+            if x_ref is not None:
+                save_img(format.mdct_psd_to_img(x_ref), os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_output_x_ref.png')}"))
         save_img(format.mel_spec_to_img(input_mel_spec), os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_input_mel_spec.png')}"))
         save_img(format.mel_spec_to_img(output_mel_spec), os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_output_mel_spec.png')}"))
 
