@@ -28,7 +28,7 @@ import torch
 
 from modules.mp_tools import lowpass_2d, FilteredDownsample2D
 from utils.dual_diffusion_utils import (
-    init_cuda, tensor_to_img, save_img
+    init_cuda, tensor_to_img, img_to_tensor, save_img, load_img
 )
 
 
@@ -37,7 +37,7 @@ def lowpass_downsample(x: torch.Tensor, blur_width: float, circular: bool) -> to
     return torch.nn.functional.avg_pool2d(x, 8)
 
 def filtered_downsample(x: torch.Tensor) -> torch.Tensor:
-    blur = FilteredDownsample2D(1, kernel=31, stride=8, use_3d_shape=True)
+    blur = FilteredDownsample2D(x.shape[1], stride=8)
     return blur(x)
 
 @torch.inference_mode()
@@ -49,7 +49,7 @@ def resample_test() -> None:
     os.makedirs(output_path, exist_ok=True)
     
     def test(down_func: callable, name: str) -> None:
-
+        
         for i in range(17):
             t1 = torch.zeros((1, 1, 256, 256))
             t1[..., 128+i, 128] = 1
@@ -73,12 +73,39 @@ def resample_test() -> None:
 
             save_img(tensor_to_img(t3, recenter=False, rescale=False),
                      os.path.join(output_path, name, f"hw_{i:02d}.png"))
-        
+
         t4 = torch.zeros((1, 1, 256, 256))
-        t4[..., 128, 0] = 1
+        t4[..., 0, 128] = 1
         t4 = down_func(t4) * 16
         save_img(tensor_to_img(t4, recenter=False, rescale=False),
-                    os.path.join(output_path, name, f"edge.png"))
+                    os.path.join(output_path, name, f"edge_t.png"))
+                
+        t5 = torch.zeros((1, 1, 256, 256))
+        t5[..., 128, 0] = 1
+        t5 = down_func(t5) * 16
+        save_img(tensor_to_img(t5, recenter=False, rescale=False),
+                    os.path.join(output_path, name, f"edge_l.png"))
+        
+        t6 = torch.zeros((1, 1, 256, 256))
+        t6[..., 255, 128] = 1
+        t6 = down_func(t6) * 16
+        save_img(tensor_to_img(t6, recenter=False, rescale=False),
+                    os.path.join(output_path, name, f"edge_b.png"))
+        
+        t7 = torch.zeros((1, 1, 256, 256))
+        t7[..., 128, 255] = 1
+        t7 = down_func(t7) * 16
+        save_img(tensor_to_img(t7, recenter=False, rescale=False),
+                    os.path.join(output_path, name, f"edge_r.png"))
+
+        if os.path.isfile(os.path.join(output_path, "test_img.png")):
+            test_img = load_img(os.path.join(output_path, "test_img.png"))
+            t_img = img_to_tensor(test_img)
+            for i in range(17):
+                t8 = torch.roll(t_img, shifts=(i, i), dims=(-1, -2))
+                t8 = down_func(t8)
+                save_img(tensor_to_img(t8, recenter=False, rescale=False),
+                        os.path.join(output_path, name, f"test_img_{i:02d}.png"))
 
     test(lambda x: lowpass_downsample(x, 8, True), "lowpass_8_circular")
     test(lambda x: lowpass_downsample(x, 8, False), "lowpass_8_square")
@@ -88,7 +115,10 @@ def resample_test() -> None:
     test(lambda x: lowpass_downsample(x, 16, False), "lowpass_16_square")
 
     test(filtered_downsample, "filtered_downsample")
-    
+
+    blur = FilteredDownsample2D(1, stride=8)
+    save_img(tensor_to_img(blur.filter), os.path.join(output_path, f"blur_filter.png"))
+
 
 if __name__ == "__main__":
 

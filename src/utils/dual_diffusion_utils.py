@@ -609,9 +609,28 @@ def tensor_to_img(x: torch.Tensor,
 
     return img
 
+def img_to_tensor(img: np.ndarray) -> torch.Tensor:
+    if img.ndim == 2:
+        img = img[..., np.newaxis]
+    elif img.ndim == 3 and img.shape[-1] == 4:
+        img = img[..., :3] * img[..., 3:4]
+    elif img.ndim == 3 and img.shape[-1] > 4:
+        raise ValueError(f"Unsupported number of channels in img_to_tensor: {img.shape[-1]}")
+
+    x = torch.from_numpy(img).float() / 255
+    x = x.permute(2, 0, 1).contiguous().unsqueeze(0)
+    
+    return x
+
 def save_img(np_img: np.ndarray, img_path: str) -> None:
     os.makedirs(os.path.dirname(img_path), exist_ok=True)
     cv2.imwrite(img_path, np_img)
+
+def load_img(img_path: str, color_mode: int = cv2.IMREAD_UNCHANGED) -> np.ndarray:
+    img = cv2.imread(img_path, color_mode)
+    if img is None:
+        raise ValueError(f"Unable to load image {img_path}")
+    return img
 
 def open_img_window(name: str,
                     width:  Optional[int] = None,
