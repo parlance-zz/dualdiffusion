@@ -36,7 +36,7 @@ from typing import Union, Literal
 import torch
 
 from modules.daes.dae import DualDiffusionDAE, DualDiffusionDAEConfig
-from modules.mp_tools import mp_silu, normalize, resample_3d, channel_to_space3d, lowpass_2d
+from modules.mp_tools import mp_silu, normalize, resample_3d, channel_to_space3d, lowpass_2d, FilteredDownsample2D
 from utils.dual_diffusion_utils import tensor_4d_to_5d, tensor_5d_to_4d
 
 
@@ -57,6 +57,8 @@ class DAE_J3_Config(DualDiffusionDAEConfig):
     num_dec_layers_per_block: int = 3        # Number of resnet blocks per resolution.
     mlp_multiplier: int    = 2               # Multiplier for the number of channels in the MLP.
     mlp_groups: int        = 1               # Number of groups for the MLPs.
+
+    downsample_lanczos_alpha: int = 3
 
 class MPConv3D_E(torch.nn.Module):
 
@@ -249,6 +251,9 @@ class DAE_J3(DualDiffusionDAE):
         self.encoder = Encoder(config.in_channels, enc_channels, config.latent_channels,
             config.num_enc_layers_per_block, block_kwargs, kernel=(1,3,3))
 
+        #self.latents_downsample = FilteredDownsample2D(config.latent_channels * 2,
+        #    self.downsample_ratio, config.downsample_lanczos_alpha, use_3d_shape=True)
+        
         # decoder
         self.input_gain = torch.nn.Parameter(torch.ones([]))
         self.input_shift = torch.nn.Parameter(torch.zeros([]))
@@ -304,9 +309,9 @@ class DAE_J3(DualDiffusionDAE):
         
         x, hidden_kld = self.encoder(tensor_4d_to_5d(x, num_channels=1))
         full_res_latents = tensor_5d_to_4d(x)
-        latents = torch.nn.functional.avg_pool2d(lowpass_2d(full_res_latents), self.downsample_ratio)
-        #full_res_latents = lowpass_2d(tensor_5d_to_4d(x))
-        #latents = torch.nn.functional.avg_pool2d(full_res_latents, self.downsample_ratio)
+        #latents = torch.nn.functional.avg_pool2d(lowpass_2d(full_res_latents), self.downsample_ratio)
+        #latents = self.latents_downsample(full_res_latents)
+        latents = torch.nn.functional.avg_pool2d(full_res_latents, self.downsample_ratio)
 
         if training == False:
             return latents
