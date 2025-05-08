@@ -1,0 +1,27 @@
+name: dualdiffusion # this env is for blackwell (5000 series) GPUs
+channels:           # linux kernel 6.14+, nvidia driver 570+ with CUDA 12.8 is required
+  - nvidia          # fix for nvidia-smi: sudo chmod o-w /var/run/nvidia-persistenced/socket
+  - conda-forge
+dependencies:
+  - python=3.11   # 3.11 req is for laion-clap, otherwise 3.12+
+  - nvidia::cuda-toolkit=12.8
+  - pip
+  - numpy==1.23.5 # 1.23.5 req is for laion-clap, otherwise *
+  - librosa       # faster backend for torchaudio i/o
+  - pip:
+    - --extra-index-url https://download.pytorch.org/whl/nightly/cu128
+    - torch==2.8.0.dev20250507+cu128
+    - torchaudio==2.6.0.dev20250507+cu128   # for audio file i/o and spectrogram transforms
+    - datasets      # load datasets for training
+    - accelerate    # multi-gpu/distributed training
+    - safetensors   # fast and safe tensor disk i/o
+    - tensorboard   # training logs monitoring web ui
+    - opencv-python # image i/o
+    - python-dotenv # environment config
+    - mutagen       # audio file metadata extraction and editing
+    - nicegui       # for interactive web ui
+    - transformers  # larger_clap_music
+    - laion-clap    # laion-clap (music_audioset_epoch_15_esc_90.14)
+    - pyloudnorm    # faster lufs without memory leak
+    - pyjson5       # json with comments and some formatting improvements
+    - py7zr         # (optional) for dataset unzip util
