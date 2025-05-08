@@ -917,8 +917,8 @@ class DualDiffusionTrainer:
                     train_logger.add_logs({
                         "train_stats/it_per_second": progress_bar.format_dict["rate"]})
                 
-                # optionally, log cuda gpu stats
-                if self.config.enable_cuda_gpu_stats_logging == True:
+                # optionally, log cuda gpu stats (every 25th step to avoid overhead)
+                if self.config.enable_cuda_gpu_stats_logging == True and self.global_step % 25 == 0:
                     try:
                         for idx, stats in enumerate(get_cuda_gpu_stats()):
                             train_logger.add_logs({
