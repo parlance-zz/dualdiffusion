@@ -37,7 +37,6 @@ from dataclasses import dataclass
 from traceback import format_exception
 
 import torch
-import torch.utils.checkpoint
 from torch.optim.lr_scheduler import LambdaLR
 from accelerate import Accelerator
 from accelerate.logging import get_logger
@@ -45,7 +44,7 @@ from accelerate.utils import ProjectConfiguration, GradientAccumulationPlugin, s
 from tqdm.auto import tqdm
 
 from pipelines.dual_diffusion_pipeline import DualDiffusionPipeline
-from utils.dual_diffusion_utils import dict_str
+from utils.dual_diffusion_utils import dict_str, get_cuda_gpu_stats
 from utils.compare_dirs import compare_dirs
 from training.module_trainers.module_trainer import ModuleTrainer, ModuleTrainerConfig
 from training.ema import EMA_Manager
@@ -164,6 +163,7 @@ class DualDiffusionTrainerConfig:
     enable_anomaly_detection: bool      = False
     enable_model_compilation: bool      = True
     enable_debug_mode: bool             = False
+    enable_cuda_gpu_stats_logging: bool = True
     compile_params: Optional[dict]      = None
 
     @staticmethod
@@ -908,14 +908,26 @@ class DualDiffusionTrainer:
                     self.persistent_state.total_train_hours += (
                         datetime.now() - last_sync_time).total_seconds() / 3600
                     train_logger.add_logs({
-                        "stats/total_train_hours": self.persistent_state.total_train_hours})
+                        "train_stats/total_train_hours": self.persistent_state.total_train_hours})
                 last_sync_time = datetime.now()
 
                 train_logger.add_logs({
-                    "stats/total_samples_processed": self.persistent_state.total_samples_processed})
+                    "train_stats/total_samples_processed": self.persistent_state.total_samples_processed})
                 if progress_bar.format_dict["rate"] is not None:
                     train_logger.add_logs({
-                        "stats/it_per_second": progress_bar.format_dict["rate"]})
+                        "train_stats/it_per_second": progress_bar.format_dict["rate"]})
+                
+                # optionally, log cuda gpu stats
+                if self.config.enable_cuda_gpu_stats_logging == True:
+                    try:
+                        for idx, stats in enumerate(get_cuda_gpu_stats()):
+                            train_logger.add_logs({
+                                f"gpu_stats/temp_{idx}": stats["temperature_C"],
+                                f"gpu_stats/power_{idx}": stats["power_W"],
+                                f"gpu_stats/vram_{idx}": stats["vram_used_MB"] / 1024,
+                            })
+                    except Exception as e:
+                        self.logger.warning(f"Error logging CUDA GPU stats: {e}")
 
                 # update emas and normalize weights
                 for ema_manager in self.ema_managers:

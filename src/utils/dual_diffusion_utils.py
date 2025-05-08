@@ -92,6 +92,37 @@ def get_available_torch_devices() -> list[str]:
 
     return available_devices
 
+def get_cuda_gpu_stats() -> list[dict[str, Union[int, float]]]:
+    query_fields = [
+        "temperature.gpu",
+        "power.draw",
+        "memory.used",
+        "memory.total"
+    ]
+    
+    result = subprocess.run(
+        ["nvidia-smi", f"--query-gpu={','.join(query_fields)}", "--format=csv,noheader,nounits"],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True
+    )
+
+    if result.returncode != 0:
+        raise RuntimeError(f"nvidia-smi error: {result.stderr.strip()}")
+
+    info_list = []
+    for line in result.stdout.strip().split('\n'):
+        temp, power, mem_used, mem_total = map(float, line.split(', '))
+        info = {
+            "temperature_C": int(temp),
+            "power_W": round(power, 1),
+            "vram_used_MB": int(mem_used),
+            "vram_total_MB": int(mem_total)
+        }
+        info_list.append(info)
+
+    return info_list
+
 def torch_dtype(dtype: Union[str, torch.dtype]) -> torch.dtype:
     if isinstance(dtype, torch.dtype):
         return dtype
