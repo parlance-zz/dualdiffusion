@@ -29,6 +29,7 @@ import numpy as np
 from training.sigma_sampler import SigmaSamplerConfig, SigmaSampler
 from training.trainer import DualDiffusionTrainer
 from training.module_trainers.module_trainer import ModuleTrainerConfig, ModuleTrainer
+from modules.formats.format import DualDiffusionFormat
 from modules.unets.unet import DualDiffusionUNet
 from modules.mp_tools import mp_sum
 from utils.dual_diffusion_utils import dict_str, normalize
@@ -45,7 +46,8 @@ class UNetTrainerConfig(ModuleTrainerConfig):
     sigma_dist_offset: float = 0.3
     use_stratified_sigma_sampling: bool = True
     sigma_pdf_resolution: Optional[int] = 127
-    sigma_pdf_warmup_steps: Optional[int] = 5000
+    sigma_pdf_sanitization: bool = True
+    sigma_pdf_warmup_steps: int = 5000
     sigma_pdf_offset: float = -0.8
     sigma_pdf_min: float = 0.2
 
@@ -72,10 +74,11 @@ class UNetTrainer(ModuleTrainer):
         self.config = config
         self.trainer = trainer
         self.logger = trainer.logger
-        self.module: DualDiffusionUNet = trainer.get_train_module("unet")
+        self.format: DualDiffusionFormat = trainer.pipeline.format.to(device=self.trainer.accelerator.device)
+        self.unet: DualDiffusionUNet = trainer.get_train_module("unet")
 
-        if trainer.config.enable_model_compilation:
-            self.module.compile(**trainer.config.compile_params)
+        if trainer.config.enable_model_compilation == True:
+            self.unet.compile(**trainer.config.compile_params)
 
         self.unet_trainer_init()
 
@@ -86,7 +89,7 @@ class UNetTrainer(ModuleTrainer):
         self.device_generator = None
         self.cpu_generator = None
     
-        if self.config.num_loss_buckets > 0:
+        if self.config.num_loss_buckets > 0: # buckets for sigma-range-specific loss tracking
             self.logger.info(f"Using {self.config.num_loss_buckets} loss buckets")
             self.unet_loss_buckets = torch.zeros(
                 self.config.num_loss_buckets, device="cpu", dtype=torch.float32)
@@ -98,23 +101,29 @@ class UNetTrainer(ModuleTrainer):
         # log unet trainer specific config / settings
         if self.config.input_perturbation > 0:
             self.logger.info(f"Using input perturbation: {self.config.input_perturbation}")
-        else: self.logger.info("Input perturbation is disabled")
+        else:
+            self.logger.info("Input perturbation is disabled")
+
         if self.config.conditioning_perturbation > 0:
             self.config.conditioning_perturbation = min(self.config.conditioning_perturbation, 1)
             self.logger.info(f"Using conditioning perturbation: {self.config.conditioning_perturbation}")
-        else: self.logger.info("Conditioning perturbation is disabled")
-        self.logger.info(f"Dropout: {self.module.config.dropout} Conditioning dropout: {self.config.conditioning_dropout}")
+        else:
+            self.logger.info("Conditioning perturbation is disabled")
+        
+        self.logger.info(f"Dropout: {self.unet.config.dropout} Conditioning dropout: {self.config.conditioning_dropout}")
 
         # sigma schedule / distribution for train batches
         sigma_sampler_config = SigmaSamplerConfig(
-            sigma_max=self.config.sigma_override_max or self.module.config.sigma_max,
-            sigma_min=self.config.sigma_override_min or self.module.config.sigma_min,
-            sigma_data=self.module.config.sigma_data,
+            sigma_max=self.config.sigma_override_max or self.unet.config.sigma_max,
+            sigma_min=self.config.sigma_override_min or self.unet.config.sigma_min,
+            sigma_data=self.unet.config.sigma_data,
             distribution=self.config.sigma_distribution,
             dist_scale=self.config.sigma_dist_scale,
             dist_offset=self.config.sigma_dist_offset,
             use_stratified_sigma_sampling=self.config.use_stratified_sigma_sampling,
             sigma_pdf_resolution=self.config.sigma_pdf_resolution,
+            sigma_pdf_sanitization=self.config.sigma_pdf_sanitization,
+            sigma_pdf_warmup_steps=self.config.sigma_pdf_warmup_steps,
             sigma_pdf_offset=self.config.sigma_pdf_offset,
             sigma_pdf_min=self.config.sigma_pdf_min
         )
@@ -123,25 +132,26 @@ class UNetTrainer(ModuleTrainer):
         self.logger.info(dict_str(sigma_sampler_config.__dict__))
 
         # separate noise schedule / sigma distribution for validation batches
+        assert self.config.validation_sigma_distribution != "ln_pdf"
         validation_sigma_sampler_config = SigmaSamplerConfig(
-            sigma_max=self.config.validation_sigma_override_max or self.module.config.sigma_max,
-            sigma_min=self.config.validation_sigma_override_min or self.module.config.sigma_min,
-            sigma_data=self.module.config.sigma_data,
+            sigma_max=self.config.validation_sigma_override_max or self.unet.config.sigma_max,
+            sigma_min=self.config.validation_sigma_override_min or self.unet.config.sigma_min,
+            sigma_data=self.unet.config.sigma_data,
             distribution=self.config.validation_sigma_distribution,
             dist_scale=self.config.validation_sigma_dist_scale,
             dist_offset=self.config.validation_sigma_dist_offset,
             use_static_sigma_sampling=True,
-            sigma_pdf_resolution=self.config.sigma_pdf_resolution,
         )
         self.validation_sigma_sampler = SigmaSampler(validation_sigma_sampler_config)
         self.logger.info("Validation SigmaSampler config:")
         self.logger.info(dict_str(validation_sigma_sampler_config.__dict__))
 
-        # pre-calculate the per-sigma loss bucket names
-        if self.config.num_loss_buckets > 0:
+        if self.config.num_loss_buckets > 0: # pre-calculate the per-sigma loss bucket names
+
             bucket_sigma = torch.linspace(np.log(self.config.loss_buckets_sigma_min),
                 np.log(self.config.loss_buckets_sigma_max), self.config.num_loss_buckets + 1).exp()
             bucket_sigma[0] = 0; bucket_sigma[-1] = float("inf")
+
             self.bucket_names = [f"loss_σ_buckets/{bucket_sigma[i]:.4f} - {bucket_sigma[i+1]:.4f}"
                                  for i in range(self.config.num_loss_buckets)]
             
@@ -170,8 +180,7 @@ class UNetTrainer(ModuleTrainer):
 
         # if using dynamic sigma sampling with ln_pdf, update the pdf using the learned per-sigma error estimate
         if self.config.sigma_distribution == "ln_pdf" and validation == False:
-            pdf_warmup_factor = min(1, self.trainer.global_step / (self.config.sigma_pdf_warmup_steps or 1))
-            self.sigma_sampler.update_pdf_from_logvar(self.module, pdf_warmup_factor)
+            self.sigma_sampler.update_pdf_from_logvar(self.unet, self.trainer.global_step)
         
         # sample whole-batch sigma and sync across all ranks / processes
         self.global_sigma = sigma_sampler.sample(total_batch_size, device=self.trainer.accelerator.device)
@@ -183,6 +192,17 @@ class UNetTrainer(ModuleTrainer):
 
         samples: torch.Tensor = batch["latents"].float().clone()
         audio_embeddings = normalize(batch["audio_embeddings"]).float().clone()
+        
+        logs = self.unet_train_batch(samples, audio_embeddings=audio_embeddings)
+        logs.update({
+            "io_stats/latents_std": samples.std(dim=(1,2,3)),
+            "io_stats/latents_mean": samples.mean(dim=(1,2,3))
+        })
+
+        return logs
+
+    def unet_train_batch(self, samples: torch.Tensor, audio_embeddings: Optional[torch.Tensor] = None,
+            ref_samples: Optional[torch.Tensor] = None) -> dict[str, Union[torch.Tensor, float]]:
 
         if self.is_validation_batch == False:
             device_batch_size = self.trainer.config.device_batch_size
@@ -192,7 +212,7 @@ class UNetTrainer(ModuleTrainer):
         # normal conditioning dropout
         conditioning_mask = (torch.rand(device_batch_size, generator=self.device_generator,
             device=self.trainer.accelerator.device) > self.config.conditioning_dropout).float()
-        unet_embeddings = self.module.get_embeddings(audio_embeddings, conditioning_mask)
+        unet_embeddings = self.unet.get_embeddings(audio_embeddings, conditioning_mask)
 
         if self.config.conditioning_perturbation > 0 and self.is_validation_batch == False: # adds noise to the conditioning embedding while preserving variance
             conditioning_perturbation = torch.randn(unet_embeddings.shape, device=unet_embeddings.device, generator=self.device_generator)
@@ -209,34 +229,35 @@ class UNetTrainer(ModuleTrainer):
 
         # prepare model inputs
         noise = torch.randn(samples.shape, device=samples.device, generator=self.device_generator)
-        samples = (samples * self.module.config.sigma_data).detach()
+        samples = (samples * self.sigma_sampler.config.sigma_data).detach()
         noise = (noise * batch_sigma.view(-1, 1, 1, 1)).detach()
 
-        denoised = self.module(samples + noise, batch_sigma, self.trainer.pipeline.format, unet_embeddings, ref_samples)
-        batch_loss_weight = (batch_sigma ** 2 + self.module.config.sigma_data ** 2) / (batch_sigma * self.module.config.sigma_data) ** 2
+        denoised = self.unet(samples + noise, batch_sigma, self.format, unet_embeddings, ref_samples)
+        batch_loss_weight = (batch_sigma ** 2 + self.sigma_sampler.config.sigma_data ** 2) / (batch_sigma * self.sigma_sampler.config.sigma_data) ** 2
         batch_weighted_loss = torch.nn.functional.mse_loss(denoised, samples, reduction="none").mean(dim=(1,2,3)) * batch_loss_weight
 
         if self.is_validation_batch == True:
             batch_loss = batch_weighted_loss
         else: # for train batches this takes the loss as the gaussian NLL with sigma-specific learned variance
-            error_logvar = self.module.get_sigma_loss_logvar(sigma=batch_sigma)
+            error_logvar = self.unet.get_sigma_loss_logvar(sigma=batch_sigma)
             batch_loss = batch_weighted_loss / error_logvar.exp() + error_logvar
         
-        # log loss bucketed by noise level range
-        if self.config.num_loss_buckets > 0:
+        if self.config.num_loss_buckets > 0: # log loss bucketed by noise level range
+
             global_weighted_loss = self.trainer.accelerator.gather(batch_weighted_loss.detach()).cpu()
             global_sigma_quantiles = (batch_sigma.detach().log().cpu() - np.log(self.config.loss_buckets_sigma_min)) / (
                 np.log(self.config.loss_buckets_sigma_max) - np.log(self.config.loss_buckets_sigma_min))
+            
             target_buckets = (global_sigma_quantiles * self.unet_loss_buckets.shape[0]).long().clip(min=0, max=self.unet_loss_buckets.shape[0] - 1)
             self.unet_loss_buckets.index_add_(0, target_buckets, global_weighted_loss)
             self.unet_loss_bucket_counts.index_add_(0, target_buckets, torch.ones_like(global_weighted_loss))
 
         return {
             "loss": batch_loss,
-            "latents/mean": samples.mean(),
-            "latents/std": samples.std()
+            "io_stats/denoised_std": denoised.std(dim=(1,2,3)),
+            "io_stats/denoised_mean": denoised.mean(dim=(1,2,3))
         }
-
+    
     @torch.no_grad()
     def finish_batch(self) -> Optional[dict[str, Union[torch.Tensor, float]]]:
         logs = {}
