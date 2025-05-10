@@ -11,11 +11,12 @@ dependencies:
   - pip:
     - torch
     - torchaudio    # for audio file i/o and spectrogram transforms
+    - torchvision   # required for laion-clap
     - datasets      # load datasets for training
     - accelerate    # multi-gpu/distributed training
     - safetensors   # fast and safe tensor disk i/o
     - tensorboard   # training logs monitoring web ui
-    - opencv-python # image i/o
+    - opencv-python # image i/o (much faster than PIL)
     - python-dotenv # environment config
     - mutagen       # audio file metadata extraction and editing
     - nicegui       # for interactive web ui
