@@ -235,14 +235,14 @@ def find_files(directory: str, name_pattern: str = "*") -> list[str]:
 @torch.inference_mode()
 def normalize_lufs(raw_samples: torch.Tensor,
                    sample_rate: int,
-                   target_lufs: float = -15.,
+                   target_lufs: float = -20.,
                    return_old_lufs: bool = False) -> torch.Tensor:
     
     if raw_samples.ndim != 2:
         raise ValueError(f"Invalid shape for normalize_lufs: {raw_samples.shape}")
     
     meter = pyloudnorm.Meter(sample_rate)
-    old_lufs = meter.integrated_loudness(raw_samples.mean(dim=0, keepdim=True).T.cpu().numpy())
+    old_lufs = meter.integrated_loudness(raw_samples.T.cpu().numpy())
     normalized_raw_samples = raw_samples * (10. ** ((target_lufs - old_lufs) / 20.0))
 
     if return_old_lufs:
@@ -260,7 +260,7 @@ def get_num_clipped_samples(raw_samples: torch.Tensor, eps: float = 2e-2) -> int
 def save_audio(raw_samples: torch.Tensor,
                sample_rate: int,
                output_path: str,
-               target_lufs: float = -15.,
+               target_lufs: float = -20.,
                metadata: Optional[dict] = None,
                no_clobber: bool = False,
                copy_on_write: bool = False) -> None:
