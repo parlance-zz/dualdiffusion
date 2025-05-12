@@ -317,21 +317,15 @@ class MPConv3D(torch.nn.Module):
 
 class FilteredDownsample2D(torch.nn.Module):
 
-    def __init__(self, channels: int, stride: int = 8, lanczos_a: int = 3, use_3d_shape: bool = False) -> None:
+    def __init__(self, channels: int, kernel: int = 16, stride: int = 8, use_3d_shape: bool = False) -> None:
         super(FilteredDownsample2D, self).__init__()
 
         self.use_3d_shape = use_3d_shape
         self.stride = stride
 
-        k = self.downsampling_lanczos_kernel(downsample_factor=stride, a=lanczos_a)
-        #kernel = 31
-        #k = np.array(self._pascal_row(kernel - 1))
-        
-        filter = torch.Tensor(k[:, None] * k[None, :]).to(torch.float64)
-        filter = (filter / filter.sum()).float()
-
-        kernel = filter.shape[0]
-        #padding_1, padding_2 = kernel//2, kernel//2 - (kernel//2+1)%2
+        #padding_1, padding_2 = kernel//2 - stride//2, kernel//2 - (kernel//2+1)%2 + stride//2
+        padding_1, padding_2 = kernel // 2, kernel // 2 - (kernel+1)%2
+        self.pad = torch.nn.ReflectionPad2d([padding_1, padding_2, padding_1, padding_2])
 
         """
         kernel = 29
@@ -342,19 +336,12 @@ class FilteredDownsample2D(torch.nn.Module):
             filter = torch.nn.functional.conv2d(filter, block_kernel, padding=1)
         filter = (filter / filter.sum()).view(kernel, kernel)
         """
+        
+        #k = np.array(self._pascal_row(kernel - 1))
+        k = np.sin(np.arange(16) / 16 * np.pi)
 
-        """
-        kernel = 16
-        x = torch.arange(16).float()
-        filter = torch.max((7 - x.view(-1, 1)).abs(), (7 - x.view(1, -1)).abs())
-        filter -= filter.amin()
-        filter /= filter.amax()
-        filter = 1 - filter
-        filter /= filter.sum()
-        """
-
-        padding_1, padding_2 = kernel//2 - stride//2, kernel//2 - (kernel//2+1)%2 + stride//2
-        self.pad = torch.nn.ReflectionPad2d([padding_1, padding_2, padding_1, padding_2])
+        filter = torch.Tensor(k[:, None] * k[None, :]).to(torch.float64)
+        filter = (filter / filter.sum()).float()
 
         if use_3d_shape == True:
             self.register_buffer("filter", filter[None, None, None, :, :].expand((channels, 1, 1, kernel, kernel)), persistent=False)
@@ -364,25 +351,6 @@ class FilteredDownsample2D(torch.nn.Module):
     def _pascal_row(self, n: int) -> list[int]:
         return [math.comb(n, k) for k in range(n + 1)]
 
-    def downsampling_lanczos_kernel(self, downsample_factor=8, a=3):
-        """
-        Create a low-pass Lanczos filter kernel for downsampling by `downsample_factor`.
-        The cutoff is 1/(2 * downsample_factor), and the kernel is 2*a*downsample_factor + 1 in size.
-        """
-
-        cutoff = 0.5 / downsample_factor  # Nyquist after downsampling
-        size = 2 * a * downsample_factor + 1  # ensure adequate sidelobe suppression
-        center = size // 2
-        x = np.arange(size) - center #+ ((size+1)%2)/2 # symmetric positions
-
-        sinc_func = 2 * cutoff * np.sinc(2 * cutoff * x)  # ideal LPF
-        lanczos_window = np.sinc(x / (a * downsample_factor))  # Lanczos window
-
-        kernel = sinc_func * lanczos_window
-        #kernel /= np.sum(kernel)  # Normalize to preserve DC gain
-
-        return kernel
-    
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         if self.use_3d_shape == True:
             return torch.nn.functional.conv2d(self.pad(x), self.filter.squeeze(1), stride=self.stride, groups=x.shape[1])
