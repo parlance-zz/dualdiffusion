@@ -49,13 +49,14 @@ class MS_MDCT_DualFormatConfig(DualDiffusionFormatConfig):
     mdct_window_len: int = 512
     mdct_psd_num_bins: int = 2048
     
+    ms_freq_min: float = 0
     ms_width_alignment: int = 128
     ms_num_frequencies: int = 256
     ms_step_size_ms: int = 8
     ms_window_duration_ms: int = 128
     ms_padded_duration_ms: int = 128
     ms_window_exponent_low: float = 17
-    ms_window_exponent_high: float = 58
+    ms_window_exponent_high: Optional[float] = 58
     ms_window_periodic: bool = True
     
     @property
@@ -85,9 +86,8 @@ class MS_MDCT_DualFormat(DualDiffusionFormat):
                           layout: torch.layout = torch.strided, device: torch.device = None,
                           requires_grad: bool = False, exponent: float = 1.) -> torch.Tensor:
         
-        window = torch.hann_window(window_length*2, periodic=periodic, dtype=dtype,
+        return torch.hann_window(window_length, periodic=periodic, dtype=dtype,
                 layout=layout, device=device, requires_grad=requires_grad) ** exponent
-        return window[window_length//2:-window_length//2]
     
     def __init__(self, config: MS_MDCT_DualFormatConfig) -> None:
         super().__init__()
@@ -110,24 +110,27 @@ class MS_MDCT_DualFormat(DualDiffusionFormat):
             center=True, pad=0, pad_mode="reflect", onesided=True
         )
 
-        self.ms_spectrogram_func_high = torchaudio.transforms.Spectrogram(
-            n_fft=config.ms_frame_padded_length,
-            win_length=config.ms_win_length,
-            hop_length=config.ms_frame_hop_length,
-            window_fn=MS_MDCT_DualFormat._hann_power_window,
-            power=1, normalized="window",
-            wkwargs={
-                "exponent": config.ms_window_exponent_high,
-                "periodic": config.ms_window_periodic,
-                "requires_grad": False
-            },
-            center=True, pad=0, pad_mode="reflect", onesided=True
-        )
+        if config.ms_window_exponent_high is not None:
+            self.ms_spectrogram_func_high = torchaudio.transforms.Spectrogram(
+                n_fft=config.ms_frame_padded_length,
+                win_length=config.ms_win_length,
+                hop_length=config.ms_frame_hop_length,
+                window_fn=MS_MDCT_DualFormat._hann_power_window,
+                power=1, normalized="window",
+                wkwargs={
+                    "exponent": config.ms_window_exponent_high,
+                    "periodic": config.ms_window_periodic,
+                    "requires_grad": False
+                },
+                center=True, pad=0, pad_mode="reflect", onesided=True
+            )
+        else:
+            self.ms_spectrogram_func_high = None
 
         # this scaled is used for filtering to create the mel-scale spectrogram
         self.ms_freq_scale = FrequencyScale(
             freq_scale="mel",
-            freq_min=0,
+            freq_min=config.ms_freq_min,
             freq_max=config.sample_rate / 2,
             sample_rate=config.sample_rate,
             num_stft_bins=config.ms_num_stft_bins,
@@ -138,7 +141,7 @@ class MS_MDCT_DualFormat(DualDiffusionFormat):
         # this scale is used for inverse filtering to create the conditioning for a mdct ddec model
         self.ms_freq_scale_mdct_psd = FrequencyScale(
             freq_scale="mel",
-            freq_min=0,
+            freq_min=config.ms_freq_min,
             freq_max=config.sample_rate / 2,
             sample_rate=config.sample_rate,
             num_stft_bins=config.mdct_psd_num_bins,
@@ -154,10 +157,13 @@ class MS_MDCT_DualFormat(DualDiffusionFormat):
         self.register_buffer("mdct_hz", mdct_hz)
         self.register_buffer("mdct_mel_density", get_mel_density(mdct_hz).view(1, 1,-1, 1))
         
-        spec_blend_hz = torch.linspace(0, config.sample_rate / 2, config.ms_num_stft_bins)
-        spec_blend_mel_density = get_mel_density(spec_blend_hz)
-        spec_blend_mel_density = (spec_blend_mel_density / spec_blend_mel_density.amax()) ** 2
-        self.register_buffer("spec_blend_weight", spec_blend_mel_density.view(1, 1,-1, 1))
+        if config.ms_window_exponent_high is not None:
+            spec_blend_hz = torch.linspace(0, config.sample_rate / 2, config.ms_num_stft_bins)
+            spec_blend_mel_density = get_mel_density(spec_blend_hz)
+            spec_blend_mel_density = (spec_blend_mel_density / spec_blend_mel_density.amax()) ** 2
+            self.register_buffer("spec_blend_weight", spec_blend_mel_density.view(1, 1,-1, 1))
+        else:
+            self.spec_blend_weight = None
     
     # **************** mel-scale spectrogram methods ****************
 
@@ -180,15 +186,29 @@ class MS_MDCT_DualFormat(DualDiffusionFormat):
         return self._get_ms_shape((bsz, self.config.num_raw_channels, raw_crop_width))
     
     @torch.no_grad()
-    def raw_to_mel_spec(self, raw_samples: torch.Tensor) -> torch.Tensor:
-        mel_spec = []
-        for raw_sample in raw_samples.unbind(0):
-            spec_low = self.ms_spectrogram_func_low(raw_sample.unsqueeze(0).float())
-            spec_high = self.ms_spectrogram_func_high(raw_sample.unsqueeze(0).float())
-            spec_blended = spec_low * self.spec_blend_weight + spec_high * (1 - self.spec_blend_weight)
-            mel_spec.append(self.ms_freq_scale.scale(spec_blended / self.ms_stft_mel_density) ** self.config.ms_abs_exponent)
+    def raw_to_mel_spec(self, raw_samples: torch.Tensor, use_slicing: bool = False) -> torch.Tensor:
+        if use_slicing == True:
+            mel_spec = []
+            for raw_sample in raw_samples.unbind(0):
+                spec_low = self.ms_spectrogram_func_low(raw_sample.unsqueeze(0).float())
+                if self.ms_spectrogram_func_high is not None:
+                    spec_high = self.ms_spectrogram_func_high(raw_sample.unsqueeze(0).float())
+                    spec_blended = spec_low * self.spec_blend_weight + spec_high * (1 - self.spec_blend_weight)
+                else:
+                    spec_blended = spec_low
 
-        return torch.cat(mel_spec, dim=0) * self.config.raw_to_mel_spec_scale
+                mel_spec.append(self.ms_freq_scale.scale(spec_blended / self.ms_stft_mel_density) ** self.config.ms_abs_exponent)
+
+            return torch.cat(mel_spec, dim=0) * self.config.raw_to_mel_spec_scale
+        else:
+            mel_spec_low = self.ms_spectrogram_func_low(raw_samples.float())
+            if self.ms_spectrogram_func_high is not None:
+                mel_spec_high = self.ms_spectrogram_func_high(raw_samples.float())
+                spec_blended = mel_spec_low * self.spec_blend_weight + mel_spec_high * (1 - self.spec_blend_weight)
+            else:
+                spec_blended = mel_spec_low
+
+            return self.ms_freq_scale.scale(spec_blended / self.ms_stft_mel_density) ** self.config.ms_abs_exponent * self.config.raw_to_mel_spec_scale
 
     def mel_spec_to_mdct_psd(self, mel_spec: torch.Tensor):
         mel_spec_mdct_psd = self.ms_freq_scale_mdct_psd.unscale(

@@ -79,8 +79,9 @@ def ms_mdct_dual_format_test() -> None:
         "exponent": cfg.format_config.ms_window_exponent_high,
         "periodic": cfg.format_config.ms_window_periodic,
     }
-    window_high = MS_MDCT_DualFormat._hann_power_window(cfg.format_config.ms_win_length, **wkwargs)
-    window_high.numpy().tofile(os.path.join(output_path, "window_high.raw"))
+    if cfg.format_config.ms_window_exponent_high is not None:
+        window_high = MS_MDCT_DualFormat._hann_power_window(cfg.format_config.ms_win_length, **wkwargs)
+        window_high.numpy().tofile(os.path.join(output_path, "window_high.raw"))
 
     stat_logger = StatLogger()
     print(f"\nNum test_samples: {len(test_samples)}\n")
@@ -109,12 +110,12 @@ def ms_mdct_dual_format_test() -> None:
         raw_sample_mdct = format.mdct_to_raw(mdct)
 
         stat_logger.add_logs({
-            "raw_sample_norm": torch.linalg.vector_norm(raw_sample) / raw_sample.numel()**0.5,
-            "raw_sample_mdct_norm": torch.linalg.vector_norm(raw_sample_mdct) / raw_sample_mdct.numel()**0.5,
-            "mel_spec_norm": torch.linalg.vector_norm(mel_spec) / mel_spec.numel()**0.5,
-            "mel_spec_mdct_psd_norm": torch.linalg.vector_norm(mel_spec_mdct_psd) / mel_spec_mdct_psd.numel()**0.5,
-            "mdct_norm": torch.linalg.vector_norm(mdct) / mdct.numel()**0.5,
-            "mdct_psd_norm": torch.linalg.vector_norm(mdct_psd) / mdct_psd.numel()**0.5,
+            "raw_sample_std": raw_sample.std(),
+            "raw_sample_mdct_std": raw_sample_mdct.std(),
+            "mel_spec_std": mel_spec.std(),
+            "mel_spec_mdct_psd_std": mel_spec_mdct_psd.std(),
+            "mdct_std": mdct.std(),
+            "mdct_psd_std": mdct_psd.std(),
         })
 
         if cfg.test_sample_verbose == True:
