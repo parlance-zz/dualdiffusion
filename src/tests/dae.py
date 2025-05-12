@@ -137,14 +137,22 @@ def dae_test() -> None:
             output_mel_spec = input_mel_spec
         
         input_x_ref = format.mel_spec_to_mdct_psd(input_mel_spec)
-        x_ref = format.mel_spec_to_mdct_psd(output_mel_spec)
+        if test_params["dae_bypass"] == True:
+            x_ref = input_x_ref
+        else:
+            format.mel_spec_to_mdct_psd(output_mel_spec)
 
         if ddec is not None:
             ddec_params = SampleParams(
                 seed=5000,
-                num_steps=20, length=audio_len, cfg_scale=1.5, input_perturbation=0, input_perturbation_offset=-0.3,
-                use_heun=True, schedule="edm2", rho=7, sigma_max=11, sigma_min=0.0002 #0.0003 #0.013
+                num_steps=30, length=audio_len, cfg_scale=1.5, input_perturbation=0, input_perturbation_offset=-0.3,
+                use_heun=True, schedule="edm2", rho=7, sigma_max=16, sigma_min=0.0002, stereo_fix=True
             )
+            #ddec_params = SampleParams(
+            #    seed=5000,
+            #    num_steps=20, length=audio_len, cfg_scale=1.5, input_perturbation=0, input_perturbation_offset=-0.3,
+            #    use_heun=True, schedule="edm2", rho=7, sigma_max=11, sigma_min=0.0002 #0.0003 #0.013
+            #)
 
             mdct_output_sample = pipeline.diffusion_decode(
                 ddec_params, audio_embedding=audio_embedding,
