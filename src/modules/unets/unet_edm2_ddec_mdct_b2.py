@@ -146,28 +146,28 @@ class Block(torch.nn.Module):
 
             qkv: torch.Tensor = self.attn_qkv(x)
             
-            #                  b  z  w  c  h
-            #qkv = qkv.permute(0, 2, 4, 1, 3)
-            #                 b  w  c  z  h
-            qkv = qkv.permute(0, 4, 1, 2, 3)
+            #                 b  z  w  c  h
+            qkv = qkv.permute(0, 2, 4, 1, 3)
+            #                  b  w  c  z  h
+            #qkv = qkv.permute(0, 4, 1, 2, 3)
 
-            #qkv = qkv.reshape(qkv.shape[0]*qkv.shape[1]*qkv.shape[2], self.num_heads, -1, 3, qkv.shape[4])
-            qkv = qkv.reshape(qkv.shape[0]*qkv.shape[1], self.num_heads, -1, 3, qkv.shape[3]*qkv.shape[4])
+            qkv = qkv.reshape(qkv.shape[0]*qkv.shape[1]*qkv.shape[2], self.num_heads, -1, 3, qkv.shape[4])
+            #qkv = qkv.reshape(qkv.shape[0]*qkv.shape[1], self.num_heads, -1, 3, qkv.shape[3]*qkv.shape[4])
             q, k, v = normalize(qkv, dim=2).unbind(3)
 
             y = torch.nn.functional.scaled_dot_product_attention(q.transpose(-1, -2),
                                                                  k.transpose(-1, -2),
                                                                  v.transpose(-1, -2)).transpose(-1, -2)
             
-            #              b           z           w           c           h
-            #y = y.reshape(x.shape[0], x.shape[2], x.shape[4], x.shape[1], x.shape[3])
-            #             b           w           c           z           h
-            y = y.reshape(x.shape[0], x.shape[4], x.shape[1], x.shape[2], x.shape[3])
+            #             b           z           w           c           h
+            y = y.reshape(x.shape[0], x.shape[2], x.shape[4], x.shape[1], x.shape[3])
+            #              b           w           c           z           h
+            #y = y.reshape(x.shape[0], x.shape[4], x.shape[1], x.shape[2], x.shape[3])
 
-            #              b, c, z, h, w
-            #y = y.permute(0, 3, 1, 4, 2).contiguous(memory_format=torch.channels_last_3d)
             #             b, c, z, h, w
-            y = y.permute(0, 2, 3, 4, 1).contiguous(memory_format=torch.channels_last_3d)
+            y = y.permute(0, 3, 1, 4, 2).contiguous(memory_format=torch.channels_last_3d)
+            #              b, c, z, h, w
+            #y = y.permute(0, 2, 3, 4, 1).contiguous(memory_format=torch.channels_last_3d)
 
             y = self.attn_proj(mp_silu(y))
             x = mp_sum(x, y, t=self.attn_balance)
