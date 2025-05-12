@@ -58,8 +58,6 @@ class DAE_J3_Config(DualDiffusionDAEConfig):
     mlp_multiplier: int    = 2               # Multiplier for the number of channels in the MLP.
     mlp_groups: int        = 1               # Number of groups for the MLPs.
 
-    downsample_lanczos_alpha: int = 3
-
 class MPConv3D_E(torch.nn.Module):
 
     def __init__(self, in_channels: int, out_channels: int, kernel: tuple[int, int, int],
@@ -309,9 +307,7 @@ class DAE_J3(DualDiffusionDAE):
         
         x, hidden_kld = self.encoder(tensor_4d_to_5d(x, num_channels=1))
         full_res_latents = tensor_5d_to_4d(x)
-        #latents = torch.nn.functional.avg_pool2d(lowpass_2d(full_res_latents), self.downsample_ratio)
-        #latents = self.latents_downsample(full_res_latents)
-        latents = torch.nn.functional.avg_pool2d(full_res_latents, self.downsample_ratio)
+        latents = torch.nn.functional.avg_pool2d(lowpass_2d(full_res_latents), self.downsample_ratio)
 
         if training == False:
             return latents
