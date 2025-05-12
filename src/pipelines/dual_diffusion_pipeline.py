@@ -61,7 +61,7 @@ class SampleParams:
     use_heun: bool                        = True
     input_perturbation: float             = 1.
     input_perturbation_offset: float      = 0.
-    num_fgla_iters: int                   = 250
+    stereo_fix: bool                      = False
     img2img_strength: float               = 0.5
     input_audio: Optional[Union[str, torch.Tensor]] = None
     input_audio_pre_encoded: bool                   = False
@@ -72,7 +72,7 @@ class SampleParams:
         self.length = int(self.length) if self.length is not None else None
         self.num_steps = int(self.num_steps)
         self.batch_size = int(self.batch_size)
-        self.num_fgla_iters = int(self.num_fgla_iters)
+        self.stereo_fix = bool(self.stereo_fix)
         # todo: additional sanitization (clip values like input perturb, etc.)
         return self
 
@@ -628,6 +628,10 @@ class DualDiffusionPipeline(torch.nn.Module):
         debug_info["sigma_schedule"] = sigma_schedule_list
         
         noise = torch.randn(sample_shape, device=unet.device, generator=generator)
+        if params.stereo_fix == True:
+            if noise.shape[1] != 2:
+                raise ValueError("Stereo fix enabled but input sample is not stereo")
+            noise[:, 0] = noise[:, 1]
         sample = noise * (sigma_schedule[0]**2 + params.sigma_data**2)**0.5
 
         progress_bar = tqdm(total=params.num_steps, disable=quiet)
