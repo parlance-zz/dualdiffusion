@@ -58,6 +58,7 @@ class UNetTestConfig:
 
     copy_sample_source_files: bool          = True
     add_random_test_samples: int            = 0
+    shuffle_test_samples: bool              = False
     random_test_samples_seed: Optional[int] = None
     test_samples: Optional[list[int]]       = None
 
@@ -121,6 +122,10 @@ def unet_test() -> None:
     if cfg.add_random_test_samples > 0:
         train_samples = config.load_json(os.path.join(config.DATASET_PATH, "train.jsonl"))
         cfg.test_samples += [sample["file_name"] for sample in random.sample(train_samples, cfg.add_random_test_samples)]
+
+    # shuffle the test samples
+    if cfg.shuffle_test_samples == True:
+        random.shuffle(cfg.test_samples)
 
     for i, filename in enumerate(cfg.test_samples):
         
