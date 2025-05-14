@@ -307,7 +307,8 @@ class DAE_J3(DualDiffusionDAE):
         
         x, hidden_kld = self.encoder(tensor_4d_to_5d(x, num_channels=1))
         full_res_latents = tensor_5d_to_4d(x)
-        latents = torch.nn.functional.avg_pool2d(lowpass_2d(full_res_latents), self.downsample_ratio)
+        #latents = torch.nn.functional.avg_pool2d(lowpass_2d(full_res_latents), self.downsample_ratio)
+        latents = torch.nn.functional.avg_pool2d(full_res_latents, self.downsample_ratio)
 
         if training == False:
             return latents
@@ -316,7 +317,11 @@ class DAE_J3(DualDiffusionDAE):
 
     def decode(self, x: torch.Tensor, embeddings: torch.Tensor, training: bool = False) -> torch.Tensor:
         
-        emb = embeddings.unsqueeze(-1).unsqueeze(-1).unsqueeze(-1)
+        if embeddings is not None:
+            emb = embeddings.unsqueeze(-1).unsqueeze(-1).unsqueeze(-1)
+        else:
+            emb = None
+
         x = tensor_4d_to_5d(x, num_channels=self.config.latent_channels)
         x = torch.cat((x, torch.ones_like(x[:, :1])), dim=1)
         x = self.latents_conv_in(x, gain=self.input_gain) + self.input_shift

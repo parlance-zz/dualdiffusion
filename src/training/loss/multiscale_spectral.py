@@ -21,7 +21,7 @@
 # SOFTWARE.
 
 from dataclasses import dataclass
-from typing import Literal
+from typing import Literal, Optional
 
 import torch
 import torchaudio
@@ -124,6 +124,7 @@ class MSSLoss2DConfig:
     block_widths: tuple[int] = (8, 16, 32, 64, 128, 256)
     block_overlap: int = 8
     block_width_weight_exponent: float = 0
+    block_window_fn: Literal["none", "flat_top", "hann"] = "none"
 
     frequency_weight_exponent: float = 1
     use_midside_transform: Literal["stack", "cat", "none"] = "none"
@@ -144,9 +145,16 @@ class MSSLoss2D:
         for block_width in self.config.block_widths:
             self.steps.append(max(block_width // self.config.block_overlap, 1))
 
-            window = self.get_sin_power_window_2d(block_width)
-            window /= window.square().mean().sqrt()
-            self.windows.append(window.to(device=device).requires_grad_(False).detach())
+            if self.config.block_window_fn == "hann":
+                window = self.get_sin_power_window_2d(block_width)
+            elif self.config.block_window_fn == "flat_top":
+                window = self.get_flat_top_window_2d(block_width)
+            elif self.config.block_window_fn != "none":
+                raise ValueError(f"Invalid block window function: {self.config.block_window_fn}")
+            
+            if self.config.block_window_fn != "none":
+                window /= window.square().mean().sqrt()
+                self.windows.append(window.to(device=device).requires_grad_(False).detach())
 
     @torch.no_grad()
     def _flat_top_window(self, x: torch.Tensor) -> torch.Tensor:
@@ -180,13 +188,16 @@ class MSSLoss2D:
         return self._flat_top_window(wx)
     
     def stft2d(self, x: torch.Tensor, block_width: int,
-               step: int, window: torch.Tensor) -> torch.Tensor:
+               step: int, window: Optional[torch.Tensor] = None) -> torch.Tensor:
         
         padding = block_width // 2
         x = torch.nn.functional.pad(x, (0, 0, padding, padding), mode="reflect")
         x = x.unfold(2, block_width, step).unfold(3, block_width, step)
 
-        x = torch.fft.rfft2(x * window, norm="ortho")
+        if window is not None:
+            x = x * window
+
+        x = torch.fft.rfft2(x, norm="ortho")
 
         if self.config.use_midside_transform not in ["none", None]:
             if self.config.use_midside_transform == "stack":
@@ -208,13 +219,17 @@ class MSSLoss2D:
                 continue
 
             step = self.steps[i]
-            window = self.windows[i]
+            if self.config.block_window_fn != "none":
+                window = self.windows[i]
+            else:
+                window = None
 
             with torch.no_grad():
                 target_fft = self.stft2d(target, block_width, step, window)
                 target_fft_abs = target_fft.abs().requires_grad_(False).detach()
                 
-                loss_weight = (1 / target_fft_abs.mean(dim=(0,1,2,3), keepdim=True).clip(min=1e-15)).requires_grad_(False).detach()
+                loss_weight = (1 / target_fft_abs.mean(dim=(0,1,2,3), keepdim=True).clip(min=1e-2)).requires_grad_(False).detach()
+
                 if self.config.frequency_weight_exponent != 1:
                     loss_weight = loss_weight.pow(self.config.frequency_weight_exponent)
                 if self.config.block_width_weight_exponent != 0:
