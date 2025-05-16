@@ -20,7 +20,7 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
-from typing import Optional
+from typing import Optional, Literal
 from dataclasses import dataclass
 
 import torch
@@ -46,6 +46,7 @@ class MS_MDCT_DualFormatConfig(DualDiffusionFormatConfig):
     raw_to_mdct_scale: float = 12.1
 
     ms_abs_exponent: float = 1
+    ms_filter_shape: Literal["triangular", "cos"] = "triangular"
     mdct_window_len: int = 512
     mdct_psd_num_bins: int = 2048
     
@@ -135,19 +136,24 @@ class MS_MDCT_DualFormat(DualDiffusionFormat):
             sample_rate=config.sample_rate,
             num_stft_bins=config.ms_num_stft_bins,
             num_filters=config.ms_num_frequencies,
-            filter_norm="slaney"
+            filter_norm="slaney",
+            filter_shape=config.ms_filter_shape,
         )
 
         # this scale is used for inverse filtering to create the conditioning for a mdct ddec model
-        self.ms_freq_scale_mdct_psd = FrequencyScale(
-            freq_scale="mel",
-            freq_min=config.ms_freq_min,
-            freq_max=config.sample_rate / 2,
-            sample_rate=config.sample_rate,
-            num_stft_bins=config.mdct_psd_num_bins,
-            num_filters=config.ms_num_frequencies,
-            filter_norm="slaney"
-        )
+        if config.mdct_psd_num_bins == self.config.ms_num_stft_bins - 1:
+            self.ms_freq_scale_mdct_psd = None # if the size is close enough just crop the last bin out
+        else:
+            self.ms_freq_scale_mdct_psd = FrequencyScale(
+                freq_scale="mel",
+                freq_min=config.ms_freq_min,
+                freq_max=config.sample_rate / 2,
+                sample_rate=config.sample_rate,
+                num_stft_bins=config.mdct_psd_num_bins,
+                num_filters=config.ms_num_frequencies,
+                filter_norm="slaney",
+                filter_shape=config.ms_filter_shape,
+            )
 
         ms_stft_hz = torch.linspace(0, config.sample_rate / 2, config.ms_num_stft_bins)
         self.register_buffer("ms_stft_hz", ms_stft_hz)
@@ -211,8 +217,12 @@ class MS_MDCT_DualFormat(DualDiffusionFormat):
             return self.ms_freq_scale.scale(spec_blended / self.ms_stft_mel_density) ** self.config.ms_abs_exponent * self.config.raw_to_mel_spec_scale
 
     def mel_spec_to_mdct_psd(self, mel_spec: torch.Tensor):
-        mel_spec_mdct_psd = self.ms_freq_scale_mdct_psd.unscale(
-            mel_spec.float().clip(min=0) ** (1 / self.config.ms_abs_exponent), rectify=False) * self.config.mel_spec_to_mdct_psd_scale
+        if self.ms_freq_scale_mdct_psd is None:
+            mel_spec_mdct_psd = self.ms_freq_scale.unscale(
+                mel_spec.float().clip(min=0) ** (1 / self.config.ms_abs_exponent), rectify=False)[:, :, :-1, :] * self.config.mel_spec_to_mdct_psd_scale
+        else:
+            mel_spec_mdct_psd = self.ms_freq_scale_mdct_psd.unscale(
+                mel_spec.float().clip(min=0) ** (1 / self.config.ms_abs_exponent), rectify=False) * self.config.mel_spec_to_mdct_psd_scale
         
         return mel_spec_mdct_psd
     
