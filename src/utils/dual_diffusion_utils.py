@@ -619,7 +619,7 @@ def tensor_to_img(x: torch.Tensor,
 
     if channel_order is not None:
         _x = x.clone()
-        for i in range(3):
+        for i in range(len(channel_order)):
             x[..., i] = _x[..., channel_order[i]]
 
     if x.shape[-1] == 4: # show alpha channel as pre-multiplied brightness
