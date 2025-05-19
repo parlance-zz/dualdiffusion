@@ -129,6 +129,7 @@ class MSSLoss2DConfig:
     frequency_weight_exponent: float = 1
     use_midside_transform: Literal["stack", "cat", "none"] = "none"
     use_mse_loss: bool = True
+    use_phase_loss: bool = False
     loss_scale: float = 1.3
 
 class MSSLoss2D:
@@ -227,11 +228,18 @@ class MSSLoss2D:
             with torch.no_grad():
                 target_fft = self.stft2d(target, block_width, step, window)
                 target_fft_abs = target_fft.abs().requires_grad_(False).detach()
+                if self.config.use_phase_loss == True:
+                    target_fft_angle = target_fft.angle().requires_grad_(False).detach()
                 
-                loss_weight = (1 / target_fft_abs.mean(dim=(0,1,2,3), keepdim=True).clip(min=1e-2)).requires_grad_(False).detach()
+                if self.config.frequency_weight_exponent != 0:
+                    loss_weight = (1 / target_fft_abs.mean(dim=(0,1,2,3), keepdim=True).clip(min=1e-2)).requires_grad_(False).detach()
 
-                if self.config.frequency_weight_exponent != 1:
-                    loss_weight = loss_weight.pow(self.config.frequency_weight_exponent)
+                    if self.config.frequency_weight_exponent != 1:
+                        loss_weight = loss_weight.pow(self.config.frequency_weight_exponent)
+                
+                else:
+                    loss_weight = 1
+
                 if self.config.block_width_weight_exponent != 0:
                     loss_weight = loss_weight * (block_width ** self.config.block_width_weight_exponent)
 
@@ -243,6 +251,12 @@ class MSSLoss2D:
             else:
                 block_loss = torch.nn.functional.l1_loss(sample_fft_abs.float(), target_fft_abs.float(), reduction="none")
             loss = loss + (block_loss * loss_weight).mean(dim=(1,2,3,4,5))
+
+            if self.config.use_phase_loss == True:
+                phase_error = target_fft_angle - sample_fft.angle()
+                wrapped_phase_error = torch.atan2(phase_error.sin(), phase_error.cos())
+                loss = loss + (wrapped_phase_error.abs() * (target_fft_abs * loss_weight * (2/torch.pi))).mean(dim=(1,2,3,4,5))
+             
    
         return loss * self.config.loss_scale
 

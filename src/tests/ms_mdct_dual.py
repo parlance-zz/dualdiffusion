@@ -55,7 +55,10 @@ def ms_mdct_dual_format_test() -> None:
 
     cfg: MS_MDCT_DualFormat_TestConfig = config.load_config(MS_MDCT_DualFormat_TestConfig,
         os.path.join(config.CONFIG_PATH, "tests", "ms_mdct_dual_format.json"))
-    format = MS_MDCT_DualFormat(cfg.format_config).to(cfg.device)
+    format: MS_MDCT_DualFormat = MS_MDCT_DualFormat(cfg.format_config).to(cfg.device)
+
+    print("Format config:")
+    print(dict_str(format.config.__dict__))
 
     dataset_path = config.DATASET_PATH
     test_samples = cfg.test_samples
@@ -82,6 +85,12 @@ def ms_mdct_dual_format_test() -> None:
     if cfg.format_config.ms_window_exponent_high is not None:
         window_high = MS_MDCT_DualFormat._hann_power_window(cfg.format_config.ms_win_length, **wkwargs)
         window_high.numpy().tofile(os.path.join(output_path, "window_high.raw"))
+
+    if format.ms_freq_scale_mdct_psd is not None:
+        mel_spec_filters = format.ms_freq_scale_mdct_psd.filters
+    else:
+        mel_spec_filters = format.ms_freq_scale.filters
+    mel_spec_filters.T.cpu().numpy().tofile(os.path.join(output_path, "mel_spec_filters.raw"))
 
     stat_logger = StatLogger()
     print(f"\nNum test_samples: {len(test_samples)}\n")
