@@ -83,8 +83,9 @@ class UNetTrainer(ModuleTrainer):
         self.unet_trainer_init()
 
     @torch.no_grad()
-    def unet_trainer_init(self) -> None:
-
+    def unet_trainer_init(self, crop_edges: int = 0) -> None:
+        
+        self.crop_edges = crop_edges
         self.is_validation_batch = False
         self.device_generator = None
         self.cpu_generator = None
@@ -233,6 +234,11 @@ class UNetTrainer(ModuleTrainer):
         noise = (noise * batch_sigma.view(-1, 1, 1, 1)).detach()
 
         denoised = self.unet(samples + noise, batch_sigma, self.format, unet_embeddings, ref_samples)
+
+        if self.crop_edges > 0: # used for ddec mdct training to avoid artifacts due to mdct lapped blocks at beginning and end of sample
+            denoised = denoised[..., self.crop_edges:-self.crop_edges, self.crop_edges:-self.crop_edges]
+            samples = samples[..., self.crop_edges:-self.crop_edges, self.crop_edges:-self.crop_edges]
+            
         batch_loss_weight = (batch_sigma ** 2 + self.sigma_sampler.config.sigma_data ** 2) / (batch_sigma * self.sigma_sampler.config.sigma_data) ** 2
         batch_weighted_loss = torch.nn.functional.mse_loss(denoised, samples, reduction="none").mean(dim=(1,2,3)) * batch_loss_weight
 
