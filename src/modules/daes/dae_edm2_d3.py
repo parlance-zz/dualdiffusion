@@ -328,7 +328,7 @@ class DAE_D3(DualDiffusionDAE):
         
     def encode(self, x: torch.Tensor, embeddings: torch.Tensor, training: bool = False) -> torch.Tensor:
         
-        x = x - 2.9 # ms_mdct_dual_format conversion fudge factor
+        x = x - 2.73 # ms_mdct_dual_format conversion fudge factor
 
         x = tensor_4d_to_5d(x, num_channels=1).to(memory_format=torch.channels_last_3d)
         x = torch.cat((x, torch.ones_like(x[:, :1])), dim=1)
@@ -369,7 +369,7 @@ class DAE_D3(DualDiffusionDAE):
 
             dec_out = wavelet_recompose2d(wavelets)
 
-        dec_out = dec_out + 2.9 # ms_mdct_dual_format conversion fudge factor
+        dec_out = dec_out + 2.73 # ms_mdct_dual_format conversion fudge factor
 
         return dec_out
     
