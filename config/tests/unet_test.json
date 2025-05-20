@@ -1,5 +1,5 @@
 {
-    "model_name": "edm2_d3a_aclap2_ultra2",
+    "model_name": "edm2_dae_d3a",
     "model_load_options": {
         "torch_dtype": "bfloat16",
         "device": "cuda",
@@ -16,19 +16,16 @@
             "dynamic": false
         }
     },
-    "output_lufs": -20,
-    "num_fgla_iters": 300, // hq settings
 
+    "output_lufs": -20,
     "skip_ddec": false,
     "copy_sample_source_files": true,
-    "random_test_samples_seed": null,
+    "random_test_samples_seed": 100,
     "add_random_test_samples": 0,
     "shuffle_test_samples": true,
     "test_samples": [
         
         //"psf3/Street Fighter IV"
-        "switch/Gravity Circuit",
-        "switch/Gravity Circuit",
         "switch/Gravity Circuit"
         
         //"spc/Shin Kidou Senki Gundam W - Endless Duel"
@@ -132,7 +129,7 @@
         //"xbox/Tony Hawk's Pro Skater 2x"
     ],
     "unet_params": {
-        "seed": null,
+        "seed": 100,
 
         "num_steps": 300,
         "cfg_scale": 2,//2, //3, //3.5,//3,

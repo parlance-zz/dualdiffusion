@@ -1,5 +1,5 @@
 {
-    "model_name": "edm2_dae_j3a_ddec",
+    "model_name": "edm2_dae_d3a",
     "model_load_options": {
         "torch_dtype": "bfloat16",
         "device": "cuda",
@@ -19,10 +19,10 @@
     "latents_img_use_pca": true,
     "latents_save_full_res": false,
     "output_lufs": -20,
-    "dae_bypass": true,
+    "dae_bypass": false,
     "ddec_output": true,
     "xref_output": false,
-    "add_random_test_samples": 10,
+    "add_random_test_samples": 0,
     "copy_sample_source_files": true,
     "test_samples": [
         "psf/Karyujou/karyujou_01.psf.flac",

@@ -32,10 +32,10 @@ import glob
 import torch
 
 from pipelines.dual_diffusion_pipeline import DualDiffusionPipeline, SampleParams
-from modules.unets.unet_edm2_ddec_mclt import DDec_MCLT_UNet
+from modules.unets.unet_edm2_ddec_mdct_b4 import DDec_MDCT_UNet_B4
+from modules.unets.unet_edm2_ddec_mclt_b1 import DDec_MCLT_UNet_B1
 from modules.daes.dae import DualDiffusionDAE
-from modules.formats.spectrogram import SpectrogramFormat
-from modules.formats.mclt import DualMCLTFormat, DualMCLTFormatConfig
+from modules.formats.ms_mdct_dual import MS_MDCT_DualFormat
 from utils.dual_diffusion_utils import (
     init_cuda, normalize, save_audio, load_audio, load_safetensors,
     save_img, dict_str, get_no_clobber_filepath, get_audio_metadata,
@@ -52,8 +52,7 @@ class UNetTestConfig:
     unet_params: SampleParams
     ddec_params: SampleParams
 
-    output_lufs: float  = -16
-    num_fgla_iters: int = 300
+    output_lufs: float  = -20
     skip_ddec: bool     = False
 
     copy_sample_source_files: bool          = True
@@ -66,7 +65,6 @@ class UNetTestConfig:
 def unet_test() -> None:
 
     torch.manual_seed(0)
-    #os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "max_split_size_mb:8192"
 
     cfg: UNetTestConfig = config.load_config(UNetTestConfig,
         os.path.join(config.CONFIG_PATH, "tests", "unet_test.json"), quiet=True)
@@ -75,12 +73,11 @@ def unet_test() -> None:
     print(f"Loading DualDiffusion model from '{model_path}'...")
     pipeline = DualDiffusionPipeline.from_pretrained(model_path, **cfg.model_load_options)
     dae: DualDiffusionDAE = getattr(pipeline, "dae", None)
-    ddec: DDec_MCLT_UNet = pipeline.ddec
-    format: SpectrogramFormat = pipeline.format
-    mclt = DualMCLTFormat(DualMCLTFormatConfig())
+    ddec: DDec_MDCT_UNet_B4 = pipeline.ddec
+    format: MS_MDCT_DualFormat = pipeline.format
 
     sample_rate = format.config.sample_rate
-    crop_width = format.sample_raw_crop_width(length=cfg.unet_params.length)
+    crop_width = format.get_raw_crop_width(raw_length=cfg.unet_params.length)
     last_global_step = pipeline.unet.config.last_global_step
 
     if cfg.random_test_samples_seed is None:
@@ -150,7 +147,7 @@ def unet_test() -> None:
         input_audio_metadata = get_audio_metadata(audio_full_path)
         if clap_audio_embeddings is None:
             clap_audio_embeddings = pipeline.embedding.encode_audio(input_audio, sample_rate=input_sample_rate)
-        input_sample = format.raw_to_sample(input_audio[:, :crop_width])
+        input_mel_spec = format.raw_to_mel_spec(input_audio[:, :crop_width])
 
         audio_embedding = normalize(clap_audio_embeddings.mean(dim=0, keepdim=True)).float()
         if dae is not None:
@@ -166,27 +163,30 @@ def unet_test() -> None:
             audio_embedding=audio_embedding, module=pipeline.unet).float()
         if dae is not None:
             latents = unet_output
-            output_sample = dae.decode(latents.to(dtype=dae.dtype), dae_embeddings).float()
+            output_mel_spec = dae.decode(latents.to(dtype=dae.dtype), dae_embeddings).float()
         else:
             latents = None
-            output_sample = unet_output
+            output_mel_spec = unet_output
         
         if cfg.skip_ddec == False:
-            #x_ref = format.convert_to_abs_exp1(output_sample)
-            #x_ref = x_ref.to(dtype=ddec.dtype)
-            x_ref = format.convert_to_unscaled_psd(output_sample.float()).to(dtype=ddec.dtype)
+            x_ref = format.mel_spec_to_mdct_psd(output_mel_spec.float()).to(dtype=ddec.dtype)
+
             print(f"x_ref   mean/std: {x_ref.mean().item():.4} {x_ref.std().item():.4}")
 
             cfg.ddec_params.seed = cfg.unet_params.seed
-            output_mclt_sample = pipeline.diffusion_decode(cfg.ddec_params, audio_embedding=audio_embedding,
-                                                    sample_shape=output_sample.shape, x_ref=x_ref, module=ddec)
+            output_mdct = pipeline.diffusion_decode(cfg.ddec_params, audio_embedding=audio_embedding,
+                                                    sample_shape=output_mel_spec.shape, x_ref=x_ref, module=ddec)
             
-            output_raw_sample = mclt.sample_to_raw(output_mclt_sample.float())
-        else:
-            output_raw_sample = format.sample_to_raw(output_sample.float(), n_fgla_iters=cfg.num_fgla_iters)
+            output_raw_sample = format.mdct_to_raw(output_mdct.float())
 
-        print(f"input   mean/std: {input_sample.mean().item():.4} {input_sample.std().item():.4}")
-        print(f"output  mean/std: {output_sample.mean().item():.4} {output_sample.std().item():.4}")
+            # kludge for mistake in edge padding when training edm2_d3a_aclap2_ultra2 ddec
+            if isinstance(ddec, DDec_MCLT_UNet_B1): 
+                output_raw_sample = output_raw_sample[..., 8192:-8192]
+        else:
+            output_raw_sample = None
+
+        print(f"input   mean/std: {input_mel_spec.mean().item():.4} {input_mel_spec.std().item():.4}")
+        print(f"output  mean/std: {output_mel_spec.mean().item():.4} {output_mel_spec.std().item():.4}")
         
         output_label = cfg.unet_params.get_label(pipeline.model_metadata)
 
@@ -214,11 +214,11 @@ def unet_test() -> None:
                 
         output_sample_file_path = os.path.join(output_path, f"{output_label}_output_sample.png")
         output_sample_file_path = get_no_clobber_filepath(output_sample_file_path)
-        save_img(format.sample_to_img(output_sample), output_sample_file_path)
+        save_img(format.mel_spec_to_img(output_mel_spec), output_sample_file_path)
 
         output_sample_file_path = os.path.join(output_path, f"{output_label}_input_sample.png")
         output_sample_file_path = get_no_clobber_filepath(output_sample_file_path)
-        save_img(format.sample_to_img(input_sample), output_sample_file_path)
+        save_img(format.mel_spec_to_img(input_mel_spec), output_sample_file_path)
 
         metadata = {**model_metadata, "diffusion_metadata": dict_str(cfg.unet_params.__dict__)}
         metadata["ddec_metadata"] = dict_str(cfg.ddec_params.__dict__) if cfg.skip_ddec == False else "null"

@@ -70,6 +70,7 @@ def dae_test() -> None:
     else:
         ddec = None
         last_global_step = dae.config.last_global_step
+    last_global_step = dae.config.last_global_step
 
     model_metadata = {"model_metadata": dict_str(pipeline.model_metadata)}
     print(f"{model_metadata['model_metadata']}\n")
@@ -84,6 +85,7 @@ def dae_test() -> None:
         dae.config.latents_img_use_pca = test_params["latents_img_use_pca"]
 
     output_path = os.path.join(model_path, "output", "dae", f"step_{last_global_step}")
+    #output_path = os.path.join(model_path, "output", "ddec", f"step_{last_global_step}")
     os.makedirs(output_path, exist_ok=True)
     start_time = datetime.datetime.now()
     avg_latents_mean = avg_latents_std = 0
@@ -129,7 +131,11 @@ def dae_test() -> None:
                 latents = dae.tiled_encode(input_mel_spec.to(dtype=dae.dtype), dae_embedding,
                     max_chunk=test_params["latents_tiled_max_chunk_size"], overlap=test_params["latents_tiled_overlap"])
             else:
-                latents, _, full_res_latents = dae.encode(input_mel_spec.to(dtype=dae.dtype), dae_embedding, training=True)
+                latents = dae.encode(input_mel_spec.to(dtype=dae.dtype), dae_embedding, training=False)
+                if isinstance(latents, tuple):
+                    latents, _, full_res_latents = latents
+                else:
+                    full_res_latents = None
             
             output_mel_spec = dae.decode(latents, dae_embedding).float()
         else:
@@ -140,19 +146,14 @@ def dae_test() -> None:
         if test_params["dae_bypass"] == True:
             x_ref = input_x_ref
         else:
-            format.mel_spec_to_mdct_psd(output_mel_spec)
+            x_ref = format.mel_spec_to_mdct_psd(output_mel_spec)
 
         if ddec is not None:
             ddec_params = SampleParams(
                 seed=5000,
                 num_steps=30, length=audio_len, cfg_scale=1.5, input_perturbation=0, input_perturbation_offset=-0.3,
-                use_heun=True, schedule="edm2", rho=7, sigma_max=16, sigma_min=0.0002, stereo_fix=True
+                use_heun=True, schedule="edm2", rho=7, sigma_max=11, sigma_min=0.00015, stereo_fix=False
             )
-            #ddec_params = SampleParams(
-            #    seed=5000,
-            #    num_steps=20, length=audio_len, cfg_scale=1.5, input_perturbation=0, input_perturbation_offset=-0.3,
-            #    use_heun=True, schedule="edm2", rho=7, sigma_max=11, sigma_min=0.0002 #0.0003 #0.013
-            #)
 
             mdct_output_sample = pipeline.diffusion_decode(
                 ddec_params, audio_embedding=audio_embedding,
