@@ -28,6 +28,7 @@ import torch
 from training.trainer import DualDiffusionTrainer
 from training.module_trainers.module_trainer import ModuleTrainerConfig, ModuleTrainer
 from training.loss.multiscale_spectral import MSSLoss2D, MSSLoss2DConfig
+from training.loss.spectral_regularization import SpecRegLoss, SpecRegLossConfig
 from modules.daes.dae_edm2_j3 import DAE_J3
 from modules.formats.ms_mdct_dual import MS_MDCT_DualFormat
 from modules.mp_tools import normalize
@@ -55,6 +56,9 @@ class DAETrainer_J1_Config(ModuleTrainerConfig):
     mss_loss_weight: float = 1
     mss_loss_2d_config: Optional[dict[str, Any]] = None
 
+    spec_reg_loss_weight: float = 0
+    spec_reg_loss_config: Optional[dict[str, Any]] = None
+
 class DAETrainer_J1(ModuleTrainer):
     
     @torch.no_grad()
@@ -78,6 +82,14 @@ class DAETrainer_J1(ModuleTrainer):
             if trainer.config.enable_model_compilation == True:
                 self.mss_loss.compile(**trainer.config.compile_params)
 
+        if config.spec_reg_loss_weight > 0:
+            config.spec_reg_loss_config = config.spec_reg_loss_config or {}
+            self.spec_reg_loss = SpecRegLoss(SpecRegLossConfig(**config.spec_reg_loss_config), 
+                latents_shape=trainer.latent_shape, mel_spec_shape=trainer.sample_shape, device=trainer.accelerator.device)
+
+            if trainer.config.enable_model_compilation == True:
+                self.spec_reg_loss.compile(**trainer.config.compile_params)
+
         self.logger.info("Training DAE model:")
         self.logger.info(f"Latents KL loss weight: {self.config.latents_kl_loss_weight}")
         self.logger.info(f"Hidden KL loss weight: {self.config.hidden_kl_loss_weight}")
@@ -89,6 +101,11 @@ class DAETrainer_J1(ModuleTrainer):
         if self.config.mss_loss_weight > 0:
             self.logger.info("MSS_Loss_2D config:")
             self.logger.info(dict_str(self.mss_loss.config.__dict__))
+
+        self.logger.info(f"Spec reg loss weight: {self.config.spec_reg_loss_weight}")
+        if self.config.spec_reg_loss_weight > 0:
+            self.logger.info("SpecRegLoss config:")
+            self.logger.info(dict_str(self.spec_reg_loss.config.__dict__))
     
     def train_batch(self, batch: dict) -> dict[str, Union[torch.Tensor, float]]:
 
@@ -135,7 +152,15 @@ class DAETrainer_J1(ModuleTrainer):
 
         total_loss = recon_loss_nll + latents_kld * latents_kl_loss_weight + hidden_kld * hidden_kl_loss_weight
 
-        logs = {
+        logs = {}
+
+        if self.config.spec_reg_loss_weight > 0:
+            spec_reg_loss = self.spec_reg_loss.spec_reg_loss(latents, mel_spec)
+            logs["loss/spec_reg"] = spec_reg_loss
+            logs["loss_weight/spec_reg"] = self.config.spec_reg_loss_weight
+            total_loss = total_loss + spec_reg_loss * self.config.spec_reg_loss_weight
+
+        logs.update({
             "loss": total_loss,
             "loss/recon": recon_loss,
             "loss/point": point_loss,
@@ -152,7 +177,7 @@ class DAETrainer_J1(ModuleTrainer):
             "io_stats/recon_mel_mean": reconstructed.mean(dim=(1,2,3)),
             "io_stats/latents_std": latents.std(dim=(1,2,3)),
             "io_stats/latents_mean": latents.mean(dim=(1,2,3))
-        }
+        })
         
         if mss_loss is not None:
             logs["loss/mss"] = mss_loss
