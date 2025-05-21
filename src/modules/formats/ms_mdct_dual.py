@@ -59,6 +59,7 @@ class MS_MDCT_DualFormatConfig(DualDiffusionFormatConfig):
     ms_window_exponent_low: float = 17
     ms_window_exponent_high: Optional[float] = 58
     ms_window_periodic: bool = True
+    ms_window_half_crop: bool = False
     
     @property
     def mdct_num_frequencies(self) -> int:
@@ -85,10 +86,15 @@ class MS_MDCT_DualFormat(DualDiffusionFormat):
     @staticmethod
     def _hann_power_window(window_length: int, periodic: bool = True, *, dtype: torch.dtype = None,
                           layout: torch.layout = torch.strided, device: torch.device = None,
-                          requires_grad: bool = False, exponent: float = 1.) -> torch.Tensor:
+                          requires_grad: bool = False, exponent: float = 1., half_crop: bool = False) -> torch.Tensor:
         
-        return torch.hann_window(window_length, periodic=periodic, dtype=dtype,
-                layout=layout, device=device, requires_grad=requires_grad) ** exponent
+        if half_crop == True:
+            window = torch.hann_window(window_length*2, periodic=periodic, dtype=dtype,
+                    layout=layout, device=device, requires_grad=requires_grad) ** exponent
+            return window[window_length//2:-window_length//2]
+        else:
+            return torch.hann_window(window_length, periodic=periodic, dtype=dtype,
+                    layout=layout, device=device, requires_grad=requires_grad) ** exponent
     
     def __init__(self, config: MS_MDCT_DualFormatConfig) -> None:
         super().__init__()
@@ -106,6 +112,7 @@ class MS_MDCT_DualFormat(DualDiffusionFormat):
             wkwargs={
                 "exponent": config.ms_window_exponent_low,
                 "periodic": config.ms_window_periodic,
+                "half_crop": config.ms_window_half_crop,
                 "requires_grad": False
             },
             center=True, pad=0, pad_mode="reflect", onesided=True
@@ -121,6 +128,7 @@ class MS_MDCT_DualFormat(DualDiffusionFormat):
                 wkwargs={
                     "exponent": config.ms_window_exponent_high,
                     "periodic": config.ms_window_periodic,
+                    "half_crop": config.ms_window_half_crop,
                     "requires_grad": False
                 },
                 center=True, pad=0, pad_mode="reflect", onesided=True
