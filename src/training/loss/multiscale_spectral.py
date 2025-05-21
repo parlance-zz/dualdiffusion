@@ -124,12 +124,12 @@ class MSSLoss2DConfig:
     block_widths: tuple[int] = (8, 16, 32, 64, 128, 256)
     block_overlap: int = 8
     block_width_weight_exponent: float = 0
-    block_window_fn: Literal["none", "flat_top", "hann"] = "none"
+    block_window_fn: Literal["none", "flat_top", "hann", "kaiser"] = "hann"
 
     frequency_weight_exponent: float = 1
     use_midside_transform: Literal["stack", "cat", "none"] = "none"
     use_mse_loss: bool = True
-    use_phase_loss: bool = False
+    phase_loss_scale: float = 0
     loss_scale: float = 1.3
 
 class MSSLoss2D:
@@ -150,6 +150,9 @@ class MSSLoss2D:
                 window = self.get_sin_power_window_2d(block_width)
             elif self.config.block_window_fn == "flat_top":
                 window = self.get_flat_top_window_2d(block_width)
+            elif self.config.block_window_fn == "kaiser":
+                window = torch.kaiser_window(block_width, beta=12, periodic=False)
+                window = torch.outer(window, window)
             elif self.config.block_window_fn != "none":
                 raise ValueError(f"Invalid block window function: {self.config.block_window_fn}")
             
@@ -228,7 +231,7 @@ class MSSLoss2D:
             with torch.no_grad():
                 target_fft = self.stft2d(target, block_width, step, window)
                 target_fft_abs = target_fft.abs().requires_grad_(False).detach()
-                if self.config.use_phase_loss == True:
+                if self.config.phase_loss_scale > 0:
                     target_fft_angle = target_fft.angle().requires_grad_(False).detach()
                 
                 if self.config.frequency_weight_exponent != 0:
@@ -245,19 +248,21 @@ class MSSLoss2D:
 
             sample_fft = self.stft2d(sample, block_width, step, window)
             sample_fft_abs = sample_fft.abs()
-            
+
             if self.config.use_mse_loss == True:
                 block_loss = torch.nn.functional.mse_loss(sample_fft_abs.float(), target_fft_abs.float(), reduction="none")
             else:
                 block_loss = torch.nn.functional.l1_loss(sample_fft_abs.float(), target_fft_abs.float(), reduction="none")
-            loss = loss + (block_loss * loss_weight).mean(dim=(1,2,3,4,5))
+            abs_loss = (block_loss * loss_weight).mean(dim=(1,2,3,4,5))
+            loss = loss + abs_loss
 
-            if self.config.use_phase_loss == True:
+            if self.config.phase_loss_scale > 0:
                 phase_error = target_fft_angle - sample_fft.angle()
                 wrapped_phase_error = torch.atan2(phase_error.sin(), phase_error.cos())
-                loss = loss + (wrapped_phase_error.abs() * (target_fft_abs * loss_weight * (2/torch.pi))).mean(dim=(1,2,3,4,5))
+                phase_loss_scale = (self.config.phase_loss_scale / torch.pi) * loss_weight
+                phase_loss = (wrapped_phase_error.abs() * target_fft_abs * phase_loss_scale).mean(dim=(1,2,3,4,5))
+                loss = loss + phase_loss
              
-   
         return loss * self.config.loss_scale
 
     def compile(self, **kwargs) -> None:
