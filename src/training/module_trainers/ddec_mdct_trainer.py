@@ -53,6 +53,8 @@ class DiffusionDecoder_MDCT_Trainer_Config(UNetTrainerConfig):
     latents_kl_loss_weight: float = 6e-2
     hidden_kl_loss_weight: float = 3e-3
 
+    crop_edges: int = 8 # used to avoid artifacts due to mdct lapped blocks at beginning and end of sample
+
 class DiffusionDecoder_MDCT_Trainer(UNetTrainer):
     
     @torch.no_grad()
@@ -69,10 +71,13 @@ class DiffusionDecoder_MDCT_Trainer(UNetTrainer):
             raise ValueError("DDEC and/or DAE not found in train_modules")
         
         self.ddec: DDec_MDCT_UNet_C1 = trainer.get_train_module("ddec")
-        if self.ddec is None: self.ddec = self.pipeline.ddec.to(
-            dtype=torch.bfloat16, device=trainer.accelerator.device).require_grad_(True)
+        if self.ddec is None: self.ddec = trainer.pipeline.ddec.to(
+            dtype=torch.bfloat16, device=trainer.accelerator.device).requires_grad_(True)
 
         self.dae: DAE_J3 = trainer.get_train_module("dae")
+        if self.dae is None: self.dae = trainer.pipeline.dae.to(
+            dtype=torch.bfloat16, device=trainer.accelerator.device).requires_grad_(False)
+
         self.format: MS_MDCT_DualFormat = trainer.pipeline.format.to(self.trainer.accelerator.device)
 
         if trainer.config.enable_model_compilation:
@@ -96,7 +101,7 @@ class DiffusionDecoder_MDCT_Trainer(UNetTrainer):
             self.logger.info(f"Hidden KL loss weight: {self.config.hidden_kl_loss_weight}")
 
         self.unet = self.ddec
-        self.unet_trainer_init()
+        self.unet_trainer_init(crop_edges=config.crop_edges)
 
     def train_batch(self, batch: dict) -> Optional[dict[str, Union[torch.Tensor, float]]]:
 
@@ -116,11 +121,7 @@ class DiffusionDecoder_MDCT_Trainer(UNetTrainer):
             random_phase_augmentation=self.config.random_phase_augmentation).detach()
         mel_spec = self.format.raw_to_mel_spec(raw_samples).detach()
 
-        if self.train_dae == True:
-            latents, recon_mel_spec, latents_kld, hidden_kld = self.dae(mel_spec, dae_embeddings)
-        else:
-            latents = latents_kld = hidden_kld = None
-            recon_mel_spec = mel_spec
+        latents, recon_mel_spec, latents_kld, hidden_kld = self.dae(mel_spec, dae_embeddings)
 
         ref_samples = self.format.mel_spec_to_mdct_psd(recon_mel_spec).detach()
         
@@ -141,8 +142,6 @@ class DiffusionDecoder_MDCT_Trainer(UNetTrainer):
             logs.update({
                 "loss/kl_latents": latents_kld.detach(),
                 "loss/kl_hidden": hidden_kld.detach(),
-                "loss/recon_mel_spec": torch.nn.functional.l1_loss(recon_mel_spec.detach(),
-                                                mel_spec, reduction="none").mean(dim=(1,2,3)),
                 "loss_weight/kl_latents": self.config.latents_kl_loss_weight,
                 "loss_weight/kl_hidden": self.config.hidden_kl_loss_weight,
                 "io_stats/latents_std": latents.std(dim=(1,2,3)).detach(),
