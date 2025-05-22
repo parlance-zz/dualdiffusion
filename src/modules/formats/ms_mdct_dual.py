@@ -247,9 +247,9 @@ class MS_MDCT_DualFormat(DualDiffusionFormat):
         return raw_length // block_width // self.config.ms_width_alignment * self.config.ms_width_alignment * block_width + block_width
     
     def get_mdct_shape(self, bsz: int = 1, raw_length: Optional[int] = None):
-        raw_crop_width = self._get_mdct_raw_crop_width(raw_length=raw_length)
+        raw_crop_width = self.get_raw_crop_width(raw_length=raw_length)
         num_mdct_bins = self.config.mdct_num_frequencies
-        num_mdct_frames = raw_crop_width // num_mdct_bins - 2
+        num_mdct_frames = raw_crop_width // num_mdct_bins + 1
         num_channels = self.config.num_raw_channels * 2 if self.config.mdct_dual_channel else 1
         return (bsz, num_channels, num_mdct_bins, num_mdct_frames,)
 
