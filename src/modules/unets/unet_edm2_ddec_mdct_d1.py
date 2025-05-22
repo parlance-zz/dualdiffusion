@@ -337,7 +337,7 @@ class DDec_MDCT_UNet_D1(DualDiffusionUNet):
  
             x_ref = x_ref.view(x_ref.shape[0], x_ref.shape[1], x.shape[3], self.psd_freqs_per_freq, x_ref.shape[3])
             x_ref = x_ref.permute(0, 3, 1, 2, 4).contiguous(memory_format=torch.channels_last_3d).to(dtype=torch.bfloat16)
-            x_ref = x_ref * self.in_psd_gain
+
 
         # Embedding.
         emb = self.emb_noise(self.emb_fourier(c_noise))
@@ -346,6 +346,7 @@ class DDec_MDCT_UNet_D1(DualDiffusionUNet):
         emb = emb.unsqueeze(-1).unsqueeze(-1).unsqueeze(-1).to(dtype=torch.bfloat16)
 
         # Encoder.
+        x_ref = x_ref * self.in_psd_gain
         inputs = (x, x_ref, torch.ones_like(x[:, :1])) if self.config.add_constant_channel else (x, x_ref)
         x = torch.cat(inputs, dim=1)
 

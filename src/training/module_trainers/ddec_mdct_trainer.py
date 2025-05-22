@@ -133,6 +133,11 @@ class DiffusionDecoder_MDCT_Trainer(UNetTrainer):
             "io_stats/mdct_mean": mdct_samples.mean(dim=(1,2,3)),
             "io_stats/x_ref_std": ref_samples.std(dim=(1,2,3)),
             "io_stats/x_ref_mean": ref_samples.mean(dim=(1,2,3)),
+            "io_stats/recon_mel_spec_std": recon_mel_spec.std(dim=(1,2,3)).detach(),
+            "io_stats/recon_mel_spec_mean": recon_mel_spec.mean(dim=(1,2,3)).detach(),
+            "io_stats/latents_std": latents.std(dim=(1,2,3)).detach(),
+            "io_stats/latents_mean": latents.mean(dim=(1,2,3)).detach(),
+            "io_stats/in_x_ref_gain": self.ddec.in_psd_gain.data.detach()
         })
 
         if self.train_dae == True:
@@ -144,10 +149,6 @@ class DiffusionDecoder_MDCT_Trainer(UNetTrainer):
                 "loss/kl_hidden": hidden_kld.detach(),
                 "loss_weight/kl_latents": self.config.latents_kl_loss_weight,
                 "loss_weight/kl_hidden": self.config.hidden_kl_loss_weight,
-                "io_stats/latents_std": latents.std(dim=(1,2,3)).detach(),
-                "io_stats/latents_mean": latents.mean(dim=(1,2,3)).detach(),
-                "io_stats/recon_mel_spec_std": recon_mel_spec.std(dim=(1,2,3)).detach(),
-                "io_stats/recon_mel_spec_mean": recon_mel_spec.mean(dim=(1,2,3)).detach(),
             })
 
         return logs
