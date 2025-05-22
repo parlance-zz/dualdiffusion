@@ -49,6 +49,7 @@ class MS_MDCT_DualFormatConfig(DualDiffusionFormatConfig):
     ms_filter_shape: Literal["triangular", "cos"] = "triangular"
     mdct_window_len: int = 512
     mdct_psd_num_bins: int = 2048
+    mdct_dual_channel: bool = False
     
     ms_freq_min: float = 0
     ms_width_alignment: int = 128
@@ -249,29 +250,37 @@ class MS_MDCT_DualFormat(DualDiffusionFormat):
         raw_crop_width = self._get_mdct_raw_crop_width(raw_length=raw_length)
         num_mdct_bins = self.config.mdct_num_frequencies
         num_mdct_frames = raw_crop_width // num_mdct_bins - 2
-        return (bsz, self.config.num_raw_channels, num_mdct_bins, num_mdct_frames,)
+        num_channels = self.config.num_raw_channels * 2 if self.config.mdct_dual_channel else 1
+        return (bsz, num_channels, num_mdct_bins, num_mdct_frames,)
 
     @torch.no_grad()
     def raw_to_mdct(self, raw_samples: torch.Tensor, random_phase_augmentation: bool = False) -> torch.Tensor:
 
-        _mclt = mclt(raw_samples.float(), self.config.mdct_window_len, "hann", 0.5).permute(0, 1, 3, 2)
+        _mclt = mclt(raw_samples.float(), self.config.mdct_window_len, "kaiser_bessel_derived", 1).permute(0, 1, 3, 2)
         if random_phase_augmentation == True:
             phase_rotation = torch.exp(2j * torch.pi * torch.rand(_mclt.shape[0], device=_mclt.device)) 
             _mclt *= phase_rotation.view(-1, 1, 1, 1)
 
-        return _mclt.real.contiguous(memory_format=self.memory_format) / self.mdct_mel_density * self.config.raw_to_mdct_scale
+        if self.config.mdct_dual_channel == True:
+            _mclt = torch.cat((_mclt.real, _mclt.imag), dim=1)
+            return _mclt.contiguous(memory_format=self.memory_format) / self.mdct_mel_density * self.config.raw_to_mdct_scale
+        else:
+            return _mclt.real.contiguous(memory_format=self.memory_format) / self.mdct_mel_density * self.config.raw_to_mdct_scale
     
     @torch.no_grad()
     def raw_to_mdct_psd(self, raw_samples: torch.Tensor) -> torch.Tensor:
-        _mclt = mclt(raw_samples.float(), self.config.mdct_window_len, "hann", 0.5).permute(0, 1, 3, 2)
+        _mclt = mclt(raw_samples.float(), self.config.mdct_window_len, "kaiser_bessel_derived", 1).permute(0, 1, 3, 2)
         return _mclt.abs().contiguous(memory_format=self.memory_format) / self.mdct_mel_density * self.config.raw_to_mdct_scale / 2**0.5
     
     @torch.no_grad()
     def mdct_to_raw(self, mdct: torch.Tensor) -> torch.Tensor:
 
         mdct = mdct * self.mdct_mel_density / self.config.raw_to_mdct_scale
+        if self.config.mdct_dual_channel == True:
+            mdct = torch.complex(*mdct.chunk(2, dim=1))
+
         raw_samples = imclt(mdct.permute(0, 1, 3, 2).contiguous(),
-            window_fn="hann", window_degree=0.5).real.contiguous()
+            window_fn="kaiser_bessel_derived", window_degree=1).real.contiguous()
         
         return raw_samples * self.config.mdct_to_raw_scale
     
