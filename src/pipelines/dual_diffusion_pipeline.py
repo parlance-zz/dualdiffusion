@@ -629,9 +629,7 @@ class DualDiffusionPipeline(torch.nn.Module):
         
         noise = torch.randn(sample_shape, device=unet.device, generator=generator)
         if params.stereo_fix == True:
-            if noise.shape[1] != 2:
-                raise ValueError("Stereo fix enabled but input sample is not stereo")
-            noise[:, 0] = noise[:, 1]
+            noise[:, ::2] = noise[:, 1::2]
         sample = noise * (sigma_schedule[0]**2 + params.sigma_data**2)**0.5
 
         progress_bar = tqdm(total=params.num_steps, disable=quiet)
