@@ -121,16 +121,16 @@ class MSSLoss1D:
 @dataclass
 class MSSLoss2DConfig:
 
-    block_widths: tuple[int] = (8, 16, 32, 64, 128, 256)
-    block_overlap: int = 8
+    block_widths: tuple[int] = (8, 16, 32, 64)
+    block_overlap: int = 2
     block_width_weight_exponent: float = 0
     block_window_fn: Literal["none", "flat_top", "hann", "kaiser"] = "hann"
 
-    frequency_weight_exponent: float = 1
-    use_midside_transform: Literal["stack", "cat", "none"] = "none"
-    use_mse_loss: bool = True
-    phase_loss_scale: float = 0
-    loss_scale: float = 1.3
+    frequency_weight_exponent: float = 0.5
+    use_midside_transform: Literal["stack", "cat", "none"] = "stack"
+    use_mse_loss: bool = False
+    phase_loss_scale: float = 1
+    loss_scale: float = 2
 
 class MSSLoss2D:
 
@@ -176,7 +176,8 @@ class MSSLoss2D:
     
     @torch.no_grad()
     def get_sin_power_window_2d(self, block_width: int, e: float = 2) -> torch.Tensor:
-        wx = (torch.arange(block_width) + 0.5) / block_width * torch.pi
+        #wx = (torch.arange(block_width) + 0.5) / block_width * torch.pi
+        wx = torch.arange(block_width) / block_width * torch.pi
         return self._sin_power_window(wx.view(1, 1,-1, 1), e) * self._sin_power_window(wx.view(1, 1, 1,-1), e)
     
     @torch.no_grad()
@@ -231,11 +232,10 @@ class MSSLoss2D:
             with torch.no_grad():
                 target_fft = self.stft2d(target, block_width, step, window)
                 target_fft_abs = target_fft.abs().requires_grad_(False).detach()
-                if self.config.phase_loss_scale > 0:
-                    target_fft_angle = target_fft.angle().requires_grad_(False).detach()
                 
                 if self.config.frequency_weight_exponent != 0:
-                    loss_weight = (1 / target_fft_abs.mean(dim=(0,1,2,3), keepdim=True).clip(min=1e-2)).requires_grad_(False).detach()
+
+                    loss_weight = (1 / target_fft_abs.mean(dim=(0,2,3), keepdim=True).clip(min=1e-2)).requires_grad_(False).detach()
 
                     if self.config.frequency_weight_exponent != 1:
                         loss_weight = loss_weight.pow(self.config.frequency_weight_exponent)
@@ -250,18 +250,21 @@ class MSSLoss2D:
             sample_fft_abs = sample_fft.abs()
 
             if self.config.use_mse_loss == True:
+
                 block_loss = torch.nn.functional.mse_loss(sample_fft_abs.float(), target_fft_abs.float(), reduction="none")
+
+                if self.config.phase_loss_scale > 0:
+                    block_loss = block_loss + (torch.nn.functional.mse_loss(sample_fft.real, target_fft.real, reduction="none") \
+                                            +  torch.nn.functional.mse_loss(sample_fft.imag, target_fft.imag, reduction="none"))
+                
             else:
                 block_loss = torch.nn.functional.l1_loss(sample_fft_abs.float(), target_fft_abs.float(), reduction="none")
+                
+                if self.config.phase_loss_scale > 0:
+                    block_loss = block_loss + (sample_fft - target_fft).abs() * self.config.phase_loss_scale
+
             abs_loss = (block_loss * loss_weight).mean(dim=(1,2,3,4,5))
             loss = loss + abs_loss
-
-            if self.config.phase_loss_scale > 0:
-                phase_error = target_fft_angle - sample_fft.angle()
-                wrapped_phase_error = torch.atan2(phase_error.sin(), phase_error.cos())
-                phase_loss_scale = (self.config.phase_loss_scale / torch.pi) * loss_weight
-                phase_loss = (wrapped_phase_error.abs() * target_fft_abs * phase_loss_scale).mean(dim=(1,2,3,4,5))
-                loss = loss + phase_loss
              
         return loss * self.config.loss_scale
 
