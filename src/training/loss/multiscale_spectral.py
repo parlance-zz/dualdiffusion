@@ -130,7 +130,7 @@ class MSSLoss2DConfig:
     use_midside_transform: Literal["stack", "cat", "none"] = "stack"
     use_mse_loss: bool = False
     phase_loss_scale: float = 1
-    loss_scale: float = 2
+    abs_loss_scale: float = 1
 
 class MSSLoss2D:
 
@@ -247,26 +247,34 @@ class MSSLoss2D:
                     loss_weight = loss_weight * (block_width ** self.config.block_width_weight_exponent)
 
             sample_fft = self.stft2d(sample, block_width, step, window)
-            sample_fft_abs = sample_fft.abs()
+            if self.config.abs_loss_scale > 0:
+                sample_fft_abs = sample_fft.abs()
 
             if self.config.use_mse_loss == True:
-
-                block_loss = torch.nn.functional.mse_loss(sample_fft_abs.float(), target_fft_abs.float(), reduction="none")
+                
+                if self.config.abs_loss_scale > 0:
+                    block_loss = torch.nn.functional.mse_loss(sample_fft_abs.float(), target_fft_abs.float(), reduction="none") * self.config.abs_loss_scale
+                else:
+                    block_loss = torch.zeros_like(target_fft_abs)
 
                 if self.config.phase_loss_scale > 0:
                     block_loss = block_loss + (torch.nn.functional.mse_loss(sample_fft.real, target_fft.real, reduction="none") \
-                                            +  torch.nn.functional.mse_loss(sample_fft.imag, target_fft.imag, reduction="none"))
+                                            +  torch.nn.functional.mse_loss(sample_fft.imag, target_fft.imag, reduction="none")) * self.config.phase_loss_scale
                 
             else:
-                block_loss = torch.nn.functional.l1_loss(sample_fft_abs.float(), target_fft_abs.float(), reduction="none")
-                
+                if self.config.abs_loss_scale > 0:
+                    block_loss = torch.nn.functional.l1_loss(
+                        sample_fft_abs.float(), target_fft_abs.float(), reduction="none") * self.config.abs_loss_scale
+                else:
+                    block_loss = torch.zeros_like(target_fft_abs)
+
                 if self.config.phase_loss_scale > 0:
                     block_loss = block_loss + (sample_fft - target_fft).abs() * self.config.phase_loss_scale
 
-            abs_loss = (block_loss * loss_weight).mean(dim=(1,2,3,4,5))
-            loss = loss + abs_loss
+            block_loss = (block_loss * loss_weight).mean(dim=(1,2,3,4,5))
+            loss = loss + block_loss
              
-        return loss * self.config.loss_scale
+        return loss
 
     def compile(self, **kwargs) -> None:
         self.mss_loss = torch.compile(self.mss_loss, **kwargs)

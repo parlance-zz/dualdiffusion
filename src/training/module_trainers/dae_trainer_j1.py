@@ -205,8 +205,9 @@ class DAETrainer_J1(ModuleTrainer):
         if mss_loss is not None:
             logs["loss/mss"] = mss_loss
 
-        for i, level_loss in enumerate(wavelet_level_losses):
-            logs[f"loss/w_level_{i}"] = level_loss
+        if wavelet_loss is not None:            
+            for i, level_loss in enumerate(wavelet_level_losses):
+                logs[f"loss/w_level_{i}"] = level_loss
 
         for name, block in self.dae.encoder.enc.items():
             logs[f"res_t/enc_{name}"] = block.res_balance.sigmoid().detach()
