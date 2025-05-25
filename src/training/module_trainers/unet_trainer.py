@@ -210,6 +210,10 @@ class UNetTrainer(ModuleTrainer):
         else:
             device_batch_size = self.trainer.config.validation_device_batch_size
         
+        if self.crop_edges > 0: # used for ddec mdct training to avoid artifacts due to mdct lapped blocks at beginning and end of sample
+            samples = samples[..., self.crop_edges:-self.crop_edges]
+            ref_samples = ref_samples[..., self.crop_edges:-self.crop_edges]
+
         # normal conditioning dropout
         conditioning_mask = (torch.rand(device_batch_size, generator=self.device_generator,
             device=self.trainer.accelerator.device) > self.config.conditioning_dropout).float()
@@ -234,10 +238,6 @@ class UNetTrainer(ModuleTrainer):
         noise = (noise * batch_sigma.view(-1, 1, 1, 1)).detach()
 
         denoised = self.unet(samples + noise, batch_sigma, self.format, unet_embeddings, ref_samples)
-
-        if self.crop_edges > 0: # used for ddec mdct training to avoid artifacts due to mdct lapped blocks at beginning and end of sample
-            denoised = denoised[..., self.crop_edges:-self.crop_edges]
-            samples = samples[..., self.crop_edges:-self.crop_edges]
         
         batch_loss_weight = (batch_sigma ** 2 + self.sigma_sampler.config.sigma_data ** 2) / (batch_sigma * self.sigma_sampler.config.sigma_data) ** 2
         batch_weighted_loss = torch.nn.functional.mse_loss(denoised, samples, reduction="none").mean(dim=(1,2,3)) * batch_loss_weight
