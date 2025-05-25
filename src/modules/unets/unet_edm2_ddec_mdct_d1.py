@@ -253,8 +253,6 @@ class DDec_MDCT_UNet_D1(DualDiffusionUNet):
         self.logvar_linear = MPConv3D_E(config.logvar_channels, 1, kernel=(), disable_weight_norm=True)
 
         # Encoder.
-        self.in_psd_gain = torch.nn.Parameter(torch.ones([]) / self.psd_freqs_per_freq)
-
         self.enc = torch.nn.ModuleDict()
         cout = config.in_channels + self.psd_freqs_per_freq + int(config.add_constant_channel)
 
@@ -338,7 +336,6 @@ class DDec_MDCT_UNet_D1(DualDiffusionUNet):
             x_ref = x_ref.view(x_ref.shape[0], x_ref.shape[1], x.shape[3], self.psd_freqs_per_freq, x_ref.shape[3])
             x_ref = x_ref.permute(0, 3, 1, 2, 4).contiguous(memory_format=torch.channels_last_3d).to(dtype=torch.bfloat16)
 
-
         # Embedding.
         emb = self.emb_noise(self.emb_fourier(c_noise))
         if self.config.in_channels_emb > 0:
@@ -346,7 +343,7 @@ class DDec_MDCT_UNet_D1(DualDiffusionUNet):
         emb = emb.unsqueeze(-1).unsqueeze(-1).unsqueeze(-1).to(dtype=torch.bfloat16)
 
         # Encoder.
-        x_ref = x_ref * self.in_psd_gain
+        x_ref = x_ref * (self.config.in_channels / self.psd_freqs_per_freq)**0.5
         inputs = (x, x_ref, torch.ones_like(x[:, :1])) if self.config.add_constant_channel else (x, x_ref)
         x = torch.cat(inputs, dim=1)
 
