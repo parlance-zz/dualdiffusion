@@ -30,7 +30,7 @@ from training.module_trainers.module_trainer import ModuleTrainerConfig, ModuleT
 from training.loss.multiscale_spectral import MSSLoss2D, MSSLoss2DConfig
 from training.loss.spectral_regularization import SpecRegLoss, SpecRegLossConfig
 from training.loss.wavelet import WaveletLoss, WaveletLoss_Config
-from modules.daes.dae_edm2_j3 import DAE_J3
+from modules.daes.dae_edm2_j5 import DAE_J5
 from modules.formats.ms_mdct_dual import MS_MDCT_DualFormat
 from modules.mp_tools import normalize
 from utils.dual_diffusion_utils import dict_str
@@ -44,17 +44,34 @@ def random_stereo_augmentation(x: torch.Tensor) -> torch.Tensor:
     
     return output
 
+def freeze_module(optimizer: torch.optim.Optimizer, module_to_freeze: torch.nn.Module) -> None:
+    
+    params_to_freeze: set[torch.Tensor] = set(module_to_freeze.parameters())
+
+    for param in params_to_freeze:
+
+        param.requires_grad = False
+
+        if param.grad is not None:
+            param.grad = None
+
+        if param in optimizer.state:
+            del optimizer.state[param]
+
 @dataclass
 class DAETrainer_J1_Config(ModuleTrainerConfig):
 
-    latents_kl_loss_weight: float = 6e-2
-    hidden_kl_loss_weight: float = 4e-3
-    kl_warmup_steps: int = 1000
+    latents_kl_loss_weight: float = 3e-2
+    hidden_kl_loss_weight: float = 2e-3
+    kl_warmup_steps: int = 250
+
+    add_latents_noise: float = 0
+    latents_noise_warmup_steps: int = 500
 
     point_loss_weight: float = 1
-    point_loss_warmup_steps: int = 100
+    point_loss_warmup_steps: int = 0
 
-    mss_loss_weight: float = 1
+    mss_loss_weight: float = 0
     mss_loss_2d_config: Optional[dict[str, Any]] = None
 
     spec_reg_loss_weight: float = 0
@@ -72,7 +89,7 @@ class DAETrainer_J1(ModuleTrainer):
         self.trainer = trainer
         self.logger = trainer.logger
 
-        self.dae: DAE_J3 = trainer.get_train_module("dae")
+        self.dae: DAE_J5 = trainer.get_train_module("dae")
         self.format: MS_MDCT_DualFormat = trainer.pipeline.format.to(self.trainer.accelerator.device)
 
         if trainer.config.enable_model_compilation == True:
@@ -125,6 +142,8 @@ class DAETrainer_J1(ModuleTrainer):
 
     def train_batch(self, batch: dict) -> dict[str, Union[torch.Tensor, float]]:
 
+        logs = {}
+
         if "audio_embeddings" in batch:
             audio_embeddings = normalize(batch["audio_embeddings"]).detach()
             dae_embeddings = self.dae.get_embeddings(audio_embeddings)
@@ -132,9 +151,18 @@ class DAETrainer_J1(ModuleTrainer):
             audio_embeddings = None
             dae_embeddings = None
         
+        if self.config.add_latents_noise > 0:
+            if self.trainer.global_step < self.config.latents_noise_warmup_steps:
+                latents_sigma = self.config.add_latents_noise * (self.trainer.global_step / self.config.latents_noise_warmup_steps)
+            else:
+                latents_sigma = self.config.add_latents_noise
+        else:
+            latents_sigma = 0
+        latents_sigma = torch.Tensor([latents_sigma]).to(device=self.trainer.accelerator.device)
+
         raw_audio = random_stereo_augmentation(batch["audio"])
         mel_spec = self.format.raw_to_mel_spec(raw_audio).detach()
-        latents, reconstructed, latents_kld, hidden_kld = self.dae(mel_spec, dae_embeddings)
+        latents, reconstructed, mel_spec, latents_kld, hidden_kld = self.dae(mel_spec, dae_embeddings, latents_sigma)
 
         point_loss_weight = self.config.point_loss_weight
         if self.config.point_loss_warmup_steps > 0:
@@ -174,13 +202,10 @@ class DAETrainer_J1(ModuleTrainer):
 
         total_loss = recon_loss_nll + latents_kld * latents_kl_loss_weight + hidden_kld * hidden_kl_loss_weight
 
-        logs = {}
-
         if self.config.spec_reg_loss_weight > 0:
             spec_reg_loss = self.spec_reg_loss.spec_reg_loss(latents, mel_spec)
-            logs["loss/spec_reg"] = spec_reg_loss
-            logs["loss_weight/spec_reg"] = self.config.spec_reg_loss_weight
             total_loss = total_loss + spec_reg_loss * self.config.spec_reg_loss_weight
+            logs["loss/spec_reg"] = spec_reg_loss
 
         logs.update({
             "loss": total_loss,
@@ -194,25 +219,27 @@ class DAETrainer_J1(ModuleTrainer):
             "loss_weight/point": point_loss_weight,
             "loss_weight/mss": self.config.mss_loss_weight,
             "loss_weight/wavelet": self.config.wavelet_loss_weight,
+            "loss_weight/spec_reg": self.config.spec_reg_loss_weight,
             "io_stats/mel_spec_std": mel_spec.std(dim=(1,2,3)),
             "io_stats/mel_spec_mean": mel_spec.mean(dim=(1,2,3)),
             "io_stats/recon_mel_std": reconstructed.std(dim=(1,2,3)),
             "io_stats/recon_mel_mean": reconstructed.mean(dim=(1,2,3)),
             "io_stats/latents_std": latents.std(dim=(1,2,3)),
-            "io_stats/latents_mean": latents.mean(dim=(1,2,3))
+            "io_stats/latents_mean": latents.mean(dim=(1,2,3)),
+            "io_stats/latents_sigma": latents_sigma
         })
         
         if mss_loss is not None:
             logs["loss/mss"] = mss_loss
 
-        if wavelet_loss is not None:            
+        if wavelet_loss is not None:
             for i, level_loss in enumerate(wavelet_level_losses):
                 logs[f"loss/w_level_{i}"] = level_loss
 
-        for name, block in self.dae.encoder.enc.items():
-            logs[f"res_t/enc_{name}"] = block.res_balance.sigmoid().detach()
+        #for name, block in self.dae.encoder.enc.items():
+        #    logs[f"res_t/enc_{name}"] = block.get_res_balance().detach()
 
-        for name, block in self.dae.dec.items():
-            logs[f"res_t/dec_{name}"] = block.res_balance.sigmoid().detach()
+        #for name, block in self.dae.dec.items():
+        #    logs[f"res_t/dec_{name}"] = block.get_res_balance().detach()
 
         return logs

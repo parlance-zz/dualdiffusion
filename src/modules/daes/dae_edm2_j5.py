@@ -36,9 +36,9 @@ from typing import Union, Literal
 import torch
 
 from modules.daes.dae import DualDiffusionDAE, DualDiffusionDAEConfig
-from modules.mp_tools import mp_silu, normalize, resample_3d
+from modules.mp_tools import mp_silu, normalize, resample_3d, mp_sum, random_crop_2d
 from utils.dual_diffusion_utils import tensor_4d_to_5d, tensor_5d_to_4d
-from utils.resample import FilteredDownsample2D, FilteredUpsample2D
+
 
 @dataclass
 class DAE_J5_Config(DualDiffusionDAEConfig):
@@ -48,16 +48,19 @@ class DAE_J5_Config(DualDiffusionDAEConfig):
     in_channels_emb: int = 0
     in_num_freqs: int    = 256
     latent_channels: int = 4
-    downsample_factor: int = 8
+    downsample_factor: int = 1
+    res_balance: float   = 0.5
 
-    model_channels: int         = 32         # Base multiplier for the number of channels.
-    channel_mult_enc: list[int] = (1,)
-    channel_mult_dec: list[int] = (2,4,8,8)
-    channel_mult_emb: int       = 4          # Multiplier for final embedding dimensionality.
-    num_enc_layers_per_block: list[int] = (6,)        # Number of resnet blocks per resolution.
-    num_dec_layers_per_block: list[int] = (3,2,1,1)        # Number of resnet blocks per resolution.
-    mlp_multiplier: int    = 2               # Multiplier for the number of channels in the MLP.
-    mlp_groups: int        = 1               # Number of groups for the MLPs.
+    model_channels: int   = 32
+    channel_mult_emb: int = 4
+    channel_mult_enc: list[int] = (1, 2, 4, 4)
+    channel_mult_dec: list[int] = (1, 2, 4, 4)
+    num_enc_layers_per_block: list[int] = (3, 3, 3, 3)
+    num_dec_layers_per_block: list[int] = (3, 3, 3, 3)
+    kernel_enc: list[int] = (2, 3, 3)
+    kernel_dec: list[int] = (2, 3, 3)
+    mlp_multiplier: int = 2
+    mlp_groups: int     = 1
 
 class MPConv3D_E(torch.nn.Module):
 
@@ -113,10 +116,11 @@ class Block(torch.nn.Module):
         emb_channels: int,                      # Number of embedding channels.
         flavor: Literal["enc", "dec"] = "enc",
         resample_mode: Literal["keep", "up", "down"] = "keep",
+        res_balance: float     = 0.5,
         clip_act: float        = 256,      # Clip output activations. None = do not clip.
         mlp_multiplier: int    = 2,        # Multiplier for the number of channels in the MLP.
         mlp_groups: int        = 1,        # Number of groups for the MLP.
-        kernel: tuple[int, int, int] = (1,3,3),   # Kernel size for the convolutional layers.
+        kernel: tuple[int, int, int] = (2,3,3),   # Kernel size for the convolutional layers.
     ) -> None:
         super().__init__()
 
@@ -125,10 +129,9 @@ class Block(torch.nn.Module):
         self.out_channels = out_channels
         self.flavor = flavor
         self.resample_mode = resample_mode
+        self.res_balance = res_balance
         self.clip_act = clip_act
         self.kernel = kernel
-
-        #self.resample = Filtered_MP_Silu_3D()
 
         self.conv_res0 = MPConv3D_E(in_channels, out_channels * mlp_multiplier,
                                     kernel=kernel, groups=mlp_groups)
@@ -136,24 +139,17 @@ class Block(torch.nn.Module):
                         out_channels, kernel=kernel, groups=mlp_groups)
         
         if in_channels != out_channels or mlp_groups > 1:
-            self.conv_skip = MPConv3D_E(in_channels, out_channels, kernel=(2,1,1), groups=1)
+            self.conv_skip = MPConv3D_E(in_channels, out_channels, kernel=(1,1,1), groups=1)
         else:
             self.conv_skip = None
 
         self.emb_gain = torch.nn.Parameter(torch.zeros([])) if emb_channels != 0 else None
         self.emb_linear = MPConv3D_E(emb_channels, out_channels * mlp_multiplier,
             kernel=(1,1,1), groups=1) if emb_channels != 0 else None
-        
-        self.res_balance = torch.nn.Parameter(-torch.ones([]) * 0.7)
-
+    
     def forward(self, x: torch.Tensor, emb: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         
         x = resample_3d(x, mode=self.resample_mode)
-        #if self.resample_mode == "up":
-        #    #x = self.resample.upsample(x
-        #    x = resample_3d(x, mode=self.resample_mode)
-        #elif self.resample_mode == "down":
-        #    x = self.resample.downsample(x)
         
         y = self.conv_res0(mp_silu(x))
 
@@ -168,8 +164,7 @@ class Block(torch.nn.Module):
         if self.conv_skip is not None:
             x = self.conv_skip(x)
         
-        t = self.res_balance.sigmoid()
-        x = torch.lerp(x, y, t) / ((1 - t) ** 2 + t ** 2) ** 0.5
+        x = mp_sum(x, y, self.res_balance)
         
         if self.clip_act is not None:
             x = x.clip_(-self.clip_act, self.clip_act)
@@ -235,7 +230,8 @@ class DAE_J5(DualDiffusionDAE):
         self.config = config
 
         block_kwargs = {"mlp_multiplier": config.mlp_multiplier,
-                        "mlp_groups": config.mlp_groups}
+                        "mlp_groups": config.mlp_groups,
+                        "res_balance": config.res_balance}
         
         enc_channels = [config.model_channels * m for m in config.channel_mult_enc]
         dec_channels = [config.model_channels * m for m in config.channel_mult_dec]
@@ -243,8 +239,7 @@ class DAE_J5(DualDiffusionDAE):
         cemb = config.model_channels * config.channel_mult_emb if config.in_channels_emb > 0 else 0
 
         self.num_levels = len(config.channel_mult_dec)
-        #assert config.downsample_factor > 1 and config.downsample_factor % 2 == 0, "downsample_factor must be a power of 2"
-        self.downsample_ratio = 2 ** (self.num_levels - 1) #* config.downsample_factor
+        self.downsample_ratio = 2 ** (self.num_levels - 1)
 
         self.recon_loss_logvar = torch.nn.Parameter(torch.zeros([]))
 
@@ -266,17 +261,14 @@ class DAE_J5(DualDiffusionDAE):
         assert len(enc_channels) == len(config.num_enc_layers_per_block)
         assert len(dec_channels) == len(config.num_dec_layers_per_block)
 
-        # encoders
+        # encoder
         self.encoder = Encoder(config.in_channels, enc_channels, config.latent_channels,
-            config.num_enc_layers_per_block, block_kwargs, kernel=(2,3,3))
-        
-        #self.latents_downsample = FilteredDownsample2D(k_size=7*config.downsample_factor//2, beta=1.5, factor=config.downsample_factor)
-        #self.latents_upsample = FilteredUpsample2D(k_size=14*config.downsample_factor//2, beta=1.5, factor=config.downsample_factor)
+            config.num_enc_layers_per_block, block_kwargs, kernel=config.kernel_enc)
 
         # decoder
         self.input_gain = torch.nn.Parameter(torch.ones([]))
         self.input_shift = torch.nn.Parameter(torch.zeros([]))
-        self.latents_conv_in = MPConv3D_E(config.latent_channels + 1, dec_channels[-1], kernel=(2,3,3))
+        self.latents_conv_in = MPConv3D_E(config.latent_channels + 1, dec_channels[-1], kernel=config.kernel_dec)
 
         self.dec = torch.nn.ModuleDict()
         cin = dec_channels[-1]
@@ -286,18 +278,18 @@ class DAE_J5(DualDiffusionDAE):
             cout = dec_channels[level]
 
             if level == self.num_levels - 1:
-                self.dec[f"block{level}_in"] = Block(level, cin,  cout, cemb, flavor="dec", **block_kwargs, kernel=(2,3,3))
+                self.dec[f"block{level}_in"] = Block(level, cin,  cout, cemb, flavor="dec", **block_kwargs, kernel=config.kernel_dec)
             else:
-                self.dec[f"block{level}_up"] = Block(level, cin, cout, cemb, flavor="dec", resample_mode="up", **block_kwargs, kernel=(2,3,3))
+                self.dec[f"block{level}_up"] = Block(level, cin, cout, cemb, flavor="dec", resample_mode="up", **block_kwargs, kernel=config.kernel_dec)
             
             for idx in range(config.num_dec_layers_per_block[level]):
-                self.dec[f"block{level}_layer{idx}"] = Block(level, cout, cout, cemb, flavor="dec", **block_kwargs, kernel=(2,3,3))
+                self.dec[f"block{level}_layer{idx}"] = Block(level, cout, cout, cemb, flavor="dec", **block_kwargs, kernel=config.kernel_dec)
 
             cin = cout
 
         self.output_gain = torch.nn.Parameter(torch.ones([]))
         self.output_shift = torch.nn.Parameter(torch.zeros([]))
-        self.conv_out = MPConv3D_E(cout, self.config.out_channels, kernel=(2,3,3))
+        self.conv_out = MPConv3D_E(cout, self.config.out_channels, kernel=config.kernel_dec)
 
     def get_embeddings(self, emb_in: torch.Tensor) -> torch.Tensor:
         if self.emb_label is not None:
@@ -327,8 +319,11 @@ class DAE_J5(DualDiffusionDAE):
     def encode(self, x: torch.Tensor, embeddings: torch.Tensor, training: bool = False) -> torch.Tensor:
         
         x, hidden_kld = self.encoder(tensor_4d_to_5d(x, num_channels=1))
-        #latents = self.latents_downsample(tensor_5d_to_4d(x))
-        latents = torch.nn.functional.avg_pool2d(tensor_5d_to_4d(x), kernel_size=self.downsample_ratio)
+        latents = tensor_5d_to_4d(x)
+
+        if self.config.downsample_factor > 1:
+            latents = torch.nn.functional.avg_pool2d(
+                latents, kernel_size=self.config.downsample_factor)
 
         if training == False:
             return latents
@@ -338,11 +333,10 @@ class DAE_J5(DualDiffusionDAE):
     def decode(self, x: torch.Tensor, embeddings: torch.Tensor, training: bool = False) -> torch.Tensor:
         
         if embeddings is not None:
-            emb = embeddings.unsqueeze(-1).unsqueeze(-1).unsqueeze(-1)
+            emb = embeddings[:, :, None, None, None]
         else:
             emb = None
 
-        #x = self.latents_upsample(x)
         x = tensor_4d_to_5d(x, num_channels=self.config.latent_channels)
         x = torch.cat((x, torch.ones_like(x[:, :1])), dim=1)
         x = self.latents_conv_in(x, gain=self.input_gain) + self.input_shift
@@ -360,16 +354,25 @@ class DAE_J5(DualDiffusionDAE):
         else:
             return decoded, hidden_kld
     
-    def forward(self, samples: torch.Tensor, dae_embeddings: torch.Tensor) -> tuple[torch.Tensor, ...]:
+    def forward(self, samples: torch.Tensor, dae_embeddings: torch.Tensor,
+            latents_sigma: torch.Tensor, equivariance_dropout: float = 0) -> tuple[torch.Tensor, ...]:
         
         latents, enc_hidden_kld = self.encode(samples, dae_embeddings, training=True)
+
+        latents = torch.nn.functional.interpolate(latents, scale_factor=self.downsample_ratio, mode="nearest")
+        samples, latents = random_crop_2d(samples, latents,
+            range_h=self.downsample_ratio, range_w=self.downsample_ratio, dropout=equivariance_dropout)
+        latents = torch.nn.functional.avg_pool2d(latents, kernel_size=self.downsample_ratio)
+
+        #latents = (latents + torch.randn_like(latents) * latents_sigma) / (1 + latents_sigma**2)**0.5
+
         decoded, dec_hidden_kld = self.decode(latents, dae_embeddings, training=True)
 
         latents_mean = latents.mean(dim=(1,2,3))
         latents_var = latents.var(dim=(1,2,3)).clip(min=1e-2)
         latents_kld = latents_mean.square() + latents_var - 1 - latents_var.log()
-
-        return latents, decoded, latents_kld, enc_hidden_kld + dec_hidden_kld
+    
+        return latents, decoded, samples, latents_kld, enc_hidden_kld + dec_hidden_kld
 
     def tiled_encode(self, x: torch.Tensor, embeddings: torch.Tensor, max_chunk: int = 6144, overlap: int = 256) -> torch.Tensor:
 
@@ -424,4 +427,4 @@ class DAE_J5(DualDiffusionDAE):
             
             latents[:, :, :, dest_start:dest_end] = latents_chunk[:, :, :, valid_start:valid_end]
         
-        return normalize(latents)
+        return latents
