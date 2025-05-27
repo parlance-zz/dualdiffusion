@@ -74,12 +74,12 @@ class FilteredResample2D(torch.nn.Module):
 class FilteredDownsample2D(FilteredResample2D):
 
     def __init__(self, k_size: int = 7, beta: float = 1.5, factor: int = 2) -> None:
-        super().__init__(k_size, factor, 1/factor, beta, gain=factor/2)
+        super().__init__(k_size, factor, 1/factor, beta, gain=factor**0.5)
 
 class FilteredUpsample2D(FilteredResample2D):
 
     def __init__(self, k_size: int = 15, beta: float = 1.5, factor: int = 2) -> None:
-        super().__init__(k_size, 1, 1/factor, beta, gain=factor)
+        super().__init__(k_size, 1, 1/factor, beta, gain=factor**0.5)
         
         self.factor = factor
     
@@ -139,12 +139,12 @@ class FilteredResample3D(torch.nn.Module):
 class FilteredDownsample3D(FilteredResample3D):
 
     def __init__(self, k_size: int = 7, beta: float = 1.5, factor: int = 2) -> None:
-        super().__init__(k_size, factor, 1/factor, beta, gain=factor/2)
+        super().__init__(k_size, factor, 1/factor, beta, gain=factor**0.5)
 
 class FilteredUpsample3D(FilteredResample3D):
 
     def __init__(self, k_size: int = 15, beta: float = 1.5, factor: int = 2) -> None:
-        super().__init__(k_size, 1, 1/factor, beta, gain=factor)
+        super().__init__(k_size, 1, 1/factor, beta, gain=factor**0.5)
         
         self.factor = factor
     
@@ -184,11 +184,12 @@ if __name__ == "__main__":
     #beta = 1.5
     #k_size = 6
 
-    beta = 3
-    k_size = 7
+    beta = 1.5#1.5#3
+    k_size = 43
+    factor = 8
 
-    downsample = FilteredDownsample2D(k_size=k_size, beta=beta)
-    upsample = FilteredUpsample2D(k_size=k_size*2+k_size%2, beta=beta)
+    downsample = FilteredDownsample2D(k_size=k_size, beta=beta, factor=factor)
+    upsample = FilteredUpsample2D(k_size=k_size*factor+k_size%factor, beta=beta, factor=factor)
     filtered_silu = Filtered_MP_Silu_2D(k_size=k_size, beta=beta)
 
     save_img(tensor_to_img(downsample.get_filter()), os.path.join(output_path, "__down_filter_kernel.png"))
@@ -196,19 +197,28 @@ if __name__ == "__main__":
     save_img(tensor_to_img(upsample.get_filter()), os.path.join(output_path, "__up_filter_kernel.png"))
     save_img(tensor_to_img(upsample.get_window()), os.path.join(output_path, "__up_filter_window.png"))
 
-    test_image = img_to_tensor(load_img(os.path.join(output_path, "__test_img.png")))
+    test_image = img_to_tensor(load_img(os.path.join(output_path, "_test_latents.png")))
+
+    #test_image = upsample(test_image)
+    #test_image = upsample(test_image)
+    #test_image = upsample(test_image)
 
     for i in range(17):
-        shifted_img = torch.roll(test_image, shifts=(i, i), dims=(-1, -2))
+        #shifted_img = torch.roll(test_image, shifts=(i, i), dims=(-1, -2))
         #downsampled_img = downsample(shifted_img)
         #downsampled_img = filtered_silu(shifted_img)
-        #downsampled_img = upsample(shifted_img)
-        #downsampled_img = downsample(downsampled_img)
+        downsampled_img = upsample(test_image)
+        downsampled_img = torch.roll(downsampled_img, shifts=(i, i), dims=(-1, -2))
+        downsampled_img = downsample(downsampled_img)
         
-        downsampled_img = downsample(shifted_img)
-        downsampled_img = upsample(downsampled_img)
+        #downsampled_img = downsample(shifted_img)
+        #downsampled_img = downsample(downsampled_img)
+        #downsampled_img = downsample(downsampled_img)
 
-        diff_img = shifted_img - downsampled_img
+        #downsampled_img = upsample(downsampled_img)
+
+        #diff_img = shifted_img - downsampled_img
         
         save_img(tensor_to_img(downsampled_img, recenter=False, rescale=False), os.path.join(output_path, f"test_img_{i:02d}.png"))
-        save_img(tensor_to_img(diff_img, recenter=False, rescale=False), os.path.join(output_path, f"test_img_diff_{i:02d}.png"))
+        #exit()
+        #save_img(tensor_to_img(diff_img, recenter=False, rescale=False), os.path.join(output_path, f"test_img_diff_{i:02d}.png"))
