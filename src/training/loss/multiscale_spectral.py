@@ -269,7 +269,9 @@ class MSSLoss2D:
                     block_loss = torch.zeros_like(target_fft_abs)
 
                 if self.config.phase_loss_scale > 0:
-                    block_loss = block_loss + (sample_fft - target_fft).abs() * self.config.phase_loss_scale
+                    #block_loss = block_loss + (sample_fft - target_fft).abs() * self.config.phase_loss_scale
+                    block_loss = block_loss + (torch.nn.functional.l1_loss(sample_fft.real, target_fft.real, reduction="none") \
+                                            +  torch.nn.functional.l1_loss(sample_fft.imag, target_fft.imag, reduction="none")) * self.config.phase_loss_scale
 
             block_loss = (block_loss * loss_weight).mean(dim=(1,2,3,4,5))
             loss = loss + block_loss
