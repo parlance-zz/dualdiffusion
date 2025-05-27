@@ -126,7 +126,7 @@ def lowpass_2d(x: torch.Tensor, blur_width: float = 16, use_circular_filter: boo
 def midside_transform(x: torch.Tensor) -> torch.Tensor:
     return torch.stack((x[:, 0] + x[:, 1], x[:, 0] - x[:, 1]), dim=1) * 0.5**0.5
 
-def wavelet_decompose2d(x: torch.Tensor, num_levels: int = 4) -> list[torch.Tensor]:
+def wavelet_decompose_2d(x: torch.Tensor, num_levels: int = 4) -> list[torch.Tensor]:
     
     wavelets = []
     for i in range(num_levels):
@@ -139,7 +139,7 @@ def wavelet_decompose2d(x: torch.Tensor, num_levels: int = 4) -> list[torch.Tens
     
     return wavelets
 
-def wavelet_recompose2d(wavelets: list[torch.Tensor], filtering: str = "nearest") -> list[torch.Tensor]:
+def wavelet_recompose_2d(wavelets: list[torch.Tensor], filtering: str = "nearest") -> list[torch.Tensor]:
 
     x = [w for w in wavelets]
     y = x.pop()
@@ -149,7 +149,7 @@ def wavelet_recompose2d(wavelets: list[torch.Tensor], filtering: str = "nearest"
     
     return y
 
-def space_to_channel3d(x: torch.Tensor) -> torch.Tensor:
+def space_to_channel_3d(x: torch.Tensor) -> torch.Tensor:
     B, C, Z, H, W = x.shape
     
     x = x.view(B, C, Z, H // 2, 2, W // 2, 2)
@@ -157,7 +157,7 @@ def space_to_channel3d(x: torch.Tensor) -> torch.Tensor:
     
     return x
 
-def channel_to_space3d(x: torch.Tensor) -> torch.Tensor:
+def channel_to_space_3d(x: torch.Tensor) -> torch.Tensor:
     B, C4, Z, H_half, W_half = x.shape
     
     C = C4 // 4 
@@ -167,7 +167,7 @@ def channel_to_space3d(x: torch.Tensor) -> torch.Tensor:
 
     return x
 
-def space_to_channel2d(x: torch.Tensor) -> torch.Tensor:
+def space_to_channel_2d(x: torch.Tensor) -> torch.Tensor:
     B, C, H, W = x.shape
     
     x = x.view(B, C, H // 2, 2, W // 2, 2)
@@ -175,7 +175,7 @@ def space_to_channel2d(x: torch.Tensor) -> torch.Tensor:
     
     return x
 
-def channel_to_space2d(x: torch.Tensor) -> torch.Tensor:
+def channel_to_space_2d(x: torch.Tensor) -> torch.Tensor:
     B, C4, H_half, W_half = x.shape
     
     C = C4 // 4
@@ -184,7 +184,28 @@ def channel_to_space2d(x: torch.Tensor) -> torch.Tensor:
     x = x.reshape(B, C, H_half * 2, W_half * 2) 
     
     return x
+
+def random_crop_2d(*tensors: torch.Tensor, range_h: int = 8,
+        range_w: int = 8, dropout: float = 0.5) -> tuple[torch.Tensor, ...]:
+
+    b, _, h, w = tensors[0].shape
+    device = tensors[0].device
+
+    batch_idx = torch.arange(b, device=device)[:, None, None, None]
+
+    dropout_mask = (torch.rand_like(h_offsets, dtype=torch.float32) < (1 - dropout)).long()
+    h_offsets = torch.randint(0, max(range_h, 1), (b,), device=device, dtype=torch.long) * dropout_mask
+    w_offsets = torch.randint(0, max(range_w, 1), (b,), device=device, dtype=torch.long) * dropout_mask    
+    h_indices = torch.arange(h - range_h, device=device)[None, None, :, None] + h_offsets[:, None, None, None]
+    w_indices = torch.arange(w - range_w, device=device)[None, None, None, :] + w_offsets[:, None, None, None]
     
+    output_tensors = []
+    for x in tensors:
+        channel_idx = torch.arange(x.shape[1], device=x.device)[None, :, None, None]
+        output_tensors.append(x[batch_idx, channel_idx, h_indices, w_indices])
+    
+    return output_tensors
+
 #----------------------------------------------------------------------------
 # Magnitude-preserving SiLU (Equation 81).
 
