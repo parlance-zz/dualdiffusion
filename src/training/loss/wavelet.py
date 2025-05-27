@@ -25,7 +25,7 @@ from typing import Literal
 
 import torch
 
-from modules.mp_tools import wavelet_decompose2d
+from modules.mp_tools import wavelet_decompose_2d
 
 
 @dataclass
@@ -59,9 +59,9 @@ class WaveletLoss:
             else:
                 raise ValueError(f"Invalid midside transform type: {self.config.use_midside_transform}")
         
-        wx = wavelet_decompose2d(x, num_levels=self.config.levels)
+        wx = wavelet_decompose_2d(x, num_levels=self.config.levels)
         with torch.no_grad():
-            wy = wavelet_decompose2d(y, num_levels=self.config.levels)
+            wy = wavelet_decompose_2d(y, num_levels=self.config.levels)
 
         level_losses = []
         total_loss = torch.zeros(sample.shape[0], device=sample.device)

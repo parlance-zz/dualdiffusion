@@ -193,7 +193,7 @@ def random_crop_2d(*tensors: torch.Tensor, range_h: int = 8,
 
     batch_idx = torch.arange(b, device=device)[:, None, None, None]
 
-    dropout_mask = (torch.rand_like(h_offsets, dtype=torch.float32) < (1 - dropout)).long()
+    dropout_mask = (torch.rand_like(h_offsets, dtype=torch.float32) >= dropout).long()
     h_offsets = torch.randint(0, max(range_h, 1), (b,), device=device, dtype=torch.long) * dropout_mask
     w_offsets = torch.randint(0, max(range_w, 1), (b,), device=device, dtype=torch.long) * dropout_mask    
     h_indices = torch.arange(h - range_h, device=device)[None, None, :, None] + h_offsets[:, None, None, None]
