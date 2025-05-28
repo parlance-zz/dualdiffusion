@@ -36,6 +36,7 @@ from tqdm.auto import tqdm
 
 from modules.module import DualDiffusionModule
 from modules.unets.unet import DualDiffusionUNet
+from modules.mp_tools import mp_sum
 from utils.dual_diffusion_utils import (
     normalize, load_safetensors, torch_dtype, torch_memory_format, load_audio, get_cos_angle
 )
@@ -61,7 +62,7 @@ class SampleParams:
     use_heun: bool                        = True
     input_perturbation: float             = 1.
     input_perturbation_offset: float      = 0.
-    stereo_fix: bool                      = False
+    stereo_fix: float                     = 0
     img2img_strength: float               = 0.5
     input_audio: Optional[Union[str, torch.Tensor]] = None
     input_audio_pre_encoded: bool                   = False
@@ -72,7 +73,7 @@ class SampleParams:
         self.length = int(self.length) if self.length is not None else None
         self.num_steps = int(self.num_steps)
         self.batch_size = int(self.batch_size)
-        self.stereo_fix = bool(self.stereo_fix)
+        self.stereo_fix = float(self.stereo_fix)
         # todo: additional sanitization (clip values like input perturb, etc.)
         return self
 
@@ -628,8 +629,10 @@ class DualDiffusionPipeline(torch.nn.Module):
         debug_info["sigma_schedule"] = sigma_schedule_list
         
         noise = torch.randn(sample_shape, device=unet.device, generator=generator)
-        if params.stereo_fix == True:
+        if params.stereo_fix > 0:
             noise[:, ::2] = noise[:, 1::2]
+            noise = mp_sum(torch.randn_like(noise), noise, params.stereo_fix)
+
         sample = noise * (sigma_schedule[0]**2 + params.sigma_data**2)**0.5
 
         progress_bar = tqdm(total=params.num_steps, disable=quiet)
