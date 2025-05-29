@@ -44,8 +44,8 @@ def random_stereo_augmentation(x: torch.Tensor) -> torch.Tensor:
 @dataclass
 class DiffusionDecoder_MDCT_Trainer_Config(UNetTrainerConfig):
 
-    loss_buckets_sigma_min: float = 0.00003
-    loss_buckets_sigma_max: float = 20
+    loss_buckets_sigma_min: float = 0.00008
+    loss_buckets_sigma_max: float = 14
 
     random_stereo_augmentation: bool = True
     random_phase_augmentation: bool = True
@@ -121,7 +121,8 @@ class DiffusionDecoder_MDCT_Trainer(UNetTrainer):
             random_phase_augmentation=self.config.random_phase_augmentation).detach()
         mel_spec = self.format.raw_to_mel_spec(raw_samples).detach()
 
-        latents, recon_mel_spec, latents_kld, hidden_kld = self.dae(mel_spec, dae_embeddings)
+        #latents, recon_mel_spec, latents_kld, hidden_kld = self.dae(mel_spec, dae_embeddings)
+        recon_mel_spec = mel_spec
 
         ref_samples = self.format.mel_spec_to_mdct_psd(recon_mel_spec).detach()
         
@@ -135,11 +136,12 @@ class DiffusionDecoder_MDCT_Trainer(UNetTrainer):
             "io_stats/x_ref_mean": ref_samples.mean(dim=(1,2,3)),
             "io_stats/recon_mel_spec_std": recon_mel_spec.std(dim=(1,2,3)).detach(),
             "io_stats/recon_mel_spec_mean": recon_mel_spec.mean(dim=(1,2,3)).detach(),
-            "io_stats/latents_std": latents.std(dim=(1,2,3)).detach(),
-            "io_stats/latents_mean": latents.mean(dim=(1,2,3)).detach(),
-            "io_stats/in_x_ref_gain": self.ddec.in_psd_gain.data.detach()
+            #"io_stats/latents_std": latents.std(dim=(1,2,3)).detach(),
+            #"io_stats/latents_mean": latents.mean(dim=(1,2,3)).detach(),
+            #"io_stats/in_x_ref_gain": self.ddec.in_psd_gain.data.detach()
         })
 
+        """
         if self.train_dae == True:
             logs["loss"] = logs["loss"] + latents_kld * self.config.latents_kl_loss_weight + \
                 hidden_kld * self.config.hidden_kl_loss_weight
@@ -150,5 +152,6 @@ class DiffusionDecoder_MDCT_Trainer(UNetTrainer):
                 "loss_weight/kl_latents": self.config.latents_kl_loss_weight,
                 "loss_weight/kl_hidden": self.config.hidden_kl_loss_weight,
             })
-
+        """
+        
         return logs
