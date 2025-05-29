@@ -36,7 +36,8 @@ from typing import Union, Literal
 import torch
 
 from modules.daes.dae import DualDiffusionDAE, DualDiffusionDAEConfig
-from modules.mp_tools import mp_silu, normalize, resample_3d, mp_sum, random_crop_2d
+from modules.mp_tools import mp_silu, normalize, resample_3d, random_crop_2d, mp_sum
+from utils.resample import FilteredDownsample2D, FilteredUpsample2D
 from utils.dual_diffusion_utils import tensor_4d_to_5d, tensor_5d_to_4d
 
 
@@ -49,7 +50,7 @@ class DAE_J5_Config(DualDiffusionDAEConfig):
     in_num_freqs: int    = 256
     latent_channels: int = 4
     downsample_factor: int = 1
-    res_balance: float   = 0.5
+    res_balance: float   = 0.3
 
     model_channels: int   = 32
     channel_mult_emb: int = 4
@@ -116,7 +117,7 @@ class Block(torch.nn.Module):
         emb_channels: int,                      # Number of embedding channels.
         flavor: Literal["enc", "dec"] = "enc",
         resample_mode: Literal["keep", "up", "down"] = "keep",
-        res_balance: float     = 0.5,
+        res_balance: float     = 0.3,
         clip_act: float        = 256,      # Clip output activations. None = do not clip.
         mlp_multiplier: int    = 2,        # Multiplier for the number of channels in the MLP.
         mlp_groups: int        = 1,        # Number of groups for the MLP.
@@ -265,6 +266,10 @@ class DAE_J5(DualDiffusionDAE):
         self.encoder = Encoder(config.in_channels, enc_channels, config.latent_channels,
             config.num_enc_layers_per_block, block_kwargs, kernel=config.kernel_enc)
 
+        beta = 3.437; k_size = 23; factor = 2
+        self.downsample = FilteredDownsample2D(k_size=k_size, beta=beta, factor=factor)
+        self.upsample = FilteredUpsample2D(k_size=k_size*factor+k_size%factor, beta=beta, factor=factor)
+        
         # decoder
         self.input_gain = torch.nn.Parameter(torch.ones([]))
         self.input_shift = torch.nn.Parameter(torch.zeros([]))
@@ -355,14 +360,27 @@ class DAE_J5(DualDiffusionDAE):
             return decoded, hidden_kld
     
     def forward(self, samples: torch.Tensor, dae_embeddings: torch.Tensor,
-            latents_sigma: torch.Tensor, equivariance_dropout: float = 0) -> tuple[torch.Tensor, ...]:
+            latents_sigma: torch.Tensor, equivariance_dropout: float = 0.5) -> tuple[torch.Tensor, ...]:
         
         latents, enc_hidden_kld = self.encode(samples, dae_embeddings, training=True)
 
-        latents = torch.nn.functional.interpolate(latents, scale_factor=self.downsample_ratio, mode="nearest")
-        samples, latents = random_crop_2d(samples, latents,
-            range_h=self.downsample_ratio, range_w=self.downsample_ratio, dropout=equivariance_dropout)
-        latents = torch.nn.functional.avg_pool2d(latents, kernel_size=self.downsample_ratio)
+        with torch.amp.autocast("cuda", enabled=False):
+            samples = samples.float(); latents = latents.float()
+            
+            for i in range(3):
+                latents = self.upsample(latents)
+            #latents = torch.nn.functional.interpolate(latents, scale_factor=self.downsample_ratio, mode="nearest")
+            #latents = torch.nn.functional.interpolate(latents, scale_factor=self.downsample_ratio, mode="bicubic")
+
+            samples, latents = random_crop_2d(samples, latents,
+                range_h=self.downsample_ratio, range_w=self.downsample_ratio, dropout=equivariance_dropout)
+            
+            for i in range(3):
+                latents = self.downsample(latents)
+            samples = samples.to(dtype=torch.bfloat16); latents = latents.to(dtype=torch.bfloat16)
+
+        #latents = torch.nn.functional.avg_pool2d(latents, kernel_size=self.downsample_ratio)
+        #latents = torch.nn.functional.interpolate(latents, scale_factor=1/self.downsample_ratio, mode="bicubic")
 
         #latents = (latents + torch.randn_like(latents) * latents_sigma) / (1 + latents_sigma**2)**0.5
 
