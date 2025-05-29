@@ -623,9 +623,22 @@ def tensor_to_img(x: torch.Tensor,
             x[..., i] = _x[..., channel_order[i]]
 
     if x.shape[-1] == 4: # show alpha channel as pre-multiplied brightness
-        x = x[..., :3] * x[..., 3:4]
+        #x = x[..., :3] * x[..., 3:4]
         if recenter: x -= x.amin(dim=(-3,-2,-1), keepdim=True)
-        if rescale:  x /= x.amax(dim=(-3,-2,-1), keepdim=True).clip(min=1e-16)  
+        if rescale:  x /= x.amax(dim=(-3,-2,-1), keepdim=True).clip(min=1e-16)
+        
+        C, M, Y, K = x.unbind(-1)
+        
+        if K.mean().item() < 0.5: K = 1 - K
+
+        R = (1 - torch.minimum(torch.tensor(1.0, device=x.device), C * (1 - K) + K))
+        G = (1 - torch.minimum(torch.tensor(1.0, device=x.device), M * (1 - K) + K))
+        B = (1 - torch.minimum(torch.tensor(1.0, device=x.device), Y * (1 - K) + K))
+
+        x = torch.stack((R, G, B), dim=-1)
+        if recenter: x -= x.amin(dim=(-3,-2,-1), keepdim=True)
+        if rescale:  x /= x.amax(dim=(-3,-2,-1), keepdim=True).clip(min=1e-16)
+        
     elif x.shape[-1] == 2:
         x = torch.cat((x, torch.zeros_like(x[..., 0:1])), dim=-1)
         x[..., 2], x[..., 1] = x[..., 1], 0
