@@ -184,9 +184,9 @@ if __name__ == "__main__":
     #beta = 1.5
     #k_size = 6
 
-    beta = 1.5#1.5#3
-    k_size = 43
-    factor = 8
+    beta = 3.437
+    k_size = 23
+    factor = 2
 
     downsample = FilteredDownsample2D(k_size=k_size, beta=beta, factor=factor)
     upsample = FilteredUpsample2D(k_size=k_size*factor+k_size%factor, beta=beta, factor=factor)
@@ -197,28 +197,27 @@ if __name__ == "__main__":
     save_img(tensor_to_img(upsample.get_filter()), os.path.join(output_path, "__up_filter_kernel.png"))
     save_img(tensor_to_img(upsample.get_window()), os.path.join(output_path, "__up_filter_window.png"))
 
-    test_image = img_to_tensor(load_img(os.path.join(output_path, "_test_latents.png")))
+    #test_image = img_to_tensor(load_img(os.path.join(output_path, "_test_latents.png")))
+    test_image = img_to_tensor(load_img(os.path.join(output_path, "__test_img.png")))
 
-    #test_image = upsample(test_image)
-    #test_image = upsample(test_image)
-    #test_image = upsample(test_image)
+    """
+    for i in range(3):
+        test_image = upsample(test_image)
+    for i in range(3):
+        test_image = downsample(test_image)
+    save_img(tensor_to_img(test_image, recenter=False, rescale=False), os.path.join(output_path, "__test_img_area.png"))
+    exit()
+    """
 
     for i in range(17):
-        #shifted_img = torch.roll(test_image, shifts=(i, i), dims=(-1, -2))
-        #downsampled_img = downsample(shifted_img)
-        #downsampled_img = filtered_silu(shifted_img)
-        downsampled_img = upsample(test_image)
-        downsampled_img = torch.roll(downsampled_img, shifts=(i, i), dims=(-1, -2))
-        downsampled_img = downsample(downsampled_img)
-        
-        #downsampled_img = downsample(shifted_img)
-        #downsampled_img = downsample(downsampled_img)
-        #downsampled_img = downsample(downsampled_img)
 
-        #downsampled_img = upsample(downsampled_img)
+        img = test_image
+        for i in range(3):
+            img = upsample(img)
 
-        #diff_img = shifted_img - downsampled_img
-        
-        save_img(tensor_to_img(downsampled_img, recenter=False, rescale=False), os.path.join(output_path, f"test_img_{i:02d}.png"))
-        #exit()
-        #save_img(tensor_to_img(diff_img, recenter=False, rescale=False), os.path.join(output_path, f"test_img_diff_{i:02d}.png"))
+        img = torch.roll(img, shifts=(i, i), dims=(-1, -2))
+
+        for i in range(3):
+            img = downsample(img)
+
+        save_img(tensor_to_img(img, recenter=False, rescale=False), os.path.join(output_path, f"test_img_{i:02d}.png"))
