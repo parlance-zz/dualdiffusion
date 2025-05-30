@@ -180,7 +180,8 @@ if __name__ == "__main__":
     from utils.dual_diffusion_utils import (
         init_cuda, tensor_to_img, img_to_tensor, save_img, load_img
     )
-
+    
+    init_cuda()
     output_path = os.path.join(config.DEBUG_PATH, "resample_test3")
 
     #beta = 1.5
@@ -190,9 +191,9 @@ if __name__ == "__main__":
     k_size = 23
     factor = 2
 
-    downsample = FilteredDownsample2D(k_size=k_size, beta=beta, factor=factor)
-    upsample = FilteredUpsample2D(k_size=k_size*factor+k_size%factor, beta=beta, factor=factor)
-    filtered_silu = Filtered_MP_Silu_2D(k_size=k_size, beta=beta)
+    downsample = FilteredDownsample2D(k_size=k_size, beta=beta, factor=factor).cuda()
+    upsample = FilteredUpsample2D(k_size=k_size*factor+k_size%factor, beta=beta, factor=factor).cuda()
+    filtered_silu = Filtered_MP_Silu_2D(k_size=k_size, beta=beta).cuda()
 
     save_img(tensor_to_img(downsample.get_filter()), os.path.join(output_path, "__down_filter_kernel.png"))
     save_img(tensor_to_img(downsample.get_window()), os.path.join(output_path, "__down_filter_window.png"))
@@ -200,16 +201,16 @@ if __name__ == "__main__":
     save_img(tensor_to_img(upsample.get_window()), os.path.join(output_path, "__up_filter_window.png"))
 
     #test_image = img_to_tensor(load_img(os.path.join(output_path, "_test_latents.png")))
-    test_image = img_to_tensor(load_img(os.path.join(output_path, "__test_img.png")))
+    test_image = img_to_tensor(load_img(os.path.join(output_path, "__test_img.png"))).cuda()
 
-    """
+    #"""
     for i in range(3):
         test_image = upsample(test_image)
     for i in range(3):
         test_image = downsample(test_image)
     save_img(tensor_to_img(test_image, recenter=False, rescale=False), os.path.join(output_path, "__test_img_area.png"))
     exit()
-    """
+    #"""
 
     for i in range(17):
 
