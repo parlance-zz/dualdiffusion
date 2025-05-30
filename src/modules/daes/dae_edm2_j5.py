@@ -360,29 +360,24 @@ class DAE_J5(DualDiffusionDAE):
             return decoded, hidden_kld
     
     def forward(self, samples: torch.Tensor, dae_embeddings: torch.Tensor,
-            latents_sigma: torch.Tensor, equivariance_dropout: float = 0.5) -> tuple[torch.Tensor, ...]:
+            latents_sigma: torch.Tensor, equivariance_dropout: float = 0) -> tuple[torch.Tensor, ...]:
         
         latents, enc_hidden_kld = self.encode(samples, dae_embeddings, training=True)
 
         with torch.amp.autocast("cuda", enabled=False):
             samples = samples.float(); latents = latents.float()
             
-            for i in range(3):
+            for i in range(self.num_levels - 1):
                 latents = self.upsample(latents)
-            #latents = torch.nn.functional.interpolate(latents, scale_factor=self.downsample_ratio, mode="nearest")
-            #latents = torch.nn.functional.interpolate(latents, scale_factor=self.downsample_ratio, mode="bicubic")
+
+            #latents = (latents + torch.randn_like(latents) * latents_sigma) / (1 + latents_sigma**2)**0.5
 
             samples, latents = random_crop_2d(samples, latents,
                 range_h=self.downsample_ratio, range_w=self.downsample_ratio, dropout=equivariance_dropout)
             
-            for i in range(3):
+            for i in range(self.num_levels - 1):
                 latents = self.downsample(latents)
             samples = samples.to(dtype=torch.bfloat16); latents = latents.to(dtype=torch.bfloat16)
-
-        #latents = torch.nn.functional.avg_pool2d(latents, kernel_size=self.downsample_ratio)
-        #latents = torch.nn.functional.interpolate(latents, scale_factor=1/self.downsample_ratio, mode="bicubic")
-
-        #latents = (latents + torch.randn_like(latents) * latents_sigma) / (1 + latents_sigma**2)**0.5
 
         decoded, dec_hidden_kld = self.decode(latents, dae_embeddings, training=True)
 
