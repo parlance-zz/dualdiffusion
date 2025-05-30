@@ -36,7 +36,7 @@ from typing import Union, Literal
 import torch
 
 from modules.daes.dae import DualDiffusionDAE, DualDiffusionDAEConfig
-from modules.mp_tools import mp_silu, normalize, resample_3d, channel_to_space3d, lowpass_2d, FilteredDownsample2D
+from modules.mp_tools import mp_silu, normalize, resample_3d, channel_to_space_3d, lowpass_2d, FilteredDownsample2D
 from utils.dual_diffusion_utils import tensor_4d_to_5d, tensor_5d_to_4d
 
 
@@ -152,7 +152,7 @@ class Block(torch.nn.Module):
     def forward(self, x: torch.Tensor, emb: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         
         if self.resample_mode == "up" and self.use_channel_to_space == True:
-            x = channel_to_space3d(x)
+            x = channel_to_space_3d(x)
         else:
             x = resample_3d(x, mode=self.resample_mode)
 

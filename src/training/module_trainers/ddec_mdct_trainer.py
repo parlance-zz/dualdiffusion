@@ -27,7 +27,7 @@ import torch
 
 from training.trainer import DualDiffusionTrainer
 from training.module_trainers.unet_trainer import UNetTrainer, UNetTrainerConfig
-from modules.daes.dae_edm2_j3 import DAE_J3
+from modules.daes.dae import DualDiffusionDAE
 from modules.unets.unet_edm2_ddec_mdct_c1 import DDec_MDCT_UNet_C1
 from modules.formats.ms_mdct_dual import MS_MDCT_DualFormat
 from modules.mp_tools import normalize
@@ -74,7 +74,7 @@ class DiffusionDecoder_MDCT_Trainer(UNetTrainer):
         if self.ddec is None: self.ddec = trainer.pipeline.ddec.to(
             dtype=torch.bfloat16, device=trainer.accelerator.device).requires_grad_(True)
 
-        self.dae: DAE_J3 = trainer.get_train_module("dae")
+        self.dae: DualDiffusionDAE = trainer.get_train_module("dae")
         if self.dae is None: self.dae = trainer.pipeline.dae.to(
             dtype=torch.bfloat16, device=trainer.accelerator.device).requires_grad_(False)
 
