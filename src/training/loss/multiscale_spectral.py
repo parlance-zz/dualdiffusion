@@ -142,7 +142,8 @@ class MSSLoss2D:
 
         self.steps = []
         self.windows = []
-        
+        self.loss_weights = []
+
         for block_width in self.config.block_widths:
             self.steps.append(max(block_width // self.config.block_overlap, 1))
 
@@ -159,6 +160,12 @@ class MSSLoss2D:
             if self.config.block_window_fn != "none":
                 window /= window.square().mean().sqrt()
                 self.windows.append(window.to(device=device).requires_grad_(False).detach())
+
+            freq_h: torch.Tensor = torch.fft.fftfreq(block_width, device=device).abs() + 1
+            freq_w: torch.Tensor = torch.fft.rfftfreq(block_width, device=device).abs() + 1
+            loss_weight = torch.outer(freq_h, freq_w)
+            loss_weight = (loss_weight / loss_weight.mean()).requires_grad_(False).detach()
+            self.loss_weights.append(loss_weight)
 
     @torch.no_grad()
     def _flat_top_window(self, x: torch.Tensor) -> torch.Tensor:
@@ -224,6 +231,7 @@ class MSSLoss2D:
                 continue
 
             step = self.steps[i]
+            loss_weight = self.loss_weights[i]
             if self.config.block_window_fn != "none":
                 window = self.windows[i]
             else:
@@ -235,13 +243,13 @@ class MSSLoss2D:
                 
                 if self.config.frequency_weight_exponent != 0:
 
-                    loss_weight = (1 / target_fft_abs.mean(dim=(0,2,3), keepdim=True).clip(min=1e-2)).requires_grad_(False).detach()
+                    #loss_weight = (1 / target_fft_abs.mean(dim=(0,2,3), keepdim=True).clip(min=1e-2)).requires_grad_(False).detach()
 
                     if self.config.frequency_weight_exponent != 1:
                         loss_weight = loss_weight.pow(self.config.frequency_weight_exponent)
-                
                 else:
-                    loss_weight = 1
+                    pass
+                    #loss_weight = 1
 
                 if self.config.block_width_weight_exponent != 0:
                     loss_weight = loss_weight * (block_width ** self.config.block_width_weight_exponent)

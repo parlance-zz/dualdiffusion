@@ -36,7 +36,7 @@ from typing import Union, Literal
 import torch
 
 from modules.daes.dae import DualDiffusionDAE, DualDiffusionDAEConfig
-from modules.mp_tools import mp_silu, normalize, resample_3d, random_crop_2d, mp_sum
+from modules.mp_tools import mp_silu, normalize, resample_3d, random_crop_2d, mp_sum, lowpass_2d
 from utils.resample import FilteredDownsample2D, FilteredUpsample2D
 from utils.dual_diffusion_utils import tensor_4d_to_5d, tensor_5d_to_4d
 
@@ -327,8 +327,8 @@ class DAE_J5(DualDiffusionDAE):
         latents = tensor_5d_to_4d(x)
 
         if self.config.downsample_factor > 1:
-            latents = torch.nn.functional.avg_pool2d(
-                latents, kernel_size=self.config.downsample_factor)
+            latents = lowpass_2d(latents, blur_width=2 * self.config.downsample_factor)
+            latents = torch.nn.functional.avg_pool2d(latents, kernel_size=self.config.downsample_factor)
 
         if training == False:
             return latents
@@ -364,21 +364,23 @@ class DAE_J5(DualDiffusionDAE):
         
         latents, enc_hidden_kld = self.encode(samples, dae_embeddings, training=True)
 
-        with torch.amp.autocast("cuda", enabled=False):
-            samples = samples.float(); latents = latents.float()
-            
-            for i in range(self.num_levels - 1):
-                latents = self.upsample(latents)
+        #latents = (latents + torch.randn_like(latents) * latents_sigma) / (1 + latents_sigma**2)**0.5
 
-            #latents = (latents + torch.randn_like(latents) * latents_sigma) / (1 + latents_sigma**2)**0.5
+        if equivariance_dropout < 1:
 
-            samples, latents = random_crop_2d(samples, latents,
-                range_h=self.downsample_ratio, range_w=self.downsample_ratio, dropout=equivariance_dropout)
-            
-            for i in range(self.num_levels - 1):
-                latents = self.downsample(latents)
-            samples = samples.to(dtype=torch.bfloat16); latents = latents.to(dtype=torch.bfloat16)
+            with torch.amp.autocast("cuda", enabled=False):
+                samples = samples.float(); latents = latents.float()
+                
+                for i in range(self.num_levels - 1):
+                    latents = self.upsample(latents)    
 
+                samples, latents = random_crop_2d(samples, latents,
+                    range_h=self.downsample_ratio, range_w=self.downsample_ratio, dropout=equivariance_dropout)
+                
+                for i in range(self.num_levels - 1):
+                    latents = self.downsample(latents)
+                samples = samples.to(dtype=torch.bfloat16); latents = latents.to(dtype=torch.bfloat16)
+        
         decoded, dec_hidden_kld = self.decode(latents, dae_embeddings, training=True)
 
         latents_mean = latents.mean(dim=(1,2,3))
