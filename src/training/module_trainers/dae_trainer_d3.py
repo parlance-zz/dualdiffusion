@@ -21,6 +21,7 @@
 # SOFTWARE.
 
 from dataclasses import dataclass
+from typing import Union
 
 import torch
 
@@ -159,11 +160,7 @@ class DAETrainer_D3(ModuleTrainer):
         self.logger.info(f"KL loss weight: {self.config.kl_loss_weight} KL warmup steps: {self.config.kl_warmup_steps}")
         self.logger.info(f"Phase loss weight: {self.config.phase_loss_weight}")
 
-    @torch.no_grad()
-    def init_batch(self, validation: bool = False) -> None:
-        pass
-
-    def train_batch(self, batch: dict) -> dict[str, torch.Tensor]:
+    def train_batch(self, batch: dict) -> dict[str, Union[torch.Tensor, float]]:
 
         if "audio_embeddings" in batch:
             sample_audio_embeddings = normalize(batch["audio_embeddings"])
@@ -205,7 +202,3 @@ class DAETrainer_D3(ModuleTrainer):
             "io_stats/latents_mean": latents.mean(dim=(1,2,3)),
             "io_stats/latents_pre_norm_std": pre_norm_latents_var.sqrt()
         }
-
-    @torch.no_grad()
-    def finish_batch(self) -> dict[str, torch.Tensor]:
-        return {}

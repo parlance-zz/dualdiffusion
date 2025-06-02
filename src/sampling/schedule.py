@@ -63,11 +63,11 @@ class SamplingSchedule:
         return (np.log(sigma_min) + (np.log(sigma_max) - np.log(sigma_min)) * t).exp()
     
     @staticmethod
-    def schedule_cos(t: torch.Tensor, sigma_max: float, sigma_min: float, **_) -> torch.Tensor:
-        theta_max = np.pi/2 - np.arctan(sigma_max)
-        theta_min = np.pi/2 - np.arctan(sigma_min)
+    def schedule_cos(t: torch.Tensor, sigma_max: float, sigma_min: float, rho: float = 1., **_) -> torch.Tensor:
+        theta_max = np.pi/2 - np.arctan(sigma_max / rho)
+        theta_min = np.pi/2 - np.arctan(sigma_min / rho)
         theta = (1-t) * (theta_min - theta_max) + theta_max
-        return theta.cos() / theta.sin()
+        return theta.cos() / theta.sin() * rho
     
     @staticmethod
     def schedule_scale_invariant(t: torch.Tensor, sigma_max: float, sigma_min: float, rho: float = 1., **_) -> torch.Tensor:

@@ -339,7 +339,7 @@ class EncodeProcess(DatasetProcessStage):
             latents["latents"] = torch.cat(encoded_latents, dim=0).to(dtype=torch.bfloat16)
             assert latents["latents"].ndim == 4
             self.logger.debug(f"encoded latents shape: {latents['latents'].shape}")
-            self.logger.debug(f"target latents shape: {self.pipeline.get_latent_shape(self.pipeline.get_sample_shape(length=crop_width))}  ({crop_width/32000:.2f}s)")
+            self.logger.debug(f"target latents shape: {self.pipeline.get_latent_shape(self.pipeline.get_mel_spec_shape(raw_length=crop_width))}  ({crop_width/32000:.2f}s)")
             
         elif input_dict["has_latents"] == True:
             self.logger.debug(f"existing latents: \"{safetensors_file_path}\" ({latents['latents'].shape[0]} variations)")

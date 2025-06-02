@@ -36,9 +36,9 @@ from tqdm.auto import tqdm
 
 from modules.module import DualDiffusionModule
 from modules.unets.unet import DualDiffusionUNet
-#from modules.mp_tools import mp_sum
+from modules.mp_tools import mp_sum
 from utils.dual_diffusion_utils import (
-    normalize, load_safetensors, torch_dtype, load_audio, get_cos_angle, tensor_info_str
+    normalize, load_safetensors, torch_dtype, torch_memory_format, load_audio, get_cos_angle
 )
 from sampling.schedule import SamplingSchedule
 from training.ema import find_emas_in_dir
@@ -62,7 +62,7 @@ class SampleParams:
     use_heun: bool                        = True
     input_perturbation: float             = 1.
     input_perturbation_offset: float      = 0.
-    num_fgla_iters: int                   = 250
+    stereo_fix: float                     = 0
     img2img_strength: float               = 0.5
     input_audio: Optional[Union[str, torch.Tensor]] = None
     input_audio_pre_encoded: bool                   = False
@@ -73,7 +73,7 @@ class SampleParams:
         self.length = int(self.length) if self.length is not None else None
         self.num_steps = int(self.num_steps)
         self.batch_size = int(self.batch_size)
-        self.num_fgla_iters = int(self.num_fgla_iters)
+        self.stereo_fix = float(self.stereo_fix)
         # todo: additional sanitization (clip values like input perturb, etc.)
         return self
 
@@ -137,6 +137,7 @@ class DualDiffusionPipeline(torch.nn.Module):
 
     def to(self, device: Optional[Union[dict[str, torch.device], torch.device]] = None,
                  dtype:  Optional[Union[dict[str, torch.dtype],  torch.dtype]]  = None,
+                 memory_format: Optional[Union[dict[str, torch.memory_format], torch.memory_format]] = None,
                  **kwargs) -> "DualDiffusionPipeline":
         
         if device is not None:
@@ -154,6 +155,14 @@ class DualDiffusionPipeline(torch.nn.Module):
             else:
                 for module in self.children():
                     module.to(dtype=torch_dtype(dtype))
+
+        if memory_format is not None:
+            if isinstance(memory_format, dict):
+                for module_name, memory_format in memory_format.items():
+                    getattr(self, module_name).to(memory_format=torch_memory_format(memory_format))
+            else:
+                for module in self.children():
+                    module.to(memory_format=torch_memory_format(memory_format))
 
         if len(kwargs) > 0:
             for module in self.children():
@@ -222,6 +231,7 @@ class DualDiffusionPipeline(torch.nn.Module):
     def from_pretrained(model_path: str,
                         torch_dtype: Union[dict[str, torch.dtype], torch.dtype] = torch.float32,
                         device: Optional[Union[dict[str, torch.device], torch.device]] = None,
+                        memory_format: Optional[Union[dict[str, torch.memory_format], torch.memory_format]] = "channels_last",
                         load_checkpoints: Optional[Union[dict[str, str], bool]] = False,
                         load_emas: Optional[Union[dict[str, str], bool]] = False,
                         compile_options: Optional[Union[dict[str, dict], dict]] = None) -> "DualDiffusionPipeline":
@@ -266,7 +276,8 @@ class DualDiffusionPipeline(torch.nn.Module):
                 phema_module_path = os.path.join(model_path, f"{module_name}_ema_archive")
                 model_modules[module_name].load_ema(ema_module_path, phema_module_path)
         
-        pipeline = DualDiffusionPipeline(model_modules).to(device=device, dtype=torch_dtype)
+        pipeline = DualDiffusionPipeline(model_modules).to(
+            device=device, dtype=torch_dtype, memory_format=memory_format)
 
         if compile_options is not None:
             pipeline.compile(compile_options)
@@ -274,8 +285,9 @@ class DualDiffusionPipeline(torch.nn.Module):
         model_metadata: dict[str, any] = {
             "model_path": model_path,
             "model_module_classes": {module_name: str(module_class)
-                                     for module_name, module_class in model_module_classes.items()},
+                for module_name, module_class in model_module_classes.items()},
             "torch_dtype": torch_dtype,
+            "memory_format": memory_format,
             "load_checkpoints": load_checkpoints,
             "load_emas": load_emas,
             "compile_options": compile_options,
@@ -310,27 +322,27 @@ class DualDiffusionPipeline(torch.nn.Module):
         model_index = {"modules": model_modules}
         config.save_json(model_index, os.path.join(model_path, "model_index.json"))
 
-    def get_latent_shape(self, sample_shape: Union[torch.Size, tuple[int, int, int, int]]) -> torch.Size:
-        encoder = getattr(self, "vae", getattr(self, "dae", None))
+    def get_latent_shape(self, mel_spec_shape: Union[torch.Size, tuple[int, int, int, int]]) -> torch.Size:
+        encoder = getattr(self, "dae", None)
         if encoder is None:
             return None
-        latent_shape = encoder.get_latent_shape(sample_shape)
+        latent_shape = encoder.get_latent_shape(mel_spec_shape)
         if hasattr(self, "unet"):
             return self.unet.get_latent_shape(latent_shape)
         else:
             return latent_shape
     
-    def get_sample_shape(self, bsz: int = 1, length: Optional[int] = None) -> tuple:
-        encoder = getattr(self, "vae", getattr(self, "dae", None))
-        sample_shape = self.format.get_sample_shape(bsz=bsz, length=length)
+    def get_mel_spec_shape(self, bsz: int = 1, raw_length: Optional[int] = None) -> tuple:
+        encoder = getattr(self, "dae", None)
+        mel_spec_shape = self.format.get_mel_spec_shape(bsz=bsz, raw_length=raw_length)
         if encoder is None:
-            return sample_shape
-        latent_shape = self.get_latent_shape(sample_shape)
-        return encoder.get_sample_shape(latent_shape)
+            return mel_spec_shape
+        latent_shape = self.get_latent_shape(mel_spec_shape)
+        return encoder.get_mel_spec_shape(latent_shape)
     
     @torch.inference_mode()
     def __call__(self, params: SampleParams, model_server_state: Optional[multiprocessing.managers.DictProxy] = None, quiet: bool = False) -> SampleOutput:
-        
+        raise NotImplementedError()
         debug_info = {}
         params = SampleParams(**params.__dict__).sanitize() # todo: this should be properly deepcopied because of tensor params
         
@@ -341,7 +353,7 @@ class DualDiffusionPipeline(torch.nn.Module):
             unet = inpainting_unet or unet
 
         params.seed = params.seed or int(np.random.randint(100000, 999999))
-        params.length = params.length or self.format.config.sample_raw_length
+        params.length = params.length or self.format.config.default_raw_length
         params.sigma_max = params.sigma_max or unet.config.sigma_max
         params.sigma_min = params.sigma_min or unet.config.sigma_min
         params.sigma_data = params.sigma_data or unet.config.sigma_data
@@ -352,7 +364,7 @@ class DualDiffusionPipeline(torch.nn.Module):
             if params.input_audio_pre_encoded == True:
                 input_audio = load_safetensors(params.input_audio)["latents"][0:1]
             else:
-                input_sample_shape = self.get_sample_shape(bsz=1, length=params.length)
+                input_sample_shape = self.get_mel_spec_shape(bsz=1, raw_length=params.length)
                 input_audio_sample_rate, input_audio = load_audio(
                     params.input_audio, count=self.format.get_audio_shape(input_sample_shape), return_sample_rate=True)
                 if input_audio_sample_rate != self.format.config.sample_rate:
@@ -365,7 +377,7 @@ class DualDiffusionPipeline(torch.nn.Module):
         generator = torch.Generator(device=unet.device).manual_seed(params.seed)
         np_generator = np.random.default_rng(params.seed)
         
-        sample_shape = self.get_sample_shape(bsz=params.batch_size, length=params.length)
+        sample_shape = self.get_mel_spec_shape(bsz=params.batch_size, raw_length=params.length)
         if getattr(self, "vae", None) is not None:
             latent_diffusion = True
             sample_shape = self.get_latent_shape(sample_shape)
@@ -578,7 +590,7 @@ class DualDiffusionPipeline(torch.nn.Module):
         
         params = SampleParams(**params.__dict__).sanitize() # todo: this should be properly deepcopied because of tensor params       
         params.seed = params.seed or int(np.random.randint(100000, 999999))
-        params.length = params.length or self.format.config.sample_raw_length
+        params.length = params.length or self.format.config.default_raw_length
         params.sigma_max = params.sigma_max or unet.config.sigma_max
         params.sigma_min = params.sigma_min or unet.config.sigma_min
         params.sigma_data = params.sigma_data or unet.config.sigma_data
@@ -596,11 +608,11 @@ class DualDiffusionPipeline(torch.nn.Module):
 
         if x_ref is None:
             if sample_shape is None:
-                if getattr(self, "vae", None) is not None or getattr(self, "dae", None) is not None:
-                    sample_shape = self.get_sample_shape(bsz=params.batch_size, length=params.length)
+                if getattr(self, "dae", None) is not None:
+                    sample_shape = self.get_mel_spec_shape(bsz=params.batch_size, raw_length=params.length)
                     sample_shape = self.get_latent_shape(sample_shape)
                 else:
-                    sample_shape = self.format.get_sample_shape(bsz=params.batch_size, length=params.length)
+                    sample_shape = self.format.get_mel_spec_shape(bsz=params.batch_size, raw_length=params.length)
             input_ref_sample = None
         else:
             sample_shape = sample_shape or x_ref.shape
@@ -617,6 +629,10 @@ class DualDiffusionPipeline(torch.nn.Module):
         debug_info["sigma_schedule"] = sigma_schedule_list
         
         noise = torch.randn(sample_shape, device=unet.device, generator=generator)
+        if params.stereo_fix > 0:
+            noise[:, ::2] = noise[:, 1::2]
+            noise = mp_sum(torch.randn_like(noise), noise, params.stereo_fix)
+
         sample = noise * (sigma_schedule[0]**2 + params.sigma_data**2)**0.5
 
         progress_bar = tqdm(total=params.num_steps, disable=quiet)

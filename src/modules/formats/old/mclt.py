@@ -25,7 +25,7 @@ from dataclasses import dataclass
 
 import torch
 
-from .format import DualDiffusionFormat, DualDiffusionFormatConfig
+from modules.formats.format import DualDiffusionFormat, DualDiffusionFormatConfig
 from utils.mclt import mclt, imclt
 from utils.dual_diffusion_utils import tensor_to_img
 

@@ -1,0 +1,199 @@
+{
+    "device": "cuda",
+    "add_random_test_samples": 5000,
+    "save_output": false,
+    "downsample_mdct_psd": false,
+    
+    "test_sample_verbose": false,
+    "test_samples": [
+        "switch/Arcaea/_t_songs_ignotus.ogg.flac",
+        "dsf/Metropolis Street Racer Prototype/file_15.adx.flac",
+        "psf3/Iron Man/_t_! movies_HUB_05_000001C2.adx.flac",
+        "psf/Gradius Gaiden/SLPM-86042_BGM1_0000096c.XA.flac"
+    ],
+
+    /*
+    "format_config": {
+        "sample_rate": 32000,
+        "num_raw_channels": 2,
+        "default_raw_length": 1408768,
+
+        "raw_to_mel_spec_scale": 9.1264,
+        "mel_spec_to_mdct_psd_scale": 0.00195788813413,
+        "mdct_to_raw_scale": 2,
+        "raw_to_mdct_scale": 12.427468,
+
+        "mdct_window_len": 512,
+        "mdct_psd_num_bins": 4096,
+        
+        "ms_freq_min": 0,
+        "ms_abs_exponent": 0.25,
+        "ms_width_alignment": 128,
+        "ms_num_frequencies": 256,
+        "ms_step_size_ms": 8,
+        "ms_window_duration_ms": 200,
+        "ms_padded_duration_ms": 200,
+        "ms_window_exponent_low": 17,
+        "ms_window_exponent_high": 29,
+        "ms_window_periodic": true
+    }
+    */
+
+    /*
+    "format_config": {
+        "sample_rate": 32000,
+        "num_raw_channels": 2,
+        "default_raw_length": 1408768,
+
+        "raw_to_mel_spec_scale": 9.1264,
+        "mel_spec_to_mdct_psd_scale": 0.00195788813413,
+        "mdct_to_raw_scale": 2,
+        "raw_to_mdct_scale": 12.427468,
+
+        "mdct_window_len": 512,
+        "mdct_psd_num_bins": 4096,
+        
+        "ms_freq_min": 30,
+        "ms_abs_exponent": 0.25,
+        "ms_width_alignment": 128,
+        "ms_num_frequencies": 256,
+        "ms_step_size_ms": 8,
+        "ms_window_duration_ms": 200,
+        "ms_padded_duration_ms": 200,
+        "ms_window_exponent_low": 32,
+        "ms_window_exponent_high": null,
+        "ms_window_periodic": true
+    }
+    */
+
+    /*
+    "format_config": {
+        "sample_rate": 32000,
+        "num_raw_channels": 2,
+        "default_raw_length": 1408768,
+
+        "raw_to_mel_spec_scale": 50.0,
+        "mel_spec_to_mdct_psd_scale": 0.18,
+        "mdct_to_raw_scale": 2,
+        "raw_to_mdct_scale": 12.1,
+
+        "mdct_window_len": 512,
+        "mdct_psd_num_bins": 2048,
+
+        "ms_abs_exponent": 1,
+        "ms_width_alignment": 128,
+        "ms_num_frequencies": 256,
+        "ms_step_size_ms": 8,
+        "ms_window_duration_ms": 128,
+        "ms_padded_duration_ms": 128,
+        "ms_window_exponent_low": 17,
+        "ms_window_exponent_high": 58,
+        "ms_window_periodic": true
+    }
+    */
+
+    /*
+    "format_config": {
+        "sample_rate": 32000,
+        "num_raw_channels": 2,
+        "default_raw_length": 1408768,
+
+        "raw_to_mel_spec_scale": 9.6281,
+        "mel_spec_to_mdct_psd_scale": 0.013,
+        "mdct_to_raw_scale": 2,
+        "raw_to_mdct_scale": 12.1,
+
+        "mdct_window_len": 512,
+        "mdct_psd_num_bins": 2048,
+
+        "ms_abs_exponent": 0.5,
+        "ms_width_alignment": 128,
+        "ms_num_frequencies": 256,
+        "ms_step_size_ms": 8,
+        "ms_window_duration_ms": 128,
+        "ms_padded_duration_ms": 128,
+        "ms_window_exponent_low": 17,
+        "ms_window_exponent_high": 58,
+        "ms_window_periodic": true
+    }
+    */
+
+    "format_config": {
+        "last_global_step": 0,
+        "sample_rate": 32000,
+        "num_raw_channels": 2,
+        "default_raw_length": 1408768,
+        "raw_to_mel_spec_scale": 3.51,
+        "mel_spec_to_mdct_psd_scale": 0.065,
+        "mdct_to_raw_scale": 1,
+        "raw_to_mdct_scale": 12.16,
+        "ms_abs_exponent": 0.25,
+        "mdct_window_len": 512,
+        "mdct_psd_num_bins": 2048,
+        "mdct_dual_channel": true,
+        "ms_freq_min": 0,
+        "ms_width_alignment": 128,
+        "ms_num_frequencies": 256,
+        "ms_step_size_ms": 8,
+        "ms_window_duration_ms": 128,
+        "ms_padded_duration_ms": 128,
+        "ms_window_exponent_low": 18,
+        "ms_window_exponent_high": 58,
+        "ms_window_periodic": true,
+        "ms_window_half_crop": true
+      }
+
+    /*
+    "format_config": {
+        "sample_rate": 32000,
+        "num_raw_channels": 2,
+        "default_raw_length": 1408768,
+
+        "raw_to_mel_spec_scale": 10.1363,
+        "mel_spec_to_mdct_psd_scale": 0.001,
+        "mdct_to_raw_scale": 2,
+        "raw_to_mdct_scale": 12.16,
+
+        "mdct_window_len": 512,
+        "mdct_psd_num_bins": 2048,
+
+        "ms_freq_min": 0,
+        "ms_filter_shape": "cos",
+        "ms_abs_exponent": 0.25,
+        "ms_width_alignment": 128,
+        "ms_num_frequencies": 256,
+        "ms_step_size_ms": 8,
+        "ms_window_duration_ms": 128,
+        "ms_padded_duration_ms": 128,
+        "ms_window_exponent_low": 16,
+        "ms_window_exponent_high": null,
+        "ms_window_periodic": true
+    }
+    /*/
+
+    /*
+    "format_config": {
+        "sample_rate": 32000,
+        "num_raw_channels": 2,
+        "default_raw_length": 1408768,
+
+        "raw_to_mel_spec_scale": 1.93184,
+        "mel_spec_to_mdct_psd_scale": 2.6e-8,
+        "mdct_to_raw_scale": 2,
+        "raw_to_mdct_scale": 12.16,
+
+        "mdct_window_len": 512,
+        "mdct_psd_num_bins": 2048,
+
+        "ms_abs_exponent": 0.125,
+        "ms_width_alignment": 128,
+        "ms_num_frequencies": 256,
+        "ms_step_size_ms": 8,
+        "ms_window_duration_ms": 128,
+        "ms_padded_duration_ms": 128,
+        "ms_window_exponent_low": 17,
+        "ms_window_exponent_high": 58,
+        "ms_window_periodic": true
+    }
+    */
+}

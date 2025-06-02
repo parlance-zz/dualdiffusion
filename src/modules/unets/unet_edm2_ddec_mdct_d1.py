@@ -36,34 +36,77 @@ from typing import Union, Optional, Literal
 import torch
 
 from modules.unets.unet import DualDiffusionUNet, DualDiffusionUNetConfig
-from modules.mp_tools import MPFourier, MPConv3D, mp_cat, mp_silu, mp_sum, normalize, resample_3d
-from modules.formats.frequency_scale import get_mel_density
-from modules.formats.format import DualDiffusionFormat
+from modules.mp_tools import MPFourier, mp_cat, mp_silu, mp_sum, normalize, resample_3d
+from modules.formats.ms_mdct_dual import MS_MDCT_DualFormat
 from utils.dual_diffusion_utils import tensor_5d_to_4d, tensor_4d_to_5d
 
 
-@dataclass
-class DDec_MCLT_UNet_B2_Config(DualDiffusionUNetConfig):
+class MPConv3D_E(torch.nn.Module):
 
-    in_channels:  int = 1
-    out_channels: int = 1
-    in_channels_emb: int = 0
+    def __init__(self, in_channels: int, out_channels: int, kernel: tuple[int, int, int],
+                 groups: int = 1, disable_weight_norm: bool = False) -> None:
+        
+        super().__init__()
+
+        self.in_channels = in_channels
+        self.out_channels = out_channels
+        self.groups = groups
+        self.disable_weight_norm = disable_weight_norm
+        
+        self.weight = torch.nn.Parameter(torch.randn(out_channels, in_channels // groups, *kernel))
+        if self.weight.numel() == 0:
+            raise ValueError(f"Invalid weight shape: {self.weight.shape}")
+        
+        if self.weight.ndim == 5:
+            pad_z, pad_w = kernel[0] // 2, kernel[2] // 2
+            if pad_w != 0 or pad_z != 0:
+                self.padding = torch.nn.ReflectionPad3d(
+                    (kernel[2] // 2, kernel[2] // 2, 0, 0, 0, kernel[0] // 2))
+            else:
+                self.padding = torch.nn.Identity()
+        else:
+            self.padding = None
+
+    def forward(self, x: torch.Tensor, gain: Union[float, torch.Tensor] = 1) -> torch.Tensor:
+        
+        w = self.weight.float()
+        if self.training == True and self.disable_weight_norm == False:
+            w = normalize(w) # traditional weight normalization
+            
+        w = w * (gain / w[0].numel()**0.5) # magnitude-preserving scaling
+        w = w.to(x.dtype)
+
+        if w.ndim == 2:
+            return x @ w.t()
+        
+        return torch.nn.functional.conv3d(self.padding(x), w,
+            padding=(0, w.shape[-2]//2, 0), groups=self.groups)
+
+    @torch.no_grad()
+    def normalize_weights(self) -> None:
+        if self.disable_weight_norm == False:
+            self.weight.copy_(normalize(self.weight))
+
+@dataclass
+class DDec_MDCT_UNet_D1_Config(DualDiffusionUNetConfig):
+
+    in_channels:  int = 2
+    out_channels: int = 2
+    in_channels_emb: int = 1024
 
     sigma_max: float = 16
-    sigma_min: float = 0.00004
+    sigma_min: float = 0.0001
     in_num_freqs: int = 256
-    in_psd_freqs: int = 3328
-    mel_density_scale: float = 0.54
-    audio_sample_rate: float = 32000
+    in_psd_freqs: int = 2048
 
-    model_channels: int  = 32                # Base multiplier for the number of channels.
-    logvar_channels: int = 192               # Number of channels for training uncertainty estimation.
-    channel_mult: list[int]    = (1,2,3,4)   # Per-resolution multipliers for the number of channels.
+    model_channels: int  = 32                  # Base multiplier for the number of channels.
+    logvar_channels: int = 192                 # Number of channels for training uncertainty estimation.
+    channel_mult: list[int]    = (1,2,3,4,5)   # Per-resolution multipliers for the number of channels.
     double_midblock: bool      = True
-    midblock_attn: bool        = False
-    channel_mult_noise: Optional[int] = 4    # Multiplier for noise embedding dimensionality.
-    channel_mult_emb: Optional[int]   = 4    # Multiplier for final embedding dimensionality.
-    channels_per_head: int    = 16           # Number of channels per attention head.
+    midblock_attn: bool        = True
+    channel_mult_noise: Optional[int] = 5    # Multiplier for noise embedding dimensionality.
+    channel_mult_emb: Optional[int]   = 5    # Multiplier for final embedding dimensionality.
+    channels_per_head: int    = 64           # Number of channels per attention head.
     num_layers_per_block: int = 2            # Number of resnet blocks per resolution.
     label_balance: float      = 0.5          # Balance between noise embedding (0) and class embedding (1).
     concat_balance: float     = 0.5          # Balance between skip connections (0) and main path (1).
@@ -109,18 +152,18 @@ class Block(torch.nn.Module):
         self.attn_balance = attn_balance
         self.clip_act = clip_act
         
-        self.conv_res0 = MPConv3D(out_channels if flavor == "enc" else in_channels,
-                                out_channels * mlp_multiplier, kernel=(3,3,3), groups=mlp_groups)
-        self.conv_res1 = MPConv3D(out_channels * mlp_multiplier, out_channels, kernel=(1,3,3), groups=mlp_groups)
-        self.conv_skip = MPConv3D(in_channels, out_channels, kernel=(1,1,1), groups=1)
+        self.conv_res0 = MPConv3D_E(out_channels if flavor == "enc" else in_channels,
+                                out_channels * mlp_multiplier, kernel=(1,3,3), groups=mlp_groups)
+        self.conv_res1 = MPConv3D_E(out_channels * mlp_multiplier, out_channels, kernel=(1,3,3), groups=mlp_groups)
+        self.conv_skip = MPConv3D_E(in_channels, out_channels, kernel=(2,1,1), groups=1)
 
         self.emb_gain = torch.nn.Parameter(torch.zeros([]))
-        self.emb_linear = MPConv3D(emb_channels, out_channels * mlp_multiplier,
+        self.emb_linear = MPConv3D_E(emb_channels, out_channels * mlp_multiplier,
             kernel=(1,1,1), groups=emb_linear_groups) if emb_channels != 0 else None
         
         if self.use_attention:
-            self.attn_qkv = MPConv3D(out_channels, out_channels * 3, kernel=(1,1,1))
-            self.attn_proj = MPConv3D(out_channels, out_channels, kernel=(1,1,1))
+            self.attn_qkv = MPConv3D_E(out_channels, out_channels * 3, kernel=(1,1,1))
+            self.attn_proj = MPConv3D_E(out_channels, out_channels, kernel=(1,1,1))
 
     def forward(self, x: torch.Tensor, emb: torch.Tensor) -> torch.Tensor:
         
@@ -145,23 +188,25 @@ class Block(torch.nn.Module):
             x = self.conv_skip(x)
         x = mp_sum(x, y, t=self.res_balance)
         
-        if self.use_attention:
+        if self.use_attention == True: # frequency-axis attention with stereo dim merged
 
             qkv: torch.Tensor = self.attn_qkv(x)
             
-            #                 b  z  w, c, h
-            qkv = qkv.permute(0, 2, 4, 1, 3)
-            qkv = qkv.reshape(qkv.shape[0]*qkv.shape[1]*qkv.shape[2], self.num_heads, -1, 3, qkv.shape[4])
+            #                 b  w  c  z  h
+            qkv = qkv.permute(0, 4, 1, 2, 3)
+
+            qkv = qkv.reshape(qkv.shape[0]*qkv.shape[1], self.num_heads, -1, 3, qkv.shape[3]*qkv.shape[4])
             q, k, v = normalize(qkv, dim=2).unbind(3)
 
             y = torch.nn.functional.scaled_dot_product_attention(q.transpose(-1, -2),
                                                                  k.transpose(-1, -2),
                                                                  v.transpose(-1, -2)).transpose(-1, -2)
             
-            #             b         , z         , w         , c         , h
-            y = y.reshape(x.shape[0], x.shape[2], x.shape[4], x.shape[1], x.shape[3])
+            #             b           w           c           z           h
+            y = y.reshape(x.shape[0], x.shape[4], x.shape[1], x.shape[2], x.shape[3])
+
             #             b, c, z, h, w
-            y = y.permute(0, 3, 1, 4, 2).contiguous(memory_format=torch.channels_last_3d)
+            y = y.permute(0, 2, 3, 4, 1).contiguous(memory_format=torch.channels_last_3d)
 
             y = self.attn_proj(mp_silu(y))
             x = mp_sum(x, y, t=self.attn_balance)
@@ -171,11 +216,11 @@ class Block(torch.nn.Module):
 
         return x
 
-class DDec_MCLT_UNet_B2(DualDiffusionUNet):
+class DDec_MDCT_UNet_D1(DualDiffusionUNet):
 
     supports_channels_last: Union[bool, Literal["3d"]] = "3d"
 
-    def __init__(self, config: DDec_MCLT_UNet_B2_Config) -> None:
+    def __init__(self, config: DDec_MDCT_UNet_D1_Config) -> None:
         super().__init__()
         self.config = config
 
@@ -193,26 +238,19 @@ class DDec_MCLT_UNet_B2(DualDiffusionUNet):
         cemb *= self.config.mlp_multiplier
 
         self.num_levels = len(config.channel_mult)
-
-        mclt_hz = torch.arange(0, config.in_num_freqs) + 0.5
-        mclt_hz = mclt_hz / config.in_num_freqs * config.audio_sample_rate / 2
-        mel_density = get_mel_density(mclt_hz)
-        mel_density /= mel_density.square().mean().sqrt()
-        mel_density = mel_density.view(1, 1, 1,-1, 1) * config.mel_density_scale
-        self.register_buffer("mel_density", mel_density, persistent=False)
         
         assert config.in_psd_freqs % config.in_num_freqs == 0
         self.psd_freqs_per_freq = config.in_psd_freqs // config.in_num_freqs
 
         # Embedding.
         self.emb_fourier = MPFourier(cnoise)
-        self.emb_noise = MPConv3D(cnoise, cemb, kernel=())
-        self.emb_label = MPConv3D(config.in_channels_emb, cemb, kernel=()) if config.in_channels_emb > 0 else None
-        self.emb_label_unconditional = MPConv3D(1, cemb, kernel=()) if config.in_channels_emb > 0 else None
+        self.emb_noise = MPConv3D_E(cnoise, cemb, kernel=())
+        self.emb_label = MPConv3D_E(config.in_channels_emb, cemb, kernel=()) if config.in_channels_emb > 0 else None
+        self.emb_label_unconditional = MPConv3D_E(1, cemb, kernel=()) if config.in_channels_emb > 0 else None
 
         # Training uncertainty estimation.
         self.logvar_fourier = MPFourier(config.logvar_channels)
-        self.logvar_linear = MPConv3D(config.logvar_channels, 1, kernel=(), disable_weight_norm=True)
+        self.logvar_linear = MPConv3D_E(config.logvar_channels, 1, kernel=(), disable_weight_norm=True)
 
         # Encoder.
         self.enc = torch.nn.ModuleDict()
@@ -225,7 +263,7 @@ class DDec_MCLT_UNet_B2(DualDiffusionUNet):
             if level == 0:
                 cin = cout
                 cout = channels
-                self.enc[f"conv_in"] = MPConv3D(cin, cout, kernel=(3,3,3))
+                self.enc[f"conv_in"] = MPConv3D_E(cin, cout, kernel=(2,3,3))
             else:
                 self.enc[f"block{level}_down"] = Block(level, cout, cout, cemb, num_freqs,
                     use_attention=level in config.attn_levels, flavor="enc", resample_mode="down", **block_kwargs)
@@ -261,7 +299,7 @@ class DDec_MCLT_UNet_B2(DualDiffusionUNet):
                     use_attention=level in config.attn_levels, flavor="dec", **block_kwargs)
                 
         self.out_gain = torch.nn.Parameter(torch.zeros([]))
-        self.conv_out = MPConv3D(cout, config.out_channels, kernel=(3,3,3))
+        self.conv_out = MPConv3D_E(cout, config.out_channels, kernel=(2,3,3))
 
     def get_embeddings(self, emb_in: torch.Tensor, conditioning_mask: torch.Tensor) -> torch.Tensor:
         if self.config.in_channels_emb > 0:
@@ -280,7 +318,7 @@ class DDec_MCLT_UNet_B2(DualDiffusionUNet):
 
     def forward(self, x_in: torch.Tensor,
                 sigma: torch.Tensor,
-                format: DualDiffusionFormat,
+                format: MS_MDCT_DualFormat,
                 embeddings: torch.Tensor,
                 x_ref: Optional[torch.Tensor] = None) -> torch.Tensor:
 
@@ -295,16 +333,17 @@ class DDec_MCLT_UNet_B2(DualDiffusionUNet):
 
             x = (c_in * tensor_4d_to_5d(x_in, self.config.in_channels)).to(dtype=torch.bfloat16)
  
-        x_ref = x_ref.view(x_ref.shape[0], x_ref.shape[1], x.shape[3], self.psd_freqs_per_freq, x_ref.shape[3])
-        x_ref = x_ref.permute(0, 3, 1, 2, 4).contiguous(memory_format=torch.channels_last_3d).to(dtype=torch.bfloat16)
+            x_ref = x_ref.view(x_ref.shape[0], x_ref.shape[1], x.shape[3], self.psd_freqs_per_freq, x_ref.shape[3])
+            x_ref = x_ref.permute(0, 3, 1, 2, 4).contiguous(memory_format=torch.channels_last_3d).to(dtype=torch.bfloat16)
 
         # Embedding.
         emb = self.emb_noise(self.emb_fourier(c_noise))
         if self.config.in_channels_emb > 0:
-            emb = mp_silu(mp_sum(emb, embeddings, t=self.config.label_balance))
+            emb = mp_silu(mp_sum(emb, embeddings.to(dtype=torch.bfloat16), t=self.config.label_balance))
         emb = emb.unsqueeze(-1).unsqueeze(-1).unsqueeze(-1).to(dtype=torch.bfloat16)
 
         # Encoder.
+        x_ref = x_ref * (self.config.in_channels / self.psd_freqs_per_freq)**0.5
         inputs = (x, x_ref, torch.ones_like(x[:, :1])) if self.config.add_constant_channel else (x, x_ref)
         x = torch.cat(inputs, dim=1)
 
@@ -320,7 +359,7 @@ class DDec_MCLT_UNet_B2(DualDiffusionUNet):
             x = block(x, emb)
 
         x: torch.Tensor = self.conv_out(x, gain=self.out_gain)
-        D_x: torch.Tensor = c_skip * x_in.float().unsqueeze(1) + c_out * x.float()
+        D_x: torch.Tensor = tensor_5d_to_4d(c_skip) * x_in.float() + tensor_5d_to_4d(c_out * x.float())
 
-        return tensor_5d_to_4d(D_x)
+        return D_x
     

@@ -447,7 +447,7 @@ class DAE_C1(DualDiffusionDAE):
         else:
             raise ValueError(f"Invalid sample shape: {sample_shape}")
         
-    def get_sample_shape(self, latent_shape: Union[torch.Size, tuple[int, int, int, int]]) -> torch.Size:
+    def get_mel_spec_shape(self, latent_shape: Union[torch.Size, tuple[int, int, int, int]]) -> torch.Size:
         if len(latent_shape) == 4:
             return (latent_shape[0], 2,
                     latent_shape[2] * 2 ** (self.num_levels-1),

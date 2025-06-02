@@ -1,5 +1,5 @@
 {
-    "model_name": "edm2_d3a_aclap2_ultra2",
+    "model_name": "edm2_dae_d3a",
     "model_load_options": {
         "torch_dtype": "bfloat16",
         "device": "cuda",
@@ -16,23 +16,37 @@
             "dynamic": false
         }
     },
-    "output_lufs": -18,
-    "num_fgla_iters": 300, // hq settings
 
+    "output_lufs": -20,
     "skip_ddec": false,
     "copy_sample_source_files": true,
-    "random_test_samples_seed": null,
-    "add_random_test_samples": 12,
+    "random_test_samples_seed": 100,
+    "add_random_test_samples": 0,
+    "shuffle_test_samples": true,
     "test_samples": [
         
+        //"psf3/Street Fighter IV"
+        "switch/Gravity Circuit"
+        
+        //"spc/Shin Kidou Senki Gundam W - Endless Duel"
+        //"psf/Mega Man X5"
+        //"psf/Mega Man 8"
+        //"psf/Suikoden 2"
+        //"3sf/Super Mario 3D Land"
+        //"smd/Gunstar Heroes"
+
+        //"3sf/Super Mario 3D Land/STM_BGM_WORLD8S_A.bcstm.flac",
         //"psf2/Shin Megami Tensei - Persona 3 FES",
-        "switch/Arcaea/_t_songs_ignotus.ogg.flac",
-        "smd/Gunstar Heroes/18 - Last Party on the Moon.vgm.flac",
-        "smd/Gunstar Heroes/18 - Last Party on the Moon.vgm.flac",
-        "dsf/Metropolis Street Racer Prototype/file_15.adx.flac",
-        "psf/Gradius Gaiden/SLPM-86042_BGM1_0000096c.XA.flac",
-        "3sf/Monster Hunter 3 Ultimate/_t_lobby_ML_T_SKB01.mca.flac",
-        "vita/Grisaia Phantom Trigger 01 & 02/MUSIC_00000013.at9.flac"
+        //"switch/Arcaea/_t_songs_ignotus.ogg.flac",
+        //"smd/Gunstar Heroes/18 - Last Party on the Moon.vgm.flac",
+        //"smd/Gunstar Heroes/18 - Last Party on the Moon.vgm.flac",
+        //"dsf/Metropolis Street Racer Prototype/file_15.adx.flac",
+        //"psf/Gradius Gaiden/SLPM-86042_BGM1_0000096c.XA.flac",
+        //"3sf/Monster Hunter 3 Ultimate/_t_lobby_ML_T_SKB01.mca.flac",
+        //"vita/Grisaia Phantom Trigger 01 & 02/MUSIC_00000013.at9.flac"
+        
+        //"xbox/AirForce Delta Storm"
+
         //"psf3/Gundam Battle Operation Next/BGM_009.adx.flac",
         //"xbox/AirForce Delta Storm/afdx_02.rwx.flac"
         /*
@@ -96,27 +110,12 @@
         //"psf/Star Wars - Episode I - The Phantom Menace",
         //"psf/Street Fighter Alpha 3",
         //"psf/Gradius Gaiden",
-        //"psf/Descent Maximum",
+        //"psf/Descent Maximum"
         //"psf/Command & Conquer - Red Alert",
         
-        /*
-        "[TwoShot] LOOP4 PAD4.flac",
-        "[TwoShot] random 2 - Track 6.flac",
-        "[TwoShot] LOOP4 PAD4.flac",
-        "[TwoShot] random 2 - Track 6.flac",
-        "[TwoShot] LOOP4 PAD4.flac",
-        "[TwoShot] random 2 - Track 6.flac",
-        "[TwoShot] LOOP4 PAD4.flac",
-        "[TwoShot] random 2 - Track 6.flac",
-        "[TwoShot] LOOP4 PAD4.flac",
-        "[TwoShot] random 2 - Track 6.flac",
-        "[TwoShot] LOOP4 PAD4.flac",
-        "[TwoShot] random 2 - Track 6.flac",
-        "[TwoShot] LOOP4 PAD4.flac",
-        "[TwoShot] random 2 - Track 6.flac",
-        */
 
         //"psf/Mega Man X6/11. BLAZE HEATNIX STAGE.xa.flac",
+
         /*
         "dick_pound-01.flac",
         "dick_pound-02.flac",
@@ -127,24 +126,13 @@
         "psf/Tony Hawk's Pro Skater 2/_t_MOVIE_INTRO.XA.flac",
         */
         
-        //"psf/Tony Hawk's Pro Skater 2",
-        /*
-        "psf/Tony Hawk's Pro Skater 2/SLES-02908_05 Bad Religion - You.xa.flac",
-        "psf/Tony Hawk's Pro Skater 2/SLES-02908_07 Millencolin - No Cigar.xa.flac",
-        "psf/Tony Hawk's Pro Skater 2/SLES-02908_09 Dub Pistols - Cyclone.xa.flac",
-        "psf/Tony Hawk's Pro Skater 2/SLES-02908_11 Styles of Beyond - Subculture.xa.flac",
-        "psf/Tony Hawk's Pro Skater 2/SLES-02908_13 Fu Manchu - Evil Eye.xa.flac",
-        "psf/Tony Hawk's Pro Skater 2/SLES-02908_14 Alley Life - Out with the Old.xa.flac",
-        "psf/Tony Hawk's Pro Skater 2/SLES-02908_15 Swingin' Utters - Five Lessons Learned.xa.flac",
-        "psf/Tony Hawk's Pro Skater 2/SLES-02908_04 Naughty by Nature - Pin the Tail on the Donkey.xa.flac",
-        "psf/Tony Hawk's Pro Skater 2/SLES-02908_06 Powerman 5000 - When Worlds Collide.xa.flac",
-        */
+        //"xbox/Tony Hawk's Pro Skater 2x"
     ],
     "unet_params": {
-        "seed": null,
+        "seed": 100,
 
         "num_steps": 300,
-        "cfg_scale": 2, //3, //3.5,//3,
+        "cfg_scale": 2,//2, //3, //3.5,//3,
         "use_heun": true, //true,
         "schedule": "edm2",
 

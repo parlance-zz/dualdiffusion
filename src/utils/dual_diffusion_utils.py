@@ -92,14 +92,57 @@ def get_available_torch_devices() -> list[str]:
 
     return available_devices
 
+def get_cuda_gpu_stats() -> list[dict[str, Union[int, float]]]:
+    query_fields = [
+        "temperature.gpu",
+        "power.draw",
+        "memory.used",
+        "memory.total"
+    ]
+    
+    result = subprocess.run(
+        ["nvidia-smi", f"--query-gpu={','.join(query_fields)}", "--format=csv,noheader,nounits"],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True
+    )
+
+    if result.returncode != 0:
+        raise RuntimeError(f"nvidia-smi error: {result.stderr.strip()}")
+
+    info_list = []
+    for line in result.stdout.strip().split('\n'):
+        temp, power, mem_used, mem_total = map(float, line.split(', '))
+        info = {
+            "temperature_C": int(temp),
+            "power_W": round(power, 1),
+            "vram_used_MB": int(mem_used),
+            "vram_total_MB": int(mem_total)
+        }
+        info_list.append(info)
+
+    return info_list
+
 def torch_dtype(dtype: Union[str, torch.dtype]) -> torch.dtype:
     if isinstance(dtype, torch.dtype):
         return dtype
     elif isinstance(dtype, str):
-        return getattr(torch, dtype)
+        _dtype = getattr(torch, dtype)
+        assert isinstance(_dtype, torch.dtype), f"Invalid dtype: {dtype}"
+        return _dtype
     else:
         raise ValueError(f"Unsupported dtype type: {dtype} ({type(dtype)})")
 
+def torch_memory_format(memory_format: Union[str, torch.memory_format]) -> torch.memory_format:
+    if isinstance(memory_format, torch.memory_format):
+        return memory_format
+    elif isinstance(memory_format, str):
+        memory_format = getattr(torch, memory_format)
+        assert isinstance(memory_format, torch.memory_format), f"Invalid memory format: {memory_format}"
+        return memory_format
+    else:
+        raise ValueError(f"Unsupported memory_format type: {memory_format} ({type(memory_format)})")
+    
 def init_logging(name: Optional[str] = None, group_name: Optional[str] = None,
         format: Union[bool, str] = False, verbose: bool = False, log_to_file: bool = True) -> logging.Logger:
 
@@ -192,14 +235,14 @@ def find_files(directory: str, name_pattern: str = "*") -> list[str]:
 @torch.inference_mode()
 def normalize_lufs(raw_samples: torch.Tensor,
                    sample_rate: int,
-                   target_lufs: float = -15.,
+                   target_lufs: float = -20.,
                    return_old_lufs: bool = False) -> torch.Tensor:
     
     if raw_samples.ndim != 2:
         raise ValueError(f"Invalid shape for normalize_lufs: {raw_samples.shape}")
     
     meter = pyloudnorm.Meter(sample_rate)
-    old_lufs = meter.integrated_loudness(raw_samples.mean(dim=0, keepdim=True).T.cpu().numpy())
+    old_lufs = meter.integrated_loudness(raw_samples.T.cpu().numpy())
     normalized_raw_samples = raw_samples * (10. ** ((target_lufs - old_lufs) / 20.0))
 
     if return_old_lufs:
@@ -217,7 +260,7 @@ def get_num_clipped_samples(raw_samples: torch.Tensor, eps: float = 2e-2) -> int
 def save_audio(raw_samples: torch.Tensor,
                sample_rate: int,
                output_path: str,
-               target_lufs: float = -15.,
+               target_lufs: float = -20.,
                metadata: Optional[dict] = None,
                no_clobber: bool = False,
                copy_on_write: bool = False) -> None:
@@ -536,6 +579,27 @@ def tensor_info_str(x: torch.Tensor) -> str:
     info_str += f"  mean: {x.mean().item():.4f}  std: {x.std().item():.4f}  norm: {x.square().mean().sqrt().item():.4f}"
     return info_str
 
+# concatenate 2 tensors of shape (b, c, h, w) along the channel dimension in random order
+# returns the concatenated tensor and a label tensor of shape (b, c, h, w) where 1 means x1 is first
+def tensor_random_cat(x1: torch.Tensor, x2: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+    # x1, x2: (b, c, h, w)
+    b, c, h, w = x1.shape
+
+    # this mask indicates for each sample in the batch whether to flip the order
+    flip_mask = torch.randint(low=0, high=2, size=(b, 1, 1, 1), device=x1.device, dtype=torch.bool)
+
+    # concatenate in random order along channel dimension
+    first = torch.where(flip_mask, x2, x1)
+    second = torch.where(flip_mask, x1, x2)
+    concatenated = torch.cat([first, second], dim=1)  # (b, 2c, h, w)
+
+    # label 1 means "the first input is authentic", 0 means "the second input is authentic"
+    # mask: True means x2 is first, so x1 is second (not authentic), hence label 0
+    #       False means x1 is first, so label 1
+    labels = (~flip_mask).expand(-1, c, h, w).to(torch.float32)
+    
+    return concatenated, labels
+
 @torch.inference_mode()
 def tensor_to_img(x: torch.Tensor,
                   recenter: bool = True,
@@ -555,13 +619,26 @@ def tensor_to_img(x: torch.Tensor,
 
     if channel_order is not None:
         _x = x.clone()
-        for i in range(3):
+        for i in range(len(channel_order)):
             x[..., i] = _x[..., channel_order[i]]
 
     if x.shape[-1] == 4: # show alpha channel as pre-multiplied brightness
-        x = x[..., :3] * x[..., 3:4]
+        #x = x[..., :3] * x[..., 3:4]
         if recenter: x -= x.amin(dim=(-3,-2,-1), keepdim=True)
-        if rescale:  x /= x.amax(dim=(-3,-2,-1), keepdim=True).clip(min=1e-16)  
+        if rescale:  x /= x.amax(dim=(-3,-2,-1), keepdim=True).clip(min=1e-16)
+        
+        C, M, Y, K = x.unbind(-1)
+        
+        if K.mean().item() < 0.5: K = 1 - K
+
+        R = (1 - torch.minimum(torch.tensor(1.0, device=x.device), C * (1 - K) + K))
+        G = (1 - torch.minimum(torch.tensor(1.0, device=x.device), M * (1 - K) + K))
+        B = (1 - torch.minimum(torch.tensor(1.0, device=x.device), Y * (1 - K) + K))
+
+        x = torch.stack((R, G, B), dim=-1)
+        if recenter: x -= x.amin(dim=(-3,-2,-1), keepdim=True)
+        if rescale:  x /= x.amax(dim=(-3,-2,-1), keepdim=True).clip(min=1e-16)
+        
     elif x.shape[-1] == 2:
         x = torch.cat((x, torch.zeros_like(x[..., 0:1])), dim=-1)
         x[..., 2], x[..., 1] = x[..., 1], 0
@@ -576,9 +653,28 @@ def tensor_to_img(x: torch.Tensor,
 
     return img
 
+def img_to_tensor(img: np.ndarray) -> torch.Tensor:
+    if img.ndim == 2:
+        img = img[..., np.newaxis]
+    elif img.ndim == 3 and img.shape[-1] == 4:
+        img = img[..., :3] * img[..., 3:4]
+    elif img.ndim == 3 and img.shape[-1] > 4:
+        raise ValueError(f"Unsupported number of channels in img_to_tensor: {img.shape[-1]}")
+
+    x = torch.from_numpy(img).float() / 255
+    x = x.permute(2, 0, 1).contiguous().unsqueeze(0)
+    
+    return x
+
 def save_img(np_img: np.ndarray, img_path: str) -> None:
     os.makedirs(os.path.dirname(img_path), exist_ok=True)
     cv2.imwrite(img_path, np_img)
+
+def load_img(img_path: str, color_mode: int = cv2.IMREAD_UNCHANGED) -> np.ndarray:
+    img = cv2.imread(img_path, color_mode)
+    if img is None:
+        raise ValueError(f"Unable to load image {img_path}")
+    return img
 
 def open_img_window(name: str,
                     width:  Optional[int] = None,

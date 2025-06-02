@@ -36,7 +36,8 @@ from typing import Union, Optional, Literal
 import torch
 
 from modules.unets.unet import DualDiffusionUNet, DualDiffusionUNetConfig
-from modules.mp_tools import MPFourier, MPConv3D, mp_cat, mp_silu, mp_sum, normalize, resample_3d
+from modules.mp_tools import MPFourier, mp_cat, mp_silu, mp_sum, normalize, resample_3d
+from modules.daes.dae_edm2_d3 import MPConv3D
 from modules.formats.frequency_scale import get_mel_density
 from modules.formats.format import DualDiffusionFormat
 from utils.dual_diffusion_utils import tensor_5d_to_4d, tensor_4d_to_5d
@@ -207,11 +208,6 @@ class DDec_MCLT_UNet_B1(DualDiffusionUNet):
         mel_density = mel_density.view(1, 1, 1,-1, 1) * config.mel_density_scale
         self.register_buffer("mel_density", mel_density, persistent=False)
 
-        #psd_freqs_per_freq = (config.in_psd_freqs + config.in_num_freqs - 1) // config.in_num_freqs
-        #psd_offsets = torch.linspace(0, config.in_psd_freqs - psd_freqs_per_freq, config.in_num_freqs).int()
-        #psd_offsets = torch.arange(psd_freqs_per_freq, dtype=torch.int32).view(1,-1) + psd_offsets.view(-1, 1)
-        #self.register_buffer("psd_offsets", psd_offsets.view(1, 1, 1,-1, 1).to(dtype=torch.int64), persistent=False)
-        #self.psd_freqs_per_freq = psd_freqs_per_freq
         assert config.in_psd_freqs % config.in_num_freqs == 0
         self.psd_freqs_per_freq = config.in_psd_freqs // config.in_num_freqs
         
@@ -304,10 +300,10 @@ class DDec_MCLT_UNet_B1(DualDiffusionUNet):
             c_in = 1 / (self.config.sigma_data ** 2 + sigma ** 2).sqrt()
             c_noise = (sigma.flatten().log() / 4).to(self.dtype)
 
-            #psd_offsets = self.psd_offsets.squeeze(0).expand(x_ref.shape[0], x_ref.shape[1], self.psd_offsets.shape[3], x_ref.shape[3])            
-            #x_ref = torch.gather(x_ref, 2, psd_offsets)
-            #x_ref = x_ref.view(x_ref.shape[0], x_ref.shape[1], self.config.in_num_freqs, self.psd_freqs_per_freq, x_ref.shape[3])
-            #x_ref = x_ref.permute(0, 3, 1, 2, 4).contiguous(memory_format=torch.channels_last_3d).to(dtype=torch.bfloat16)
+            # ms_mdct_dual_format conversion fudge factor
+            fft_hz = torch.linspace(0, self.config.audio_sample_rate / 2, self.config.in_psd_freqs, device=x_ref.device)
+            x_ref = (x_ref / get_mel_density(fft_hz).view(1, 1,-1, 1) / 9).clip(min=0)
+
             x_ref = x_ref.view(x_ref.shape[0], x_ref.shape[1], self.config.in_num_freqs, self.psd_freqs_per_freq, x_ref.shape[3])
             x_ref = x_ref.permute(0, 3, 1, 2, 4).contiguous(memory_format=torch.channels_last_3d).to(dtype=torch.bfloat16)
 

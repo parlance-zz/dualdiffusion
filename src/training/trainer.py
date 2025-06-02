@@ -37,7 +37,6 @@ from dataclasses import dataclass
 from traceback import format_exception
 
 import torch
-import torch.utils.checkpoint
 from torch.optim.lr_scheduler import LambdaLR
 from accelerate import Accelerator
 from accelerate.logging import get_logger
@@ -45,7 +44,7 @@ from accelerate.utils import ProjectConfiguration, GradientAccumulationPlugin, s
 from tqdm.auto import tqdm
 
 from pipelines.dual_diffusion_pipeline import DualDiffusionPipeline
-from utils.dual_diffusion_utils import dict_str
+from utils.dual_diffusion_utils import dict_str, get_cuda_gpu_stats
 from utils.compare_dirs import compare_dirs
 from training.module_trainers.module_trainer import ModuleTrainer, ModuleTrainerConfig
 from training.ema import EMA_Manager
@@ -55,7 +54,7 @@ from modules.module import DualDiffusionModule
 
 class TrainLogger():
 
-    def __init__(self, accelerator: Accelerator) -> None:
+    def __init__(self, accelerator: Optional[Accelerator] = None) -> None:
 
         self.accelerator = accelerator
         self.channels: dict[str, float] = {}
@@ -68,7 +67,10 @@ class TrainLogger():
     @torch.inference_mode()
     def add_log(self, key: str, value: Union[torch.Tensor, float]) -> None:
         if torch.is_tensor(value):
-            value = self.accelerator.gather(value.detach()).mean().item()
+            if self.accelerator is not None:
+                value = self.accelerator.gather(value.detach()).mean().item()
+            else:
+                value = value.detach().mean().item()
 
         if key in self.channels:
             self.channels[key] += value
@@ -160,7 +162,8 @@ class DualDiffusionTrainerConfig:
     enable_bf16_reduction_in_sdp: bool  = False
     enable_anomaly_detection: bool      = False
     enable_model_compilation: bool      = True
-    enable_channels_last: bool          = True
+    enable_debug_mode: bool             = False
+    enable_cuda_gpu_stats_logging: bool = True
     compile_params: Optional[dict]      = None
 
     @staticmethod
@@ -331,9 +334,13 @@ class DualDiffusionTrainer:
                 self.modules.append(module)
                 self.module_classes.append(type(module))
 
-        self.sample_shape: tuple = self.pipeline.get_sample_shape(bsz=self.config.device_batch_size)
-        self.validation_sample_shape: tuple = self.pipeline.get_sample_shape(bsz=self.config.validation_device_batch_size)
-        if hasattr(self.pipeline, "vae") or hasattr(self.pipeline, "dae"):
+        if self.config.enable_debug_mode == True:
+            self.config.device_batch_size = 2
+            self.config.validation_device_batch_size = 2
+
+        self.sample_shape: tuple = self.pipeline.get_mel_spec_shape(bsz=self.config.device_batch_size)
+        self.validation_sample_shape: tuple = self.pipeline.get_mel_spec_shape(bsz=self.config.validation_device_batch_size)
+        if hasattr(self.pipeline, "dae"):
             self.latent_shape: tuple = self.pipeline.get_latent_shape(self.sample_shape)
             self.validation_latent_shape: tuple = self.pipeline.get_latent_shape(self.validation_sample_shape)
         else:
@@ -344,17 +351,19 @@ class DualDiffusionTrainer:
         self.logger.info(f"Module trainer class: {self.config.module_trainer_class.__name__}")
         self.logger.info(f"Model metadata: {dict_str(self.pipeline.model_metadata)}")
 
-        if self.config.enable_channels_last == True:
-            for module in self.modules:
-                module.to(memory_format=torch.channels_last)
-
         self.modules = self.accelerator.prepare(*self.modules)
         if not isinstance(self.modules, (tuple, list)): self.modules = [self.modules]
 
         for module in self.modules:
             if hasattr(module, "normalize_weights"):
                 module.normalize_weights()
+    
+    def get_train_module(self, module_name: str) -> DualDiffusionModule:
+        if module_name not in self.config.train_modules:
+            return None
         
+        return self.modules[self.config.train_modules.index(module_name)]
+
     def init_ema_manager(self) -> None:
         
         self.config.emas = self.config.emas or {}
@@ -551,6 +560,9 @@ class DualDiffusionTrainer:
    
     def init_dataloader(self) -> None:
         
+        if self.config.enable_debug_mode == True:
+            self.config.dataloader.load_splits = ["debug"]
+
         self.local_batch_size = self.config.device_batch_size * self.config.gradient_accumulation_steps
         self.total_batch_size = self.local_batch_size * self.accelerator.num_processes
         self.validation_local_batch_size = self.config.validation_device_batch_size * self.config.validation_accumulation_steps
@@ -558,7 +570,7 @@ class DualDiffusionTrainer:
 
         dataset_config = DatasetConfig(
             data_dir=config.DATASET_PATH,
-            sample_crop_width=self.pipeline.format.sample_raw_crop_width(),
+            raw_crop_width=self.pipeline.format.get_raw_crop_width(),
             latents_crop_width=self.latent_shape[-1] if self.latent_shape is not None else 0,
             num_proc=self.config.dataloader.dataset_num_proc,
             load_datatypes=self.config.dataloader.load_datatypes,
@@ -568,8 +580,9 @@ class DualDiffusionTrainer:
         )
         self.dataset = DualDiffusionDataset(dataset_config, self.pipeline.format.config, self.pipeline.embedding.config)
 
+        self.train_split_name = self.config.dataloader.load_splits[0]
         self.train_dataloader = torch.utils.data.DataLoader(
-            self.dataset["train"], shuffle=True,
+            self.dataset[self.train_split_name], shuffle=True,
             batch_size=self.local_batch_size,
             num_workers=self.config.dataloader.dataloader_num_workers or 0,
             pin_memory=self.config.dataloader.pin_memory,
@@ -584,7 +597,7 @@ class DualDiffusionTrainer:
             self.validation_dataloader = None
 
         self.logger.info(f"Using dataset path {config.DATASET_PATH} with {dataset_config.num_proc or 1} dataset processes)")
-        self.logger.info(f"  {len(self.dataset['train'])} train samples ({self.dataset.num_filtered_samples['train']} filtered)")
+        self.logger.info(f"  {len(self.dataset[self.train_split_name])} samples ({self.dataset.num_filtered_samples[self.train_split_name]} filtered) in split '{self.train_split_name}'")
         if self.config.num_validation_epochs > 0:
             self.logger.info(f"  {len(self.dataset['validation'])} validation samples ({self.dataset.num_filtered_samples['validation']} filtered)")
         self.logger.info(f"Using train dataloader with {self.config.dataloader.dataloader_num_workers or 0} workers")
@@ -595,6 +608,11 @@ class DualDiffusionTrainer:
 
     def init_torch_compile(self) -> None:
 
+        if self.config.enable_debug_mode == True:
+            self.config.enable_model_compilation = False
+            self.logger.info("Debug mode enabled - skipping model compilation")
+            return
+        
         if self.config.enable_model_compilation:
             if platform.system() == "Linux":
                 self.config.compile_params = self.config.compile_params or {"fullgraph": True, "dynamic": False}
@@ -735,7 +753,7 @@ class DualDiffusionTrainer:
     def train(self) -> None:
 
         self.logger.info("***** Running training *****")
-        self.logger.info(f"  Num examples = {len(self.dataset['train'])}")
+        self.logger.info(f"  Num examples = {len(self.dataset[self.train_split_name])}")
         self.logger.info(f"  Instantaneous batch size per device = {self.config.device_batch_size}")
         self.logger.info(f"  Gradient accumulation steps = {self.config.gradient_accumulation_steps}")
         self.logger.info(f"  Total train batch size (w. parallel, distributed & accumulation) = {self.total_batch_size}")
@@ -810,7 +828,9 @@ class DualDiffusionTrainer:
         for local_batch in (self.resume_dataloader or self.train_dataloader):
             
             train_logger.clear() # accumulates per-batch logs / statistics
-            self.module_trainer.init_batch()
+            batch_init_logs = self.module_trainer.init_batch()
+            if batch_init_logs is not None:
+                train_logger.add_logs(batch_init_logs)
             
             for self.accum_step in range(self.config.gradient_accumulation_steps):
 
@@ -888,14 +908,26 @@ class DualDiffusionTrainer:
                     self.persistent_state.total_train_hours += (
                         datetime.now() - last_sync_time).total_seconds() / 3600
                     train_logger.add_logs({
-                        "stats/total_train_hours": self.persistent_state.total_train_hours})
+                        "train_stats/total_train_hours": self.persistent_state.total_train_hours})
                 last_sync_time = datetime.now()
 
                 train_logger.add_logs({
-                    "stats/total_samples_processed": self.persistent_state.total_samples_processed})
+                    "train_stats/total_samples_processed": self.persistent_state.total_samples_processed})
                 if progress_bar.format_dict["rate"] is not None:
                     train_logger.add_logs({
-                        "stats/it_per_second": progress_bar.format_dict["rate"]})
+                        "train_stats/it_per_second": progress_bar.format_dict["rate"]})
+                
+                # optionally, log cuda gpu stats (every 25th step to avoid overhead)
+                if self.config.enable_cuda_gpu_stats_logging == True and self.global_step % 25 == 0:
+                    try:
+                        for idx, stats in enumerate(get_cuda_gpu_stats()):
+                            train_logger.add_logs({
+                                f"gpu_stats/temp_{idx}": stats["temperature_C"],
+                                f"gpu_stats/power_{idx}": stats["power_W"],
+                                f"gpu_stats/vram_{idx}": stats["vram_used_MB"] / 1024,
+                            })
+                    except Exception as e:
+                        self.logger.warning(f"Error logging CUDA GPU stats: {e}")
 
                 # update emas and normalize weights
                 for ema_manager in self.ema_managers:
@@ -909,8 +941,11 @@ class DualDiffusionTrainer:
                         name, beta in self.ema_managers[0].get_ema_betas().items()})
                 
                 # update logs
+                batch_finish_logs = self.module_trainer.finish_batch()
+                if batch_finish_logs is not None:
+                    train_logger.add_logs(batch_finish_logs)
+                
                 train_logger.add_logs({"learn_rate": self.lr_scheduler.get_last_lr()[0]})
-                train_logger.add_logs(self.module_trainer.finish_batch())
                 logs = train_logger.get_logs()
                 self.accelerator.log(logs, step=self.global_step)
 

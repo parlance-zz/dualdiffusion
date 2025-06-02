@@ -85,7 +85,7 @@ class DualDiffusionDAE(DualDiffusionModule, ABC):
         pass
 
     @abstractmethod
-    def get_sample_shape(self, latent_shape: Union[torch.Size, tuple[int, int, int, int]]) -> torch.Size:
+    def get_mel_spec_shape(self, latent_shape: Union[torch.Size, tuple[int, int, int, int]]) -> torch.Size:
         pass
 
     @abstractmethod

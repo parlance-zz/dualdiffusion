@@ -24,6 +24,7 @@ from typing import Optional
 
 import torch
 
+
 class WindowFunction:
 
     @staticmethod
@@ -33,23 +34,27 @@ class WindowFunction:
 
     @staticmethod
     def kaiser(window_len: int, beta: float = 4*torch.pi, device: Optional[torch.device] = None) -> torch.Tensor:
-        alpha = (window_len - 1) / 2
-        n = torch.arange(window_len, device=device)
-        return (torch.special.i0(beta * torch.sqrt(1 - ((n - alpha) / alpha).square()))
-                / torch.special.i0(torch.tensor(beta)))
+        return torch.kaiser_window(window_len, beta=beta, periodic=False, device=device)
 
     @staticmethod
-    def kaiser_derived(window_len:int , beta: float = 4*torch.pi, device: Optional[torch.device] = None) -> torch.Tensor:
+    def kaiser_bessel_derived(window_len: int, beta: float = 4, device: Optional[torch.device] = None) -> torch.Tensor:
+        """
+        Generate a KBD (Kaiser-Bessel Derived) window of length N with given beta.
+        
+        Parameters:
+            N (int): Length of the window (must be even).
+            beta (float): Beta parameter (e.g., 4.0 or 6.0 — not multiplied by π).
+        
+        Returns:
+            np.ndarray: KBD window of length N.
+        """
+        if window_len % 2 != 0:
+            raise ValueError("Window length N must be even.")
 
-        kaiserw = WindowFunction.kaiser(window_len // 2 + 1, beta, device)
-        csum = torch.cumsum(kaiserw, dim=0)
-        halfw = torch.sqrt(csum[:-1] / csum[-1])
-
-        w = torch.zeros(window_len, device=device)
-        w[:window_len//2] = halfw
-        w[-window_len//2:] = halfw.flip(0)
-
-        return w
+        kaiser_win = torch.kaiser_window(window_len // 2 + 1, beta=beta, periodic=False)
+        cumulative_sum = torch.cumsum(kaiser_win[:-1] ** 2, dim=0)
+        kbd_half = torch.sqrt(cumulative_sum / cumulative_sum[-1])
+        return torch.cat((kbd_half, kbd_half.flip(0)), dim=0).to(device=device)
 
     @staticmethod
     def hann_poisson(window_len: int, alpha: float = 2, device: Optional[torch.device] = None) -> torch.Tensor:

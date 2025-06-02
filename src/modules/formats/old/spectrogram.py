@@ -26,8 +26,8 @@ from dataclasses import dataclass
 import torch
 import torchaudio
 
-from .format import DualDiffusionFormat, DualDiffusionFormatConfig
-from .frequency_scale import FrequencyScale, get_mel_density
+from modules.formats.format import DualDiffusionFormat, DualDiffusionFormatConfig
+from modules.formats.frequency_scale import FrequencyScale, get_mel_density
 from .phase_recovery import PhaseRecovery
 
 @dataclass()

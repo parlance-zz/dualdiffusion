@@ -1,23 +1,31 @@
 {
-    "model_name": "edm2_ddec_mclt_b2a",
+    "model_name": "edm2_dae_d3a",
     "model_load_options": {
         "torch_dtype": "bfloat16",
         "device": "cuda",
         "load_checkpoints": true,
-        "load_emas": true,
-        "compile_options": null
+        "load_emas": {
+            "ddec": "ema_std0.1.safetensors"
+        },
+        "compile_options": {
+            "fullgraph": true,
+            "dynamic": false
+        }
     },
-    "length": 1024000,
+    "length": 1408768,
     "latents_tiled_encode": false,
     "latents_tiled_max_chunk_size": 6144,
     "latents_tiled_overlap": 256,
-    "output_lufs": -18.5,
-    "num_fgla_iters": 300,
-    "synthesis": "ddec",
-    "add_random_test_samples": 6,
+    "latents_img_use_pca": true,
+    "latents_save_full_res": false,
+    "output_lufs": -20,
+    "dae_bypass": false,
+    "ddec_output": true,
+    "xref_output": false,
+    "add_random_test_samples": 0,
     "copy_sample_source_files": true,
-    "fgla_sample_source_files": false,
     "test_samples": [
+        "psf/Karyujou/karyujou_01.psf.flac",
         "switch/Arcaea/_t_songs_ignotus.ogg.flac",
         "dsf/Metropolis Street Racer Prototype/file_15.adx.flac",
         "psf3/Iron Man/_t_! movies_HUB_05_000001C2.adx.flac",

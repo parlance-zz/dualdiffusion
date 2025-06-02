@@ -21,7 +21,7 @@
 # SOFTWARE.
 
 from dataclasses import dataclass
-from typing import Optional, Type
+from typing import Optional, Type, Union
 from abc import ABC, abstractmethod
 
 import torch
@@ -35,13 +35,11 @@ class ModuleTrainer(ABC):
     config_class: Optional[Type[ModuleTrainerConfig]] = None
 
     @abstractmethod
-    def init_batch(self, validation: bool = False) -> None:
+    def train_batch(self, batch: dict) -> dict[str, Union[torch.Tensor, float]]:
         pass
     
-    @abstractmethod
-    def train_batch(self, batch: dict) -> dict[str, torch.Tensor]:
-        pass
+    def init_batch(self, validation: bool = False) -> Optional[dict[str, Union[torch.Tensor, float]]]:
+        return None
     
-    @abstractmethod
-    def finish_batch(self) -> dict[str, torch.Tensor]:
-        pass
+    def finish_batch(self) -> Optional[dict[str, Union[torch.Tensor, float]]]:
+        return None

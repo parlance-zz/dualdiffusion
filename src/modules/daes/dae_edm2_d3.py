@@ -36,9 +36,51 @@ from typing import Union, Literal
 import torch
 
 from modules.daes.dae import DualDiffusionDAE, DualDiffusionDAEConfig
-from modules.mp_tools import mp_silu, mp_sum, normalize, MPConv3D, resample_3d, wavelet_decompose2d, wavelet_recompose2d
+from modules.mp_tools import mp_silu, mp_sum, normalize, resample_3d, wavelet_decompose2d, wavelet_recompose2d
 from utils.dual_diffusion_utils import tensor_4d_to_5d, tensor_5d_to_4d
 
+
+class MPConv3D(torch.nn.Module):
+
+    def __init__(self, in_channels: int, out_channels: int,
+                 kernel: tuple[int, int], groups: int = 1, stride: int = 1,
+                 disable_weight_norm: bool = False) -> None:
+        
+        super().__init__()
+
+        self.in_channels = in_channels
+        self.out_channels = out_channels
+        self.groups = groups
+        self.stride = stride
+        self.disable_weight_norm = disable_weight_norm
+        
+        self.weight = torch.nn.Parameter(torch.randn(out_channels, in_channels // groups, *kernel))
+
+    def forward(self, x: torch.Tensor, gain: Union[float, torch.Tensor] = 1.) -> torch.Tensor:
+        
+        w = self.weight.float()
+        if self.training == True and self.disable_weight_norm == False:
+            w = normalize(w, dim=1) # traditional weight normalization
+            
+        w = w * (gain / w[0].numel()**0.5) # magnitude-preserving scaling
+        w = w.to(x.dtype)
+
+        if w.ndim == 2:
+            return x @ w.t()
+        
+        if w.ndim == 5:
+            if w.shape[-3] == 2:
+                x = torch.cat((x, x[:, :, 0:1]), dim=2)
+            elif w.shape[-3] == 3:
+                return torch.nn.functional.conv3d(x, w, padding=(w.shape[-3]//2, w.shape[-2]//2, w.shape[-1]//2), groups=self.groups, stride=self.stride)
+            return torch.nn.functional.conv3d(x, w, padding=(0, w.shape[-2]//2, w.shape[-1]//2), groups=self.groups, stride=self.stride)
+        else:
+            return torch.nn.functional.conv2d(x, w, padding=(w.shape[-2]//2, w.shape[-1]//2), groups=self.groups, stride=self.stride)
+
+    @torch.no_grad()
+    def normalize_weights(self) -> None:
+        if self.disable_weight_norm == False:
+            self.weight.copy_(normalize(self.weight, dim=1))
 
 @dataclass
 class DAE_D3_Config(DualDiffusionDAEConfig):
@@ -268,15 +310,15 @@ class DAE_D3(DualDiffusionDAE):
     def get_recon_loss_logvar(self) -> torch.Tensor:
         return self.recon_loss_logvar
     
-    def get_latent_shape(self, sample_shape: Union[torch.Size, tuple[int, int, int, int]]) -> torch.Size:
-        if len(sample_shape) == 4:
-            return (sample_shape[0], self.config.latent_channels * 2,
-                    sample_shape[2] // 2 ** (self.num_levels-1),
-                    sample_shape[3] // 2 ** (self.num_levels-1))
+    def get_latent_shape(self, mel_spec_shape: Union[torch.Size, tuple[int, int, int, int]]) -> torch.Size:
+        if len(mel_spec_shape) == 4:
+            return (mel_spec_shape[0], self.config.latent_channels * 2,
+                    mel_spec_shape[2] // 2 ** (self.num_levels-1),
+                    mel_spec_shape[3] // 2 ** (self.num_levels-1))
         else:
-            raise ValueError(f"Invalid sample shape: {sample_shape}")
+            raise ValueError(f"Invalid sample shape: {mel_spec_shape}")
         
-    def get_sample_shape(self, latent_shape: Union[torch.Size, tuple[int, int, int, int]]) -> torch.Size:
+    def get_mel_spec_shape(self, latent_shape: Union[torch.Size, tuple[int, int, int, int]]) -> torch.Size:
         if len(latent_shape) == 4:
             return (latent_shape[0], 2,
                     latent_shape[2] * 2 ** (self.num_levels-1),
@@ -284,7 +326,9 @@ class DAE_D3(DualDiffusionDAE):
         else:
             raise ValueError(f"Invalid latent shape: {latent_shape}")
         
-    def encode(self, x: torch.Tensor, embeddings: torch.Tensor, normalize_latents: bool = True) -> torch.Tensor:
+    def encode(self, x: torch.Tensor, embeddings: torch.Tensor, training: bool = False) -> torch.Tensor:
+        
+        x = x - 2.73 # ms_mdct_dual_format conversion fudge factor
 
         x = tensor_4d_to_5d(x, num_channels=1).to(memory_format=torch.channels_last_3d)
         x = torch.cat((x, torch.ones_like(x[:, :1])), dim=1)
@@ -297,12 +341,13 @@ class DAE_D3(DualDiffusionDAE):
         
         latents = tensor_5d_to_4d(self.conv_latents_out(x)).to(memory_format=torch.channels_last)
         latents = torch.nn.functional.avg_pool2d(latents, self.downsample_ratio)
-        if normalize_latents == True:
-            return normalize(latents)
-        else:
-            return latents
 
-    def decode(self, x: torch.Tensor, embeddings: torch.Tensor) -> torch.Tensor:
+        if training == True:
+            return latents
+        else:
+            return normalize(latents)
+
+    def decode(self, x: torch.Tensor, embeddings: torch.Tensor, training: bool = False) -> torch.Tensor:
 
         x = tensor_4d_to_5d(x, num_channels=self.config.latent_channels).to(memory_format=torch.channels_last_3d)
         x = torch.cat((x, torch.ones_like(x[:, :1])), dim=1)
@@ -316,7 +361,7 @@ class DAE_D3(DualDiffusionDAE):
 
         # amplify high frequency details a bit
         dec_out = tensor_5d_to_4d(self.conv_out(x, gain=self.out_gain)).to(memory_format=torch.channels_last)
-        if self.training == False and len(self.config.wavelet_rescale_factors) > 0: 
+        if training == False and len(self.config.wavelet_rescale_factors) > 0: 
             
             wavelets = wavelet_decompose2d(dec_out, num_levels=len(self.config.wavelet_rescale_factors))
             for i in range(len(self.config.wavelet_rescale_factors)):
@@ -324,14 +369,14 @@ class DAE_D3(DualDiffusionDAE):
 
             dec_out = wavelet_recompose2d(wavelets)
 
+        dec_out = dec_out + 2.73 # ms_mdct_dual_format conversion fudge factor
+
         return dec_out
     
-    def forward(self, samples: torch.Tensor, dae_embeddings: torch.Tensor, add_latents_noise: float = 0) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    def forward(self, samples: torch.Tensor, dae_embeddings: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         
-        pre_norm_latents = self.encode(samples, dae_embeddings, normalize_latents=False)
+        pre_norm_latents = self.encode(samples, dae_embeddings, training=True)
         latents = normalize(pre_norm_latents)
-        if add_latents_noise > 0:
-            latents = normalize(latents + torch.randn_like(latents) * add_latents_noise)
         
         reconstructed = self.decode(latents, dae_embeddings)
         return latents, reconstructed, pre_norm_latents

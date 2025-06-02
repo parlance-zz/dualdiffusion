@@ -37,7 +37,7 @@ import torch
 
 from modules.unets.unet import DualDiffusionUNet, DualDiffusionUNetConfig
 from modules.mp_tools import MPConv, MPFourier, mp_cat, mp_silu, mp_sum, normalize, resample_2d
-from modules.formats.format import DualDiffusionFormat
+from modules.formats.ms_mdct_dual import MS_MDCT_DualFormat
 
 @dataclass
 class UNetConfig(DualDiffusionUNetConfig):
@@ -241,9 +241,15 @@ class UNet(DualDiffusionUNet):
         return latent_shape[0:2] + ((latent_shape[2] // 2**(self.num_levels-1)) * 2**(self.num_levels-1),
                                     (latent_shape[3] // 2**(self.num_levels-1)) * 2**(self.num_levels-1))
 
+    @torch.no_grad()
+    def get_ln_freqs(self, format: MS_MDCT_DualFormat, x: torch.Tensor) -> torch.Tensor:        
+        ln_freqs = format.ms_freq_scale.get_unscaled(x.shape[2] + 2, device=x.device)[1:-1].log2()
+        ln_freqs = ln_freqs.view(1, 1,-1, 1).repeat(x.shape[0], 1, 1, x.shape[3])
+        return ((ln_freqs - ln_freqs.mean()) / ln_freqs.std()).to(x.dtype)
+    
     def forward(self, x_in: torch.Tensor,
                 sigma: torch.Tensor,
-                format: DualDiffusionFormat,
+                format: MS_MDCT_DualFormat,
                 embeddings: torch.Tensor,
                 x_ref: Optional[torch.Tensor] = None) -> torch.Tensor:
 
@@ -264,7 +270,7 @@ class UNet(DualDiffusionUNet):
         emb = mp_silu(emb).unsqueeze(2).unsqueeze(3).to(x.dtype)
 
         # Encoder.
-        x = torch.cat((x, torch.ones_like(x[:, :1]), format.get_ln_freqs(x)), dim=1)
+        x = torch.cat((x, torch.ones_like(x[:, :1]), self.get_ln_freqs(format, x)), dim=1)
 
         skips = []
         for name, block in self.enc.items():
