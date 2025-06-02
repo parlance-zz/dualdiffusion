@@ -203,7 +203,7 @@ class MSSLoss2D:
                step: int, window: Optional[torch.Tensor] = None) -> torch.Tensor:
         
         padding = block_width // 2
-        x = torch.nn.functional.pad(x, (0, 0, padding, padding), mode="reflect")
+        x = torch.nn.functional.pad(x, (padding, padding, padding, padding), mode="reflect")
         x = x.unfold(2, block_width, step).unfold(3, block_width, step)
 
         if window is not None:
