@@ -61,6 +61,7 @@ def freeze_module(optimizer: torch.optim.Optimizer, module_to_freeze: torch.nn.M
 @dataclass
 class DAETrainer_J1_Config(ModuleTrainerConfig):
 
+    equivariance_dropout: float   = 0
     latents_kl_loss_weight: float = 3e-2
     hidden_kl_loss_weight: float = 2e-3
     kl_warmup_steps: int = 250
@@ -119,6 +120,7 @@ class DAETrainer_J1(ModuleTrainer):
                 self.wavelet_loss.compile(**trainer.config.compile_params)
 
         self.logger.info("Training DAE model:")
+        self.logger.info(f"Equivariance dropout: {self.config.equivariance_dropout}")
         self.logger.info(f"Latents KL loss weight: {self.config.latents_kl_loss_weight}")
         self.logger.info(f"Hidden KL loss weight: {self.config.hidden_kl_loss_weight}")
         self.logger.info(f"KL warmup steps: {self.config.kl_warmup_steps}")
@@ -162,7 +164,8 @@ class DAETrainer_J1(ModuleTrainer):
 
         raw_audio = random_stereo_augmentation(batch["audio"])
         mel_spec = self.format.raw_to_mel_spec(raw_audio).detach()
-        latents, reconstructed, mel_spec, latents_kld, hidden_kld = self.dae(mel_spec, dae_embeddings, latents_sigma)
+        latents, reconstructed, mel_spec, latents_kld, hidden_kld = self.dae(
+            mel_spec, dae_embeddings, latents_sigma, self.config.equivariance_dropout)
 
         point_loss_weight = self.config.point_loss_weight
         if self.config.point_loss_warmup_steps > 0:
