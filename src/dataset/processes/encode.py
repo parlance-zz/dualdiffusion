@@ -33,13 +33,13 @@ import torchaudio
 import safetensors.torch as safetensors
 
 from pipelines.dual_diffusion_pipeline import DualDiffusionPipeline
-from modules.formats.spectrogram import SpectrogramFormat, SpectrogramFormatConfig
+from modules.formats.ms_mdct_dual import MS_MDCT_DualFormat, MS_MDCT_DualFormatConfig
 from modules.embeddings.embedding import DualDiffusionEmbedding
 from modules.daes.dae import DualDiffusionDAE
 from dataset.dataset_processor import DatasetProcessor, DatasetProcessStage
 from utils.dual_diffusion_utils import (
     get_audio_metadata, load_audio, get_audio_info, dict_str,
-    save_safetensors, load_safetensors_ex, normalize
+    save_safetensors, load_safetensors_ex, normalize, tensor_info_str
 )
 
 
@@ -206,12 +206,12 @@ class EncodeProcess(DatasetProcessStage):
     def limit_output_queue_size(self) -> bool:
         return True
     
-    def get_pitch_augmentation_format(self, shift_semitones: float) -> SpectrogramFormat:
+    def get_pitch_augmentation_format(self, shift_semitones: float) -> MS_MDCT_DualFormat:
         shift_rate = 2 ** (shift_semitones / 12)
         augmented_config = deepcopy(self.format_config)
         augmented_config.min_frequency *= shift_rate
         augmented_config.max_frequency *= shift_rate
-        return SpectrogramFormat(augmented_config)
+        return MS_MDCT_DualFormat(augmented_config)
 
     @torch.inference_mode()
     def start_process(self):
@@ -224,7 +224,7 @@ class EncodeProcess(DatasetProcessStage):
             )#load_emas={"dae": self.process_config.dae_ema})
         
         self.logger.info(f"Model metadata:\n{dict_str(self.pipeline.model_metadata)}")
-        self.format: SpectrogramFormat = self.pipeline.format
+        self.format: MS_MDCT_DualFormat = self.pipeline.format
         self.embedding: DualDiffusionEmbedding = self.pipeline.embedding
         self.dae: DualDiffusionDAE = self.pipeline.dae
 
@@ -239,11 +239,11 @@ class EncodeProcess(DatasetProcessStage):
         
         # encode latents setup
         
-        self.format_config: SpectrogramFormatConfig = self.format.config
+        self.format_config: MS_MDCT_DualFormatConfig = self.format.config
         
         num_encode_offsets = self.process_config.latents_num_time_offset_augmentations
-        self.dae_encode_offset_padding = self.format_config.hop_length * num_encode_offsets if num_encode_offsets > 0 else 0
-        self.dae_encode_offsets = [i * self.format_config.hop_length for i in range(num_encode_offsets)]
+        self.dae_encode_offset_padding = self.format_config.ms_frame_hop_length * num_encode_offsets if num_encode_offsets > 0 else 0
+        self.dae_encode_offsets = [i * self.format_config.ms_frame_hop_length for i in range(num_encode_offsets)]
         self.dae_batch_size = self.process_config.latents_batch_size
         self.dae_num_batches_per_sample = (num_encode_offsets + self.dae_batch_size - 1) // self.dae_batch_size
         self.use_tiled_encode = self.process_config.latents_tiled_encode
@@ -253,7 +253,7 @@ class EncodeProcess(DatasetProcessStage):
         pitch_shifts = self.process_config.latents_pitch_offset_augmentations
         pitch_augmentation_formats = [
             self.get_pitch_augmentation_format(shift).to(self.device) for shift in pitch_shifts]
-        self.dae_encode_formats: list[SpectrogramFormat] = [self.format] + pitch_augmentation_formats
+        self.dae_encode_formats: list[MS_MDCT_DualFormat] = [self.format] + pitch_augmentation_formats
     
     @torch.inference_mode()
     def process(self, input_dict: dict) -> Optional[Union[dict, list[dict]]]:
@@ -298,7 +298,7 @@ class EncodeProcess(DatasetProcessStage):
                     audio, sample_rate, self.format_config.sample_rate)
 
             # create raw audio augmentations
-            crop_width = self.format.sample_raw_crop_width(audio.shape[-1] - self.dae_encode_offset_padding)
+            crop_width = self.format.get_raw_crop_width(audio.shape[-1] - self.dae_encode_offset_padding)
 
             input_audio = []
             for offset in self.dae_encode_offsets:
@@ -313,7 +313,7 @@ class EncodeProcess(DatasetProcessStage):
             for format in self.dae_encode_formats:
                 for b in range(self.dae_num_batches_per_sample):
                     batch_input_raw_sample = audio[b*bsz:(b+1)*bsz]
-                    input_sample = format.raw_to_sample(batch_input_raw_sample).type(torch.bfloat16)
+                    input_sample = format.raw_to_mel_spec(batch_input_raw_sample).type(torch.bfloat16)
                     input_samples.append(input_sample)
             input_sample = torch.cat(input_samples, dim=0)
             
@@ -340,6 +340,7 @@ class EncodeProcess(DatasetProcessStage):
             assert latents["latents"].ndim == 4
             self.logger.debug(f"encoded latents shape: {latents['latents'].shape}")
             self.logger.debug(f"target latents shape: {self.pipeline.get_latent_shape(self.pipeline.get_mel_spec_shape(raw_length=crop_width))}  ({crop_width/32000:.2f}s)")
+            self.logger.debug(f"latents stats: {tensor_info_str(latents['latents'])}")
             
         elif input_dict["has_latents"] == True:
             self.logger.debug(f"existing latents: \"{safetensors_file_path}\" ({latents['latents'].shape[0]} variations)")
