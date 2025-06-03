@@ -122,7 +122,9 @@ def ms_mdct_dual_format_test() -> None:
             "raw_sample_std": raw_sample.std(),
             "raw_sample_mdct_std": raw_sample_mdct.std(),
             "mel_spec_std": mel_spec.std(),
+            "mel_spec_mean": mel_spec.mean(),
             "mel_spec_mdct_psd_std": mel_spec_mdct_psd.std(),
+            "mel_spec_mdct_psd_mean": mel_spec_mdct_psd.mean(),
             "mdct_std": mdct.std(),
             "mdct_psd_std": mdct_psd.std(),
         })

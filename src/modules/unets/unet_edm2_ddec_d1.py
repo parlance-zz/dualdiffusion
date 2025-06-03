@@ -88,26 +88,29 @@ class MPConv3D_E(torch.nn.Module):
             self.weight.copy_(normalize(self.weight))
 
 @dataclass
-class DDec_MDCT_UNet_D1_Config(DualDiffusionUNetConfig):
+class DDec_UNet_D1_Config(DualDiffusionUNetConfig):
 
     in_channels:  int = 2
     out_channels: int = 2
-    in_channels_emb: int = 1024
+    in_channels_emb: int = 0
 
-    sigma_max: float = 16
-    sigma_min: float = 0.0001
+    sigma_max: float = 14
+    sigma_min: float = 0.00008
     in_num_freqs: int = 256
-    in_psd_freqs: int = 2048
+    in_psd_freqs: int = 2048 # set to 0 for melspec ddec, otherwise num mdct psd freqs from ms_mdct_dual_format config
+
+    input_scale: Optional[float] = None
+    input_shift: Optional[float] = None
 
     model_channels: int  = 32                  # Base multiplier for the number of channels.
     logvar_channels: int = 192                 # Number of channels for training uncertainty estimation.
-    channel_mult: list[int]    = (1,2,3,4,5)   # Per-resolution multipliers for the number of channels.
-    double_midblock: bool      = True
-    midblock_attn: bool        = True
-    channel_mult_noise: Optional[int] = 5    # Multiplier for noise embedding dimensionality.
-    channel_mult_emb: Optional[int]   = 5    # Multiplier for final embedding dimensionality.
+    channel_mult: list[int]    = (1,2,3,4)     # Per-resolution multipliers for the number of channels.
+    double_midblock: bool      = False
+    midblock_attn: bool        = False
+    channel_mult_noise: Optional[int] = 6    # Multiplier for noise embedding dimensionality.
+    channel_mult_emb: Optional[int]   = 6    # Multiplier for final embedding dimensionality.
     channels_per_head: int    = 64           # Number of channels per attention head.
-    num_layers_per_block: int = 2            # Number of resnet blocks per resolution.
+    num_layers_per_block: int = 3            # Number of resnet blocks per resolution.
     label_balance: float      = 0.5          # Balance between noise embedding (0) and class embedding (1).
     concat_balance: float     = 0.5          # Balance between skip connections (0) and main path (1).
     res_balance: float        = 0.3          # Balance between main branch (0) and residual branch (1).
@@ -216,11 +219,11 @@ class Block(torch.nn.Module):
 
         return x
 
-class DDec_MDCT_UNet_D1(DualDiffusionUNet):
+class DDec_UNet_D1(DualDiffusionUNet):
 
     supports_channels_last: Union[bool, Literal["3d"]] = "3d"
 
-    def __init__(self, config: DDec_MDCT_UNet_D1_Config) -> None:
+    def __init__(self, config: DDec_UNet_D1_Config) -> None:
         super().__init__()
         self.config = config
 
@@ -239,8 +242,11 @@ class DDec_MDCT_UNet_D1(DualDiffusionUNet):
 
         self.num_levels = len(config.channel_mult)
         
-        assert config.in_psd_freqs % config.in_num_freqs == 0
-        self.psd_freqs_per_freq = config.in_psd_freqs // config.in_num_freqs
+        assert config.in_psd_freqs % config.in_num_freqs == 0 or config.in_psd_freqs == 0
+        if config.in_psd_freqs > 0:
+            self.psd_freqs_per_freq = config.in_psd_freqs // config.in_num_freqs
+        else:
+            self.psd_freqs_per_freq = config.in_channels
 
         # Embedding.
         self.emb_fourier = MPFourier(cnoise)
@@ -316,6 +322,20 @@ class DDec_MDCT_UNet_D1(DualDiffusionUNet):
         return latent_shape[0:2] + ((latent_shape[2] // 2**(self.num_levels-1)) * 2**(self.num_levels-1),
                                     (latent_shape[3] // 2**(self.num_levels-1)) * 2**(self.num_levels-1))
 
+    def scale_input(self, x: torch.Tensor) -> torch.Tensor:
+        if self.config.input_scale is not None:
+            x = x * self.config.input_scale
+        if self.config.input_shift is not None:
+            x = x + self.config.input_shift
+        return x
+    
+    def unscale_output(self, x: torch.Tensor) -> torch.Tensor:
+        if self.config.input_shift is not None:
+            x = x - self.config.input_shift
+        if self.config.input_scale is not None:
+            x = x / self.config.input_scale
+        return x
+
     def forward(self, x_in: torch.Tensor,
                 sigma: torch.Tensor,
                 format: MS_MDCT_DualFormat,
@@ -332,9 +352,13 @@ class DDec_MDCT_UNet_D1(DualDiffusionUNet):
             c_noise = (sigma.flatten().log() / 4).to(self.dtype)
 
             x = (c_in * tensor_4d_to_5d(x_in, self.config.in_channels)).to(dtype=torch.bfloat16)
- 
-            x_ref = x_ref.view(x_ref.shape[0], x_ref.shape[1], x.shape[3], self.psd_freqs_per_freq, x_ref.shape[3])
-            x_ref = x_ref.permute(0, 3, 1, 2, 4).contiguous(memory_format=torch.channels_last_3d).to(dtype=torch.bfloat16)
+
+            if self.config.in_psd_freqs > 0:
+                x_ref = x_ref.view(x_ref.shape[0], x_ref.shape[1], x.shape[3], self.psd_freqs_per_freq, x_ref.shape[3])
+                x_ref = x_ref.permute(0, 3, 1, 2, 4).contiguous(memory_format=torch.channels_last_3d).to(dtype=torch.bfloat16)
+                x_ref = x_ref * (self.config.in_channels / self.psd_freqs_per_freq)**0.5
+            else:
+                x_ref = tensor_4d_to_5d(x_ref, self.config.in_channels).to(dtype=torch.bfloat16)
 
         # Embedding.
         emb = self.emb_noise(self.emb_fourier(c_noise))
@@ -343,7 +367,6 @@ class DDec_MDCT_UNet_D1(DualDiffusionUNet):
         emb = emb.unsqueeze(-1).unsqueeze(-1).unsqueeze(-1).to(dtype=torch.bfloat16)
 
         # Encoder.
-        x_ref = x_ref * (self.config.in_channels / self.psd_freqs_per_freq)**0.5
         inputs = (x, x_ref, torch.ones_like(x[:, :1])) if self.config.add_constant_channel else (x, x_ref)
         x = torch.cat(inputs, dim=1)
 
