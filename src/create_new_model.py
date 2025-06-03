@@ -83,6 +83,7 @@ if __name__ == "__main__":
 
     model_seed = int(model_index.get("model_init_seed", 1337))
     torch.manual_seed(int(model_seed))
+    print(f"Using model seed: {model_seed}")
     print("")
 
     for module_name, module_import_dict in model_index["modules"].items():
