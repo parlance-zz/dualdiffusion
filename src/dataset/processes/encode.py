@@ -25,6 +25,7 @@ from utils import config
 from typing import Optional, Union, Literal
 from dataclasses import dataclass
 from copy import deepcopy
+from datetime import datetime
 import logging
 import os
 
@@ -59,6 +60,7 @@ class EncodeProcessConfig:
     audio_embeddings_force_overwrite: bool        = False # (re)encode and overwrite existing audio embeddings
     text_embeddings_force_overwrite: bool         = False # (re)encode and overwrite existing text embeddings
     embeddings_only: bool                         = False # only encodes audio/text embeddings and skips latents
+    ignore_modified_after: Optional[str]          = None  # if set, ignore files modified after this date (in ISO format, e.g. "2025-01-01T00:00:00")
 
 class EncodeLoad(DatasetProcessStage):
 
@@ -85,7 +87,10 @@ class EncodeLoad(DatasetProcessStage):
             logger.warning("WARNING: Force audio embeddings overwrite is enabled - existing data will be overwritten")
         if self.process_config.text_embeddings_force_overwrite == True:
             logger.warning("WARNING: Force text embeddings overwrite is enabled - existing data will be overwritten")
-        
+        if self.process_config.ignore_modified_after is not None:
+            cutoff_datetime = datetime.fromisoformat(self.process_config.ignore_modified_after)
+            logger.warning(f"WARNING: Skipping processing for files modified after: {cutoff_datetime}")
+
         logger.info(f"Encode model: {self.process_config.model}  compile: {self.process_config.compile_models}")
         if self.process_config.embeddings_only == True:
             logger.info(f"Skipping latents, encoding audio / text embeddings only")
@@ -120,6 +125,15 @@ class EncodeLoad(DatasetProcessStage):
             # check if we've already encoded anything
             safetensors_file_path = f"{os.path.splitext(file_path)[0]}.safetensors"
             if os.path.isfile(safetensors_file_path):
+                
+                # if ignore_modified_after is set, check the modified date and ignore if modified after cutoff
+                if self.process_config.ignore_modified_after is not None:
+                    cutoff_date = datetime.fromisoformat(self.process_config.ignore_modified_after)
+                    modified_date = datetime.fromtimestamp(os.path.getmtime(safetensors_file_path))
+                    if modified_date > cutoff_date:
+                        self.logger.debug(f"Skipping \"{safetensors_file_path}\" due to modified date ({modified_date})")
+                        return None
+
                 with safetensors.safe_open(safetensors_file_path, framework="pt") as f:
                     try:
                         f.get_slice("latents").get_shape()

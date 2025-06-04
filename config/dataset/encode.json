@@ -14,5 +14,6 @@
 
     "audio_embeddings_force_overwrite": false,      // (re)encode and overwrite existing audio embeddings
     "text_embeddings_force_overwrite": false,       // (re)encode and overwrite existing text embeddings
-    "embeddings_only": false                        // only encodes audio/text embeddings and skips latents
+    "embeddings_only": false,                       // only encodes audio/text embeddings and skips latents
+    "ignore_modified_after": "2025-06-01T00:00:00"  // if set, ignore files modified after this date (in ISO format, e.g. "2025-01-01T00:00:00")
 }
