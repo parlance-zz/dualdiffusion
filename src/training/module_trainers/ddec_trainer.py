@@ -44,6 +44,8 @@ def random_stereo_augmentation(x: torch.Tensor) -> torch.Tensor:
 @dataclass
 class DiffusionDecoder_Trainer_Config(UNetTrainerConfig):
 
+    add_latents_noise: float = 0.03
+
     loss_buckets_sigma_min: float = 0.00008
     loss_buckets_sigma_max: float = 14
 
@@ -93,9 +95,14 @@ class DiffusionDecoder_Trainer(UNetTrainer):
             self.logger.info("Using random stereo augmentation")
         else: self.logger.info("Random stereo augmentation is disabled")
 
-        if self.config.random_phase_augmentation == True:
-            self.logger.info("Using random phase augmentation")
-        else: self.logger.info("Random phase augmentation is disabled")
+        if self.train_mode == "ddec_mdct":
+            if self.config.random_phase_augmentation == True:
+                self.logger.info("Using random phase augmentation")
+            else: self.logger.info("Random phase augmentation is disabled")
+
+        self.logger.info(f"Crop edges: {self.config.crop_edges}")
+        if self.train_mode == "ddec_ms":
+            self.logger.info(f"Add latents noise: {self.config.add_latents_noise}")
 
         self.unet = self.ddec
         self.unet_trainer_init(crop_edges=config.crop_edges)
@@ -127,10 +134,11 @@ class DiffusionDecoder_Trainer(UNetTrainer):
             
             logs = self.unet_train_batch(mdct_samples, audio_embeddings, ref_samples)
         else:
-            latents_sigma = torch.zeros(1, device=self.dae.device, dtype=self.dae.dtype)
+            latents_sigma = torch.Tensor([self.config.add_latents_noise]).to(dtype=self.dae.dtype, device=self.dae.device)
             latents, recon_mel_spec, _, _, _ = self.dae(
                 mel_spec.to(dtype=self.dae.dtype), dae_embeddings, latents_sigma, equivariance_dropout=1)
             
+            recon_mel_spec = recon_mel_spec.float()
             mel_spec, recon_mel_spec = self.ddec.scale_input(mel_spec), self.ddec.scale_input(recon_mel_spec)
             ref_samples = recon_mel_spec.detach()
 
@@ -152,6 +160,7 @@ class DiffusionDecoder_Trainer(UNetTrainer):
             logs.update({
                 "io_stats/latents_std": latents.std(dim=(1,2,3)).detach(),
                 "io_stats/latents_mean": latents.mean(dim=(1,2,3)).detach(),
+                "io_stats/latents_sigma": latents_sigma.detach(),
             })
 
         return logs

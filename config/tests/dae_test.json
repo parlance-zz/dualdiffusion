@@ -1,11 +1,12 @@
 {
-    "model_name": "edm2_dae_d3a",
+    "model_name": "edm2_dae_j5d_ddec_ms_d1",
     "model_load_options": {
         "torch_dtype": "bfloat16",
         "device": "cuda",
         "load_checkpoints": true,
         "load_emas": {
-            "ddec": "ema_std0.1.safetensors"
+            "ddec_mdct": "ema_std0.1.safetensors",
+            "ddec_ms": "ema_std0.05.safetensors"
         },
         "compile_options": {
             "fullgraph": true,
@@ -17,12 +18,11 @@
     "latents_tiled_max_chunk_size": 6144,
     "latents_tiled_overlap": 256,
     "latents_img_use_pca": true,
-    "latents_save_full_res": false,
     "output_lufs": -20,
     "dae_bypass": false,
-    "ddec_output": true,
+    "ddec_output": false,
     "xref_output": false,
-    "add_random_test_samples": 0,
+    "add_random_test_samples": 5,
     "copy_sample_source_files": true,
     "test_samples": [
         "psf/Karyujou/karyujou_01.psf.flac",
