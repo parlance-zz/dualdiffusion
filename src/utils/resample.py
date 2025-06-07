@@ -54,7 +54,7 @@ class FilteredResample1D(torch.nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
 
-        kernel: torch.Tensor = self.kernel.float()
+        kernel: torch.Tensor = self.kernel#.float()
 
         kw = kernel[None, None, None, :].expand(x.shape[1], 1, 1, self.k_size)
         x = torch.nn.functional.conv2d(self.pad_w(x), kw, groups=x.shape[1], stride=(1,self.stride))
@@ -110,7 +110,7 @@ class FilteredResample2D(torch.nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
 
-        kernel: torch.Tensor = self.kernel.float()
+        kernel: torch.Tensor = self.kernel#.float()
 
         kw = kernel[None, None, None, :].expand(x.shape[1], 1, 1, self.k_size)
         x = torch.nn.functional.conv2d(self.pad_w(x), kw, groups=x.shape[1], stride=(1,self.stride))
