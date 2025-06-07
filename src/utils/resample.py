@@ -33,6 +33,60 @@ def _kaiser_windowed_sinc_1d(size, cutoff, beta):
     kernel = sinc * torch.kaiser_window(size, beta=beta, periodic=False)
     return kernel / kernel.sum()
 
+class FilteredResample1D(torch.nn.Module):
+
+    def __init__(self, k_size: int = 7, stride: int = 2,
+            cutoff: float = 0.5, beta: float = 1.5, gain: float = 1) -> None:
+        super().__init__()
+
+        self.k_size = k_size
+        self.stride = stride
+        self.beta = beta
+
+        self.register_buffer("kernel",
+            _kaiser_windowed_sinc_1d(k_size, cutoff, beta) * gain, persistent=False)
+
+        even = k_size % 2 == 0; hk_size = k_size // 2
+        if stride == 1:
+            self.pad_w = torch.nn.ReflectionPad2d((hk_size, hk_size - even, 0, 0))
+        else:
+            self.pad_w = torch.nn.ReflectionPad2d((hk_size - even, hk_size, 0, 0))
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+
+        kernel: torch.Tensor = self.kernel.float()
+
+        kw = kernel[None, None, None, :].expand(x.shape[1], 1, 1, self.k_size)
+        x = torch.nn.functional.conv2d(self.pad_w(x), kw, groups=x.shape[1], stride=(1,self.stride))
+
+        return x
+
+    def get_filter(self) -> torch.Tensor:
+        return self.kernel
+    
+    def get_window(self) -> torch.Tensor:
+        return torch.kaiser_window(self.k_size, beta=self.beta, periodic=False)
+
+class FilteredDownsample1D(FilteredResample1D):
+
+    def __init__(self, k_size: int = 7, beta: float = 1.5, factor: int = 2) -> None:
+        super().__init__(k_size, factor, 1/factor, beta, gain=factor)
+
+class FilteredUpsample1D(FilteredResample1D):
+
+    def __init__(self, k_size: int = 15, beta: float = 1.5, factor: int = 2) -> None:
+        super().__init__(k_size, 1, 1/factor, beta, gain=factor)
+        
+        self.factor = factor
+    
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+
+        b,c,h,w = x.shape
+        y = torch.zeros((b, c, h, w*self.factor), device=x.device, dtype=x.dtype)
+        y[..., ::self.factor] = x
+
+        return super().forward(y)
+
 class FilteredResample2D(torch.nn.Module):
 
     def __init__(self, k_size: int = 7, stride: int = 2,
@@ -72,7 +126,7 @@ class FilteredResample2D(torch.nn.Module):
     def get_window(self) -> torch.Tensor:
         window = torch.kaiser_window(self.k_size, beta=self.beta, periodic=False)
         return torch.outer(window, window)
-    
+
 class FilteredDownsample2D(FilteredResample2D):
 
     def __init__(self, k_size: int = 7, beta: float = 1.5, factor: int = 2) -> None:
