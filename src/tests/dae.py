@@ -88,9 +88,9 @@ def dae_test() -> None:
         test_samples += [sample["file_name"] for sample in random.sample(train_samples, add_random_test_samples)]
     copy_sample_source_files: bool = test_params["copy_sample_source_files"]
 
-    for filename in test_samples:   
+    for i, filename in enumerate(test_samples):
         
-        print(f"\nfile: {filename}")
+        print(f"\nfile {i+1}/{len(test_samples)}: {filename}")
         file_ext = os.path.splitext(filename)[1]
 
         file_path = os.path.join(dataset_path, filename)

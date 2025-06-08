@@ -31,7 +31,7 @@
 # SOFTWARE.
 
 from dataclasses import dataclass
-from typing import Union, Literal
+from typing import Union, Literal, Optional
 
 import torch
 
@@ -50,6 +50,7 @@ class DAE_J5_Config(DualDiffusionDAEConfig):
     in_num_freqs: int    = 256
     latent_channels: int = 4
     downsample_factor: int = 1
+    filtered_downsample: bool = True
     res_balance: float   = 0.3
 
     model_channels: int   = 32
@@ -63,10 +64,12 @@ class DAE_J5_Config(DualDiffusionDAEConfig):
     mlp_multiplier: int = 2
     mlp_groups: int     = 1
 
+    mp_conv_norm_dim: Optional[int] = None
+
 class MPConv3D_E(torch.nn.Module):
 
     def __init__(self, in_channels: int, out_channels: int, kernel: tuple[int, int, int],
-                 groups: int = 1, disable_weight_norm: bool = False) -> None:
+            groups: int = 1, disable_weight_norm: bool = False, mp_conv_norm_dim: Optional[int] = None) -> None:
         
         super().__init__()
 
@@ -74,6 +77,7 @@ class MPConv3D_E(torch.nn.Module):
         self.out_channels = out_channels
         self.groups = groups
         self.disable_weight_norm = disable_weight_norm
+        self.mp_conv_norm_dim = mp_conv_norm_dim
         
         self.weight = torch.nn.Parameter(torch.randn(out_channels, in_channels // groups, *kernel))
         if self.weight.numel() == 0:
@@ -92,7 +96,7 @@ class MPConv3D_E(torch.nn.Module):
         
         w = self.weight.float()
         if self.training == True and self.disable_weight_norm == False:
-            w = normalize(w) # traditional weight normalization
+            w = normalize(w, dim=self.mp_conv_norm_dim) # traditional weight normalization
             
         w = w * (gain / w[0].numel()**0.5) # magnitude-preserving scaling
         w = w.to(x.dtype)
@@ -106,7 +110,7 @@ class MPConv3D_E(torch.nn.Module):
     @torch.no_grad()
     def normalize_weights(self) -> None:
         if self.disable_weight_norm == False:
-            self.weight.copy_(normalize(self.weight))
+            self.weight.copy_(normalize(self.weight, dim=self.mp_conv_norm_dim))
 
 class Block(torch.nn.Module):
 
@@ -122,6 +126,7 @@ class Block(torch.nn.Module):
         mlp_multiplier: int    = 2,        # Multiplier for the number of channels in the MLP.
         mlp_groups: int        = 1,        # Number of groups for the MLP.
         kernel: tuple[int, int, int] = (2,3,3),   # Kernel size for the convolutional layers.
+        mp_conv_norm_dim: Optional[int] = None,  # Dimension for weight normalization in MPConv3D_E.
     ) -> None:
         super().__init__()
 
@@ -135,18 +140,19 @@ class Block(torch.nn.Module):
         self.kernel = kernel
 
         self.conv_res0 = MPConv3D_E(in_channels, out_channels * mlp_multiplier,
-                                    kernel=kernel, groups=mlp_groups)
+            kernel=kernel, groups=mlp_groups, mp_conv_norm_dim=mp_conv_norm_dim)
         self.conv_res1 = MPConv3D_E(out_channels * mlp_multiplier,
-                        out_channels, kernel=kernel, groups=mlp_groups)
+            out_channels, kernel=kernel, groups=mlp_groups, mp_conv_norm_dim=mp_conv_norm_dim)
         
         if in_channels != out_channels or mlp_groups > 1:
-            self.conv_skip = MPConv3D_E(in_channels, out_channels, kernel=(1,1,1), groups=1)
+            self.conv_skip = MPConv3D_E(in_channels, out_channels, kernel=(1,1,1),
+                                        groups=1, mp_conv_norm_dim=mp_conv_norm_dim)
         else:
             self.conv_skip = None
 
         self.emb_gain = torch.nn.Parameter(torch.zeros([])) if emb_channels != 0 else None
         self.emb_linear = MPConv3D_E(emb_channels, out_channels * mlp_multiplier,
-            kernel=(1,1,1), groups=1) if emb_channels != 0 else None
+            kernel=(1,1,1), groups=1, mp_conv_norm_dim=mp_conv_norm_dim) if emb_channels != 0 else None
     
     def forward(self, x: torch.Tensor, emb: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         
@@ -185,7 +191,8 @@ class Encoder(torch.nn.Module):
 
         self.input_gain = torch.nn.Parameter(torch.ones([]))
         self.input_shift = torch.nn.Parameter(torch.zeros([]))
-        self.conv_in = MPConv3D_E(in_channels + 1, enc_channels[0], kernel=kernel)
+        self.conv_in = MPConv3D_E(in_channels + 1, enc_channels[0], kernel=kernel,
+                                  mp_conv_norm_dim=block_kwargs["mp_conv_norm_dim"])
 
         self.enc = torch.nn.ModuleDict()
         cout = enc_channels[0]
@@ -206,7 +213,8 @@ class Encoder(torch.nn.Module):
 
         self.output_gain = torch.nn.Parameter(torch.ones([]))
         self.output_shift = torch.nn.Parameter(torch.zeros([]))
-        self.conv_out = MPConv3D_E(enc_channels[-1], latent_channels, kernel=kernel)
+        self.conv_out = MPConv3D_E(enc_channels[-1], latent_channels,
+            kernel=kernel, mp_conv_norm_dim=block_kwargs["mp_conv_norm_dim"])
 
     def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         
@@ -221,7 +229,7 @@ class Encoder(torch.nn.Module):
 
         x = self.conv_out(x, gain=self.output_gain) + self.output_shift
         return x, hidden_kld
-    
+
 class DAE_J5(DualDiffusionDAE):
 
     supports_channels_last: Union[bool, Literal["3d"]] = "3d"
@@ -232,7 +240,8 @@ class DAE_J5(DualDiffusionDAE):
 
         block_kwargs = {"mlp_multiplier": config.mlp_multiplier,
                         "mlp_groups": config.mlp_groups,
-                        "res_balance": config.res_balance}
+                        "res_balance": config.res_balance,
+                        "mp_conv_norm_dim": config.mp_conv_norm_dim}
         
         enc_channels = [config.model_channels * m for m in config.channel_mult_enc]
         dec_channels = [config.model_channels * m for m in config.channel_mult_dec]
@@ -246,7 +255,8 @@ class DAE_J5(DualDiffusionDAE):
 
         # embedding
         if cemb > 0:
-            self.emb_label = MPConv3D_E(config.in_channels_emb, cemb, kernel=())
+            self.emb_label = MPConv3D_E(config.in_channels_emb, cemb, kernel=(),
+                                        mp_conv_norm_dim=config.mp_conv_norm_dim)
             self.emb_gain = torch.nn.Parameter(torch.zeros([]))
             self.emb_dim = cemb
         else:
@@ -265,7 +275,7 @@ class DAE_J5(DualDiffusionDAE):
         # encoder
         self.encoder = Encoder(config.in_channels, enc_channels, config.latent_channels,
             config.num_enc_layers_per_block, block_kwargs, kernel=config.kernel_enc)
-
+        
         beta = 3.437; k_size = 23; factor = 2
         self.downsample = FilteredDownsample2D(k_size=k_size, beta=beta, factor=factor)
         self.upsample = FilteredUpsample2D(k_size=k_size*factor+k_size%factor, beta=beta, factor=factor)
@@ -273,7 +283,8 @@ class DAE_J5(DualDiffusionDAE):
         # decoder
         self.input_gain = torch.nn.Parameter(torch.ones([]))
         self.input_shift = torch.nn.Parameter(torch.zeros([]))
-        self.latents_conv_in = MPConv3D_E(config.latent_channels + 1, dec_channels[-1], kernel=config.kernel_dec)
+        self.latents_conv_in = MPConv3D_E(config.latent_channels + 1, dec_channels[-1],
+            kernel=config.kernel_dec,  mp_conv_norm_dim=config.mp_conv_norm_dim)
 
         self.dec = torch.nn.ModuleDict()
         cin = dec_channels[-1]
@@ -294,7 +305,8 @@ class DAE_J5(DualDiffusionDAE):
 
         self.output_gain = torch.nn.Parameter(torch.ones([]))
         self.output_shift = torch.nn.Parameter(torch.zeros([]))
-        self.conv_out = MPConv3D_E(cout, self.config.out_channels, kernel=config.kernel_dec)
+        self.conv_out = MPConv3D_E(cout, self.config.out_channels,
+            kernel=config.kernel_dec, mp_conv_norm_dim=config.mp_conv_norm_dim)
 
     def get_embeddings(self, emb_in: torch.Tensor) -> torch.Tensor:
         if self.emb_label is not None:
@@ -327,7 +339,8 @@ class DAE_J5(DualDiffusionDAE):
         latents = tensor_5d_to_4d(x)
 
         if self.config.downsample_factor > 1:
-            latents = lowpass_2d(latents, blur_width=2 * self.config.downsample_factor)
+            if self.config.filtered_downsample == True:
+                latents = lowpass_2d(latents, blur_width=2 * self.config.downsample_factor)
             latents = torch.nn.functional.avg_pool2d(latents, kernel_size=self.config.downsample_factor)
 
         if training == False:
