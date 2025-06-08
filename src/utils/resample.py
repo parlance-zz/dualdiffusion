@@ -70,7 +70,7 @@ class FilteredResample1D(torch.nn.Module):
 class FilteredDownsample1D(FilteredResample1D):
 
     def __init__(self, k_size: int = 7, beta: float = 1.5, factor: int = 2) -> None:
-        super().__init__(k_size, factor, 1/factor, beta, gain=factor)
+        super().__init__(k_size, factor, 1/factor, beta, gain=factor**0.5)
 
 class FilteredUpsample1D(FilteredResample1D):
 
@@ -244,6 +244,14 @@ if __name__ == "__main__":
     beta = 3.437
     k_size = 23
     factor = 2
+
+    downsample = FilteredDownsample1D(k_size=k_size, beta=beta, factor=factor).cuda().to(dtype=torch.bfloat16)
+    upsample = FilteredUpsample1D(k_size=k_size*factor+k_size%factor, beta=beta, factor=factor).cuda().to(dtype=torch.bfloat16)
+
+    test_data = torch.randn((1, 8, 2, 65536), device="cuda", dtype=torch.bfloat16)
+    print(downsample(test_data).std(), downsample(downsample(test_data)).std())
+    print(upsample(test_data).std(), upsample(upsample(test_data)).std())
+    exit()
 
     downsample = FilteredDownsample2D(k_size=k_size, beta=beta, factor=factor).cuda()
     upsample = FilteredUpsample2D(k_size=k_size*factor+k_size%factor, beta=beta, factor=factor).cuda()
