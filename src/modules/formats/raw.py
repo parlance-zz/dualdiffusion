@@ -55,6 +55,10 @@ class RawFormat(DualDiffusionFormat):
         raw_length = raw_length or self.config.default_raw_length
         return raw_length // self.config.width_alignment * self.config.width_alignment
 
+    def get_raw_sample_shape(self, bsz: int = 1, raw_length: Optional[int] = None) -> tuple[int, int, int, int]:
+        crop_width = self.get_raw_crop_width(raw_length)
+        return (bsz, 1, self.config.num_raw_channels, crop_width)
+
     def scale(self, raw_samples: torch.Tensor, random_phase_augmentation: bool = False) -> torch.Tensor:
         _mclt = mclt(raw_samples.float(), self.config.mdct_window_len, "kaiser_bessel_derived", 1)
 
