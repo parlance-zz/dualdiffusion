@@ -27,9 +27,9 @@ import torch
 
 from training.trainer import DualDiffusionTrainer
 from training.module_trainers.unet_trainer import UNetTrainer, UNetTrainerConfig
-from modules.daes.dae_edm2_i1 import DAE_I1
-from modules.unets.unet_edm2_ddec_i1 import DDec_UNet_I1
-from modules.formats.raw import RawFormat
+from modules.daes.dae_edm2_i3 import DAE_I3
+from modules.unets.unet_edm2_ddec_i3 import DDec_UNet_I3
+from modules.formats.mdct import MDCT_Format
 from modules.mp_tools import normalize
 
 
@@ -50,7 +50,7 @@ class DiffusionDecoder_Trainer_Config(UNetTrainerConfig):
     latents_kl_loss_weight: float = 1e-2
     kl_warmup_steps: int = 250
 
-    loss_buckets_sigma_max: float = 14
+    loss_buckets_sigma_max: float = 12
     loss_buckets_sigma_min: float = 0.00008
 
     random_stereo_augmentation: bool = False
@@ -67,12 +67,12 @@ class DiffusionDecoder_Trainer(UNetTrainer):
         self.trainer = trainer
         self.logger = trainer.logger
 
-        self.ddec: DDec_UNet_I1 = trainer.get_train_module("ddec_raw")
-        self.dae: DAE_I1 = trainer.get_train_module("dae")
+        self.ddec: DDec_UNet_I3 = trainer.get_train_module("ddec")
+        self.dae: DAE_I3 = trainer.get_train_module("dae")
 
-        assert self.ddec is not None and self.dae is not None, "DiffusionDecoder_Trainer train modules ddec_raw and dae"
+        assert self.ddec is not None and self.dae is not None, "DiffusionDecoder_Trainer train modules ddec and dae"
 
-        self.format: RawFormat = trainer.pipeline.format.to(self.trainer.accelerator.device)
+        self.format: MDCT_Format = trainer.pipeline.format.to(self.trainer.accelerator.device)
 
         if trainer.config.enable_model_compilation:
             self.ddec.compile(**trainer.config.compile_params)
@@ -126,15 +126,16 @@ class DiffusionDecoder_Trainer(UNetTrainer):
             warmup_scale = self.trainer.global_step / self.config.kl_warmup_steps
             latents_kl_loss_weight *= warmup_scale
             
-        raw_samples = self.format.scale(raw_samples, random_phase_augmentation=self.config.random_phase_augmentation).detach()
-        latents, ddec_embeddings, latents_kld = self.dae(raw_samples, dae_embeddings, latents_sigma)
+        mdct_samples = self.format.raw_to_mdct(raw_samples,
+            random_phase_augmentation=self.config.random_phase_augmentation).detach()
+        latents, ddec_embeddings, latents_kld = self.dae(mdct_samples, dae_embeddings, latents_sigma)
 
-        logs = self.unet_train_batch(raw_samples, ddec_embeddings, None)
+        logs = self.unet_train_batch(mdct_samples, ddec_embeddings, None)
         logs["loss"] = logs["loss"] + latents_kl_loss_weight * latents_kld
 
         logs.update({
-            "io_stats/raw_samples_std": raw_samples.std(dim=(1,2,3)),
-            "io_stats/raw_samples_mean": raw_samples.mean(dim=(1,2,3)),
+            "io_stats/mdct_samples_std": mdct_samples.std(dim=(1,2,3)),
+            "io_stats/mdct_samples_mean": mdct_samples.mean(dim=(1,2,3)),
             "io_stats/latents_std": latents.std(dim=(1,2,3)).detach(),
             "io_stats/latents_mean": latents.mean(dim=(1,2,3)).detach(),
             "io_stats/latents_sigma": latents_sigma.detach(),
