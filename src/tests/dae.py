@@ -30,13 +30,13 @@ import torch
 
 from modules.embeddings.clap import CLAP_Embedding
 from pipelines.dual_diffusion_pipeline import DualDiffusionPipeline, SampleParams
-from modules.unets.unet_edm2_ddec_d1 import DDec_UNet_D1
+from modules.unets.unet_edm2_ddec_i1 import DDec_UNet_I1
 from modules.embeddings.clap import CLAP_Embedding
 from modules.daes.dae import DualDiffusionDAE
-from modules.formats.ms_mdct_dual import MS_MDCT_DualFormat
+from modules.formats.raw import RawFormat
 from utils.dual_diffusion_utils import (
     init_cuda, normalize, save_audio, load_audio, load_safetensors,
-    save_img, get_audio_info, dict_str
+    save_img, get_audio_info, dict_str, save_tensor_raw
 )
 
 
@@ -56,15 +56,14 @@ def dae_test() -> None:
     print(f"Loading DualDiffusion model from '{model_path}'...")
     pipeline = DualDiffusionPipeline.from_pretrained(model_path, **model_load_options)
     dae: DualDiffusionDAE = getattr(pipeline, "dae", None)
-    ddec_ms: DDec_UNet_D1 = getattr(pipeline, "ddec_ms", None)
-    ddec_mdct: DDec_UNet_D1 = getattr(pipeline, "ddec_mdct", None)
-    format: MS_MDCT_DualFormat = pipeline.format
+    ddec_raw: DDec_UNet_I1 = getattr(pipeline, "ddec_raw", None)
+    format: RawFormat = pipeline.format
     embedding: CLAP_Embedding = pipeline.embedding
 
     sample_rate = format.config.sample_rate
     
-    last_global_step = ddec_ms.config.last_global_step
-    output_path = os.path.join(model_path, "output", "ddec_ms", f"step_{last_global_step}")
+    last_global_step = ddec_raw.config.last_global_step
+    output_path = os.path.join(model_path, "output", "ddec_raw", f"step_{last_global_step}")
     os.makedirs(output_path, exist_ok=True)
 
     model_metadata = {"model_metadata": dict_str(pipeline.model_metadata)}
@@ -72,9 +71,9 @@ def dae_test() -> None:
 
     dataset_path = config.DATASET_PATH
     test_samples: list[str] = test_params["test_samples"] or []
-    sample_shape = pipeline.get_mel_spec_shape(raw_length=length)
-    latent_shape = pipeline.get_latent_shape(sample_shape)
-    print(f"Sample shape: {sample_shape}  Latent shape: {latent_shape}")
+    #sample_shape = pipeline.get_mel_spec_shape(raw_length=length)
+    #latent_shape = pipeline.get_latent_shape(sample_shape)
+    #print(f"Sample shape: {sample_shape}  Latent shape: {latent_shape}")
 
     if test_params.get("latents_img_use_pca", None) is not None:
         dae.config.latents_img_use_pca = test_params["latents_img_use_pca"]
@@ -100,8 +99,7 @@ def dae_test() -> None:
         audio_len = get_audio_info(file_path).frames
         count = format.get_raw_crop_width(raw_length=min(length, audio_len))
         source_raw_sample = load_audio(file_path, count=count)
-        input_raw_sample = source_raw_sample.unsqueeze(0).to(format.device)
-        input_mel_spec = format.raw_to_mel_spec(input_raw_sample)
+        input_raw_sample = format.scale(source_raw_sample.unsqueeze(0).to(format.device))
 
         safetensors_file_name = os.path.join(f"{os.path.splitext(filename)[0]}.safetensors")
         safetensors_file_path = os.path.join(dataset_path, safetensors_file_name)
@@ -121,60 +119,54 @@ def dae_test() -> None:
             dae_embedding = dae.get_embeddings(audio_embedding)
 
             if test_params["latents_tiled_encode"] == True:
+                raise NotImplementedError()
                 latents = dae.tiled_encode(input_mel_spec.to(dtype=dae.dtype), dae_embedding,
                     max_chunk=test_params["latents_tiled_max_chunk_size"], overlap=test_params["latents_tiled_overlap"])
+                
+                output_embeddings = dae.decode(latents, dae_embedding)
             else:
-                latents = dae.encode(input_mel_spec.to(dtype=dae.dtype), dae_embedding)
-            
-            output_mel_spec = dae.decode(latents, dae_embedding).float()
+                #latents = dae.encode(input_raw_sample.to(dtype=dae.dtype), dae_embedding)
+                latents, output_embeddings, _ = dae.forward(input_raw_sample.to(dtype=dae.dtype), dae_embedding, None)
         else:
             latents = None
-            output_mel_spec = input_mel_spec
+            output_embeddings = None
 
-        # ***************** ddec ms stage *****************
-        if test_params["dae_bypass"] == False and ddec_ms is not None:
-            x_ref_ms = ddec_ms.scale_input(output_mel_spec)
-
-            ddec_ms_params = SampleParams(
-                seed=5000,
-                num_steps=50, length=audio_len, cfg_scale=1.5, input_perturbation=1, input_perturbation_offset=0,
-                use_heun=False, schedule="edm2", rho=7, sigma_max=250, sigma_min=0.004
-            )
-
-            ddec_ms_output_sample = pipeline.diffusion_decode(
-                ddec_ms_params, audio_embedding=audio_embedding,
-                sample_shape=output_mel_spec.shape,
-                x_ref=x_ref_ms.to(dtype=ddec_ms.dtype), module=ddec_ms)
-            
-            ddec_ms_output_sample = ddec_ms.unscale_output(ddec_ms_output_sample.float())
-        else:
-            ddec_ms_output_sample = output_mel_spec
-
+        print("latents freq stds:", latents.std(dim=(1,3)))
+        latents /= latents.std(dim=(1,3), keepdim=True)
+        latents = latents.to(dtype=torch.bfloat16)
+        #print(dae.dtype, latents.shape, latents.dtype)
+        
+        for i, embedding in enumerate(output_embeddings):
+            output_embeddings[i] = embedding.to(torch.bfloat16)
+            #print(embedding.shape, embedding.dtype)
+        #exit()
         # ***************** ddec mdct stage ***************** 
-        input_x_ref_mdct = format.mel_spec_to_mdct_psd(input_mel_spec)
-        if test_params["dae_bypass"] == True:
-            x_ref_mdct = input_x_ref_mdct
-        else:
-            x_ref_mdct = format.mel_spec_to_mdct_psd(ddec_ms_output_sample)
+        #input_x_ref_mdct = format.mel_spec_to_mdct_psd(input_mel_spec)
+        #if test_params["dae_bypass"] == True:
+        #    x_ref_mdct = input_x_ref_mdct
+        #else:
+        #    x_ref_mdct = format.mel_spec_to_mdct_psd(ddec_ms_output_sample)
 
-        if ddec_mdct is not None:
-            ddec_mdct_params = SampleParams(
+        if ddec_raw is not None and test_params["ddec_output"] != False:
+            ddec_raw_params = SampleParams(
                 seed=5000,
-                num_steps=50, length=audio_len, cfg_scale=1.5, input_perturbation=1, input_perturbation_offset=0.37,
-                use_heun=False, schedule="edm2", rho=7, sigma_max=12, sigma_min=0.0002, stereo_fix=0.5
+                num_steps=100, length=audio_len, cfg_scale=1.5, input_perturbation=0, input_perturbation_offset=0,
+                use_heun=True, schedule="edm2", rho=7, sigma_max=10, sigma_min=0.00008, stereo_fix=0
             )
 
-            output_ddec_mdct = pipeline.diffusion_decode(
-                ddec_mdct_params, audio_embedding=audio_embedding,
-                sample_shape=format.get_mdct_shape(raw_length=count),
-                x_ref=x_ref_mdct.to(dtype=ddec_mdct.dtype), module=ddec_mdct)
+            output_ddec_raw = pipeline.diffusion_decode(
+                ddec_raw_params, audio_embedding=output_embeddings,
+                sample_shape=format.get_raw_sample_shape(raw_length=count),
+                x_ref=None, module=ddec_raw)
             
-            output_raw = format.mdct_to_raw(output_ddec_mdct.float())
+            output_raw = format.unscale(output_ddec_raw.float())
         else:
-            output_raw = None
+            ddec_raw_params = output_ddec_raw = ddec_raw = output_raw = None
 
-        print(f"input   mean/std: {input_mel_spec.mean().item():.4} {input_mel_spec.std().item():.4}")
-        print(f"output  mean/std: {output_mel_spec.mean().item():.4} {output_mel_spec.std().item():.4}")
+        print(f"input   mean/std: {input_raw_sample.mean().item():.4} {input_raw_sample.std().item():.4}")
+        if output_ddec_raw is not None:
+            print(f"output  mean/std: {output_ddec_raw.mean().item():.4} {output_ddec_raw.std().item():.4}")
+            
         if latents is not None:
             latents_mean = latents.mean().item()
             latents_std = latents.std().item()
@@ -183,20 +175,20 @@ def dae_test() -> None:
             print(f"latents mean/std: {latents_mean:.4} {latents_std:.4}")
         
         metadata = {**model_metadata}
-        metadata["ddec_ms_metadata"] = dict_str(ddec_ms_params.__dict__) if ddec_ms is not None else "null"
-        metadata["ddec_mdct_metadata"] = dict_str(ddec_mdct_params.__dict__) if ddec_mdct is not None else "null"
+        metadata["ddec_raw_metadata"] = dict_str(ddec_raw_params.__dict__) if ddec_raw is not None else "null"
 
         if latents is not None:
             save_img(dae.latents_to_img(latents), os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_latents.png')}"))
             save_img(dae.latents_to_img(latents), os.path.join(output_path, "1", f"step_{last_global_step}_{filename.replace(file_ext, '_latents.png')}"))
+            save_tensor_raw(latents.float().contiguous(), os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_latents.raw')}"))
         
-        if test_params.get("xref_output", False) == True:
-            save_img(format.mdct_psd_to_img(input_x_ref_mdct), os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_input_x_ref_mdct.png')}"))
-            if x_ref_mdct is not None:
-                save_img(format.mdct_psd_to_img(x_ref_mdct), os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_output_x_ref_mdct.png')}"))
-        save_img(format.mel_spec_to_img(input_mel_spec), os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_input_mel_spec.png')}"))
-        save_img(format.mel_spec_to_img(output_mel_spec), os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_output_mel_spec.png')}"))
-        save_img(format.mel_spec_to_img(ddec_ms_output_sample), os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_output_mel_spec_ddec.png')}"))
+        #if test_params.get("xref_output", False) == True:
+        #    save_img(format.mdct_psd_to_img(input_x_ref_mdct), os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_input_x_ref_mdct.png')}"))
+        #    if x_ref_mdct is not None:
+        #        save_img(format.mdct_psd_to_img(x_ref_mdct), os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_output_x_ref_mdct.png')}"))
+        #save_img(format.mel_spec_to_img(input_mel_spec), os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_input_mel_spec.png')}"))
+        #save_img(format.mel_spec_to_img(output_embeddings), os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_output_mel_spec.png')}"))
+        #save_img(format.mel_spec_to_img(ddec_ms_output_sample), os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_output_mel_spec_ddec.png')}"))
 
         if output_raw is not None:
             output_flac_file_path = os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_decoded.flac')}")

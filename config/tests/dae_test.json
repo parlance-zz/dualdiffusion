@@ -1,34 +1,29 @@
 {
-    "model_name": "edm2_dae_j5d_ddec_ms_d1",
+    "model_name": "edm2_ddec_i1a",
     "model_load_options": {
         "torch_dtype": "bfloat16",
         "device": "cuda",
         "load_checkpoints": true,
-        "load_emas": {
-            "ddec_mdct": "ema_std0.1.safetensors",
-            "ddec_ms": "ema_std0.05.safetensors"
-        },
+        "load_emas": null,
         "compile_options": {
             "fullgraph": true,
             "dynamic": false
         }
     },
-    "length": 1408768,
+    "length": 608768,
     "latents_tiled_encode": false,
     "latents_tiled_max_chunk_size": 6144,
     "latents_tiled_overlap": 256,
     "latents_img_use_pca": true,
     "output_lufs": -20,
     "dae_bypass": false,
-    "ddec_output": false,
+    "ddec_output": true,
     "xref_output": false,
-    "add_random_test_samples": 5,
+    "add_random_test_samples": 9,
     "copy_sample_source_files": true,
     "test_samples": [
-        "psf/Karyujou/karyujou_01.psf.flac",
+        "3sf/Dopamix/STRM_BGM_ENDING.bcstm.flac",
         "switch/Arcaea/_t_songs_ignotus.ogg.flac",
-        "dsf/Metropolis Street Racer Prototype/file_15.adx.flac",
-        "psf3/Iron Man/_t_! movies_HUB_05_000001C2.adx.flac",
-        "psf/Gradius Gaiden/SLPM-86042_BGM1_0000096c.XA.flac"
+        "psf3/Iron Man/_t_! movies_HUB_05_000001C2.adx.flac"
     ]
 }
