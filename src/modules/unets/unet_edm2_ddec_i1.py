@@ -48,7 +48,7 @@ class DDec_UNet_I1_Config(DualDiffusionUNetConfig):
     out_channels: int    = 1
     in_channels_emb: int = 32
 
-    sigma_max: float = 14
+    sigma_max: float = 12
     sigma_min: float = 0.00008
     in_num_freqs: int = 1
     
@@ -58,12 +58,12 @@ class DDec_UNet_I1_Config(DualDiffusionUNetConfig):
 
     model_channels: int   = 32
     logvar_channels: int  = 192
-    channel_mult_emb: int = 4
-    channel_mult_enc: list[int] = (1,1,1,2,2,2,3,3,3,4,4,4)
-    channel_mult_dec: list[int] = (1,1,1,2,2,2,3,3,3,4,4,4)
-    num_layers_per_block: list[int] = (1,1,1,1,1,1,1,1,1,1,1,1)
-    kernel_enc: list[int] = (1,7)
-    kernel_dec: list[int] = (1,7)
+    channel_mult_emb: int = 3
+    channel_mult_enc: list[int] = (1,2,3,3,3,3,4,4)
+    channel_mult_dec: list[int] = (1,2,3,3,3,3,4,4)
+    num_layers_per_block: list[int] = (1,1,1,1,1,1,1,1)
+    kernel_enc: list[int] = (2,3) #(1,9)
+    kernel_dec: list[int] = (2,3) #(1,9)
     mlp_multiplier: int = 1
     mlp_groups: int     = 1
 
@@ -130,7 +130,7 @@ class Block1D(torch.nn.Module):
         clip_act: float        = 256,      # Clip output activations. None = do not clip.
         mlp_multiplier: int    = 1,        # Multiplier for the number of channels in the MLP.
         mlp_groups: int        = 1,        # Number of groups for the MLP.
-        kernel: tuple[int, int] = (1,7),   # Kernel size for the convolutional layers.
+        kernel: tuple[int, int] = (1,9),   # Kernel size for the convolutional layers.
     ) -> None:
         super().__init__()
 
@@ -145,19 +145,27 @@ class Block1D(torch.nn.Module):
             
         self.conv_res0 = MPConv1D(in_channels,  out_channels * mlp_multiplier, kernel=kernel, groups=mlp_groups)
         self.conv_res1 = MPConv1D(out_channels * mlp_multiplier, out_channels, kernel=kernel, groups=mlp_groups)        
-        self.conv_skip = MPConv1D(in_channels, out_channels, kernel=(2,1), groups=1)
+        #self.conv_skip = MPConv1D(in_channels, out_channels, kernel=(2,1), groups=1)
+        if in_channels != out_channels or mlp_groups > 1:
+            self.conv_skip = MPConv1D(in_channels, out_channels, kernel=(1,1), groups=1)
+        else:
+            self.conv_skip = None
 
         self.emb_gain = torch.nn.Parameter(torch.zeros([])) if emb_channels != 0 else None
         self.emb_linear = MPConv1D(emb_channels, out_channels * mlp_multiplier,
             kernel=(1,1), groups=1) if emb_channels != 0 else None
         
         self.emb_label = MPConv1D(label_channels, emb_channels, kernel=(1,1))
-        self.emb_label_unconditional = MPConv1D(1, emb_channels, kernel=(), disable_weight_norm=True)
+        #self.emb_label_unconditional = MPConv1D(1, emb_channels, kernel=(), disable_weight_norm=True)
+        self.u_embedding = torch.nn.Parameter(torch.zeros(1, emb_channels, 1, 1))
     
     def get_embeddings(self, emb_in: torch.Tensor, conditioning_mask: torch.Tensor) -> torch.Tensor:
-        u_embedding = self.emb_label_unconditional(torch.ones(1, device=emb_in.device, dtype=emb_in.dtype))[None, :, None, None]
-        c_embedding = self.emb_label(emb_in)
-        return mp_sum(u_embedding, c_embedding, t=conditioning_mask)
+        #u_embedding: torch.Tensor = self.emb_label_unconditional(
+        #    torch.ones(1, device=emb_in.device, dtype=emb_in.dtype))[None, :, None, None]
+        c_embedding: torch.Tensor = self.emb_label(emb_in)
+        #return u_embedding.lerp(c_embedding, conditioning_mask)
+        #return self.u_embedding.to(dtype=torch.bfloat16).lerp(c_embedding, conditioning_mask)
+        return torch.where(conditioning_mask, c_embedding, self.u_embedding.to(dtype=torch.bfloat16))
         
     def forward(self, x: torch.Tensor, emb: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         
@@ -211,13 +219,13 @@ class DDec_UNet_I1(DualDiffusionUNet):
         # embedding
         self.emb_fourier = MPFourier(cemb)
         self.emb_noise = MPConv1D(cemb, cemb, kernel=())
-        self.emb_label_unconditional = MPConv1D(1, cemb, kernel=())
+        #self.emb_label_unconditional = MPConv1D(1, cemb, kernel=())
 
         # training uncertainty estimation
         self.logvar_fourier = MPFourier(config.logvar_channels)
         self.logvar_linear = MPConv1D(config.logvar_channels, 1, kernel=(), disable_weight_norm=True)
 
-        assert len(enc_channels) ==  len(dec_channels) == len(config.num_layers_per_block)
+        assert len(enc_channels) == len(dec_channels) == len(config.num_layers_per_block)
 
         self.downsample = FilteredDownsample1D(k_size=config.resample_k_size,
                         beta=config.resample_beta, factor=config.resample_factor)
@@ -273,18 +281,18 @@ class DDec_UNet_I1(DualDiffusionUNet):
 
     def get_embeddings(self, emb_in: list[torch.Tensor], conditioning_mask: torch.Tensor) -> list[torch.Tensor]:
         
-        conditioning_mask = conditioning_mask[:, None, None, None]
+        conditioning_mask = conditioning_mask[:, None, None, None]#.to(dtype=torch.bfloat16)
         embeddings = []
 
         for name, block in self.enc.items():
             
             if isinstance(block, Block1D):
-                embeddings.append(block.get_embeddings(emb_in[block.level], conditioning_mask))
+                embeddings.append(block.get_embeddings(emb_in[block.level].to(dtype=torch.bfloat16), conditioning_mask))
 
         for name, block in self.dec.items():
 
             if isinstance(block, Block1D):
-                embeddings.append(block.get_embeddings(emb_in[block.level], conditioning_mask))
+                embeddings.append(block.get_embeddings(emb_in[block.level].to(dtype=torch.bfloat16), conditioning_mask))
 
         embeddings.reverse()
         return embeddings
@@ -320,7 +328,7 @@ class DDec_UNet_I1(DualDiffusionUNet):
         emb_noise = self.emb_noise(self.emb_fourier(c_noise))[:, :, None, None].to(dtype=torch.bfloat16)
         
         input_x = x
-        x = torch.ones((x.shape[0], 1, x.shape[2], x.shape[3]), device=x.device, dtype=x.dtype)
+        x = torch.ones_like(x[:, :1])
         skips = []
         
         #print("")

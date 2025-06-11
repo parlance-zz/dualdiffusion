@@ -216,7 +216,7 @@ class UNetTrainer(ModuleTrainer):
 
         # normal conditioning dropout
         conditioning_mask = (torch.rand(device_batch_size, generator=self.device_generator,
-            device=self.trainer.accelerator.device) > self.config.conditioning_dropout).float()
+            device=self.trainer.accelerator.device) > self.config.conditioning_dropout).requires_grad_(False).detach()
         unet_embeddings = self.unet.get_embeddings(embeddings, conditioning_mask)
 
         if self.config.conditioning_perturbation > 0 and self.is_validation_batch == False: # adds noise to the conditioning embedding while preserving variance

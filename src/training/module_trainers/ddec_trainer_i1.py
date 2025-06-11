@@ -141,5 +141,11 @@ class DiffusionDecoder_Trainer(UNetTrainer):
             "loss_weight/kl_latents": latents_kl_loss_weight,
             "loss/kl_latents": latents_kld.detach(),
         })
+        
+        if self.trainer.config.enable_debug_mode == True:
+            print(latents.shape)
+            
+        for i in range(latents.shape[2]):
+            logs[f"io_stats/latents_f_std_{i}"] = latents[:, :, i, :].std(dim=(1,2)).detach()
 
         return logs

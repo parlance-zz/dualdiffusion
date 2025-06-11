@@ -54,15 +54,16 @@ class DAE_I1_Config(DualDiffusionDAEConfig):
     resample_beta: float = 3.437
     resample_k_size: int = 23
     resample_factor: int = 2
+    extra_downsamples: int = 4
 
     model_channels: int   = 32
-    channel_mult_emb: int = 0     
-    channel_mult_enc: list[int] = (1,1,1,2,2,2,3,3,3,4,4,4)
-    channel_mult_dec: list[int] = (1,1,1,2,2,2,3,3,3,4,4,4)
-    num_enc_layers_per_block: list[int] = (1,1,1,1,1,1,1,1,1,1,1,1)
-    num_dec_layers_per_block: list[int] = (1,1,1,1,1,1,1,1,1,1,1,1)
-    kernel_enc: list[int] = (1,7)
-    kernel_dec: list[int] = (1,7)
+    channel_mult_emb: int = 0
+    channel_mult_enc: list[int] = (1,2,3,3,3,3,4,4)
+    channel_mult_dec: list[int] = (1,2,3,3,3,3,4,4)
+    num_enc_layers_per_block: list[int] = (1,1,1,1,1,1,1,1)
+    num_dec_layers_per_block: list[int] = (1,1,1,1,1,1,1,1)
+    kernel_enc: list[int] = (1,9)
+    kernel_dec: list[int] = (1,9)
     mlp_multiplier: int = 1
     mlp_groups: int     = 1
 
@@ -114,6 +115,43 @@ class MPConv1D(torch.nn.Module):
         if self.disable_weight_norm == False:
             self.weight.copy_(normalize(self.weight))
 
+class MPConv2D_R(torch.nn.Module):
+
+    def __init__(self, in_channels: int, out_channels: int,
+                 kernel: tuple[int, int], groups: int = 1, stride: int = 1,
+                 disable_weight_norm: bool = False) -> None:
+        
+        super().__init__()
+
+        self.in_channels = in_channels
+        self.out_channels = out_channels
+        self.groups = groups
+        self.stride = stride
+        self.disable_weight_norm = disable_weight_norm
+        
+        self.weight = torch.nn.Parameter(torch.randn(out_channels, in_channels // groups, *kernel))
+        self.padding = torch.nn.ReflectionPad2d((kernel[1] // 2, kernel[1] // 2, 0, 0))
+
+    def forward(self, x: torch.Tensor, gain: Union[float, torch.Tensor] = 1.) -> torch.Tensor:
+        
+        w = self.weight.float()
+        if self.training == True and self.disable_weight_norm == False:
+            w = normalize(w, dim=1) # traditional weight normalization
+            
+        w = w * (gain / w[0].numel()**0.5) # magnitude-preserving scaling
+        w = w.to(x.dtype)
+
+        if w.ndim == 2:
+            return x @ w.t()
+        
+        return torch.nn.functional.conv2d(self.padding(x), w, 
+            padding=(w.shape[-2]//2, 0), groups=self.groups, stride=self.stride)
+
+    @torch.no_grad()
+    def normalize_weights(self) -> None:
+        if self.disable_weight_norm == False:
+            self.weight.copy_(normalize(self.weight, dim=1))
+
 class Block1D(torch.nn.Module):
 
     def __init__(self,
@@ -127,7 +165,7 @@ class Block1D(torch.nn.Module):
         clip_act: float        = 256,      # Clip output activations. None = do not clip.
         mlp_multiplier: int    = 1,        # Multiplier for the number of channels in the MLP.
         mlp_groups: int        = 1,        # Number of groups for the MLP.
-        kernel: tuple[int, int] = (1,7),   # Kernel size for the convolutional layers.
+        kernel: tuple[int, int] = (1,9),   # Kernel size for the convolutional layers.
     ) -> None:
         super().__init__()
 
@@ -144,7 +182,7 @@ class Block1D(torch.nn.Module):
         self.conv_res1 = MPConv1D(out_channels * mlp_multiplier, out_channels, kernel=kernel, groups=mlp_groups)
         
         if in_channels != out_channels or mlp_groups > 1:
-            self.conv_skip = MPConv1D(in_channels, out_channels, kernel=(2,1), groups=1)
+            self.conv_skip = MPConv1D(in_channels, out_channels, kernel=(1,1), groups=1)
         else:
             self.conv_skip = None
 
@@ -194,7 +232,7 @@ class DAE_I1(DualDiffusionDAE):
         cemb = config.model_channels * config.channel_mult_emb if config.in_channels_emb > 0 else 0
 
         self.num_levels = len(config.channel_mult_dec)
-        self.total_downsample_ratio = config.resample_factor ** (self.num_levels - 1)
+        self.total_downsample_ratio = config.resample_factor ** (self.num_levels - 1 + config.extra_downsamples)
 
         # embedding
         if cemb > 0:
@@ -218,7 +256,7 @@ class DAE_I1(DualDiffusionDAE):
         cout = 1 # 1 const channel
 
         for level, channels in enumerate(enc_channels):
-            self.enc[f"block{level}_conv_in"] = MPConv1D(cout + config.in_channels, channels, kernel=(2,9))
+            self.enc[f"block{level}_conv_in"] = MPConv1D(cout + config.in_channels, channels, kernel=(1,9))
 
             if level == 0:
                 self.enc[f"block{level}_in"] = Block1D(
@@ -231,19 +269,21 @@ class DAE_I1(DualDiffusionDAE):
                 self.enc[f"block{level}_layer{idx}"] = Block1D(
                     level, channels, channels, 0, flavor="enc", kernel=config.kernel_enc, **block_kwargs)
             
-            self.enc[f"block{level}_conv_out"] = MPConv1D(channels, config.latent_channels, kernel=(2,9))
+            self.enc[f"block{level}_conv_out"] = MPConv1D(channels, config.latent_channels, kernel=(1,9))
             cout = channels
 
         self.latents_out_gain = torch.nn.Parameter(torch.ones([]))
 
         # decoder
+        self.conv_latents_reg = MPConv2D_R(config.latent_channels*2, config.latent_channels*2, kernel=(3,3))
+        
         self.dec = torch.nn.ModuleDict()
         cout = 1 # 1 const channel
 
         for level in reversed(range(0, self.num_levels)):
             channels = dec_channels[level]
 
-            self.dec[f"block{level}_conv_in"] = MPConv1D(cout + config.latent_channels, channels, kernel=(2,9))
+            self.dec[f"block{level}_conv_in"] = MPConv1D(cout + config.latent_channels, channels, kernel=(1,9))
 
             if level == self.num_levels - 1:
                 self.dec[f"block{level}_in"] = Block1D(
@@ -256,7 +296,7 @@ class DAE_I1(DualDiffusionDAE):
                 self.dec[f"block{level}_layer{idx}"] = Block1D(
                     level, channels, channels, cemb, flavor="dec", **block_kwargs, kernel=config.kernel_dec)
 
-            self.dec[f"block{level}_conv_out"] = MPConv1D(channels, config.out_channels_emb, kernel=(2,9))
+            self.dec[f"block{level}_conv_out"] = MPConv1D(channels, config.out_channels_emb, kernel=(1,9))
             cout = channels
 
     def get_embeddings(self, emb_in: torch.Tensor) -> torch.Tensor:
@@ -289,7 +329,8 @@ class DAE_I1(DualDiffusionDAE):
     def encode(self, x: torch.Tensor, embeddings: torch.Tensor) -> torch.Tensor:
         
         input_x = x
-        x = torch.ones((x.shape[0], 1, x.shape[2], x.shape[3]), device=x.device, dtype=x.dtype)
+        #x = torch.ones((x.shape[0], 1, x.shape[2], x.shape[3]), device=x.device, dtype=x.dtype)
+        x = torch.ones_like(x[:, :1])
 
         if embeddings is not None:
             embeddings = embeddings[:, :, None, None]
@@ -325,13 +366,21 @@ class DAE_I1(DualDiffusionDAE):
                 #print(f"x_shape: {x.shape}")
                 x = block(x, embeddings)
 
+        for i in range(self.config.extra_downsamples):
+            latents = self.downsample(latents)
+
         #print(f"output latents_shape: {latents.shape}")
+        latents = self.conv_latents_reg(latents)
         return latents * self.latents_out_gain
 
     def decode(self, x: torch.Tensor, embeddings: torch.Tensor) -> torch.Tensor:
         
         latents = x
-        x = torch.ones((latents.shape[0], 1, 2, latents.shape[3]), device=latents.device, dtype=latents.dtype)
+        for i in range(self.config.extra_downsamples):
+            latents = self.upsample(latents)
+
+        #x = torch.ones((latents.shape[0], 1, 2, latents.shape[3]), device=latents.device, dtype=latents.dtype)
+        x = torch.ones_like(latents[:, :1, :2])
 
         if embeddings is not None:
             embeddings = embeddings[:, :, None, None]
@@ -347,7 +396,7 @@ class DAE_I1(DualDiffusionDAE):
                 if not name.startswith(f"block{self.num_levels-1}_"):
                     x = self.upsample(x)
 
-                latents_in = normalize(latents[:, :, 0:1, :].reshape(latents.shape[0], self.config.latent_channels, 2, latents.shape[3]))
+                latents_in = latents[:, :, 0:1, :].reshape(latents.shape[0], self.config.latent_channels, 2, latents.shape[3])
                 #print(f"latents_in_shape: {latents_in.shape}, latents_shape: {latents.shape}, x_shape: {x.shape}")
 
                 x = mp_cat(x, latents_in, t=self.config.cat_balance)
@@ -375,11 +424,14 @@ class DAE_I1(DualDiffusionDAE):
         latents = self.encode(samples, dae_embeddings)
         decoded = self.decode(latents, dae_embeddings)
 
-        latents_mean = latents.mean(dim=(1,2,3))
-        latents_var = latents.var(dim=(1,2,3))
-        latents_kld = latents_mean.square() + latents_var - 1 - latents_var.log()
-    
-        return latents, decoded, latents_kld
+        #latents_pca_loss = pca_regularization_loss(latents)
+
+        latents3d = latents.view(latents.shape[0], self.config.latent_channels, 2, latents.shape[2], latents.shape[3])
+        latents_mean = latents3d.mean(dim=(4))
+        latents_var = latents3d.var(dim=(1,2,3,4))
+        latents_kld = latents_mean.square().mean(dim=(1,2,3)) + latents_var - 1 - latents_var.log()
+        
+        return latents, decoded, latents_kld #+ latents_pca_loss
 
     def tiled_encode(self, x: torch.Tensor, embeddings: torch.Tensor, max_chunk: int = 6144, overlap: int = 256) -> torch.Tensor:
         raise NotImplementedError()
@@ -436,3 +488,31 @@ class DAE_I1(DualDiffusionDAE):
             latents[:, :, :, dest_start:dest_end] = latents_chunk[:, :, :, valid_start:valid_end]
         
         return latents
+
+def pca_regularization_loss(activations: torch.Tensor) -> torch.Tensor:
+    """
+    activations: hidden states of network in shape (b, c, h, w)
+    each row is a separate hidden state
+    """
+
+    b, c, h, w = activations.shape
+    x = activations.permute(0, 2, 3, 1).reshape(b, -1, c)  # shape: (b, h*w, c)
+
+    # Global covariance matrix (across all samples)
+    x_all = x.reshape(-1, c)
+    x_all_centered = x_all - x_all.mean(dim=0, keepdim=True)
+    cov_global = x_all_centered.T @ x_all_centered / x_all_centered.shape[0]  # (c, c)
+    cov_global_norm = cov_global / cov_global.trace()
+
+    # Normalize each activation vector
+    x_unit = torch.nn.functional.normalize(x, dim=2)  # (b, h*w, c)
+
+    # Compute per-vector outer products
+    outer_products = x_unit[:, :, :, None] * x_unit[:, :, None, :]  # (b, h*w, c, c)
+
+    # Compute per-sample average outer product difference from global covariance
+    cov_diff = outer_products - cov_global_norm[None, None, :, :]  # (b, h*w, c, c)
+    loss_per_vector = (cov_diff ** 2).sum(dim=(2, 3))  # (b, h*w)
+    loss_per_sample = loss_per_vector.mean(dim=1)  # (b,)
+
+    return loss_per_sample  # shape: (b,)
