@@ -43,8 +43,8 @@ from utils.resample import FilteredDownsample1D, FilteredUpsample1D
 @dataclass
 class DAE_I4_Config(DualDiffusionDAEConfig):
 
-    in_channels: int     = 1
-    out_channels: int    = 64
+    in_channels: int      = 1
+    out_channels: int     = 0 # unused
     in_channels_emb: int  = 0
     
     in_num_freqs: int    = 1
@@ -297,7 +297,7 @@ class DAE_I4(DualDiffusionDAE):
                 self.dec[f"block{level}_layer{idx}"] = Block1D(
                     level, channels, channels, cemb, flavor="dec", **block_kwargs, kernel=config.kernel_dec)
 
-            self.dec[f"block{level}_conv_out"] = MPConv1D(channels, config.out_channels, kernel=config.kernel_dec)
+            self.dec[f"block{level}_conv_out"] = MPConv1D(channels, channels, kernel=config.kernel_dec)
             cout = channels
 
     def get_embeddings(self, emb_in: torch.Tensor) -> torch.Tensor:

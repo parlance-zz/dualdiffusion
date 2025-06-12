@@ -46,7 +46,7 @@ class DDec_UNet_I4_Config(DualDiffusionUNetConfig):
 
     in_channels: int     = 1
     out_channels: int    = 1
-    in_channels_emb: int = 64
+    in_channels_emb: int = 0 # unused
 
     sigma_max: float = 12
     sigma_min: float = 0.00008
@@ -209,8 +209,6 @@ class DDec_UNet_I4(DualDiffusionUNet):
         enc_channels = [config.model_channels * m for m in config.channel_mult_enc]
         dec_channels = [config.model_channels * m for m in config.channel_mult_dec]
 
-        assert config.in_channels_emb > 0
-        clabel = config.in_channels_emb
         cemb = config.model_channels * config.channel_mult_emb
 
         self.num_levels = len(config.channel_mult_dec)
@@ -239,6 +237,7 @@ class DDec_UNet_I4(DualDiffusionUNet):
 
         for level, channels in enumerate(enc_channels):
             self.enc[f"block{level}_conv_in"] = MPConv1D(cout + config.in_channels, channels, kernel=config.kernel_enc)
+            clabel = channels
 
             if level == 0:
                 self.enc[f"block{level}_in"] = Block1D(
@@ -260,6 +259,7 @@ class DDec_UNet_I4(DualDiffusionUNet):
 
         for level in reversed(range(0, self.num_levels)):
             channels = dec_channels[level]
+            clabel = channels
 
             if level == self.num_levels - 1:
                 self.dec[f"block{level}_conv_in"] = MPConv1D(cout, channels, kernel=config.kernel_dec)
