@@ -27,7 +27,6 @@ import torch
 
 from modules.formats.format import DualDiffusionFormat, DualDiffusionFormatConfig
 from modules.formats.frequency_scale import get_mel_density
-from utils.mclt import mclt, imclt
 
 
 @dataclass()
@@ -37,19 +36,14 @@ class RawFormatConfig(DualDiffusionFormatConfig):
     num_raw_channels: int = 2
     default_raw_length: int = 1409024
 
-    scale: float = 8.72164
+    scale: float = 39.05
     width_alignment: int = 2048
-
-    mdct_window_len: int = 512
 
 class RawFormat(DualDiffusionFormat):
 
     def __init__(self, config: RawFormatConfig) -> None:
         super().__init__()
         self.config = config
-
-        mdct_hz = (torch.arange(config.mdct_window_len // 2) + 0.5) * config.sample_rate / config.mdct_window_len
-        self.register_buffer("mdct_mel_density", get_mel_density(mdct_hz).view(1, 1, 1,-1))
 
     def get_raw_crop_width(self, raw_length: Optional[int] = None) -> int:
         raw_length = raw_length or self.config.default_raw_length
@@ -59,18 +53,36 @@ class RawFormat(DualDiffusionFormat):
         crop_width = self.get_raw_crop_width(raw_length)
         return (bsz, 1, self.config.num_raw_channels, crop_width)
 
+    @torch.no_grad()
     def scale(self, raw_samples: torch.Tensor, random_phase_augmentation: bool = False) -> torch.Tensor:
-        _mclt = mclt(raw_samples.float(), self.config.mdct_window_len, "kaiser_bessel_derived", 1)
+        
+        raw_len = raw_samples.shape[-1]
+        raw_samples = torch.nn.functional.pad(raw_samples.float(), (raw_len // 2, raw_len // 2), mode="reflect")
+        rfft: torch.Tensor = torch.fft.rfft(raw_samples, dim=-1, norm="ortho")
 
         if random_phase_augmentation == True:
-            phase_rotation = torch.exp(2j * torch.pi * torch.rand(_mclt.shape[0], device=_mclt.device)) 
-            _mclt *= phase_rotation.view(-1, 1, 1, 1)
-        
-        raw_samples = imclt(_mclt / self.mdct_mel_density, window_fn="kaiser_bessel_derived").real.unsqueeze(1)
-        return raw_samples.contiguous() * self.config.scale
+            phase_rotation = torch.exp(2j * torch.pi * torch.rand(rfft.shape[0], device=rfft.device))
+            rfft *= phase_rotation.view(-1, 1, 1)
 
+        rfft_freq = torch.fft.rfftfreq(raw_samples.shape[-1], d=1/self.config.sample_rate, device=raw_samples.device)
+        mel_density = get_mel_density(rfft_freq)
+        mel_density /= mel_density.mean()
+        raw_samples = torch.fft.irfft(rfft / mel_density.view(1, 1,-1), n=raw_samples.shape[-1], dim=-1, norm="ortho")
+
+        return raw_samples[..., raw_len//2:-raw_len//2].unsqueeze(1).contiguous() * self.config.scale
+
+    @torch.no_grad()
     def unscale(self, raw_samples: torch.Tensor):
-        _mclt = mclt(raw_samples.float().squeeze(1), self.config.mdct_window_len, "kaiser_bessel_derived", 1)
+        
+        raw_samples = raw_samples.squeeze(1)
+        
+        raw_len = raw_samples.shape[-1]
+        raw_samples = torch.nn.functional.pad(raw_samples.float(), (raw_len // 2, raw_len // 2), mode="reflect")
+        rfft: torch.Tensor = torch.fft.rfft(raw_samples, dim=-1, norm="ortho")
 
-        raw_samples = imclt(_mclt * self.mdct_mel_density, window_fn="kaiser_bessel_derived").real
-        return raw_samples.contiguous() / self.config.scale
+        rfft_freq = torch.fft.rfftfreq(raw_samples.shape[-1], d=1/self.config.sample_rate, device=raw_samples.device)
+        mel_density = get_mel_density(rfft_freq)
+        mel_density /= mel_density.mean()
+        raw_samples = torch.fft.irfft(rfft * mel_density.view(1, 1,-1), n=raw_samples.shape[-1], dim=-1, norm="ortho")
+
+        return raw_samples[..., raw_len//2:-raw_len//2].contiguous() / self.config.scale
