@@ -47,9 +47,6 @@ class DiffusionDecoder_Trainer_Config(UNetTrainerConfig):
     add_latents_noise: float = 0
     latents_noise_warmup_steps: int = 10000
 
-    latents_kl_loss_weight: float = 1e-2
-    kl_warmup_steps: int = 250
-
     loss_buckets_sigma_max: float = 14
     loss_buckets_sigma_min: float = 0.00008
 
@@ -69,7 +66,6 @@ class DiffusionDecoder_Trainer(UNetTrainer):
 
         self.ddec: DDec_UNet_I1 = trainer.get_train_module("ddec_raw")
         self.dae: DAE_I1 = trainer.get_train_module("dae")
-
         assert self.ddec is not None and self.dae is not None, "DiffusionDecoder_Trainer train modules ddec_raw and dae"
 
         self.format: RawFormat = trainer.pipeline.format.to(self.trainer.accelerator.device)
@@ -90,9 +86,6 @@ class DiffusionDecoder_Trainer(UNetTrainer):
         else: self.logger.info("Random phase augmentation is disabled")
 
         self.logger.info(f"Crop edges: {self.config.crop_edges}")
-
-        self.logger.info(f"Latents KL loss weight: {self.config.latents_kl_loss_weight}")
-        self.logger.info(f"KL warmup steps: {self.config.kl_warmup_steps}")
         self.logger.info(f"Add latents noise: {self.config.add_latents_noise}")
 
         self.unet = self.ddec
@@ -120,17 +113,12 @@ class DiffusionDecoder_Trainer(UNetTrainer):
         else:
             latents_sigma = 0
         latents_sigma = torch.Tensor([latents_sigma]).to(device=self.trainer.accelerator.device)
-
-        latents_kl_loss_weight = self.config.latents_kl_loss_weight
-        if self.trainer.global_step < self.config.kl_warmup_steps:
-            warmup_scale = self.trainer.global_step / self.config.kl_warmup_steps
-            latents_kl_loss_weight *= warmup_scale
             
-        raw_samples = self.format.scale(raw_samples, random_phase_augmentation=self.config.random_phase_augmentation).detach()
-        latents, ddec_embeddings, latents_kld = self.dae(raw_samples, dae_embeddings, latents_sigma)
+        raw_samples = self.format.scale(raw_samples,
+            random_phase_augmentation=self.config.random_phase_augmentation).detach()
+        latents, ddec_embeddings = self.dae(raw_samples, dae_embeddings, latents_sigma)
 
         logs = self.unet_train_batch(raw_samples, ddec_embeddings, None)
-        logs["loss"] = logs["loss"] + latents_kl_loss_weight * latents_kld
 
         logs.update({
             "io_stats/raw_samples_std": raw_samples.std(dim=(1,2,3)),
@@ -138,14 +126,9 @@ class DiffusionDecoder_Trainer(UNetTrainer):
             "io_stats/latents_std": latents.std(dim=(1,2,3)).detach(),
             "io_stats/latents_mean": latents.mean(dim=(1,2,3)).detach(),
             "io_stats/latents_sigma": latents_sigma.detach(),
-            "loss_weight/kl_latents": latents_kl_loss_weight,
-            "loss/kl_latents": latents_kld.detach(),
         })
         
         if self.trainer.config.enable_debug_mode == True:
-            print(latents.shape)
-            
-        for i in range(latents.shape[2]):
-            logs[f"io_stats/latents_f_std_{i}"] = latents[:, :, i, :].std(dim=(1,2)).detach()
+            print(f"Latents shape: {latents.shape}")
 
         return logs

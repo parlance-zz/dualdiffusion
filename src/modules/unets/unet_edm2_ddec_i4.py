@@ -145,7 +145,7 @@ class Block1D(torch.nn.Module):
             
         self.conv_res0 = MPConv1D(in_channels,  out_channels * mlp_multiplier, kernel=kernel, groups=mlp_groups)
         self.conv_res1 = MPConv1D(out_channels * mlp_multiplier, out_channels, kernel=kernel, groups=mlp_groups)        
-        #self.conv_skip = MPConv1D(in_channels, out_channels, kernel=(2,1), groups=1)
+
         if in_channels != out_channels or mlp_groups > 1:
             self.conv_skip = MPConv1D(in_channels, out_channels, kernel=(1,1), groups=1)
         else:
@@ -156,15 +156,10 @@ class Block1D(torch.nn.Module):
             kernel=(1,1), groups=1) if emb_channels != 0 else None
         
         self.emb_label = MPConv1D(label_channels, emb_channels, kernel=(1,1))
-        #self.emb_label_unconditional = MPConv1D(1, emb_channels, kernel=(), disable_weight_norm=True)
         self.u_embedding = torch.nn.Parameter(torch.zeros(1, emb_channels, 1, 1))
     
     def get_embeddings(self, emb_in: torch.Tensor, conditioning_mask: torch.Tensor) -> torch.Tensor:
-        #u_embedding: torch.Tensor = self.emb_label_unconditional(
-        #    torch.ones(1, device=emb_in.device, dtype=emb_in.dtype))[None, :, None, None]
         c_embedding: torch.Tensor = self.emb_label(emb_in)
-        #return u_embedding.lerp(c_embedding, conditioning_mask)
-        #return self.u_embedding.to(dtype=torch.bfloat16).lerp(c_embedding, conditioning_mask)
         return torch.where(conditioning_mask, c_embedding, self.u_embedding.to(dtype=torch.bfloat16))
         
     def forward(self, x: torch.Tensor, emb: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
@@ -331,42 +326,29 @@ class DDec_UNet_I4(DualDiffusionUNet):
         x = torch.ones_like(x[:, :1])
         skips = []
         
-        #print("")
-        #print("ddec_raw")
         for name, block in self.enc.items():
             
-            #print(f"enc_{name}")
             if name.endswith("_conv_in"):
-
                 if not name.startswith("block0_"):
                     x = self.downsample(x)
 
-                #print(f"x_shape: {x.shape}, input_x_shape: {input_x.shape}")
-                #skip_balance = self.enc_skip_balance[block.level].sigmoid()
-                #x = mp_cat(x, input_x, t=self.config.skip_balance)
                 x = mp_cat(x, input_x, t=self.config.cat_balance)
                 input_x = self.downsample(input_x)
                 x = block(x)
             else:
                 emb = mp_silu(mp_sum(emb_noise, embeddings.pop().to(dtype=torch.bfloat16), t=self.config.label_balance))
-                #print(f"emb_shape: {emb.shape}, x_shape: {x.shape}")
                 x = block(x, emb)
                 skips.append(x)
 
         for name, block in self.dec.items():
             
-            #print(f"dec_{name}")
             if name.endswith("_conv_in"):
-
-                #print(f"x_shape: {x.shape}")
                 x = block(x)
                 continue
             
             emb = mp_silu(mp_sum(emb_noise, embeddings.pop().to(dtype=torch.bfloat16), t=self.config.label_balance))
-            #print(f"emb_shape: {emb.shape}, x_shape: {x.shape}")
             
             if "layer" in name:
-                #print(f"skips_shape: {skips[-1].shape}")
                 x = mp_cat(x, skips.pop(), t=self.config.cat_balance)
 
             x = block(x, emb)

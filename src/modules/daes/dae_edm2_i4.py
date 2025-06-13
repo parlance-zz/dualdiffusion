@@ -275,7 +275,6 @@ class DAE_I4(DualDiffusionDAE):
         self.latents_out_gain = torch.nn.Parameter(torch.ones([]))
 
         # decoder
-        #self.conv_latents_reg = MPConv2D_R(config.latent_channels, config.latent_channels, kernel=(3,3))
         self.conv_latents_reg = MPConv2D_R(config.latent_channels*2, config.latent_channels*2, kernel=(3,3))
         
         self.dec = torch.nn.ModuleDict()
@@ -330,104 +329,73 @@ class DAE_I4(DualDiffusionDAE):
     def encode(self, x: torch.Tensor, embeddings: torch.Tensor) -> torch.Tensor:
         
         input_x = x
-        #x = torch.ones((x.shape[0], 1, x.shape[2], x.shape[3]), device=x.device, dtype=x.dtype)
         x = torch.ones_like(x[:, :1])
 
         if embeddings is not None:
             embeddings = embeddings[:, :, None, None]
 
         latents = None
-        #print("")
-        #print("dae")
 
         for name, block in self.enc.items():
             
-            #print(f"enc_{name}")
-            if name.endswith("_conv_in"):
-                
+            if name.endswith("_conv_in"):                
                 if not name.startswith("block0_"):
                     x = self.downsample(x)
 
-                #print(f"x_shape: {x.shape}, input_x_shape: {input_x.shape}")
-                #skip_balance = self.enc_skip_balance[block.level].sigmoid()
-                #x = mp_cat(x, input_x, t=self.config.skip_balance)
                 x = mp_cat(x, input_x, t=self.config.cat_balance)
                 input_x = self.downsample(input_x)
                 x = block(x)
 
             elif name.endswith("_conv_out"):
-
-                latents_out = block(x)
+                latents_out = block(x).float()
                 latents_out = latents_out.reshape(latents_out.shape[0], latents_out.shape[1] * 2, 1, latents_out.shape[3])
+
                 if latents is None:
                     latents = latents_out
                 else:
-                    latents = torch.cat((normalize(latents_out), self.downsample(latents)), dim=2)
-                
-                #print(f"latents_out_shape: {latents_out.shape}, latents_shape: {latents.shape}")
+                    latents = torch.cat((latents_out, self.downsample(latents)), dim=2)
             else:
-                #print(f"x_shape: {x.shape}")
                 x = block(x, embeddings)
 
-        for i in range(self.config.extra_downsamples):
+        for _ in range(self.config.extra_downsamples):
             latents = self.downsample(latents)
 
-        #print(f"output latents_shape: {latents.shape}")
-        
-        return latents * self.latents_out_gain
+        normalized_latents = normalize(latents - latents.mean(dim=3, keepdim=True), dim=(1,3))
+        return normalized_latents
 
     def decode(self, x: torch.Tensor, embeddings: torch.Tensor) -> torch.Tensor:
         
-        #x = x.view(x.shape[0], self.config.latent_channels, 2, x.shape[2], x.shape[3]) # (B, C/2, 2, H, W)
-        #x = x.permute(0, 2, 1, 3, 4)  # (B, 2, C/2, H, W)
-        #x = x.reshape(x.shape[0] * 2, self.config.latent_channels, x.shape[3], x.shape[4]) # (B*2, C/2, H, W)
-
-        latents = self.conv_latents_reg(x)
-
-        #latents = latents.view(latents.shape[0], 2, self.config.latent_channels, latents.shape[2], latents.shape[3]) # (B, 2, C/2, H, W)
-        #latents = latents.permute(0, 2, 1, 3, 4)  # (B, C/2, 2, H, W)
-        #latents = latents.reshape(latents.shape[0], self.config.latent_channels * 2, latents.shape[3], latents.shape[4]) # (B, C, H, W)
+        latents = self.conv_latents_reg(x).to(dtype=torch.bfloat16)
 
         for _ in range(self.config.extra_downsamples):
             latents = self.upsample(latents)
 
-        #x = torch.ones((latents.shape[0], 1, 2, latents.shape[3]), device=latents.device, dtype=latents.dtype)
         x = torch.ones_like(latents[:, :1, :2])
 
         if embeddings is not None:
             embeddings = embeddings[:, :, None, None]
 
         x_out: list[torch.Tensor] = []
-        #print("")
-
         for name, block in self.dec.items():
             
-            #print(f"dec_{name}")
             if name.endswith("_conv_in"):
-            
                 if not name.startswith(f"block{self.num_levels-1}_"):
                     x = self.upsample(x)
 
                 latents_in = latents[:, :, 0:1, :].reshape(latents.shape[0], self.config.latent_channels, 2, latents.shape[3])
-                #print(f"latents_in_shape: {latents_in.shape}, latents_shape: {latents.shape}, x_shape: {x.shape}")
-
                 x = mp_cat(x, latents_in, t=self.config.cat_balance)
+
                 if not name.startswith(f"block0_"):
                     latents = self.upsample(latents[:, :, 1:, :])
+
                 x = block(x)
 
             elif name.endswith("_conv_out"):
-                
                 x_out.append(normalize(block(x)))
-                #print(f"x_shape: {x.shape}, x_out_shape: {x_out[-1].shape}")
             else:
-                #print(f"x_shape: {x.shape}")
                 x = block(x, embeddings)
 
         x_out.reverse()
-        #for _x_out in x_out:
-            #print(f"x_out_shape: {_x_out.shape}")
-
         return x_out
     
     def forward(self, samples: torch.Tensor, dae_embeddings: torch.Tensor,
@@ -436,11 +404,7 @@ class DAE_I4(DualDiffusionDAE):
         latents = self.encode(samples, dae_embeddings)
         decoded = self.decode(latents, dae_embeddings)
 
-        latents_mean = latents.mean(dim=(1,2,3))
-        latents_var = latents.var(dim=(1,2,3))
-        latents_kld = latents_mean.square() + latents_var - 1 - latents_var.log()
-        
-        return latents, decoded, latents_kld
+        return latents, decoded
 
     def tiled_encode(self, x: torch.Tensor, embeddings: torch.Tensor, max_chunk: int = 6144, overlap: int = 256) -> torch.Tensor:
         raise NotImplementedError()
