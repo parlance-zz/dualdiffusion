@@ -67,6 +67,7 @@ class DualDiffusionDAEConfig(DualDiffusionModuleConfig, ABC):
     latents_img_split_stereo: bool = True
     latents_img_use_pca: bool      = True
     latents_img_channel_order: Optional[tuple[int]] = (1, 3, 2, 0)
+    latents_img_flip_stereo: bool = True
 
 class DualDiffusionDAE(DualDiffusionModule, ABC):
 
@@ -116,6 +117,10 @@ class DualDiffusionDAE(DualDiffusionModule, ABC):
     def latents_to_img(self, latents: torch.Tensor) -> ndarray:
         
         if self.config.latents_img_split_stereo == True:
+            if self.config.latents_img_flip_stereo == True:
+                latents = latents.clone().detach()
+                latents[:, 1::2] = latents[:, 1::2].flip(dims=(2,))
+
             latents = torch.cat((latents[:, 0::2], latents[:, 1::2]), dim=2)
         
         if self.config.latents_img_use_pca == True:

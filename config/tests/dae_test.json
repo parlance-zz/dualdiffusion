@@ -1,10 +1,13 @@
 {
-    "model_name": "edm2_ddec_i1a",
+    "model_name": "edm2_ddec_i4b",
     "model_load_options": {
         "torch_dtype": "bfloat16",
         "device": "cuda",
         "load_checkpoints": true,
-        "load_emas": null,
+        "load_emas": {
+            "dae": "ema_std0.1.safetensors",
+            "ddec_raw": "ema_std0.1.safetensors"
+        },
         "compile_options": {
             "fullgraph": true,
             "dynamic": false
@@ -15,11 +18,11 @@
     "latents_tiled_max_chunk_size": 6144,
     "latents_tiled_overlap": 256,
     "latents_img_use_pca": true,
+    "latents_img_flip_stereo": true,
     "output_lufs": -20,
     "dae_bypass": false,
     "ddec_output": true,
-    "xref_output": false,
-    "add_random_test_samples": 9,
+    "add_random_test_samples": 25,
     "copy_sample_source_files": true,
     "test_samples": [
         "3sf/Dopamix/STRM_BGM_ENDING.bcstm.flac",

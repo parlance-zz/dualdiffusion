@@ -78,6 +78,9 @@ def dae_test() -> None:
     if test_params.get("latents_img_use_pca", None) is not None:
         dae.config.latents_img_use_pca = test_params["latents_img_use_pca"]
     
+    if test_params.get("latents_img_flip_stereo", None) is not None:
+        dae.config.latents_img_flip_stereo = test_params["latents_img_flip_stereo"]
+
     start_time = datetime.datetime.now()
     avg_latents_mean = avg_latents_std = 0
 
@@ -138,14 +141,6 @@ def dae_test() -> None:
         
         for i, embedding in enumerate(output_embeddings):
             output_embeddings[i] = embedding.to(torch.bfloat16)
-            #print(embedding.shape, embedding.dtype)
-        #exit()
-        # ***************** ddec mdct stage ***************** 
-        #input_x_ref_mdct = format.mel_spec_to_mdct_psd(input_mel_spec)
-        #if test_params["dae_bypass"] == True:
-        #    x_ref_mdct = input_x_ref_mdct
-        #else:
-        #    x_ref_mdct = format.mel_spec_to_mdct_psd(ddec_ms_output_sample)
 
         if ddec_raw is not None and test_params["ddec_output"] != False:
             ddec_raw_params = SampleParams(
@@ -181,14 +176,6 @@ def dae_test() -> None:
             save_img(dae.latents_to_img(latents), os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_latents.png')}"))
             save_img(dae.latents_to_img(latents), os.path.join(output_path, "1", f"step_{last_global_step}_{filename.replace(file_ext, '_latents.png')}"))
             save_tensor_raw(latents.float().contiguous(), os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_latents.raw')}"))
-        
-        #if test_params.get("xref_output", False) == True:
-        #    save_img(format.mdct_psd_to_img(input_x_ref_mdct), os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_input_x_ref_mdct.png')}"))
-        #    if x_ref_mdct is not None:
-        #        save_img(format.mdct_psd_to_img(x_ref_mdct), os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_output_x_ref_mdct.png')}"))
-        #save_img(format.mel_spec_to_img(input_mel_spec), os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_input_mel_spec.png')}"))
-        #save_img(format.mel_spec_to_img(output_embeddings), os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_output_mel_spec.png')}"))
-        #save_img(format.mel_spec_to_img(ddec_ms_output_sample), os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_output_mel_spec_ddec.png')}"))
 
         if output_raw is not None:
             output_flac_file_path = os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_decoded.flac')}")
