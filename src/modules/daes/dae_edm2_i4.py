@@ -436,10 +436,9 @@ class DAE_I4(DualDiffusionDAE):
         latents = self.encode(samples, dae_embeddings)
         decoded = self.decode(latents, dae_embeddings)
 
-        latents3d = latents.view(latents.shape[0], self.config.latent_channels, 2, latents.shape[2], latents.shape[3])
-        latents_mean = latents3d.mean(dim=(4))
-        latents_var = latents3d.var(dim=(1,2,3,4))
-        latents_kld = latents_mean.square().mean(dim=(1,2,3)) + latents_var - 1 - latents_var.log()
+        latents_mean = latents.mean(dim=(1,2,3))
+        latents_var = latents.var(dim=(1,2,3))
+        latents_kld = latents_mean.square() + latents_var - 1 - latents_var.log()
         
         return latents, decoded, latents_kld
 
