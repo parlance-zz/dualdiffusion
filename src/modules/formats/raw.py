@@ -93,7 +93,7 @@ class RawFormat(DualDiffusionFormat):
             raw_len = raw_samples.shape[-1]
             raw_samples = torch.nn.functional.pad(raw_samples, (raw_len // 2, raw_len // 2), mode="reflect")
             rfft: torch.Tensor = torch.fft.fft(raw_samples, dim=-1, norm="ortho")
-            rfft = rfft[..., :rfft.shape[-1] // 2 + 1]
+            rfft = rfft[..., :rfft.shape[-1] // 2 + 1] / 2
 
         if self.config.mel_density_scaling == True:
             rfft_freq = torch.fft.rfftfreq(raw_samples.shape[-1], d=1/self.config.sample_rate, device=raw_samples.device)
