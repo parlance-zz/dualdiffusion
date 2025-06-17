@@ -52,18 +52,18 @@ class DAE_I5_Config(DualDiffusionDAEConfig):
     latent_channels: int = 12
     
     resample_beta: float = 3.437
-    resample_k_size: int = 23
+    resample_k_size: int = 11
     resample_factor: int = 2
     extra_downsamples: int = 4
 
     model_channels: int   = 32
     channel_mult_emb: int = 0
-    channel_mult_enc: list[int] = (1,1,2,2,3,3,4,4)
-    channel_mult_dec: list[int] = (1,1,2,2,3,3,4,4)
+    channel_mult_enc: list[int] = (1,1,1,1,1,1,1,1)
+    channel_mult_dec: list[int] = (1,1,1,1,1,1,1,1)
     num_enc_layers_per_block: list[int] = (1,1,1,1,1,1,1,1)
     num_dec_layers_per_block: list[int] = (1,1,1,1,1,1,1,1)
-    kernel_enc: list[int] = (2,11)
-    kernel_dec: list[int] = (2,11)
+    kernel_enc: list[int] = (2,5)
+    kernel_dec: list[int] = (2,5)
     mlp_multiplier: int = 1
     mlp_groups: int     = 1
 
@@ -357,7 +357,8 @@ class DAE_I5(DualDiffusionDAE):
                 if latents is None:
                     latents = latents_out
                 else:
-                    latents = torch.cat((latents_out, self.downsample(latents)), dim=2)
+                    #latents = torch.cat((latents_out, self.downsample(latents)), dim=2)
+                    latents = torch.cat((normalize(latents_out), self.downsample(latents)), dim=2)
             else:
                 x = block(x, embeddings)
 
