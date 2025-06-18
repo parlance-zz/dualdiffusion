@@ -27,8 +27,8 @@ import torch
 
 from training.trainer import DualDiffusionTrainer
 from training.module_trainers.unet_trainer import UNetTrainer, UNetTrainerConfig
-from modules.daes.dae_edm2_i3 import DAE_I3
-from modules.unets.unet_edm2_ddec_i3 import DDec_UNet_I3
+from modules.daes.dae_edm2_k1 import DAE_K1
+from modules.unets.unet_edm2_ddec_k1 import DDec_UNet_K1
 from modules.formats.mdct import MDCT_Format
 from modules.mp_tools import normalize
 
@@ -67,12 +67,14 @@ class DiffusionDecoder_Trainer(UNetTrainer):
         self.trainer = trainer
         self.logger = trainer.logger
 
-        self.ddec: DDec_UNet_I3 = trainer.get_train_module("ddec")
-        self.dae: DAE_I3 = trainer.get_train_module("dae")
+        self.ddec: DDec_UNet_K1 = trainer.get_train_module("ddec")
+        self.dae: DAE_K1 = trainer.get_train_module("dae")
 
-        assert self.ddec is not None and self.dae is not None, "DiffusionDecoder_Trainer train modules ddec and dae"
+        assert self.ddec is not None and self.dae is not None, "DiffusionDecoder_Trainer requires train modules ddec and dae"
 
         self.format: MDCT_Format = trainer.pipeline.format.to(self.trainer.accelerator.device)
+        self.loss_weight = self.format.mdct_mel_density.clone()# ** 2
+        self.loss_weight /= self.loss_weight.mean()
 
         if trainer.config.enable_model_compilation:
             self.ddec.compile(**trainer.config.compile_params)
@@ -117,9 +119,9 @@ class DiffusionDecoder_Trainer(UNetTrainer):
                 latents_sigma = self.config.add_latents_noise * (self.trainer.global_step / self.config.latents_noise_warmup_steps)
             else:
                 latents_sigma = self.config.add_latents_noise
+            latents_sigma = torch.Tensor([latents_sigma]).to(device=self.trainer.accelerator.device)
         else:
-            latents_sigma = 0
-        latents_sigma = torch.Tensor([latents_sigma]).to(device=self.trainer.accelerator.device)
+            latents_sigma = None
 
         latents_kl_loss_weight = self.config.latents_kl_loss_weight
         if self.trainer.global_step < self.config.kl_warmup_steps:
@@ -138,9 +140,12 @@ class DiffusionDecoder_Trainer(UNetTrainer):
             "io_stats/mdct_samples_mean": mdct_samples.mean(dim=(1,2,3)),
             "io_stats/latents_std": latents.std(dim=(1,2,3)).detach(),
             "io_stats/latents_mean": latents.mean(dim=(1,2,3)).detach(),
-            "io_stats/latents_sigma": latents_sigma.detach(),
+            "io_stats/latents_sigma": latents_sigma.detach() if latents_sigma is not None else 0,
             "loss_weight/kl_latents": latents_kl_loss_weight,
             "loss/kl_latents": latents_kld.detach(),
         })
+
+        if self.trainer.config.enable_debug_mode == True:
+            print("latents.shape:", latents.shape, "mdct_samples.shape:", mdct_samples.shape)
 
         return logs
