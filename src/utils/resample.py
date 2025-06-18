@@ -131,12 +131,12 @@ class FilteredResample2D(torch.nn.Module):
 class FilteredDownsample2D(FilteredResample2D):
 
     def __init__(self, k_size: int = 7, beta: float = 1.5, factor: int = 2) -> None:
-        super().__init__(k_size, factor, 1/factor, beta, gain=factor**0.5)
+        super().__init__(k_size, factor, 1/factor, beta, gain=1)
 
 class FilteredUpsample2D(FilteredResample2D):
 
     def __init__(self, k_size: int = 15, beta: float = 1.5, factor: int = 2) -> None:
-        super().__init__(k_size, 1, 1/factor, beta, gain=factor**0.5)
+        super().__init__(k_size, 1, 1/factor, beta, gain=factor)
         
         self.factor = factor
     
@@ -303,10 +303,10 @@ if __name__ == "__main__":
     downsample = FilteredDownsample1D(k_size=k_size, beta=beta, factor=factor).cuda().to(dtype=torch.bfloat16)
     upsample = FilteredUpsample1D(k_size=k_size*factor+k_size%factor, beta=beta, factor=factor).cuda().to(dtype=torch.bfloat16)
 
-    test_data = torch.randn((1, 8, 2, 65536), device="cuda", dtype=torch.bfloat16)
-    print(downsample(test_data).std(), downsample(downsample(test_data)).std())
-    print(upsample(test_data).std(), upsample(upsample(test_data)).std())
-    exit()
+    #test_data = torch.randn((1, 8, 2, 65536), device="cuda", dtype=torch.bfloat16)
+    #print(downsample(test_data).std(), downsample(downsample(test_data)).std())
+    #print(upsample(test_data).std(), upsample(upsample(test_data)).std())
+    #exit()
 
     downsample = FilteredDownsample2D(k_size=k_size, beta=beta, factor=factor).cuda()
     upsample = FilteredUpsample2D(k_size=k_size*factor+k_size%factor, beta=beta, factor=factor).cuda()
@@ -322,9 +322,13 @@ if __name__ == "__main__":
 
     #"""
     for i in range(3):
+        print("pre-upsample std:", test_image.std())
         test_image = upsample(test_image)
+        print("post-upsample std:", test_image.std())
     for i in range(3):
+        print("pre-downsample std:", test_image.std())
         test_image = downsample(test_image)
+        print("post-downsample std:", test_image.std())
     save_img(tensor_to_img(test_image, recenter=False, rescale=False), os.path.join(output_path, "__test_img_area.png"))
     exit()
     #"""
