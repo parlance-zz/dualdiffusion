@@ -198,8 +198,8 @@ class DualDiffusionPipeline(torch.nn.Module):
             # get and sort module checkpoints
             for path in os.listdir(model_path):
                 if os.path.isdir(os.path.join(model_path, path)):
-                    #if path.startswith(f"{module_name}_") and path.split("_")[-1].startswith("checkpoint-"):
-                    if module_name in path and path.split("_")[-1].startswith("checkpoint-"):
+                    path_parts = path.split("_")
+                    if module_name in path_parts and path_parts[-1].startswith("checkpoint-"):
                         module_inventory.checkpoints.append(path)
 
             module_inventory.checkpoints = sorted(module_inventory.checkpoints, key=lambda x: int(x.split("-")[1]))
@@ -601,9 +601,9 @@ class DualDiffusionPipeline(torch.nn.Module):
         conditioning_mask = torch.cat((torch.ones(params.batch_size, dtype=torch.bool), torch.zeros(params.batch_size, dtype=torch.bool)))
         unet_class_embeddings = unet.get_embeddings(audio_embedding, conditioning_mask.to(device=unet.device))
 
-        #if unet_class_embeddings is not None:
-        #    debug_info["unet_class_embeddings mean"] = unet_class_embeddings.mean().item()
-        #    debug_info["unet_class_embeddings std"] = unet_class_embeddings.std().item()
+        if unet_class_embeddings is not None:
+            debug_info["unet_class_embeddings mean"] = unet_class_embeddings.mean().item()
+            debug_info["unet_class_embeddings std"] = unet_class_embeddings.std().item()
 
         if x_ref is None:
             if sample_shape is None:
@@ -629,7 +629,7 @@ class DualDiffusionPipeline(torch.nn.Module):
         
         noise = torch.randn(sample_shape, device=unet.device, generator=generator)
         if params.stereo_fix > 0:
-            noise[:, :, 0] = noise[:, :, 1]
+            noise[:, ::2] = noise[:, 1::2]
             noise = mp_sum(torch.randn_like(noise), noise, params.stereo_fix)
 
         sample = noise * (sigma_schedule[0]**2 + params.sigma_data**2)**0.5

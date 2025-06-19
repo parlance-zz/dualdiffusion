@@ -18,10 +18,11 @@
     "latents_tiled_max_chunk_size": 6144,
     "latents_tiled_overlap": 256,
     "latents_img_use_pca": true,
-    "latents_img_flip_stereo": true,
+    "latents_img_flip_stereo": false,
     "output_lufs": -20,
     "dae_bypass": false,
     "ddec_output": true,
+    "xref_output": false,
     "add_random_test_samples": 25,
     "copy_sample_source_files": true,
     "test_samples": [

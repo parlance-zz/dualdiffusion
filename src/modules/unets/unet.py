@@ -64,9 +64,3 @@ class DualDiffusionUNet(DualDiffusionModule, ABC):
                 embeddings: Optional[torch.Tensor] = None,
                 x_ref: Optional[torch.Tensor] = None) -> torch.Tensor:
         pass
-
-    def compile(self, **kwargs) -> None:
-        if type(self).supports_compile == True:
-            super().compile(**kwargs)
-            self.get_embeddings = torch.compile(self.get_embeddings, **kwargs)
-            self.forward = torch.compile(self.forward, **kwargs)

@@ -338,7 +338,6 @@ class DualDiffusionTrainer:
             self.config.device_batch_size = 2
             self.config.validation_device_batch_size = 2
 
-        """
         self.sample_shape: tuple = self.pipeline.get_mel_spec_shape(bsz=self.config.device_batch_size)
         self.validation_sample_shape: tuple = self.pipeline.get_mel_spec_shape(bsz=self.config.validation_device_batch_size)
         if hasattr(self.pipeline, "dae"):
@@ -347,11 +346,7 @@ class DualDiffusionTrainer:
         else:
             self.latent_shape = None
             self.validation_latent_shape = None
-        """
-        self.sample_shape = None
-        self.latent_shape = None
-        self.validation_latent_shape = None
-    
+
         self.logger.info(f"Module classes: {[c.__name__ for c in self.module_classes]}")
         self.logger.info(f"Module trainer class: {self.config.module_trainer_class.__name__}")
         self.logger.info(f"Model metadata: {dict_str(self.pipeline.model_metadata)}")
@@ -782,12 +777,10 @@ class DualDiffusionTrainer:
         self.logger.info(f"  Total train batch size (w. parallel, distributed & accumulation) = {self.total_batch_size}")
         self.logger.info(f"  Total optimization steps for full run = {self.config.max_train_steps}")
         self.logger.info(f"  Path to save/load checkpoints = {self.config.model_path}")
-        """
         if self.sample_shape is not None:
             self.logger.info(f"  Sample shape: {self.sample_shape}")
         if self.latent_shape is not None:
             self.logger.info(f"  Latent shape: {self.latent_shape}")
-        """
 
         self.load_checkpoint()
         self.resume_dataloader = self.accelerator.skip_first_batches(self.train_dataloader, self.resume_step) if self.resume_step > 0 else None
