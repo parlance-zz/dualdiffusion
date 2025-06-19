@@ -194,7 +194,7 @@ class UNetTrainer(ModuleTrainer):
         samples: torch.Tensor = batch["latents"].float().clone()
         audio_embeddings = normalize(batch["audio_embeddings"]).float().clone()
         
-        logs = self.unet_train_batch(samples, audio_embeddings=audio_embeddings)
+        logs = self.unet_train_batch(samples, embeddings=audio_embeddings)
         logs.update({
             "io_stats/latents_std": samples.std(dim=(1,2,3)),
             "io_stats/latents_mean": samples.mean(dim=(1,2,3))
@@ -202,8 +202,8 @@ class UNetTrainer(ModuleTrainer):
 
         return logs
 
-    def unet_train_batch(self, samples: torch.Tensor, audio_embeddings: Optional[torch.Tensor] = None,
-            ref_samples: Optional[torch.Tensor] = None) -> dict[str, Union[torch.Tensor, float]]:
+    def unet_train_batch(self, samples: torch.Tensor, embeddings: Optional[Union[torch.Tensor, list[torch.Tensor]]] = None,
+            ref_samples: Optional[torch.Tensor] = None, loss_weight: Optional[torch.Tensor] = None) -> dict[str, Union[torch.Tensor, float]]:
 
         if self.is_validation_batch == False:
             device_batch_size = self.trainer.config.device_batch_size
@@ -216,8 +216,8 @@ class UNetTrainer(ModuleTrainer):
 
         # normal conditioning dropout
         conditioning_mask = (torch.rand(device_batch_size, generator=self.device_generator,
-            device=self.trainer.accelerator.device) > self.config.conditioning_dropout).float()
-        unet_embeddings = self.unet.get_embeddings(audio_embeddings, conditioning_mask)
+            device=self.trainer.accelerator.device) > self.config.conditioning_dropout).requires_grad_(False).detach()
+        unet_embeddings = self.unet.get_embeddings(embeddings, conditioning_mask)
 
         if self.config.conditioning_perturbation > 0 and self.is_validation_batch == False: # adds noise to the conditioning embedding while preserving variance
             conditioning_perturbation = torch.randn(unet_embeddings.shape, device=unet_embeddings.device, generator=self.device_generator)
@@ -240,7 +240,10 @@ class UNetTrainer(ModuleTrainer):
         denoised = self.unet(samples + noise, batch_sigma, self.format, unet_embeddings, ref_samples)
         
         batch_loss_weight = (batch_sigma ** 2 + self.sigma_sampler.config.sigma_data ** 2) / (batch_sigma * self.sigma_sampler.config.sigma_data) ** 2
-        batch_weighted_loss = torch.nn.functional.mse_loss(denoised, samples, reduction="none").mean(dim=(1,2,3)) * batch_loss_weight
+        batch_weighted_loss = torch.nn.functional.mse_loss(denoised, samples, reduction="none")
+        if loss_weight is not None: # use custom loss weight if provided
+            batch_weighted_loss = batch_weighted_loss * loss_weight
+        batch_weighted_loss = batch_weighted_loss.mean(dim=(1,2,3)) * batch_loss_weight
 
         if self.is_validation_batch == True:
             batch_loss = batch_weighted_loss

@@ -33,6 +33,61 @@ def _kaiser_windowed_sinc_1d(size, cutoff, beta):
     kernel = sinc * torch.kaiser_window(size, beta=beta, periodic=False)
     return kernel / kernel.sum()
 
+class FilteredResample1D(torch.nn.Module):
+
+    def __init__(self, k_size: int = 7, stride: int = 2,
+            cutoff: float = 0.5, beta: float = 1.5, gain: float = 1) -> None:
+        super().__init__()
+
+        self.k_size = k_size
+        self.stride = stride
+        self.beta = beta
+
+        self.register_buffer("kernel",
+            _kaiser_windowed_sinc_1d(k_size, cutoff, beta) * gain, persistent=False)
+
+        even = k_size % 2 == 0; hk_size = k_size // 2
+        if stride == 1:
+            self.pad_w = torch.nn.ReflectionPad2d((hk_size, hk_size - even, 0, 0))
+        else:
+            self.pad_w = torch.nn.ReflectionPad2d((hk_size - even, hk_size, 0, 0))
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+
+        kernel: torch.Tensor = self.kernel
+        original_dtype = x.dtype
+
+        kw = kernel[None, None, None, :].expand(x.shape[1], 1, 1, self.k_size)
+        x = torch.nn.functional.conv2d(self.pad_w(x), kw, groups=x.shape[1], stride=(1,self.stride))
+
+        return x.to(dtype=original_dtype)
+
+    def get_filter(self) -> torch.Tensor:
+        return self.kernel
+    
+    def get_window(self) -> torch.Tensor:
+        return torch.kaiser_window(self.k_size, beta=self.beta, periodic=False)
+
+class FilteredDownsample1D(FilteredResample1D):
+
+    def __init__(self, k_size: int = 7, beta: float = 1.5, factor: int = 2) -> None:
+        super().__init__(k_size, factor, 1/factor, beta, gain=1)
+
+class FilteredUpsample1D(FilteredResample1D):
+
+    def __init__(self, k_size: int = 15, beta: float = 1.5, factor: int = 2) -> None:
+        super().__init__(k_size, 1, 1/factor, beta, gain=factor)
+        
+        self.factor = factor
+    
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+
+        b,c,h,w = x.shape
+        y = torch.zeros((b, c, h, w*self.factor), device=x.device, dtype=x.dtype)
+        y[..., ::self.factor] = x
+
+        return super().forward(y)
+
 class FilteredResample2D(torch.nn.Module):
 
     def __init__(self, k_size: int = 7, stride: int = 2,
@@ -56,7 +111,7 @@ class FilteredResample2D(torch.nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
 
-        kernel: torch.Tensor = self.kernel.float()
+        kernel: torch.Tensor = self.kernel
 
         kw = kernel[None, None, None, :].expand(x.shape[1], 1, 1, self.k_size)
         x = torch.nn.functional.conv2d(self.pad_w(x), kw, groups=x.shape[1], stride=(1,self.stride))
@@ -72,16 +127,16 @@ class FilteredResample2D(torch.nn.Module):
     def get_window(self) -> torch.Tensor:
         window = torch.kaiser_window(self.k_size, beta=self.beta, periodic=False)
         return torch.outer(window, window)
-    
+
 class FilteredDownsample2D(FilteredResample2D):
 
     def __init__(self, k_size: int = 7, beta: float = 1.5, factor: int = 2) -> None:
-        super().__init__(k_size, factor, 1/factor, beta, gain=factor**0.5)
+        super().__init__(k_size, factor, 1/factor, beta, gain=1)
 
 class FilteredUpsample2D(FilteredResample2D):
 
     def __init__(self, k_size: int = 15, beta: float = 1.5, factor: int = 2) -> None:
-        super().__init__(k_size, 1, 1/factor, beta, gain=factor**0.5)
+        super().__init__(k_size, 1, 1/factor, beta, gain=factor)
         
         self.factor = factor
     
@@ -169,6 +224,60 @@ class Filtered_MP_Silu_3D(torch.nn.Module):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return self.downsample(mp_silu(self.upsample(x)))
 
+class FilteredResample1D3(torch.nn.Module):
+
+    def __init__(self, k_size: int = 7, stride: int = 2,
+            cutoff: float = 0.5, beta: float = 1.5, gain: float = 1) -> None:
+        super().__init__()
+
+        self.k_size = k_size
+        self.stride = stride
+        self.beta = beta
+
+        self.register_buffer("kernel",
+            _kaiser_windowed_sinc_1d(k_size, cutoff, beta) * gain, persistent=False)
+
+        even = k_size % 2 == 0; hk_size = k_size // 2
+        if stride == 1:
+            self.pad_w = torch.nn.ReflectionPad3d((hk_size, hk_size - even, 0, 0, 0, 0))
+        else:
+            self.pad_w = torch.nn.ReflectionPad3d((hk_size - even, hk_size, 0, 0, 0, 0))
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+
+        kernel: torch.Tensor = self.kernel
+        original_dtype = x.dtype
+
+        kw = kernel[None, None, None, None, :].expand(x.shape[1], 1, 1, 1, self.k_size)
+        x = torch.nn.functional.conv3d(self.pad_w(x), kw, groups=x.shape[1], stride=(1,1,self.stride))
+
+        return x.to(dtype=original_dtype)
+
+    def get_filter(self) -> torch.Tensor:
+        return self.kernel
+    
+    def get_window(self) -> torch.Tensor:
+        return torch.kaiser_window(self.k_size, beta=self.beta, periodic=False)
+
+class FilteredDownsample1D3(FilteredResample1D3):
+
+    def __init__(self, k_size: int = 7, beta: float = 1.5, factor: int = 2) -> None:
+        super().__init__(k_size, factor, 1/factor, beta, gain=1)
+
+class FilteredUpsample1D3(FilteredResample1D3):
+
+    def __init__(self, k_size: int = 15, beta: float = 1.5, factor: int = 2) -> None:
+        super().__init__(k_size, 1, 1/factor, beta, gain=factor)
+        
+        self.factor = factor
+    
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+
+        b,c,z,h,w = x.shape
+        y = torch.zeros((b, c, z, h, w*self.factor), device=x.device, dtype=x.dtype)
+        y[..., ::self.factor] = x
+
+        return super().forward(y)
 
 
 if __name__ == "__main__":
@@ -191,6 +300,14 @@ if __name__ == "__main__":
     k_size = 23
     factor = 2
 
+    downsample = FilteredDownsample1D(k_size=k_size, beta=beta, factor=factor).cuda().to(dtype=torch.bfloat16)
+    upsample = FilteredUpsample1D(k_size=k_size*factor+k_size%factor, beta=beta, factor=factor).cuda().to(dtype=torch.bfloat16)
+
+    #test_data = torch.randn((1, 8, 2, 65536), device="cuda", dtype=torch.bfloat16)
+    #print(downsample(test_data).std(), downsample(downsample(test_data)).std())
+    #print(upsample(test_data).std(), upsample(upsample(test_data)).std())
+    #exit()
+
     downsample = FilteredDownsample2D(k_size=k_size, beta=beta, factor=factor).cuda()
     upsample = FilteredUpsample2D(k_size=k_size*factor+k_size%factor, beta=beta, factor=factor).cuda()
     filtered_silu = Filtered_MP_Silu_2D(k_size=k_size, beta=beta).cuda()
@@ -205,9 +322,13 @@ if __name__ == "__main__":
 
     #"""
     for i in range(3):
+        print("pre-upsample std:", test_image.std())
         test_image = upsample(test_image)
+        print("post-upsample std:", test_image.std())
     for i in range(3):
+        print("pre-downsample std:", test_image.std())
         test_image = downsample(test_image)
+        print("post-downsample std:", test_image.std())
     save_img(tensor_to_img(test_image, recenter=False, rescale=False), os.path.join(output_path, "__test_img_area.png"))
     exit()
     #"""

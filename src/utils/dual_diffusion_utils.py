@@ -576,7 +576,7 @@ def tensor_4d_to_5d(x: torch.Tensor, num_channels: int) -> torch.Tensor:
 
 def tensor_info_str(x: torch.Tensor) -> str:
     info_str = f"shape: {list(x.shape)}  device: {x.device}  dtype: {x.dtype}"
-    info_str += f"  mean: {x.mean().item():.4f}  std: {x.std().item():.4f}  norm: {x.square().mean().sqrt().item():.4f}"
+    info_str += f"  mean: {x.mean().item():.4f}  std: {x.std().item():.4f}  norm: {x.square().mean().sqrt().item():.4f} abs_max: {x.abs().max().item():.4f}"
     return info_str
 
 # concatenate 2 tensors of shape (b, c, h, w) along the channel dimension in random order

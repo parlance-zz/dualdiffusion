@@ -737,8 +737,26 @@ class DualDiffusionTrainer:
                 tmp_path = os.path.join(self.config.model_path, "tmp")
                 diff_output_path = os.path.join(tmp_path, "src_config_changes.diff")
                 compare_dirs(diff_output_path, checkpoint_full_path, tmp_path,
-                    ignore_patterns=["*_loss.json", "trainer_state.json"],
-                    whitelist_patterns=["*.json", "*.py"])
+                    ignore_patterns=["*_loss.json"], whitelist_patterns=["*.json", "*.py"])
+                
+                # find all diff files in logging dir with a global step after our resume global step
+                # rename them to avoid confusion as they are not part of the resumed run
+                logged_diff_files = [f for f in os.listdir(self.config.logging.logging_dir)
+                                if f.startswith("src_config_changes_") and f.endswith(".diff")]
+                
+                for logged_diff_file in logged_diff_files:
+                    logged_diff_output_path = os.path.join(self.config.logging.logging_dir, logged_diff_file)
+                    if os.path.isfile(logged_diff_output_path):
+                        logged_step = int(logged_diff_file.split("_")[3].split(".diff")[0])
+                        if logged_step > self.global_step:
+                            renamed_logged_diff_output_path = os.path.join(
+                                self.config.logging.logging_dir, f"_{logged_diff_file}")
+                            os.rename(logged_diff_output_path, renamed_logged_diff_output_path)
+
+                # copy new diff output to logging dir
+                logged_diff_output_path = os.path.join(
+                    self.config.logging.logging_dir, f"src_config_changes_{str(self.global_step).zfill(7)}.diff")
+                shutil.copy(diff_output_path, logged_diff_output_path)
 
         if self.global_step > 0:
             self.epoch = self.global_step // self.num_update_steps_per_epoch
