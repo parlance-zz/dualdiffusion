@@ -349,19 +349,17 @@ class DAE_I4(DualDiffusionDAE):
             elif name.endswith("_conv_out"):
                 latents_out = block(x).float()
                 latents_out = latents_out.reshape(latents_out.shape[0], latents_out.shape[1] * 2, 1, latents_out.shape[3])
-
                 if latents is None:
                     latents = latents_out
                 else:
-                    latents = torch.cat((latents_out, self.downsample(latents)), dim=2)
+                    latents = torch.cat((normalize(latents_out), self.downsample(latents)), dim=2)
             else:
                 x = block(x, embeddings)
 
         for _ in range(self.config.extra_downsamples):
             latents = self.downsample(latents)
 
-        normalized_latents = normalize(latents - latents.mean(dim=3, keepdim=True), dim=(1,3))
-        return normalized_latents
+        return latents * self.latents_out_gain
 
     def decode(self, x: torch.Tensor, embeddings: torch.Tensor) -> torch.Tensor:
         
@@ -384,10 +382,8 @@ class DAE_I4(DualDiffusionDAE):
 
                 latents_in = latents[:, :, 0:1, :].reshape(latents.shape[0], self.config.latent_channels, 2, latents.shape[3])
                 x = mp_cat(x, latents_in, t=self.config.cat_balance)
-
                 if not name.startswith(f"block0_"):
                     latents = self.upsample(latents[:, :, 1:, :])
-
                 x = block(x)
 
             elif name.endswith("_conv_out"):
@@ -399,12 +395,20 @@ class DAE_I4(DualDiffusionDAE):
         return x_out
     
     def forward(self, samples: torch.Tensor, dae_embeddings: torch.Tensor,
-            latents_sigma: torch.Tensor) -> tuple[torch.Tensor, ...]:
+            latents_sigma: torch.Tensor = None) -> tuple[torch.Tensor, ...]:
         
         latents = self.encode(samples, dae_embeddings)
+
+        if latents_sigma is not None:
+            latents = (latents + torch.randn_like(latents) * latents_sigma) / (1 + latents_sigma**2)**0.5
+
         decoded = self.decode(latents, dae_embeddings)
 
-        return latents, decoded
+        latents_mean = latents.mean(dim=(1,2,3))
+        latents_var = latents.var(dim=(1,2,3))
+        latents_kld = latents_mean.square() + latents_var - 1 - latents_var.log()
+        
+        return latents, decoded, latents_kld
 
     def tiled_encode(self, x: torch.Tensor, embeddings: torch.Tensor, max_chunk: int = 6144, overlap: int = 256) -> torch.Tensor:
         raise NotImplementedError()
