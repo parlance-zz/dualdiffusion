@@ -40,9 +40,11 @@ class MS_MDCT_DualFormatConfig(DualDiffusionFormatConfig):
     default_raw_length: int = 1408768
 
     # these values scale to unit norm for audio pre-normalized to -20 lufs
-    raw_to_mel_spec_scale: float = 50.0
+    raw_to_mel_spec_scale: float = 50
+    raw_to_mel_spec_offset: float = 0
     mel_spec_to_mdct_psd_scale: float = 0.18
-    mdct_to_raw_scale: float = 2.0
+    mel_spec_to_mdct_psd_offset: float = 0
+    mdct_to_raw_scale: float = 2
     raw_to_mdct_scale: float = 12.1
 
     ms_abs_exponent: float = 1
@@ -232,7 +234,8 @@ class MS_MDCT_DualFormat(DualDiffusionFormat):
                 else:
                     spec_blended = spec_low
 
-                mel_spec.append(self.ms_freq_scale.scale(spec_blended / self.ms_stft_mel_density) ** self.config.ms_abs_exponent)
+                mel_spec.append(self.ms_freq_scale.scale(spec_blended / self.ms_stft_mel_density)
+                                ** self.config.ms_abs_exponent + self.config.raw_to_mel_spec_offset)
 
             return torch.cat(mel_spec, dim=0) * self.config.raw_to_mel_spec_scale
         else:
@@ -243,9 +246,13 @@ class MS_MDCT_DualFormat(DualDiffusionFormat):
             else:
                 spec_blended = mel_spec_low
 
-            return self.ms_freq_scale.scale(spec_blended / self.ms_stft_mel_density) ** self.config.ms_abs_exponent * self.config.raw_to_mel_spec_scale
+            return (self.ms_freq_scale.scale(spec_blended / self.ms_stft_mel_density)
+                ** self.config.ms_abs_exponent * self.config.raw_to_mel_spec_scale + self.config.raw_to_mel_spec_offset)
 
     def mel_spec_to_mdct_psd(self, mel_spec: torch.Tensor):
+
+        mel_spec = mel_spec - self.config.raw_to_mel_spec_offset
+
         if self.ms_freq_scale_mdct_psd is None:
             mel_spec_mdct_psd = self.ms_freq_scale.unscale(
                 mel_spec.float().clip(min=0) ** (1 / self.config.ms_abs_exponent), rectify=False)[:, :, :-1, :] * self.config.mel_spec_to_mdct_psd_scale
@@ -253,10 +260,11 @@ class MS_MDCT_DualFormat(DualDiffusionFormat):
             mel_spec_mdct_psd = self.ms_freq_scale_mdct_psd.unscale(
                 mel_spec.float().clip(min=0) ** (1 / self.config.ms_abs_exponent), rectify=False) * self.config.mel_spec_to_mdct_psd_scale
         
-        return mel_spec_mdct_psd
+        return mel_spec_mdct_psd + self.config.mel_spec_to_mdct_psd_offset
     
     @torch.inference_mode()
     def mel_spec_to_img(self, mel_spec: torch.Tensor):
+        mel_spec = mel_spec - self.config.raw_to_mel_spec_offset
         return tensor_to_img(mel_spec.clip(min=0)**(0.25 / self.config.ms_abs_exponent), flip_y=True)
     
     # **************** mdct methods ****************
