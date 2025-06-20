@@ -239,6 +239,11 @@ class DAETrainer_J1(ModuleTrainer):
             for i, level_loss in enumerate(wavelet_level_losses):
                 logs[f"loss/w_level_{i}"] = level_loss
 
+        if self.trainer.config.enable_debug_mode == True:
+            print("mel_spec.shape:", mel_spec.shape)
+            print("reconstructed.shape:", reconstructed.shape)
+            print("latents.shape:", latents.shape)
+
         #for name, block in self.dae.encoder.enc.items():
         #    logs[f"res_t/enc_{name}"] = block.get_res_balance().detach()
 

@@ -63,8 +63,9 @@ def dae_test() -> None:
 
     sample_rate = format.config.sample_rate
     
-    last_global_step = ddec_ms.config.last_global_step
-    output_path = os.path.join(model_path, "output", "ddec_ms", f"step_{last_global_step}")
+    dae.config.latents_img_split_stereo = False
+    last_global_step = dae.config.last_global_step
+    output_path = os.path.join(model_path, "output", "dae", f"step_{last_global_step}")
     os.makedirs(output_path, exist_ok=True)
 
     model_metadata = {"model_metadata": dict_str(pipeline.model_metadata)}

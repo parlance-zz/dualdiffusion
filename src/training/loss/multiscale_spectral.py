@@ -63,7 +63,7 @@ class MSSLoss1D:
                 n_fft=block_width,
                 win_length=block_width,
                 hop_length=max(block_width // self.config.block_overlap, 1),
-                window_fn=MS_MDCT_DualFormat._hann_power_window,
+                window_fn=MS_MDCT_DualFormat._mel_spec_window,
                 power=None, normalized="window",
                 wkwargs={
                     "exponent": 1,
@@ -122,14 +122,15 @@ class MSSLoss1D:
 class MSSLoss2DConfig:
 
     block_widths: tuple[int] = (8, 16, 32, 64)
-    block_overlap: int = 2
+    block_overlap: int = 8
     block_width_weight_exponent: float = 0
-    block_window_fn: Literal["none", "flat_top", "hann", "kaiser"] = "hann"
+    block_window_fn: Literal["none", "flat_top", "flat_top_circular", "hann", "kaiser"] = "flat_top"
 
-    frequency_weight_exponent: float = 0.5
+    frequency_weighting: Literal["product", "f^2", "dynamic"] = "product"
+    frequency_weight_exponent: float = 1
     use_midside_transform: Literal["stack", "cat", "none"] = "stack"
     use_mse_loss: bool = False
-    phase_loss_scale: float = 1
+    phase_loss_scale: float = 0
     abs_loss_scale: float = 1
 
 class MSSLoss2D:
@@ -144,28 +145,38 @@ class MSSLoss2D:
         self.windows = []
         self.loss_weights = []
 
-        for block_width in self.config.block_widths:
-            self.steps.append(max(block_width // self.config.block_overlap, 1))
+        for block_width in config.block_widths:
+            self.steps.append(max(block_width // config.block_overlap, 1))
 
-            if self.config.block_window_fn == "hann":
+            if config.block_window_fn == "hann":
                 window = self.get_sin_power_window_2d(block_width)
-            elif self.config.block_window_fn == "flat_top":
+            elif config.block_window_fn == "flat_top":
                 window = self.get_flat_top_window_2d(block_width)
-            elif self.config.block_window_fn == "kaiser":
+            elif config.block_window_fn == "flat_top_circular":
+                window = self.get_flat_top_window_2d_circular(block_width)
+            elif config.block_window_fn == "kaiser":
                 window = torch.kaiser_window(block_width, beta=12, periodic=False)
                 window = torch.outer(window, window)
-            elif self.config.block_window_fn != "none":
-                raise ValueError(f"Invalid block window function: {self.config.block_window_fn}")
+            elif config.block_window_fn == "none":
+                window = torch.ones((block_width, block_width))
+            else:
+                raise ValueError(f"Invalid block window function: {config.block_window_fn}")
             
-            if self.config.block_window_fn != "none":
-                window /= window.square().mean().sqrt()
-                self.windows.append(window.to(device=device).requires_grad_(False).detach())
+            window /= window.square().mean().sqrt()
+            self.windows.append(window.to(device=device).requires_grad_(False).detach())
 
-            freq_h: torch.Tensor = torch.fft.fftfreq(block_width, device=device).abs() + 1
-            freq_w: torch.Tensor = torch.fft.rfftfreq(block_width, device=device).abs() + 1
-            loss_weight = torch.outer(freq_h, freq_w)
-            loss_weight = (loss_weight / loss_weight.mean()).requires_grad_(False).detach()
-            self.loss_weights.append(loss_weight)
+            freq_h: torch.Tensor = torch.fft.fftfreq(block_width, d=1/block_width)
+            freq_w: torch.Tensor = torch.fft.rfftfreq(block_width, d=1/block_width)
+            if config.frequency_weighting == "product":
+                loss_weight = (freq_h.view(-1, 1).abs() + 1) * freq_w.view(1, -1).abs()
+            elif config.frequency_weighting == "f^2":
+                loss_weight = freq_h.view(-1, 1)**2 + freq_w.view(1, -1)**2 + 1
+            elif config.frequency_weighting != "dynamic":
+                raise ValueError(f"Invalid frequency weighting: {config.frequency_weighting}")
+            
+            if config.frequency_weighting != "dynamic":
+                loss_weight = loss_weight.float().requires_grad_(False).detach().to(device=device)
+                self.loss_weights.append(loss_weight)
 
     @torch.no_grad()
     def _flat_top_window(self, x: torch.Tensor) -> torch.Tensor:
@@ -174,7 +185,8 @@ class MSSLoss2D:
 
     @torch.no_grad()
     def get_flat_top_window_2d(self, block_width: int) -> torch.Tensor:
-        wx = (torch.arange(block_width) + 0.5) / block_width * 2 * torch.pi
+        #wx = (torch.arange(block_width) + 0.5) / block_width * 2 * torch.pi
+        wx = torch.arange(block_width) / block_width * 2 * torch.pi
         return self._flat_top_window(wx.view(1, 1,-1, 1)) * self._flat_top_window(wx.view(1, 1, 1,-1))
     
     @torch.no_grad()
@@ -189,15 +201,14 @@ class MSSLoss2D:
     
     @torch.no_grad()
     def create_distance_tensor(self, block_width: int) -> torch.Tensor:
-        x_coords = (torch.arange(block_width) + 0.5).repeat(block_width, 1)
-        y_coords = (torch.arange(block_width) + 0.5).view(-1, 1).repeat(1, block_width)
+        x_coords = (torch.arange(block_width) + 0.5).view(1, -1)
+        y_coords = (torch.arange(block_width) + 0.5).view(-1, 1)
         return torch.sqrt((x_coords - block_width/2) ** 2 + (y_coords - block_width/2) ** 2)
 
     @torch.no_grad()
     def get_flat_top_window_2d_circular(self, block_width: int) -> torch.Tensor:
-        dist = self.create_distance_tensor(block_width)
-        wx = (dist / (block_width/2 + 0.5)).clip(max=1) * torch.pi + torch.pi
-        return self._flat_top_window(wx)
+        dist = self.create_distance_tensor(block_width) / (block_width // 2)
+        return (self._flat_top_window(dist * torch.pi + torch.pi) * (dist <= 1))[None, None, :, :]
     
     def stft2d(self, x: torch.Tensor, block_width: int,
                step: int, window: Optional[torch.Tensor] = None) -> torch.Tensor:
@@ -213,8 +224,10 @@ class MSSLoss2D:
 
         if self.config.use_midside_transform not in ["none", None]:
             if self.config.use_midside_transform == "stack":
+                #x = torch.stack(((x[:, 0] + x[:, 1]) / 2, (x[:, 0] - x[:, 1]) * 2), dim=1)
                 x = torch.stack((x[:, 0] + x[:, 1], x[:, 0] - x[:, 1]), dim=1)
             elif self.config.use_midside_transform == "cat":
+                #x = torch.cat((x, (x[:, 0:1] + x[:, 1:2]) / 2, (x[:, 0:1] - x[:, 1:2]) * 2), dim=1)
                 x = torch.cat((x, (x[:, 0:1] + x[:, 1:2])*0.5**0.5, (x[:, 0:1] - x[:, 1:2])*0.5**0.5), dim=1)
             else:
                 raise ValueError(f"Invalid midside transform type: {self.config.use_midside_transform}")
@@ -231,25 +244,20 @@ class MSSLoss2D:
                 continue
 
             step = self.steps[i]
-            loss_weight = self.loss_weights[i]
-            if self.config.block_window_fn != "none":
-                window = self.windows[i]
-            else:
-                window = None
+            window = self.windows[i]
+            
+            if self.config.frequency_weighting != "dynamic":
+                loss_weight = self.loss_weights[i]
 
             with torch.no_grad():
                 target_fft = self.stft2d(target, block_width, step, window)
                 target_fft_abs = target_fft.abs().requires_grad_(False).detach()
                 
-                if self.config.frequency_weight_exponent != 0:
+                if self.config.frequency_weighting == "dynamic":
+                    loss_weight = (1 / target_fft_abs.mean(dim=(0,2,3), keepdim=True).clip(min=1e-2)).requires_grad_(False).detach()
 
-                    #loss_weight = (1 / target_fft_abs.mean(dim=(0,2,3), keepdim=True).clip(min=1e-2)).requires_grad_(False).detach()
-
-                    if self.config.frequency_weight_exponent != 1:
-                        loss_weight = loss_weight.pow(self.config.frequency_weight_exponent)
-                else:
-                    pass
-                    #loss_weight = 1
+                if self.config.frequency_weight_exponent != 1:
+                    loss_weight = loss_weight.pow(self.config.frequency_weight_exponent)
 
                 if self.config.block_width_weight_exponent != 0:
                     loss_weight = loss_weight * (block_width ** self.config.block_width_weight_exponent)
@@ -277,9 +285,12 @@ class MSSLoss2D:
                     block_loss = torch.zeros_like(target_fft_abs)
 
                 if self.config.phase_loss_scale > 0:
-                    #block_loss = block_loss + (sample_fft - target_fft).abs() * self.config.phase_loss_scale
                     block_loss = block_loss + (torch.nn.functional.l1_loss(sample_fft.real, target_fft.real, reduction="none") \
                                             +  torch.nn.functional.l1_loss(sample_fft.imag, target_fft.imag, reduction="none")) * self.config.phase_loss_scale
+
+            #with torch.no_grad():
+            #    fft_dots = sample_fft.real * target_fft.real + sample_fft.imag * target_fft.imag
+            #block_loss = block_loss * torch.sign(fft_dots).detach()
 
             block_loss = (block_loss * loss_weight).mean(dim=(1,2,3,4,5))
             loss = loss + block_loss
