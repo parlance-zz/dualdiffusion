@@ -63,7 +63,6 @@ def dae_test() -> None:
 
     sample_rate = format.config.sample_rate
     
-    dae.config.latents_img_split_stereo = False
     last_global_step = dae.config.last_global_step
     output_path = os.path.join(model_path, "output", "dae", f"step_{last_global_step}")
     os.makedirs(output_path, exist_ok=True)

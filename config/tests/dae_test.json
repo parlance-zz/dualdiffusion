@@ -1,19 +1,16 @@
 {
-    "model_name": "edm2_ddec_i4b",
+    "model_name": "edm2_dae_m1a",
     "model_load_options": {
         "torch_dtype": "bfloat16",
         "device": "cuda",
         "load_checkpoints": true,
-        "load_emas": {
-            "dae": "ema_std0.1.safetensors",
-            "ddec_raw": "ema_std0.1.safetensors"
-        },
+        "load_emas": null,
         "compile_options": {
             "fullgraph": true,
             "dynamic": false
         }
     },
-    "length": 608768,
+    "length": 1440000,
     "latents_tiled_encode": false,
     "latents_tiled_max_chunk_size": 6144,
     "latents_tiled_overlap": 256,
@@ -21,7 +18,7 @@
     "latents_img_flip_stereo": false,
     "output_lufs": -20,
     "dae_bypass": false,
-    "ddec_output": true,
+    "ddec_output": false,
     "xref_output": false,
     "add_random_test_samples": 25,
     "copy_sample_source_files": true,

@@ -49,6 +49,7 @@ class DAE_M1_Config(DualDiffusionDAEConfig):
     latent_channels: int = 8
     downsample_factor: int = 8
     res_balance: float   = 0.3
+    polarity_fix: bool   = False
 
     model_channels: int   = 32
     channel_mult_emb: int = 4
@@ -336,6 +337,10 @@ class DAE_M1(DualDiffusionDAE):
             x = block(x, emb)
 
         decoded = self.conv_out(x, gain=self.output_gain)
+
+        if self.config.polarity_fix == True:
+            decoded = -decoded
+
         return decoded
     
     def forward(self, samples: torch.Tensor, dae_embeddings: torch.Tensor,
