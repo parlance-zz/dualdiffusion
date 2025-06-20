@@ -168,7 +168,7 @@ class MSSLoss2D:
             freq_h: torch.Tensor = torch.fft.fftfreq(block_width, d=1/block_width)
             freq_w: torch.Tensor = torch.fft.rfftfreq(block_width, d=1/block_width)
             if config.frequency_weighting == "product":
-                loss_weight = (freq_h.view(-1, 1).abs() + 1) * freq_w.view(1, -1).abs()
+                loss_weight = (freq_h.view(-1, 1).abs() + 1) * (freq_w.view(1, -1).abs() + 1)
             elif config.frequency_weighting == "f^2":
                 loss_weight = freq_h.view(-1, 1)**2 + freq_w.view(1, -1)**2 + 1
             elif config.frequency_weighting != "dynamic":
@@ -287,10 +287,6 @@ class MSSLoss2D:
                 if self.config.phase_loss_scale > 0:
                     block_loss = block_loss + (torch.nn.functional.l1_loss(sample_fft.real, target_fft.real, reduction="none") \
                                             +  torch.nn.functional.l1_loss(sample_fft.imag, target_fft.imag, reduction="none")) * self.config.phase_loss_scale
-
-            #with torch.no_grad():
-            #    fft_dots = sample_fft.real * target_fft.real + sample_fft.imag * target_fft.imag
-            #block_loss = block_loss * torch.sign(fft_dots).detach()
 
             block_loss = (block_loss * loss_weight).mean(dim=(1,2,3,4,5))
             loss = loss + block_loss
