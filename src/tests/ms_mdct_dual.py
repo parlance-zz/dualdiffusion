@@ -75,7 +75,7 @@ def ms_mdct_dual_format_test() -> None:
         "exponent": cfg.format_config.ms_window_exponent_low,
         "periodic": cfg.format_config.ms_window_periodic,
     }
-    window_low = MS_MDCT_DualFormat._hann_power_window(cfg.format_config.ms_win_length, **wkwargs)
+    window_low = MS_MDCT_DualFormat._mel_spec_window(cfg.format_config.ms_win_length, **wkwargs)
     window_low.numpy().tofile(os.path.join(output_path, "window_low.raw"))
 
     wkwargs={
@@ -83,7 +83,7 @@ def ms_mdct_dual_format_test() -> None:
         "periodic": cfg.format_config.ms_window_periodic,
     }
     if cfg.format_config.ms_window_exponent_high is not None:
-        window_high = MS_MDCT_DualFormat._hann_power_window(cfg.format_config.ms_win_length, **wkwargs)
+        window_high = MS_MDCT_DualFormat._mel_spec_window(cfg.format_config.ms_win_length, **wkwargs)
         window_high.numpy().tofile(os.path.join(output_path, "window_high.raw"))
 
     if format.ms_freq_scale_mdct_psd is not None:
@@ -91,6 +91,9 @@ def ms_mdct_dual_format_test() -> None:
     else:
         mel_spec_filters = format.ms_freq_scale.filters
     mel_spec_filters.T.cpu().numpy().tofile(os.path.join(output_path, "mel_spec_filters.raw"))
+
+    print(f"MelSpec filter frequencies (hz): (low cut: {format.ms_filter_freqs[0].item()}, high cut: {format.ms_filter_freqs[-1].item()})")
+    print(format.ms_filter_freqs[1:-1])
 
     stat_logger = StatLogger()
     print(f"\nNum test_samples: {len(test_samples)}\n")

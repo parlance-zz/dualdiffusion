@@ -29,7 +29,7 @@ import torchaudio
 from modules.formats.format import DualDiffusionFormat, DualDiffusionFormatConfig
 from modules.formats.frequency_scale import FrequencyScale, get_mel_density
 from utils.dual_diffusion_utils import tensor_to_img
-from utils.mclt import mclt, imclt
+from utils.mclt import mclt, imclt, WindowFunction
 
 
 @dataclass()
@@ -60,7 +60,6 @@ class MS_MDCT_DualFormatConfig(DualDiffusionFormatConfig):
     ms_window_exponent_low: float = 17
     ms_window_exponent_high: Optional[float] = 58
     ms_window_periodic: bool = True
-    ms_window_half_crop: bool = False
     
     @property
     def mdct_num_frequencies(self) -> int:
@@ -85,17 +84,14 @@ class MS_MDCT_DualFormatConfig(DualDiffusionFormatConfig):
 class MS_MDCT_DualFormat(DualDiffusionFormat):
 
     @staticmethod
-    def _hann_power_window(window_length: int, periodic: bool = True, *, dtype: torch.dtype = None,
+    def _mel_spec_window(window_length: int, periodic: bool = True, *, dtype: torch.dtype = None,
                           layout: torch.layout = torch.strided, device: torch.device = None,
-                          requires_grad: bool = False, exponent: float = 1., half_crop: bool = False) -> torch.Tensor:
+                          requires_grad: bool = False, exponent: float = 1) -> torch.Tensor:
         
-        if half_crop == True:
-            window = torch.hann_window(window_length*2, periodic=periodic, dtype=dtype,
-                    layout=layout, device=device, requires_grad=requires_grad) ** exponent
-            return window[window_length//2:-window_length//2]
-        else:
-            return torch.hann_window(window_length, periodic=periodic, dtype=dtype,
-                    layout=layout, device=device, requires_grad=requires_grad) ** exponent
+        return WindowFunction.blackman_harris(window_length, device=device) ** exponent
+    
+        return torch.hann_window(window_length, periodic=periodic, dtype=dtype,
+                layout=layout, device=device, requires_grad=requires_grad) ** exponent
     
     def __init__(self, config: MS_MDCT_DualFormatConfig) -> None:
         super().__init__()
@@ -108,12 +104,11 @@ class MS_MDCT_DualFormat(DualDiffusionFormat):
             n_fft=config.ms_frame_padded_length,
             win_length=config.ms_win_length,
             hop_length=config.ms_frame_hop_length,
-            window_fn=MS_MDCT_DualFormat._hann_power_window,
+            window_fn=MS_MDCT_DualFormat._mel_spec_window,
             power=1, normalized="window",
             wkwargs={
                 "exponent": config.ms_window_exponent_low,
                 "periodic": config.ms_window_periodic,
-                "half_crop": config.ms_window_half_crop,
                 "requires_grad": False
             },
             center=True, pad=0, pad_mode="reflect", onesided=True
@@ -124,12 +119,11 @@ class MS_MDCT_DualFormat(DualDiffusionFormat):
                 n_fft=config.ms_frame_padded_length,
                 win_length=config.ms_win_length,
                 hop_length=config.ms_frame_hop_length,
-                window_fn=MS_MDCT_DualFormat._hann_power_window,
+                window_fn=MS_MDCT_DualFormat._mel_spec_window,
                 power=1, normalized="window",
                 wkwargs={
                     "exponent": config.ms_window_exponent_high,
                     "periodic": config.ms_window_periodic,
-                    "half_crop": config.ms_window_half_crop,
                     "requires_grad": False
                 },
                 center=True, pad=0, pad_mode="reflect", onesided=True
@@ -164,6 +158,10 @@ class MS_MDCT_DualFormat(DualDiffusionFormat):
                 filter_shape=config.ms_filter_shape,
             )
 
+        ms_filter_freqs = self.ms_freq_scale.get_unscaled(config.ms_num_frequencies + 2)
+        self.ms_lowest_filter_freq = ms_filter_freqs[1].item()
+        self.register_buffer("ms_filter_freqs", ms_filter_freqs)
+
         ms_stft_hz = torch.linspace(0, config.sample_rate / 2, config.ms_num_stft_bins)
         self.register_buffer("ms_stft_hz", ms_stft_hz)
         self.register_buffer("ms_stft_mel_density", get_mel_density(ms_stft_hz).view(1, 1,-1, 1))
@@ -179,6 +177,25 @@ class MS_MDCT_DualFormat(DualDiffusionFormat):
             self.register_buffer("spec_blend_weight", spec_blend_mel_density.view(1, 1,-1, 1))
         else:
             self.spec_blend_weight = None
+    
+    def _high_pass(self, raw_samples: torch.Tensor) -> torch.Tensor:
+        
+        cutoff_freq = self.config.ms_freq_min
+
+        if cutoff_freq <= 0 or (self.ms_lowest_filter_freq - cutoff_freq) <= 0:
+            return raw_samples
+        
+        raw_len = raw_samples.shape[-1]
+
+        raw_samples = torch.nn.functional.pad(raw_samples.float(), (raw_len // 2, raw_len // 2), mode="reflect")
+        rfft: torch.Tensor = torch.fft.rfft(raw_samples, dim=-1, norm="ortho")
+        rfft_freq = torch.fft.rfftfreq(raw_samples.shape[-1], d=1/self.config.sample_rate, device=raw_samples.device)
+
+        filter: torch.Tensor = (rfft_freq - cutoff_freq) / (self.ms_lowest_filter_freq - cutoff_freq)
+        filter = filter.clip(min=0., max=1.).view(1, 1,-1)
+
+        raw_samples = torch.fft.irfft(rfft * filter, n=raw_samples.shape[-1], dim=-1, norm="ortho")
+        return raw_samples[..., raw_len//2:-raw_len//2]
     
     # **************** mel-scale spectrogram methods ****************
 
@@ -202,6 +219,9 @@ class MS_MDCT_DualFormat(DualDiffusionFormat):
     
     @torch.no_grad()
     def raw_to_mel_spec(self, raw_samples: torch.Tensor, use_slicing: bool = False) -> torch.Tensor:
+        
+        raw_samples = self._high_pass(raw_samples)
+
         if use_slicing == True:
             mel_spec = []
             for raw_sample in raw_samples.unbind(0):
@@ -255,6 +275,8 @@ class MS_MDCT_DualFormat(DualDiffusionFormat):
 
     @torch.no_grad()
     def raw_to_mdct(self, raw_samples: torch.Tensor, random_phase_augmentation: bool = False) -> torch.Tensor:
+        
+        raw_samples = self._high_pass(raw_samples)
 
         _mclt = mclt(raw_samples.float(), self.config.mdct_window_len, "kaiser_bessel_derived", 1).permute(0, 1, 3, 2)
         if random_phase_augmentation == True:
@@ -269,6 +291,9 @@ class MS_MDCT_DualFormat(DualDiffusionFormat):
     
     @torch.no_grad()
     def raw_to_mdct_psd(self, raw_samples: torch.Tensor) -> torch.Tensor:
+
+        raw_samples = self._high_pass(raw_samples)
+
         _mclt = mclt(raw_samples.float(), self.config.mdct_window_len, "kaiser_bessel_derived", 1).permute(0, 1, 3, 2)
         return _mclt.abs().contiguous(memory_format=self.memory_format) / self.mdct_mel_density * self.config.raw_to_mdct_scale / 2**0.5
     

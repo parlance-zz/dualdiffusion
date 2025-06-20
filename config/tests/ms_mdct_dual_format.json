@@ -1,7 +1,7 @@
 {
     "device": "cuda",
-    "add_random_test_samples": 2500,
-    "save_output": false,
+    "add_random_test_samples": 0,
+    "save_output": true,
     "downsample_mdct_psd": false,
     
     "test_sample_verbose": false,
@@ -145,6 +145,7 @@
       }
     */
 
+    // best match to dae d3a
     ///*
     "format_config": {
         "sample_rate": 32000,
@@ -157,21 +158,20 @@
         "raw_to_mdct_scale": 12.16,
 
         "mdct_window_len": 512,
-        "mdct_psd_num_bins": 2048,
+        "mdct_psd_num_bins": 4096,
         "mdct_dual_channel": true,
 
-        "ms_freq_min": 0,
+        "ms_freq_min": 20,
         "ms_filter_shape": "cos",
         "ms_abs_exponent": 0.25,
         "ms_width_alignment": 128,
         "ms_num_frequencies": 256,
         "ms_step_size_ms": 8,
-        "ms_window_duration_ms": 128,
-        "ms_padded_duration_ms": 128,
-        "ms_window_exponent_low": 16,
+        "ms_window_duration_ms": 200, //128,
+        "ms_padded_duration_ms": 200, //128,
+        "ms_window_exponent_low": 12, //3 for flat-top //5 for blackman-harris, //15 for hann (128ms window)
         "ms_window_exponent_high": null,
-        "ms_window_periodic": true,
-        "ms_window_half_crop": false
+        "ms_window_periodic": true
     }
     //*/
 
