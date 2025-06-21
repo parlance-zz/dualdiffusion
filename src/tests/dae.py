@@ -187,7 +187,6 @@ def dae_test() -> None:
         metadata["ddec_mdct_metadata"] = dict_str(ddec_mdct_params.__dict__) if ddec_mdct is not None else "null"
 
         if latents is not None:
-            save_img(dae.latents_to_img(latents), os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_latents.png')}"))
             save_img(dae.latents_to_img(latents), os.path.join(output_path, "1", f"step_{last_global_step}_{filename.replace(file_ext, '_latents.png')}"))
         
         if test_params.get("xref_output", False) == True:
@@ -196,7 +195,6 @@ def dae_test() -> None:
                 save_img(format.mdct_psd_to_img(x_ref_mdct), os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_output_x_ref_mdct.png')}"))
         save_img(format.mel_spec_to_img(input_mel_spec), os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_input_mel_spec.png')}"))
         save_img(format.mel_spec_to_img(output_mel_spec), os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_output_mel_spec.png')}"))
-        save_img(format.mel_spec_to_img(ddec_ms_output_sample), os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_output_mel_spec_ddec.png')}"))
 
         if output_raw is not None:
             output_flac_file_path = os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_decoded.flac')}")
