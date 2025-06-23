@@ -31,6 +31,7 @@ from training.loss.multiscale_spectral import MSSLoss2D, MSSLoss2DConfig
 from training.loss.spectral_regularization import SpecRegLoss, SpecRegLossConfig
 from training.loss.wavelet import WaveletLoss, WaveletLoss_Config
 from modules.daes.dae_edm2_j5 import DAE_J5
+from modules.mss import MSSLoss2D
 from modules.formats.ms_mdct_dual import MS_MDCT_DualFormat
 from modules.mp_tools import normalize
 from utils.dual_diffusion_utils import dict_str
@@ -73,7 +74,6 @@ class DAETrainer_J1_Config(ModuleTrainerConfig):
     point_loss_warmup_steps: int = 0
 
     mss_loss_weight: float = 0
-    mss_loss_2d_config: Optional[dict[str, Any]] = None
 
     spec_reg_loss_weight: float = 0
     spec_reg_loss_config: Optional[dict[str, Any]] = None
@@ -91,6 +91,7 @@ class DAETrainer_J1(ModuleTrainer):
         self.logger = trainer.logger
 
         self.dae: DAE_J5 = trainer.get_train_module("dae")
+        self.mss: MSSLoss2D = trainer.get_train_module("mss")
         self.format: MS_MDCT_DualFormat = trainer.pipeline.format.to(self.trainer.accelerator.device)
 
         if trainer.config.enable_model_compilation == True:
@@ -98,11 +99,8 @@ class DAETrainer_J1(ModuleTrainer):
             self.format.compile(**trainer.config.compile_params)
 
         if config.mss_loss_weight > 0:
-            config.mss_loss_2d_config = config.mss_loss_2d_config or {}
-            self.mss_loss = MSSLoss2D(MSSLoss2DConfig(**config.mss_loss_2d_config), device=trainer.accelerator.device)
-
             if trainer.config.enable_model_compilation == True:
-                self.mss_loss.compile(**trainer.config.compile_params)
+                self.mss.compile(**trainer.config.compile_params)
 
         if config.spec_reg_loss_weight > 0:
             config.spec_reg_loss_config = config.spec_reg_loss_config or {}
@@ -130,7 +128,7 @@ class DAETrainer_J1(ModuleTrainer):
         self.logger.info(f"MSS loss weight: {self.config.mss_loss_weight}")
         if self.config.mss_loss_weight > 0:
             self.logger.info("MSS_Loss_2D config:")
-            self.logger.info(dict_str(self.mss_loss.config.__dict__))
+            self.logger.info(dict_str(self.mss.config.__dict__))
 
         self.logger.info(f"Spec reg loss weight: {self.config.spec_reg_loss_weight}")
         if self.config.spec_reg_loss_weight > 0:
@@ -182,7 +180,7 @@ class DAETrainer_J1(ModuleTrainer):
             recon_loss = torch.zeros(mel_spec.shape[0], device=self.trainer.accelerator.device)
         
         if self.config.mss_loss_weight > 0:
-            mss_loss = self.mss_loss.mss_loss(reconstructed, mel_spec)
+            mss_loss = self.mss(reconstructed, mel_spec)
             recon_loss = recon_loss + mss_loss * self.config.mss_loss_weight
         else:
             mss_loss = None
@@ -193,8 +191,9 @@ class DAETrainer_J1(ModuleTrainer):
         else:
             wavelet_loss = None
         
-        recon_loss_logvar = self.dae.get_recon_loss_logvar()
-        recon_loss_nll = recon_loss / recon_loss_logvar.exp() + recon_loss_logvar
+        #recon_loss_logvar = self.dae.get_recon_loss_logvar()
+        #recon_loss_nll = recon_loss / recon_loss_logvar.exp() + recon_loss_logvar
+        recon_loss_nll = recon_loss
 
         latents_kl_loss_weight = self.config.latents_kl_loss_weight
         hidden_kl_loss_weight = self.config.hidden_kl_loss_weight
