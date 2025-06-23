@@ -34,7 +34,8 @@ class MSSLoss2DConfig(DualDiffusionModuleConfig):
 
     block_widths: tuple[int] = (8, 16, 32, 64)
     block_steps: tuple[int] = (1, 2, 4, 8)
-    block_window_fn: Literal["none", "flat_top", "flat_top_circular", "hann", "kaiser", "blackman_harris"] = "flat_top"
+    block_window_fn: Literal["none", "flat_top", "flat_top_circular", "hann", "kaiser", "blackman_harris", "gaussian"] = "flat_top"
+    block_window_param: float = 8
 
     frequency_weighting_init: Literal["product", "f^2", "dynamic"] = "product"
     use_midside_transform: Literal["stack", "cat", "none"] = "cat"
@@ -68,6 +69,10 @@ class MSSLoss2D(DualDiffusionModule):
             elif config.block_window_fn == "blackman_harris":
                 window = WindowFunction.blackman_harris(block_width)
                 window = torch.outer(window, window)
+            elif config.block_window_fn == "gaussian":
+                wx = torch.linspace(-1, 1, block_width)
+                w1d = (-config.block_window_param * wx**2).exp()
+                window = torch.outer(w1d, w1d)
             elif config.block_window_fn == "none":
                 window = torch.ones((block_width, block_width))
             else:
