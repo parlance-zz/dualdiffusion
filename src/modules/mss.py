@@ -158,11 +158,11 @@ class MSSLoss2D(DualDiffusionModule):
             with torch.no_grad():
                 target_fft = self.stft2d(padding(target), block_width, step, window)
                 target_fft_abs = target_fft.abs().requires_grad_(False).detach()
-                target_fft_abs[:, :, :, :, 0, 0] = target_fft[:, :, :, :, 0, 0].real
+                #target_fft_abs[:, :, :, :, 0, 0] = target_fft[:, :, :, :, 0, 0].real
 
             sample_fft = self.stft2d(padding(sample), block_width, step, window)
             sample_fft_abs = sample_fft.abs()
-            sample_fft_abs[:, :, :, :, 0, 0] = sample_fft[:, :, :, :, 0, 0].real
+            #sample_fft_abs[:, :, :, :, 0, 0] = sample_fft[:, :, :, :, 0, 0].real
 
             if self.config.use_mse_loss == True:
                 block_loss = torch.nn.functional.mse_loss(sample_fft_abs, target_fft_abs, reduction="none")
