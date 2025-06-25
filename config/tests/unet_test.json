@@ -20,13 +20,18 @@
     "output_lufs": -20,
     "skip_ddec": false,
     "copy_sample_source_files": true,
-    "random_test_samples_seed": 100,
-    "add_random_test_samples": 0,
+    "random_test_samples_seed": null,
+    "add_random_test_samples": 5,
     "shuffle_test_samples": true,
     "test_samples": [
         
         //"psf3/Street Fighter IV"
-        "switch/Gravity Circuit"
+        //"switch/Gravity Circuit"
+        //"psf2/King's Field - The Ancient City"
+        //"wii/Mighty Switch Force!"
+        //"switch/Cat Girl Without Salad - Amuse-Bouche"
+        //"ssf/Command & Conquer"
+        //"smd/Gunstar Heroes"
         
         //"spc/Shin Kidou Senki Gundam W - Endless Duel"
         //"psf/Mega Man X5"
@@ -129,7 +134,7 @@
         //"xbox/Tony Hawk's Pro Skater 2x"
     ],
     "unet_params": {
-        "seed": 100,
+        "seed": null,
 
         "num_steps": 300,
         "cfg_scale": 2,//2, //3, //3.5,//3,
@@ -144,7 +149,7 @@
     },
     "ddec_params": {
 
-        "num_steps": 20,
+        "num_steps": 100,
         "cfg_scale": 1.5,
         "use_heun": true,
         "schedule": "edm2",

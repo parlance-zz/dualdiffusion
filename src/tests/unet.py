@@ -32,7 +32,6 @@ import glob
 import torch
 
 from pipelines.dual_diffusion_pipeline import DualDiffusionPipeline, SampleParams
-from modules.unets.unet_edm2_ddec_mdct_b4 import DDec_MDCT_UNet_B4
 from modules.unets.unet_edm2_ddec_mclt_b1 import DDec_MCLT_UNet_B1
 from modules.daes.dae import DualDiffusionDAE
 from modules.formats.ms_mdct_dual import MS_MDCT_DualFormat
@@ -73,7 +72,7 @@ def unet_test() -> None:
     print(f"Loading DualDiffusion model from '{model_path}'...")
     pipeline = DualDiffusionPipeline.from_pretrained(model_path, **cfg.model_load_options)
     dae: DualDiffusionDAE = getattr(pipeline, "dae", None)
-    ddec: DDec_MDCT_UNet_B4 = pipeline.ddec
+    ddec: DDec_MCLT_UNet_B1 = pipeline.ddec
     format: MS_MDCT_DualFormat = pipeline.format
 
     sample_rate = format.config.sample_rate
@@ -181,7 +180,7 @@ def unet_test() -> None:
 
             # kludge for mistake in edge padding when training edm2_d3a_aclap2_ultra2 ddec
             if isinstance(ddec, DDec_MCLT_UNet_B1): 
-                output_raw_sample = output_raw_sample[..., 8192:-8192]
+                output_raw_sample = output_raw_sample[..., 4096:-4096]
         else:
             output_raw_sample = None
 
