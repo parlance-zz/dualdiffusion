@@ -36,10 +36,11 @@ from typing import Union, Literal
 import torch
 
 from modules.daes.dae import DualDiffusionDAE, DualDiffusionDAEConfig
-from modules.mp_tools import mp_silu, mp_sum, normalize, resample_3d, wavelet_decompose2d, wavelet_recompose2d
+from modules.mp_tools import mp_silu, mp_sum, normalize, resample_3d, wavelet_decompose_2d, wavelet_recompose_2d
 from utils.dual_diffusion_utils import tensor_4d_to_5d, tensor_5d_to_4d
 
 
+"""
 class MPConv3D(torch.nn.Module):
 
     def __init__(self, in_channels: int, out_channels: int,
@@ -81,6 +82,59 @@ class MPConv3D(torch.nn.Module):
     def normalize_weights(self) -> None:
         if self.disable_weight_norm == False:
             self.weight.copy_(normalize(self.weight, dim=1))
+"""
+
+class MPConv3D(torch.nn.Module):
+
+    def __init__(self, in_channels: int, out_channels: int, kernel: tuple[int, int, int],
+                 groups: int = 1, disable_weight_norm: bool = False, norm_dim: tuple[int] = 1) -> None:
+        
+        super().__init__()
+
+        self.in_channels = in_channels
+        self.out_channels = out_channels
+        self.groups = groups
+        self.disable_weight_norm = disable_weight_norm
+        self.norm_dim = norm_dim
+        
+        self.weight = torch.nn.Parameter(torch.randn(out_channels, in_channels // groups, *kernel))
+        if self.weight.numel() == 0:
+            raise ValueError(f"Invalid weight shape: {self.weight.shape}")
+        
+        if self.weight.ndim == 5:
+            pad_z, pad_w = kernel[0] // 2, kernel[2] // 2
+            if pad_w != 0 or pad_z != 0:
+                self.padding = torch.nn.ReflectionPad3d((kernel[2] // 2, kernel[2] // 2, 0, 0, 0, kernel[0] // 2))
+            else:
+                self.padding = torch.nn.Identity()
+        else:
+            self.padding = None
+
+    def forward(self, x: torch.Tensor, gain: Union[float, torch.Tensor] = 1) -> torch.Tensor:
+        
+        w = self.weight.float()
+        if self.training == True and self.disable_weight_norm == False:
+            if self.norm_dim is not None:
+                w = normalize(w, dim=self.norm_dim) # traditional weight normalization
+            else:
+                w = normalize(w) # traditional weight normalization
+            
+        w = w * (gain / w[0].numel()**0.5) # magnitude-preserving scaling
+        w = w.to(x.dtype)
+
+        if w.ndim == 2:
+            return x @ w.t()
+        
+        return torch.nn.functional.conv3d(self.padding(x), w,
+            padding=(0, w.shape[-2]//2, 0), groups=self.groups)
+
+    @torch.no_grad()
+    def normalize_weights(self) -> None:
+        if self.disable_weight_norm == False:
+            if self.norm_dim is not None:
+                self.weight.copy_(normalize(self.weight, dim=self.norm_dim))
+            else:
+                self.weight.copy_(normalize(self.weight))
 
 @dataclass
 class DAE_D3_Config(DualDiffusionDAEConfig):
@@ -328,7 +382,7 @@ class DAE_D3(DualDiffusionDAE):
         
     def encode(self, x: torch.Tensor, embeddings: torch.Tensor, training: bool = False) -> torch.Tensor:
         
-        x = x - 2.73 # ms_mdct_dual_format conversion fudge factor
+        #x = x - 2.73 # ms_mdct_dual_format conversion fudge factor
 
         x = tensor_4d_to_5d(x, num_channels=1).to(memory_format=torch.channels_last_3d)
         x = torch.cat((x, torch.ones_like(x[:, :1])), dim=1)
@@ -363,13 +417,13 @@ class DAE_D3(DualDiffusionDAE):
         dec_out = tensor_5d_to_4d(self.conv_out(x, gain=self.out_gain)).to(memory_format=torch.channels_last)
         if training == False and len(self.config.wavelet_rescale_factors) > 0: 
             
-            wavelets = wavelet_decompose2d(dec_out, num_levels=len(self.config.wavelet_rescale_factors))
+            wavelets = wavelet_decompose_2d(dec_out, num_levels=len(self.config.wavelet_rescale_factors))
             for i in range(len(self.config.wavelet_rescale_factors)):
                 wavelets[i] /= self.config.wavelet_rescale_factors[i]**0.5
 
-            dec_out = wavelet_recompose2d(wavelets)
+            dec_out = wavelet_recompose_2d(wavelets)
 
-        dec_out = dec_out + 2.73 # ms_mdct_dual_format conversion fudge factor
+        #dec_out = dec_out + 2.73 # ms_mdct_dual_format conversion fudge factor
 
         return dec_out
     
