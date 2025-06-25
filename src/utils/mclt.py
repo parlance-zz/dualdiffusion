@@ -33,6 +33,10 @@ class WindowFunction:
         return (0.5 - 0.5 * torch.cos(2 * torch.pi * n))
 
     @staticmethod
+    def sin(window_len: int, device: Optional[torch.device] = None) -> torch.Tensor:
+        return WindowFunction.hann(window_len, device=device) ** 0.5
+    
+    @staticmethod
     def kaiser(window_len: int, beta: float = 4*torch.pi, device: Optional[torch.device] = None) -> torch.Tensor:
         return torch.kaiser_window(window_len, beta=beta, periodic=False, device=device)
 

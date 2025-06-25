@@ -47,12 +47,13 @@ class MS_MDCT_DualFormatConfig(DualDiffusionFormatConfig):
     mdct_to_raw_scale: float = 2
     raw_to_mdct_scale: float = 12.1
 
-    ms_abs_exponent: float = 1
-    ms_filter_shape: Literal["triangular", "cos"] = "triangular"
     mdct_window_len: int = 512
+    mdct_window_func: Literal["sin", "kaiser_bessel_derived"] = "kaiser_bessel_derived"
     mdct_psd_num_bins: int = 2048
     mdct_dual_channel: bool = False
-    
+
+    ms_abs_exponent: float = 1
+    ms_filter_shape: Literal["triangular", "cos"] = "triangular"    
     ms_freq_min: float = 0
     ms_width_alignment: int = 128
     ms_num_frequencies: int = 256
@@ -62,6 +63,7 @@ class MS_MDCT_DualFormatConfig(DualDiffusionFormatConfig):
     ms_window_exponent_low: float = 17
     ms_window_exponent_high: Optional[float] = 58
     ms_window_periodic: bool = True
+    ms_window_func: Literal["hann", "blackman_harris"] = "blackman_harris"
     
     @property
     def mdct_num_frequencies(self) -> int:
@@ -86,14 +88,17 @@ class MS_MDCT_DualFormatConfig(DualDiffusionFormatConfig):
 class MS_MDCT_DualFormat(DualDiffusionFormat):
 
     @staticmethod
-    def _mel_spec_window(window_length: int, periodic: bool = True, *, dtype: torch.dtype = None,
+    def _mel_spec_window(window_length: int, window_func: Literal["hann", "blackman_harris"], periodic: bool = True, *, dtype: torch.dtype = None,
                           layout: torch.layout = torch.strided, device: torch.device = None,
                           requires_grad: bool = False, exponent: float = 1) -> torch.Tensor:
         
-        return WindowFunction.blackman_harris(window_length, device=device) ** exponent
-    
-        return torch.hann_window(window_length, periodic=periodic, dtype=dtype,
-                layout=layout, device=device, requires_grad=requires_grad) ** exponent
+        if window_func == "blackman_harris":
+            return WindowFunction.blackman_harris(window_length, device=device) ** exponent
+        elif window_func == "hann":
+            return torch.hann_window(window_length, periodic=periodic, dtype=dtype,
+                    layout=layout, device=device, requires_grad=requires_grad) ** exponent
+        else:
+            raise ValueError(f"Unsupported window function: {window_func}. Supported functions are 'hann' and 'blackman_harris'.")
     
     def __init__(self, config: MS_MDCT_DualFormatConfig) -> None:
         super().__init__()
@@ -109,6 +114,7 @@ class MS_MDCT_DualFormat(DualDiffusionFormat):
             window_fn=MS_MDCT_DualFormat._mel_spec_window,
             power=1, normalized="window",
             wkwargs={
+                "window_func": config.ms_window_func,
                 "exponent": config.ms_window_exponent_low,
                 "periodic": config.ms_window_periodic,
                 "requires_grad": False
@@ -124,6 +130,7 @@ class MS_MDCT_DualFormat(DualDiffusionFormat):
                 window_fn=MS_MDCT_DualFormat._mel_spec_window,
                 power=1, normalized="window",
                 wkwargs={
+                    "window_func": config.ms_window_func,
                     "exponent": config.ms_window_exponent_high,
                     "periodic": config.ms_window_periodic,
                     "requires_grad": False
@@ -286,7 +293,7 @@ class MS_MDCT_DualFormat(DualDiffusionFormat):
         
         raw_samples = self._high_pass(raw_samples)
 
-        _mclt = mclt(raw_samples.float(), self.config.mdct_window_len, "kaiser_bessel_derived", 1).permute(0, 1, 3, 2)
+        _mclt = mclt(raw_samples.float(), self.config.mdct_window_len, self.config.mdct_window_func, 1).permute(0, 1, 3, 2)
         if random_phase_augmentation == True:
             phase_rotation = torch.exp(2j * torch.pi * torch.rand(_mclt.shape[0], device=_mclt.device)) 
             _mclt *= phase_rotation.view(-1, 1, 1, 1)
@@ -302,7 +309,7 @@ class MS_MDCT_DualFormat(DualDiffusionFormat):
 
         raw_samples = self._high_pass(raw_samples)
 
-        _mclt = mclt(raw_samples.float(), self.config.mdct_window_len, "kaiser_bessel_derived", 1).permute(0, 1, 3, 2)
+        _mclt = mclt(raw_samples.float(), self.config.mdct_window_len, self.config.mdct_window_func, 1).permute(0, 1, 3, 2)
         return _mclt.abs().contiguous(memory_format=self.memory_format) / self.mdct_mel_density * self.config.raw_to_mdct_scale / 2**0.5
     
     @torch.no_grad()
@@ -313,7 +320,7 @@ class MS_MDCT_DualFormat(DualDiffusionFormat):
             mdct = torch.complex(*mdct.chunk(2, dim=1))
 
         raw_samples = imclt(mdct.permute(0, 1, 3, 2).contiguous(),
-            window_fn="kaiser_bessel_derived", window_degree=1).real.contiguous()
+            window_fn=self.config.mdct_window_func, window_degree=1).real.contiguous()
         
         return raw_samples * self.config.mdct_to_raw_scale
     
