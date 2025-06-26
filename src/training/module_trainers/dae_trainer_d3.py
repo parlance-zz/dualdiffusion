@@ -28,7 +28,7 @@ import torch
 from training.trainer import DualDiffusionTrainer
 from .module_trainer import ModuleTrainerConfig, ModuleTrainer
 from modules.daes.dae_edm2_d3 import DAE_D3
-from modules.formats.spectrogram import SpectrogramFormat
+from modules.formats.ms_mdct_dual import MS_MDCT_DualFormat
 from modules.mp_tools import normalize
 
 
@@ -132,7 +132,9 @@ class DAETrainer_D3_Config(ModuleTrainerConfig):
 
     kl_loss_weight: float = 2e-2
     kl_warmup_steps: int  = 1000
-    phase_loss_weight: float = 1
+    phase_loss_weight: float = 0.1
+    add_latents_noise: float = 0
+    latents_noise_warmup_steps: int = 10000
 
 class DAETrainer_D3(ModuleTrainer):
     
@@ -149,7 +151,7 @@ class DAETrainer_D3(ModuleTrainer):
         self.cpu_generator = None
 
         self.mss_loss = MSSLoss2D(MSSLoss2DConfig(), device=trainer.accelerator.device)
-        self.format: SpectrogramFormat = trainer.pipeline.format.to(self.trainer.accelerator.device)
+        self.format: MS_MDCT_DualFormat = trainer.pipeline.format.to(self.trainer.accelerator.device)
 
         if trainer.config.enable_model_compilation:
             self.module.compile(**trainer.config.compile_params)
@@ -158,6 +160,7 @@ class DAETrainer_D3(ModuleTrainer):
 
         self.logger.info("Training DAE model:")
         self.logger.info(f"KL loss weight: {self.config.kl_loss_weight} KL warmup steps: {self.config.kl_warmup_steps}")
+        self.logger.info(f"Add latents noise: {self.config.add_latents_noise}")
         self.logger.info(f"Phase loss weight: {self.config.phase_loss_weight}")
 
     def train_batch(self, batch: dict) -> dict[str, Union[torch.Tensor, float]]:
@@ -168,37 +171,53 @@ class DAETrainer_D3(ModuleTrainer):
         else:
             dae_embeddings = None
         
-        spec_samples = self.format.raw_to_sample(batch["audio"]).clone().detach()
-        latents, reconstructed, pre_norm_latents = self.module(spec_samples, dae_embeddings)
+        if self.config.add_latents_noise > 0:
+            if self.trainer.global_step < self.config.latents_noise_warmup_steps:
+                latents_sigma = self.config.add_latents_noise * (self.trainer.global_step / self.config.latents_noise_warmup_steps)
+            else:
+                latents_sigma = self.config.add_latents_noise
+        else:
+            latents_sigma = 0
+        latents_sigma = torch.Tensor([latents_sigma]).to(device=self.trainer.accelerator.device)
+
+        mel_spec = self.format.raw_to_mel_spec(batch["audio"]).clone().detach()
+        latents, reconstructed, pre_norm_latents = self.module(mel_spec, dae_embeddings)
 
         pre_norm_latents_var = pre_norm_latents.var(dim=(1,2,3))
         kl_loss = pre_norm_latents.mean(dim=(1,2,3)).square() + pre_norm_latents_var - 1 - pre_norm_latents_var.log()
 
-        recon_loss, phase_loss = self.mss_loss.mss_loss(reconstructed, spec_samples)
-        recon_loss = recon_loss + phase_loss * self.config.phase_loss_weight
+        abs_loss, phase_loss = self.mss_loss.mss_loss(reconstructed, mel_spec)
+        recon_loss = abs_loss + phase_loss * self.config.phase_loss_weight
 
         recon_loss_logvar = self.module.get_recon_loss_logvar()
         recon_loss_nll = (recon_loss / 2) / recon_loss_logvar.exp() + recon_loss_logvar
 
-        point_loss = torch.nn.functional.l1_loss(reconstructed, spec_samples, reduction="none").mean(dim=(1,2,3))
+        point_loss = torch.nn.functional.l1_loss(reconstructed, mel_spec, reduction="none").mean(dim=(1,2,3))
 
         kl_loss_weight = self.config.kl_loss_weight
         if self.trainer.global_step < self.config.kl_warmup_steps:
             kl_loss_weight *= self.trainer.global_step / self.config.kl_warmup_steps
 
+        if self.trainer.config.enable_debug_mode == True:
+            print("mel_spec.shape:", mel_spec.shape)
+            print("reconstructed.shape:", reconstructed.shape)
+            print("latents.shape:", latents.shape)
+
         return {
             "loss": recon_loss_nll + kl_loss * kl_loss_weight,
             "loss/recon": recon_loss,
-            "loss/phase": phase_loss,
+            "loss/mss_abs": abs_loss,
+            "loss/mss_phase": phase_loss,
             "loss/point": point_loss,
-            "loss/kl": kl_loss,
-            "loss_weight/kl": kl_loss_weight,
+            "loss/kl_latents": kl_loss,
+            "loss_weight/kl_latents": kl_loss_weight,
             "loss_weight/phase": self.config.phase_loss_weight,
-            "io_stats/input_std": spec_samples.std(dim=(1,2,3)),
-            "io_stats/input_mean": spec_samples.mean(dim=(1,2,3)),
-            "io_stats/output_std": reconstructed.std(dim=(1,2,3)),
-            "io_stats/output_mean": reconstructed.mean(dim=(1,2,3)),
+            "io_stats/mel_spec_std": mel_spec.std(dim=(1,2,3)),
+            "io_stats/mel_spec_mean": mel_spec.mean(dim=(1,2,3)),
+            "io_stats/recon_mel_std": reconstructed.std(dim=(1,2,3)),
+            "io_stats/recon_mel_mean": reconstructed.mean(dim=(1,2,3)),
             "io_stats/latents_std": latents.std(dim=(1,2,3)),
             "io_stats/latents_mean": latents.mean(dim=(1,2,3)),
-            "io_stats/latents_pre_norm_std": pre_norm_latents_var.sqrt()
+            "io_stats/latents_pre_norm_std": pre_norm_latents_var.sqrt(),
+            "io_stats/latents_sigma": latents_sigma
         }
