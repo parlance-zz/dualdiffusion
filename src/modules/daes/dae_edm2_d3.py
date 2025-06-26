@@ -31,7 +31,7 @@
 # SOFTWARE.
 
 from dataclasses import dataclass
-from typing import Union, Literal
+from typing import Union, Literal, Optional
 
 import torch
 
@@ -381,8 +381,6 @@ class DAE_D3(DualDiffusionDAE):
             raise ValueError(f"Invalid latent shape: {latent_shape}")
         
     def encode(self, x: torch.Tensor, embeddings: torch.Tensor, training: bool = False) -> torch.Tensor:
-        
-        #x = x - 2.73 # ms_mdct_dual_format conversion fudge factor
 
         x = tensor_4d_to_5d(x, num_channels=1).to(memory_format=torch.channels_last_3d)
         x = torch.cat((x, torch.ones_like(x[:, :1])), dim=1)
@@ -415,7 +413,7 @@ class DAE_D3(DualDiffusionDAE):
 
         # amplify high frequency details a bit
         dec_out = tensor_5d_to_4d(self.conv_out(x, gain=self.out_gain)).to(memory_format=torch.channels_last)
-        if training == False and len(self.config.wavelet_rescale_factors) > 0: 
+        if training == False and len(self.config.wavelet_rescale_factors) > 0:
             
             wavelets = wavelet_decompose_2d(dec_out, num_levels=len(self.config.wavelet_rescale_factors))
             for i in range(len(self.config.wavelet_rescale_factors)):
@@ -423,16 +421,16 @@ class DAE_D3(DualDiffusionDAE):
 
             dec_out = wavelet_recompose_2d(wavelets)
 
-        #dec_out = dec_out + 2.73 # ms_mdct_dual_format conversion fudge factor
-
         return dec_out
     
-    def forward(self, samples: torch.Tensor, dae_embeddings: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    def forward(self, samples: torch.Tensor, dae_embeddings: torch.Tensor, latents_sigma: Optional[torch.Tensor] = None) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         
         pre_norm_latents = self.encode(samples, dae_embeddings, training=True)
+        if latents_sigma is not None:
+            pre_norm_latents = pre_norm_latents + latents_sigma * torch.randn_like(pre_norm_latents)
         latents = normalize(pre_norm_latents)
         
-        reconstructed = self.decode(latents, dae_embeddings)
+        reconstructed = self.decode(latents, dae_embeddings, training=True)
         return latents, reconstructed, pre_norm_latents
 
     def tiled_encode(self, x: torch.Tensor, embeddings: torch.Tensor, max_chunk: int = 6144, overlap: int = 256) -> torch.Tensor:

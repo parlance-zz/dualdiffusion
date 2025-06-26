@@ -1,5 +1,5 @@
 {
-    "model_name": "edm2_dae_m1a",
+    "model_name": "edm2_dae_d3a_v2",
     "model_load_options": {
         "torch_dtype": "bfloat16",
         "device": "cuda",
@@ -20,8 +20,9 @@
     "dae_bypass": false,
     "ddec_output": false,
     "xref_output": false,
-    "add_random_test_samples": 25,
-    "copy_sample_source_files": true,
+    "add_random_test_samples": 45,
+    "random_test_samples_seed": 0,
+    "copy_sample_source_files": false,
     "test_samples": [
         "3sf/Dopamix/STRM_BGM_ENDING.bcstm.flac",
         "switch/Arcaea/_t_songs_ignotus.ogg.flac",

@@ -43,11 +43,13 @@ from utils.dual_diffusion_utils import (
 @torch.inference_mode()
 def dae_test() -> None:
 
-    torch.manual_seed(0)
-
     test_params = config.load_json(
         os.path.join(config.CONFIG_PATH, "tests", "dae_test.json"))
     
+    torch.manual_seed(0)
+    if test_params["random_test_samples_seed"] is not None:
+        random.seed(test_params["random_test_samples_seed"])
+
     model_name = test_params["model_name"]
     model_load_options = test_params["model_load_options"]
     length = test_params["length"]
