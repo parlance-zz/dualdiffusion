@@ -35,8 +35,9 @@ from modules.mp_tools import normalize
 @dataclass
 class MSSLoss2DConfig:
 
-    block_widths: tuple[int] = (8, 16, 32, 64)
-    block_overlap: int = 8
+    block_widths: tuple[int] = (11, 13, 17, 19, 23, 29, 31)
+    block_steps:  tuple[int] = ( 1,  2,  3,  5,  7, 11, 13)
+    #block_steps: tuple[int] = ( 2,  3,  5,  7, 11, 13, 17)
 
 class MSSLoss2D:
 
@@ -51,10 +52,14 @@ class MSSLoss2D:
         self.loss_weights = []
         self.phase_loss_weights = []
         
-        for block_width in self.config.block_widths:
+        for block_width, block_step in zip(config.block_widths, config.block_steps):
 
-            self.steps.append(max(block_width // self.config.block_overlap, 1))
+            self.steps.append(block_step)
             window = self.get_flat_top_window_2d(block_width)
+
+            #wx = (torch.arange(block_width) / block_width * torch.pi).sin()
+            #window *= torch.outer(wx, wx)[None, None, :, :]
+
             window /= window.square().mean().sqrt()
             self.windows.append(window.to(device=device).requires_grad_(False).detach())
 
@@ -65,7 +70,7 @@ class MSSLoss2D:
             blockfreq_x = torch.arange(block_width//2 + 1, device=device)
             wavelength = 1 / ((blockfreq_y.square().view(-1, 1) + blockfreq_x.square().view(1, -1)).sqrt() + 1)
             loss_weight = (1 / wavelength * wavelength.amin()) * block_width**2
-        
+
             self.loss_weights.append(loss_weight.requires_grad_(False).detach())
             self.phase_loss_weights.append((wavelength/torch.pi * block_width**2).requires_grad_(False).detach())
 
@@ -87,42 +92,44 @@ class MSSLoss2D:
         x = x.unfold(2, block_width, step).unfold(3, block_width, step)
 
         x = torch.fft.rfft2(x * window, norm="ortho")
-        if x.shape[1] == 2:
+        #if x.shape[1] == 2:
             #x = torch.stack((x[:, 0] + x[:, 1], x[:, 0] - x[:, 1]), dim=1)
-            x = torch.cat((x, (x[:, 0:1] + x[:, 1:2])*0.5**0.5, (x[:, 0:1] - x[:, 1:2])*0.5**0.5), dim=1)
+            #x = torch.cat((x, (x[:, 0:1] + x[:, 1:2])*0.5**0.5, (x[:, 0:1] - x[:, 1:2])*0.5**0.5), dim=1)
 
         return x
     
     def mss_loss(self, sample: torch.Tensor, target: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
 
         loss = torch.zeros(target.shape[0], device=self.device)
-        phase_loss = torch.zeros(target.shape[0], device=self.device)
+        #phase_loss = torch.zeros(target.shape[0], device=self.device)
 
         for i, block_width in enumerate(self.config.block_widths):
             
             step = self.steps[i]
             window = self.windows[i]
-            loss_weight = self.loss_weights[i]
+            #loss_weight = self.loss_weights[i]
 
             with torch.no_grad():
                 target_fft = self.stft2d(target, block_width, step, window)
                 target_fft_abs = target_fft.abs().requires_grad_(False).detach()
-                target_fft_angle = target_fft.angle().requires_grad_(False).detach()
+                #target_fft_angle = target_fft.angle().requires_grad_(False).detach()
+                loss_weight = (block_width / target_fft_abs.mean(dim=(0,1,2,3), keepdim=True).clip(min=1e-2)).requires_grad_(False).detach()
 
             sample_fft = self.stft2d(sample, block_width, step, window)
             sample_fft_abs = sample_fft.abs()
-            sample_fft_angle = sample_fft.angle()
+            #sample_fft_angle = sample_fft.angle()
             
-            l1_loss = torch.nn.functional.l1_loss(sample_fft_abs.float(), target_fft_abs.float(), reduction="none")
+            #l1_loss = torch.nn.functional.l1_loss(sample_fft_abs.float(), target_fft_abs.float(), reduction="none")
+            l1_loss = torch.nn.functional.mse_loss(sample_fft_abs.float(), target_fft_abs.float(), reduction="none")
             loss = loss + (l1_loss * loss_weight).mean(dim=(1,2,3,4,5))
 
-            phase_loss_weight = self.phase_loss_weights[i] * target_fft_abs
-            phase_error = (sample_fft_angle - target_fft_angle).abs()
-            phase_error_wrap_mask = (phase_error > torch.pi).requires_grad_(False).detach()
-            phase_error = torch.where(phase_error_wrap_mask, 2*torch.pi - phase_error, phase_error)
-            phase_loss = phase_loss + (phase_error * phase_loss_weight).mean(dim=(1,2,3,4,5))
+            #phase_loss_weight = self.phase_loss_weights[i] * target_fft_abs
+            #phase_error = (sample_fft_angle - target_fft_angle).abs()
+            #phase_error_wrap_mask = (phase_error > torch.pi).requires_grad_(False).detach()
+            #phase_error = torch.where(phase_error_wrap_mask, 2*torch.pi - phase_error, phase_error)
+            #phase_loss = phase_loss + (phase_error * phase_loss_weight).mean(dim=(1,2,3,4,5))
    
-        return loss, phase_loss
+        return loss, torch.zeros_like(loss)#phase_loss
 
     def compile(self, **kwargs) -> None:
         self.mss_loss = torch.compile(self.mss_loss, **kwargs)
@@ -144,7 +151,7 @@ class DAETrainer_D3(ModuleTrainer):
         self.config = config
         self.trainer = trainer
         self.logger = trainer.logger
-        self.module: DAE_D3 = trainer.module
+        self.module: DAE_D3 = trainer.get_train_module("dae")
 
         self.is_validation_batch = False
         self.device_generator = None
@@ -178,10 +185,10 @@ class DAETrainer_D3(ModuleTrainer):
                 latents_sigma = self.config.add_latents_noise
         else:
             latents_sigma = 0
-        latents_sigma = torch.Tensor([latents_sigma]).to(device=self.trainer.accelerator.device)
 
         mel_spec = self.format.raw_to_mel_spec(batch["audio"]).clone().detach()
-        latents, reconstructed, pre_norm_latents = self.module(mel_spec, dae_embeddings)
+        latents, reconstructed, pre_norm_latents = self.module(mel_spec, dae_embeddings,
+            torch.Tensor([latents_sigma]).to(device=self.trainer.accelerator.device) if latents_sigma > 0 else None)
 
         pre_norm_latents_var = pre_norm_latents.var(dim=(1,2,3))
         kl_loss = pre_norm_latents.mean(dim=(1,2,3)).square() + pre_norm_latents_var - 1 - pre_norm_latents_var.log()
