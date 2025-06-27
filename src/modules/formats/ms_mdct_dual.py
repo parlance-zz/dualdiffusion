@@ -285,7 +285,7 @@ class MS_MDCT_DualFormat(DualDiffusionFormat):
         raw_crop_width = self.get_raw_crop_width(raw_length=raw_length)
         num_mdct_bins = self.config.mdct_num_frequencies
         num_mdct_frames = raw_crop_width // num_mdct_bins + 1
-        num_channels = self.config.num_raw_channels * 2 if self.config.mdct_dual_channel else 1
+        num_channels = self.config.num_raw_channels * (2 if self.config.mdct_dual_channel else 1)
         return (bsz, num_channels, num_mdct_bins, num_mdct_frames,)
 
     @torch.no_grad()

@@ -42,7 +42,7 @@ from utils.dual_diffusion_utils import (
 
 @torch.inference_mode()
 def dae_test() -> None:
-
+    
     test_params = config.load_json(
         os.path.join(config.CONFIG_PATH, "tests", "dae_test.json"))
     
@@ -59,14 +59,22 @@ def dae_test() -> None:
     pipeline = DualDiffusionPipeline.from_pretrained(model_path, **model_load_options)
     dae: DualDiffusionDAE = getattr(pipeline, "dae", None)
     ddec_ms: DDec_UNet_D1 = getattr(pipeline, "ddec_ms", None)
-    ddec_mdct: DDec_UNet_D1 = getattr(pipeline, "ddec_mdct", None)
+    ddec_mdct: DDec_UNet_D1 = getattr(pipeline, "ddec", None)
     format: MS_MDCT_DualFormat = pipeline.format
     embedding: CLAP_Embedding = pipeline.embedding
 
     sample_rate = format.config.sample_rate
     
-    last_global_step = dae.config.last_global_step
-    output_path = os.path.join(model_path, "output", "dae", f"step_{last_global_step}")
+    if test_params.get("ddec_output", False) != True:
+        ddec_mdct = None
+    
+    if ddec_mdct is None:
+        last_global_step = dae.config.last_global_step
+        output_path = os.path.join(model_path, "output", "dae", f"step_{last_global_step}")
+    else:
+        last_global_step = ddec_mdct.config.last_global_step
+        output_path = os.path.join(model_path, "output", "ddec", f"step_{last_global_step}")
+
     os.makedirs(output_path, exist_ok=True)
 
     model_metadata = {"model_metadata": dict_str(pipeline.model_metadata)}
@@ -162,8 +170,8 @@ def dae_test() -> None:
         if ddec_mdct is not None:
             ddec_mdct_params = SampleParams(
                 seed=5000,
-                num_steps=50, length=audio_len, cfg_scale=1.5, input_perturbation=1, input_perturbation_offset=0.37,
-                use_heun=False, schedule="edm2", rho=7, sigma_max=12, sigma_min=0.0002, stereo_fix=0.5
+                num_steps=50, length=audio_len, cfg_scale=1.5, input_perturbation=0, input_perturbation_offset=0.3,
+                use_heun=True, schedule="edm2", rho=7, sigma_max=11, sigma_min=0.0002, stereo_fix=0.5
             )
 
             output_ddec_mdct = pipeline.diffusion_decode(
