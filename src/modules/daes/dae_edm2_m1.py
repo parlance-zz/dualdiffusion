@@ -36,33 +36,40 @@ from typing import Union, Literal, Optional
 import torch
 
 from modules.daes.dae import DualDiffusionDAE, DualDiffusionDAEConfig
-from modules.mp_tools import mp_silu, normalize, resample_2d, mp_sum
+from modules.mp_tools import mp_silu, normalize, resample_2d, mp_sum, mp_cat
+from utils.resample import FilteredDownsample2D, FilteredUpsample2D
 
 
 @dataclass
 class DAE_M1_Config(DualDiffusionDAEConfig):
 
-    in_channels: int     = 2
-    out_channels: int    = 2
+    in_channels: int     = 4
+    out_channels: int    = 4
     in_channels_emb: int = 0
     in_num_freqs: int    = 256
     latent_channels: int = 8
-    downsample_factor: int = 8
+    downsample_factor: int = 1
     res_balance: float   = 0.3
     polarity_fix: bool   = False
+    stereo_fix: bool     = False
 
-    model_channels: int   = 32
+    model_channels: int   = 64
     channel_mult_emb: int = 4
-    channel_mult_enc: list[int] = (1,)
-    channel_mult_dec: list[int] = (1, 2, 4, 8)
-    num_enc_layers_per_block: list[int] = (8,)
-    num_dec_layers_per_block: list[int] = (2, 2, 2, 2)
-    kernel_enc: list[int] = (5, 5)
-    kernel_dec: list[int] = (5, 5)
+    channel_mult_enc: list[int] = (1, 2, 4)
+    channel_mult_dec: list[int] = (1, 2, 4)
+    num_enc_layers_per_block: list[int] = (2, 2, 2)
+    num_dec_layers_per_block: list[int] = (2, 2, 2)
+    kernel_in: list[int]  = (5, 5)
+    kernel_enc: list[int] = (3, 3)
+    kernel_dec: list[int] = (3, 3)
+    kernel_out: list[int] = (5, 5)
     mlp_multiplier: int = 2
     mlp_groups: int     = 1
 
-    mp_conv_norm_dim: Optional[int] = 1
+    mp_conv_norm_dim: Optional[int] = None
+
+    resample_beta: float = 3.437
+    resample_k_size: int = 23
 
 class MPConv2D_E(torch.nn.Module):
 
@@ -118,7 +125,7 @@ class Block(torch.nn.Module):
         out_channels: int,                      # Number of output channels.
         emb_channels: int,                      # Number of embedding channels.
         flavor: Literal["enc", "dec"] = "enc",
-        resample_mode: Literal["keep", "up", "down"] = "keep",
+        resample: Optional[torch.nn.Module] = None,
         res_balance: float     = 0.3,
         clip_act: float        = 256,      # Clip output activations. None = do not clip.
         mlp_multiplier: int    = 2,        # Multiplier for the number of channels in the MLP.
@@ -132,10 +139,16 @@ class Block(torch.nn.Module):
         self.in_channels = in_channels
         self.out_channels = out_channels
         self.flavor = flavor
-        self.resample_mode = resample_mode
+        self.resample = resample if resample is not None else torch.nn.Identity()
         self.res_balance = res_balance
         self.clip_act = clip_act
         self.kernel = kernel
+        
+        if flavor == "dec" and resample is not None:
+            self.noise_channels = MPConv2D_E(in_channels, in_channels, kernel=(1,1))
+            self.noise_channels_gain = torch.nn.Parameter(torch.zeros([]))
+        else:
+            self.noise_channels = self.noise_channels_gain = None
 
         self.conv_res0 = MPConv2D_E(in_channels, out_channels * mlp_multiplier,
             kernel=kernel, groups=mlp_groups, mp_conv_norm_dim=mp_conv_norm_dim)
@@ -154,8 +167,15 @@ class Block(torch.nn.Module):
     
     def forward(self, x: torch.Tensor, emb: torch.Tensor) -> torch.Tensor:
         
-        x = resample_2d(x, mode=self.resample_mode)
-        x = normalize(x, dim=1) # pixel norm
+        x = self.resample(x)
+
+        #if self.flavor == "enc":
+        #   x = normalize(x, dim=1) # pixel norm
+
+        if self.noise_channels is not None:
+            noise = torch.randn_like(x)
+            sigma = self.noise_channels(x, gain=self.noise_channels_gain)
+            x = x + noise * sigma
 
         y = self.conv_res0(mp_silu(x))
 
@@ -180,41 +200,64 @@ class Block(torch.nn.Module):
 class Encoder(torch.nn.Module):
 
     def __init__(self, in_channels: int, enc_channels: list[int], latent_channels: int,
-            num_layers: list[int], block_kwargs: dict, kernel: tuple[int, int] = (3,3)) -> None:
+            num_layers: list[int], block_kwargs: dict, kernel_enc: tuple[int, int] = (3,3), kernel_in: tuple[int, int] = (5,5), downsample: Optional[torch.nn.Module] = None) -> None:
         super().__init__()
 
-        self.conv_in = MPConv2D_E(in_channels + 1, enc_channels[0], kernel=(9,9),
+        self.downsample = downsample
+
+        self.conv_in = MPConv2D_E(in_channels + 1, enc_channels[0], kernel=kernel_in,
                                   mp_conv_norm_dim=block_kwargs["mp_conv_norm_dim"])
 
         self.enc = torch.nn.ModuleDict()
         cout = enc_channels[0]
         for level, channels in enumerate(enc_channels):
             
+            cskip = enc_channels[level - 1] if level > 0 else 0
+
             if level == 0:
                 self.enc[f"block{level}_in"] = Block(
-                    level, cout, channels, 0, flavor="enc", kernel=kernel, **block_kwargs)
+                    level, cout + cskip, channels, 0, flavor="enc", kernel=kernel_enc, **block_kwargs)
             else:
                 self.enc[f"block{level}_down"] = Block(
-                    level, cout, channels, 0, flavor="enc", resample_mode="down", kernel=kernel, **block_kwargs)
+                    level, cout + cskip + in_channels, channels, 0, flavor="enc", resample=self.downsample, kernel=kernel_enc, **block_kwargs)
             
             for idx in range(num_layers[level]):
                 self.enc[f"block{level}_layer{idx}"] = Block(
-                    level, channels, channels, 0, flavor="enc", kernel=kernel, **block_kwargs)
+                    level, channels + cskip, channels, 0, flavor="enc", kernel=kernel_enc, **block_kwargs)
             
             cout = channels
 
         self.output_gain = torch.nn.Parameter(torch.ones([]))
         self.conv_out = MPConv2D_E(enc_channels[-1], latent_channels,
-            kernel=kernel, mp_conv_norm_dim=block_kwargs["mp_conv_norm_dim"])
+            kernel=kernel_enc, mp_conv_norm_dim=block_kwargs["mp_conv_norm_dim"])
 
     def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         
+        input_x = x
         x = torch.cat((x, torch.ones_like(x[:, :1])), dim=1)
         x = self.conv_in(x)
 
-        for block in self.enc.values():
-            x = block(x, None)
+        skip_in = []; skip_out = []
+        for name, block in self.enc.items():
+            if "down" in name:
+                skip_in = skip_out
+                skip_out = []
+                skip_in.reverse()
 
+                x = mp_cat(x, input_x, t=0.1)
+                x = mp_cat(x, skip_in.pop(), t=0.2)
+
+                input_x = self.downsample(input_x)
+
+            elif block.level > 0:
+
+                #x = mp_cat(x, resample_2d(skip_in.pop(), mode="down"), t=0.3)
+                x = mp_cat(x, self.downsample(skip_in.pop()), t=0.2)
+
+            x = block(x, None)
+            skip_out.append(x)
+
+        x = normalize(x, dim=1)  # pixel norm
         x = self.conv_out(x, gain=self.output_gain)
         return x
 
@@ -260,9 +303,12 @@ class DAE_M1(DualDiffusionDAE):
         assert len(enc_channels) == len(config.num_enc_layers_per_block)
         assert len(dec_channels) == len(config.num_dec_layers_per_block)
 
+        self.downsample = FilteredDownsample2D(k_size=config.resample_k_size, beta=config.resample_beta, factor=2)
+        self.upsample = FilteredUpsample2D(k_size=config.resample_k_size*2 + 1, beta=config.resample_beta, factor=2)
+        
         # encoder
         self.encoder = Encoder(config.in_channels, enc_channels, config.latent_channels,
-            config.num_enc_layers_per_block, block_kwargs, kernel=config.kernel_enc)
+            config.num_enc_layers_per_block, block_kwargs, kernel_enc=config.kernel_enc, kernel_in=config.kernel_in, downsample=self.downsample)
         
         # decoder
         self.latents_conv_in = MPConv2D_E(config.latent_channels + 1, dec_channels[-1],
@@ -274,20 +320,21 @@ class DAE_M1(DualDiffusionDAE):
         for level in reversed(range(0, self.num_levels)):
             
             cout = dec_channels[level]
+            cskip = dec_channels[level + 1] if level < self.num_levels - 1 else 0
 
             if level == self.num_levels - 1:
-                self.dec[f"block{level}_in"] = Block(level, cin,  cout, cemb, flavor="dec", **block_kwargs, kernel=config.kernel_dec)
+                self.dec[f"block{level}_in"] = Block(level, cin + cskip,  cout, cemb, flavor="dec", **block_kwargs, kernel=config.kernel_dec)
             else:
-                self.dec[f"block{level}_up"] = Block(level, cin, cout, cemb, flavor="dec", resample_mode="up", **block_kwargs, kernel=config.kernel_dec)
+                self.dec[f"block{level}_up"] = Block(level, cin + cskip, cout, cemb, flavor="dec", resample=self.upsample, **block_kwargs, kernel=config.kernel_dec)
             
             for idx in range(config.num_dec_layers_per_block[level]):
-                self.dec[f"block{level}_layer{idx}"] = Block(level, cout, cout, cemb, flavor="dec", **block_kwargs, kernel=config.kernel_dec)
+                self.dec[f"block{level}_layer{idx}"] = Block(level, cout + cskip, cout, cemb, flavor="dec", **block_kwargs, kernel=config.kernel_dec)
 
             cin = cout
 
         self.output_gain = torch.nn.Parameter(torch.ones([]))
         self.conv_out = MPConv2D_E(cout, self.config.out_channels,
-            kernel=(9,9), mp_conv_norm_dim=config.mp_conv_norm_dim)
+            kernel=config.kernel_out, mp_conv_norm_dim=config.mp_conv_norm_dim)
 
     def get_embeddings(self, emb_in: torch.Tensor) -> torch.Tensor:
         if self.emb_label is not None:
@@ -318,8 +365,11 @@ class DAE_M1(DualDiffusionDAE):
         
         latents = self.encoder(x)
 
-        if self.config.downsample_factor > 1:
-            latents = torch.nn.functional.avg_pool2d(latents, kernel_size=self.config.downsample_factor)
+        for i in range(self.config.downsample_factor):
+            latents = self.downsample(latents)
+
+        #if self.config.downsample_factor > 0:
+            #latents = torch.nn.functional.avg_pool2d(latents, kernel_size=2**self.config.downsample_factor)
 
         return latents
 
@@ -330,21 +380,41 @@ class DAE_M1(DualDiffusionDAE):
         else:
             emb = None
 
+        for i in range(self.config.downsample_factor):
+            x = self.upsample(x)
+
         x = torch.cat((x, torch.ones_like(x[:, :1])), dim=1)
         x = self.latents_conv_in(x)
 
-        for block in self.dec.values():
+        skip_in = []; skip_out = []
+        for name, block in self.dec.items():
+            if "up" in name:
+                skip_in = skip_out
+                skip_out = []
+                skip_in.reverse()
+
+                x = mp_cat(x, skip_in.pop(), t=0.2)
+
+            elif block.level < self.num_levels - 1:
+
+                #x = mp_cat(x, resample_2d(skip_in.pop(), mode="up"), t=0.3)
+                x = mp_cat(x, self.upsample(skip_in.pop()), t=0.2)
+
             x = block(x, emb)
+            skip_out.append(x)
 
         decoded = self.conv_out(x, gain=self.output_gain)
 
         if self.config.polarity_fix == True:
             decoded = -decoded
+        
+        if self.config.stereo_fix == True:
+            decoded = torch.flip(decoded, dims=(1,))
 
         return decoded
     
     def forward(self, samples: torch.Tensor, dae_embeddings: torch.Tensor,
-            latents_sigma: torch.Tensor, equivariance_dropout: float = 0) -> tuple[torch.Tensor, ...]:
+            latents_sigma: torch.Tensor) -> tuple[torch.Tensor, ...]:
         
         latents = self.encode(samples, dae_embeddings, training=True)
         #latents = (latents + torch.randn_like(latents) * latents_sigma) / (1 + latents_sigma**2)**0.5
@@ -354,7 +424,7 @@ class DAE_M1(DualDiffusionDAE):
         latents_var = latents.var(dim=(1,2,3)).clip(min=1e-2)
         latents_kld = latents_mean.square() + latents_var - 1 - latents_var.log()
     
-        return latents, decoded, samples, latents_kld, torch.zeros_like(latents_kld)
+        return latents, decoded, samples, latents_kld
 
     def tiled_encode(self, x: torch.Tensor, embeddings: torch.Tensor, max_chunk: int = 6144, overlap: int = 256) -> torch.Tensor:
 
