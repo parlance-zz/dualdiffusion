@@ -62,6 +62,7 @@ class UNetTrainerConfig(ModuleTrainerConfig):
     loss_buckets_sigma_min: float = 0.01
     loss_buckets_sigma_max: float = 200
 
+    normalize_latents: bool = False
     input_perturbation: float = 0
     conditioning_perturbation: float = 0
     conditioning_dropout: float = 0.1
@@ -100,6 +101,7 @@ class UNetTrainer(ModuleTrainer):
             self.logger.info("UNet loss buckets are disabled")
 
         # log unet trainer specific config / settings
+        self.logger.info(f"Normalize latents: {self.config.normalize_latents}")
         if self.config.input_perturbation > 0:
             self.logger.info(f"Using input perturbation: {self.config.input_perturbation}")
         else:
@@ -191,14 +193,21 @@ class UNetTrainer(ModuleTrainer):
 
     def train_batch(self, batch: dict) -> dict[str, Union[torch.Tensor, float]]:
 
-        samples: torch.Tensor = batch["latents"].float().clone()
-        audio_embeddings = normalize(batch["audio_embeddings"]).float().clone()
+        latents: torch.Tensor = batch["latents"].float().clone()
+        if self.config.normalize_latents == True:
+            latents = normalize(latents).float().detach()
+
+        audio_embeddings = normalize(batch["audio_embeddings"]).float().clone().detach()
         
-        logs = self.unet_train_batch(samples, embeddings=audio_embeddings)
+        logs = self.unet_train_batch(latents, embeddings=audio_embeddings)
         logs.update({
-            "io_stats/latents_std": samples.std(dim=(1,2,3)),
-            "io_stats/latents_mean": samples.mean(dim=(1,2,3))
+            "io_stats/latents_std": latents.std(dim=(1,2,3)),
+            "io_stats/latents_mean": latents.mean(dim=(1,2,3))
         })
+
+        if self.trainer.config.enable_debug_mode == True:
+            print("latents.shape:", latents.shape)
+            print("audio_embeddings.shape:", audio_embeddings.shape)
 
         return logs
 
