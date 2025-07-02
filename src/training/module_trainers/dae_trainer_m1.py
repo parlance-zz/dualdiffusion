@@ -24,6 +24,7 @@ from dataclasses import dataclass
 from typing import Union, Any, Optional
 
 import torch
+import numpy as np
 
 from training.trainer import DualDiffusionTrainer
 from training.module_trainers.module_trainer import ModuleTrainerConfig, ModuleTrainer
@@ -31,16 +32,20 @@ from training.loss.spectral_regularization import SpecRegLoss, SpecRegLossConfig
 from training.loss.wavelet import WaveletLoss, WaveletLoss_Config
 from modules.daes.dae_edm2_m1 import DAE_M1
 from modules.formats.ms_mdct_dual import MS_MDCT_DualFormat
+from modules.formats.frequency_scale import get_mel_density
 from modules.mp_tools import normalize
 from utils.dual_diffusion_utils import dict_str
 
-
+#"""
 @dataclass
 class MSSLoss2DConfig:
 
-    block_widths: tuple[int] = (11, 13, 17, 19, 23, 29, 31)
-    block_steps:  tuple[int] = ( 1,  2,  3,  5,  7, 11, 13)
-    #block_steps: tuple[int] = ( 2,  3,  5,  7, 11, 13, 17)
+    #block_widths: tuple[int] = (11, 13, 17, 19, 23, 29, 31)
+    #block_steps:  tuple[int] = ( 1,  2,  3,  5,  7, 11, 13)
+
+    block_widths: tuple[int] = (7, 11, 19, 41, 71)
+    block_steps:  tuple[int] = (2,  3,  5, 11, 19)
+    sample_rate: int = 32000
 
 class MSSLoss2D:
 
@@ -72,10 +77,11 @@ class MSSLoss2D:
         return self._flat_top_window(wx.view(1, 1,-1, 1)) * self._flat_top_window(wx.view(1, 1, 1,-1))
     
     def stft2d(self, x: torch.Tensor, block_width: int,
-               step: int, window: torch.Tensor) -> torch.Tensor:
+               step: int, window: torch.Tensor, offset_h: int, offset_w: int) -> torch.Tensor:
         
         padding = block_width // 2
-        x = torch.nn.functional.pad(x, (padding, padding, padding, padding), mode="reflect")
+        x = torch.nn.functional.pad(x, (padding+1+step, padding, padding+1+step, padding), mode="reflect")
+        x = x[:, :, offset_h:, offset_w:]
         x = x.unfold(2, block_width, step).unfold(3, block_width, step)
 
         x = torch.fft.fft2(x * window, norm="ortho")
@@ -100,14 +106,23 @@ class MSSLoss2D:
             
             step = self.steps[i]
             window = self.windows[i]
+            offset_h = np.random.randint(0, step)
+            offset_w = np.random.randint(0, step)
 
             with torch.no_grad():
-                target_fft = self.stft2d(target, block_width, step, window)
+                target_fft = self.stft2d(target, block_width, step, window, offset_h, offset_w)
                 target_fft_abs = target_fft.abs().requires_grad_(False).detach()
-                loss_weight = (block_width / target_fft_abs.square().mean(dim=(0,1,2,3), keepdim=True).clip(min=1e-4).sqrt()).requires_grad_(False).detach()
-                #loss_weight = (block_width / target_fft_abs.square().mean(dim=(0,2,3), keepdim=True).clip(min=1e-4).sqrt()).requires_grad_(False).detach()
+                #loss_weight = (block_width / target_fft_abs.square().mean(dim=(0,1,2,3), keepdim=True).clip(min=1e-4).sqrt()).requires_grad_(False).detach()
+                loss_weight = (block_width / target_fft_abs.square().mean(dim=(0,1,2,3), keepdim=True).clip(min=1e-4).sqrt())
 
-            sample_fft = self.stft2d(sample, block_width, step, window)
+                hz = (torch.arange(target_fft_abs.shape[2], device=self.device) + 0.5) / target_fft_abs.shape[2] * self.config.sample_rate / 2
+                mel_density = get_mel_density(hz).view(1, 1,-1, 1, 1, 1)
+                loss_weight = (loss_weight * mel_density).requires_grad_(False).detach()
+
+                #print(target_fft_abs.square().mean(dim=(0,1,2,3), keepdim=True).amin())
+                #loss_weight = (block_width / target_fft_abs.square().mean(dim=(0,1,2,3), keepdim=True).clip(min=1e-2)).requires_grad_(False).detach()
+
+            sample_fft = self.stft2d(sample, block_width, step, window, offset_h, offset_w)
             sample_fft_abs = sample_fft.abs()
             
             mse_loss = torch.nn.functional.mse_loss(sample_fft_abs.float(), target_fft_abs.float(), reduction="none")
@@ -191,6 +206,74 @@ class MSSLoss1D:
 
     def compile(self, **kwargs) -> None:
         self.mss_loss = torch.compile(self.mss_loss, **kwargs)
+#"""
+
+"""
+@dataclass
+class MSSLoss2DConfig:
+    block_widths: tuple[int, ...] = (11, 13, 17, 19, 23, 29, 31)
+    block_steps: tuple[int, ...] = (1, 2, 3, 5, 7, 11, 13)
+
+class MSSLoss2D(torch.nn.Module):
+    def __init__(self, config: MSSLoss2DConfig, device: torch.device) -> None:
+        super().__init__()
+        
+        # load or jit-compile the cuda extension
+        self.mss_loss_cuda = self._load_cuda_extension()
+        
+        self.config = config
+        self.device = device
+        
+        # precompute windows
+        self.steps: list[int] = []
+        self.windows: list[torch.Tensor] = []
+        
+        for block_width, block_step in zip(config.block_widths, config.block_steps):
+            self.steps.append(block_step)
+            window = self.get_flat_top_window_2d(block_width)
+            window = window / torch.sqrt(torch.mean(window.square()))
+            self.windows.append(window.to(device=device).detach())
+    
+    def _load_cuda_extension(self) -> Any:
+        # jit-compile the extension
+        from torch.utils.cpp_extension import load
+        
+        cuda_src_dir = os.path.join(config.SRC_PATH, "cuda")
+        return load(
+            name="mss_loss_2d_cuda",
+            sources=[
+                os.path.join(cuda_src_dir, "mss_loss_2d_cuda.cpp"),
+                os.path.join(cuda_src_dir, "mss_loss_2d_cuda_kernel.cu"),
+            ],
+            extra_cuda_cflags=["-O3", "--use_fast_math"],
+            verbose=True
+        )
+    
+    @torch.no_grad()
+    def _flat_top_window(self, x: torch.Tensor) -> torch.Tensor:
+        # flat top window function
+        return (0.21557895 - 0.41663158 * torch.cos(x) + 0.277263158 * torch.cos(2*x)
+                - 0.083578947 * torch.cos(3*x) + 0.006947368 * torch.cos(4*x))
+
+    @torch.no_grad()
+    def get_flat_top_window_2d(self, block_width: int) -> torch.Tensor:
+        wx = (torch.arange(block_width, device=self.device) + 0.5) / block_width * 2 * torch.pi
+        return self._flat_top_window(wx.view(1, 1, -1, 1)) * self._flat_top_window(wx.view(1, 1, 1, -1))
+    
+    def forward(self, sample: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+        # call the cuda implementation
+        return self.mss_loss_cuda.mss_loss_forward(
+            sample, target, self.config.block_widths, self.steps, self.windows
+        )
+    
+    def mss_loss(self, sample: torch.Tensor, target: torch.Tensor) -> tuple[torch.Tensor, None]:
+        # wrapper for backward compatibility
+        loss = self.forward(sample, target)
+        return loss, None
+    
+    def compile(self, **kwargs) -> None:
+        return
+"""
 
 def random_stereo_augmentation(x: torch.Tensor) -> torch.Tensor:
     
@@ -215,7 +298,7 @@ def freeze_module(optimizer: torch.optim.Optimizer, module_to_freeze: torch.nn.M
             del optimizer.state[param]
 
 @dataclass
-class DAETrainer_J1_Config(ModuleTrainerConfig):
+class DAETrainer_M1_Config(ModuleTrainerConfig):
 
     latents_kl_loss_weight: float = 3e-2
     kl_warmup_steps: int = 250
@@ -234,10 +317,10 @@ class DAETrainer_J1_Config(ModuleTrainerConfig):
     wavelet_loss_weight: float = 0
     wavelet_loss_config: Optional[dict[str, Any]] = None
 
-class DAETrainer_J1(ModuleTrainer):
+class DAETrainer_M1(ModuleTrainer):
     
     @torch.no_grad()
-    def __init__(self, config: DAETrainer_J1_Config, trainer: DualDiffusionTrainer) -> None:
+    def __init__(self, config: DAETrainer_M1_Config, trainer: DualDiffusionTrainer) -> None:
         
         self.config = config
         self.trainer = trainer
@@ -314,8 +397,9 @@ class DAETrainer_J1(ModuleTrainer):
 
         raw_audio = random_stereo_augmentation(batch["audio"])
         mdct_samples = self.format.raw_to_mdct(raw_audio, random_phase_augmentation=True).detach()
+        noised_mdct_samples = ((mdct_samples + torch.randn_like(mdct_samples) * 0.1) / (1**2 + 0.1**2)**0.5).detach()
         latents, reconstructed, mdct_samples, latents_kld = self.dae(
-            mdct_samples, dae_embeddings, latents_sigma)
+            noised_mdct_samples, dae_embeddings, latents_sigma)
         
         point_loss_weight = self.config.point_loss_weight
         if self.config.point_loss_warmup_steps > 0:

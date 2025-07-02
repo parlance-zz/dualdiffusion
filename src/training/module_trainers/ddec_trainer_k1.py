@@ -27,9 +27,9 @@ import torch
 
 from training.trainer import DualDiffusionTrainer
 from training.module_trainers.unet_trainer import UNetTrainer, UNetTrainerConfig
-from modules.daes.dae_edm2_k1 import DAE_K1
+from modules.daes.dae_edm2_d3 import DAE_D3
 from modules.unets.unet_edm2_ddec_k1 import DDec_UNet_K1
-from modules.formats.mdct import MDCT_Format
+from modules.formats.ms_mdct_dual import MS_MDCT_DualFormat
 from modules.mp_tools import normalize
 
 
@@ -46,9 +46,6 @@ class DiffusionDecoder_Trainer_Config(UNetTrainerConfig):
 
     add_latents_noise: float = 0
     latents_noise_warmup_steps: int = 10000
-
-    latents_kl_loss_weight: float = 1e-2
-    kl_warmup_steps: int = 250
 
     loss_buckets_sigma_max: float = 12
     loss_buckets_sigma_min: float = 0.00008
@@ -68,13 +65,11 @@ class DiffusionDecoder_Trainer(UNetTrainer):
         self.logger = trainer.logger
 
         self.ddec: DDec_UNet_K1 = trainer.get_train_module("ddec")
-        self.dae: DAE_K1 = trainer.get_train_module("dae")
+        self.dae: DAE_D3 = trainer.pipeline.dae.to(device=self.trainer.accelerator.device, dtype=torch.bfloat16)
 
-        assert self.ddec is not None and self.dae is not None, "DiffusionDecoder_Trainer requires train modules ddec and dae"
-
-        self.format: MDCT_Format = trainer.pipeline.format.to(self.trainer.accelerator.device)
-        self.loss_weight = self.format.mdct_mel_density.clone()# ** 2
-        self.loss_weight /= self.loss_weight.mean()
+        self.format: MS_MDCT_DualFormat = trainer.pipeline.format.to(self.trainer.accelerator.device)
+        #self.loss_weight = self.format.mdct_mel_density.clone()# ** 2
+        #self.loss_weight /= self.loss_weight.mean()
 
         if trainer.config.enable_model_compilation:
             self.ddec.compile(**trainer.config.compile_params)
@@ -92,9 +87,6 @@ class DiffusionDecoder_Trainer(UNetTrainer):
         else: self.logger.info("Random phase augmentation is disabled")
 
         self.logger.info(f"Crop edges: {self.config.crop_edges}")
-
-        self.logger.info(f"Latents KL loss weight: {self.config.latents_kl_loss_weight}")
-        self.logger.info(f"KL warmup steps: {self.config.kl_warmup_steps}")
         self.logger.info(f"Add latents noise: {self.config.add_latents_noise}")
 
         self.unet = self.ddec
@@ -122,30 +114,30 @@ class DiffusionDecoder_Trainer(UNetTrainer):
             latents_sigma = torch.Tensor([latents_sigma]).to(device=self.trainer.accelerator.device)
         else:
             latents_sigma = None
-
-        latents_kl_loss_weight = self.config.latents_kl_loss_weight
-        if self.trainer.global_step < self.config.kl_warmup_steps:
-            warmup_scale = self.trainer.global_step / self.config.kl_warmup_steps
-            latents_kl_loss_weight *= warmup_scale
             
         mdct_samples = self.format.raw_to_mdct(raw_samples,
             random_phase_augmentation=self.config.random_phase_augmentation).detach()
-        latents, ddec_embeddings, latents_kld = self.dae(mdct_samples, dae_embeddings, latents_sigma)
+        mel_spec = self.format.raw_to_mel_spec(raw_samples).detach()
 
-        logs = self.unet_train_batch(mdct_samples, ddec_embeddings, None)
-        logs["loss"] = logs["loss"] + latents_kl_loss_weight * latents_kld
-
+        latents, recon_mel_spec, _ = self.dae(mel_spec, dae_embeddings, latents_sigma)
+        
+        logs = self.unet_train_batch(mdct_samples, recon_mel_spec, None)
         logs.update({
             "io_stats/mdct_samples_std": mdct_samples.std(dim=(1,2,3)),
             "io_stats/mdct_samples_mean": mdct_samples.mean(dim=(1,2,3)),
+            "io_stats/mel_spec_std": mel_spec.std(dim=(1,2,3)),
+            "io_stats/mel_spec_mean": mel_spec.mean(dim=(1,2,3)),
+            "io_stats/recon_mel_spec_std": recon_mel_spec.std(dim=(1,2,3)),
+            "io_stats/recon_mel_spec_mean": recon_mel_spec.mean(dim=(1,2,3)),
             "io_stats/latents_std": latents.std(dim=(1,2,3)).detach(),
             "io_stats/latents_mean": latents.mean(dim=(1,2,3)).detach(),
             "io_stats/latents_sigma": latents_sigma.detach() if latents_sigma is not None else 0,
-            "loss_weight/kl_latents": latents_kl_loss_weight,
-            "loss/kl_latents": latents_kld.detach(),
         })
 
         if self.trainer.config.enable_debug_mode == True:
-            print("latents.shape:", latents.shape, "mdct_samples.shape:", mdct_samples.shape)
+            print("latents.shape:", latents.shape,
+                  "mdct_samples.shape:", mdct_samples.shape,
+                  "mel_spec.shape:", mel_spec.shape,
+                  "recon_mel_spec.shape:", recon_mel_spec.shape)
 
         return logs

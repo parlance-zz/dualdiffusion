@@ -172,10 +172,10 @@ class Block(torch.nn.Module):
         #if self.flavor == "enc":
         #   x = normalize(x, dim=1) # pixel norm
 
-        if self.noise_channels is not None:
-            noise = torch.randn_like(x)
-            sigma = self.noise_channels(x, gain=self.noise_channels_gain)
-            x = x + noise * sigma
+        #if self.noise_channels is not None:
+        #    noise = torch.randn_like(x)
+        #    sigma = self.noise_channels(x, gain=self.noise_channels_gain)
+        #    x = x + noise * sigma
 
         y = self.conv_res0(mp_silu(x))
 
@@ -305,6 +305,8 @@ class DAE_M1(DualDiffusionDAE):
 
         self.downsample = FilteredDownsample2D(k_size=config.resample_k_size, beta=config.resample_beta, factor=2)
         self.upsample = FilteredUpsample2D(k_size=config.resample_k_size*2 + 1, beta=config.resample_beta, factor=2)
+        #self.downsample = lambda x: resample_2d(x, mode="down")
+        #self.upsample = lambda x: resample_2d(x, mode="up")
         
         # encoder
         self.encoder = Encoder(config.in_channels, enc_channels, config.latent_channels,
