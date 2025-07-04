@@ -409,6 +409,27 @@ class DualDiffusionTrainer:
         self.persistent_state.grad_norm_logmean = log_mean * mean_beta + (1 - mean_beta) * math.log(grad_norm)
         self.persistent_state.grad_norm_logvar = log_var * std_beta + (1 - std_beta) * math.log(grad_var)
 
+    def get_momentum(self, optimizer: Optional[torch.optim.Optimizer] = None) -> torch.Tensor:
+
+        optimizer = optimizer or self.optimizer
+
+        # collect all momentum tensors
+        momentum_tensors: list[torch.Tensor] = []
+        for group in optimizer.param_groups:
+            for p in group["params"]:
+                state = optimizer.state.get(p, None)
+                if state is not None:
+                    exp_avg = state.get("exp_avg", None)
+                    if exp_avg is not None:
+                        momentum_tensors.append(exp_avg)
+        
+        if len(momentum_tensors) == 0:
+            return 0.0
+
+        # compute norms with _foreach
+        norms = torch._foreach_norm(momentum_tensors)
+        return torch.linalg.vector_norm(torch.stack(norms, dim=0))
+                
     def init_optimizer(self) -> None:
         
         opt_params = []
@@ -935,6 +956,9 @@ class DualDiffusionTrainer:
                     train_logger.add_logs({
                         "train_stats/it_per_second": progress_bar.format_dict["rate"]})
                 
+                # log average momentum norm
+                train_logger.add_log("grad_norm/momentum", self.get_momentum())
+
                 # optionally, log cuda gpu stats (every 25th step to avoid overhead)
                 if self.config.enable_cuda_gpu_stats_logging == True and self.global_step % 25 == 0:
                     try:
