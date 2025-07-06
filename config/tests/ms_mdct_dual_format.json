@@ -1,6 +1,6 @@
 {
     "device": "cuda",
-    "add_random_test_samples": 2000,
+    "add_random_test_samples": 200,
     "save_output": false,
     "downsample_mdct_psd": false,
     
@@ -151,29 +151,31 @@
         "sample_rate": 32000,
         "num_raw_channels": 2,
         "default_raw_length": 1408768,
-
-        "raw_to_mel_spec_scale": 9.25,
-        "raw_to_mel_spec_offset": -2.785,
-        "mel_spec_to_mdct_psd_scale": 0.00188,
-        "mel_spec_to_mdct_psd_offset": -0.59,
+      
+        "raw_to_mel_spec_scale": 9.29379224133,
+        "raw_to_mel_spec_offset": -2.90285315,
+        "mel_spec_to_mdct_psd_scale": 0.001826292667, //0.00141690296, 
+        "mel_spec_to_mdct_psd_offset": -0.5870303662, //0
         "mdct_to_raw_scale": 1,
-        "raw_to_mdct_scale": 12.16,
-
+        "raw_to_mdct_scale": 12.427468,
+      
         "mdct_window_len": 512,
+        "mdct_window_func": "sin",
         "mdct_psd_num_bins": 4096,
         "mdct_dual_channel": true,
-
+        
         "ms_freq_min": 20,
-        "ms_filter_shape": "cos",
         "ms_abs_exponent": 0.25,
+        "ms_filter_shape": "triangular",
         "ms_width_alignment": 128,
         "ms_num_frequencies": 256,
         "ms_step_size_ms": 8,
-        "ms_window_duration_ms": 200, //128,
-        "ms_padded_duration_ms": 200, //128,
-        "ms_window_exponent_low": 12, //3 for flat-top //5 for blackman-harris, //15 for hann (128ms window)
+        "ms_window_duration_ms": 200,
+        "ms_padded_duration_ms": 200,
+        "ms_window_exponent_low": 32,
         "ms_window_exponent_high": null,
-        "ms_window_periodic": true
+        "ms_window_periodic": true,
+        "ms_window_func": "hann"
     }
     //*/
 

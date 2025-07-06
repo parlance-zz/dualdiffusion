@@ -75,7 +75,8 @@ def ms_mdct_dual_format_test() -> None:
         "exponent": cfg.format_config.ms_window_exponent_low,
         "periodic": cfg.format_config.ms_window_periodic,
     }
-    window_low = MS_MDCT_DualFormat._mel_spec_window(cfg.format_config.ms_win_length, **wkwargs)
+    window_low = MS_MDCT_DualFormat._mel_spec_window(cfg.format_config.ms_win_length,
+                                window_func=cfg.format_config.ms_window_func, **wkwargs)
     window_low.numpy().tofile(os.path.join(output_path, "window_low.raw"))
 
     wkwargs={
@@ -98,9 +99,9 @@ def ms_mdct_dual_format_test() -> None:
     stat_logger = StatLogger()
     print(f"\nNum test_samples: {len(test_samples)}\n")
 
-    for filename in test_samples:   
+    for i, filename in enumerate(test_samples):
         
-        print(f"file: {filename}")
+        print(f"file {i+1}/{len(test_samples)}: {filename}")
 
         file_path = os.path.join(dataset_path, filename)
         if os.path.isfile(file_path) == False:
