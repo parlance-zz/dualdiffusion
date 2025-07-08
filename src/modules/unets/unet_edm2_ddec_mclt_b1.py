@@ -38,7 +38,6 @@ import torch
 from modules.unets.unet import DualDiffusionUNet, DualDiffusionUNetConfig
 from modules.mp_tools import MPFourier, mp_cat, mp_silu, mp_sum, normalize, resample_3d
 from modules.daes.dae_edm2_d3 import MPConv3D
-from modules.formats.frequency_scale import get_mel_density
 from modules.formats.format import DualDiffusionFormat
 from utils.dual_diffusion_utils import tensor_5d_to_4d, tensor_4d_to_5d
 
@@ -51,9 +50,7 @@ class DDec_MCLT_UNet_B1_Config(DualDiffusionUNetConfig):
     in_channels_emb: int = 0
 
     in_num_freqs: int = 256
-    in_psd_freqs: int = 3201
-    mel_density_scale: float = 0.54
-    audio_sample_rate: float = 32000
+    in_psd_freqs: int = 4096
 
     model_channels: int  = 32                # Base multiplier for the number of channels.
     logvar_channels: int = 128               # Number of channels for training uncertainty estimation.
@@ -201,13 +198,6 @@ class DDec_MCLT_UNet_B1(DualDiffusionUNet):
 
         self.num_levels = len(config.channel_mult)
 
-        mclt_hz = torch.arange(0, config.in_num_freqs) + 0.5
-        mclt_hz = mclt_hz / config.in_num_freqs * config.audio_sample_rate / 2
-        mel_density = get_mel_density(mclt_hz)
-        mel_density /= mel_density.square().mean().sqrt()
-        mel_density = mel_density.view(1, 1, 1,-1, 1) * config.mel_density_scale
-        self.register_buffer("mel_density", mel_density, persistent=False)
-
         assert config.in_psd_freqs % config.in_num_freqs == 0
         self.psd_freqs_per_freq = config.in_psd_freqs // config.in_num_freqs
         
@@ -299,10 +289,6 @@ class DDec_MCLT_UNet_B1(DualDiffusionUNet):
             c_out = sigma * self.config.sigma_data / (sigma ** 2 + self.config.sigma_data ** 2).sqrt()
             c_in = 1 / (self.config.sigma_data ** 2 + sigma ** 2).sqrt()
             c_noise = (sigma.flatten().log() / 4).to(self.dtype)
-
-            # ms_mdct_dual_format conversion fudge factor
-            fft_hz = torch.linspace(0, self.config.audio_sample_rate / 2, self.config.in_psd_freqs, device=x_ref.device)
-            x_ref = (x_ref / get_mel_density(fft_hz).view(1, 1,-1, 1) / 9).clip(min=0)
 
             x_ref = x_ref.view(x_ref.shape[0], x_ref.shape[1], self.config.in_num_freqs, self.psd_freqs_per_freq, x_ref.shape[3])
             x_ref = x_ref.permute(0, 3, 1, 2, 4).contiguous(memory_format=torch.channels_last_3d).to(dtype=torch.bfloat16)

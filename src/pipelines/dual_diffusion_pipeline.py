@@ -691,9 +691,6 @@ class DualDiffusionPipeline(torch.nn.Module):
                 else:
                     cfg_model_output_hat = model_output_hat
                 cfg_model_output = torch.lerp(cfg_model_output, cfg_model_output_hat, 0.5)            
-            
-            #if module_name == "ddec":
-            #    cfg_model_output = self.format.raw_to_sample(self.format.sample_to_raw(cfg_model_output, n_fgla_iters=1, quiet=True))
 
             t = sigma_next / sigma_curr if (i+1) < params.num_steps else 0
             sample = torch.lerp(cfg_model_output, sample, t)
@@ -724,9 +721,4 @@ class DualDiffusionPipeline(torch.nn.Module):
         debug_info["final_sample_mean"] = sample.mean().item()
         debug_info["final_sample_std"] = sample.std().item()
 
-        if hasattr(unet, "mel_density"):
-            sample *= unet.mel_density.squeeze(0)
-            #sample *= unet.freq_stds.view(1, 1,-1, 1)
-
         return sample
-        #sample = normalize(sample).float() * params.sigma_data
