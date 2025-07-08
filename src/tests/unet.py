@@ -125,7 +125,7 @@ def unet_test() -> None:
 
     for i, filename in enumerate(cfg.test_samples):
         
-        print(f"\nfile: {filename}")
+        print(f"\nfile {i+1}/{len(cfg.test_samples)}: {filename}")
 
         safetensors_file_name = os.path.join(f"{os.path.splitext(filename)[0]}.safetensors")
         safetensors_full_path = os.path.join(config.DATASET_PATH, safetensors_file_name)
@@ -177,10 +177,6 @@ def unet_test() -> None:
                                                     sample_shape=output_mel_spec.shape, x_ref=x_ref, module=ddec)
             
             output_raw_sample = format.mdct_to_raw(output_mdct.float())
-
-            # kludge for mistake in edge padding when training edm2_d3a_aclap2_ultra2 ddec
-            if isinstance(ddec, DDec_MCLT_UNet_B1): 
-                output_raw_sample = output_raw_sample[..., 4096:-4096]
         else:
             output_raw_sample = None
 

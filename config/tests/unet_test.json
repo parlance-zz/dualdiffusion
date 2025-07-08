@@ -1,5 +1,5 @@
 {
-    "model_name": "edm2_dae_d3a",
+    "model_name": "edm2_dae_d3a_v2",
     "model_load_options": {
         "torch_dtype": "bfloat16",
         "device": "cuda",
@@ -8,8 +8,7 @@
             //"unet": "phema_std0.015.safetensors",
             //"unet": "phema_std0.2.safetensors",
             //"unet": "ema_std0.05.safetensors",
-            "unet": "ema_std0.1.safetensors",
-            "ddec": "ema_std0.1.safetensors"
+            "unet": "ema_std0.1.safetensors"
         },
         "compile_options": {
             "fullgraph": true,
@@ -21,17 +20,21 @@
     "skip_ddec": false,
     "copy_sample_source_files": true,
     "random_test_samples_seed": null,
-    "add_random_test_samples": 5,
+    "add_random_test_samples": 0,
     "shuffle_test_samples": true,
     "test_samples": [
+
+        //"switch/Blazing Chrome"
         
+        //"psf3/One Piece - Pirate Warriors 3"
         //"psf3/Street Fighter IV"
         //"switch/Gravity Circuit"
         //"psf2/King's Field - The Ancient City"
         //"wii/Mighty Switch Force!"
-        //"switch/Cat Girl Without Salad - Amuse-Bouche"
         //"ssf/Command & Conquer"
         //"smd/Gunstar Heroes"
+        //"spc/Super Metroid"
+        //"switch/Kirby Star Allies"
         
         //"spc/Shin Kidou Senki Gundam W - Endless Duel"
         //"psf/Mega Man X5"
@@ -39,6 +42,38 @@
         //"psf/Suikoden 2"
         //"3sf/Super Mario 3D Land"
         //"smd/Gunstar Heroes"
+        //"xbox/Tony Hawk's Pro Skater 2x"
+        //"xbox/AirForce Delta Storm"
+
+        /*
+        "3sf/Monster Hunter 3 Ultimate",
+        "3sf/Monster Hunter 4",
+        "3sf/Monster Hunter 4 Ultimate",
+        "3sf/Monster Hunter Generations",
+        "3sf/Monster Hunter XX"
+        */
+
+        //"smd/Sonic CD",
+        "psf/Mega Man 8" // cool shit
+        //"psf/Suikoden 2",
+        //"psf/Mega Man X6"
+        //"psf/Contra - Legacy of War",
+        //"psf/Chrono Cross"
+        //"psf/Dance Dance Revolution - Konamix",
+        //"psf/WipEout 3 - Special Edition",
+        //"psf/Star Wars - Episode I - The Phantom Menace",
+        //"psf/Street Fighter Alpha 3",
+        //"psf/Gradius Gaiden",
+        //"psf/Descent Maximum"
+        //"psf/Command & Conquer - Red Alert",
+
+        /*
+        "psf3/One Piece - Pirate Warriors 3/BGMLink_00000007.at3.flac",
+        "psf3/One Piece - Pirate Warriors 3/BGMLink_00000007.at3.flac",
+        "psf3/One Piece - Pirate Warriors 3/BGMLink_00000007.at3.flac",
+        "psf3/One Piece - Pirate Warriors 3/BGMLink_00000007.at3.flac",
+        "psf3/One Piece - Pirate Warriors 3/BGMLink_00000007.at3.flac"
+        */
 
         //"3sf/Super Mario 3D Land/STM_BGM_WORLD8S_A.bcstm.flac",
         //"psf2/Shin Megami Tensei - Persona 3 FES",
@@ -50,106 +85,55 @@
         //"3sf/Monster Hunter 3 Ultimate/_t_lobby_ML_T_SKB01.mca.flac",
         //"vita/Grisaia Phantom Trigger 01 & 02/MUSIC_00000013.at9.flac"
         
-        //"xbox/AirForce Delta Storm"
+        /*
+        "switch/Blazing Chrome/sndMusic_Stage_02.ogg.flac",
+        "switch/Blazing Chrome/sndMusic_Stage_03.ogg.flac",
+        "switch/Blazing Chrome/sndMusic_Stage_04_A.ogg.flac",
+        "switch/Blazing Chrome/sndMusic_Stage_04_C.ogg.flac"
+        */
 
         //"psf3/Gundam Battle Operation Next/BGM_009.adx.flac",
-        //"xbox/AirForce Delta Storm/afdx_02.rwx.flac"
+
         /*
+        "xbox/AirForce Delta Storm/afdx_02.rwx.flac",
         "xbox/AirForce Delta Storm/afdx_gra.rwx.flac",
         "xbox/AirForce Delta Storm/afdx_m01.rwx.flac",
         "xbox/AirForce Delta Storm/afdx_m08.rwx.flac",
         "xbox/AirForce Delta Storm/afdx_m14.rwx.flac",
         "xbox/AirForce Delta Storm/afdx_m21.rwx.flac",
-        "xbox/AirForce Delta Storm/afdx_z03.rwx.flac",
-        */
-        
-        /*
-        "psf/Gradius Gaiden/SLPM-86042_BGM1_0000096c.XA.flac",
-        "3sf/Monster Hunter 3 Ultimate/_t_lobby_ML_T_SKB01.mca.flac",
-        "psf/Gradius Gaiden/SLPM-86042_BGM1_0000096c.XA.flac",
-        "3sf/Monster Hunter 3 Ultimate/_t_lobby_ML_T_SKB01.mca.flac",
-        "psf/Gradius Gaiden/SLPM-86042_BGM1_0000096c.XA.flac",
-        "3sf/Monster Hunter 3 Ultimate/_t_lobby_ML_T_SKB01.mca.flac",
-        "psf/Gradius Gaiden/SLPM-86042_BGM1_0000096c.XA.flac",
-        "3sf/Monster Hunter 3 Ultimate/_t_lobby_ML_T_SKB01.mca.flac",
-        "psf/Gradius Gaiden/SLPM-86042_BGM1_0000096c.XA.flac",
-        "3sf/Monster Hunter 3 Ultimate/_t_lobby_ML_T_SKB01.mca.flac",
-        "psf/Gradius Gaiden/SLPM-86042_BGM1_0000096c.XA.flac",
-        "3sf/Monster Hunter 3 Ultimate/_t_lobby_ML_T_SKB01.mca.flac",
-        "psf/Gradius Gaiden/SLPM-86042_BGM1_0000096c.XA.flac",
-        "3sf/Monster Hunter 3 Ultimate/_t_lobby_ML_T_SKB01.mca.flac",
-        "psf/Gradius Gaiden/SLPM-86042_BGM1_0000096c.XA.flac",
-        "3sf/Monster Hunter 3 Ultimate/_t_lobby_ML_T_SKB01.mca.flac",
+        "xbox/AirForce Delta Storm/afdx_z03.rwx.flac"
         */
 
-        /*
-        "3sf/Monster Hunter 3 Ultimate",
-        "3sf/Monster Hunter 4",
-        "3sf/Monster Hunter 4 Ultimate",
-        "3sf/Monster Hunter Generations",
-        "3sf/Monster Hunter XX",
-        */
+        //"3sf/Monster Hunter 3 Ultimate/_t_lobby_ML_T_SKB01.mca.flac",
+        //"psf/Gradius Gaiden/SLPM-86042_BGM1_0000096c.XA.flac",
 
         /*
-        "psf/Gradius Gaiden/SLPM-86042_BGM1_0000096c.XA.flac",
-        "psf/Gradius Gaiden/SLPM-86042_BGM1_0000096c.XA.flac",
-        "psf/Gradius Gaiden/SLPM-86042_BGM1_0000096c.XA.flac",
-        "psf/Gradius Gaiden/SLPM-86042_BGM1_0000096c.XA.flac",
-        "psf/Gradius Gaiden/SLPM-86042_BGM1_0000096c.XA.flac",
-        "psf/Gradius Gaiden/SLPM-86042_BGM1_0000096c.XA.flac",
-        "psf/Gradius Gaiden/SLPM-86042_BGM1_0000096c.XA.flac",
-        "psf/Gradius Gaiden/SLPM-86042_BGM1_0000096c.XA.flac",
-        "psf/Gradius Gaiden/SLPM-86042_BGM1_0000096c.XA.flac",
-        */
-
-        //"smd/Sonic CD",
-        //"psf/Mega Man 8" // cool shit
-        //"psf/Suikoden 2",
-        //"psf/Mega Man X6",
-        //"psf/Contra - Legacy of War",
-        //"psf/Chrono Cross",
-        //"psf/Command & Conquer",
-        //"psf/Dance Dance Revolution - Konamix",
-        //"psf/Tony Hawk's Pro Skater 2",
-        //"psf/WipEout 3 - Special Edition",
-        //"psf/Star Wars - Episode I - The Phantom Menace",
-        //"psf/Street Fighter Alpha 3",
-        //"psf/Gradius Gaiden",
-        //"psf/Descent Maximum"
-        //"psf/Command & Conquer - Red Alert",
-        
-
-        //"psf/Mega Man X6/11. BLAZE HEATNIX STAGE.xa.flac",
-
-        /*
-        "dick_pound-01.flac",
-        "dick_pound-02.flac",
         "psf/Mega Man X6/11. BLAZE HEATNIX STAGE.xa.flac",
         "psf/Final Fantasy VII/416 One-Winged Angel.minipsf.flac",
         "psf/Final Fantasy VII/111 Fanfare.minipsf.flac",
         "psf/Soul Blade/SLUS-00240_SOULXA_01016401_0000.xa.flac",
         "psf/Tony Hawk's Pro Skater 2/_t_MOVIE_INTRO.XA.flac",
+        "dsf/Metropolis Street Racer Prototype/file_15.adx.flac",
+        "switch/Arcaea/_t_songs_ignotus.ogg.flac",
         */
-        
-        //"xbox/Tony Hawk's Pro Skater 2x"
     ],
     "unet_params": {
         "seed": null,
 
-        "num_steps": 300,
-        "cfg_scale": 2,//2, //3, //3.5,//3,
-        "use_heun": true, //true,
+        "num_steps": 400,//300,
+        "cfg_scale": 2,//3, //2
+        "use_heun": true,//true,
         "schedule": "edm2",
 
-        "sigma_max": 200, //250,
+        "sigma_max": 200, //200,
         "sigma_min": 0.01,//0.025,
         
-        "input_perturbation": 0.3, //0.99, //0.5, //0.3,//0.4,
-        "input_perturbation_offset": 0.3 //0.3
+        "input_perturbation": 0.3,//0.3
+        "input_perturbation_offset": 0.3//0.3
     },
     "ddec_params": {
 
-        "num_steps": 100,
+        "num_steps": 100,//100,
         "cfg_scale": 1.5,
         "use_heun": true,
         "schedule": "edm2",
@@ -162,7 +146,7 @@
 
         //"input_perturbation": 0,
         //"input_perturbation_offset": 0,
-        "input_perturbation": 0,
-        "input_perturbation_offset": -0.3
+        "input_perturbation": 0,//0,
+        "input_perturbation_offset": 0.3//0.3//-0.3
     }
 }
