@@ -36,53 +36,9 @@ from typing import Union, Literal, Optional
 import torch
 
 from modules.daes.dae import DualDiffusionDAE, DualDiffusionDAEConfig
-from modules.mp_tools import mp_silu, mp_sum, normalize, resample_3d, wavelet_decompose_2d, wavelet_recompose_2d
+from modules.mp_tools import mp_silu, mp_sum, normalize, resample_3d
 from utils.dual_diffusion_utils import tensor_4d_to_5d, tensor_5d_to_4d
 
-
-"""
-class MPConv3D(torch.nn.Module):
-
-    def __init__(self, in_channels: int, out_channels: int,
-                 kernel: tuple[int, int], groups: int = 1, stride: int = 1,
-                 disable_weight_norm: bool = False) -> None:
-        
-        super().__init__()
-
-        self.in_channels = in_channels
-        self.out_channels = out_channels
-        self.groups = groups
-        self.stride = stride
-        self.disable_weight_norm = disable_weight_norm
-        
-        self.weight = torch.nn.Parameter(torch.randn(out_channels, in_channels // groups, *kernel))
-
-    def forward(self, x: torch.Tensor, gain: Union[float, torch.Tensor] = 1.) -> torch.Tensor:
-        
-        w = self.weight.float()
-        if self.training == True and self.disable_weight_norm == False:
-            w = normalize(w, dim=1) # traditional weight normalization
-            
-        w = w * (gain / w[0].numel()**0.5) # magnitude-preserving scaling
-        w = w.to(x.dtype)
-
-        if w.ndim == 2:
-            return x @ w.t()
-        
-        if w.ndim == 5:
-            if w.shape[-3] == 2:
-                x = torch.cat((x, x[:, :, 0:1]), dim=2)
-            elif w.shape[-3] == 3:
-                return torch.nn.functional.conv3d(x, w, padding=(w.shape[-3]//2, w.shape[-2]//2, w.shape[-1]//2), groups=self.groups, stride=self.stride)
-            return torch.nn.functional.conv3d(x, w, padding=(0, w.shape[-2]//2, w.shape[-1]//2), groups=self.groups, stride=self.stride)
-        else:
-            return torch.nn.functional.conv2d(x, w, padding=(w.shape[-2]//2, w.shape[-1]//2), groups=self.groups, stride=self.stride)
-
-    @torch.no_grad()
-    def normalize_weights(self) -> None:
-        if self.disable_weight_norm == False:
-            self.weight.copy_(normalize(self.weight, dim=1))
-"""
 
 class MPConv3D(torch.nn.Module):
 
@@ -160,8 +116,6 @@ class DAE_D3_Config(DualDiffusionDAEConfig):
     emb_linear_groups: int = 1
     add_constant_channel: bool = True
     add_pixel_norm: bool       = False
-
-    wavelet_rescale_factors: list[float] = (0.78, 0.86, 0.96)
     
 class Block(torch.nn.Module):
 
@@ -411,16 +365,7 @@ class DAE_D3(DualDiffusionDAE):
         for block in self.dec.values():
             x = block(x, embeddings)
 
-        # amplify high frequency details a bit
         dec_out = tensor_5d_to_4d(self.conv_out(x, gain=self.out_gain)).to(memory_format=torch.channels_last)
-        if training == False and len(self.config.wavelet_rescale_factors) > 0:
-            
-            wavelets = wavelet_decompose_2d(dec_out, num_levels=len(self.config.wavelet_rescale_factors))
-            for i in range(len(self.config.wavelet_rescale_factors)):
-                wavelets[i] /= self.config.wavelet_rescale_factors[i]**0.5
-
-            dec_out = wavelet_recompose_2d(wavelets)
-
         return dec_out
     
     def forward(self, samples: torch.Tensor, dae_embeddings: torch.Tensor, latents_sigma: Optional[torch.Tensor] = None) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
