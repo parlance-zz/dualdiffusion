@@ -51,6 +51,8 @@ class UNetTestConfig:
     unet_params: SampleParams
     ddec_params: SampleParams
 
+    add_latents_noise: Optional[float] = None
+
     output_lufs: float  = -20
     skip_ddec: bool     = False
 
@@ -161,7 +163,9 @@ def unet_test() -> None:
         unet_output = pipeline.diffusion_decode(cfg.unet_params,
             audio_embedding=audio_embedding, module=pipeline.unet).float()
         if dae is not None:
-            latents = unet_output
+            latents = unet_output.float()
+            if cfg.add_latents_noise is not None:
+                latents = normalize(latents + torch.randn_like(latents) * cfg.add_latents_noise)
             output_mel_spec = dae.decode(latents.to(dtype=dae.dtype), dae_embeddings).float()
         else:
             latents = None
@@ -225,8 +229,8 @@ def unet_test() -> None:
 
         if cfg.copy_sample_source_files == True:
             output_flac_file_path = os.path.join(output_path, f"{output_label}_input_prompt.flac")
-            save_audio(input_audio, input_sample_rate, output_flac_file_path,
-                       target_lufs=cfg.output_lufs, metadata=input_audio_metadata)
+            save_audio(input_audio[..., :output_raw_sample.shape[-1]], input_sample_rate, output_flac_file_path,
+                       target_lufs=cfg.output_lufs, metadata={**metadata, **input_audio_metadata})
             print(f"Saved flac output to {output_flac_file_path}")
 
     print(f"\nFinished in: {datetime.datetime.now() - start_time}")

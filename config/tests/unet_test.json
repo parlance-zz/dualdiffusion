@@ -8,7 +8,8 @@
             //"unet": "phema_std0.015.safetensors",
             //"unet": "phema_std0.2.safetensors",
             //"unet": "ema_std0.05.safetensors",
-            "unet": "ema_std0.1.safetensors"
+            "unet": "ema_std0.1.safetensors",
+            "ddec": "ema_std0.1.safetensors"
         },
         "compile_options": {
             "fullgraph": true,
@@ -16,6 +17,7 @@
         }
     },
 
+    "add_latents_noise": null,
     "output_lufs": -20,
     "skip_ddec": false,
     "copy_sample_source_files": true,
@@ -54,7 +56,7 @@
         */
 
         //"smd/Sonic CD",
-        "psf/Mega Man 8" // cool shit
+        //"psf/Mega Man 8" // cool shit
         //"psf/Suikoden 2",
         //"psf/Mega Man X6"
         //"psf/Contra - Legacy of War",
@@ -65,9 +67,18 @@
         //"psf/Street Fighter Alpha 3",
         //"psf/Gradius Gaiden",
         //"psf/Descent Maximum"
-        //"psf/Command & Conquer - Red Alert",
+        //"psf/Command & Conquer - Red Alert" // cool shit
 
+        // no vocals rock, crisp
         /*
+        "psf2/Fisherman's Challenge/STRBGM_0000000F.genh.flac",
+        "psf2/Fisherman's Challenge/STRBGM_0000000F.genh.flac",
+        "psf2/Fisherman's Challenge/STRBGM_0000000F.genh.flac",
+        "psf2/Fisherman's Challenge/STRBGM_0000000F.genh.flac",
+        "psf2/Fisherman's Challenge/STRBGM_0000000F.genh.flac"
+        */
+
+        /* // metal
         "psf3/One Piece - Pirate Warriors 3/BGMLink_00000007.at3.flac",
         "psf3/One Piece - Pirate Warriors 3/BGMLink_00000007.at3.flac",
         "psf3/One Piece - Pirate Warriors 3/BGMLink_00000007.at3.flac",
@@ -75,12 +86,17 @@
         "psf3/One Piece - Pirate Warriors 3/BGMLink_00000007.at3.flac"
         */
 
-        //"3sf/Super Mario 3D Land/STM_BGM_WORLD8S_A.bcstm.flac",
+        ///* // jazz
+        "dsf/Metropolis Street Racer Prototype/file_15.adx.flac",
+        "dsf/Metropolis Street Racer Prototype/file_15.adx.flac",
+        "dsf/Metropolis Street Racer Prototype/file_15.adx.flac",
+        "dsf/Metropolis Street Racer Prototype/file_15.adx.flac",
+        "dsf/Metropolis Street Racer Prototype/file_15.adx.flac"
+        //*/
+
         //"psf2/Shin Megami Tensei - Persona 3 FES",
         //"switch/Arcaea/_t_songs_ignotus.ogg.flac",
         //"smd/Gunstar Heroes/18 - Last Party on the Moon.vgm.flac",
-        //"smd/Gunstar Heroes/18 - Last Party on the Moon.vgm.flac",
-        //"dsf/Metropolis Street Racer Prototype/file_15.adx.flac",
         //"psf/Gradius Gaiden/SLPM-86042_BGM1_0000096c.XA.flac",
         //"3sf/Monster Hunter 3 Ultimate/_t_lobby_ML_T_SKB01.mca.flac",
         //"vita/Grisaia Phantom Trigger 01 & 02/MUSIC_00000013.at9.flac"
