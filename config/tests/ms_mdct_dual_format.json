@@ -1,6 +1,6 @@
 {
     "device": "cuda",
-    "add_random_test_samples": 200,
+    "add_random_test_samples": 1000,
     "save_output": false,
     "downsample_mdct_psd": false,
     
@@ -153,16 +153,16 @@
         "default_raw_length": 1408768,
       
         "raw_to_mel_spec_scale": 9.29379224133,
-        "raw_to_mel_spec_offset": -2.90285315,
-        "mel_spec_to_mdct_psd_scale": 0.001826292667, //0.00141690296, 
-        "mel_spec_to_mdct_psd_offset": -0.5870303662, //0
-        "mdct_to_raw_scale": 1,
+        "raw_to_mel_spec_offset": -2.90285315,       // below is for 0-mean unit std mel_spec_mdct_psd
+        "mel_spec_to_mdct_psd_scale": 0.00141690296, //0.001826292667,
+        "mel_spec_to_mdct_psd_offset": 0,            //-0.5870303662,
+        "mdct_to_raw_scale": 2,
         "raw_to_mdct_scale": 12.427468,
       
         "mdct_window_len": 512,
         "mdct_window_func": "sin",
         "mdct_psd_num_bins": 4096,
-        "mdct_dual_channel": true,
+        "mdct_dual_channel": false,
         
         "ms_freq_min": 20,
         "ms_abs_exponent": 0.25,

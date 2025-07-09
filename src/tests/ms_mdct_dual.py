@@ -93,8 +93,12 @@ def ms_mdct_dual_format_test() -> None:
         mel_spec_filters = format.ms_freq_scale.filters
     mel_spec_filters.T.cpu().numpy().tofile(os.path.join(output_path, "mel_spec_filters.raw"))
 
-    print(f"MelSpec filter frequencies (hz): (low cut: {format.ms_filter_freqs[0].item()}, high cut: {format.ms_filter_freqs[-1].item()})")
+    print(f"\nMelSpec filter frequencies (hz): (low cut: {format.ms_filter_freqs[0].item()}, high cut: {format.ms_filter_freqs[-1].item()})")
     print(format.ms_filter_freqs[1:-1])
+
+    print("\nMDCT mel-density scaling coefficients:")
+    print(1 / format.mdct_mel_density.flatten())
+    mdct_avg_bin_std = torch.zeros_like(format.mdct_mel_density.flatten())
 
     stat_logger = StatLogger()
     print(f"\nNum test_samples: {len(test_samples)}\n")
@@ -122,6 +126,7 @@ def ms_mdct_dual_format_test() -> None:
         mdct_psd = format.raw_to_mdct_psd(raw_sample)
         raw_sample_mdct = format.mdct_to_raw(mdct)
 
+        mdct_avg_bin_std += mdct.std(dim=(0, 1, 3)) / len(test_samples)
         stat_logger.add_logs({
             "raw_sample_std": raw_sample.std(),
             "raw_sample_mdct_std": raw_sample_mdct.std(),
@@ -165,6 +170,9 @@ def ms_mdct_dual_format_test() -> None:
         mdct_psd_output_path = os.path.join(output_path, f"{filename}_mdct_psd.png")
         save_img(format.mdct_psd_to_img(mdct_psd), mdct_psd_output_path)
         print(f"Saved mdct_psd img to {mdct_psd_output_path}")
+
+    print("\nAverage MDCT bin std:")
+    print(mdct_avg_bin_std)
 
     print("\nAverage stats:")
     print(dict_str(stat_logger.get_logs()))
