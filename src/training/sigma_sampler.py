@@ -45,8 +45,8 @@ class SigmaSamplerConfig:
     sigma_pdf_warmup_steps: int = 5000
     sigma_pdf_resolution: int = 127
     sigma_pdf_sanitization: bool = True
-    sigma_pdf_offset: float = -0.8
-    sigma_pdf_min: float = 0.2
+    sigma_pdf_offset: float = 0
+    sigma_pdf_min: float = 1e-3
 
     @property
     def ln_sigma_min(self) -> float:

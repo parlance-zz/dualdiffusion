@@ -103,6 +103,8 @@ def sigma_sampler_test():
     sigma_max = test_params["sigma_max"]
     sigma_min = test_params["sigma_min"]
     sigma_data = test_params["sigma_data"]
+    sigma_pdf_offset = test_params["sigma_pdf_offset"]
+    sigma_pdf_min = test_params["sigma_pdf_min"]
 
     training_batch_size = test_params["training_batch_size"]
     batch_distribution = test_params["batch_distribution"]
@@ -122,23 +124,13 @@ def sigma_sampler_test():
     n_histo_bins = test_params["n_histo_bins"]
     use_y_log_scale = test_params["use_y_log_scale"]
 
-    batch_distribution_pdf = None
-    reference_distribution_pdf = None
-
     if batch_distribution == "ln_pdf" or reference_distribution == "ln_pdf":
-
         model_path = os.path.join(config.MODELS_PATH, reference_model_name)
         print(f"Loading DualDiffusion model from '{model_path}'...")
         pipeline = DualDiffusionPipeline.from_pretrained(model_path, **model_load_options)
-
         module = getattr(pipeline, test_params["reference_module"])
-        sigma = torch.linspace(np.log(sigma_min), np.log(sigma_max), n_histo_bins).exp()
-        sigma_error = module.get_sigma_loss_logvar(sigma).float().flatten()
-    
-        if batch_distribution == "ln_pdf":
-            batch_distribution_pdf = ((-sigma_error * batch_dist_scale).exp() - 0.8).clip(min=0.2)
-        if reference_distribution == "ln_pdf":
-            reference_distribution_pdf = ((-sigma_error * reference_dist_scale).exp() - 0.8).clip(min=0.2)
+    else:
+        module = None
 
     batch_sampler_config = SigmaSamplerConfig(
         sigma_max=sigma_max,
@@ -147,11 +139,15 @@ def sigma_sampler_test():
         distribution=batch_distribution,
         dist_scale=batch_dist_scale,
         dist_offset=batch_dist_offset,
-        dist_pdf=batch_distribution_pdf,
         use_stratified_sigma_sampling=batch_stratified_sampling,
-        sigma_pdf_sanitization=batch_pdf_sanitization
+        sigma_pdf_sanitization=batch_pdf_sanitization,
+        sigma_pdf_offset=sigma_pdf_offset,
+        sigma_pdf_min=sigma_pdf_min,
+        sigma_pdf_warmup_steps=0
     )
     batch_sampler = SigmaSampler(batch_sampler_config)
+    if module is not None:
+        batch_sampler.update_pdf_from_logvar(module, 9999999)
 
     reference_sampler_config = SigmaSamplerConfig(
         sigma_max=sigma_max,
@@ -160,11 +156,15 @@ def sigma_sampler_test():
         distribution=reference_distribution,
         dist_scale=reference_dist_scale,
         dist_offset=reference_dist_offset,
-        dist_pdf=reference_distribution_pdf,
         use_stratified_sigma_sampling=reference_stratified_sampling,
-        sigma_pdf_sanitization=reference_pdf_sanitization
+        sigma_pdf_sanitization=reference_pdf_sanitization,
+        sigma_pdf_offset=sigma_pdf_offset,
+        sigma_pdf_min=sigma_pdf_min,
+        sigma_pdf_warmup_steps=0
     )
     reference_sampler = SigmaSampler(reference_sampler_config)
+    if module is not None:
+        reference_sampler.update_pdf_from_logvar(module, 9999999)
 
     if batch_sampler.config.distribution == "ln_pdf":
         multi_plot((batch_sampler.dist_pdf, "batch_distribution_pdf"),
