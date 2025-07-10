@@ -103,8 +103,6 @@ def sigma_sampler_test():
     sigma_max = test_params["sigma_max"]
     sigma_min = test_params["sigma_min"]
     sigma_data = test_params["sigma_data"]
-    sigma_pdf_offset = test_params["sigma_pdf_offset"]
-    sigma_pdf_min = test_params["sigma_pdf_min"]
 
     training_batch_size = test_params["training_batch_size"]
     batch_distribution = test_params["batch_distribution"]
@@ -112,6 +110,8 @@ def sigma_sampler_test():
     batch_dist_offset = test_params["batch_dist_offset"]
     batch_stratified_sampling = test_params["batch_stratified_sampling"]
     batch_pdf_sanitization = test_params["batch_pdf_sanitization"]
+    batch_sigma_pdf_offset = test_params["batch_sigma_pdf_offset"]
+    batch_sigma_pdf_min = test_params["batch_sigma_pdf_min"]
 
     reference_batch_size = test_params["reference_batch_size"]
     reference_distribution = test_params["reference_distribution"]
@@ -119,6 +119,8 @@ def sigma_sampler_test():
     reference_dist_offset = test_params["reference_dist_offset"]
     reference_stratified_sampling = test_params["reference_stratified_sampling"]
     reference_pdf_sanitization = test_params["reference_pdf_sanitization"]
+    reference_sigma_pdf_offset = test_params["reference_sigma_pdf_offset"]
+    reference_sigma_pdf_min = test_params["reference_sigma_pdf_min"]
 
     n_iter = test_params["n_iter"]
     n_histo_bins = test_params["n_histo_bins"]
@@ -141,8 +143,8 @@ def sigma_sampler_test():
         dist_offset=batch_dist_offset,
         use_stratified_sigma_sampling=batch_stratified_sampling,
         sigma_pdf_sanitization=batch_pdf_sanitization,
-        sigma_pdf_offset=sigma_pdf_offset,
-        sigma_pdf_min=sigma_pdf_min,
+        sigma_pdf_offset=batch_sigma_pdf_offset,
+        sigma_pdf_min=batch_sigma_pdf_min,
         sigma_pdf_warmup_steps=0
     )
     batch_sampler = SigmaSampler(batch_sampler_config)
@@ -158,8 +160,8 @@ def sigma_sampler_test():
         dist_offset=reference_dist_offset,
         use_stratified_sigma_sampling=reference_stratified_sampling,
         sigma_pdf_sanitization=reference_pdf_sanitization,
-        sigma_pdf_offset=sigma_pdf_offset,
-        sigma_pdf_min=sigma_pdf_min,
+        sigma_pdf_offset=reference_sigma_pdf_offset,
+        sigma_pdf_min=reference_sigma_pdf_min,
         sigma_pdf_warmup_steps=0
     )
     reference_sampler = SigmaSampler(reference_sampler_config)
