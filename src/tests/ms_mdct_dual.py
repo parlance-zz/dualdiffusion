@@ -96,8 +96,10 @@ def ms_mdct_dual_format_test() -> None:
     print(f"\nMelSpec filter frequencies (hz): (low cut: {format.ms_filter_freqs[0].item()}, high cut: {format.ms_filter_freqs[-1].item()})")
     print(format.ms_filter_freqs[1:-1])
 
+    mdct_mel_density_scaling = 1 / format.mdct_mel_density.flatten().cpu()
     print("\nMDCT mel-density scaling coefficients:")
-    print(1 / format.mdct_mel_density.flatten())
+    print(mdct_mel_density_scaling)
+    mdct_mel_density_scaling.numpy().tofile(os.path.join(output_path, "mdct_mel_density_scaling.raw"))
     mdct_avg_bin_std = torch.zeros_like(format.mdct_mel_density.flatten())
 
     stat_logger = StatLogger()
@@ -173,6 +175,7 @@ def ms_mdct_dual_format_test() -> None:
 
     print("\nAverage MDCT bin std:")
     print(mdct_avg_bin_std)
+    mdct_avg_bin_std.cpu().numpy().tofile(os.path.join(output_path, "mdct_avg_bin_std.raw"))
 
     print("\nAverage stats:")
     print(dict_str(stat_logger.get_logs()))
