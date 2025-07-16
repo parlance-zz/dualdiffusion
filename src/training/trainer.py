@@ -942,7 +942,7 @@ class DualDiffusionTrainer:
             # weights have now been updated in the last optimizer step
             if self.accelerator.sync_gradients:
                 
-                # log total train time, total samples processed, and it/s stats
+                # log total train time, total samples processed, epoch #, and it/s stats
                 if last_sync_time is not None:
                     self.persistent_state.total_train_hours += (
                         datetime.now() - last_sync_time).total_seconds() / 3600
@@ -955,6 +955,9 @@ class DualDiffusionTrainer:
                 if progress_bar.format_dict["rate"] is not None:
                     train_logger.add_logs({
                         "train_stats/it_per_second": progress_bar.format_dict["rate"]})
+                
+                if self.local_step == 0:
+                    train_logger.add_log("train_stats/epoch", self.epoch)
                 
                 # log average momentum norm
                 train_logger.add_log("grad_norm/momentum", self.get_momentum())
