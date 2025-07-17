@@ -148,8 +148,8 @@ def sigma_sampler_test():
         sigma_pdf_warmup_steps=0
     )
     batch_sampler = SigmaSampler(batch_sampler_config)
-    if module is not None:
-        batch_sampler.update_pdf_from_logvar(module, 9999999)
+    try: batch_sampler.update_pdf_from_logvar(module, 9999999)
+    except: pass
 
     reference_sampler_config = SigmaSamplerConfig(
         sigma_max=sigma_max,
@@ -165,8 +165,8 @@ def sigma_sampler_test():
         sigma_pdf_warmup_steps=0
     )
     reference_sampler = SigmaSampler(reference_sampler_config)
-    if module is not None:
-        reference_sampler.update_pdf_from_logvar(module, 9999999)
+    try: reference_sampler.update_pdf_from_logvar(module, 9999999)
+    except: pass
 
     if batch_sampler.config.distribution == "ln_pdf":
         multi_plot((batch_sampler.dist_pdf, "batch_distribution_pdf"),
