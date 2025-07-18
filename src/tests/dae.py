@@ -134,9 +134,12 @@ def dae_test() -> None:
                 latents = dae.tiled_encode(input_mel_spec.to(dtype=dae.dtype), dae_embedding,
                     max_chunk=test_params["latents_tiled_max_chunk_size"], overlap=test_params["latents_tiled_overlap"])
             else:
-                latents = dae.encode(input_mel_spec.to(dtype=dae.dtype), dae_embedding)
+                latents = dae.encode(input_mel_spec.to(dtype=dae.dtype), dae_embedding).float()
             
-            output_mel_spec = dae.decode(latents, dae_embedding).float()
+            if test_params.get("add_latents_noise", None) is not None:
+                latents = normalize(latents + torch.randn_like(latents) * test_params["add_latents_noise"]).float()
+            
+            output_mel_spec = dae.decode(latents.to(dtype=dae.dtype), dae_embedding).float()
         else:
             latents = None
             output_mel_spec = input_mel_spec
@@ -170,8 +173,8 @@ def dae_test() -> None:
         if ddec_mdct is not None:
             ddec_mdct_params = SampleParams(
                 seed=5000,
-                num_steps=50, length=audio_len, cfg_scale=1.5, input_perturbation=0, input_perturbation_offset=0.3,
-                use_heun=True, schedule="edm2", rho=7, sigma_max=11, sigma_min=0.0002, stereo_fix=0.5
+                num_steps=20, length=audio_len, cfg_scale=1.5, input_perturbation=0.03, input_perturbation_offset=-0.3,
+                use_heun=True, schedule="linear", rho=7, sigma_max=11, sigma_min=0.0002, stereo_fix=0
             )
 
             output_ddec_mdct = pipeline.diffusion_decode(
