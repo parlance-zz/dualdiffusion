@@ -4,13 +4,16 @@
         "torch_dtype": "bfloat16",
         "device": "cuda",
         "load_checkpoints": true,
-        "load_emas": null,
+        "load_emas": {
+            "ddec": "ema_std0.1.safetensors"
+        },
         "compile_options": {
             "fullgraph": true,
             "dynamic": false
         }
     },
     "length": 1440000,
+    "add_latents_noise": null,
     "latents_tiled_encode": false,
     "latents_tiled_max_chunk_size": 6144,
     "latents_tiled_overlap": 256,
@@ -18,14 +21,15 @@
     "latents_img_flip_stereo": false,
     "output_lufs": -20,
     "dae_bypass": false,
-    "ddec_output": false,
+    "ddec_output": true,
     "xref_output": false,
-    "add_random_test_samples": 45,
+    "add_random_test_samples": 3,
     "random_test_samples_seed": 0,
-    "copy_sample_source_files": false,
+    "copy_sample_source_files": true,
     "test_samples": [
-        "3sf/Dopamix/STRM_BGM_ENDING.bcstm.flac",
+        "psf3/Iron Man/_t_! movies_HUB_05_000001C2.adx.flac",
+        "dsf/Metropolis Street Racer Prototype/file_15.adx.flac",
         "switch/Arcaea/_t_songs_ignotus.ogg.flac",
-        "psf3/Iron Man/_t_! movies_HUB_05_000001C2.adx.flac"
+        "3sf/Dopamix/STRM_BGM_ENDING.bcstm.flac"
     ]
 }

@@ -8,7 +8,8 @@
             //"unet": "phema_std0.015.safetensors",
             //"unet": "phema_std0.2.safetensors",
             //"unet": "ema_std0.05.safetensors",
-            "unet": "ema_std0.1.safetensors",
+            //"unet": "phema_std0.12.safetensors",
+            "unet": "phema_std0.12.safetensors",
             "ddec": "ema_std0.1.safetensors"
         },
         "compile_options": {
@@ -17,17 +18,18 @@
         }
     },
 
-    "add_latents_noise": null,
+    "add_latents_noise": 0.03,
     "output_lufs": -20,
     "skip_ddec": false,
     "copy_sample_source_files": true,
     "random_test_samples_seed": null,
-    "add_random_test_samples": 0,
+    "add_random_test_samples": 20,
     "shuffle_test_samples": true,
     "test_samples": [
 
         //"switch/Blazing Chrome"
-        
+        //"switch/Cuphead"
+
         //"psf3/One Piece - Pirate Warriors 3"
         //"psf3/Street Fighter IV"
         //"switch/Gravity Circuit"
@@ -37,14 +39,40 @@
         //"smd/Gunstar Heroes"
         //"spc/Super Metroid"
         //"switch/Kirby Star Allies"
+        //"usf/Legend of Zelda, The - Ocarina of Time",
+        //"usf/F-Zero X"
+        //"usf/Super Mario 64",
+        //"usf/Star Fox 64",
+        //"usf/Pilotwings 64",
+        //"usf/Mario Kart 64"
+        //"usf/Bomberman 64",
+        //"usf/Super Smash Bros"
+
+        //"spc/Final Fantasy - Mystic Quest"
+        //"spc/Final Fantasy IV",
+        //"spc/Final Fantasy V",
+        //"spc/Final Fantasy VI"
+
+        //"spc/Mega Man 7"
+        //"spc/Mega Man X"
+        //"spc/Mega Man X2",
+        //"spc/Mega Man X3"
+        //"spc/RockMan & Forte"
+        
+        //"spc/Pilotwings"
+        //"spc/International Superstar Soccer",
+        //"spc/Umihara Kawase"
         
         //"spc/Shin Kidou Senki Gundam W - Endless Duel"
-        //"psf/Mega Man X5"
+        //"psf/Mega Man X4",
+        //"psf/Mega Man X5",
+        //"psf/Mega Man X6"
         //"psf/Mega Man 8"
         //"psf/Suikoden 2"
         //"3sf/Super Mario 3D Land"
         //"smd/Gunstar Heroes"
         //"xbox/Tony Hawk's Pro Skater 2x"
+        //"wii/Tony Hawk's Downhill Jam" // better quality
         //"xbox/AirForce Delta Storm"
 
         /*
@@ -61,13 +89,67 @@
         //"psf/Mega Man X6"
         //"psf/Contra - Legacy of War",
         //"psf/Chrono Cross"
-        //"psf/Dance Dance Revolution - Konamix",
+        //"psf/Dance Dance Revolution - Konamix"
         //"psf/WipEout 3 - Special Edition",
         //"psf/Star Wars - Episode I - The Phantom Menace",
         //"psf/Street Fighter Alpha 3",
         //"psf/Gradius Gaiden",
         //"psf/Descent Maximum"
         //"psf/Command & Conquer - Red Alert" // cool shit
+        
+        /* // nice high-def piano
+        "psf2/Quartett! The Stage of Love/B05.ADX.flac",
+        "psf2/Quartett! The Stage of Love/B05.ADX.flac",
+        "psf2/Quartett! The Stage of Love/B05.ADX.flac",
+        "psf2/Quartett! The Stage of Love/B05.ADX.flac",
+        "psf2/Quartett! The Stage of Love/B05.ADX.flac",
+        //*/
+        //"psf2/Quartett! The Stage of Love"
+        
+        /* // high-def pop-punk
+        "wii/Tony Hawk's Downhill Jam/_t_songs_15.logg.flac",
+        "wii/Tony Hawk's Downhill Jam/_t_songs_15.logg.flac",
+        "wii/Tony Hawk's Downhill Jam/_t_songs_15.logg.flac",
+        "wii/Tony Hawk's Downhill Jam/_t_songs_15.logg.flac",
+        "wii/Tony Hawk's Downhill Jam/_t_songs_15.logg.flac",
+        "wii/Tony Hawk's Downhill Jam/_t_songs_15.logg.flac",
+        "wii/Tony Hawk's Downhill Jam/_t_songs_15.logg.flac",
+        "wii/Tony Hawk's Downhill Jam/_t_songs_15.logg.flac"
+        */
+
+        /* // piano + light orchestra
+        "3sf/Inazuma Eleven Everyday/STRM_BGM15_TIMEZONE_NIGHT.bcstm.flac",
+        "3sf/Inazuma Eleven Everyday/STRM_BGM15_TIMEZONE_NIGHT.bcstm.flac",
+        "3sf/Inazuma Eleven Everyday/STRM_BGM15_TIMEZONE_NIGHT.bcstm.flac",
+        "3sf/Inazuma Eleven Everyday/STRM_BGM15_TIMEZONE_NIGHT.bcstm.flac",
+        "3sf/Inazuma Eleven Everyday/STRM_BGM15_TIMEZONE_NIGHT.bcstm.flac",
+        //*/
+        //"3sf/Inazuma Eleven Everyday",
+
+        /* // female asian singing + piano and light orchestra
+        "psp/Conception - Ore no Kodomo o Unde Kure!!/bgm007.at3.flac",
+        "psp/Conception - Ore no Kodomo o Unde Kure!!/bgm007.at3.flac",
+        "psp/Conception - Ore no Kodomo o Unde Kure!!/bgm007.at3.flac",
+        "psp/Conception - Ore no Kodomo o Unde Kure!!/bgm007.at3.flac",
+        "psp/Conception - Ore no Kodomo o Unde Kure!!/bgm007.at3.flac",
+        //*/
+        //"psp/Conception - Ore no Kodomo o Unde Kure!!"
+
+        /* // ** high-performing k-pop techno **
+        "psf/Mega Man 8/31. Staff Roll (Brandnew Way).flac.flac",
+        "psf/Mega Man 8/31. Staff Roll (Brandnew Way).flac.flac",
+        "psf/Mega Man 8/31. Staff Roll (Brandnew Way).flac.flac",
+        "psf/Mega Man 8/31. Staff Roll (Brandnew Way).flac.flac",
+        "psf/Mega Man 8/31. Staff Roll (Brandnew Way).flac.flac",
+        //*/
+
+        /* // no vocals, country / folk
+        "wii/Cars - Race-O-Rama/RS_ExploreR.dsp.flac",
+        "wii/Cars - Race-O-Rama/RS_ExploreR.dsp.flac",
+        "wii/Cars - Race-O-Rama/RS_ExploreR.dsp.flac",
+        "wii/Cars - Race-O-Rama/RS_ExploreR.dsp.flac",
+        "wii/Cars - Race-O-Rama/RS_ExploreR.dsp.flac",
+        //*/
 
         // no vocals rock, crisp
         /*
@@ -75,24 +157,26 @@
         "psf2/Fisherman's Challenge/STRBGM_0000000F.genh.flac",
         "psf2/Fisherman's Challenge/STRBGM_0000000F.genh.flac",
         "psf2/Fisherman's Challenge/STRBGM_0000000F.genh.flac",
-        "psf2/Fisherman's Challenge/STRBGM_0000000F.genh.flac"
-        */
+        "psf2/Fisherman's Challenge/STRBGM_0000000F.genh.flac",
+        //*/
+        //"psf2/Fisherman's Challenge"
 
         /* // metal
         "psf3/One Piece - Pirate Warriors 3/BGMLink_00000007.at3.flac",
         "psf3/One Piece - Pirate Warriors 3/BGMLink_00000007.at3.flac",
         "psf3/One Piece - Pirate Warriors 3/BGMLink_00000007.at3.flac",
         "psf3/One Piece - Pirate Warriors 3/BGMLink_00000007.at3.flac",
-        "psf3/One Piece - Pirate Warriors 3/BGMLink_00000007.at3.flac"
-        */
+        "psf3/One Piece - Pirate Warriors 3/BGMLink_00000007.at3.flac",
+        //*/
+        //"psf3/One Piece - Pirate Warriors 3"
 
-        ///* // jazz
+        /* // jazz
         "dsf/Metropolis Street Racer Prototype/file_15.adx.flac",
         "dsf/Metropolis Street Racer Prototype/file_15.adx.flac",
         "dsf/Metropolis Street Racer Prototype/file_15.adx.flac",
         "dsf/Metropolis Street Racer Prototype/file_15.adx.flac",
         "dsf/Metropolis Street Racer Prototype/file_15.adx.flac"
-        //*/
+        */
 
         //"psf2/Shin Megami Tensei - Persona 3 FES",
         //"switch/Arcaea/_t_songs_ignotus.ogg.flac",
@@ -119,9 +203,14 @@
         "xbox/AirForce Delta Storm/afdx_m21.rwx.flac",
         "xbox/AirForce Delta Storm/afdx_z03.rwx.flac"
         */
-
-        //"3sf/Monster Hunter 3 Ultimate/_t_lobby_ML_T_SKB01.mca.flac",
-        //"psf/Gradius Gaiden/SLPM-86042_BGM1_0000096c.XA.flac",
+        
+        /*
+        "3sf/Monster Hunter 3 Ultimate/_t_lobby_ML_T_SKB01.mca.flac",
+        "psf/Gradius Gaiden/SLPM-86042_BGM1_0000096c.XA.flac",
+        "psf/Gradius Gaiden/SLPM-86042_BGM1_0000096c.XA.flac",
+        "psf/Gradius Gaiden/SLPM-86042_BGM1_0000096c.XA.flac",
+        "psf/Gradius Gaiden/SLPM-86042_BGM1_0000096c.XA.flac"
+        */
 
         /*
         "psf/Mega Man X6/11. BLAZE HEATNIX STAGE.xa.flac",
@@ -136,33 +225,29 @@
     "unet_params": {
         "seed": null,
 
-        "num_steps": 400,//300,
-        "cfg_scale": 2,//3, //2
+        "num_steps": 500,//300,//400
+        "cfg_scale": 2,//2, //1.5
         "use_heun": true,//true,
-        "schedule": "edm2",
+        "schedule": "linear",//"edm2",
 
         "sigma_max": 200, //200,
-        "sigma_min": 0.01,//0.025,
+        "sigma_min": 0.01,//0.025,a
         
-        "input_perturbation": 0.3,//0.3
-        "input_perturbation_offset": 0.3//0.3
+        "input_perturbation": 1,//0.06//0.3
+        "input_perturbation_offset": 0//-0.3//0.3
     },
     "ddec_params": {
 
-        "num_steps": 100,//100,
+        "num_steps": 20,//100
         "cfg_scale": 1.5,
         "use_heun": true,
-        "schedule": "edm2",
+        "schedule": "linear", //"edm2",
         "rho": 7,
 
-        //"sigma_max": 11,
-        //"sigma_min": 0.0002,
         "sigma_max": 11,
         "sigma_min": 0.0002,
 
-        //"input_perturbation": 0,
-        //"input_perturbation_offset": 0,
-        "input_perturbation": 0,//0,
-        "input_perturbation_offset": 0.3//0.3//-0.3
+        "input_perturbation": 0.03,//0.3,//0,//1
+        "input_perturbation_offset": -0.3
     }
 }
