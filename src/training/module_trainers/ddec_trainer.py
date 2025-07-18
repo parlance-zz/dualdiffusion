@@ -46,8 +46,8 @@ class DiffusionDecoder_Trainer_Config(UNetTrainerConfig):
 
     add_latents_noise: float = 0.01
 
-    loss_buckets_sigma_min: float = 0.00008
-    loss_buckets_sigma_max: float = 14
+    loss_buckets_sigma_min: float = 0.0002
+    loss_buckets_sigma_max: float = 11
 
     random_stereo_augmentation: bool = False
     random_phase_augmentation: bool = True
