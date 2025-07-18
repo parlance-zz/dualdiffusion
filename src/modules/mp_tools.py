@@ -206,6 +206,26 @@ def random_crop_2d(*tensors: torch.Tensor, range_h: int = 8,
     
     return output_tensors
 
+@torch.no_grad()
+def randn_like_hp_2d(x: torch.Tensor) -> torch.Tensor:
+
+    b, c, h, w = x.shape
+    device = x.device
+    dtype = x.dtype
+
+    noise_fft = torch.randn(b, c, h, w//2 + 1, 2, device=device, dtype=torch.float32)
+    noise_fft = torch.view_as_complex(noise_fft)
+
+    # create highpass mask: True where both f_y and f_x >= 0.5 * Nyquist
+    f_y = torch.fft.fftfreq(h, d=1, device=device)  # shape: (h,)
+    f_x = torch.fft.rfftfreq(w, d=1, device=device) # shape: (w//2 + 1,)
+    fy_mask = (f_y.abs() >= 0.25)  # half the Nyquist is 0.25 (Nyquist is 0.5)
+    fx_mask = (f_x.abs() >= 0.25)
+    highpass_mask = fy_mask[:, None] | fx_mask[None, :]  # shape: (h, w//2+1)
+
+    noise = torch.fft.irfftn(noise_fft ** highpass_mask[None, None, :, :], s=(h, w), dim=(-2, -1), norm="ortho") * 1.5**0.5
+    return noise.to(dtype=dtype).requires_grad_(False)
+
 #----------------------------------------------------------------------------
 # Magnitude-preserving SiLU (Equation 81).
 
