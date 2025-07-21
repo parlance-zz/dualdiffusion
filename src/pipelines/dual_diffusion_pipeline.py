@@ -661,20 +661,31 @@ class DualDiffusionPipeline(torch.nn.Module):
                 debug_info["cfg_output_std"] = []
                 debug_info["effective_input_perturbation"] = []
 
-            model_output = unet(input_sample, input_sigma, self.format, unet_class_embeddings, input_ref_sample).float()
-            if unet_class_embeddings is not None:
-                cfg_model_output = model_output[params.batch_size:].lerp(model_output[:params.batch_size], params.cfg_scale)
-            else:
-                cfg_model_output = model_output
-            
+            #cfgo = np.log(sigma_next * sigma_curr) / 2 - 15
+            #if cfgo < 0:
+            #    effective_cfg_scale = params.cfg_scale
+            #else:
+            #    effective_cfg_scale = params.cfg_scale / np.cosh(cfgo)**5
+            effective_cfg_scale = params.cfg_scale
+
             old_sigma_next = sigma_next
-            effective_input_perturbation = float(params.input_perturbation * (1 - 1 / np.cosh(np.log(sigma_next * sigma_curr) / 2 + params.input_perturbation_offset))**2)
+            ipo = np.log(sigma_next * sigma_curr) / 2 + params.input_perturbation_offset
+            if ipo < 0:
+                effective_input_perturbation = 0
+            else:
+                effective_input_perturbation = float(params.input_perturbation * (1 - 1 / np.cosh(ipo))**2)
             sigma_next *= (1 - (max(min(effective_input_perturbation, 1), 0)))
             effective_input_perturbation = 1 - sigma_next / old_sigma_next
             effective_input_perturbation = old_sigma_next - sigma_next
             debug_info["effective_input_perturbation"].append(effective_input_perturbation)
 
-            if params.use_heun:
+            model_output = unet(input_sample, input_sigma, self.format, unet_class_embeddings, input_ref_sample).float()
+            if unet_class_embeddings is not None:
+                cfg_model_output = model_output[params.batch_size:].lerp(model_output[:params.batch_size], effective_cfg_scale)
+            else:
+                cfg_model_output = model_output
+
+            if params.use_heun == True:# and effective_input_perturbation == 0:
                 sigma_hat = max(old_sigma_next, params.sigma_min)
                 t_hat = sigma_hat / sigma_curr
 
@@ -687,7 +698,7 @@ class DualDiffusionPipeline(torch.nn.Module):
 
                 model_output_hat = unet(input_sample_hat, input_sigma_hat, self.format, unet_class_embeddings, input_ref_sample).float()
                 if unet_class_embeddings is not None:
-                    cfg_model_output_hat = model_output_hat[params.batch_size:].lerp(model_output_hat[:params.batch_size], params.cfg_scale)
+                    cfg_model_output_hat = model_output_hat[params.batch_size:].lerp(model_output_hat[:params.batch_size], effective_cfg_scale)
                 else:
                     cfg_model_output_hat = model_output_hat
                 cfg_model_output = torch.lerp(cfg_model_output, cfg_model_output_hat, 0.5)            
