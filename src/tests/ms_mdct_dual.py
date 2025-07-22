@@ -52,6 +52,7 @@ class MS_MDCT_DualFormat_TestConfig:
 def ms_mdct_dual_format_test() -> None:
 
     torch.manual_seed(0)
+    random.seed()
 
     cfg: MS_MDCT_DualFormat_TestConfig = config.load_config(MS_MDCT_DualFormat_TestConfig,
         os.path.join(config.CONFIG_PATH, "tests", "ms_mdct_dual_format.json"))
@@ -173,7 +174,7 @@ def ms_mdct_dual_format_test() -> None:
         save_img(format.mdct_psd_to_img(mdct_psd), mdct_psd_output_path)
         print(f"Saved mdct_psd img to {mdct_psd_output_path}")
 
-    print("\nAverage MDCT bin std:")
+    print(f"\nAverage MDCT bin std (std variance: {mdct_avg_bin_std.var().item()}):")
     print(mdct_avg_bin_std)
     mdct_avg_bin_std.cpu().numpy().tofile(os.path.join(output_path, "mdct_avg_bin_std.raw"))
 
