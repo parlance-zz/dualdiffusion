@@ -54,6 +54,7 @@ class UNetTestConfig:
     add_latents_noise: Optional[float] = None
 
     output_lufs: float  = -20
+    output_highpass: bool = True
     skip_ddec: bool     = False
 
     copy_sample_source_files: bool          = True
@@ -181,6 +182,8 @@ def unet_test() -> None:
                                                     sample_shape=output_mel_spec.shape, x_ref=x_ref, module=ddec)
             
             output_raw_sample = format.mdct_to_raw(output_mdct.float())
+            if cfg.output_highpass == True:
+                output_raw_sample = format._high_pass(output_raw_sample)
         else:
             output_raw_sample = None
 
