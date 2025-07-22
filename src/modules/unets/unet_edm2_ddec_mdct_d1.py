@@ -68,10 +68,8 @@ class DDec_MDCT_UNet_D1_Config(DualDiffusionUNetConfig):
     attn_levels: list[int]    = ()           # List of resolution levels to use self-attention.
     mlp_multiplier: int    = 1               # Multiplier for the number of channels in the MLP.
     mlp_groups: int        = 1               # Number of groups for the MLPs.
-    mlp_multiplier_1d: int = 4
     emb_linear_groups: int = 1
     add_constant_channel: bool = True
-    
 
 class Block(torch.nn.Module):
 
@@ -89,7 +87,6 @@ class Block(torch.nn.Module):
         clip_act: float        = 256,      # Clip output activations. None = do not clip.
         mlp_multiplier: int    = 1,        # Multiplier for the number of channels in the MLP.
         mlp_groups: int        = 1,        # Number of groups for the MLP.
-        mlp_multiplier_1d: int = 4,  
         emb_linear_groups: int = 1,
         channels_per_head: int = 64,       # Number of channels per attention head.
         use_attention: bool    = False     # Use self-attention in this block.
@@ -107,25 +104,25 @@ class Block(torch.nn.Module):
         self.res_balance = res_balance
         self.attn_balance = attn_balance
         self.clip_act = clip_act
-        
-        channels_1d = out_channels * mlp_multiplier * num_freqs
-        assert (out_channels * mlp_multiplier) % mlp_multiplier_1d == 0
-        conv_1d_groups = (out_channels * mlp_multiplier) // mlp_multiplier_1d
 
         self.conv_res0 = MPConv3D(out_channels if flavor == "enc" else in_channels,
                                 out_channels * mlp_multiplier, kernel=(1,3,3), groups=mlp_groups)
         
-        self.conv_1d = MPConv3D(channels_1d, channels_1d, kernel=(1,1,1), groups=conv_1d_groups)
+        self.conv_1d = MPConv3D(num_freqs, num_freqs, kernel=(2,1,3), groups=1)
 
         self.conv_res1 = MPConv3D(out_channels * mlp_multiplier, out_channels, kernel=(1,3,3), groups=mlp_groups)
-        self.conv_skip = MPConv3D(in_channels, out_channels, kernel=(2,1,1), groups=1)
+
+        if in_channels != out_channels or mlp_groups > 1:
+            self.conv_skip = MPConv3D(in_channels, out_channels, kernel=(1,1,1), groups=1)
+        else:
+            self.conv_skip = None
 
         self.emb_gain = torch.nn.Parameter(torch.zeros([]))
         self.emb_linear = MPConv3D(emb_channels, out_channels * mlp_multiplier,
             kernel=(1,1,1), groups=emb_linear_groups) if emb_channels != 0 else None
         
         self.emb_gain_1d = torch.nn.Parameter(torch.zeros([]))
-        self.emb_linear_1d = MPConv3D(emb_channels, channels_1d,
+        self.emb_linear_1d = MPConv3D(emb_channels, num_freqs,
             kernel=(1,1,1), groups=emb_linear_groups) if emb_channels != 0 else None
         
         if self.use_attention:
@@ -150,14 +147,10 @@ class Block(torch.nn.Module):
         y: torch.Tensor = self.conv_res0(mp_silu(x))
 
         c = self.emb_linear(emb, gain=self.emb_gain) + 1.
-        y = y * c
+        y = mp_silu(y * c)
 
         c = self.emb_linear_1d(emb, gain=self.emb_gain_1d) + 1.
-        y = y.view(y.shape[0], y.shape[1] * self.num_freqs, 1, y.shape[3])
-        y = self.conv_1d(y) * c
-        y = y.view(y.shape[0], y.shape[1] // self.num_freqs, self.num_freqs, y.shape[2])
-
-        y = mp_silu(y)
+        y = mp_silu((self.conv_1d(y.transpose(1, 3)) * c).transpose(1, 3))
 
         if self.dropout != 0 and self.training == True: # magnitude preserving fix for dropout
             y = torch.nn.functional.dropout(y, p=self.dropout) * (1. - self.dropout)**0.5
@@ -207,7 +200,6 @@ class DDec_MDCT_UNet_D1(DualDiffusionUNet):
         block_kwargs = {"dropout": config.dropout,
                         "mlp_multiplier": config.mlp_multiplier,
                         "mlp_groups": config.mlp_groups,
-                        "mlp_multiplier_1d": config.mlp_multiplier_1d,
                         "emb_linear_groups": config.emb_linear_groups,
                         "res_balance": config.res_balance,
                         "attn_balance": config.attn_balance,
@@ -320,7 +312,7 @@ class DDec_MDCT_UNet_D1(DualDiffusionUNet):
         # Embedding.
         emb = self.emb_noise(self.emb_fourier(c_noise))
         if self.config.in_channels_emb > 0:
-            emb = mp_silu(mp_sum(emb, embeddings, t=self.config.label_balance))
+            emb = mp_silu(mp_sum(emb, embeddings.to(dtype=emb.dtype), t=self.config.label_balance))
         emb = emb.unsqueeze(-1).unsqueeze(-1).unsqueeze(-1).to(dtype=torch.bfloat16)
 
         # Encoder.
