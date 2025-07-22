@@ -7,9 +7,9 @@
         "load_emas": {
             //"unet": "phema_std0.015.safetensors",
             //"unet": "phema_std0.2.safetensors",
-            //"unet": "ema_std0.05.safetensors",
-            //"unet": "phema_std0.12.safetensors",
-            "unet": "phema_std0.12.safetensors",
+            "unet": "ema_std0.05.safetensors",
+            //"unet": "phema_std0.13.safetensors",
+            //"unet": "ema_std0.1.safetensors",
             "ddec": "ema_std0.1.safetensors"
         },
         "compile_options": {
@@ -23,7 +23,7 @@
     "skip_ddec": false,
     "copy_sample_source_files": true,
     "random_test_samples_seed": null,
-    "add_random_test_samples": 20,
+    "add_random_test_samples": 18,
     "shuffle_test_samples": true,
     "test_samples": [
 
@@ -41,8 +41,8 @@
         //"switch/Kirby Star Allies"
         //"usf/Legend of Zelda, The - Ocarina of Time",
         //"usf/F-Zero X"
-        //"usf/Super Mario 64",
-        //"usf/Star Fox 64",
+        //"usf/Super Mario 64"
+        //"usf/Star Fox 64"
         //"usf/Pilotwings 64",
         //"usf/Mario Kart 64"
         //"usf/Bomberman 64",
@@ -97,9 +97,13 @@
         //"psf/Descent Maximum"
         //"psf/Command & Conquer - Red Alert" // cool shit
         
+        /* // high-def jazzy electronic (bomberman 64-esque)
+        "psp/Conception - Ore no Kodomo o Unde Kure!!/bgm042.at3.flac",
+        "psp/Conception - Ore no Kodomo o Unde Kure!!/bgm042.at3.flac",
+        "psp/Conception - Ore no Kodomo o Unde Kure!!/bgm042.at3.flac",
+        //*/
+
         /* // nice high-def piano
-        "psf2/Quartett! The Stage of Love/B05.ADX.flac",
-        "psf2/Quartett! The Stage of Love/B05.ADX.flac",
         "psf2/Quartett! The Stage of Love/B05.ADX.flac",
         "psf2/Quartett! The Stage of Love/B05.ADX.flac",
         "psf2/Quartett! The Stage of Love/B05.ADX.flac",
@@ -110,16 +114,9 @@
         "wii/Tony Hawk's Downhill Jam/_t_songs_15.logg.flac",
         "wii/Tony Hawk's Downhill Jam/_t_songs_15.logg.flac",
         "wii/Tony Hawk's Downhill Jam/_t_songs_15.logg.flac",
-        "wii/Tony Hawk's Downhill Jam/_t_songs_15.logg.flac",
-        "wii/Tony Hawk's Downhill Jam/_t_songs_15.logg.flac",
-        "wii/Tony Hawk's Downhill Jam/_t_songs_15.logg.flac",
-        "wii/Tony Hawk's Downhill Jam/_t_songs_15.logg.flac",
-        "wii/Tony Hawk's Downhill Jam/_t_songs_15.logg.flac"
-        */
+        //*/
 
         /* // piano + light orchestra
-        "3sf/Inazuma Eleven Everyday/STRM_BGM15_TIMEZONE_NIGHT.bcstm.flac",
-        "3sf/Inazuma Eleven Everyday/STRM_BGM15_TIMEZONE_NIGHT.bcstm.flac",
         "3sf/Inazuma Eleven Everyday/STRM_BGM15_TIMEZONE_NIGHT.bcstm.flac",
         "3sf/Inazuma Eleven Everyday/STRM_BGM15_TIMEZONE_NIGHT.bcstm.flac",
         "3sf/Inazuma Eleven Everyday/STRM_BGM15_TIMEZONE_NIGHT.bcstm.flac",
@@ -130,8 +127,6 @@
         "psp/Conception - Ore no Kodomo o Unde Kure!!/bgm007.at3.flac",
         "psp/Conception - Ore no Kodomo o Unde Kure!!/bgm007.at3.flac",
         "psp/Conception - Ore no Kodomo o Unde Kure!!/bgm007.at3.flac",
-        "psp/Conception - Ore no Kodomo o Unde Kure!!/bgm007.at3.flac",
-        "psp/Conception - Ore no Kodomo o Unde Kure!!/bgm007.at3.flac",
         //*/
         //"psp/Conception - Ore no Kodomo o Unde Kure!!"
 
@@ -139,22 +134,24 @@
         "psf/Mega Man 8/31. Staff Roll (Brandnew Way).flac.flac",
         "psf/Mega Man 8/31. Staff Roll (Brandnew Way).flac.flac",
         "psf/Mega Man 8/31. Staff Roll (Brandnew Way).flac.flac",
-        "psf/Mega Man 8/31. Staff Roll (Brandnew Way).flac.flac",
-        "psf/Mega Man 8/31. Staff Roll (Brandnew Way).flac.flac",
+        */
+        "vita/Phantasy Star Online 2/11_bgm_musicdisc_590.hca.flac",
+        "vita/Phantasy Star Online 2/11_bgm_musicdisc_590.hca.flac",
+        "vita/Phantasy Star Online 2/11_bgm_musicdisc_590.hca.flac",
         //*/
 
         /* // no vocals, country / folk
         "wii/Cars - Race-O-Rama/RS_ExploreR.dsp.flac",
         "wii/Cars - Race-O-Rama/RS_ExploreR.dsp.flac",
         "wii/Cars - Race-O-Rama/RS_ExploreR.dsp.flac",
-        "wii/Cars - Race-O-Rama/RS_ExploreR.dsp.flac",
-        "wii/Cars - Race-O-Rama/RS_ExploreR.dsp.flac",
         //*/
 
         // no vocals rock, crisp
+        ///*
+        "wii/Kamen Rider - Chou Climax Heroes/Stage03.brstm.flac",
+        "wii/Kamen Rider - Chou Climax Heroes/Stage03.brstm.flac",
+        "wii/Kamen Rider - Chou Climax Heroes/Stage03.brstm.flac",
         /*
-        "psf2/Fisherman's Challenge/STRBGM_0000000F.genh.flac",
-        "psf2/Fisherman's Challenge/STRBGM_0000000F.genh.flac",
         "psf2/Fisherman's Challenge/STRBGM_0000000F.genh.flac",
         "psf2/Fisherman's Challenge/STRBGM_0000000F.genh.flac",
         "psf2/Fisherman's Challenge/STRBGM_0000000F.genh.flac",
@@ -164,9 +161,11 @@
         /* // metal
         "psf3/One Piece - Pirate Warriors 3/BGMLink_00000007.at3.flac",
         "psf3/One Piece - Pirate Warriors 3/BGMLink_00000007.at3.flac",
-        "psf3/One Piece - Pirate Warriors 3/BGMLink_00000007.at3.flac",
-        "psf3/One Piece - Pirate Warriors 3/BGMLink_00000007.at3.flac",
-        "psf3/One Piece - Pirate Warriors 3/BGMLink_00000007.at3.flac",
+        "psf3/One Piece - Pirate Warriors 3/BGMLink_00000007.at3.flac"
+        */
+        "switch/eBaseball Powerful Pro Yakyuu 2020/_t_wem_1004274880.wem.flac",
+        "switch/eBaseball Powerful Pro Yakyuu 2020/_t_wem_1004274880.wem.flac",
+        "switch/eBaseball Powerful Pro Yakyuu 2020/_t_wem_1004274880.wem.flac"
         //*/
         //"psf3/One Piece - Pirate Warriors 3"
 
@@ -226,15 +225,15 @@
         "seed": null,
 
         "num_steps": 500,//300,//400
-        "cfg_scale": 2,//2, //1.5
+        "cfg_scale": 2.5,//2, //1.5
         "use_heun": true,//true,
-        "schedule": "linear",//"edm2",
+        "schedule": "linear",//"linear",//"edm2",
 
         "sigma_max": 200, //200,
         "sigma_min": 0.01,//0.025,a
         
-        "input_perturbation": 1,//0.06//0.3
-        "input_perturbation_offset": 0//-0.3//0.3
+        "input_perturbation": 0.03,//0.03,//0.06//0.3
+        "input_perturbation_offset": 0.3//-0.3//0.3
     },
     "ddec_params": {
 
