@@ -222,6 +222,8 @@ class UNetTrainer(ModuleTrainer):
         if self.crop_edges > 0: # used for ddec mdct training to avoid artifacts due to mdct lapped blocks at beginning and end of sample
             samples = samples[..., self.crop_edges:-self.crop_edges]
             ref_samples = ref_samples[..., self.crop_edges:-self.crop_edges]
+            if loss_weight is not None and loss_weight.ndim == 4 and loss_weight.shape[-1] > 1:
+                loss_weight = loss_weight[..., self.crop_edges:-self.crop_edges]
 
         # normal conditioning dropout
         conditioning_mask = (torch.rand(device_batch_size, generator=self.device_generator,
