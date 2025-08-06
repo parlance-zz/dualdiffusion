@@ -1,0 +1,37 @@
+{
+    "device": "cuda",
+    "add_random_test_samples": 0,
+    "save_output": true,
+    
+    "test_sample_verbose": false,
+    "test_samples": [
+        "switch/Arcaea/_t_songs_ignotus.ogg.flac",
+        "dsf/Metropolis Street Racer Prototype/file_15.adx.flac",
+        "psf3/Iron Man/_t_! movies_HUB_05_000001C2.adx.flac",
+        "psf/Gradius Gaiden/SLPM-86042_BGM1_0000096c.XA.flac"
+    ],
+
+    "format_config": {
+        "sample_rate": 32000,
+        "num_raw_channels": 2,
+
+        "low_cut_start_hz": 28.862,
+        "low_cut_end_hz": 20,
+        
+        "default_raw_length": 1409024,
+        "width_alignment": 32768,
+
+        "raw_to_mdct_scale": 275.47124,
+        "mdct_psd_scale": 1.1785113,
+        "mdct_psd_eps": 1e-2,
+        "mdct_window_len": 512,
+        "mdct_window_func": "sin",
+
+        "mdct_psd_to_p2m_scale": 30.9832693,
+        "p2m_psd_scale": 1.765726368,
+        "p2m_psd_eps": 1e-2,
+        "p2m_use_midside_transform": true,
+        "p2m_block_width": 16,
+        "p2m_window_func": "sin"
+    }
+}
