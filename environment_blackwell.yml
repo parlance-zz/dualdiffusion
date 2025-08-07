@@ -13,6 +13,7 @@ dependencies:
     - torch==2.8.0.dev20250602+cu128 
     - torchaudio==2.8.0.dev20250602+cu128   # for audio file i/o and spectrogram transforms
     - torchvision==0.23.0.dev20250602+cu128 # required for laion-clap
+    - einops        # lightweight lib for cleaner tensor manipulation
     - datasets      # load datasets for training
     - accelerate    # multi-gpu/distributed training
     - safetensors   # fast and safe tensor disk i/o

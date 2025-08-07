@@ -12,6 +12,7 @@ dependencies:
     - torch
     - torchaudio    # for audio file i/o and spectrogram transforms
     - torchvision   # required for laion-clap
+    - einops        # lightweight lib for cleaner tensor manipulation
     - datasets      # load datasets for training
     - accelerate    # multi-gpu/distributed training
     - safetensors   # fast and safe tensor disk i/o
