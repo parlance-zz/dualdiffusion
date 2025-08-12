@@ -199,6 +199,8 @@ class DualDiffusionPipeline(torch.nn.Module):
             for path in os.listdir(model_path):
                 if os.path.isdir(os.path.join(model_path, path)):
                     path_parts = path.split("_")
+                    if len(path_parts) > 2:
+                        path_parts = ["_".join(path_parts[:-1]), path_parts[-1]] # todo: this breaks multi-module checkpoints
                     if module_name in path_parts and path_parts[-1].startswith("checkpoint-"):
                         module_inventory.checkpoints.append(path)
 
@@ -334,7 +336,10 @@ class DualDiffusionPipeline(torch.nn.Module):
     
     def get_mel_spec_shape(self, bsz: int = 1, raw_length: Optional[int] = None) -> tuple:
         encoder = getattr(self, "dae", None)
-        mel_spec_shape = self.format.get_mel_spec_shape(bsz=bsz, raw_length=raw_length)
+        if hasattr(self.format, "get_mel_spec_shape"):
+            mel_spec_shape = self.format.get_mel_spec_shape(bsz=bsz, raw_length=raw_length)
+        else:
+            mel_spec_shape = self.format.get_mdct_shape(bsz=bsz, raw_length=raw_length)
         if encoder is None:
             return mel_spec_shape
         latent_shape = self.get_latent_shape(mel_spec_shape)
@@ -634,7 +639,7 @@ class DualDiffusionPipeline(torch.nn.Module):
 
         sample = noise * (sigma_schedule[0]**2 + params.sigma_data**2)**0.5
 
-        progress_bar = tqdm(total=params.num_steps, disable=quiet)
+        #progress_bar = tqdm(total=params.num_steps, disable=quiet)
         for i, (sigma_curr, sigma_next) in enumerate(zip(sigma_schedule_list[:-1], sigma_schedule_list[1:])):
             
             if params.seamless_loop == True:
@@ -668,12 +673,16 @@ class DualDiffusionPipeline(torch.nn.Module):
             #    effective_cfg_scale = params.cfg_scale / np.cosh(cfgo)**5
             effective_cfg_scale = params.cfg_scale
 
+            #ipo = np.log(sigma_next * sigma_curr) / 2 + params.input_perturbation_offset
+            #if ipo < 0:
+            #    effective_input_perturbation = 0
+            #else:
+            #    effective_input_perturbation = float(params.input_perturbation * (1 - 1 / np.cosh(ipo))**2)
+            
+            effective_input_perturbation = 1#1 - i / params.num_steps
+            print(f"{i+1}/{params.num_steps} sample std: {sample.std():.3f}  sigma: {sigma_curr:.3f}")
+
             old_sigma_next = sigma_next
-            ipo = np.log(sigma_next * sigma_curr) / 2 + params.input_perturbation_offset
-            if ipo < 0:
-                effective_input_perturbation = 0
-            else:
-                effective_input_perturbation = float(params.input_perturbation * (1 - 1 / np.cosh(ipo))**2)
             sigma_next *= (1 - (max(min(effective_input_perturbation, 1), 0)))
             effective_input_perturbation = 1 - sigma_next / old_sigma_next
             effective_input_perturbation = old_sigma_next - sigma_next
@@ -706,6 +715,18 @@ class DualDiffusionPipeline(torch.nn.Module):
             t = sigma_next / sigma_curr if (i+1) < params.num_steps else 0
             sample = torch.lerp(cfg_model_output, sample, t)
 
+            #if params.input_perturbation_offset > 105:
+                #sample = sample / sample.std(dim=(1,2,3), keepdim=True) #* 0.8972
+                #sample *= 1.27
+            """
+            rescaled_sample = self.format.unscale_mdct_from_ms_mdct_psd(sample.float(), x_ref.float())
+            raw_sample = self.format.mdct_to_raw(rescaled_sample)
+            mclt = self.format.mdct(raw_sample)
+            sample = mclt.real / mclt.abs().clip(min=1e-15)
+            sample /= sample.std(dim=(1,2,3), keepdim=True) #self.format.scale_mdct_from_ms_mdct_psd(mclt.real, mclt.abs())
+            sample = sample.float().contiguous()
+            """
+            
             #if module_name == "unet":
             #    sample = normalize(sample).float() * (sigma_next**2 + params.sigma_data**2)**0.5
 
@@ -716,8 +737,14 @@ class DualDiffusionPipeline(torch.nn.Module):
 
             if i+1 < params.num_steps:
                 p = max(old_sigma_next**2 - sigma_next**2, 0)**0.5
-                sample.add_(torch.randn(sample.shape, generator=generator,
-                    device=sample.device, dtype=sample.dtype), alpha=p)
+                noise = torch.randn(sample.shape, generator=generator, device=sample.device, dtype=sample.dtype)
+
+                if params.stereo_fix > 0:
+                    noise[:, ::2] = noise[:, 1::2]
+                    noise2 = torch.randn(sample.shape, generator=generator, device=sample.device, dtype=sample.dtype)
+                    noise = mp_sum(noise2, noise, params.stereo_fix)
+
+                sample.add_(noise, alpha=p)
             
             # log sampling debug info
             debug_info["sample_std"].append(sample.std().item())
@@ -726,8 +753,8 @@ class DualDiffusionPipeline(torch.nn.Module):
             debug_info["cfg_output_mean"].append(cfg_model_output.mean().item())
             debug_info["cfg_output_std"].append(cfg_model_output.std().item())
 
-            progress_bar.update(1)
-        progress_bar.close()
+            #progress_bar.update(1)
+        #progress_bar.close()
 
         debug_info["final_sample_mean"] = sample.mean().item()
         debug_info["final_sample_std"] = sample.std().item()

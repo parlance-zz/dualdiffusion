@@ -29,7 +29,8 @@ import torchaudio
 from modules.formats.format import DualDiffusionFormat, DualDiffusionFormatConfig
 from modules.formats.frequency_scale import FrequencyScale, get_mel_density
 from utils.dual_diffusion_utils import tensor_to_img
-from utils.mclt import mclt, imclt, WindowFunction
+from utils.mclt import WindowFunction
+from utils.mdct import MDCT, IMDCT, sin_window, kaiser_bessel_derived, vorbis
 
 
 @dataclass()
@@ -48,7 +49,7 @@ class MS_MDCT_DualFormatConfig(DualDiffusionFormatConfig):
     raw_to_mdct_scale: float = 12.1
 
     mdct_window_len: int = 512
-    mdct_window_func: Literal["sin", "kaiser_bessel_derived"] = "kaiser_bessel_derived"
+    mdct_window_func: Literal["sin", "kaiser_bessel_derived", "vorbis"] = "sin"
     mdct_psd_num_bins: int = 2048
     mdct_dual_channel: bool = False
 
@@ -186,6 +187,17 @@ class MS_MDCT_DualFormat(DualDiffusionFormat):
             self.register_buffer("spec_blend_weight", spec_blend_mel_density.view(1, 1,-1, 1))
         else:
             self.spec_blend_weight = None
+
+        if config.mdct_window_func == "sin":
+            mdct_window_fn = sin_window
+        elif config.mdct_window_func == "kaiser_bessel_derived":
+            mdct_window_fn = kaiser_bessel_derived
+        elif config.mdct_window_func == "vorbis":
+            mdct_window_fn = vorbis
+        else:
+            raise ValueError(f"Unsupported mdct window function: {config.mdct_window_func}. Supported functions are 'sin', 'kaiser_bessel_derived', and 'vorbis'.")
+        self.mdct = MDCT(win_length=config.mdct_window_len, window_fn=mdct_window_fn, return_complex=True)
+        self.imdct = IMDCT(win_length=config.mdct_window_len, window_fn=mdct_window_fn)
     
     def _high_pass(self, raw_samples: torch.Tensor) -> torch.Tensor:
         
@@ -256,6 +268,7 @@ class MS_MDCT_DualFormat(DualDiffusionFormat):
             return (self.ms_freq_scale.scale(spec_blended / self.ms_stft_mel_density)
                 ** self.config.ms_abs_exponent * self.config.raw_to_mel_spec_scale + self.config.raw_to_mel_spec_offset)
 
+    @torch.no_grad()
     def mel_spec_to_mdct_psd(self, mel_spec: torch.Tensor):
 
         mel_spec = mel_spec - self.config.raw_to_mel_spec_offset
@@ -268,7 +281,15 @@ class MS_MDCT_DualFormat(DualDiffusionFormat):
                 mel_spec.float().clip(min=0) ** (1 / self.config.ms_abs_exponent), rectify=False) * self.config.mel_spec_to_mdct_psd_scale
         
         return mel_spec_mdct_psd + self.config.mel_spec_to_mdct_psd_offset
+
+    @torch.no_grad()
+    def scale_mdct_from_ms_mdct_psd(self, mdct: torch.Tensor, mdct_psd: torch.Tensor, eps: float = 1e-2):
+        return mdct / (mdct_psd + eps) * 1.1785113
     
+    @torch.no_grad()
+    def unscale_mdct_from_ms_mdct_psd(self, mdct: torch.Tensor, mdct_psd: torch.Tensor, eps: float = 1e-2):
+        return mdct * (mdct_psd + eps) / 1.1785113
+       
     @torch.inference_mode()
     def mel_spec_to_img(self, mel_spec: torch.Tensor):
         mel_spec = mel_spec - self.config.raw_to_mel_spec_offset
@@ -293,7 +314,8 @@ class MS_MDCT_DualFormat(DualDiffusionFormat):
         
         raw_samples = self._high_pass(raw_samples)
 
-        _mclt = mclt(raw_samples.float(), self.config.mdct_window_len, self.config.mdct_window_func, 1).permute(0, 1, 3, 2)
+        #_mclt = mclt(raw_samples.float(), self.config.mdct_window_len, self.config.mdct_window_func, 1).permute(0, 1, 3, 2)
+        _mclt = self.mdct(raw_samples.float())
         if random_phase_augmentation == True:
             phase_rotation = torch.exp(2j * torch.pi * torch.rand(_mclt.shape[0], device=_mclt.device)) 
             _mclt *= phase_rotation.view(-1, 1, 1, 1)
@@ -309,7 +331,8 @@ class MS_MDCT_DualFormat(DualDiffusionFormat):
 
         raw_samples = self._high_pass(raw_samples)
 
-        _mclt = mclt(raw_samples.float(), self.config.mdct_window_len, self.config.mdct_window_func, 1).permute(0, 1, 3, 2)
+        #_mclt = mclt(raw_samples.float(), self.config.mdct_window_len, self.config.mdct_window_func, 1).permute(0, 1, 3, 2)
+        _mclt = self.mdct(raw_samples.float())
         return _mclt.abs().contiguous(memory_format=self.memory_format) / self.mdct_mel_density * self.config.raw_to_mdct_scale / 2**0.5
     
     @torch.no_grad()
@@ -319,8 +342,9 @@ class MS_MDCT_DualFormat(DualDiffusionFormat):
         if self.config.mdct_dual_channel == True:
             mdct = torch.complex(*mdct.chunk(2, dim=1))
 
-        raw_samples = imclt(mdct.permute(0, 1, 3, 2).contiguous(),
-            window_fn=self.config.mdct_window_func, window_degree=1).real.contiguous()
+        #raw_samples = imclt(mdct.permute(0, 1, 3, 2).contiguous(),
+        #    window_fn=self.config.mdct_window_func, window_degree=1).real.contiguous()
+        raw_samples = self.imdct(mdct).real.contiguous()
         
         return raw_samples * self.config.mdct_to_raw_scale
     

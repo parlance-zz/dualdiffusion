@@ -1,6 +1,6 @@
 {
     "device": "cuda",
-    "add_random_test_samples": 1000,
+    "add_random_test_samples": 500,
     "save_output": false,
     "downsample_mdct_psd": false,
     
@@ -156,8 +156,8 @@
         "raw_to_mel_spec_offset": -2.90285315,       // below is for 0-mean unit std mel_spec_mdct_psd
         "mel_spec_to_mdct_psd_scale": 0.00141690296, //0.001826292667,
         "mel_spec_to_mdct_psd_offset": 0,            //-0.5870303662,
-        "mdct_to_raw_scale": 2,
-        "raw_to_mdct_scale": 12.427468,
+        "mdct_to_raw_scale": 1,
+        "raw_to_mdct_scale": 275.47124,
       
         "mdct_window_len": 512,
         "mdct_window_func": "sin",

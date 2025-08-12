@@ -50,12 +50,17 @@ class MDCT_PSD_FormatConfig(DualDiffusionFormatConfig):
     mdct_window_func: Literal["sin", "kbd", "vorbis"] = "sin"
 
     mdct_psd_to_p2m_scale: float = 30.9832693 # for stereo audio @ -20 lufs with midside transform
+    mdct_psd_to_p2m_pow: float    = 1
+    mdct_psd_to_p2m_offset: float = 0
     p2m_psd_scale: float = 1.765726368
     p2m_psd_eps: float   = 1e-2
     p2m_use_midside_transform: bool = True
     p2m_block_width: int = 16
     p2m_window_func: Literal["sin", "kbd", "vorbis"] = "sin"
     
+    #p2m_bin_std: Optional[list[float]]  = None
+    #p2m_bin_mean: Optional[list[float]] = None
+
     @property
     def mdct_num_frequencies(self) -> int:
         return self.mdct_window_len // 2
@@ -92,6 +97,11 @@ class MDCT_PSD_Format(DualDiffusionFormat):
         p2m_window_fn = get_window_fn(config.p2m_window_func)
         self.p2m = MDCT2(win_length=config.p2m_block_width, window_fn=p2m_window_fn, return_complex=True)
         self.ip2m = IMDCT2(win_length=config.p2m_block_width, window_fn=p2m_window_fn)
+
+        #p2m_bin_std = config.p2m_bin_std or [1.] * (config.num_raw_channels * config.p2m_num_frequencies)
+        #p2m_bin_mean = config.p2m_bin_mean or [0.] * (config.num_raw_channels * config.p2m_num_frequencies)
+        #self.register_buffer("p2m_bin_std",  torch.tensor(p2m_bin_std,  dtype=torch.float32).view(1,-1, 1, 1), persistent=False)
+        #self.register_buffer("p2m_bin_mean", torch.tensor(p2m_bin_mean, dtype=torch.float32).view(1,-1, 1, 1), persistent=False)
 
     def _high_pass(self, raw_samples: torch.Tensor) -> torch.Tensor:
         
@@ -162,12 +172,14 @@ class MDCT_PSD_Format(DualDiffusionFormat):
 
     @torch.inference_mode()
     def psd_to_img(self, psd: torch.Tensor) -> torch.Tensor:
-        psd = psd.clip(min=0) ** 0.25
+        #psd = psd.clip(min=0) ** 0.25
 
         # if input is a p2m psd reshape it to a valid 2d image
         if psd.shape[1] == self.config.num_raw_channels * self.config.p2m_num_frequencies:
+            psd = psd.clip(min=0) ** 0.5
             return self._p2m_to_img(psd)
         else:
+            psd = psd.clip(min=0) ** 0.25
             return tensor_to_img(psd, flip_y=True)
     
     # ************* p2m methods *************
@@ -182,6 +194,11 @@ class MDCT_PSD_Format(DualDiffusionFormat):
     @torch.no_grad()
     def mdct_psd_to_p2m(self, mdct_psd: torch.Tensor) -> torch.Tensor:
 
+        if self.config.mdct_psd_to_p2m_pow != 1:
+            mdct_psd = mdct_psd.clip(min=0) ** self.config.mdct_psd_to_p2m_pow
+
+        mdct_psd = mdct_psd + self.config.mdct_psd_to_p2m_offset
+
         if self.config.p2m_use_midside_transform == True:
             mdct_psd = torch.stack((mdct_psd[:, 0] + mdct_psd[:, 1], mdct_psd[:, 0] - mdct_psd[:, 1]), dim=1) / 2**0.5
 
@@ -189,22 +206,31 @@ class MDCT_PSD_Format(DualDiffusionFormat):
         p2m = p2m.real.reshape(p2m.shape[0],
             self.config.num_raw_channels * self.config.p2m_num_frequencies, p2m.shape[4], p2m.shape[5])
         
+        #p2m = (p2m - self.p2m_bin_mean) / self.p2m_bin_std
         return p2m.contiguous(memory_format=self.memory_format)
     
     @torch.no_grad()
     def mdct_psd_to_p2m_psd(self, mdct_psd: torch.Tensor) -> torch.Tensor:
 
+        if self.config.mdct_psd_to_p2m_pow != 1:
+            mdct_psd = mdct_psd.clip(min=0) ** self.config.mdct_psd_to_p2m_pow
+
+        mdct_psd = mdct_psd + self.config.mdct_psd_to_p2m_offset
+
         if self.config.p2m_use_midside_transform == True:
             mdct_psd = torch.stack((mdct_psd[:, 0] + mdct_psd[:, 1], mdct_psd[:, 0] - mdct_psd[:, 1]), dim=1) / 2**0.5
 
         p2m = self.p2m(mdct_psd) * self.config.mdct_psd_to_p2m_scale
-        p2m_psd = p2m.abs().reshape(p2m.shape[0],
+        p2m_psd = p2m.reshape(p2m.shape[0],
             self.config.num_raw_channels * self.config.p2m_num_frequencies, p2m.shape[4], p2m.shape[5])
         
-        return p2m_psd.contiguous(memory_format=self.memory_format)
+        #p2m_psd = (p2m_psd - self.p2m_bin_mean) / self.p2m_bin_std
+        return p2m_psd.abs().contiguous(memory_format=self.memory_format)
     
     @torch.no_grad()
     def p2m_to_mdct_psd(self, p2m: torch.Tensor) -> torch.Tensor:
+
+        #p2m = (p2m * self.p2m_bin_std + self.p2m_bin_mean)
 
         p2m = p2m.reshape(p2m.shape[0],
             self.config.num_raw_channels, self.config.p2m_block_hop_length,
@@ -216,6 +242,11 @@ class MDCT_PSD_Format(DualDiffusionFormat):
         if self.config.p2m_use_midside_transform == True:
             mdct_psd = torch.stack((mdct_psd[:, 0] + mdct_psd[:, 1], mdct_psd[:, 0] - mdct_psd[:, 1]), dim=1) / 2**0.5
         
+        mdct_psd = mdct_psd - self.config.mdct_psd_to_p2m_offset
+
+        if self.config.mdct_psd_to_p2m_pow != 1:
+            mdct_psd = mdct_psd.clip(min=0) ** (1 / self.config.mdct_psd_to_p2m_pow)
+
         return mdct_psd
     
     @torch.no_grad()
@@ -231,6 +262,8 @@ class MDCT_PSD_Format(DualDiffusionFormat):
 
         p2m = p2m.reshape(p2m.shape[0], self.config.num_raw_channels,
             self.config.p2m_block_hop_length, self.config.p2m_block_hop_length, p2m.shape[2], p2m.shape[3])
+        #p2m = p2m.clip(min=0)**0.5
+        #p2m /= p2m.abs().mean(dim=(-1, -2), keepdim=True) + 1e-10
         p2m = p2m.transpose(3, 4).flip(dims=(3,))
         p2m = p2m.reshape(p2m.shape[0], p2m.shape[1], p2m.shape[2] * p2m.shape[3], p2m.shape[4] * p2m.shape[5])
 
