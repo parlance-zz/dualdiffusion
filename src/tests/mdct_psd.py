@@ -23,6 +23,7 @@
 from utils import config
 
 from dataclasses import dataclass
+import json
 import os
 import random
 
@@ -47,6 +48,20 @@ class MDCT_PSD_Format_TestConfig:
 
     format_config: MDCT_PSD_FormatConfig
 
+def print_tensor_as_json_table(tensor: torch.Tensor, values_per_row: int) -> None:
+
+    data = tensor.flatten().cpu().numpy()
+    print("[")
+    for i in range(0, len(data), values_per_row):
+        row = data[i:i+values_per_row]
+
+        formatted_row = ",".join(f"{val:6.3f}" for val in row)
+        if i + values_per_row >= len(data):
+            print("  " + formatted_row)
+        else:
+            print("  " + formatted_row + ",")
+    print("]")
+    
 @torch.inference_mode()
 def mdct_psd_format_test() -> None:
 
@@ -75,6 +90,10 @@ def mdct_psd_format_test() -> None:
     print(mdct_mel_density_scaling)
     mdct_mel_density_scaling.numpy().tofile(os.path.join(output_path, "mdct_mel_density_scaling.raw"))
     mdct_avg_bin_std = torch.zeros_like(format.mdct_mel_density.flatten())
+
+    p2m_avg_bin_std = torch.zeros(format.config.p2m_num_frequencies * format.config.num_raw_channels, dtype=torch.float32, device=format.device)
+    p2m_avg_bin_mean = torch.zeros(format.config.p2m_num_frequencies * format.config.num_raw_channels, dtype=torch.float32, device=format.device)
+
 
     stat_logger = StatLogger()
     print(f"\nNum test_samples: {len(test_samples)}\n")
@@ -105,15 +124,22 @@ def mdct_psd_format_test() -> None:
         mdct_psd_p2m = format.p2m_to_mdct_psd(p2m)
 
         mdct_avg_bin_std += mdct.std(dim=(0, 1, 3)) / len(test_samples)
+
+        p2m_avg_bin_std += p2m.std(dim=(0, 2, 3)) / len(test_samples)
+        p2m_avg_bin_mean += p2m.mean(dim=(0, 2, 3)) / len(test_samples)
+
         stat_logger.add_logs({
             "raw_sample_std": raw_sample.std(),
             "raw_sample_mdct_std": raw_sample_mdct.std(),
             "mdct_std": mdct.std(),
             "mdct_scaled_std": mdct_scaled.std(),
             "mdct_unscaled_std": mdct_unscaled.std(),
+            "mdct_psd_mean": mdct_psd.mean(),
             "mdct_psd_std": mdct_psd.std(),
             "mdct_psd_p2m_std": mdct_psd_p2m.std(),
+            "p2m_mean": p2m.mean(),
             "p2m_std": p2m.std(),
+            "p2m_scaled_mean": p2m_scaled.mean(),
             "p2m_scaled_std": p2m_scaled.std(),
             "p2m_unscaled_std": p2m_unscaled.std(),
             "p2m_psd_std": p2m_psd.std(),
@@ -160,6 +186,11 @@ def mdct_psd_format_test() -> None:
     print(f"\nAverage MDCT bin std (std variance: {mdct_avg_bin_std.var().item()}):")
     print(mdct_avg_bin_std)
     mdct_avg_bin_std.cpu().numpy().tofile(os.path.join(output_path, "mdct_avg_bin_std.raw"))
+
+    print(f"\nAverage P2M bin std:")
+    print_tensor_as_json_table(p2m_avg_bin_std, 8)
+    print(f"\nAverage P2M bin mean:")
+    print_tensor_as_json_table(p2m_avg_bin_mean, 8)
 
     print("\nAverage stats:")
     print(dict_str(stat_logger.get_logs()))
