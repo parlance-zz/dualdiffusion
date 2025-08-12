@@ -245,12 +245,15 @@ class UNetTrainer(ModuleTrainer):
 
         # prepare model inputs
         noise = torch.randn(samples.shape, device=samples.device, generator=self.device_generator)
-        samples = (samples * self.sigma_sampler.config.sigma_data).detach()
-        noise = (noise * batch_sigma.view(-1, 1, 1, 1)).detach()
+        #samples = (samples * self.sigma_sampler.config.sigma_data).detach()
+        samples = samples.detach()
+        if hasattr(self.unet, "get_sigma"):
+            batch_sigma = self.unet.get_sigma()
+        noise = noise * batch_sigma.view(-1, 1, 1, 1)
 
         denoised = self.unet(samples + noise, batch_sigma, self.format, unet_embeddings, ref_samples)
         
-        batch_loss_weight = (batch_sigma ** 2 + self.sigma_sampler.config.sigma_data ** 2) / (batch_sigma * self.sigma_sampler.config.sigma_data) ** 2
+        batch_loss_weight = (batch_sigma ** 2 + self.unet.config.sigma_data ** 2) / (batch_sigma * self.unet.config.sigma_data) ** 2
         batch_weighted_loss = torch.nn.functional.mse_loss(denoised, samples, reduction="none")
         if loss_weight is not None: # use custom loss weight if provided
             batch_weighted_loss = batch_weighted_loss * loss_weight
@@ -262,21 +265,35 @@ class UNetTrainer(ModuleTrainer):
             error_logvar = self.unet.get_sigma_loss_logvar(sigma=batch_sigma)
             batch_loss = batch_weighted_loss / error_logvar.exp() + error_logvar
         
-        if self.config.num_loss_buckets > 0: # log loss bucketed by noise level range
-
-            global_weighted_loss = self.trainer.accelerator.gather(batch_weighted_loss.detach()).cpu()
-            global_sigma_quantiles = (batch_sigma.detach().log().cpu() - np.log(self.config.loss_buckets_sigma_min)) / (
-                np.log(self.config.loss_buckets_sigma_max) - np.log(self.config.loss_buckets_sigma_min))
-            
-            target_buckets = (global_sigma_quantiles * self.unet_loss_buckets.shape[0]).long().clip(min=0, max=self.unet_loss_buckets.shape[0] - 1)
-            self.unet_loss_buckets.index_add_(0, target_buckets, global_weighted_loss)
-            self.unet_loss_bucket_counts.index_add_(0, target_buckets, torch.ones_like(global_weighted_loss))
-
-        return {
+        logs: dict[str, torch.Tensor] = {
             "loss": batch_loss,
             "io_stats/denoised_std": denoised.std(dim=(1,2,3)),
-            "io_stats/denoised_mean": denoised.mean(dim=(1,2,3))
+            "io_stats/denoised_mean": denoised.mean(dim=(1,2,3)),
+            "io_stats/input_std": samples.std(dim=(1,2,3)),
+            "io_stats/input_mean": samples.mean(dim=(1,2,3)),
         }
+
+        if ref_samples is not None:
+            logs.update({
+                "io_stats/x_ref_std": ref_samples.std(dim=(1,2,3)),
+                "io_stats/x_ref_mean": ref_samples.mean(dim=(1,2,3)),
+            })
+
+        if hasattr(self.unet, "get_sigma"):
+            logs["io_stats/sigma"] = batch_sigma.detach()
+            logs["loss/mse"] = batch_weighted_loss.mean().detach()
+        else:    
+            if self.config.num_loss_buckets > 0: # log loss bucketed by noise level range
+
+                global_weighted_loss = self.trainer.accelerator.gather(batch_weighted_loss.detach()).cpu()
+                global_sigma_quantiles = (batch_sigma.detach().log().cpu() - np.log(self.config.loss_buckets_sigma_min)) / (
+                    np.log(self.config.loss_buckets_sigma_max) - np.log(self.config.loss_buckets_sigma_min))
+                
+                target_buckets = (global_sigma_quantiles * self.unet_loss_buckets.shape[0]).long().clip(min=0, max=self.unet_loss_buckets.shape[0] - 1)
+                self.unet_loss_buckets.index_add_(0, target_buckets, global_weighted_loss)
+                self.unet_loss_bucket_counts.index_add_(0, target_buckets, torch.ones_like(global_weighted_loss))
+
+        return logs
     
     @torch.no_grad()
     def finish_batch(self) -> Optional[dict[str, Union[torch.Tensor, float]]]:
