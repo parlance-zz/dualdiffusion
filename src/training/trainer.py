@@ -882,8 +882,8 @@ class DualDiffusionTrainer:
 
                     module_logs = self.module_trainer.train_batch(device_batch)
                     train_logger.add_logs(module_logs)
-                    for i, sample_path in enumerate(device_batch["sample_paths"]):
-                        self.train_sample_logger.add_log(sample_path, module_logs["loss"][i])
+                    #for i, sample_path in enumerate(device_batch["sample_paths"]):
+                    #    self.train_sample_logger.add_log(sample_path, module_logs["loss"][i])
 
                     # loss is multiplied by grad accum steps for consistent grad norm
                     self.accelerator.backward(module_logs["loss"].mean() * self.config.optimizer.loss_scale)

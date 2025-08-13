@@ -23,7 +23,6 @@
 from utils import config
 
 from dataclasses import dataclass
-import json
 import os
 import random
 
@@ -42,6 +41,7 @@ class MDCT_PSD_Format_TestConfig:
 
     device: str
     save_output: bool
+    p2m_img_transposed: bool
     test_sample_verbose: bool
     add_random_test_samples: int
     test_samples: list[str]
@@ -91,9 +91,8 @@ def mdct_psd_format_test() -> None:
     mdct_mel_density_scaling.numpy().tofile(os.path.join(output_path, "mdct_mel_density_scaling.raw"))
     mdct_avg_bin_std = torch.zeros_like(format.mdct_mel_density.flatten())
 
-    p2m_avg_bin_std = torch.zeros(format.config.p2m_num_frequencies * format.config.num_raw_channels, dtype=torch.float32, device=format.device)
-    p2m_avg_bin_mean = torch.zeros(format.config.p2m_num_frequencies * format.config.num_raw_channels, dtype=torch.float32, device=format.device)
-
+    p2m_avg_bin_std = torch.zeros(format.config.p2m_num_channels, dtype=torch.float32, device=format.device)
+    p2m_avg_bin_mean = torch.zeros(format.config.p2m_num_channels, dtype=torch.float32, device=format.device)
 
     stat_logger = StatLogger()
     print(f"\nNum test_samples: {len(test_samples)}\n")
@@ -112,16 +111,14 @@ def mdct_psd_format_test() -> None:
         raw_sample = load_audio(file_path, count=crop_width).unsqueeze(0).to(cfg.device)
 
         mdct = format.raw_to_mdct(raw_sample)
-        mdct_psd = format.raw_to_mdct_psd(raw_sample)
-        mdct_scaled = format.scale_mdct_from_psd(mdct, mdct_psd)
-        mdct_unscaled = format.unscale_mdct_from_psd(mdct_scaled, mdct_psd)
         raw_sample_mdct = format.mdct_to_raw(mdct)
 
-        p2m = format.mdct_psd_to_p2m(mdct_psd)
-        p2m_psd = format.mdct_psd_to_p2m_psd(mdct_psd)
+        p2m = format.mdct_to_p2m(mdct)
+        p2m_psd = format.mdct_to_p2m_psd(mdct)
         p2m_scaled = format.scale_p2m_from_psd(p2m, p2m_psd)
         p2m_unscaled = format.unscale_p2m_from_psd(p2m_scaled, p2m_psd)
-        mdct_psd_p2m = format.p2m_to_mdct_psd(p2m)
+        mdct_p2m = format.p2m_to_mdct(p2m)
+        raw_sample_mdct_p2m = format.mdct_to_raw(mdct_p2m)
 
         mdct_avg_bin_std += mdct.std(dim=(0, 1, 3)) / len(test_samples)
 
@@ -131,17 +128,15 @@ def mdct_psd_format_test() -> None:
         stat_logger.add_logs({
             "raw_sample_std": raw_sample.std(),
             "raw_sample_mdct_std": raw_sample_mdct.std(),
+            "raw_sample_mdct_p2m_std": raw_sample_mdct_p2m.std(),
             "mdct_std": mdct.std(),
-            "mdct_scaled_std": mdct_scaled.std(),
-            "mdct_unscaled_std": mdct_unscaled.std(),
-            "mdct_psd_mean": mdct_psd.mean(),
-            "mdct_psd_std": mdct_psd.std(),
-            "mdct_psd_p2m_std": mdct_psd_p2m.std(),
+            "mdct_p2m_std": mdct_p2m.std(),
             "p2m_mean": p2m.mean(),
             "p2m_std": p2m.std(),
             "p2m_scaled_mean": p2m_scaled.mean(),
             "p2m_scaled_std": p2m_scaled.std(),
             "p2m_unscaled_std": p2m_unscaled.std(),
+            "p2m_psd_mean": p2m_psd.mean(),
             "p2m_psd_std": p2m_psd.std(),
         })
 
@@ -149,8 +144,7 @@ def mdct_psd_format_test() -> None:
             print("raw_sample:", tensor_info_str(raw_sample))
             print("raw_sample_mdct:", tensor_info_str(raw_sample_mdct))
             print("mdct:", tensor_info_str(mdct), f"(target shape: {format.get_mdct_shape(raw_length=raw_length)}")
-            print("mdct_psd:", tensor_info_str(mdct_psd))
-            print("mdct_psd_p2m:", tensor_info_str(mdct_psd_p2m))
+            print("mdct_p2m:", tensor_info_str(mdct_p2m))
             print("p2m:", tensor_info_str(p2m), f"(target shape: {format.get_p2m_shape(mdct.shape)}")
             print("p2m_psd:", tensor_info_str(p2m_psd), "\n")
 
@@ -167,20 +161,20 @@ def mdct_psd_format_test() -> None:
         save_audio(raw_sample_mdct.squeeze(0), cfg.format_config.sample_rate, mdct_output_path, target_lufs=None)
         print(f"Saved raw_sample_mdct to {mdct_output_path}")
 
-        mdct_psd_output_path = os.path.join(output_path, f"{filename}_mdct_psd.png")
-        save_img(format.psd_to_img(mdct_psd), mdct_psd_output_path)
-        print(f"Saved mdct_psd img to {mdct_psd_output_path}")
+        raw_sample_mdct_p2m_output_path = os.path.join(output_path, f"{filename}_mdct_p2m.flac")
+        save_audio(raw_sample_mdct_p2m.squeeze(0), cfg.format_config.sample_rate, raw_sample_mdct_p2m_output_path, target_lufs=None)
+        print(f"Saved raw_sample_mdct_p2m to {raw_sample_mdct_p2m_output_path}")
 
-        mdct_psd_p2m_output_path = os.path.join(output_path, f"{filename}_mdct_psd_p2m.png")
-        save_img(format.psd_to_img(mdct_psd_p2m), mdct_psd_p2m_output_path)
-        print(f"Saved mdct_psd_p2m img to {mdct_psd_p2m_output_path}")
-
+        p2m_output_path = os.path.join(output_path, f"{filename}_p2m.png")
+        save_img(format._p2m_to_img(p2m, transposed=cfg.p2m_img_transposed), p2m_output_path)
+        print(f"Saved p2m img to {p2m_output_path}")
+        
         p2m_psd_output_path = os.path.join(output_path, f"{filename}_p2m_psd.png")
-        save_img(format.psd_to_img(p2m_psd), p2m_psd_output_path)
+        save_img(format.psd_to_img(p2m_psd, transpose_p2m=cfg.p2m_img_transposed), p2m_psd_output_path)
         print(f"Saved p2m_psd img to {p2m_psd_output_path}\n")
 
         p2m_scaled_output_path = os.path.join(output_path, f"{filename}_p2m_scaled.png")
-        save_img(format._p2m_to_img(p2m_scaled), p2m_scaled_output_path)
+        save_img(format._p2m_to_img(p2m_scaled, transposed=cfg.p2m_img_transposed), p2m_scaled_output_path)
         print(f"Saved mdct_psd img to {p2m_scaled_output_path}")
 
     print(f"\nAverage MDCT bin std (std variance: {mdct_avg_bin_std.var().item()}):")
@@ -195,6 +189,7 @@ def mdct_psd_format_test() -> None:
     print("\nAverage stats:")
     print(dict_str(stat_logger.get_logs()))
 
+    print(cfg.p2m_img_transposed)
 if __name__ == "__main__":
 
     init_cuda()

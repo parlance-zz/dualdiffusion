@@ -42,8 +42,8 @@ from modules.formats.format import DualDiffusionFormat
 
 class MPConv2D(torch.nn.Module):
 
-    def __init__(self, in_channels: int, out_channels: int, kernel: tuple[int, int],
-                 groups: int = 1, disable_weight_norm: bool = False, norm_dim: tuple[int] = None) -> None:
+    def __init__(self, in_channels: int, out_channels: int, kernel: tuple[int, int], space: bool,
+            groups: int = 1, disable_weight_norm: bool = False, norm_dim: tuple[int] = 1) -> None:
         
         super().__init__()
 
@@ -52,6 +52,7 @@ class MPConv2D(torch.nn.Module):
         self.groups = groups
         self.disable_weight_norm = disable_weight_norm
         self.norm_dim = norm_dim
+        self.space = space
         
         self.weight = torch.nn.Parameter(torch.randn(out_channels, in_channels // groups, *kernel))
         if self.weight.numel() == 0 or self.weight.ndim not in (2, 4):
@@ -67,12 +68,29 @@ class MPConv2D(torch.nn.Module):
                 w = normalize(w) # traditional weight normalization
             
         w = w * (gain / w[0].numel()**0.5) # magnitude-preserving scaling
-        w = w.to(x.dtype)
+        weight = w.to(x.dtype)
 
-        if w.ndim == 2:
-            return x @ w.t()
+        if weight.ndim == 2:
+            return x @ weight.t()
         
-        return torch.nn.functional.conv2d(x, w, padding=(w.shape[-2]//2, w.shape[-1]//2), groups=self.groups)
+        """
+        b, c, bh, bw, h, w = x.shape
+        if self.space == True and False:
+            x = x.permute(0, 2, 3, 1, 4, 5).reshape(b * bh * bw, c, h, w)
+        else:
+            x = x.permute(0, 4, 5, 1, 2, 3).reshape(b * h * w, c, bh, bw)
+        """
+        out: torch.Tensor = torch.nn.functional.conv2d(x, weight, padding=(weight.shape[-2]//2, weight.shape[-1]//2), groups=self.groups)
+
+        """
+        c = self.out_channels
+        if self.space == True and False:
+            out = out.view(b, bh, bw, c, h, w).permute(0, 3, 1, 2, 4, 5)
+        else:
+            out = out.view(b, h, w, c, bh, bw).permute(0, 3, 4, 5, 1, 2)
+        """
+
+        return out
 
     @torch.no_grad()
     def normalize_weights(self) -> None:
@@ -83,27 +101,28 @@ class MPConv2D(torch.nn.Module):
                 self.weight.copy_(normalize(self.weight))
 
 @dataclass
-class DDec_MDCT_UNet_P3_Config(DualDiffusionUNetConfig):
+class DDec_MDCT_UNet_P4_Config(DualDiffusionUNetConfig):
 
-    in_channels:  int = 128
-    out_channels: int = 128
+    in_channels:  int = 2
+    out_channels: int = 2
     in_channels_emb: int = 0
 
+    p2m_block_width: int = 8
     in_num_freqs: int = 33
 
-    model_channels: int  = 1024               # Base multiplier for the number of channels.
-    channel_mult: list[int]    = (1,)         # Per-resolution multipliers for the number of channels.
+    model_channels: int  = 64               # Base multiplier for the number of channels.
+    channel_mult: list[int]    = (1,)       # Per-resolution multipliers for the number of channels.
     double_midblock: bool      = False
     midblock_attn: bool        = False
     channels_per_head: int    = 64           # Number of channels per attention head.
-    num_layers_per_block: int = 3            # Number of resnet blocks per resolution.
+    num_layers_per_block: int = 5            # Number of resnet blocks per resolution.
     label_balance: float      = 0.5          # Balance between noise embedding (0) and class embedding (1).
     concat_balance: float     = 0.5          # Balance between skip connections (0) and main path (1).
     res_balance: float        = 0.3          # Balance between main branch (0) and residual branch (1).
     attn_balance: float       = 0.3          # Balance between main branch (0) and self-attention (1).
     attn_levels: list[int]    = ()           # List of resolution levels to use self-attention.
-    mlp_multiplier: int    = 3               # Multiplier for the number of channels in the MLP.
-    mlp_groups: int        = 8               # Number of groups for the MLPs.
+    mlp_multiplier: int    = 2               # Multiplier for the number of channels in the MLP.
+    mlp_groups: int        = 1               # Number of groups for the MLPs.
     add_constant_channel: bool = True
 
 class Block(torch.nn.Module):
@@ -137,14 +156,14 @@ class Block(torch.nn.Module):
         self.res_balance = res_balance
         self.attn_balance = attn_balance
         self.clip_act = clip_act
-
+        
         self.conv_res0 = MPConv2D(out_channels if flavor == "enc" else in_channels,
-                                out_channels * mlp_multiplier, kernel=(3,3), groups=mlp_groups)
+            out_channels * mlp_multiplier, kernel=(3,3), space=True, groups=mlp_groups)
 
-        self.conv_res1 = MPConv2D(out_channels * mlp_multiplier, out_channels, kernel=(3,3), groups=mlp_groups)
+        self.conv_res1 = MPConv2D(out_channels * mlp_multiplier, out_channels, kernel=(3,3), space=False, groups=mlp_groups)
 
         if in_channels != out_channels or mlp_groups > 1:
-            self.conv_skip = MPConv2D(in_channels, out_channels, kernel=(1,1), groups=1)
+            self.conv_skip = MPConv2D(in_channels, out_channels, kernel=(1,1), space=True, groups=1)
         else:
             self.conv_skip = None
 
@@ -153,7 +172,14 @@ class Block(torch.nn.Module):
         
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         
-        x = resample_2d(x, mode=self.resample_mode)
+        if self.resample_mode != "keep":
+             
+            b, c, bh, bw, h, w = x.shape
+
+            x = x.permute(0, 4, 5, 1, 2, 3).reshape(b * h * w, c, bh, bw)
+            x = resample_2d(x, mode=self.resample_mode).to(x.dtype)
+            bh, bw = x.shape[-2], x.shape[-1]
+            x = x.view(b, h, w, c, bh, bw).permute(0, 3, 4, 5, 1, 2)
 
         if self.flavor == "enc":
             if self.conv_skip is not None:
@@ -171,17 +197,19 @@ class Block(torch.nn.Module):
             x = self.conv_skip(x)
         x = mp_sum(x, y, t=self.res_balance)
         
-        if self.use_attention == True:
-            raise NotImplementedError("Self-attention is not implemented in this block.")
+        #if self.use_attention == True:
+        #    pass
 
         if self.clip_act is not None:
             x = x.clip_(-self.clip_act, self.clip_act)
 
         return x
 
-class DDec_MDCT_UNet_P3(DualDiffusionUNet):
+class DDec_MDCT_UNet_P4(DualDiffusionUNet):
 
-    def __init__(self, config: DDec_MDCT_UNet_P3_Config) -> None:
+    supports_channels_last: Union[bool, Literal["3d"]] = False
+
+    def __init__(self, config: DDec_MDCT_UNet_P4_Config) -> None:
         super().__init__()
         self.config = config
 
@@ -209,7 +237,8 @@ class DDec_MDCT_UNet_P3(DualDiffusionUNet):
             if level == 0:
                 cin = cout
                 cout = channels
-                self.enc[f"conv_in"] = MPConv2D(cin, cout, kernel=(3,3))
+                self.enc[f"conv_in0"] = MPConv2D(cin, cout, kernel=(3,3), space=True)
+                self.enc[f"conv_in1"] = MPConv2D(cout, cout, kernel=(3,3), space=False)
             else:
                 self.enc[f"block{level}_down"] = Block(level, cout, cout, num_freqs,
                     use_attention=level in config.attn_levels, flavor="enc", resample_mode="down", **block_kwargs)
@@ -245,7 +274,8 @@ class DDec_MDCT_UNet_P3(DualDiffusionUNet):
                     use_attention=level in config.attn_levels, flavor="dec", **block_kwargs)
                 
         self.out_gain = torch.nn.Parameter(torch.zeros([]))
-        self.conv_out = MPConv2D(cout, config.out_channels, kernel=(3,3))
+        self.conv_out0 = MPConv2D(cout, cout, kernel=(3,3), space=True)
+        self.conv_out1 = MPConv2D(cout, config.out_channels, kernel=(3,3), space=False)
 
     def get_embeddings(self, emb_in: torch.Tensor, conditioning_mask: torch.Tensor) -> torch.Tensor:
         #return conditioning_mask[:, None, None, None, None].to(self.device, self.dtype)
@@ -268,23 +298,33 @@ class DDec_MDCT_UNet_P3(DualDiffusionUNet):
                 x_ref: Optional[torch.Tensor] = None) -> torch.Tensor:
 
         with torch.no_grad():
-            sigma = sigma.view(-1, 1, 1, 1)
+            sigma = sigma.view(-1, 1, 1, 1, 1, 1)
             
             # Preconditioning weights.
             c_skip = self.config.sigma_data ** 2 / (sigma ** 2 + self.config.sigma_data ** 2)           # 0.5
             c_out = sigma * self.config.sigma_data / (sigma ** 2 + self.config.sigma_data ** 2).sqrt()  # 1.414
             c_in = 1 / (self.config.sigma_data ** 2 + sigma ** 2).sqrt()                                # 0.707
 
-            x_ref = x_ref.to(dtype=torch.bfloat16)
+            b, c, h, w = x_in.shape
+            bw = self.config.p2m_block_width
+            x_in = x_in.view(b, c // bw // bw, bw, bw, h, w)
+            x_ref = x_ref.view(b, c // bw // bw, bw, bw, h, w)
+
             x = (c_in * x_in).to(dtype=torch.bfloat16)
+            x_ref = x_ref.to(dtype=torch.bfloat16)
 
         # Encoder.
         inputs = (x, x_ref, torch.ones_like(x[:, :1])) if self.config.add_constant_channel else (x, x_ref)
         x = torch.cat(inputs, dim=1)
 
+        _b, _c, _bh, _bw, _h, _w = x.shape
+        x = x.permute(0, 4, 5, 1, 2, 3).reshape(_b * _h * _w, _c, _bh, _bw)
+
         skips = []
         for name, block in self.enc.items():
             x = block(x) if "conv" in name else block(x)
+            if name == "conv_in0": continue
+
             skips.append(x)
 
         # Decoder.
@@ -293,8 +333,12 @@ class DDec_MDCT_UNet_P3(DualDiffusionUNet):
                 x = mp_cat(x, skips.pop(), t=self.config.concat_balance)
             x = block(x)
 
-        x: torch.Tensor = self.conv_out(x, gain=self.out_gain)
+        x: torch.Tensor = self.conv_out0(x)
+        x: torch.Tensor = self.conv_out1(x, gain=self.out_gain)
+
+        _c = x.shape[1]
+        x = x.view(_b, _h, _w, _c, _bh, _bw).permute(0, 3, 4, 5, 1, 2)
+
         D_x: torch.Tensor = c_skip * x_in.float() + c_out * x.float()
 
-        return D_x
-    
+        return D_x.view(b, c, h, w)

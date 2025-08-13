@@ -43,24 +43,17 @@ class MDCT_PSD_FormatConfig(DualDiffusionFormatConfig):
     default_raw_length: int = 1409024
     width_alignment: int    = 32768
 
-    raw_to_mdct_scale: float = 275.47124 # for stereo audio @ -20 lufs
-    mdct_psd_scale: float = 1.1785113
-    mdct_psd_eps: float   = 1e-2
+    raw_to_mdct_scale: float = 278.47124 # for stereo audio @ -20 lufs
     mdct_window_len: int = 512
     mdct_window_func: Literal["sin", "kbd", "vorbis"] = "sin"
 
-    mdct_psd_to_p2m_scale: float = 30.9832693 # for stereo audio @ -20 lufs with midside transform
-    mdct_psd_to_p2m_pow: float    = 1
-    mdct_psd_to_p2m_offset: float = 0
-    p2m_psd_scale: float = 1.765726368
-    p2m_psd_eps: float   = 1e-2
-    p2m_use_midside_transform: bool = True
+    mdct_to_p2m_scale: float = 30.50252 # for stereo audio @ -20 lufs with midside transform
+    p2m_psd_scale: float = 1.461213
+    p2m_psd_eps: float   = 1e-3
+    p2m_use_midside_transform: bool = False
     p2m_block_width: int = 16
     p2m_window_func: Literal["sin", "kbd", "vorbis"] = "sin"
     
-    #p2m_bin_std: Optional[list[float]]  = None
-    #p2m_bin_mean: Optional[list[float]] = None
-
     @property
     def mdct_num_frequencies(self) -> int:
         return self.mdct_window_len // 2
@@ -70,8 +63,16 @@ class MDCT_PSD_FormatConfig(DualDiffusionFormatConfig):
         return self.mdct_window_len // 2
     
     @property
-    def p2m_num_frequencies(self) -> int:
+    def p2m_num_bins(self) -> int:
         return self.p2m_block_width ** 2 // 4
+    
+    @property
+    def p2m_num_channels(self) -> int:
+        return self.p2m_num_bins * self.num_raw_channels
+    
+    @property
+    def p2m_num_frequencies(self) -> int:
+        return self.mdct_num_frequencies // self.p2m_block_hop_length + 1
     
     @property
     def p2m_block_hop_length(self) -> int:
@@ -86,9 +87,13 @@ class MDCT_PSD_Format(DualDiffusionFormat):
         if self.config.p2m_use_midside_transform == True:
             assert self.config.num_raw_channels == 2, "P2M Mid-side transform requires 2 raw channels"
 
-        mdct_hz = (torch.arange(config.mdct_num_frequencies) + 0.5) * config.sample_rate / config.mdct_window_len
-        self.register_buffer("mdct_hz", mdct_hz)
-        self.register_buffer("mdct_mel_density", get_mel_density(mdct_hz).view(1, 1,-1, 1))
+        mdct_hz = (torch.arange(config.mdct_num_frequencies) + 0.5) * (config.sample_rate/2) / config.mdct_num_frequencies
+        self.register_buffer("mdct_hz", mdct_hz, persistent=False)
+        self.register_buffer("mdct_mel_density", get_mel_density(mdct_hz).view(1, 1,-1, 1), persistent=False)
+
+        p2m_hz = (torch.arange(config.p2m_num_frequencies) + 0.5) * (config.sample_rate/2) / config.p2m_num_frequencies
+        self.register_buffer("p2m_hz", p2m_hz, persistent=False)
+        self.register_buffer("p2m_mel_density", get_mel_density(p2m_hz).view(1, 1,-1, 1), persistent=False)
 
         mdct_window_fn = get_window_fn(config.mdct_window_func)
         self.mdct = MDCT(win_length=config.mdct_window_len, window_fn=mdct_window_fn, return_complex=True)
@@ -97,11 +102,6 @@ class MDCT_PSD_Format(DualDiffusionFormat):
         p2m_window_fn = get_window_fn(config.p2m_window_func)
         self.p2m = MDCT2(win_length=config.p2m_block_width, window_fn=p2m_window_fn, return_complex=True)
         self.ip2m = IMDCT2(win_length=config.p2m_block_width, window_fn=p2m_window_fn)
-
-        #p2m_bin_std = config.p2m_bin_std or [1.] * (config.num_raw_channels * config.p2m_num_frequencies)
-        #p2m_bin_mean = config.p2m_bin_mean or [0.] * (config.num_raw_channels * config.p2m_num_frequencies)
-        #self.register_buffer("p2m_bin_std",  torch.tensor(p2m_bin_std,  dtype=torch.float32).view(1,-1, 1, 1), persistent=False)
-        #self.register_buffer("p2m_bin_mean", torch.tensor(p2m_bin_mean, dtype=torch.float32).view(1,-1, 1, 1), persistent=False)
 
     def _high_pass(self, raw_samples: torch.Tensor) -> torch.Tensor:
         
@@ -161,93 +161,63 @@ class MDCT_PSD_Format(DualDiffusionFormat):
         raw_samples = self.imdct(mdct).real.contiguous()
         
         return raw_samples
-    
-    @torch.no_grad()
-    def scale_mdct_from_psd(self, mdct: torch.Tensor, mdct_psd: torch.Tensor):
-        return mdct / (mdct_psd + self.config.mdct_psd_eps) * self.config.mdct_psd_scale
-    
-    @torch.no_grad()
-    def unscale_mdct_from_psd(self, mdct: torch.Tensor, mdct_psd: torch.Tensor):
-        return mdct * (mdct_psd + self.config.mdct_psd_eps) / self.config.mdct_psd_scale
 
     @torch.inference_mode()
-    def psd_to_img(self, psd: torch.Tensor) -> torch.Tensor:
-        #psd = psd.clip(min=0) ** 0.25
+    def psd_to_img(self, psd: torch.Tensor, transpose_p2m: bool = False) -> torch.Tensor:
+        psd = psd.clip(min=0) ** 0.25
 
         # if input is a p2m psd reshape it to a valid 2d image
-        if psd.shape[1] == self.config.num_raw_channels * self.config.p2m_num_frequencies:
-            psd = psd.clip(min=0) ** 0.5
-            return self._p2m_to_img(psd)
+        if psd.shape[1] == self.config.p2m_num_channels:
+            return self._p2m_to_img(psd, transposed=transpose_p2m)
         else:
-            psd = psd.clip(min=0) ** 0.25
             return tensor_to_img(psd, flip_y=True)
     
     # ************* p2m methods *************
 
     def get_p2m_shape(self, mdct_shape: tuple[int, int, int, int]) -> tuple[int, int, int, int]:
         bsz = mdct_shape[0]
-        num_channels = mdct_shape[1] * self.config.p2m_num_frequencies
         h_blocks = mdct_shape[2] // self.config.p2m_block_hop_length + 1
         w_blocks = mdct_shape[3] // self.config.p2m_block_hop_length + 1
-        return (bsz, num_channels, h_blocks, w_blocks,)
+        return (bsz, self.config.p2m_num_channels, h_blocks, w_blocks,)
     
     @torch.no_grad()
-    def mdct_psd_to_p2m(self, mdct_psd: torch.Tensor) -> torch.Tensor:
-
-        if self.config.mdct_psd_to_p2m_pow != 1:
-            mdct_psd = mdct_psd.clip(min=0) ** self.config.mdct_psd_to_p2m_pow
-
-        mdct_psd = mdct_psd + self.config.mdct_psd_to_p2m_offset
+    def mdct_to_p2m(self, mdct: torch.Tensor) -> torch.Tensor:
 
         if self.config.p2m_use_midside_transform == True:
-            mdct_psd = torch.stack((mdct_psd[:, 0] + mdct_psd[:, 1], mdct_psd[:, 0] - mdct_psd[:, 1]), dim=1) / 2**0.5
+            mdct = torch.stack((mdct[:, 0] + mdct[:, 1], mdct[:, 0] - mdct[:, 1]), dim=1) / 2**0.5
 
-        p2m = self.p2m(mdct_psd) * self.config.mdct_psd_to_p2m_scale
+        p2m: torch.Tensor = self.p2m(mdct) * self.config.mdct_to_p2m_scale
         p2m = p2m.real.reshape(p2m.shape[0],
-            self.config.num_raw_channels * self.config.p2m_num_frequencies, p2m.shape[4], p2m.shape[5])
+            self.config.p2m_num_channels, p2m.shape[4], p2m.shape[5])
         
-        #p2m = (p2m - self.p2m_bin_mean) / self.p2m_bin_std
         return p2m.contiguous(memory_format=self.memory_format)
     
     @torch.no_grad()
-    def mdct_psd_to_p2m_psd(self, mdct_psd: torch.Tensor) -> torch.Tensor:
-
-        if self.config.mdct_psd_to_p2m_pow != 1:
-            mdct_psd = mdct_psd.clip(min=0) ** self.config.mdct_psd_to_p2m_pow
-
-        mdct_psd = mdct_psd + self.config.mdct_psd_to_p2m_offset
+    def mdct_to_p2m_psd(self, mdct: torch.Tensor) -> torch.Tensor:
 
         if self.config.p2m_use_midside_transform == True:
-            mdct_psd = torch.stack((mdct_psd[:, 0] + mdct_psd[:, 1], mdct_psd[:, 0] - mdct_psd[:, 1]), dim=1) / 2**0.5
+            mdct = torch.stack((mdct[:, 0] + mdct[:, 1], mdct[:, 0] - mdct[:, 1]), dim=1) / 2**0.5
 
-        p2m = self.p2m(mdct_psd) * self.config.mdct_psd_to_p2m_scale
-        p2m_psd = p2m.reshape(p2m.shape[0],
-            self.config.num_raw_channels * self.config.p2m_num_frequencies, p2m.shape[4], p2m.shape[5])
+        p2m: torch.Tensor = self.p2m(mdct) * self.config.mdct_to_p2m_scale
+        p2m_psd = p2m.abs().reshape(p2m.shape[0],
+            self.config.p2m_num_channels, p2m.shape[4], p2m.shape[5])
         
-        #p2m_psd = (p2m_psd - self.p2m_bin_mean) / self.p2m_bin_std
-        return p2m_psd.abs().contiguous(memory_format=self.memory_format)
+        return p2m_psd.contiguous(memory_format=self.memory_format)
     
     @torch.no_grad()
-    def p2m_to_mdct_psd(self, p2m: torch.Tensor) -> torch.Tensor:
-
-        #p2m = (p2m * self.p2m_bin_std + self.p2m_bin_mean)
+    def p2m_to_mdct(self, p2m: torch.Tensor) -> torch.Tensor:
 
         p2m = p2m.reshape(p2m.shape[0],
             self.config.num_raw_channels, self.config.p2m_block_hop_length,
             self.config.p2m_block_hop_length, p2m.shape[2], p2m.shape[3])
         
-        mdct_psd = self.ip2m(p2m / self.config.mdct_psd_to_p2m_scale)
-        mdct_psd = mdct_psd.real.contiguous(memory_format=self.memory_format)
+        mdct: torch.Tensor = self.ip2m(p2m / self.config.mdct_to_p2m_scale)
+        mdct = mdct.real.contiguous(memory_format=self.memory_format)
 
         if self.config.p2m_use_midside_transform == True:
-            mdct_psd = torch.stack((mdct_psd[:, 0] + mdct_psd[:, 1], mdct_psd[:, 0] - mdct_psd[:, 1]), dim=1) / 2**0.5
+            mdct = torch.stack((mdct[:, 0] + mdct[:, 1], mdct[:, 0] - mdct[:, 1]), dim=1) / 2**0.5
         
-        mdct_psd = mdct_psd - self.config.mdct_psd_to_p2m_offset
-
-        if self.config.mdct_psd_to_p2m_pow != 1:
-            mdct_psd = mdct_psd.clip(min=0) ** (1 / self.config.mdct_psd_to_p2m_pow)
-
-        return mdct_psd
+        return mdct
     
     @torch.no_grad()
     def scale_p2m_from_psd(self, p2m: torch.Tensor, p2m_psd: torch.Tensor):
@@ -258,13 +228,17 @@ class MDCT_PSD_Format(DualDiffusionFormat):
         return p2m * (p2m_psd + self.config.p2m_psd_eps) / self.config.p2m_psd_scale
     
     @torch.inference_mode()
-    def _p2m_to_img(self, p2m: torch.Tensor) -> torch.Tensor:
+    def _p2m_to_img(self, p2m: torch.Tensor, transposed: bool = False) -> torch.Tensor:
 
         p2m = p2m.reshape(p2m.shape[0], self.config.num_raw_channels,
             self.config.p2m_block_hop_length, self.config.p2m_block_hop_length, p2m.shape[2], p2m.shape[3])
-        #p2m = p2m.clip(min=0)**0.5
-        #p2m /= p2m.abs().mean(dim=(-1, -2), keepdim=True) + 1e-10
-        p2m = p2m.transpose(3, 4).flip(dims=(3,))
-        p2m = p2m.reshape(p2m.shape[0], p2m.shape[1], p2m.shape[2] * p2m.shape[3], p2m.shape[4] * p2m.shape[5])
+        
+        if transposed == True:
+            p2m = p2m.permute(0, 1, 4, 2, 5, 3)
+            p2m = p2m.reshape(p2m.shape[0], p2m.shape[1], p2m.shape[2] * p2m.shape[3], p2m.shape[4] * p2m.shape[5])
+            p2m = p2m.flip(dims=(2,))
+        else:    
+            p2m = p2m.transpose(3, 4).flip(dims=(3,))
+            p2m = p2m.reshape(p2m.shape[0], p2m.shape[1], p2m.shape[2] * p2m.shape[3], p2m.shape[4] * p2m.shape[5])
 
         return tensor_to_img(p2m)

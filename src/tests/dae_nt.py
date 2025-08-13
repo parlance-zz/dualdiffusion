@@ -29,8 +29,7 @@ import random
 import torch
 
 from modules.embeddings.clap import CLAP_Embedding
-from modules.unets.unet_edm2_ddec_mdct_d2 import DDec_MDCT_UNet_D2
-from modules.unets.unet_edm2_ddec_mdct_p2 import DDec_MDCT_UNet_P2
+from modules.unets.unet_edm2_ddec_mdct_p3 import DDec_MDCT_UNet_P3
 from modules.embeddings.clap import CLAP_Embedding
 from modules.daes.dae import DualDiffusionDAE
 from modules.formats.mdct_psd import MDCT_PSD_Format
@@ -59,25 +58,22 @@ def dae_test() -> None:
     print(f"Loading DualDiffusion model from '{model_path}'...")
     pipeline = DualDiffusionPipeline.from_pretrained(model_path, **model_load_options)
     dae: DualDiffusionDAE = getattr(pipeline, "dae", None)
-    ddec_p2m: DDec_MDCT_UNet_P2 = getattr(pipeline, "ddec_p2m", None)
-    ddec_mdct: DDec_MDCT_UNet_D2 = getattr(pipeline, "ddec", None)
+    ddec_p2m: DDec_MDCT_UNet_P3 = getattr(pipeline, "ddec", None)
     format: MDCT_PSD_Format = pipeline.format
     embedding: CLAP_Embedding = pipeline.embedding
 
     sample_rate = format.config.sample_rate
     
     if test_params.get("ddec_output", False) != True:
-        ddec_mdct = None
+        ddec_p2m = None
     
-    if ddec_mdct is None:
+    if ddec_p2m is None:
         last_global_step = dae.config.last_global_step
         output_path = os.path.join(model_path, "output", "dae", f"step_{last_global_step}")
     else:
-        last_global_step = ddec_mdct.config.last_global_step
+        last_global_step = ddec_p2m.config.last_global_step
         output_path = os.path.join(model_path, "output", "ddec", f"step_{last_global_step}")
 
-    last_global_step = ddec_p2m.config.last_global_step
-    output_path = os.path.join(model_path, "output", "ddec_p2m", f"step_{last_global_step}")
     os.makedirs(output_path, exist_ok=True)
 
     model_metadata = {"model_metadata": dict_str(pipeline.model_metadata)}
@@ -114,8 +110,9 @@ def dae_test() -> None:
         count = format.get_raw_crop_width(raw_length=min(length, audio_len))
         source_raw_sample = load_audio(file_path, count=count)
         input_raw_sample = source_raw_sample.unsqueeze(0).to(format.device)
-        input_mdct_psd = format.raw_to_mdct_psd(input_raw_sample)
-        input_p2m_psd = format.mdct_psd_to_p2m_psd(input_mdct_psd)
+        input_mdct = format.raw_to_mdct(input_raw_sample)
+        input_p2m = format.mdct_to_p2m(input_mdct)
+        input_p2m_psd = format.mdct_to_p2m_psd(input_mdct)
 
         safetensors_file_name = os.path.join(f"{os.path.splitext(filename)[0]}.safetensors")
         safetensors_file_path = os.path.join(dataset_path, safetensors_file_name)
@@ -162,29 +159,9 @@ def dae_test() -> None:
                 sample_shape=output_p2m_psd.shape,
                 x_ref=output_p2m_psd.to(dtype=ddec_p2m.dtype), module=ddec_p2m).float()
         
-        #output_p2m[:, 0] = 1
-        #output_p2m[:, 64] = 1
         output_p2m = format.unscale_p2m_from_psd(output_p2m, output_p2m_psd)
-        #output_mdct_psd = format.raw_to_mdct_psd(input_raw_sample)
-        
-        output_mdct_psd = format.p2m_to_mdct_psd(output_p2m)
-
-        if ddec_mdct is not None:
-            ddec_mdct_params = SampleParams(
-                seed=5000,
-                num_steps=200, length=audio_len, cfg_scale=0, input_perturbation=1, input_perturbation_offset=100,
-                use_heun=False, schedule="linear", rho=7, sigma_max=1.00000001, sigma_min=0.99999999, stereo_fix=0#0
-            )
-
-            output_mdct = pipeline.diffusion_decode(
-                ddec_mdct_params, audio_embedding=audio_embedding,
-                sample_shape=format.get_mdct_shape(raw_length=count),
-                x_ref=output_mdct_psd.to(dtype=ddec_mdct.dtype), module=ddec_mdct)
-            
-            output_mdct = format.unscale_mdct_from_psd(output_mdct.float(), output_mdct_psd.float())
-            output_raw = format.mdct_to_raw(output_mdct.float())
-        else:
-            output_raw = None
+        output_mdct = format.p2m_to_mdct(output_p2m)
+        output_raw = format.mdct_to_raw(output_mdct)
 
         print(f"input   mean/std: {input_p2m_psd.mean().item():.4} {input_p2m_psd.std().item():.4}")
         print(f"output  mean/std: {output_p2m_psd.mean().item():.4} {output_p2m_psd.std().item():.4}")
@@ -196,18 +173,17 @@ def dae_test() -> None:
             print(f"latents mean/std: {latents_mean:.4} {latents_std:.4}")
         
         metadata = {**model_metadata}
-        metadata["ddec_ms_metadata"] = dict_str(ddec_p2m_params.__dict__) if ddec_p2m is not None else "null"
-        metadata["ddec_mdct_metadata"] = dict_str(ddec_mdct_params.__dict__) if ddec_mdct is not None else "null"
+        metadata["ddec_metadata"] = dict_str(ddec_p2m_params.__dict__) if ddec_p2m is not None else "null"
 
         if latents is not None:
             save_img(dae.latents_to_img(latents), os.path.join(output_path, "1", f"step_{last_global_step}_{filename.replace(file_ext, '_latents.png')}"))
         
         if test_params.get("xref_output", False) == True:
-            save_img(format.psd_to_img(input_mdct_psd), os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_input_mdct_psd.png')}"))
-            if output_mdct_psd is not None:
-                save_img(format.psd_to_img(output_mdct_psd), os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_output_mdct_psd.png')}"))
-        save_img(format.psd_to_img(input_p2m_psd), os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_input_p2m_psd.png')}"))
-        save_img(format.psd_to_img(output_p2m_psd), os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_output_p2m_psd.png')}"))
+            save_img(format.psd_to_img(input_p2m_psd), os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_input_p2m_psd.png')}"))
+            save_img(format.psd_to_img(output_p2m_psd), os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_output_p2m_psd.png')}"))
+
+        #save_img(format.psd_to_img(input_p2m_psd), os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_input_p2m_psd.png')}"))
+        #save_img(format.psd_to_img(output_p2m_psd), os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_output_p2m_psd.png')}"))
 
         if output_raw is not None:
             output_flac_file_path = os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_decoded.flac')}")

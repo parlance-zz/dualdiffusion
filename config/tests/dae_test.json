@@ -1,12 +1,11 @@
 {
-    "model_name": "edm2_dae_d3a_v2_nt",
+    "model_name": "edm2_mdct_p2m_nt",
     "model_load_options": {
         "torch_dtype": "bfloat16",
         "device": "cuda",
         "load_checkpoints": true,
         "load_emas": {
-            "ddec": "ema_std0.1.safetensors",
-            "ddec_p2m": "ema_std0.1.safetensors"
+            "ddec": "ema_std0.05.safetensors"
         },
         "compile_options": {
             "fullgraph": true,
@@ -25,7 +24,7 @@
     "ddec_output": true,
     "xref_output": true,
     "add_random_test_samples": 8,
-    "random_test_samples_seed": 27,
+    "random_test_samples_seed": 28,
     "copy_sample_source_files": true,
     "test_samples": [
         "switch/Arcaea/_t_songs_ignotus.ogg.flac",
