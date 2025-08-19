@@ -44,7 +44,7 @@ def random_stereo_augmentation(x: torch.Tensor) -> torch.Tensor:
 class DiffusionDecoder_Trainer_Config(UNetTrainerConfig):
 
     loss_weight_pow: float = 0.25
-    loss_weight_min: float = 0.1
+    loss_weight_min: float = 0.15
 
     crop_edges: int = 2 # used to avoid artifacts due to mdct lapped blocks at beginning and end of sample
 
@@ -100,15 +100,19 @@ class DiffusionDecoder_Trainer(UNetTrainer):
         with torch.no_grad():
             
             mdct: torch.Tensor = self.format.raw_to_mdct(raw_samples, random_phase_augmentation=True).detach()
-            p2m: torch.Tensor = self.format.mdct_to_p2m(mdct).detach()
-            p2m_psd = self.format.mdct_to_p2m_psd(mdct).requires_grad_(False).detach()
-            p2m_scaled = self.format.scale_p2m_from_psd(p2m, p2m_psd).detach()
+            mdct_psd: torch.Tensor = self.format.raw_to_mdct_psd(raw_samples).requires_grad_(False).detach()
+            mdct_scaled = self.format.scale_mdct_from_psd(mdct, mdct_psd).detach()
+            #p2m: torch.Tensor = self.format.mdct_to_p2m(mdct).detach()
+            #p2m_psd = self.format.mdct_to_p2m_psd(mdct).requires_grad_(False).detach()
+            #p2m_scaled = self.format.scale_p2m_from_psd(p2m, p2m_psd).detach()
         
-        loss_weight = ((p2m_psd.clip(min=0) * self.format.p2m_mel_density) ** self.config.loss_weight_pow).requires_grad_(False).detach()
+        #loss_weight = ((p2m_psd.clip(min=0) * self.format.p2m_mel_density) ** self.config.loss_weight_pow).requires_grad_(False).detach()
+        loss_weight = ((mdct_psd.clip(min=0) * self.format.mdct_mel_density) ** self.config.loss_weight_pow).requires_grad_(False).detach()
 
         if self.trainer.config.enable_debug_mode == True:
             print("loss_weight min:", loss_weight.mean(dim=(1,2,3)).amin().item())
             print("loss_weight avg:", loss_weight.mean().item())
 
         loss_weight = (loss_weight / loss_weight.mean(dim=(1,2,3), keepdim=True).clip(min=self.config.loss_weight_min)).requires_grad_(False).detach()
-        return self.unet_train_batch(p2m_scaled, audio_embeddings, p2m_psd, loss_weight=loss_weight)
+        #return self.unet_train_batch(p2m_scaled, audio_embeddings, p2m_psd, loss_weight=loss_weight)
+        return self.unet_train_batch(mdct_scaled, audio_embeddings, mdct_psd, loss_weight=loss_weight)

@@ -36,34 +36,36 @@ from typing import Union, Optional, Literal
 import torch
 
 from modules.unets.unet import DualDiffusionUNet, DualDiffusionUNetConfig
-from modules.mp_tools import MPFourier, mp_cat, mp_silu, mp_sum, normalize, resample_3d
+from modules.mp_tools import mp_cat, mp_silu, mp_sum, normalize, resample_3d
 from modules.daes.dae_edm2_d3 import MPConv3D
 from modules.formats.format import DualDiffusionFormat
-from utils.dual_diffusion_utils import tensor_5d_to_4d, tensor_4d_to_5d
 
 
 @dataclass
-class DDec_MDCT_UNet_D2_Config(DualDiffusionUNetConfig):
+class DDec_MDCT_UNet_D3_Config(DualDiffusionUNetConfig):
 
-    in_channels:  int = 1
-    out_channels: int = 1
+    in_channels:  int = 64
+    out_channels: int = 64
+    in_channels_x_ref: int = 64
     in_channels_emb: int = 0
 
-    in_num_freqs: int = 1536
+    x_ref_scale: float = 0.819672
+    p2m_block_width: int = 8
+    in_num_freqs: int = 33
 
-    model_channels: int  = 32                # Base multiplier for the number of channels.
-    channel_mult: list[int]    = (1,2,3,4,5) # Per-resolution multipliers for the number of channels.
+    model_channels: int  = 1024                # Base multiplier for the number of channels.
+    channel_mult: list[int]    = (1,) # Per-resolution multipliers for the number of channels.
     double_midblock: bool      = False
     midblock_attn: bool        = False
     channels_per_head: int    = 64           # Number of channels per attention head.
-    num_layers_per_block: int = 3            # Number of resnet blocks per resolution.
+    num_layers_per_block: int = 5            # Number of resnet blocks per resolution.
     label_balance: float      = 0.5          # Balance between noise embedding (0) and class embedding (1).
     concat_balance: float     = 0.5          # Balance between skip connections (0) and main path (1).
     res_balance: float        = 0.3          # Balance between main branch (0) and residual branch (1).
     attn_balance: float       = 0.3          # Balance between main branch (0) and self-attention (1).
-    attn_levels: list[int]    = ()        # List of resolution levels to use self-attention.
-    mlp_multiplier: int    = 1               # Multiplier for the number of channels in the MLP.
-    mlp_groups: int        = 1               # Number of groups for the MLPs.
+    attn_levels: list[int]    = ()           # List of resolution levels to use self-attention.
+    mlp_multiplier: int    = 2               # Multiplier for the number of channels in the MLP.
+    mlp_groups: int        = 8               # Number of groups for the MLPs.
     add_constant_channel: bool = True
 
 class Block(torch.nn.Module):
@@ -99,9 +101,9 @@ class Block(torch.nn.Module):
         self.clip_act = clip_act
 
         self.conv_res0 = MPConv3D(out_channels if flavor == "enc" else in_channels,
-                                out_channels * mlp_multiplier, kernel=(1,5,3), groups=mlp_groups)
+                        out_channels * mlp_multiplier, kernel=(1,3,3), groups=mlp_groups)
 
-        self.conv_res1 = MPConv3D(out_channels * mlp_multiplier, out_channels, kernel=(1,5,3), groups=mlp_groups)
+        self.conv_res1 = MPConv3D(out_channels * mlp_multiplier, out_channels, kernel=(1,3,3), groups=mlp_groups)
 
         #if in_channels != out_channels or mlp_groups > 1:
         #    self.conv_skip = MPConv3D(in_channels, out_channels, kernel=(1,1,1), groups=1)
@@ -110,17 +112,11 @@ class Block(torch.nn.Module):
         self.conv_skip = MPConv3D(in_channels, out_channels, kernel=(2,1,1), groups=1)
 
         if use_attention == True:
-            self.attn_qkv = MPConv3D(out_channels, out_channels * 3, kernel=(1,1,1))
-            self.attn_proj = MPConv3D(out_channels, out_channels, kernel=(1,1,1))
+            raise NotImplementedError("Self-attention is not implemented in this block.")
         
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         
-        if self.resample_mode == "down":
-            x = torch.nn.functional.avg_pool3d(x, kernel_size=(1,4,1))
-        elif self.resample_mode == "up":
-            x = torch.nn.functional.interpolate(x, scale_factor=(1,4,1), mode="nearest")
-
-        #x = resample_3d(x, mode=self.resample_mode)
+        x = resample_3d(x, mode=self.resample_mode)
 
         if self.flavor == "enc":
             if self.conv_skip is not None:
@@ -139,51 +135,18 @@ class Block(torch.nn.Module):
         x = mp_sum(x, y, t=self.res_balance)
         
         if self.use_attention == True:
-            qkv: torch.Tensor = self.attn_qkv(x)
-            
-            #"""
-            #                 b  z  w, c, h
-            qkv = qkv.permute(0, 2, 4, 1, 3)
-            qkv = qkv.reshape(qkv.shape[0]*qkv.shape[1]*qkv.shape[2], self.num_heads, -1, 3, qkv.shape[4])
-            q, k, v = normalize(qkv, dim=2).unbind(3)
-
-            y = torch.nn.functional.scaled_dot_product_attention(q.transpose(-1, -2),
-                                                                 k.transpose(-1, -2),
-                                                                 v.transpose(-1, -2)).transpose(-1, -2)
-            
-            #             b         , z         , w         , c         , h
-            y = y.reshape(x.shape[0], x.shape[2], x.shape[4], x.shape[1], x.shape[3])
-            #             b, c, z, h, w
-            y = y.permute(0, 3, 1, 4, 2).contiguous(memory_format=torch.channels_last_3d)
-            #"""
-
-            """
-            #                 b  z  w, h, c
-            qkv = qkv.permute(0, 2, 4, 3, 1)
-            qkv = qkv.reshape(qkv.shape[0]*qkv.shape[1]*qkv.shape[2], self.num_heads, qkv.shape[4], -1, 3)
-            q, k, v = normalize(qkv, dim=3).unbind(4)
-
-            y = torch.nn.functional.scaled_dot_product_attention(q,k,v)
-            
-            #          b         , z         , w         , h         , c
-            y = y.view(x.shape[0], x.shape[2], x.shape[4], x.shape[3], x.shape[1])
-            #             b, c, z, h, w
-            y = y.permute(0, 4, 1, 3, 2).contiguous(memory_format=torch.channels_last_3d)
-            """
-
-            y = self.attn_proj(mp_silu(y))
-            x = mp_sum(x, y, t=self.attn_balance)
+            raise NotImplementedError("Self-attention is not implemented in this block.")
 
         if self.clip_act is not None:
             x = x.clip_(-self.clip_act, self.clip_act)
 
         return x
 
-class DDec_MDCT_UNet_D2(DualDiffusionUNet):
+class DDec_MDCT_UNet_D3(DualDiffusionUNet):
 
     supports_channels_last: Union[bool, Literal["3d"]] = "3d"
 
-    def __init__(self, config: DDec_MDCT_UNet_D2_Config) -> None:
+    def __init__(self, config: DDec_MDCT_UNet_D3_Config) -> None:
         super().__init__()
         self.config = config
 
@@ -202,7 +165,7 @@ class DDec_MDCT_UNet_D2(DualDiffusionUNet):
 
         # Encoder.
         self.enc = torch.nn.ModuleDict()
-        cout = config.in_channels + 1 + int(config.add_constant_channel)
+        cout = config.in_channels + config.in_channels_x_ref + int(config.add_constant_channel)
 
         for level, channels in enumerate(cblock):
             
@@ -277,9 +240,15 @@ class DDec_MDCT_UNet_D2(DualDiffusionUNet):
             c_out = sigma * self.config.sigma_data / (sigma ** 2 + self.config.sigma_data ** 2).sqrt()  # 1.414
             c_in = 1 / (self.config.sigma_data ** 2 + sigma ** 2).sqrt()                                # 0.707
 
-            #x_ref = embeddings * tensor_4d_to_5d(x_ref, 1).to(dtype=torch.bfloat16)
-            x_ref = tensor_4d_to_5d(x_ref, 1).to(dtype=torch.bfloat16)
-            x = (c_in * tensor_4d_to_5d(x_in, self.config.in_channels)).to(dtype=torch.bfloat16)
+            b, c, h, w, = x_in.shape
+            bh = bw = self.config.p2m_block_width
+            z = c // (bh*bw)
+
+            x_ref = x_ref.view(b, z, bh*bw, h, w).permute(0, 2, 1, 3, 4).contiguous(memory_format=self.memory_format)
+            x_in = x_in.view(b, z, bh*bw, h, w).permute(0, 2, 1, 3, 4).contiguous(memory_format=self.memory_format)
+
+            x_ref = (x_ref * self.config.x_ref_scale).to(dtype=torch.bfloat16)
+            x = (c_in * x_in).to(dtype=torch.bfloat16)
 
         # Encoder.
         inputs = (x, x_ref, torch.ones_like(x[:, :1])) if self.config.add_constant_channel else (x, x_ref)
@@ -297,7 +266,8 @@ class DDec_MDCT_UNet_D2(DualDiffusionUNet):
             x = block(x)
 
         x: torch.Tensor = self.conv_out(x, gain=self.out_gain)
-        D_x: torch.Tensor = c_skip * x_in.float().unsqueeze(1) + c_out * x.float()
+        D_x: torch.Tensor = c_skip * x_in.float() + c_out * x.float()
 
-        return tensor_5d_to_4d(D_x)
+        D_x = D_x.permute(0, 2, 1, 3, 4).contiguous().view(b, c, h, w)
+        return D_x
     

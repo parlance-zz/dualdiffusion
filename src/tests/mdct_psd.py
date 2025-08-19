@@ -112,7 +112,10 @@ def mdct_psd_format_test() -> None:
 
         mdct = format.raw_to_mdct(raw_sample)
         raw_sample_mdct = format.mdct_to_raw(mdct)
-
+        mdct_psd = format.raw_to_mdct_psd(raw_sample)
+        mdct_scaled = format.scale_mdct_from_psd(mdct, mdct_psd)
+        mdct_unscaled = format.unscale_mdct_from_psd(mdct_scaled, mdct_psd)
+        
         p2m = format.mdct_to_p2m(mdct)
         p2m_psd = format.mdct_to_p2m_psd(mdct)
         p2m_scaled = format.scale_p2m_from_psd(p2m, p2m_psd)
@@ -130,6 +133,8 @@ def mdct_psd_format_test() -> None:
             "raw_sample_mdct_std": raw_sample_mdct.std(),
             "raw_sample_mdct_p2m_std": raw_sample_mdct_p2m.std(),
             "mdct_std": mdct.std(),
+            "mdct_scaled_std": mdct_scaled.std(),
+            "mdct_unscaled_std": mdct_unscaled.std(),
             "mdct_p2m_std": mdct_p2m.std(),
             "p2m_mean": p2m.mean(),
             "p2m_std": p2m.std(),
@@ -189,7 +194,7 @@ def mdct_psd_format_test() -> None:
     print("\nAverage stats:")
     print(dict_str(stat_logger.get_logs()))
 
-    print(cfg.p2m_img_transposed)
+
 if __name__ == "__main__":
 
     init_cuda()

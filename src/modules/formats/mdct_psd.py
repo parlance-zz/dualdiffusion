@@ -44,6 +44,8 @@ class MDCT_PSD_FormatConfig(DualDiffusionFormatConfig):
     width_alignment: int    = 32768
 
     raw_to_mdct_scale: float = 278.47124 # for stereo audio @ -20 lufs
+    mdct_psd_eps: float = 1e-2
+    mdct_psd_scale: float = 1.0
     mdct_window_len: int = 512
     mdct_window_func: Literal["sin", "kbd", "vorbis"] = "sin"
 
@@ -72,7 +74,7 @@ class MDCT_PSD_FormatConfig(DualDiffusionFormatConfig):
     
     @property
     def p2m_num_frequencies(self) -> int:
-        return self.mdct_num_frequencies // self.p2m_block_hop_length + 1
+        return self.mdct_num_frequencies // self.p2m_block_hop_length# + 1
     
     @property
     def p2m_block_hop_length(self) -> int:
@@ -161,6 +163,14 @@ class MDCT_PSD_Format(DualDiffusionFormat):
         raw_samples = self.imdct(mdct).real.contiguous()
         
         return raw_samples
+
+    @torch.no_grad()
+    def scale_mdct_from_psd(self, mdct: torch.Tensor, mdct_psd: torch.Tensor):
+        return mdct / (mdct_psd + self.config.mdct_psd_eps) * self.config.mdct_psd_scale
+
+    @torch.no_grad()
+    def unscale_mdct_from_psd(self, mdct: torch.Tensor, mdct_psd: torch.Tensor):
+        return mdct * (mdct_psd + self.config.mdct_psd_eps) / self.config.mdct_psd_scale
 
     @torch.inference_mode()
     def psd_to_img(self, psd: torch.Tensor, transpose_p2m: bool = False) -> torch.Tensor:

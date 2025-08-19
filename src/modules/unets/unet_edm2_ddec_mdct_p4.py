@@ -73,24 +73,27 @@ class MPConv2D(torch.nn.Module):
         if weight.ndim == 2:
             return x @ weight.t()
         
-        """
+        groups = self.groups
+
         b, c, bh, bw, h, w = x.shape
-        if self.space == True and False:
+        if self.space == True:
             x = x.permute(0, 2, 3, 1, 4, 5).reshape(b * bh * bw, c, h, w)
+            #x = x.view(b, c * bh * bw, h, w)
+            #groups *= bh * bw
         else:
             x = x.permute(0, 4, 5, 1, 2, 3).reshape(b * h * w, c, bh, bw)
-        """
-        out: torch.Tensor = torch.nn.functional.conv2d(x, weight, padding=(weight.shape[-2]//2, weight.shape[-1]//2), groups=self.groups)
 
-        """
+        out: torch.Tensor = torch.nn.functional.conv2d(x, weight, padding=(weight.shape[-2]//2, weight.shape[-1]//2), groups=groups)
         c = self.out_channels
-        if self.space == True and False:
+
+        if self.space == True:
             out = out.view(b, bh, bw, c, h, w).permute(0, 3, 1, 2, 4, 5)
+            #print(out.shape, b, c, bh, bw, h, w)
+            #out = out.view(b, c, bh, bw, h, w)
         else:
             out = out.view(b, h, w, c, bh, bw).permute(0, 3, 4, 5, 1, 2)
-        """
-
-        return out
+        
+        return out#.contiguous()
 
     @torch.no_grad()
     def normalize_weights(self) -> None:
@@ -105,23 +108,24 @@ class DDec_MDCT_UNet_P4_Config(DualDiffusionUNetConfig):
 
     in_channels:  int = 2
     out_channels: int = 2
+    x_ref_channels: int = 2
     in_channels_emb: int = 0
 
     p2m_block_width: int = 8
     in_num_freqs: int = 33
 
-    model_channels: int  = 64               # Base multiplier for the number of channels.
-    channel_mult: list[int]    = (1,)       # Per-resolution multipliers for the number of channels.
+    model_channels: int  = 128               # Base multiplier for the number of channels.
+    channel_mult: list[int]    = (1,)    # Per-resolution multipliers for the number of channels.
     double_midblock: bool      = False
     midblock_attn: bool        = False
     channels_per_head: int    = 64           # Number of channels per attention head.
-    num_layers_per_block: int = 5            # Number of resnet blocks per resolution.
+    num_layers_per_block: int = 3            # Number of resnet blocks per resolution.
     label_balance: float      = 0.5          # Balance between noise embedding (0) and class embedding (1).
     concat_balance: float     = 0.5          # Balance between skip connections (0) and main path (1).
     res_balance: float        = 0.3          # Balance between main branch (0) and residual branch (1).
     attn_balance: float       = 0.3          # Balance between main branch (0) and self-attention (1).
     attn_levels: list[int]    = ()           # List of resolution levels to use self-attention.
-    mlp_multiplier: int    = 2               # Multiplier for the number of channels in the MLP.
+    mlp_multiplier: int    = 1               # Multiplier for the number of channels in the MLP.
     mlp_groups: int        = 1               # Number of groups for the MLPs.
     add_constant_channel: bool = True
 
@@ -131,7 +135,7 @@ class Block(torch.nn.Module):
         level: int,                             # Resolution level.
         in_channels: int,                       # Number of input channels.
         out_channels: int,                      # Number of output channels.
-        num_freqs: int,
+        block_width: int,
         flavor: Literal["enc", "dec"] = "enc",
         resample_mode: Literal["keep", "up", "down"] = "keep",
         dropout: float         = 0.,       # Dropout probability.
@@ -146,7 +150,7 @@ class Block(torch.nn.Module):
         super().__init__()
 
         self.level = level
-        self.num_freqs = num_freqs
+        self.block_width = block_width
         self.use_attention = use_attention
         self.num_heads = out_channels // channels_per_head
         self.out_channels = out_channels
@@ -228,11 +232,11 @@ class DDec_MDCT_UNet_P4(DualDiffusionUNet):
 
         # Encoder.
         self.enc = torch.nn.ModuleDict()
-        cout = config.in_channels * 2 + int(config.add_constant_channel)
+        cout = config.in_channels + config.x_ref_channels + int(config.add_constant_channel)
 
         for level, channels in enumerate(cblock):
             
-            num_freqs = config.in_num_freqs // 2**level
+            block_width = config.p2m_block_width // 2**level
 
             if level == 0:
                 cin = cout
@@ -240,13 +244,13 @@ class DDec_MDCT_UNet_P4(DualDiffusionUNet):
                 self.enc[f"conv_in0"] = MPConv2D(cin, cout, kernel=(3,3), space=True)
                 self.enc[f"conv_in1"] = MPConv2D(cout, cout, kernel=(3,3), space=False)
             else:
-                self.enc[f"block{level}_down"] = Block(level, cout, cout, num_freqs,
+                self.enc[f"block{level}_down"] = Block(level, cout, cout, block_width,
                     use_attention=level in config.attn_levels, flavor="enc", resample_mode="down", **block_kwargs)
             
             for idx in range(config.num_layers_per_block):
                 cin = cout
                 cout = channels
-                self.enc[f"block{level}_layer{idx}"] = Block(level, cin, cout, num_freqs,
+                self.enc[f"block{level}_layer{idx}"] = Block(level, cin, cout, block_width,
                     use_attention=level in config.attn_levels, flavor="enc", **block_kwargs)
 
         # Decoder.
@@ -255,22 +259,22 @@ class DDec_MDCT_UNet_P4(DualDiffusionUNet):
         
         for level, channels in reversed(list(enumerate(cblock))):
             
-            num_freqs = config.in_num_freqs // 2**level
+            block_width = config.p2m_block_width // 2**level
 
             if level == len(cblock) - 1:
-                self.dec[f"block{level}_in0"] = Block(level, cout, cout, num_freqs,
+                self.dec[f"block{level}_in0"] = Block(level, cout, cout, block_width,
                     use_attention=config.midblock_attn, flavor="dec", **block_kwargs)
                 if config.double_midblock == True:
-                    self.dec[f"block{level}_in1"] = Block(level, cout, cout, num_freqs,
+                    self.dec[f"block{level}_in1"] = Block(level, cout, cout, block_width,
                         use_attention=config.midblock_attn, flavor="dec", **block_kwargs)
             else:
-                self.dec[f"block{level}_up"] = Block(level, cout, cout, num_freqs,
+                self.dec[f"block{level}_up"] = Block(level, cout, cout, block_width,
                     use_attention=level in config.attn_levels, flavor="dec", resample_mode="up", **block_kwargs)
 
             for idx in range(config.num_layers_per_block + 1):
                 cin = cout + skips.pop()
                 cout = channels
-                self.dec[f"block{level}_layer{idx}"] = Block(level, cin, cout, num_freqs,
+                self.dec[f"block{level}_layer{idx}"] = Block(level, cin, cout, block_width,
                     use_attention=level in config.attn_levels, flavor="dec", **block_kwargs)
                 
         self.out_gain = torch.nn.Parameter(torch.zeros([]))
@@ -317,9 +321,6 @@ class DDec_MDCT_UNet_P4(DualDiffusionUNet):
         inputs = (x, x_ref, torch.ones_like(x[:, :1])) if self.config.add_constant_channel else (x, x_ref)
         x = torch.cat(inputs, dim=1)
 
-        _b, _c, _bh, _bw, _h, _w = x.shape
-        x = x.permute(0, 4, 5, 1, 2, 3).reshape(_b * _h * _w, _c, _bh, _bw)
-
         skips = []
         for name, block in self.enc.items():
             x = block(x) if "conv" in name else block(x)
@@ -335,10 +336,6 @@ class DDec_MDCT_UNet_P4(DualDiffusionUNet):
 
         x: torch.Tensor = self.conv_out0(x)
         x: torch.Tensor = self.conv_out1(x, gain=self.out_gain)
-
-        _c = x.shape[1]
-        x = x.view(_b, _h, _w, _c, _bh, _bw).permute(0, 3, 4, 5, 1, 2)
-
         D_x: torch.Tensor = c_skip * x_in.float() + c_out * x.float()
 
         return D_x.view(b, c, h, w)

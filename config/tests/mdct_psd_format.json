@@ -1,8 +1,8 @@
 {
     "device": "cuda",
-    "add_random_test_samples": 0,
-    "save_output": true,
-    "p2m_img_transposed": true,
+    "add_random_test_samples": 500,
+    "save_output": false,
+    "p2m_img_transposed": false,
     
     "test_sample_verbose": false,
     "test_samples": [
@@ -23,12 +23,14 @@
         "default_raw_length": 1409024,
         "width_alignment": 32768,
 
-        "raw_to_mdct_scale": 278.47124,
-        "mdct_window_len": 512,
+        "raw_to_mdct_scale": 680,
+        "mdct_psd_eps": 1e-2,
+        "mdct_psd_scale": 1.197,
+        "mdct_window_len": 3072,
         "mdct_window_func": "sin",
 
-        "mdct_to_p2m_scale": 30.50252,
-        "p2m_psd_scale": 1.461213,
+        "mdct_to_p2m_scale": 5.65518,
+        "p2m_psd_scale": 1.491213,
         "p2m_psd_eps": 1e-3,
         "p2m_use_midside_transform": false,
         "p2m_block_width": 16,

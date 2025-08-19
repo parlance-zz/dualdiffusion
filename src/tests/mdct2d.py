@@ -58,15 +58,16 @@ if __name__ == "__main__":
     print("tformed_shape", tformed.shape)
 
     tformed_abs = tformed.abs()
-    tformed /= tformed_abs + 1e-4
+    tformed = tformed.imag * 1j
+    #tformed /= tformed_abs + 1e-4
 
     #tformed_abs_dc = tformed_abs[:, :, 0, 0, :, :]
-    quantized_abs, offsets = quantize_tensor(tformed_abs ** 0.47, 64)
-    dequantized_abs = dequantize_tensor(quantized_abs, offsets) ** (1 / 0.47)
+    #quantized_abs, offsets = quantize_tensor(tformed_abs ** 0.47, 64)
+    #dequantized_abs = dequantize_tensor(quantized_abs, offsets) ** (1 / 0.47)
     #dequantized_abs[:, :, 0, 0, :, :] = tformed_abs_dc
-    #dequantized_abs = tformed_abs
+    dequantized_abs = tformed_abs
 
-    tformed *= dequantized_abs + 1e-4
+    #tformed *= dequantized_abs + 1e-4
 
     untformed = imdct2(tformed, window)
     save_img(tensor_to_img(untformed, recenter=False, rescale=False), os.path.join(output_path, "test_img_untformed.png"))
