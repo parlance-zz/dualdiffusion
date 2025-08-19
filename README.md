@@ -1,16 +1,14 @@
 # Dual Diffusion
 Dual Diffusion is a generative diffusion model for music. This model and the code in this repository is still a work-in-progress.
 
-The current model uses a custom architecture based on the [EDM2](https://github.com/NVlabs/edm2) UNet and a custom 2-stage VAE design. The model uses [CLAP](https://github.com/LAION-AI/CLAP) audio embeddings for conditioning and is being trained on music from a wide variety of video games.
+The current model uses a custom architecture based on the [EDM2](https://github.com/NVlabs/edm2) UNet and a custom 2-stage VAE design with a diffusion decoder. The model uses [CLAP](https://github.com/LAION-AI/CLAP) audio embeddings for conditioning and is trained on video game music from the mid-90s to present day.
 
 You can hear demo audio from the model in various stages of training / development [here](https://www.g-diffuser.com/dualdiffusion).
-
-SNES game music was used as my dataset for the first year of development. The SNES dataset is comprised of ~20,000 samples of lengths between 1 and 3 minutes. I used the each game as a class label for conditioning, which means you could choose a game (or a weighted combination of multiple games) to generate new music with the appropriate instruments and style. The number of examples per class / game was anywhere from ~5 to ~50 and all generated samples combining more than 1 game were "zero-shot".
 
 I started this project in August/2023 with the intention of achieving 3 goals:
 * Familiarize myself with every component of modern diffusion models in both inference and training
 * Train a model from scratch that is able to generate music that I would actually want to listen to
-* Do the above using only a single consumer GPU (4090)
+* Do the above using only desktop GPU hardware
 
 The model has changed substantially over the course of development in the last 18 months.
 
@@ -84,15 +82,26 @@ The model has changed substantially over the course of development in the last 1
    * For this new dataset I wanted the model to better understand natural dynamics / loudness variation so I spent quite a bit of time making the dataset pre-processing / normalization more robust to avoid
    the need for forced normalization anywhere further down the line in the model pipeline.
 
-* In January/2025 I started working on new VAE architectures to better suit the qualities of the new dataset with realistic audio and un-normalized dynamics.
+* In January/2025 I started working on new VAE architectures to better suit the qualities of the new dataset with realistic audio and improved dynamics.
    * In December/2023 I noted that certain VAE design and training choices can result in high quality audio, but at the cost of the latent diffusion model performance owing to chaotic latents that are difficult to interpret. For the new VAE I wanted to maximize latent interpretability as much as possible, even at the expense of audio quality.
-   * I found that training a VAE with plain MSE loss results in very interpretable latents. The latent diffusion model performs significantly better when using these latents as all the information about the fine details has been removed. The audio quality is poor as expected.
+   * I found that training a VAE with plain MSE loss results in very interpretable latents (albeit only if the encoder training is frozen after a modest number of training steps). The latent diffusion model performs significantly better when using these latents as all the information about the fine details has been removed. The audio quality is poor as expected.
    * I found that it is possible to remedy the audio quality problem by training a secondary diffusion model to act as the 2nd stage in a 2-stage VAE decoding process: The 1st stage VAE encodes and decodes the latents
    to a blurry audio spectrogram - at this point all fine detail has been lost. The 2nd stage is a standard diffusion model that uses the blurry audio spectrogram as conditioning in a similar way to most inpainting models (although in this case nothing is masked).
    * The diffusion model decoder is extremely good at accurately reconstructing these highly localized fine details and the resulting audio quality far exceeds what I was able to achieve with any single stage VAE and complex loss functions.
 
+* In March/2025 I continued to experiment with VAE and diffusion decoder designs to improve audio quality.
+   * Instead of using a diffusion decoder to improve the mel-scale spectrogram for FGLA I found it is possible to use the mel-spec as conditioning for a diffusion decoder that operates directly on an MDCT of the raw audio. Because the mel-scale and linear-scale frequency resolutions are different, the mel-scale spectrogram is first upsampled to a high resolution linear-frequency scale spectrogram, and then subsequently chunked into channels to match the frequency resolution of the MDCT.
+   * The performance of the MDCT diffusion decoder can be further improved by reducing the range of noise scales in the noise schedule. This can be done without sacrificing linearity by scaling MDCT coefficients by a factor inversely proportional to their wavelength. This rescaling is then inverted when the MDCT is decoded to recover the original frequency response.
+   * To further improve the interpretability of the latents I starting experimenting with an encoder that operates without downsampling. Only after projecting to the final latent channel count are the latents downsampled (using average pooling) to the desired latent resolution. This effectively "supersamples" the latents and guarantees sub-latent-pixel shift equivariance without the need for any complex augmentations (as in EQ-VAE) or expensive filtering operations in the encoder (as in StyleGAN3).
+   * The supersampled latent encoder works extremely well with *2D* multi-scale power-spectral-density loss with appropriate weighting for each frequency (inversely proportional to its wavelength). Prime-sized block widths with randomized offsets and a flat-top window are used for best results.
+
+* In July/2025 I began training a larger model using all the above improvements (U3).
+
 
 Some additional notes:
+* The web UI is currently broken because of the move from class label to CLAP conditioning back in November/2024. I'll fix it at some point but my top priority is developing the model itself. Batch sampling is still available from a JSON config file.
+* Some areas of the codebase need to be cleaned up and refactored / de-duplicated. Due to the experimental nature of the project the need for rapid iteration outweighs my desire for perfectly clean code.
+* SNES game music was used as my dataset for the first year of development (2023). The SNES dataset was comprised of ~20,000 samples of lengths between 1 and 3 minutes. I used the each game as a class label for conditioning, which means you could choose a game (or a weighted combination of multiple games) to generate new music with the appropriate instruments and style. The number of examples per class / game was anywhere from ~5 to ~50 and all generated samples combining more than 1 game were "zero-shot".
 * The training code supports multiple GPUs and distributed training through huggingface accelerate, currently logging is to tensorboard.
 * The dataset pre/post-processing code is included in this repository which includes everything needed to train a new model on your own data
 * All the code in this repository is tested to work on both Windows and Linux platforms, although performance is significantly better on Linux
