@@ -54,6 +54,13 @@ def custom_collate(input_batch: list[dict[str, torch.Tensor]]) -> dict[str, torc
             output_batch[datatype] = torch.stack(data) 
     return output_batch
 
+def resolve_absolute_path(example, data_dir: str):
+    if example["file_name"] is not None:
+        example["file_name"] = os.path.join(data_dir, example["file_name"])
+    if example["latents_file_name"] is not None:
+        example["latents_file_name"] = os.path.join(data_dir, example["latents_file_name"])
+    return example
+
 @dataclass
 class DatasetConfig:
 
@@ -111,16 +118,11 @@ class DualDiffusionDataset(torch.nn.Module):
         return self.dataset_dict[split]
 
     def preprocess_dataset(self) -> None:
-        
-        def resolve_absolute_path(example):
-            if example["file_name"] is not None:
-                example["file_name"] = os.path.join(self.config.data_dir, example["file_name"])
-            if example["latents_file_name"] is not None:
-                example["latents_file_name"] = os.path.join(self.config.data_dir, example["latents_file_name"])
-            return example
-        
-        self.dataset_dict = self.dataset_dict.map(resolve_absolute_path)
-        
+
+        self.dataset_dict = self.dataset_dict.map(resolve_absolute_path,
+            fn_kwargs={"data_dir": self.config.data_dir}, num_proc=self.config.num_proc,
+            load_from_cache_file=False, keep_in_memory=True)
+
         def invalid_sample_filter(example):
             
             if self.config.filter_unnormalized_samples == True:
@@ -147,7 +149,9 @@ class DualDiffusionDataset(torch.nn.Module):
             return True
 
         pre_filter_n_samples = {split: len(ds) for split, ds in self.dataset_dict.items()}
-        if self.config.filter_invalid_samples: self.dataset_dict = self.dataset_dict.filter(invalid_sample_filter)
+        if self.config.filter_invalid_samples:
+            self.dataset_dict = self.dataset_dict.filter(invalid_sample_filter,
+                load_from_cache_file=False, keep_in_memory=True)
         self.num_filtered_samples = {split: (pre_filter_n_samples[split] - len(ds)) for split, ds in self.dataset_dict.items()}
     
     @torch.no_grad()
