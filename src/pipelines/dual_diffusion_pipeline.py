@@ -734,8 +734,8 @@ class DualDiffusionPipeline(torch.nn.Module):
             debug_info["cfg_output_mean"].append(cfg_model_output.mean().item())
             debug_info["cfg_output_std"].append(cfg_model_output.std().item())
 
-            #progress_bar.update(1)
-        #progress_bar.close()
+            progress_bar.update(1)
+        progress_bar.close()
 
         debug_info["final_sample_mean"] = sample.mean().item()
         debug_info["final_sample_std"] = sample.std().item()
