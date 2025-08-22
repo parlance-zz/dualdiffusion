@@ -669,11 +669,17 @@ class DualDiffusionPipeline(torch.nn.Module):
             effective_cfg_scale = params.cfg_scale
 
             old_sigma_next = sigma_next
-            ipo = np.log(sigma_next * sigma_curr) / 2 + params.input_perturbation_offset
-            if ipo < 0:
+            #ipo = np.log(sigma_next * sigma_curr) / 2 + params.input_perturbation_offset
+            ipo = np.log(sigma_curr) + params.input_perturbation_offset
+            if ipo < 0 and False:
                 effective_input_perturbation = 0
             else:
-                effective_input_perturbation = float(params.input_perturbation * (1 - 1 / np.cosh(ipo))**2)
+                #effective_input_perturbation = float(params.input_perturbation * (1 - 1 / np.cosh(ipo))**2)
+                #effective_input_perturbation = float(params.input_perturbation * (1 / np.cosh(ipo))**2)
+                effective_input_perturbation = float(params.input_perturbation * (1 / np.cosh(ipo))**1)
+            
+            #effective_cfg_scale = (effective_cfg_scale - 1) * (effective_input_perturbation / (params.input_perturbation + 1e-15)) + 1
+            #print(f"{i+1}/{params.num_steps} effective input perturbation: {(effective_input_perturbation / (params.input_perturbation + 1e-15)):.3f}  sigma: {sigma_curr:.3f}")#  cfg scale: {effective_cfg_scale:.3f}")
             sigma_next *= (1 - (max(min(effective_input_perturbation, 1), 0)))
             effective_input_perturbation = 1 - sigma_next / old_sigma_next
             effective_input_perturbation = old_sigma_next - sigma_next
@@ -681,6 +687,8 @@ class DualDiffusionPipeline(torch.nn.Module):
 
             model_output = unet(input_sample, input_sigma, self.format, unet_class_embeddings, input_ref_sample).float()
             if unet_class_embeddings is not None:
+                #dist = (model_output[params.batch_size:] - model_output[:params.batch_size]).square().mean().sqrt()
+                #print(f"{i+1}/{params.num_steps} cfg dist: {dist.item():.3f}  delta_sigma: {(sigma_curr - old_sigma_next):.3f}")
                 cfg_model_output = model_output[params.batch_size:].lerp(model_output[:params.batch_size], effective_cfg_scale)
             else:
                 cfg_model_output = model_output
@@ -726,8 +734,8 @@ class DualDiffusionPipeline(torch.nn.Module):
             debug_info["cfg_output_mean"].append(cfg_model_output.mean().item())
             debug_info["cfg_output_std"].append(cfg_model_output.std().item())
 
-            progress_bar.update(1)
-        progress_bar.close()
+            #progress_bar.update(1)
+        #progress_bar.close()
 
         debug_info["final_sample_mean"] = sample.mean().item()
         debug_info["final_sample_std"] = sample.std().item()

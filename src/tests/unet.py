@@ -63,6 +63,8 @@ class UNetTestConfig:
     random_test_samples_seed: Optional[int] = None
     test_samples: Optional[list[int]]       = None
 
+    length_override: Optional[int] = None
+
 @torch.inference_mode()
 def unet_test() -> None:
 
@@ -126,6 +128,8 @@ def unet_test() -> None:
     if cfg.shuffle_test_samples == True:
         random.shuffle(cfg.test_samples)
 
+    #cfg.test_samples = cfg.test_samples * 100
+
     for i, filename in enumerate(cfg.test_samples):
         
         print(f"\nfile {i+1}/{len(cfg.test_samples)}: {filename}")
@@ -140,7 +144,7 @@ def unet_test() -> None:
             clap_audio_embeddings = None
 
         audio_full_path = os.path.join(config.DATASET_PATH, filename)
-        if os.path.isfile(audio_full_path) == False:
+        if os.path.isfile(audio_full_path) == False: 
             audio_full_path = os.path.join(config.DEBUG_PATH, filename)
         if os.path.isfile(audio_full_path) == False:
             print(f"Error: Could not find {filename}, skipping...")
@@ -161,6 +165,11 @@ def unet_test() -> None:
         cfg.unet_params.seed = base_seed + i
         cfg.unet_params.prompt = filename
         
+        #cfg.unet_params.seed = 10000
+        #u, v = i % 10, i // 10
+        #cfg.unet_params.cfg_scale = 2 + u * 0.5
+        #cfg.unet_params.input_perturbation_offset = 0.3 + v * 0.1
+
         unet_output = pipeline.diffusion_decode(cfg.unet_params,
             audio_embedding=audio_embedding, module=pipeline.unet).float()
         if dae is not None:
