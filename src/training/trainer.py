@@ -846,6 +846,7 @@ class DualDiffusionTrainer:
             else: self.epoch += 1
 
         # hurray!
+        self.save_checkpoint()
         self.logger.info(f"Reached max train steps ({self.config.max_train_steps}) - Training complete")
         self.accelerator.end_training()
 
