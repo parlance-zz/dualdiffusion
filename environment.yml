@@ -6,7 +6,7 @@ dependencies:
   - python=3.11   # 3.11 req is for laion-clap, otherwise 3.12+
   - nvidia::cudatoolkit
   - pip
-  - numpy==1.23.5 # 1.23.5 req is for laion-clap, otherwise *
+  - numpy         # 1.23.5 req is for laion-clap, otherwise *
   - librosa       # faster backend for torchaudio i/o
   - pip:
     - torch

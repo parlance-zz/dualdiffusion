@@ -56,16 +56,26 @@ def resample_1d(x: torch.Tensor, mode: Literal["keep", "down", "up"] = "keep") -
         return torch.lerp(x[..., ::2], x[..., 1::2], 0.5) # should be multiplied by 2**0.5 to be magnitude preserving,
     elif mode == 'up':
         return torch.repeat_interleave(x, 2, dim=-1)
-    
-def resample_2d(x: torch.Tensor, mode: Literal["keep", "down", "up"] = "keep",
-                ratio: int = 2, filtering: str = "nearest") -> torch.Tensor:
+
+def resample_2d(x: torch.Tensor, mode: Literal["keep", "down", "up"] = "keep", ratio: int = 2) -> torch.Tensor:
     
     if mode == "keep":
         return x
-    elif mode == 'down':
+    elif mode == "down":
         return torch.nn.functional.avg_pool2d(x, ratio) # should be multiplied by 2 to be magnitude preserving,
-    elif mode == 'up':                              
-        return torch.nn.functional.interpolate(x, scale_factor=ratio, mode=filtering)
+    elif mode == "down_h":
+        return torch.nn.functional.avg_pool2d(x, (ratio, 1))
+    elif mode == "down_w":
+        return torch.nn.functional.avg_pool2d(x, (1, ratio))
+    elif mode == "up":
+        dtype = x.dtype
+        return torch.nn.functional.interpolate(x, scale_factor=ratio, mode="nearest").to(dtype=dtype)
+    elif mode == "up_h":
+        return torch.repeat_interleave(x, ratio, dim=-2)
+    elif mode == "up_w":
+        return torch.repeat_interleave(x, ratio, dim=-1)
+    else:
+        raise ValueError(f"Invalid resampling mode: {mode}")
 
 def resample_3d(x: torch.Tensor, mode: Literal["keep", "down", "up"] = "keep") -> torch.Tensor:
 

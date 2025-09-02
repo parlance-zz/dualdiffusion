@@ -1,26 +1,25 @@
 {
-    "model_name": "edm2_mdct_p2m_nt",
+    "model_name": "edm2_mdct_2psd_a1",
     "model_load_options": {
         "torch_dtype": "bfloat16",
         "device": "cuda",
         "load_checkpoints": true,
-        "load_emas": {
-            "ddec": "ema_std0.1.safetensors"
-        },
+        "load_emas": null,
         "compile_options": {
             "fullgraph": true,
             "dynamic": false
         }
     },
     "length": 1420000,
-    "add_latents_noise": null,
+    "add_latents_noise": 0.125,
     "latents_tiled_encode": false,
     "latents_tiled_max_chunk_size": 6144,
     "latents_tiled_overlap": 256,
     "latents_img_use_pca": true,
     "latents_img_flip_stereo": false,
+    "colormap_psd": false,
     "output_lufs": -20,
-    "dae_bypass": true,
+    "dae_bypass": false,
     "ddec_output": true,
     "xref_output": true,
     "add_random_test_samples": 20,
