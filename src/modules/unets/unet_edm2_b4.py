@@ -251,7 +251,8 @@ class UNet(DualDiffusionUNet):
                 sigma: torch.Tensor,
                 format: MS_MDCT_DualFormat,
                 embeddings: torch.Tensor,
-                x_ref: Optional[torch.Tensor] = None) -> torch.Tensor:
+                x_ref: Optional[torch.Tensor] = None,
+                perturbed_input: Optional[torch.Tensor] = None) -> torch.Tensor:
 
         with torch.no_grad():
             sigma = sigma.view(-1, 1, 1, 1)
@@ -262,7 +263,10 @@ class UNet(DualDiffusionUNet):
             c_in = 1 / (self.config.sigma_data ** 2 + sigma ** 2).sqrt()
             c_noise = (sigma.flatten().log() / 4).to(self.dtype)
 
-            x = (c_in * x_in).to(self.dtype)
+            if perturbed_input is not None:
+                x = (c_in * perturbed_input).to(self.dtype)
+            else:
+                x = (c_in * x_in).to(self.dtype)
  
         # Embedding.
         emb = self.emb_noise(self.emb_fourier(c_noise))

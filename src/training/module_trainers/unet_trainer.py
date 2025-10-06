@@ -234,21 +234,22 @@ class UNetTrainer(ModuleTrainer):
             conditioning_perturbation = torch.randn(unet_embeddings.shape, device=unet_embeddings.device, generator=self.device_generator)
             unet_embeddings = mp_sum(unet_embeddings, conditioning_perturbation, self.config.conditioning_perturbation)
         
-        # add extra noise to the sample while preserving variance if input_perturbation is enabled
-        if self.config.input_perturbation > 0 and self.is_validation_batch == False:
-            input_perturbation = torch.randn(samples.shape, device=samples.device, generator=self.device_generator)
-            samples = mp_sum(samples, input_perturbation, self.config.input_perturbation)
-
         # get the noise level for this sub-batch from the pre-calculated whole-batch sigma (required for stratified sampling)
         local_sigma = self.global_sigma[self.trainer.accelerator.local_process_index::self.trainer.accelerator.num_processes]
         batch_sigma = local_sigma[self.trainer.accum_step * device_batch_size:(self.trainer.accum_step+1) * device_batch_size]
 
         # prepare model inputs
         noise = torch.randn(samples.shape, device=samples.device, generator=self.device_generator)
-        samples = (samples * self.sigma_sampler.config.sigma_data).detach()
+        samples = samples.detach()
         noise = (noise * batch_sigma.view(-1, 1, 1, 1)).detach()
 
-        denoised = self.unet(samples + noise, batch_sigma, self.format, unet_embeddings, ref_samples)
+        if self.config.input_perturbation > 0:
+            input_perturbation = torch.randn(samples.shape, device=samples.device, generator=self.device_generator)
+            perturbed_input = samples + noise + input_perturbation * batch_sigma.view(-1, 1, 1, 1) * self.config.input_perturbation
+        else:
+            perturbed_input = None
+
+        denoised = self.unet(samples + noise, batch_sigma, self.format, unet_embeddings, ref_samples, perturbed_input)
         
         batch_loss_weight = (batch_sigma ** 2 + self.sigma_sampler.config.sigma_data ** 2) / (batch_sigma * self.sigma_sampler.config.sigma_data) ** 2
         batch_weighted_loss = torch.nn.functional.mse_loss(denoised, samples, reduction="none")

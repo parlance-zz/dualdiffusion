@@ -279,7 +279,8 @@ class DDec_MCLT_UNet_B1(DualDiffusionUNet):
                 sigma: torch.Tensor,
                 format: DualDiffusionFormat,
                 embeddings: torch.Tensor,
-                x_ref: Optional[torch.Tensor] = None) -> torch.Tensor:
+                x_ref: Optional[torch.Tensor] = None,
+                perturbed_input: Optional[torch.Tensor] = None) -> torch.Tensor:
 
         with torch.no_grad():
             sigma = sigma.view(-1, 1, 1, 1, 1)
@@ -293,7 +294,10 @@ class DDec_MCLT_UNet_B1(DualDiffusionUNet):
             x_ref = x_ref.view(x_ref.shape[0], x_ref.shape[1], self.config.in_num_freqs, self.psd_freqs_per_freq, x_ref.shape[3])
             x_ref = x_ref.permute(0, 3, 1, 2, 4).contiguous(memory_format=torch.channels_last_3d).to(dtype=torch.bfloat16)
 
-            x = (c_in * tensor_4d_to_5d(x_in, self.config.in_channels)).to(dtype=torch.bfloat16)
+            if perturbed_input is not None:
+                x = (c_in * tensor_4d_to_5d(perturbed_input, self.config.in_channels)).to(dtype=torch.bfloat16)
+            else:
+                x = (c_in * tensor_4d_to_5d(x_in, self.config.in_channels)).to(dtype=torch.bfloat16)
  
         # Embedding.
         emb = self.emb_noise(self.emb_fourier(c_noise))
