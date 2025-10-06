@@ -28,6 +28,7 @@ import os
 import datetime
 import random
 import glob
+import inspect
 
 import torch
 
@@ -233,6 +234,7 @@ def unet_test() -> None:
 
         metadata = {**model_metadata, "diffusion_metadata": dict_str(cfg.unet_params.__dict__)}
         metadata["ddec_metadata"] = dict_str(cfg.ddec_params.__dict__) if cfg.skip_ddec == False else "null"
+        metadata["src"] = str(inspect.getsource(pipeline.diffusion_decode))
 
         output_flac_file_path = os.path.join(output_path, f"{output_label}.flac")
         output_flac_file_path = get_no_clobber_filepath(output_flac_file_path)
