@@ -12,24 +12,23 @@
             "dynamic": false
         }
     },
-    "length": 1440000,
+    "length": null,
     "add_latents_noise": null,
     "latents_tiled_encode": false,
     "latents_tiled_max_chunk_size": 6144,
     "latents_tiled_overlap": 256,
     "latents_img_use_pca": true,
-    "latents_img_flip_stereo": false,
     "output_lufs": -20,
     "dae_bypass": false,
     "ddec_output": true,
     "xref_output": false,
-    "add_random_test_samples": 3,
-    "random_test_samples_seed": 0,
+    "add_random_test_samples": 50,
+    "random_test_samples_seed": 29,
     "copy_sample_source_files": true,
     "test_samples": [
+        "switch/Arcaea/_t_songs_ignotus.ogg.flac",
         "psf3/Iron Man/_t_! movies_HUB_05_000001C2.adx.flac",
         "dsf/Metropolis Street Racer Prototype/file_15.adx.flac",
-        "switch/Arcaea/_t_songs_ignotus.ogg.flac",
         "3sf/Dopamix/STRM_BGM_ENDING.bcstm.flac"
     ]
 }

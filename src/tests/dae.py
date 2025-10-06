@@ -108,6 +108,9 @@ def dae_test() -> None:
             file_path = os.path.join(config.DEBUG_PATH, filename)
 
         audio_len = get_audio_info(file_path).frames
+        if audio_len < length:
+            print(f"WARNING: audio length {audio_len} is shorter than the test length {length}, skipping...")
+            continue
         count = format.get_raw_crop_width(raw_length=min(length, audio_len))
         source_raw_sample = load_audio(file_path, count=count)
         input_raw_sample = source_raw_sample.unsqueeze(0).to(format.device)
@@ -208,6 +211,7 @@ def dae_test() -> None:
                 save_img(format.mdct_psd_to_img(x_ref_mdct), os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_output_x_ref_mdct.png')}"))
         save_img(format.mel_spec_to_img(input_mel_spec), os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_input_mel_spec.png')}"))
         save_img(format.mel_spec_to_img(output_mel_spec), os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_output_mel_spec.png')}"))
+        save_img(format.mel_spec_to_img(output_mel_spec - input_mel_spec), os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_error_mel_spec.png')}"))
 
         if output_raw is not None:
             output_flac_file_path = os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_decoded.flac')}")
