@@ -210,6 +210,8 @@ class DualDiffusionTrainer:
 
         self.config = train_config
         self.persistent_state = TrainerPersistentState()
+        self.persistent_state.grad_norm_logmean = float(math.log(train_config.optimizer.max_grad_norm))
+        self.persistent_state.grad_norm_logvar = self.persistent_state.grad_norm_logmean
 
         self.init_accelerator()
         self.init_tensorboard()
