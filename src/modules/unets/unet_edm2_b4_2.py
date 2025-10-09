@@ -52,11 +52,11 @@ class UNetConfig(DualDiffusionUNetConfig):
     sigma_data: float = 1.
 
     mp_fourier_ln_sigma_offset: float = 0.5
-    mp_fourier_bandwidth:       float = 2.
+    mp_fourier_bandwidth:       float = 1.4
 
     model_channels: int  = 256               # Base multiplier for the number of channels.
     logvar_channels: int = 192               # Number of channels for training uncertainty estimation.
-    channel_mult: list[int]    = (1,2,3,4,5) # Per-resolution multipliers for the number of channels.
+    channel_mult: list[int]    = (2,2,3,4,5) # Per-resolution multipliers for the number of channels.
     channel_mult_noise: Optional[int] = None # Multiplier for noise embedding dimensionality.
     channel_mult_emb: Optional[int]   = None # Multiplier for final embedding dimensionality.
     channels_per_head: int    = 64           # Number of channels per attention head.
@@ -109,11 +109,15 @@ class Block(torch.nn.Module):
 
         self.emb_gain = torch.nn.Parameter(torch.zeros([]))
         self.emb_linear = MPConv(emb_channels, out_channels * mlp_multiplier,
-                                 kernel=(1,1), groups=emb_linear_groups) if emb_channels != 0 else None
+                                 kernel=(1,1), groups=emb_linear_groups)
 
         if self.use_attention == True:
             self.attn_qkv = MPConv(out_channels, out_channels * 3, kernel=(1,1))
             self.attn_proj = MPConv(out_channels, out_channels, kernel=(1,1))
+
+            self.emb_gain_qkv = torch.nn.Parameter(torch.zeros([]))
+            #self.emb_linear_qkv = MPConv(emb_channels, out_channels, kernel=(1,1), groups=emb_linear_groups)
+            self.emb_linear_qkv = MPConv(emb_channels, out_channels * 3, kernel=(1,1), groups=emb_linear_groups)
 
     def forward(self, x: torch.Tensor, emb: torch.Tensor) -> torch.Tensor:
         
@@ -136,11 +140,23 @@ class Block(torch.nn.Module):
 
         if self.flavor == "dec" and self.conv_skip is not None:
             x = self.conv_skip(x)
+
         x = mp_sum(x, y, t=self.res_balance)
         
         if self.use_attention == True:
 
-            qkv: torch.Tensor = self.attn_qkv(x)
+            """
+            c = self.emb_linear_qkv(emb, gain=self.emb_gain_qkv) + 1.
+            y = x * c
+
+            qkv: torch.Tensor = self.attn_qkv(y)
+            qkv = qkv.reshape(qkv.shape[0], self.num_heads, -1, 3, y.shape[2] * y.shape[3])
+            q, k, v = normalize(qkv, dim=2).unbind(3)
+            """
+
+            c = self.emb_linear_qkv(emb, gain=self.emb_gain_qkv) + 1.
+
+            qkv: torch.Tensor = self.attn_qkv(x) * c
             qkv = qkv.reshape(qkv.shape[0], self.num_heads, -1, 3, y.shape[2] * y.shape[3])
             q, k, v = normalize(qkv, dim=2).unbind(3)
 

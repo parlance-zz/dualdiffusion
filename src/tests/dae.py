@@ -82,6 +82,7 @@ def dae_test() -> None:
 
     dataset_path = config.DATASET_PATH
     test_samples: list[str] = test_params["test_samples"] or []
+    length = length or format.config.default_raw_length
     sample_shape = pipeline.get_mel_spec_shape(raw_length=length)
     latent_shape = pipeline.get_latent_shape(sample_shape)
     print(f"Sample shape: {sample_shape}  Latent shape: {latent_shape}")
