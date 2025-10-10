@@ -65,7 +65,7 @@ class UNetConfig(DualDiffusionUNetConfig):
     concat_balance: float     = 0.5          # Balance between skip connections (0) and main path (1).
     res_balance: float        = 0.3          # Balance between main branch (0) and residual branch (1).
     attn_balance: float       = 0.3          # Balance between main branch (0) and self-attention (1).
-    attn_levels: list[int]    = (2,3,4)        # List of resolution levels to use self-attention.
+    attn_levels: list[int]    = (2,3,4)      # List of resolution levels to use self-attention.
     mlp_multiplier: int    = 1               # Multiplier for the number of channels in the MLP.
     mlp_groups: int        = 8               # Number of groups for the MLPs.
     emb_linear_groups: int = 1
@@ -116,8 +116,7 @@ class Block(torch.nn.Module):
             self.attn_proj = MPConv(out_channels, out_channels, kernel=(1,1))
 
             self.emb_gain_qkv = torch.nn.Parameter(torch.zeros([]))
-            #self.emb_linear_qkv = MPConv(emb_channels, out_channels, kernel=(1,1), groups=emb_linear_groups)
-            self.emb_linear_qkv = MPConv(emb_channels, out_channels * 3, kernel=(1,1), groups=emb_linear_groups)
+            self.emb_linear_qkv = MPConv(emb_channels, out_channels, kernel=(1,1), groups=emb_linear_groups)
 
     def forward(self, x: torch.Tensor, emb: torch.Tensor) -> torch.Tensor:
         
@@ -145,18 +144,9 @@ class Block(torch.nn.Module):
         
         if self.use_attention == True:
 
-            """
-            c = self.emb_linear_qkv(emb, gain=self.emb_gain_qkv) + 1.
-            y = x * c
-
-            qkv: torch.Tensor = self.attn_qkv(y)
-            qkv = qkv.reshape(qkv.shape[0], self.num_heads, -1, 3, y.shape[2] * y.shape[3])
-            q, k, v = normalize(qkv, dim=2).unbind(3)
-            """
-
             c = self.emb_linear_qkv(emb, gain=self.emb_gain_qkv) + 1.
 
-            qkv: torch.Tensor = self.attn_qkv(x) * c
+            qkv: torch.Tensor = self.attn_qkv(x * c)
             qkv = qkv.reshape(qkv.shape[0], self.num_heads, -1, 3, y.shape[2] * y.shape[3])
             q, k, v = normalize(qkv, dim=2).unbind(3)
 
