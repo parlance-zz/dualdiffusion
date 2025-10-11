@@ -67,6 +67,8 @@ class UNetTrainerConfig(ModuleTrainerConfig):
     conditioning_perturbation: float = 0
     conditioning_dropout: float = 0.1
 
+    logvar_warmup_steps: int = 2000
+
 class UNetTrainer(ModuleTrainer):
     
     @torch.no_grad()
@@ -260,7 +262,19 @@ class UNetTrainer(ModuleTrainer):
         if self.is_validation_batch == True:
             batch_loss = batch_weighted_loss
         else: # for train batches this takes the loss as the gaussian NLL with sigma-specific learned variance
+
             error_logvar = self.unet.get_sigma_loss_logvar(sigma=batch_sigma)
+            if self.config.logvar_warmup_steps > 0 and self.trainer.global_step < self.config.logvar_warmup_steps:
+
+                logvar_scale = min(max(self.trainer.global_step / self.config.logvar_warmup_steps * 2 - 1, 0), 1)
+
+                if logvar_scale <= 0:
+                    error_logvar = torch.zeros_like(error_logvar.detach())
+                else:
+                    error_logvar = error_logvar * logvar_scale
+            else:
+                logvar_scale = 1
+            
             batch_loss = batch_weighted_loss / error_logvar.exp() + error_logvar
         
         if self.config.num_loss_buckets > 0: # log loss bucketed by noise level range
@@ -276,7 +290,8 @@ class UNetTrainer(ModuleTrainer):
         return {
             "loss": batch_loss,
             "io_stats/denoised_std": denoised.std(dim=(1,2,3)),
-            "io_stats/denoised_mean": denoised.mean(dim=(1,2,3))
+            "io_stats/denoised_mean": denoised.mean(dim=(1,2,3)),
+            "io_stats/logvar_scale": logvar_scale
         }
     
     @torch.no_grad()
