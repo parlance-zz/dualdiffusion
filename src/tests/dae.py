@@ -177,7 +177,7 @@ def dae_test() -> None:
         if ddec_mdct is not None:
             ddec_mdct_params = SampleParams(
                 seed=5000,
-                num_steps=20, length=audio_len, cfg_scale=1.5, input_perturbation=0.03, input_perturbation_offset=-0.3,
+                num_steps=20, length=audio_len, cfg_scale=1.5, input_perturbation=0, input_perturbation_offset=-0.3,
                 use_heun=True, schedule="linear", rho=7, sigma_max=11, sigma_min=0.0002, stereo_fix=0
             )
 
