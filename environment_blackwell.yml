@@ -1,9 +1,9 @@
 name: dualdiffusion2 # this env is for blackwell (5000 series) GPUs
-channels:           # linux kernel 6.14+, nvidia driver 580+ with CUDA 13.0+ is required
-  - nvidia          # fix for nvidia-smi: sudo chmod o-w /var/run/nvidia-persistenced/socket
+channels:            # linux kernel 6.14+, nvidia driver 580+ with CUDA 13.0+ is required
+  - nvidia
   - conda-forge
 dependencies:
-  - python   # 3.11 req is for laion-clap, otherwise 3.12+
+  - python
   - nvidia::cuda-toolkit=13.0.2
   - pip
   - numpy
