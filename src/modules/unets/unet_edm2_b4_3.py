@@ -31,7 +31,7 @@
 # SOFTWARE.
 
 from dataclasses import dataclass
-from typing import Union, Optional, Literal
+from typing import Union, Optional
 
 import torch
 
@@ -56,16 +56,16 @@ class UNetConfig(DualDiffusionUNetConfig):
     mp_fourier_ln_sigma_offset: float = 0.5
     mp_fourier_bandwidth:       float = 1
 
-    model_channels: int  = 1280               # Base multiplier for the number of channels.
+    model_channels: int  = 1024               # Base multiplier for the number of channels.
     logvar_channels: int = 192               # Number of channels for training uncertainty estimation.
     channel_mult: list[int]    = (1,)        # Per-resolution multipliers for the number of channels.
     channel_mult_noise: Optional[int] = 1    # Multiplier for noise embedding dimensionality.
     channel_mult_emb: Optional[int]   = 1    # Multiplier for final embedding dimensionality.
+    use_skips: bool = True
     channels_per_head: int    = 64           # Number of channels per attention head.
-    rope_channels: int        = 32
+    rope_channels: int        = 48
     rope_base: float          = 10000.
-    mla_latent_dim: int       = 32
-    num_layers_per_block: int = 12           # Number of resnet blocks per resolution.
+    num_layers_per_block: int = 8            # Number of resnet blocks per resolution.
     label_balance: float      = 0.5          # Balance between noise embedding (0) and class embedding (1).
     res_balance: float        = 0.5          # Balance between main branch (0) and residual branch (1).
     attn_balance: float       = 0.5          # Balance between main branch (0) and self-attention (1).
@@ -80,6 +80,7 @@ class Block(torch.nn.Module):
         level: int,                             # Resolution level.
         in_channels: int,                       # Number of input channels.
         out_channels: int,                      # Number of output channels.
+        skip_channels: int,
         emb_channels: int,                      # Number of embedding channels.
         dropout: float         = 0.,       # Dropout probability.
         res_balance: float     = 0.3,      # Balance between main branch (0) and residual branch (1).
@@ -104,8 +105,13 @@ class Block(torch.nn.Module):
         
         inner_channels = out_channels * mlp_multiplier
 
+        if skip_channels > 0:
+            self.conv_skip = MPConv(in_channels + skip_channels, in_channels, kernel=(1,1))
+        else:
+            self.conv_skip = torch.nn.Identity()
+
         self.conv_res0 = MPConv(in_channels, inner_channels, kernel=(1,3), groups=mlp_groups)
-        self.conv_mix0 = MPConv(inner_channels,  inner_channels, kernel=(1,1), groups=1)
+        self.conv_mix0 = MPConv(inner_channels, inner_channels, kernel=(1,1), groups=1)
         self.conv_res1 = MPConv(inner_channels, inner_channels, kernel=(1,3), groups=mlp_groups)
         self.conv_mix1 = MPConv(inner_channels, out_channels, kernel=(1,1), groups=1)
         
@@ -121,7 +127,8 @@ class Block(torch.nn.Module):
             self.emb_linear_qkv = MPConv(emb_channels, out_channels, kernel=(1,1), groups=emb_linear_groups)
 
     def forward(self, x: torch.Tensor, emb: torch.Tensor, rope_tables: tuple[torch.Tensor, torch.Tensor]) -> torch.Tensor:
-
+        
+        x = self.conv_skip(x)
         y = self.conv_res0(mp_silu(x))
 
         c = self.emb_linear(emb, gain=self.emb_gain) + 1.
@@ -145,8 +152,8 @@ class Block(torch.nn.Module):
             qkv = qkv.reshape(qkv.shape[0], self.num_heads, -1, 3, y.shape[2] * y.shape[3])
             q, k, v = normalize(qkv, dim=2).unbind(3)
 
-            q_rot = _rope_pair_rotate_partial(q.transpose(-1, -2), rope_tables[0], rope_tables[1])
-            k_rot = _rope_pair_rotate_partial(k.transpose(-1, -2), rope_tables[0], rope_tables[1])
+            q_rot = _rope_pair_rotate_partial(q.transpose(-1, -2), rope_tables)
+            k_rot = _rope_pair_rotate_partial(k.transpose(-1, -2), rope_tables)
 
             y = torch.nn.functional.scaled_dot_product_attention(q_rot, k_rot, v.transpose(-1, -2)).transpose(-1, -2)
 
@@ -201,9 +208,16 @@ class UNet(DualDiffusionUNet):
             self.dec[f"conv_in"] = MPConv(cin, cout, kernel=(1,3))
             
             for idx in range(config.num_layers_per_block):
+
                 cin = cout
                 cout = channels
-                self.dec[f"block{level}_layer{idx}"] = Block(level, cin, cout, cemb, use_attention=level in config.attn_levels, **block_kwargs)
+
+                if config.use_skips == True and idx >= config.num_layers_per_block // 2:
+                    cskip = channels
+                else:
+                    cskip = 0
+
+                self.dec[f"block{level}_layer{idx}"] = Block(level, cin, cout, cskip, cemb, use_attention=level in config.attn_levels, **block_kwargs)
                 
         self.out_gain = torch.nn.Parameter(torch.zeros([]))
         self.conv_out = MPConv(cout, config.out_channels * config.in_freqs, kernel=(1,3))
@@ -236,27 +250,40 @@ class UNet(DualDiffusionUNet):
             c_out = sigma * self.config.sigma_data / (sigma ** 2 + self.config.sigma_data ** 2).sqrt()
             c_in = 1 / (self.config.sigma_data ** 2 + sigma ** 2).sqrt()
             ln_sigma = sigma.flatten().log() - self.config.mp_fourier_ln_sigma_offset
-            c_noise = (ln_sigma / 4).to(self.dtype)
+            c_noise = ln_sigma / 4
 
             if perturbed_input is not None:
-                x = (c_in * perturbed_input).to(self.dtype)
+                x = (c_in * perturbed_input).to(dtype=torch.bfloat16)
             else:
-                x = (c_in * x_in).to(self.dtype)
+                x = (c_in * x_in).to(dtype=torch.bfloat16)
 
         # Embedding.
-        emb = self.emb_noise(self.emb_fourier(c_noise))
-        emb = mp_sum(emb, embeddings.to(emb.dtype), t=self.config.label_balance)
-        emb = mp_silu(emb).unsqueeze(2).unsqueeze(3).to(x.dtype)
+        emb: torch.Tensor = self.emb_noise(self.emb_fourier(c_noise))
+        emb = mp_sum(emb, embeddings.to(dtype=emb.dtype), t=self.config.label_balance)
+        emb = mp_silu(emb).unsqueeze(2).unsqueeze(3).to(dtype=torch.bfloat16)
 
         # build rope tables        
-        rope_tables = _rope_tables_for_seq(x.shape[3], self.config.rope_channels, self.config.rope_base, device=x.device)
+        rope_tables = _rope_tables_for_seq(x.shape[3], self.config.rope_channels,
+                                self.config.rope_base, device=x.device, dtype=x.dtype)
 
         # Encoder.
         x = x.view(x.shape[0], self.config.in_channels * self.config.in_freqs, 1, x.shape[3])
         x = torch.cat((x, torch.ones_like(x[:, :1])), dim=1)
 
+        idx = 0; skips = []
         for name, block in self.dec.items():
-            x = block(x) if "conv" in name else block(x, emb, rope_tables)
+            if "conv" in name:
+                x = block(x)
+            else:
+                if self.config.use_skips == True and idx >= self.config.num_layers_per_block // 2:
+                    x = torch.cat((x, skips.pop()), dim=1)
+
+                x = block(x, emb, rope_tables)
+
+                if self.config.use_skips == True and idx < self.config.num_layers_per_block // 2:
+                    skips.append(x)
+                
+                idx += 1
 
         x = self.conv_out(x, gain=self.out_gain)
         x = x.view(x.shape[0], self.config.out_channels, self.config.in_freqs, x.shape[3])

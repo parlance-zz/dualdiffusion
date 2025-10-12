@@ -23,7 +23,7 @@
 import torch
 
 
-def _rope_pair_rotate_partial(x: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor) -> torch.Tensor:
+def _rope_pair_rotate_partial(x: torch.Tensor, rope_tables: tuple[torch.Tensor, torch.Tensor]) -> torch.Tensor:
     """
     Rotate only the first rope_ch channels of x using RoPE pair-wise rotation.
     - x: [..., D]
@@ -32,6 +32,7 @@ def _rope_pair_rotate_partial(x: torch.Tensor, cos: torch.Tensor, sin: torch.Ten
     Returns x with first rope_ch channels rotated, the rest unchanged.
     """
 
+    cos, sin = rope_tables
     rope_ch = cos.shape[-1] * 2
     
     x_rot  = x[..., :rope_ch]
@@ -44,7 +45,7 @@ def _rope_pair_rotate_partial(x: torch.Tensor, cos: torch.Tensor, sin: torch.Ten
 
     return torch.cat([xr_even, xr_odd, x_tail], dim=-1)
 
-def _build_rope_width(W: int, rope_ch: int, base: float = 10000., device: torch.device = "cpu") -> tuple[torch.Tensor, torch.Tensor]:
+def _build_rope_width(W: int, rope_ch: int, base: float = 10000., device: torch.device = "cpu", dtype: torch.dtype = torch.float32) -> tuple[torch.Tensor, torch.Tensor]:
     """
     Build RoPE cos/sin tables for width axis only.
     Returns cos, sin with shape [W, rope_ch/2] in float32.
@@ -56,11 +57,11 @@ def _build_rope_width(W: int, rope_ch: int, base: float = 10000., device: torch.
     inv_freq = 1. / (base ** (torch.arange(0, rope_ch, 2, device=device, dtype=torch.float32) / rope_ch))
     cols = torch.arange(W, device=device, dtype=torch.float32)
     ang = torch.einsum("w,d->wd", cols, inv_freq)  # [W, rope_ch/2]
-    cos = torch.cos(ang)
-    sin = torch.sin(ang)
+    cos = torch.cos(ang).to(dtype=dtype)
+    sin = torch.sin(ang).to(dtype=dtype)
     return cos, sin
 
-def _rope_tables_for_seq(N: int, rope_ch: int, rope_base: float = 10000., device: torch.device = "cpu") -> tuple[torch.Tensor, torch.Tensor]:
+def _rope_tables_for_seq(N: int, rope_ch: int, rope_base: float = 10000., device: torch.device = "cpu", dtype: torch.dtype = torch.float32) -> tuple[torch.Tensor, torch.Tensor]:
     """
     Build RoPE cos/sin for a 1D sequence of length N using mla.py utilities.
     Returns cos, sin shaped for broadcasting over [B, H, N, rope_ch/2].
@@ -71,7 +72,7 @@ def _rope_tables_for_seq(N: int, rope_ch: int, rope_base: float = 10000., device
             torch.tensor([], device=device, dtype=torch.float32).view(1, 1, N, 0),
             torch.tensor([], device=device, dtype=torch.float32).view(1, 1, N, 0),
         )
-    cos_w, sin_w = _build_rope_width(N, rope_ch, rope_base, device=device)  # [N, rope_ch/2]
+    cos_w, sin_w = _build_rope_width(N, rope_ch, rope_base, device=device, dtype=dtype)  # [N, rope_ch/2]
     cos = cos_w.view(1, 1, N, rope_ch // 2)
     sin = sin_w.view(1, 1, N, rope_ch // 2)
     return cos, sin
