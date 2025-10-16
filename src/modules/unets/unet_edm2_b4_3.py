@@ -56,16 +56,16 @@ class UNetConfig(DualDiffusionUNetConfig):
     mp_fourier_ln_sigma_offset: float = 0.5
     mp_fourier_bandwidth:       float = 1
 
-    model_channels: int  = 1024               # Base multiplier for the number of channels.
+    model_channels: int  = 1920              # Base multiplier for the number of channels.
     logvar_channels: int = 192               # Number of channels for training uncertainty estimation.
     channel_mult: list[int]    = (1,)        # Per-resolution multipliers for the number of channels.
     channel_mult_noise: Optional[int] = 1    # Multiplier for noise embedding dimensionality.
     channel_mult_emb: Optional[int]   = 1    # Multiplier for final embedding dimensionality.
     use_skips: bool = True
-    channels_per_head: int    = 64           # Number of channels per attention head.
-    rope_channels: int        = 48
+    channels_per_head: int    = 96           # Number of channels per attention head.
+    rope_channels: int        = 80
     rope_base: float          = 10000.
-    num_layers_per_block: int = 8            # Number of resnet blocks per resolution.
+    num_layers_per_block: int = 9            # Number of resnet blocks per resolution.
     label_balance: float      = 0.5          # Balance between noise embedding (0) and class embedding (1).
     res_balance: float        = 0.5          # Balance between main branch (0) and residual branch (1).
     attn_balance: float       = 0.5          # Balance between main branch (0) and self-attention (1).
@@ -212,7 +212,7 @@ class UNet(DualDiffusionUNet):
                 cin = cout
                 cout = channels
 
-                if config.use_skips == True and idx >= config.num_layers_per_block // 2:
+                if config.use_skips == True and idx >= config.num_layers_per_block / 2:
                     cskip = channels
                 else:
                     cskip = 0
@@ -268,6 +268,7 @@ class UNet(DualDiffusionUNet):
 
         # Encoder.
         x = x.view(x.shape[0], self.config.in_channels * self.config.in_freqs, 1, x.shape[3])
+        x_input = x
         x = torch.cat((x, torch.ones_like(x[:, :1])), dim=1)
 
         idx = 0; skips = []
@@ -275,17 +276,18 @@ class UNet(DualDiffusionUNet):
             if "conv" in name:
                 x = block(x)
             else:
-                if self.config.use_skips == True and idx >= self.config.num_layers_per_block // 2:
+                if self.config.use_skips == True and idx >= self.config.num_layers_per_block / 2:
                     x = torch.cat((x, skips.pop()), dim=1)
 
+                x[:, :x_input.shape[1]] = (x[:, :x_input.shape[1]] + x_input) / 2**0.5
                 x = block(x, emb, rope_tables)
 
-                if self.config.use_skips == True and idx < self.config.num_layers_per_block // 2:
+                if self.config.use_skips == True and idx < self.config.num_layers_per_block / 2 - 0.5:
                     skips.append(x)
                 
                 idx += 1
 
-        x = self.conv_out(x, gain=self.out_gain)
+        x: torch.Tensor = self.conv_out(x, gain=self.out_gain)
         x = x.view(x.shape[0], self.config.out_channels, self.config.in_freqs, x.shape[3])
 
         D_x = c_skip * x_in + c_out * x.float()
