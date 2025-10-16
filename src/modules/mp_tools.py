@@ -65,7 +65,7 @@ def resample_2d(x: torch.Tensor, mode: Literal["keep", "down", "up"] = "keep",
     elif mode == 'down':
         return torch.nn.functional.avg_pool2d(x, ratio) # should be multiplied by 2 to be magnitude preserving,
     elif mode == 'up':                              
-        return torch.nn.functional.interpolate(x, scale_factor=ratio, mode=filtering)
+        return torch.nn.functional.interpolate(x, scale_factor=ratio, mode=filtering).to(x.dtype)
 
 def resample_3d(x: torch.Tensor, mode: Literal["keep", "down", "up"] = "keep") -> torch.Tensor:
 
@@ -80,6 +80,31 @@ def resample_3d(x: torch.Tensor, mode: Literal["keep", "down", "up"] = "keep") -
     
     elif mode == 'up': # torch.nn.functional.interpolate doesn't work properly with 5d tensors
         return x.repeat_interleave(2, dim=-1).repeat_interleave(2, dim=-2)
+
+def patchify_2d(x: torch.Tensor, patch_h: int, patch_w: int) -> torch.Tensor:
+
+    b, c, h, w = x.shape
+    if h % patch_h != 0 or w % patch_w != 0:
+        raise ValueError("Input tensor dimensions must be divisible by patch dimensions.")
+
+    patches = x.unfold(2, patch_h, patch_h).unfold(3, patch_w, patch_w)
+    # patches shape: (b, c, num_patches_h, num_patches_w, patch_h, patch_w)
+    patches = patches.permute(0, 1, 4, 5, 2, 3)
+    # patches shape: (b, c, patch_h, patch_w, num_patches_h, num_patches_w)
+    return patches.reshape(b, c * patch_h * patch_w, patches.shape[4], patches.shape[5])
+
+def unpatchify_2d(patches: torch.Tensor, patch_h: int, patch_w: int) -> torch.Tensor:
+
+    b, c_ph_pw, num_patches_h, num_patches_w = patches.shape
+    if c_ph_pw % (patch_h * patch_w) != 0:
+        raise ValueError("Channel dimension must be divisible by patch height * patch width.")
+
+    c = c_ph_pw // (patch_h * patch_w)
+    patches = patches.view(b, c, patch_h, patch_w, num_patches_h, num_patches_w)
+    # patches shape: (b, c, patch_h, patch_w, num_patches_h, num_patches_w)
+    patches = patches.permute(0, 1, 4, 2, 5, 3)
+    # patches shape: (b, c, num_patches_h, patch_h, num_patches_w, patch_w)
+    return patches.reshape(b, c, num_patches_h * patch_h, num_patches_w * patch_w)
 
 # applies a brick-wall low-pass filter preserving only the lowest 1/downsample frequencies
 def lowpass_2d(x: torch.Tensor, blur_width: float = 16, use_circular_filter: bool = True) -> torch.Tensor:
