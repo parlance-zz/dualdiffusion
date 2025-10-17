@@ -459,6 +459,8 @@ class DualDiffusionTrainer:
                 #foreach=True,
                 fused=True,
             )
+
+            self.use_muon = False
         else:
             try:
                 from muon import SingleDeviceMuonWithAuxAdam  # type: ignore
@@ -496,10 +498,11 @@ class DualDiffusionTrainer:
             ]
 
             self.optimizer = SingleDeviceMuonWithAuxAdam(param_groups)
+            self.use_muon = True
 
         self.logger.info(f"Using {opt_cls.__name__} optimiser with learning rate {self.config.lr_schedule.learning_rate}")
         self.logger.info(f"  AdamW param count: {len(adam_params)} Muon param count:{len(muon_params)}")
-        if len(muon_params) > 0:
+        if self.use_muon == True:
             self.logger.info(f"  Muon learning rate multiplier: {self.config.optimizer.muon_learning_rate_multiplier}")
             self.logger.info(f"  Muon momentum: {self.config.optimizer.muon_momentum_beta} weight decay: {self.config.optimizer.muon_weight_decay}")
             
@@ -814,23 +817,25 @@ class DualDiffusionTrainer:
                     if g["eps"] != self.config.optimizer.adam_epsilon:
                         g["eps"] = self.config.optimizer.adam_epsilon
                         updated_adam_eps = True
-            
-            if updated_muon_learn_rate:
-                self.logger.info(f"Using updated Muon learning rate: {target_muon_lr}")
-            if updated_muon_momentum:
-                self.logger.info(f"Using updated Muon momentum: {self.config.optimizer.muon_momentum_beta}")
-            if updated_muon_weight_decay:
-                self.logger.info(f"Using updated Muon weight decay: {self.config.optimizer.muon_weight_decay}")
+
+            if self.use_muon == True:
+                if updated_muon_learn_rate:
+                    self.lr_scheduler.scheduler.base_lrs[0] = target_muon_lr
+                    self.logger.info(f"Using updated Muon learning rate: {target_muon_lr}")
+                if updated_muon_momentum:
+                    self.logger.info(f"Using updated Muon momentum: {self.config.optimizer.muon_momentum_beta}")
+                if updated_muon_weight_decay:
+                    self.logger.info(f"Using updated Muon weight decay: {self.config.optimizer.muon_weight_decay}")
 
             if updated_learn_rate:
-                self.lr_scheduler.scheduler.base_lrs = [self.config.lr_schedule.learning_rate]
-                self.logger.info(f"Using updated learning rate: {self.config.lr_schedule.learning_rate}")
+                self.lr_scheduler.scheduler.base_lrs[-1] = self.config.lr_schedule.learning_rate
+                self.logger.info(f"Using updated AdamW learning rate: {self.config.lr_schedule.learning_rate}")
             if updated_adam_betas:
-                self.logger.info(f"Using updated Adam beta1: {self.config.optimizer.adam_beta1} beta2: {self.config.optimizer.adam_beta2}")
+                self.logger.info(f"Using updated AdamW beta1: {self.config.optimizer.adam_beta1} beta2: {self.config.optimizer.adam_beta2}")
             if updated_weight_decay:
-                self.logger.info(f"Using updated Adam weight decay: {self.config.optimizer.adam_weight_decay}")
+                self.logger.info(f"Using updated AdamW weight decay: {self.config.optimizer.adam_weight_decay}")
             if updated_adam_eps:
-                self.logger.info(f"Using updated Adam epsilon: {self.config.optimizer.adam_epsilon}")
+                self.logger.info(f"Using updated AdamW epsilon: {self.config.optimizer.adam_epsilon}")
 
             # any and all source code or config changes differences relative
             # to the loaded checkpoint will be saved in this diff file
@@ -1071,7 +1076,11 @@ class DualDiffusionTrainer:
                 if batch_finish_logs is not None:
                     train_logger.add_logs(batch_finish_logs)
                 
-                train_logger.add_logs({"learn_rate": self.lr_scheduler.get_last_lr()[0]})
+                last_learn_rates = self.lr_scheduler.get_last_lr()
+                if self.use_muon == True:
+                    train_logger.add_logs({"learn_rate/muon": last_learn_rates[0]})
+                train_logger.add_logs({"learn_rate/adamw": last_learn_rates[-1]})
+
                 logs = train_logger.get_logs()
                 self.accelerator.log(logs, step=self.global_step)
 
