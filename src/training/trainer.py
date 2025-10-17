@@ -479,8 +479,8 @@ class DualDiffusionTrainer:
                         adam_param_names.append(name)
 
             if self.config.enable_debug_mode == True:
-                self.logger.info(f"Muon  parameters: {dict_str(muon_param_names)}")
-                self.logger.info(f"AdamW parameters: {dict_str(adam_param_names)}")
+                self.logger.info(f"Muon  parameters: {muon_param_names}")
+                self.logger.info(f"AdamW parameters: {adam_param_names}")
 
             param_groups = [
                 {

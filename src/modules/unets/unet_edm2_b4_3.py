@@ -74,6 +74,8 @@ class UNetConfig(DualDiffusionUNetConfig):
     mlp_groups: int        = 8               # Number of groups for the MLPs.
     emb_linear_groups: int = 2
 
+    input_skip_t: float = 0.5
+
 class Block(torch.nn.Module):
 
     def __init__(self,
@@ -93,6 +95,8 @@ class Block(torch.nn.Module):
         use_attention: bool    = False,    # Use self-attention in this block.
     ) -> None:
         super().__init__()
+
+        assert out_channels % channels_per_head == 0
 
         self.level = level
         self.use_attention = use_attention
@@ -182,9 +186,13 @@ class UNet(DualDiffusionUNet):
         cblock = [config.model_channels * x for x in config.channel_mult]
         cnoise = config.model_channels * config.channel_mult_noise if config.channel_mult_noise is not None else max(cblock)
         cemb = config.model_channels * config.channel_mult_emb if config.channel_mult_emb is not None else max(cblock)
-        
+        cdata = config.in_channels * config.in_freqs
+
         self.num_levels = len(config.channel_mult)
+
         assert self.num_levels == 1
+        assert config.rope_channels % 2 == 0
+        assert config.rope_channels <= config.channels_per_head
 
         # Embedding.
         self.emb_fourier = MPFourier(cnoise, bandwidth=config.mp_fourier_bandwidth)
@@ -199,7 +207,7 @@ class UNet(DualDiffusionUNet):
 
         # Encoder.
         self.dec = torch.nn.ModuleDict()
-        cout = config.in_channels * config.in_freqs + 1 # 1 extra const channel
+        cout = cdata + 1 # 1 extra const channel
 
         for level, channels in enumerate(cblock):
             
@@ -268,7 +276,7 @@ class UNet(DualDiffusionUNet):
 
         # Encoder.
         x = x.view(x.shape[0], self.config.in_channels * self.config.in_freqs, 1, x.shape[3])
-        x_input = x
+        x_input  = torch.cat((x, -x), dim=1)
         x = torch.cat((x, torch.ones_like(x[:, :1])), dim=1)
 
         idx = 0; skips = []
@@ -279,7 +287,8 @@ class UNet(DualDiffusionUNet):
                 if self.config.use_skips == True and idx >= self.config.num_layers_per_block / 2:
                     x = torch.cat((x, skips.pop()), dim=1)
 
-                x[:, :x_input.shape[1]] = (x[:, :x_input.shape[1]] + x_input) / 2**0.5
+                x[:, :x_input.shape[1]] = mp_sum(x[:, :x_input.shape[1]], x_input, t=self.config.input_skip_t)
+
                 x = block(x, emb, rope_tables)
 
                 if self.config.use_skips == True and idx < self.config.num_layers_per_block / 2 - 0.5:
