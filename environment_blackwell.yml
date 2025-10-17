@@ -27,3 +27,4 @@ dependencies:
     - pyloudnorm    # faster lufs without memory leak
     - pyjson5       # json with comments and some formatting improvements
     - py7zr         # (optional) for dataset unzip util
+    - git+https://github.com/KellerJordan/Muon # Muon optimizer for faster training

@@ -35,6 +35,7 @@ from datetime import datetime
 from typing import Optional, Literal, Type, Union, Any
 from dataclasses import dataclass
 from traceback import format_exception
+from fnmatch import fnmatch
 
 import torch
 from torch.optim.lr_scheduler import LambdaLR
@@ -106,11 +107,18 @@ class OptimizerConfig:
     adam_beta2: float         = 0.99
     adam_epsilon: float       = 1e-8
     adam_weight_decay: float  = 0.
+
     loss_scale: float         = 250.
     max_grad_norm: float      = 1.
     grad_norm_std_ema_beta: float  = 0.999
     grad_norm_mean_ema_beta: float = 0.99
     dynamic_max_grad_norm_z: Optional[float] = 3
+
+    muon_param_patterns: list[str] = ()
+    adam_param_patterns: list[str] = ()
+    muon_learning_rate_multiplier: float = 100
+    muon_momentum_beta: float = 0.95
+    muon_weight_decay: float = 0.
 
 @dataclass
 class DataLoaderConfig:
@@ -434,23 +442,70 @@ class DualDiffusionTrainer:
                 
     def init_optimizer(self) -> None:
         
-        opt_params = []
-        for module in self.modules:
-            opt_params.extend(module.parameters())
+        muon_params = []; adam_params = []
+        if len(self.config.optimizer.muon_param_patterns) == 0:
 
-        self.optimizer = torch.optim.AdamW(
-            opt_params,
-            lr=self.config.lr_schedule.learning_rate,
-            betas=(self.config.optimizer.adam_beta1, self.config.optimizer.adam_beta2),
-            weight_decay=self.config.optimizer.adam_weight_decay,
-            eps=self.config.optimizer.adam_epsilon,
-            #foreach=True,
-            fused=True,
-        )
+            opt_cls = torch.optim.AdamW
 
-        self.logger.info(f"Using AdamW optimiser with learning rate {self.config.lr_schedule.learning_rate}")
+            for module in self.modules:
+                adam_params.extend(module.parameters())
+
+            self.optimizer = torch.optim.AdamW(
+                adam_params,
+                lr=self.config.lr_schedule.learning_rate,
+                betas=(self.config.optimizer.adam_beta1, self.config.optimizer.adam_beta2),
+                weight_decay=self.config.optimizer.adam_weight_decay,
+                eps=self.config.optimizer.adam_epsilon,
+                #foreach=True,
+                fused=True,
+            )
+        else:
+            try:
+                from muon import SingleDeviceMuonWithAuxAdam  # type: ignore
+                opt_cls = SingleDeviceMuonWithAuxAdam
+            except ImportError:
+                self.logger.error("Import error: Unable to import muon and len(muon_param_patterns) > 0")
+                exit(1)
+
+            muon_param_names = []; adam_param_names = []
+            for module in self.modules:
+                for name, param in module.named_parameters():
+                    if  (any(fnmatch(name, pattern) for pattern in self.config.optimizer.muon_param_patterns) and
+                    (not any(fnmatch(name, pattern) for pattern in self.config.optimizer.adam_param_patterns))):
+                        muon_params.append(param)
+                        muon_param_names.append(name)
+                    else:
+                        adam_params.append(param)
+                        adam_param_names.append(name)
+
+            if self.config.enable_debug_mode == True:
+                self.logger.info(f"Muon  parameters: {dict_str(muon_param_names)}")
+                self.logger.info(f"AdamW parameters: {dict_str(adam_param_names)}")
+
+            param_groups = [
+                {
+                    "params": muon_params, "use_muon": True,
+                    "lr": self.config.lr_schedule.learning_rate * self.config.optimizer.muon_learning_rate_multiplier,
+                    "weight_decay": self.config.optimizer.muon_weight_decay, "momentum": self.config.optimizer.muon_momentum_beta
+                },
+                {
+                    "params": adam_params, "use_muon": False,
+                    "lr": self.config.lr_schedule.learning_rate, "weight_decay": self.config.optimizer.adam_weight_decay,
+                    "betas": (self.config.optimizer.adam_beta1, self.config.optimizer.adam_beta2), "eps": self.config.optimizer.adam_epsilon
+                },
+            ]
+
+            self.optimizer = SingleDeviceMuonWithAuxAdam(param_groups)
+
+        self.logger.info(f"Using {opt_cls.__name__} optimiser with learning rate {self.config.lr_schedule.learning_rate}")
+        self.logger.info(f"  AdamW param count: {len(adam_params)} Muon param count:{len(muon_params)}")
+        if len(muon_params) > 0:
+            self.logger.info(f"  Muon learning rate multiplier: {self.config.optimizer.muon_learning_rate_multiplier}")
+            self.logger.info(f"  Muon momentum: {self.config.optimizer.muon_momentum_beta} weight decay: {self.config.optimizer.muon_weight_decay}")
+            
         self.logger.info(f"  AdamW beta1: {self.config.optimizer.adam_beta1} beta2: {self.config.optimizer.adam_beta2}")
         self.logger.info(f"  AdamW eps: {self.config.optimizer.adam_epsilon} weight decay: {self.config.optimizer.adam_weight_decay}")
+        
         
         if self.config.optimizer.dynamic_max_grad_norm_z is not None:
             self.logger.info(f"  Dynamic max grad norm enabled"
@@ -727,23 +782,46 @@ class DualDiffusionTrainer:
             self.accelerator.load_state(checkpoint_full_path)
 
             # update any optimizer params that have changed
+            target_muon_lr = self.config.lr_schedule.learning_rate * self.config.optimizer.muon_learning_rate_multiplier
+
             updated_learn_rate = False; updated_adam_betas = False
             updated_weight_decay = False; updated_adam_eps = False
+            updated_muon_learn_rate = False; updated_muon_momentum = False
+            updated_muon_weight_decay = False
+
             for g in self.optimizer.param_groups:
 
-                if g["initial_lr"] != self.config.lr_schedule.learning_rate:
-                    g["initial_lr"] = self.config.lr_schedule.learning_rate
-                    updated_learn_rate = True
-                if g["betas"] != (self.config.optimizer.adam_beta1, self.config.optimizer.adam_beta2):
-                    g["betas"] = (self.config.optimizer.adam_beta1, self.config.optimizer.adam_beta2)
-                    updated_adam_betas = True
-                if g["weight_decay"] != self.config.optimizer.adam_weight_decay:
-                    g["weight_decay"] = self.config.optimizer.adam_weight_decay
-                    updated_weight_decay = True
-                if g["eps"] != self.config.optimizer.adam_epsilon:
-                    g["eps"] = self.config.optimizer.adam_epsilon
-                    updated_adam_eps = True
-                
+                if g.get("use_muon", False) == True:
+                    if g["initial_lr"] != target_muon_lr:
+                        g["initial_lr"] = target_muon_lr
+                        updated_muon_learn_rate = True
+                    if g["momentum"] != self.config.optimizer.muon_momentum_beta:
+                        g["momentum"] = self.config.optimizer.muon_momentum_beta
+                        updated_muon_momentum = True
+                    if g["weight_decay"] != self.config.optimizer.muon_weight_decay:
+                        g["weight_decay"] = self.config.optimizer.muon_weight_decay
+                        updated_muon_weight_decay = True
+                else:
+                    if g["initial_lr"] != self.config.lr_schedule.learning_rate:
+                        g["initial_lr"] = self.config.lr_schedule.learning_rate
+                        updated_learn_rate = True
+                    if g["betas"] != (self.config.optimizer.adam_beta1, self.config.optimizer.adam_beta2):
+                        g["betas"] = (self.config.optimizer.adam_beta1, self.config.optimizer.adam_beta2)
+                        updated_adam_betas = True
+                    if g["weight_decay"] != self.config.optimizer.adam_weight_decay:
+                        g["weight_decay"] = self.config.optimizer.adam_weight_decay
+                        updated_weight_decay = True
+                    if g["eps"] != self.config.optimizer.adam_epsilon:
+                        g["eps"] = self.config.optimizer.adam_epsilon
+                        updated_adam_eps = True
+            
+            if updated_muon_learn_rate:
+                self.logger.info(f"Using updated Muon learning rate: {target_muon_lr}")
+            if updated_muon_momentum:
+                self.logger.info(f"Using updated Muon momentum: {self.config.optimizer.muon_momentum_beta}")
+            if updated_muon_weight_decay:
+                self.logger.info(f"Using updated Muon weight decay: {self.config.optimizer.muon_weight_decay}")
+
             if updated_learn_rate:
                 self.lr_scheduler.scheduler.base_lrs = [self.config.lr_schedule.learning_rate]
                 self.logger.info(f"Using updated learning rate: {self.config.lr_schedule.learning_rate}")
