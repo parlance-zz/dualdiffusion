@@ -56,14 +56,14 @@ class UNetConfig(DualDiffusionUNetConfig):
     mp_fourier_ln_sigma_offset: float = 0.5
     mp_fourier_bandwidth:       float = 1
 
-    model_channels: int  = 1920              # Base multiplier for the number of channels.
+    model_channels: int  = 1024              # Base multiplier for the number of channels.
     logvar_channels: int = 192               # Number of channels for training uncertainty estimation.
     channel_mult: list[int]    = (1,)        # Per-resolution multipliers for the number of channels.
     channel_mult_noise: Optional[int] = 1    # Multiplier for noise embedding dimensionality.
     channel_mult_emb: Optional[int]   = 1    # Multiplier for final embedding dimensionality.
     use_skips: bool = True
-    channels_per_head: int    = 96           # Number of channels per attention head.
-    rope_channels: int        = 80
+    channels_per_head: int    = 64           # Number of channels per attention head.
+    rope_channels: int        = 48
     rope_base: float          = 10000.
     num_layers_per_block: int = 9            # Number of resnet blocks per resolution.
     label_balance: float      = 0.5          # Balance between noise embedding (0) and class embedding (1).
@@ -124,7 +124,9 @@ class Block(torch.nn.Module):
                                  kernel=(1,1), groups=emb_linear_groups)
 
         if self.use_attention == True:
-            self.attn_qkv = MPConv(out_channels, out_channels * 3, kernel=(1,1))
+            self.attn_q = MPConv(out_channels, out_channels, kernel=(1,1))
+            self.attn_k = MPConv(out_channels, out_channels, kernel=(1,1))
+            self.attn_v = MPConv(out_channels, out_channels, kernel=(1,1))
             self.attn_proj = MPConv(out_channels, out_channels, kernel=(1,1))
 
             self.emb_gain_qkv = torch.nn.Parameter(torch.zeros([]))
@@ -151,10 +153,18 @@ class Block(torch.nn.Module):
         if self.use_attention == True:
 
             c = self.emb_linear_qkv(emb, gain=self.emb_gain_qkv) + 1.
+            y = x * c
 
-            qkv: torch.Tensor = self.attn_qkv(x * c)
-            qkv = qkv.reshape(qkv.shape[0], self.num_heads, -1, 3, y.shape[2] * y.shape[3])
-            q, k, v = normalize(qkv, dim=2).unbind(3)
+            # bizarrely this is way faster than doing a single qkv projection, and uses less memory (with compile)
+            q: torch.Tensor = self.attn_q(y)
+            k: torch.Tensor = self.attn_k(y)
+            v: torch.Tensor = self.attn_v(y)
+            q = q.reshape(q.shape[0], self.num_heads, -1, y.shape[2] * y.shape[3])
+            k = k.reshape(k.shape[0], self.num_heads, -1, y.shape[2] * y.shape[3])
+            v = v.reshape(v.shape[0], self.num_heads, -1, y.shape[2] * y.shape[3])
+            q = normalize(q, dim=2)
+            k = normalize(k, dim=2)
+            v = normalize(v, dim=2)
 
             q_rot = _rope_pair_rotate_partial(q.transpose(-1, -2), rope_tables)
             k_rot = _rope_pair_rotate_partial(k.transpose(-1, -2), rope_tables)
@@ -193,6 +203,8 @@ class UNet(DualDiffusionUNet):
         assert self.num_levels == 1
         assert config.rope_channels % 2 == 0
         assert config.rope_channels <= config.channels_per_head
+        if config.input_skip_t > 0:
+            assert cblock[0] >= 2 * cdata
 
         # Embedding.
         self.emb_fourier = MPFourier(cnoise, bandwidth=config.mp_fourier_bandwidth)
@@ -287,7 +299,8 @@ class UNet(DualDiffusionUNet):
                 if self.config.use_skips == True and idx >= self.config.num_layers_per_block / 2:
                     x = torch.cat((x, skips.pop()), dim=1)
 
-                x[:, :x_input.shape[1]] = mp_sum(x[:, :x_input.shape[1]], x_input, t=self.config.input_skip_t)
+                if self.config.input_skip_t > 0:
+                    x[:, :x_input.shape[1]] = mp_sum(x[:, :x_input.shape[1]], x_input, t=self.config.input_skip_t)
 
                 x = block(x, emb, rope_tables)
 
