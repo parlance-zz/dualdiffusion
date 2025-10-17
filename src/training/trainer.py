@@ -785,17 +785,18 @@ class DualDiffusionTrainer:
             self.accelerator.load_state(checkpoint_full_path)
 
             # update any optimizer params that have changed
-            target_muon_lr = self.config.lr_schedule.learning_rate * self.config.optimizer.muon_learning_rate_multiplier
+            target_adam_lr = self.config.lr_schedule.learning_rate
+            target_muon_lr = target_adam_lr * self.config.optimizer.muon_learning_rate_multiplier
 
-            updated_learn_rate = False; updated_adam_betas = False
-            updated_weight_decay = False; updated_adam_eps = False
+            updated_adam_learn_rate = False; updated_adam_betas = False
+            updated_adam_weight_decay = False; updated_adam_eps = False
             updated_muon_learn_rate = False; updated_muon_momentum = False
             updated_muon_weight_decay = False
 
             for g in self.optimizer.param_groups:
 
                 if g.get("use_muon", False) == True:
-                    if g["initial_lr"] != target_muon_lr:
+                    if self.lr_scheduler.scheduler.base_lrs[0] != target_muon_lr:
                         g["initial_lr"] = target_muon_lr
                         updated_muon_learn_rate = True
                     if g["momentum"] != self.config.optimizer.muon_momentum_beta:
@@ -805,15 +806,15 @@ class DualDiffusionTrainer:
                         g["weight_decay"] = self.config.optimizer.muon_weight_decay
                         updated_muon_weight_decay = True
                 else:
-                    if g["initial_lr"] != self.config.lr_schedule.learning_rate:
-                        g["initial_lr"] = self.config.lr_schedule.learning_rate
-                        updated_learn_rate = True
+                    if self.lr_scheduler.scheduler.base_lrs[-1] != target_adam_lr:
+                        g["initial_lr"] = target_adam_lr
+                        updated_adam_learn_rate = True
                     if g["betas"] != (self.config.optimizer.adam_beta1, self.config.optimizer.adam_beta2):
                         g["betas"] = (self.config.optimizer.adam_beta1, self.config.optimizer.adam_beta2)
                         updated_adam_betas = True
                     if g["weight_decay"] != self.config.optimizer.adam_weight_decay:
                         g["weight_decay"] = self.config.optimizer.adam_weight_decay
-                        updated_weight_decay = True
+                        updated_adam_weight_decay = True
                     if g["eps"] != self.config.optimizer.adam_epsilon:
                         g["eps"] = self.config.optimizer.adam_epsilon
                         updated_adam_eps = True
@@ -827,12 +828,12 @@ class DualDiffusionTrainer:
                 if updated_muon_weight_decay:
                     self.logger.info(f"Using updated Muon weight decay: {self.config.optimizer.muon_weight_decay}")
 
-            if updated_learn_rate:
-                self.lr_scheduler.scheduler.base_lrs[-1] = self.config.lr_schedule.learning_rate
-                self.logger.info(f"Using updated AdamW learning rate: {self.config.lr_schedule.learning_rate}")
+            if updated_adam_learn_rate:
+                self.lr_scheduler.scheduler.base_lrs[-1] = target_adam_lr
+                self.logger.info(f"Using updated AdamW learning rate: {target_adam_lr}")
             if updated_adam_betas:
                 self.logger.info(f"Using updated AdamW beta1: {self.config.optimizer.adam_beta1} beta2: {self.config.optimizer.adam_beta2}")
-            if updated_weight_decay:
+            if updated_adam_weight_decay:
                 self.logger.info(f"Using updated AdamW weight decay: {self.config.optimizer.adam_weight_decay}")
             if updated_adam_eps:
                 self.logger.info(f"Using updated AdamW epsilon: {self.config.optimizer.adam_epsilon}")
