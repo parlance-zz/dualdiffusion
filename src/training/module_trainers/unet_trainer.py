@@ -232,7 +232,7 @@ class UNetTrainer(ModuleTrainer):
 
         if self.config.conditioning_perturbation > 0 and self.is_validation_batch == False: # adds noise to the conditioning embedding while preserving variance
             conditioning_perturbation = torch.randn(unet_embeddings.shape, device=unet_embeddings.device, generator=self.device_generator)
-            unet_embeddings = mp_sum(unet_embeddings, conditioning_perturbation, self.config.conditioning_perturbation)
+            unet_embeddings = unet_embeddings + conditioning_perturbation * self.config.conditioning_perturbation
         
         # get the noise level for this sub-batch from the pre-calculated whole-batch sigma (required for stratified sampling)
         local_sigma = self.global_sigma[self.trainer.accelerator.local_process_index::self.trainer.accelerator.num_processes]
