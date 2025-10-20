@@ -430,6 +430,8 @@ class DualDiffusionTrainer:
                 state = optimizer.state.get(p, None)
                 if state is not None:
                     exp_avg = state.get("exp_avg", None)
+                    if exp_avg is None:
+                        exp_avg = state.get("momentum_buffer", None)
                     if exp_avg is not None:
                         momentum_tensors.append(exp_avg)
         
@@ -463,7 +465,7 @@ class DualDiffusionTrainer:
             self.use_muon = False
         else:
             try:
-                from muon import SingleDeviceMuonWithAuxAdam  # type: ignore
+                from training.muon import SingleDeviceMuonWithAuxAdam  # type: ignore
                 opt_cls = SingleDeviceMuonWithAuxAdam
             except ImportError:
                 self.logger.error("Import error: Unable to import muon and len(muon_param_patterns) > 0")
