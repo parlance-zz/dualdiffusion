@@ -38,11 +38,13 @@ from traceback import format_exception
 from fnmatch import fnmatch
 
 import torch
+import numpy as np
 from torch.optim.lr_scheduler import LambdaLR
 from accelerate import Accelerator
 from accelerate.logging import get_logger
 from accelerate.utils import ProjectConfiguration, GradientAccumulationPlugin, set_seed
 from tqdm.auto import tqdm
+from scipy.interpolate import CubicSpline
 
 from pipelines.dual_diffusion_pipeline import DualDiffusionPipeline
 from utils.dual_diffusion_utils import dict_str, get_cuda_gpu_stats
@@ -465,8 +467,8 @@ class DualDiffusionTrainer:
             self.use_muon = False
         else:
             try:
-                from training.muon import SingleDeviceMuonWithAuxAdam  # type: ignore
-                opt_cls = SingleDeviceMuonWithAuxAdam
+                from training.nor_muon import SingleDeviceNorMuonWithAuxAdam  # type: ignore
+                opt_cls = SingleDeviceNorMuonWithAuxAdam
             except ImportError:
                 self.logger.error("Import error: Unable to import muon and len(muon_param_patterns) > 0")
                 exit(1)
@@ -491,15 +493,17 @@ class DualDiffusionTrainer:
                     "params": muon_params, "use_muon": True,
                     "lr": self.config.lr_schedule.learning_rate * self.config.optimizer.muon_learning_rate_multiplier,
                     "weight_decay": self.config.optimizer.muon_weight_decay, "momentum": self.config.optimizer.muon_momentum_beta
-                },
-                {
+                }
+            ]
+
+            if len(adam_params) > 0:
+                param_groups.append({
                     "params": adam_params, "use_muon": False,
                     "lr": self.config.lr_schedule.learning_rate, "weight_decay": self.config.optimizer.adam_weight_decay,
                     "betas": (self.config.optimizer.adam_beta1, self.config.optimizer.adam_beta2), "eps": self.config.optimizer.adam_epsilon
-                },
-            ]
+                })
 
-            self.optimizer = SingleDeviceMuonWithAuxAdam(param_groups)
+            self.optimizer = SingleDeviceNorMuonWithAuxAdam(param_groups)
             self.use_muon = True
 
         self.logger.info(f"Using {opt_cls.__name__} optimiser with learning rate {self.config.lr_schedule.learning_rate}")
@@ -628,6 +632,34 @@ class DualDiffusionTrainer:
                     lr = max(lr * self.config.lr_schedule.learning_rate,
                         self.config.lr_schedule.min_learning_rate) / self.config.lr_schedule.learning_rate
                 return lr
+        
+        elif self.config.lr_schedule.lr_schedule == "muon":
+
+            def lr_schedule(step):
+                """
+                Calculates the learning rate for a given step based on a smooth decay schedule.
+                This function uses a cubic spline for the main decay phase for a smoother curve.
+                """
+                # Define the key points for the decay schedule
+                # Using the same initial LR at step 800 as the piecewise function for consistency
+                decay_steps = np.array([800, 2500, 4500, 14000])
+                #decay_lrs = np.array([0.4605, 0.35, 0.22, 0.02])
+                decay_lrs = np.array([0.00921, 0.007, 0.0044, 0.0004])
+
+                if step < 800:
+                    # Constant learning rate before decay starts
+                    lr = decay_lrs[0]
+                elif 800 <= step <= 14000:
+                    # Use a cubic spline for a smooth decay through the key points.
+                    # bc_type='clamped' ensures the derivative at the endpoints is zero,
+                    # creating a smoother transition.
+                    cs = CubicSpline(decay_steps, decay_lrs, bc_type='clamped')
+                    lr = cs(step)
+                else: # step > 14000
+                    # After the main decay, slowly decay towards 0.01 exponentially
+                    lr = 0.0002 + (0.0004 - 0.0002) * np.exp(-0.0001 * (step - 14000))
+
+                return float(lr * 100)
             
         elif self.config.lr_schedule.lr_schedule == "constant":
 
@@ -639,7 +671,16 @@ class DualDiffusionTrainer:
         else:
             raise ValueError(f"Unsupported learning rate schedule: {self.config.lr_schedule.lr_schedule}")
         
-        self.lr_scheduler = LambdaLR(self.optimizer, lr_schedule)
+        def lr_schedule_constant(current_step: int) -> float:
+            if current_step < scaled_lr_warmup_steps:
+                return current_step / scaled_lr_warmup_steps
+            return 1.
+
+        if len(self.optimizer.param_groups) == 2:
+            schedules = [lr_schedule, lr_schedule_constant]
+        else:
+            schedules = lr_schedule
+        self.lr_scheduler = LambdaLR(self.optimizer, schedules)
    
     def init_dataloader(self) -> None:
         
@@ -795,11 +836,12 @@ class DualDiffusionTrainer:
             updated_muon_learn_rate = False; updated_muon_momentum = False
             updated_muon_weight_decay = False
 
-            for g in self.optimizer.param_groups:
+            for i, g in enumerate(self.optimizer.param_groups):
 
                 if g.get("use_muon", False) == True:
-                    if self.lr_scheduler.scheduler.base_lrs[0] != target_muon_lr:
+                    if self.lr_scheduler.scheduler.base_lrs[i] != target_muon_lr:
                         g["initial_lr"] = target_muon_lr
+                        self.lr_scheduler.scheduler.base_lrs[i] = target_muon_lr
                         updated_muon_learn_rate = True
                     if g["momentum"] != self.config.optimizer.muon_momentum_beta:
                         g["momentum"] = self.config.optimizer.muon_momentum_beta
@@ -808,8 +850,9 @@ class DualDiffusionTrainer:
                         g["weight_decay"] = self.config.optimizer.muon_weight_decay
                         updated_muon_weight_decay = True
                 else:
-                    if self.lr_scheduler.scheduler.base_lrs[-1] != target_adam_lr:
+                    if self.lr_scheduler.scheduler.base_lrs[i] != target_adam_lr:
                         g["initial_lr"] = target_adam_lr
+                        self.lr_scheduler.scheduler.base_lrs[i] = target_adam_lr
                         updated_adam_learn_rate = True
                     if g["betas"] != (self.config.optimizer.adam_beta1, self.config.optimizer.adam_beta2):
                         g["betas"] = (self.config.optimizer.adam_beta1, self.config.optimizer.adam_beta2)
@@ -823,7 +866,6 @@ class DualDiffusionTrainer:
 
             if self.use_muon == True:
                 if updated_muon_learn_rate:
-                    self.lr_scheduler.scheduler.base_lrs[0] = target_muon_lr
                     self.logger.info(f"Using updated Muon learning rate: {target_muon_lr}")
                 if updated_muon_momentum:
                     self.logger.info(f"Using updated Muon momentum: {self.config.optimizer.muon_momentum_beta}")
@@ -831,7 +873,6 @@ class DualDiffusionTrainer:
                     self.logger.info(f"Using updated Muon weight decay: {self.config.optimizer.muon_weight_decay}")
 
             if updated_adam_learn_rate:
-                self.lr_scheduler.scheduler.base_lrs[-1] = target_adam_lr
                 self.logger.info(f"Using updated AdamW learning rate: {target_adam_lr}")
             if updated_adam_betas:
                 self.logger.info(f"Using updated AdamW beta1: {self.config.optimizer.adam_beta1} beta2: {self.config.optimizer.adam_beta2}")
@@ -1084,6 +1125,17 @@ class DualDiffusionTrainer:
                     train_logger.add_logs({"learn_rate/muon": last_learn_rates[0]})
                 train_logger.add_logs({"learn_rate/adamw": last_learn_rates[-1]})
 
+
+                """
+                update_threshold = self.optimizer.param_groups[0]["update_threshold"]
+                train_logger.add_log("learn_rate/update_threshold", update_threshold)
+                total_num_updated = 0
+                for group in self.optimizer.param_groups:
+                    total_num_updated += group["num_updated"]
+                train_logger.add_log("learn_rate/num_updated", total_num_updated)
+                """
+                train_logger.add_log("learn_rate/muon_base_rate", self.lr_scheduler.scheduler.base_lrs[0])
+
                 logs = train_logger.get_logs()
                 self.accelerator.log(logs, step=self.global_step)
 
@@ -1101,7 +1153,18 @@ class DualDiffusionTrainer:
                     if self.config.strict_checkpoint_time == True:
                         if (datetime.now() - self.last_checkpoint_time).total_seconds() >= self.config.min_checkpoint_time:
                             _save_checkpoint = True
-                    
+
+                    # temporary hack for adjusting learn rates without reload
+                    _inc_t_path = os.path.join(self.config.model_path, "_inc_t")
+                    if os.path.isfile(_inc_t_path):
+                        os.remove(_inc_t_path)
+                        self.lr_scheduler.scheduler.base_lrs[0] *= 1.05
+
+                    _dec_t_path = os.path.join(self.config.model_path, "_dec_t")
+                    if os.path.isfile(_dec_t_path):
+                        os.remove(_dec_t_path)
+                        self.lr_scheduler.scheduler.base_lrs[0] /= 1.05
+
                     # saves a checkpoint immediately if a file named "_save_checkpoint" is found in the model path
                     _save_checkpoint_path = os.path.join(self.config.model_path, "_save_checkpoint")
                     if os.path.isfile(_save_checkpoint_path): _save_checkpoint = True
