@@ -56,23 +56,24 @@ class UNetConfig(DualDiffusionUNetConfig):
     mp_fourier_ln_sigma_offset: float = 0.5
     mp_fourier_bandwidth:       float = 1
 
-    model_channels: int  = 1024              # Base multiplier for the number of channels.
+    model_channels: int  = 1536              # Base multiplier for the number of channels.
     logvar_channels: int = 192               # Number of channels for training uncertainty estimation.
     channel_mult: list[int]    = (1,)        # Per-resolution multipliers for the number of channels.
     channel_mult_noise: Optional[int] = 1    # Multiplier for noise embedding dimensionality.
     channel_mult_emb: Optional[int]   = 1    # Multiplier for final embedding dimensionality.
-    use_skips: bool = True
-    channels_per_head: int    = 64           # Number of channels per attention head.
-    rope_channels: int        = 48
+    use_skips: bool     = True
+    use_conv_skip: bool = True
+    channels_per_head: int    = 128           # Number of channels per attention head.
+    rope_channels: int        = 112
     rope_base: float          = 10000.
     num_layers_per_block: int = 9            # Number of resnet blocks per resolution.
     label_balance: float      = 0.5          # Balance between noise embedding (0) and class embedding (1).
     res_balance: float        = 0.5          # Balance between main branch (0) and residual branch (1).
     attn_balance: float       = 0.5          # Balance between main branch (0) and self-attention (1).
     attn_levels: list[int]    = (0,)         # List of resolution levels to use self-attention.
-    mlp_multiplier: int    = 2               # Multiplier for the number of channels in the MLP.
-    mlp_groups: int        = 8               # Number of groups for the MLPs.
-    emb_linear_groups: int = 2
+    mlp_multiplier: int    = 3               # Multiplier for the number of channels in the MLP.
+    mlp_groups: int        = 1               # Number of groups for the MLPs.
+    emb_linear_groups: int = 1
 
     input_skip_t: float = 0.5
 
@@ -115,13 +116,10 @@ class Block(torch.nn.Module):
             self.conv_skip = torch.nn.Identity()
 
         self.conv_res0 = MPConv(in_channels, inner_channels, kernel=(1,3), groups=mlp_groups)
-        self.conv_mix0 = MPConv(inner_channels, inner_channels, kernel=(1,1), groups=1)
-        self.conv_res1 = MPConv(inner_channels, inner_channels, kernel=(1,3), groups=mlp_groups)
-        self.conv_mix1 = MPConv(inner_channels, out_channels, kernel=(1,1), groups=1)
+        self.conv_res1 = MPConv(inner_channels, out_channels, kernel=(1,1), groups=1)
         
         self.emb_gain = torch.nn.Parameter(torch.zeros([]))
-        self.emb_linear = MPConv(emb_channels, out_channels * mlp_multiplier,
-                                 kernel=(1,1), groups=emb_linear_groups)
+        self.emb_linear = MPConv(emb_channels, inner_channels, kernel=(1,1), groups=emb_linear_groups)
 
         if self.use_attention == True:
             self.attn_q = MPConv(out_channels, out_channels, kernel=(1,1))
@@ -135,21 +133,7 @@ class Block(torch.nn.Module):
     def forward(self, x: torch.Tensor, emb: torch.Tensor, rope_tables: tuple[torch.Tensor, torch.Tensor]) -> torch.Tensor:
         
         x = self.conv_skip(x)
-        y = self.conv_res0(mp_silu(x))
 
-        c = self.emb_linear(emb, gain=self.emb_gain) + 1.
-        y = normalize(y * c, dim=1)
-
-        y = self.conv_mix0(mp_silu(y))
-
-        #if self.dropout != 0 and self.training == True: # magnitude preserving fix for dropout
-        #    y = torch.nn.functional.dropout(y, p=self.dropout) * (1. - self.dropout)**0.5
-
-        y = self.conv_res1(mp_silu(y))
-        y = self.conv_mix1(mp_silu(y))
-        
-        x = mp_sum(x, y, t=self.res_balance)
-        
         if self.use_attention == True:
 
             c = self.emb_linear_qkv(emb, gain=self.emb_gain_qkv) + 1.
@@ -173,6 +157,18 @@ class Block(torch.nn.Module):
 
             y = self.attn_proj(y.reshape(*x.shape))
             x = mp_sum(x, y, t=self.attn_balance)
+
+        y = self.conv_res0(x)
+
+        c = self.emb_linear(emb, gain=self.emb_gain) + 1.
+        y = mp_silu(normalize(y * c, dim=1))
+
+        if self.dropout != 0 and self.training == True: # magnitude preserving fix for dropout
+            y = torch.nn.functional.dropout(y, p=self.dropout) * (1. - self.dropout)**0.5
+
+        y = self.conv_res1(y)
+        
+        x = mp_sum(x, y, t=self.res_balance)
 
         if self.clip_act is not None:
             x = x.clip_(-self.clip_act, self.clip_act)
@@ -232,7 +228,7 @@ class UNet(DualDiffusionUNet):
                 cin = cout
                 cout = channels
 
-                if config.use_skips == True and idx >= config.num_layers_per_block / 2:
+                if config.use_skips == True and config.use_conv_skip == True and idx >= config.num_layers_per_block / 2:
                     cskip = channels
                 else:
                     cskip = 0
@@ -288,16 +284,19 @@ class UNet(DualDiffusionUNet):
 
         # Encoder.
         x = x.view(x.shape[0], self.config.in_channels * self.config.in_freqs, 1, x.shape[3])
-        x_input  = torch.cat((x, -x), dim=1)
+        x_input = torch.cat((x, -x), dim=1)
         x = torch.cat((x, torch.ones_like(x[:, :1])), dim=1)
 
         idx = 0; skips = []
         for name, block in self.dec.items():
             if "conv" in name:
                 x = block(x)
-            else:
+            else:    
                 if self.config.use_skips == True and idx >= self.config.num_layers_per_block / 2:
-                    x = torch.cat((x, skips.pop()), dim=1)
+                    if self.config.use_conv_skip == True:
+                        x = torch.cat((x, skips.pop()), dim=1)
+                    else:
+                        x = mp_sum(x, skips.pop(), t=0.5)
 
                 if self.config.input_skip_t > 0:
                     x[:, :x_input.shape[1]] = mp_sum(x[:, :x_input.shape[1]], x_input, t=self.config.input_skip_t)

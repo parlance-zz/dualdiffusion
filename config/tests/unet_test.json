@@ -5,13 +5,8 @@
         "device": "cuda",
         "load_checkpoints": true,
         "load_emas": {
+            //"unet": "ema_std0.1.safetensors",
             //"unet": "ema_std0.05.safetensors",
-            //"unet": "ema_std0.01.safetensors",
-
-            //"unet": "ema_std0.0025.safetensors",
-            //"unet": "ema_std0.005.safetensors", // decent at 475k steps
-            //"unet": "phema_std0.001.safetensors", // decent at 507k steps
-            //"unet": "ema_std0.01.safetensors",
             //"unet": "ema_beta0.995.safetensors",
             "ddec": "ema_std0.1.safetensors"
         },
@@ -27,7 +22,7 @@
     "copy_sample_source_files": true,
     "random_test_samples_seed": null,
     "add_random_test_samples": 0,
-    "shuffle_test_samples": true,
+    "shuffle_test_samples": false,
     "test_samples": [
         
 
@@ -36,9 +31,31 @@
         //"psf3/Elder Scrolls IV, The - Oblivion",
         //"xbox/Elder Scrolls III, The - Morrowind"
 
-        //"switch/Atelier Sophie 2 - The Alchemist of the Mysterious Dream", // high sound quality, orchestral et al
+        /*
+        "switch/Atelier Sophie 2 - The Alchemist of the Mysterious Dream", // high sound quality, orchestral et al
+        "vita/Taiko no Tatsujin - V Version/SONG_MEGM1X.at9.flac", // cool orchestral with female singing
+        "wii/Nodame Cantabile - Dream Orchestra/Menu_Song10.brstm.flac",
+        "switch/Sangokushi 14 with Power-up Kit/0x272c6efb_00000004.kns.flac",
+        "psf3/Asura's Wrath/NewWorld_4.mp3.flac",
+        "3sf/Inazuma Eleven Everyday/STRM_BGM15_TIMEZONE_NIGHT.bcstm.flac"
+        */
         //"switch/Super Smash Bros. Ultimate"
         
+        /*
+        "wii/Kamen Rider - Chou Climax Heroes/Stage03.brstm.flac",
+        "wii/Kamen Rider - Chou Climax Heroes/Stage03.brstm.flac",
+        "wii/Kamen Rider - Chou Climax Heroes/Stage03.brstm.flac",
+        "wii/Kamen Rider - Chou Climax Heroes/Stage03.brstm.flac",
+        "wii/Kamen Rider - Chou Climax Heroes/Stage03.brstm.flac",
+        "wii/Kamen Rider - Chou Climax Heroes/Stage03.brstm.flac",
+        "wii/Kamen Rider - Chou Climax Heroes/Stage03.brstm.flac",
+        "wii/Kamen Rider - Chou Climax Heroes/Stage03.brstm.flac",
+        "wii/Kamen Rider - Chou Climax Heroes/Stage03.brstm.flac",
+        "wii/Kamen Rider - Chou Climax Heroes/Stage03.brstm.flac",
+        "wii/Kamen Rider - Chou Climax Heroes/Stage03.brstm.flac",
+        "wii/Kamen Rider - Chou Climax Heroes/Stage03.brstm.flac"
+        /*/
+
         //*
         "switch/Super Smash Bros. Ultimate/_t_!Movie_c2_opening_jp.ogg.flac", // smash bros opening with female asian vocals
         "switch/Super Smash Bros. Ultimate/j40_hr_menutitle.lopus.flac", // harmonized electric guitars
@@ -231,18 +248,30 @@
         //*/
         //"psf2/Fisherman's Challenge"
 
-        /* // metal
-        "psf3/One Piece - Pirate Warriors 3/BGMLink_00000007.at3.flac",
-        "switch/eBaseball Powerful Pro Yakyuu 2020/_t_wem_1004274880.wem.flac",
-        "vita/Tayutama 2 - You're the only one/015.at9.flac", // sick progressive metal
-        "wii/Kamen Rider - Chou Climax Heroes/Stage03.brstm.flac", // progressive metal
-        "switch/Super Smash Bros. Ultimate/j40_hr_menutitle.lopus.flac", // harmonized electric guitars
+        //* // metal
+        //"psf3/One Piece - Pirate Warriors 3/BGMLink_00000007.at3.flac",
+        //"switch/eBaseball Powerful Pro Yakyuu 2020/_t_wem_1004274880.wem.flac",
+        //"vita/Tayutama 2 - You're the only one/015.at9.flac", // sick progressive metal
+        //"switch/Super Smash Bros. Ultimate/j40_hr_menutitle.lopus.flac", // harmonized electric guitars
 
-        "psf3/One Piece - Pirate Warriors 3/BGMLink_00000007.at3.flac",
-        "switch/eBaseball Powerful Pro Yakyuu 2020/_t_wem_1004274880.wem.flac",
-        "vita/Tayutama 2 - You're the only one/015.at9.flac", // sick progressive metal
+        //"psf3/One Piece - Pirate Warriors 3/BGMLink_00000007.at3.flac",
+        //"switch/eBaseball Powerful Pro Yakyuu 2020/_t_wem_1004274880.wem.flac",
+        
+        /*
         "wii/Kamen Rider - Chou Climax Heroes/Stage03.brstm.flac", // progressive metal
-        "switch/Super Smash Bros. Ultimate/j40_hr_menutitle.lopus.flac" // harmonized electric guitars
+        "vita/Tayutama 2 - You're the only one/015.at9.flac", // sick progressive metal ***
+        "wii/Kamen Rider - Chou Climax Heroes/Stage03.brstm.flac", // progressive metal
+        "vita/Tayutama 2 - You're the only one/015.at9.flac", // sick progressive metal ***
+        "wii/Kamen Rider - Chou Climax Heroes/Stage03.brstm.flac", // progressive metal
+        "vita/Tayutama 2 - You're the only one/015.at9.flac", // sick progressive metal ***
+        "wii/Kamen Rider - Chou Climax Heroes/Stage03.brstm.flac", // progressive metal
+        "vita/Tayutama 2 - You're the only one/015.at9.flac", // sick progressive metal ***
+        "wii/Kamen Rider - Chou Climax Heroes/Stage03.brstm.flac", // progressive metal
+        "vita/Tayutama 2 - You're the only one/015.at9.flac" // sick progressive metal ***
+        
+
+
+        //"switch/Super Smash Bros. Ultimate/j40_hr_menutitle.lopus.flac" // harmonized electric guitars
         //*/
 
         /* // jazz
@@ -250,6 +279,13 @@
         "dsf/Metropolis Street Racer Prototype/file_15.adx.flac"
         //*/
         
+        //"dsf/Metropolis Street Racer Prototype/file_15.adx.flac",
+        //"psf/Mega Man 8/31. Staff Roll (Brandnew Way).flac.flac"
+        //"vita/Phantasy Star Online 2/11_bgm_musicdisc_590.hca.flac"
+
+        //*
+        //"vita/Phantasy Star Online 2/11_bgm_musicdisc_590.hca.flac",
+
 
         //"psf2/Shin Megami Tensei - Persona 3 FES",
         //"switch/Arcaea/_t_songs_ignotus.ogg.flac",
@@ -297,31 +333,33 @@
     ],
     "unet_params": {
         "seed": null,
+        //"seed": 100,
         "seamless_loop": false,
 
-        "length": 1700000,
-        "num_steps": 300,//500,//460, //300, //100, //600, //500, //1500 //300
-        "cfg_scale": 2,//3.9,//3.4,//4,//3.6//3.3,//2,//2.618,//4,//2, //4,//5,
-        "use_heun": false,//true,
+        "length": null,
+        "num_steps": 100,
+        //"num_steps": 400,
+        "cfg_scale": 4,
+        "use_heun": true,//true,
 
         //"schedule": "scale_invariant",
         //"rho": 4,//2.7,
 
-        //"schedule": "linear",
+        "schedule": "linear",
 
-        "schedule": "edm2",
-        "rho": 7,
+        //"schedule": "edm2",
+        //"rho": 7,
 
         //"schedule": "cos",
         //"rho": 1.688,
 
-        //"sigma_max": 150,
-        //"sigma_min": 0.03,
-        "sigma_max": 400,//300,
-        "sigma_min": 0.0025,//0.003,
+        "sigma_max": 400,
+        "sigma_min": 0.01,
+        //"sigma_min": 0.004,
         
-        "input_perturbation": 0,//0.004,//0.01,//0.15,//0.01//0.3,//0.7,//0.11,//0.12,//0.13,//0.12,//0.17,//0.0066,
-        "input_perturbation_offset": -0.5//-0.85//-0.6//-0.5//-0.4866//0//-0.4
+        //"input_perturbation": 0.12,
+        "input_perturbation": 1,
+        "input_perturbation_offset": -0.85//-0.5
     },
     "ddec_params": {
 

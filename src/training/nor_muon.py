@@ -67,15 +67,15 @@ def _zeropower_via_newtonschulz5(G: torch.Tensor, steps: int = 5) -> torch.Tenso
     performance at all relative to UV^T, where USV^T = G is the SVD.
     """
     assert G.ndim >= 2 # batched Muon implementation by @scottjmaddox, and put into practice in the record by @YouJiacheng
-    #a, b, c = (3.4445, -4.7750,  2.0315) # old coefficients
+    a, b, c = (3.4445, -4.7750,  2.0315) # old coefficients
 
-    ns_coeffs=( # new coefficients from https://github.com/leloykun/adaptive-muon?tab=readme-ov-file
-        (2.9145, -4.3663, 2.4515),
-        (2.9131, -4.3582, 2.4446),
-        (2.9030, -4.3145, 2.4106),
-        (2.8317, -4.0251, 2.1928),
-        (2.8392, -3.3535, 1.5149),
-    )
+    #ns_coeffs=( # new coefficients from https://github.com/leloykun/adaptive-muon?tab=readme-ov-file
+    #    (2.9145, -4.3663, 2.4515),
+    #    (2.9131, -4.3582, 2.4446),
+    #    (2.9030, -4.3145, 2.4106),
+    #    (2.8317, -4.0251, 2.1928),
+    #    (2.8392, -3.3535, 1.5149),
+    #)
 
     X = G.bfloat16()
     if G.size(-2) > G.size(-1):
@@ -85,7 +85,7 @@ def _zeropower_via_newtonschulz5(G: torch.Tensor, steps: int = 5) -> torch.Tenso
     X = X / (X.norm(dim=(-2, -1), keepdim=True) + 1e-7)
     # Perform the NS iterations
     for i in range(steps):
-        a, b, c = ns_coeffs[i]
+        #a, b, c = ns_coeffs[i]
         A = X @ X.mT
         B = b * A + c * A @ A # quintic computation strategy adapted from suggestion by @jxbz, @leloykun, and @YouJiacheng
         X = a * X + B @ X
@@ -94,7 +94,7 @@ def _zeropower_via_newtonschulz5(G: torch.Tensor, steps: int = 5) -> torch.Tenso
         X = X.mT
 
     # from https://github.com/leloykun/adaptive-muon
-    X = torch.einsum('ij,ij,ab->ab', G.type_as(X), X, X)  # Adaptive scaling,`(G * X).sum() * X` == (G.T @ X).trace() * X
+    #X = torch.einsum('ij,ij,ab->ab', G.type_as(X), X, X)  # Adaptive scaling,`(G * X).sum() * X` == (G.T @ X).trace() * X
 
     return X
 
@@ -109,13 +109,14 @@ def normuon_update(grad, momentum, second_momentum, beta=0.95, beta2=0.95, ns_st
     vnorm = update.norm(dim=(-2,-1), keepdim=True)
     v_mean = torch.mean(update * update, dim=-1, keepdim=True)
     second_momentum.lerp_(v_mean, 1 - beta2)
-    
     step_size = 1 / second_momentum.sqrt().add_(1e-10)
     update.mul_(step_size)
     vnorm_new = update.norm(dim=(-2,-1), keepdim=True)
     update.mul_(vnorm / (vnorm_new.add_(1e-10))) # This scaling keep the update norm the same as pre-normalization
     ##################################################
-    update *= max(1, grad.size(-2) / grad.size(-1))**0.5
+    #update *= max(1, grad.size(-2) / grad.size(-1))**0.5
+    #update *= max(1, update.size(-2) / update.size(-1))**0.5 # fix for conv params
+
     return update
 
 # old implementation

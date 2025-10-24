@@ -628,7 +628,7 @@ class DualDiffusionTrainer:
                 if current_step < scaled_lr_warmup_steps:
                     lr *= current_step / scaled_lr_warmup_steps
                 if current_step > scaled_lr_reference_steps:
-                    lr *= (scaled_lr_reference_steps / current_step) ** self.config.lr_schedule.lr_decay_exponent
+                    lr /= 1 + (current_step / scaled_lr_reference_steps) ** self.config.lr_schedule.lr_decay_exponent
                     lr = max(lr * self.config.lr_schedule.learning_rate,
                         self.config.lr_schedule.min_learning_rate) / self.config.lr_schedule.learning_rate
                 return lr
@@ -1124,16 +1124,6 @@ class DualDiffusionTrainer:
                 if self.use_muon == True:
                     train_logger.add_logs({"learn_rate/muon": last_learn_rates[0]})
                 train_logger.add_logs({"learn_rate/adamw": last_learn_rates[-1]})
-
-
-                """
-                update_threshold = self.optimizer.param_groups[0]["update_threshold"]
-                train_logger.add_log("learn_rate/update_threshold", update_threshold)
-                total_num_updated = 0
-                for group in self.optimizer.param_groups:
-                    total_num_updated += group["num_updated"]
-                train_logger.add_log("learn_rate/num_updated", total_num_updated)
-                """
                 train_logger.add_log("learn_rate/muon_base_rate", self.lr_scheduler.scheduler.base_lrs[0])
 
                 logs = train_logger.get_logs()
