@@ -224,6 +224,7 @@ class DAE(DualDiffusionDAE):
                 flavor="enc", use_attention=False, **block_kwargs)
                 
         self.conv_latents_out = MPConv(cenc, config.latent_channels, kernel=(1,3))
+        self.conv_latents_out_gain = torch.nn.Parameter(torch.ones([]))
         self.conv_latents_in  = MPConv(config.latent_channels + 1, cblock[-1], kernel=(3,3))
 
         # decoder
@@ -284,7 +285,7 @@ class DAE(DualDiffusionDAE):
         for name, block in self.enc.items():
             x = block(x) if "conv" in name else block(x, emb, rope_tables)
 
-        latents = self.conv_latents_out(x) #todo: might need gain param here
+        latents = self.conv_latents_out(x, gain=self.conv_latents_out_gain)
         latents = torch.nn.functional.avg_pool2d(latents, (1, self.downsample_ratio))
 
         if training == True:
