@@ -36,6 +36,7 @@ from typing import Optional, Literal, Type, Union, Any
 from dataclasses import dataclass
 from traceback import format_exception
 from fnmatch import fnmatch
+from re import search
 
 import torch
 import numpy as np
@@ -621,14 +622,28 @@ class DualDiffusionTrainer:
         scaled_lr_warmup_steps = self.config.lr_schedule.lr_warmup_steps * self.accelerator.num_processes
         scaled_lr_reference_steps = self.config.lr_schedule.lr_reference_steps * self.accelerator.num_processes
 
-        if self.config.lr_schedule.lr_schedule == "edm2":
+        if self.config.lr_schedule.lr_schedule == "edm2_smooth":
+
+            def lr_schedule(current_step: int) -> float:
+
+                lr = 1.
+
+                if current_step < scaled_lr_warmup_steps:
+                    theta = current_step / scaled_lr_warmup_steps * math.pi + math.pi
+                    lr *= (math.cos(theta) + 1) / 2
+                
+                lr /= 1 + (current_step / scaled_lr_reference_steps) ** self.config.lr_schedule.lr_decay_exponent
+
+                return lr
+        
+        elif self.config.lr_schedule.lr_schedule == "edm2":
 
             def lr_schedule(current_step: int) -> float:
                 lr = 1.
                 if current_step < scaled_lr_warmup_steps:
                     lr *= current_step / scaled_lr_warmup_steps
                 if current_step > scaled_lr_reference_steps:
-                    lr /= 1 + (current_step / scaled_lr_reference_steps) ** self.config.lr_schedule.lr_decay_exponent
+                    lr /= (current_step / scaled_lr_reference_steps) ** self.config.lr_schedule.lr_decay_exponent
                     lr = max(lr * self.config.lr_schedule.learning_rate,
                         self.config.lr_schedule.min_learning_rate) / self.config.lr_schedule.learning_rate
                 return lr
@@ -677,7 +692,7 @@ class DualDiffusionTrainer:
             return 1.
 
         if len(self.optimizer.param_groups) == 2:
-            schedules = [lr_schedule, lr_schedule_constant]
+            schedules = [lr_schedule, lr_schedule]
         else:
             schedules = lr_schedule
         self.lr_scheduler = LambdaLR(self.optimizer, schedules)
@@ -782,7 +797,7 @@ class DualDiffusionTrainer:
             try:
                 checkpoints = os.listdir(self.config.model_path)
                 checkpoints = [d for d in checkpoints if d.startswith(f"{self.config.module_name}_checkpoint")]
-                checkpoints = sorted(checkpoints, key=lambda x: int(x.split("-")[1]))
+                checkpoints = sorted(checkpoints, key=lambda x: int(search(r'\d+', x.split('-')[1]).group()))
 
                 if len(checkpoints) > self.config.checkpoints_total_limit:
                     num_to_remove = len(checkpoints) - self.config.checkpoints_total_limit
@@ -812,7 +827,7 @@ class DualDiffusionTrainer:
         # get latest checkpoint path
         dirs = os.listdir(self.config.model_path)
         dirs = [d for d in dirs if d.startswith(f"{self.config.module_name}_checkpoint")]
-        dirs = sorted(dirs, key=lambda x: int(x.split("-")[1]))
+        dirs = sorted(dirs, key=lambda x: int(search(r'\d+', x.split('-')[1]).group()))
         path = dirs[-1] if len(dirs) > 0 else None
 
         if path is None:
