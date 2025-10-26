@@ -40,9 +40,8 @@ def multi_plot(*args, layout: Optional[tuple[int, int]] = None,
                x_log_scale: bool = False,
                y_log_scale: bool = False,
                x_axis_range: Optional[tuple] = None,
-               y_axis_range: Optional[tuple] = None) -> None:
-
-    if config.NO_GUI: return
+               y_axis_range: Optional[tuple] = None,
+               save_path: Optional[str] = None) -> None:
     
     layout = layout or (len(args), 1)
     axes = np.atleast_2d(plt.subplots(layout[0],
@@ -90,12 +89,18 @@ def multi_plot(*args, layout: Optional[tuple[int, int]] = None,
                         top=1-0.1/figsize[1],
                         wspace=1.8/figsize[0],
                         hspace=1/figsize[1])
+    
+    if save_path is not None:
+        os.makedirs(os.path.dirname(save_path), exist_ok=True)
+        plt.savefig(save_path, dpi=200)
+
     plt.show()
 
 @torch.inference_mode()
 def sigma_sampler_test():
 
     test_params = config.load_json(os.path.join(config.CONFIG_PATH, "tests", "sigma_sampler.json"))
+    output_path = os.path.join(config.DEBUG_PATH, "sigma_sampler")
 
     reference_model_name = test_params["reference_model_name"]
     model_load_options = test_params["model_load_options"]
@@ -171,8 +176,9 @@ def sigma_sampler_test():
     if batch_sampler.config.distribution == "ln_pdf":
         multi_plot((batch_sampler.dist_pdf, "batch_distribution_pdf"),
                    (batch_sampler.dist_cdf, "batch_distribution_cdf"),
-                   y_axis_range=(0, None))
-        
+                   y_axis_range=(0, None),
+                   save_path=os.path.join(output_path, "batch_pdf_cdf.png"))
+
     avg_batch_mean = avg_batch_min = avg_batch_max = 0
     avg_reference_mean = avg_reference_min = avg_reference_max = 0
 
@@ -224,7 +230,8 @@ def sigma_sampler_test():
 
     multi_plot((batch_sigma_histo, "batch sigma"), (batch_example, "batch example"), (reference_example, "reference example"),
             added_plots={0: (reference_sigma_histo, "reference_sigma")},
-            y_log_scale=use_y_log_scale, x_axis_range=(np.log(sigma_min), np.log(sigma_max)))
+            y_log_scale=use_y_log_scale, x_axis_range=(np.log(sigma_min), np.log(sigma_max)),
+            save_path=os.path.join(output_path, "batch_ref_sigma_histo.png"))
     
 if __name__ == "__main__":
 

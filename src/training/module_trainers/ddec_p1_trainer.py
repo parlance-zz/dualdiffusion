@@ -84,7 +84,8 @@ class DiffusionDecoder_Trainer(UNetTrainer):
             self.logger.info("Using random stereo augmentation")
         else: self.logger.info("Random stereo augmentation is disabled")
 
-        self.loss_weight = self.format.mdct_mel_density / self.format.mdct_mel_density.mean()
+        #self.loss_weight = self.format.mdct_mel_density / self.format.mdct_mel_density.mean()
+        self.loss_weight = None
 
         self.unet = self.ddec
         self.unet_trainer_init(crop_edges=config.crop_edges)
