@@ -837,7 +837,7 @@ class DualDiffusionTrainer:
                     self.logger.warning(f"Last global step in {module_name} module config is {module.config.last_global_step}, but no checkpoint found")
                     # todo: set global_step/resume_step/first_epoch and override step counts in optimizer / lr scheduler
         else:
-            self.global_step = int(path.split("-")[1])
+            self.global_step = int(search(r'\d+', path).group())
             self.logger.info(f"Resuming from checkpoint {path} (global step: {self.global_step})")
             checkpoint_full_path = os.path.join(self.config.model_path, path)
             self.accelerator.load_state(checkpoint_full_path)
