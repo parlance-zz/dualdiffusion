@@ -30,24 +30,26 @@ import torch
 
 from modules.embeddings.clap import CLAP_Embedding
 from pipelines.dual_diffusion_pipeline import DualDiffusionPipeline, SampleParams
-from modules.unets.unet_edm2_ddec_i1 import DDec_UNet_I1
+from modules.unets.unet_edm2_p1_ddec import UNet
 from modules.embeddings.clap import CLAP_Embedding
-from modules.daes.dae import DualDiffusionDAE
+from modules.daes.dae_edm2_p1 import DAE
 from modules.formats.mdct import MDCT_Format
 from utils.dual_diffusion_utils import (
     init_cuda, normalize, save_audio, load_audio, load_safetensors,
-    save_img, get_audio_info, dict_str, save_tensor_raw
+    save_img, get_audio_info, dict_str
 )
 
 
 @torch.inference_mode()
 def dae_test() -> None:
-
-    torch.manual_seed(0)
-
-    test_params = config.load_json(
-        os.path.join(config.CONFIG_PATH, "tests", "dae_test.json"))
     
+    test_params = config.load_json(
+        os.path.join(config.CONFIG_PATH, "tests", "dae_mdct_test.json"))
+    
+    torch.manual_seed(0)
+    if test_params["random_test_samples_seed"] is not None:
+        random.seed(test_params["random_test_samples_seed"])
+
     model_name = test_params["model_name"]
     model_load_options = test_params["model_load_options"]
     length = test_params["length"]
@@ -55,15 +57,23 @@ def dae_test() -> None:
     model_path = os.path.join(config.MODELS_PATH, model_name)
     print(f"Loading DualDiffusion model from '{model_path}'...")
     pipeline = DualDiffusionPipeline.from_pretrained(model_path, **model_load_options)
-    dae: DualDiffusionDAE = getattr(pipeline, "dae", None)
-    ddec: DDec_UNet_I1 = getattr(pipeline, "ddec", None)
+    dae: DAE = getattr(pipeline, "dae", None)
+    ddec_mdct: UNet = getattr(pipeline, "ddec", None)
     format: MDCT_Format = pipeline.format
     embedding: CLAP_Embedding = pipeline.embedding
 
     sample_rate = format.config.sample_rate
     
-    last_global_step = ddec.config.last_global_step
-    output_path = os.path.join(model_path, "output", "ddec", f"step_{last_global_step}")
+    if test_params.get("ddec_output", False) != True:
+        ddec_mdct = None
+    
+    if ddec_mdct is None:
+        last_global_step = dae.config.last_global_step
+        output_path = os.path.join(model_path, "output", "dae", f"step_{last_global_step}")
+    else:
+        last_global_step = ddec_mdct.config.last_global_step
+        output_path = os.path.join(model_path, "output", "ddec", f"step_{last_global_step}")
+
     os.makedirs(output_path, exist_ok=True)
 
     model_metadata = {"model_metadata": dict_str(pipeline.model_metadata)}
@@ -71,16 +81,14 @@ def dae_test() -> None:
 
     dataset_path = config.DATASET_PATH
     test_samples: list[str] = test_params["test_samples"] or []
-    #sample_shape = pipeline.get_mel_spec_shape(raw_length=length)
-    #latent_shape = pipeline.get_latent_shape(sample_shape)
-    #print(f"Sample shape: {sample_shape}  Latent shape: {latent_shape}")
+    length = length or format.config.default_raw_length
+    sample_shape = pipeline.get_mel_spec_shape(raw_length=length)
+    latent_shape = pipeline.get_latent_shape(sample_shape)
+    print(f"Sample shape: {sample_shape}  Latent shape: {latent_shape}")
 
     if test_params.get("latents_img_use_pca", None) is not None:
         dae.config.latents_img_use_pca = test_params["latents_img_use_pca"]
     
-    if test_params.get("latents_img_flip_stereo", None) is not None:
-        dae.config.latents_img_flip_stereo = test_params["latents_img_flip_stereo"]
-
     start_time = datetime.datetime.now()
     avg_latents_mean = avg_latents_std = 0
 
@@ -90,9 +98,9 @@ def dae_test() -> None:
         test_samples += [sample["file_name"] for sample in random.sample(train_samples, add_random_test_samples)]
     copy_sample_source_files: bool = test_params["copy_sample_source_files"]
 
-    for filename in test_samples:   
+    for i, filename in enumerate(test_samples):
         
-        print(f"\nfile: {filename}")
+        print(f"\nfile {i+1}/{len(test_samples)}: {filename}")
         file_ext = os.path.splitext(filename)[1]
 
         file_path = os.path.join(dataset_path, filename)
@@ -100,9 +108,13 @@ def dae_test() -> None:
             file_path = os.path.join(config.DEBUG_PATH, filename)
 
         audio_len = get_audio_info(file_path).frames
+        if audio_len < length:
+            print(f"WARNING: audio length {audio_len} is shorter than the test length {length}, skipping...")
+            continue
         count = format.get_raw_crop_width(raw_length=min(length, audio_len))
         source_raw_sample = load_audio(file_path, count=count)
-        input_mdct = format.raw_to_mdct(source_raw_sample.unsqueeze(0).to(format.device))
+        input_raw_sample = source_raw_sample.unsqueeze(0).to(format.device)
+        input_mdct = format.raw_to_mdct(input_raw_sample, random_phase_augmentation=True, dual_channel=True)
 
         safetensors_file_name = os.path.join(f"{os.path.splitext(filename)[0]}.safetensors")
         safetensors_file_path = os.path.join(dataset_path, safetensors_file_name)
@@ -113,65 +125,43 @@ def dae_test() -> None:
             audio_embedding = normalize(latents_dict["clap_audio_embeddings"].mean(dim=0, keepdim=True)).float()
         else:
             audio_embedding = normalize(embedding.encode_audio(
-                input_mdct, sample_rate=format.config.sample_rate).mean(dim=0, keepdim=True)).float()
+                input_raw_sample, sample_rate=format.config.sample_rate).mean(dim=0, keepdim=True)).float()
 
         filename = os.path.basename(filename)
 
         # ***************** dae stage *****************
-        if test_params["dae_bypass"] == False and dae is not None:
-            dae_embedding = dae.get_embeddings(audio_embedding)
 
-            if test_params["latents_tiled_encode"] == True:
-                raise NotImplementedError()
-                latents = dae.tiled_encode(input_mel_spec.to(dtype=dae.dtype), dae_embedding,
-                    max_chunk=test_params["latents_tiled_max_chunk_size"], overlap=test_params["latents_tiled_overlap"])
-                
-                output_embeddings = dae.decode(latents, dae_embedding)
-            else:
-                add_latents_noise = None#0.03 #None
-                latents, output_embeddings, _ = dae.forward(input_mdct.to(dtype=dae.dtype), dae_embedding, add_latents_noise)
+        dae_embedding = dae.get_embeddings(audio_embedding.to(dtype=dae.dtype))
 
+        if test_params["latents_tiled_encode"] == True:
+            latents = dae.tiled_encode(input_mdct.to(dtype=dae.dtype), dae_embedding,
+                max_chunk=test_params["latents_tiled_max_chunk_size"], overlap=test_params["latents_tiled_overlap"])
         else:
-            latents = None
-            output_embeddings = None
-
-        print("latents freq stds:", latents.std(dim=(1,3)))
-        print("latents freq means:", latents.mean(dim=3).abs().mean(dim=1))
-        latents -= latents.mean(dim=(3), keepdim=True)
-        latents /= latents.std(dim=(1,3), keepdim=True)
+            latents = dae.encode(input_mdct.to(dtype=dae.dtype), dae_embedding).float()
         
-        latents = latents.to(dtype=torch.bfloat16)
-        output_embeddings = output_embeddings.to(dtype=torch.bfloat16)
+        ddec_cond = dae.decode(latents.to(dtype=dae.dtype), dae_embedding).float()
 
+        # ***************** ddec mdct stage ***************** 
+        x_ref_mdct = ddec_cond
 
-        #for i, embedding in enumerate(output_embeddings):
-        #    output_embeddings embedding.to(torch.bfloat16)
-
-        if ddec is not None and test_params["ddec_output"] != False:
-            ddec_params = SampleParams(
+        if ddec_mdct is not None:
+            ddec_mdct_params = SampleParams(
                 seed=5000,
-                num_steps=100, length=audio_len, cfg_scale=1.5, input_perturbation=0, input_perturbation_offset=0,
-                use_heun=True, schedule="edm2", rho=7, sigma_max=12, sigma_min=0.0001, stereo_fix=0
+                num_steps=20, length=audio_len, cfg_scale=1.5, input_perturbation=0, input_perturbation_offset=-0.3,
+                use_heun=True, schedule="linear", rho=7, sigma_max=11, sigma_min=0.0002, stereo_fix=0
             )
 
-            print("latents.shape:", latents.shape)
-            print("get_mdct_shape:", format.get_mdct_shape(raw_length=count))
-            print("input_mdct.shape:", input_mdct.shape)
-            print("output_embeddings.shape:", output_embeddings.shape)
-
             output_ddec_mdct = pipeline.diffusion_decode(
-                ddec_params, audio_embedding=output_embeddings,
+                ddec_mdct_params, audio_embedding=audio_embedding,
                 sample_shape=format.get_mdct_shape(raw_length=count),
-                x_ref=None, module=ddec)
+                x_ref=x_ref_mdct.to(dtype=ddec_mdct.dtype), module=ddec_mdct)
             
             output_raw = format.mdct_to_raw(output_ddec_mdct.float())
         else:
-            ddec_params = output_ddec_mdct = ddec = output_raw = None
+            output_raw = None
 
-        print(f"input   mean/std: {input_mdct.mean().item():.4} {input_mdct.std().item():.4}")
-        if output_ddec_mdct is not None:
-            print(f"output  mean/std: {output_ddec_mdct.mean().item():.4} {output_ddec_mdct.std().item():.4}")
-            
+        print(f"input_mdct   mean/std: {input_mdct.mean().item():.4} {input_mdct.std().item():.4}")
+        print(f"ddec_cond    mean/std: {ddec_cond.mean().item():.4} {ddec_cond.std().item():.4}")
         if latents is not None:
             latents_mean = latents.mean().item()
             latents_std = latents.std().item()
@@ -180,12 +170,18 @@ def dae_test() -> None:
             print(f"latents mean/std: {latents_mean:.4} {latents_std:.4}")
         
         metadata = {**model_metadata}
-        metadata["ddec_metadata"] = dict_str(ddec_params.__dict__) if ddec is not None else "null"
+        metadata["ddec_mdct_metadata"] = dict_str(ddec_mdct_params.__dict__) if ddec_mdct is not None else "null"
 
-        if latents is not None:
-            save_img(dae.latents_to_img(latents), os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_latents.png')}"))
-            save_img(dae.latents_to_img(latents), os.path.join(output_path, "1", f"step_{last_global_step}_{filename.replace(file_ext, '_latents.png')}"))
-            save_tensor_raw(latents.float().contiguous(), os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_latents.raw')}"))
+        #if latents is not None:
+        #    save_img(dae.latents_to_img(latents), os.path.join(output_path, "1", f"step_{last_global_step}_{filename.replace(file_ext, '_latents.png')}"))
+        
+        #if test_params.get("xref_output", False) == True:
+        #    save_img(format.mdct_psd_to_img(input_x_ref_mdct), os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_input_x_ref_mdct.png')}"))
+        #    if x_ref_mdct is not None:
+        #        save_img(format.mdct_psd_to_img(x_ref_mdct), os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_output_x_ref_mdct.png')}"))
+        #save_img(format.mel_spec_to_img(input_mel_spec), os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_input_mel_spec.png')}"))
+        #save_img(format.mel_spec_to_img(ddec_cond), os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_output_mel_spec.png')}"))
+        #save_img(format.mel_spec_to_img(ddec_cond - input_mel_spec), os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_error_mel_spec.png')}"))
 
         if output_raw is not None:
             output_flac_file_path = os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_decoded.flac')}")
