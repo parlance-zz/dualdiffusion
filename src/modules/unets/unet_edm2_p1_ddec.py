@@ -47,8 +47,8 @@ class UNetConfig(DualDiffusionUNetConfig):
 
     in_channels:  int = 128
     out_channels: int = 128
-    in_channels_emb: int = 1024
-    in_channels_x_ref: int = 64
+    in_channels_emb: int = 0
+    in_channels_x_ref: int = 256
 
     sigma_max: float  = 11.
     sigma_min: float  = 0.0002
@@ -57,7 +57,7 @@ class UNetConfig(DualDiffusionUNetConfig):
     mp_fourier_ln_sigma_offset: float = -0.7
     mp_fourier_bandwidth:       float = 1
 
-    model_channels: int  = 1280              # Base multiplier for the number of channels.
+    model_channels: int  = 2048              # Base multiplier for the number of channels.
     logvar_channels: int = 192               # Number of channels for training uncertainty estimation.
     channel_mult: list[int]    = (1,)        # Per-resolution multipliers for the number of channels.
     channel_mult_noise: Optional[int] = 1    # Multiplier for noise embedding dimensionality.
@@ -72,9 +72,9 @@ class UNetConfig(DualDiffusionUNetConfig):
     res_balance: float        = 0.5          # Balance between main branch (0) and residual branch (1).
     attn_balance: float       = 0.5          # Balance between main branch (0) and self-attention (1).
     attn_levels: list[int]    = ()           # List of resolution levels to use self-attention.
-    mlp_multiplier: int    = 4               # Multiplier for the number of channels in the MLP.
-    mlp_groups: int        = 4               # Number of groups for the MLPs.
-    emb_linear_groups: int = 4
+    mlp_multiplier: int    = 2               # Multiplier for the number of channels in the MLP.
+    mlp_groups: int        = 8               # Number of groups for the MLPs.
+    emb_linear_groups: int = 2
 
     input_skip_t: float = 0.5
 
@@ -118,7 +118,8 @@ class Block(torch.nn.Module):
 
         self.conv_res0 = MPConv(in_channels, inner_channels, kernel=(1,3), groups=mlp_groups)
         self.conv_res1 = MPConv(inner_channels, out_channels, kernel=(1,3), groups=mlp_groups)
-        #self.conv_stereo = MPConv(inner_channels, out_channels, kernel=(1,1), groups=1)
+        #self.conv_stereo0 = MPConv(inner_channels, inner_channels, kernel=(1,1), groups=1)
+        self.conv_stereo1 = MPConv(out_channels, out_channels, kernel=(1,1), groups=1)
         
         self.emb_gain = torch.nn.Parameter(torch.zeros([]))
         self.emb_linear = MPConv(emb_channels, inner_channels, kernel=(1,1), groups=emb_linear_groups)
@@ -134,7 +135,7 @@ class Block(torch.nn.Module):
 
     def forward(self, x: torch.Tensor, emb: torch.Tensor, rope_tables: tuple[torch.Tensor, torch.Tensor]) -> torch.Tensor:
         
-        x = self.conv_skip(x)
+        x = normalize(self.conv_skip(x), dim=1)
 
         if self.use_attention == True:
 
@@ -160,7 +161,9 @@ class Block(torch.nn.Module):
             y = self.attn_proj(y.reshape(*x.shape))
             x = mp_sum(x, y, t=self.attn_balance)
 
-        y = self.conv_res0(x)
+        y = self.conv_res0(mp_silu(x))
+        #stereo: torch.Tensor = self.conv_stereo0(y).flip(dims=(2,))
+        #y = mp_sum(y, stereo, t=0.5)
 
         c = self.emb_linear(emb, gain=self.emb_gain) + 1.
         y = mp_silu(normalize(y * c, dim=1))
@@ -169,8 +172,8 @@ class Block(torch.nn.Module):
             y = torch.nn.functional.dropout(y, p=self.dropout) * (1. - self.dropout)**0.5
 
         y: torch.Tensor = self.conv_res1(y)
-        #stereo: torch.Tensor = self.conv_stereo(y).flip(dims=(2,))
-        #y = mp_sum(y, stereo, t=0.5)
+        stereo: torch.Tensor = self.conv_stereo1(y).flip(dims=(2,))
+        y = normalize(mp_sum(y, stereo, t=0.5), dim=1)
         
         x = mp_sum(x, y, t=self.res_balance)
 
@@ -209,8 +212,12 @@ class UNet(DualDiffusionUNet):
         # Embedding.
         self.emb_fourier = MPFourier(cnoise, bandwidth=config.mp_fourier_bandwidth)
         self.emb_noise = MPConv(cnoise, cemb, kernel=())
-        self.emb_label = MPConv(config.in_channels_emb, cemb, kernel=())
-        self.emb_label_unconditional = MPConv(1, cemb, kernel=())
+        if config.in_channels_emb > 0:
+            self.emb_label = MPConv(config.in_channels_emb, cemb, kernel=())
+            self.emb_label_unconditional = MPConv(1, cemb, kernel=())
+        else:
+            self.emb_label = None
+            self.emb_label_unconditional = None
 
         # Training uncertainty estimation.
         self.logvar_fourier = MPFourier(config.logvar_channels)
@@ -236,6 +243,7 @@ class UNet(DualDiffusionUNet):
                     cskip = channels
                 else:
                     cskip = 0
+                cskip += config.in_channels_x_ref
 
                 self.dec[f"block{level}_layer{idx}"] = Block(level, cin, cout, cskip, cemb, use_attention=level in config.attn_levels, **block_kwargs)
                 
@@ -243,9 +251,12 @@ class UNet(DualDiffusionUNet):
         self.conv_out = MPConv(cout, config.out_channels, kernel=(3,3))
 
     def get_embeddings(self, emb_in: torch.Tensor, conditioning_mask: torch.Tensor) -> torch.Tensor:
-        u_embedding = self.emb_label_unconditional(torch.ones(1, device=self.device, dtype=self.dtype))
-        c_embedding = self.emb_label(normalize(emb_in).to(device=self.device, dtype=self.dtype))
-        return mp_sum(u_embedding, c_embedding, t=conditioning_mask.unsqueeze(1).to(self.device, self.dtype))
+        if self.config.in_channels_emb > 0:
+            u_embedding = self.emb_label_unconditional(torch.ones(1, device=self.device, dtype=self.dtype))
+            c_embedding = self.emb_label(normalize(emb_in).to(device=self.device, dtype=self.dtype))
+            return mp_sum(u_embedding, c_embedding, t=conditioning_mask.unsqueeze(1).to(self.device, self.dtype))
+        else:
+            return emb_in
         
     def get_sigma_loss_logvar(self, sigma: Optional[torch.Tensor] = None) -> torch.Tensor:
         ln_sigma = sigma.flatten().log() - self.config.mp_fourier_ln_sigma_offset
@@ -278,20 +289,24 @@ class UNet(DualDiffusionUNet):
 
         # Embedding.
         emb: torch.Tensor = self.emb_noise(self.emb_fourier(c_noise))
-        emb = mp_sum(emb, embeddings.to(dtype=emb.dtype), t=self.config.label_balance)
-        emb = mp_silu(emb)[..., None, None].to(dtype=torch.bfloat16)
+        if self.config.in_channels_emb > 0:
+            emb = mp_sum(emb, embeddings.to(dtype=emb.dtype), t=self.config.label_balance)
+        emb = mp_silu(emb)[..., None, None].to(dtype=torch.bfloat16) # todo: maybe no mp_silu here
       
         rope_tables = _rope_tables_for_stereo(x, self.config.rope_channels, self.config.rope_base)
 
         # Encoder.
-        x_input = torch.cat((x, x_ref.to(dtype=x.dtype)), dim=1)
-        x = torch.cat((x_input, torch.ones_like(x[:, :1])), dim=1)
+        x_input = x
+        x_ref = x_ref.to(dtype=x.dtype)
+        x = torch.cat((x, x_ref, torch.ones_like(x[:, :1])), dim=1)
 
         idx = 0; skips = []
         for name, block in self.dec.items():
             if "conv" in name:
                 x = block(x)
             else:
+                x = torch.cat((x, x_ref), dim=1)
+
                 if self.config.use_skips == True and idx >= self.config.num_layers_per_block / 2:
                     if self.config.use_conv_skip == True:
                         x = torch.cat((x, skips.pop()), dim=1)

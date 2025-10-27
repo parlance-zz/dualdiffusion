@@ -110,8 +110,8 @@ class DiffusionDecoder_Trainer(UNetTrainer):
         latents, ddec_cond, pre_norm_latents = self.dae(mdct_samples2, dae_embeddings)
 
         pre_norm_latents_var = pre_norm_latents.var(dim=1)
-        kl_loss = pre_norm_latents.mean(dim=1).square() + pre_norm_latents_var - 1 - pre_norm_latents_var.log()
-        kl_loss = kl_loss.mean(dim=(1,2))
+        var_kl = pre_norm_latents_var - 1 - pre_norm_latents_var.log()
+        kl_loss = var_kl.mean(dim=(1,2)) + pre_norm_latents.mean(dim=(1,2,3)).square()
 
         kl_loss_weight = self.config.kl_loss_weight
         if self.trainer.global_step < self.config.kl_warmup_steps:

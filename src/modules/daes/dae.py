@@ -31,11 +31,11 @@ from modules.module import DualDiffusionModule, DualDiffusionModuleConfig
 from utils.dual_diffusion_utils import tensor_to_img
 
 
-def top4_pca_components(x: torch.Tensor) -> torch.Tensor:
+def top_pca_components(x: torch.Tensor, n_pca: int = 4) -> torch.Tensor:
     B, C, H, W = x.shape
-    
-    result = torch.zeros((B, 4, H, W), device=x.device, dtype=x.dtype)
-    
+
+    result = torch.zeros((B, n_pca, H, W), device=x.device, dtype=x.dtype)
+
     for b in range(B):
         # reshape to (H*W, C) for this batch item
         x_b = x[b].reshape(C, H*W).transpose(0, 1)  # shape: (H*W, C)
@@ -45,13 +45,13 @@ def top4_pca_components(x: torch.Tensor) -> torch.Tensor:
         x_b_centered = x_b - mean_b
         
         # do PCA using torch.pca_lowrank
-        U, S, V = torch.pca_lowrank(x_b_centered, q=4)
-        
-        # project data onto the top 4 principal components
-        projected_data = torch.matmul(x_b_centered, V)  # shape: (H*W, 4)
-        
-        # reshape back to (4, H, W)
-        result[b] = projected_data.transpose(0, 1).reshape(4, H, W) 
+        U, S, V = torch.pca_lowrank(x_b_centered, q=n_pca)
+
+        # project data onto the top n_pca principal components
+        projected_data = torch.matmul(x_b_centered, V)  # shape: (H*W, n_pca)
+
+        # reshape back to (n_pca, H, W)
+        result[b] = projected_data.transpose(0, 1).reshape(n_pca, H, W)
     
     return result
 
@@ -124,7 +124,7 @@ class DualDiffusionDAE(DualDiffusionModule, ABC):
             latents = torch.cat((latents[:, 0::2], latents[:, 1::2]), dim=2)
         
         if self.config.latents_img_use_pca == True:
-            return tensor_to_img(top4_pca_components(latents.float()),
+            return tensor_to_img(top_pca_components(latents.float()),
                 flip_y=True, channel_order=self.config.latents_img_channel_order)
         else:
             return tensor_to_img(latents, flip_y=True,

@@ -20,6 +20,28 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
+# MIT License
+#
+# Copyright (c) 2025 zichongli5
+#
+# Permission is hereby granted, free of charge, to any person obtaining a copy
+# of this software and associated documentation files (the "Software"), to deal
+# in the Software without restriction, including without limitation the rights
+# to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+# copies of the Software, and to permit persons to whom the Software is
+# furnished to do so, subject to the following conditions:
+#
+# The above copyright notice and this permission notice shall be included in all
+# copies or substantial portions of the Software.
+#
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+# SOFTWARE.
+
 # Modifications under MIT License
 #
 # Copyright (c) 2023 Christopher Friesen
@@ -109,10 +131,10 @@ def normuon_update(grad, momentum, second_momentum, beta=0.95, beta2=0.95, ns_st
     vnorm = update.norm(dim=(-2,-1), keepdim=True)
     v_mean = torch.mean(update * update, dim=-1, keepdim=True)
     second_momentum.lerp_(v_mean, 1 - beta2)
-    step_size = 1 / second_momentum.sqrt().add_(1e-10)
+    step_size = 1 / second_momentum.sqrt().add_(1e-20)
     update.mul_(step_size)
     vnorm_new = update.norm(dim=(-2,-1), keepdim=True)
-    update.mul_(vnorm / (vnorm_new.add_(1e-10))) # This scaling keep the update norm the same as pre-normalization
+    update.mul_(vnorm / (vnorm_new.add_(1e-20))) # This scaling keep the update norm the same as pre-normalization
     ##################################################
     #update *= max(1, grad.size(-2) / grad.size(-1))**0.5
     #update *= max(1, update.size(-2) / update.size(-1))**0.5 # fix for conv params

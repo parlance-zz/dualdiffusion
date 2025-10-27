@@ -36,8 +36,9 @@ from typing import Union, Optional, Literal
 import torch
 from numpy import ndarray
 
-from modules.daes.dae import DualDiffusionDAE, DualDiffusionDAEConfig
+from modules.daes.dae import DualDiffusionDAE, DualDiffusionDAEConfig, top_pca_components
 from modules.mp_tools import MPConv, mp_silu, mp_sum, normalize, resample_1d
+from modules.formats.frequency_scale import get_mel_density
 from modules.rope import _rope_pair_rotate_partial, _rope_tables_for_seq
 
 
@@ -59,7 +60,7 @@ def _rope_tables_for_stereo(x: torch.Tensor, rope_channels: int, rope_base: floa
 class DAE_Config(DualDiffusionDAEConfig):
 
     in_channels:  int = 256
-    out_channels: int = 64
+    out_channels: int = 256
     in_channels_emb: int = 1024
     latent_channels: int = 64
     in_num_freqs: int = 128
@@ -75,14 +76,14 @@ class DAE_Config(DualDiffusionDAEConfig):
     channels_per_head: int    = 64           # Number of channels per attention head.
     rope_channels: int        = 48
     rope_base: float          = 10000.
-    num_enc_layers: int       = 5
-    num_dec_layers_per_block: int = 1        # Number of resnet blocks per resolution.
-    res_balance: float        = 0.5          # Balance between main branch (0) and residual branch (1).
-    attn_balance: float       = 0.5          # Balance between main branch (0) and self-attention (1).
+    num_enc_layers: int       = 8
+    num_dec_layers_per_block: int = 2        # Number of resnet blocks per resolution.
+    res_balance: float        = 0.3          # Balance between main branch (0) and residual branch (1).
+    attn_balance: float       = 0.3          # Balance between main branch (0) and self-attention (1).
     attn_levels: list[int]    = ()           # List of resolution levels to use self-attention.
-    mlp_multiplier: int    = 4               # Multiplier for the number of channels in the MLP.
-    mlp_groups: int        = 4               # Number of groups for the MLPs.
-    emb_linear_groups: int = 4
+    mlp_multiplier: int    = 2               # Multiplier for the number of channels in the MLP.
+    mlp_groups: int        = 8               # Number of groups for the MLPs.
+    emb_linear_groups: int = 2
 
 class Block(torch.nn.Module):
 
@@ -127,7 +128,8 @@ class Block(torch.nn.Module):
 
         self.conv_res0 = MPConv(out_channels, inner_channels, kernel=(1,3), groups=mlp_groups)
         self.conv_res1 = MPConv(inner_channels, out_channels, kernel=(1,3), groups=mlp_groups)
-        #self.conv_stereo = MPConv(inner_channels, out_channels, kernel=(1,1), groups=1)
+        #self.conv_stereo0 = MPConv(inner_channels, inner_channels, kernel=(1,1), groups=1)
+        self.conv_stereo1 = MPConv(out_channels, out_channels, kernel=(1,1), groups=1)
         
         self.emb_gain = torch.nn.Parameter(torch.zeros([]))
         self.emb_linear = MPConv(emb_channels, inner_channels, kernel=(1,1), groups=emb_linear_groups)
@@ -170,7 +172,9 @@ class Block(torch.nn.Module):
             y = self.attn_proj(y.reshape(*x.shape))
             x = mp_sum(x, y, t=self.attn_balance)
 
-        y = self.conv_res0(x)
+        y = self.conv_res0(mp_silu(x))
+        #stereo: torch.Tensor = self.conv_stereo0(y).flip(dims=(2,))
+        #y = mp_sum(y, stereo, t=0.5)
 
         c = self.emb_linear(emb, gain=self.emb_gain) + 1.
         y = mp_silu(normalize(y * c, dim=1))
@@ -179,8 +183,8 @@ class Block(torch.nn.Module):
             y = torch.nn.functional.dropout(y, p=self.dropout) * (1. - self.dropout)**0.5
 
         y: torch.Tensor = self.conv_res1(y)
-        #stereo: torch.Tensor = self.conv_stereo(y).flip(dims=(2,))
-        #y = mp_sum(y, stereo, t=0.5)
+        stereo: torch.Tensor = self.conv_stereo1(y).flip(dims=(2,))
+        y = normalize(mp_sum(y, stereo, t=0.5), dim=1)
         
         x = mp_sum(x, y, t=self.res_balance)
 
@@ -218,13 +222,13 @@ class DAE(DualDiffusionDAE):
 
         # encoder
         self.enc = torch.nn.ModuleDict()
-        self.enc[f"conv_in"] = MPConv(cdata + 1, cenc, kernel=(1,3))
+        self.enc[f"conv_in"] = MPConv(cdata + 1, cenc, kernel=(3,3))
 
         for idx in range(config.num_enc_layers):
             self.enc[f"block_0_layer{idx}"] = Block(0, cenc, cenc, cemb,
                 flavor="enc", use_attention=False, **block_kwargs)
                 
-        self.conv_latents_out = MPConv(cenc, config.latent_channels, kernel=(1,3))
+        self.conv_latents_out = MPConv(cenc, config.latent_channels, kernel=(3,3))
         self.conv_latents_out_gain = torch.nn.Parameter(torch.ones([]))
         self.conv_latents_in  = MPConv(config.latent_channels + 1, cblock[-1], kernel=(3,3))
 
@@ -323,8 +327,15 @@ class DAE(DualDiffusionDAE):
 
     def latents_to_img(self, latents: torch.Tensor) -> ndarray:
         
-        latents = latents.view(latents.shape[0], latents.shape[1] // 4, 4, 2, latents.shape[3])
-        latents = latents.permute(0, 2, 3, 1, 4)
+        #latents = top_pca_components(latents, n_pca = latents.shape[1])
+        
+        latents = latents.view(latents.shape[0], 4, latents.shape[1] // 4, 2, latents.shape[3])
+        latents = latents.permute(0, 1, 3, 2, 4)
         latents = latents.reshape(latents.shape[0], 8, latents.shape[3], latents.shape[4])
+
+        #latents = normalize(latents, dim=3)
+        #hz = torch.linspace(0, 16000, steps=latents.shape[2], device=latents.device)
+        #mel_density = get_mel_density(hz)
+        #latents /= mel_density[None, None, :, None]
 
         return super().latents_to_img(latents)
