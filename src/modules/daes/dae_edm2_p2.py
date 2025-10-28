@@ -39,54 +39,49 @@ from numpy import ndarray
 from modules.daes.dae import DualDiffusionDAE, DualDiffusionDAEConfig, top_pca_components
 from modules.mp_tools import MPConv, mp_silu, mp_sum, normalize, resample_1d
 from modules.rope import _rope_pair_rotate_partial, _rope_tables_for_seq
-from modules.sliding_attention import SlidingWindowAttention
 
 
-def _rope_tables_for_stereo(x: torch.Tensor, rope_channels: int, rope_base: float, seq_len: Optional[int] = None) -> tuple[torch.Tensor, torch.Tensor]:
+def _rope_tables_for_stereo(x: torch.Tensor, rope_channels: int, rope_base: float) -> tuple[torch.Tensor, torch.Tensor]:
 
-    rope_tables_cos, rope_tables_sin = _rope_tables_for_seq(seq_len or x.shape[3], rope_channels, rope_base, device=x.device, dtype=x.dtype)
+    rope_tables_cos, rope_tables_sin = _rope_tables_for_seq(x.shape[3], rope_channels, rope_base, device=x.device, dtype=x.dtype)
 
     # expand for stereo in h dim
-    rope_tables_cos = rope_tables_cos.repeat_interleave(repeats=2, dim=2)
-    rope_tables_sin = rope_tables_sin.repeat_interleave(repeats=2, dim=2)
+    rope_tables_cos = rope_tables_cos.repeat(1, 1, 2, 1)
+    rope_tables_sin = rope_tables_sin.repeat(1, 1, 2, 1)
 
-    # modulate alternating-element values for stereo differentiation
+    # add values for stereo differentiation
     rope_tables_cos = torch.cat((rope_tables_cos,  torch.ones_like(rope_tables_cos[..., 0:2])), dim=-1)
-    rope_tables_sin = torch.cat((rope_tables_sin,  torch.ones_like(rope_tables_sin[..., 0:2])), dim=-1)
-    rope_tables_cos[:, :, 0::2, -2:] *= -1
-    rope_tables_sin[:, :, 0::2, -2:] *= -1
+    rope_tables_sin = torch.cat((rope_tables_sin, -torch.ones_like(rope_tables_sin[..., 0:2])), dim=-1)
 
-    return (rope_tables_cos.to(dtype=torch.bfloat16), rope_tables_sin.to(dtype=torch.bfloat16))
+    return (rope_tables_cos, rope_tables_sin)
 
 @dataclass
 class DAE_Config(DualDiffusionDAEConfig):
 
-    in_channels:  int = 256
-    out_channels: int = 128
+    in_channels:  int = 2
+    out_channels: int = 2
     in_channels_emb: int = 1024
-    latent_channels: int = 64
+    latent_channels: int = 1
     in_num_freqs: int = 128
 
     mp_fourier_ln_sigma_offset: float = -0.7
     mp_fourier_bandwidth:       float = 1
 
-    model_channels: int   = 768              # Base multiplier for the number of channels.
-    logvar_channels: int  = 192               # Number of channels for training uncertainty estimation.
+    model_channels: int   = 32              # Base multiplier for the number of channels.
     channel_mult_enc: int = 1
-    channel_mult_dec: list[int] = (1,1,1,1,1) # Per-resolution multipliers for the number of channels.
-    channel_mult_emb: Optional[int] = 1       # Multiplier for final embedding dimensionality.
+    channel_mult_dec: list[int] = (32,32,32,32,32) # Per-resolution multipliers for the number of channels.
+    channel_mult_emb: Optional[int] = 32       # Multiplier for final embedding dimensionality.
     channels_per_head: int    = 64           # Number of channels per attention head.
-    rope_channels: int        = 54
-    rope_base: float          = 20000.
-    attention_window_size: int = 16
-    num_enc_layers: int       = 6
-    num_dec_layers_per_block: int = 1        # Number of resnet blocks per resolution.
-    res_balance_enc: float    = 0.5          # Balance between main branch (0) and residual branch (1).
-    res_balance_dec: float    = 0.5          # Balance between main branch (0) and residual branch (1).
-    attn_balance: float       = 0.5          # Balance between main branch (0) and self-attention (1).
-    attn_levels: list[int]    = (0,)  # List of resolution levels to use self-attention.
-    mlp_multiplier: int    = 4               # Multiplier for the number of channels in the MLP.
-    mlp_groups: int        = 8               # Number of groups for the MLPs.
+    rope_channels: int        = 48
+    rope_base: float          = 10000.
+    num_enc_layers: int       = 8
+    num_dec_layers_per_block: int = 2        # Number of resnet blocks per resolution.
+    res_balance_enc: float    = 0.3          # Balance between main branch (0) and residual branch (1).
+    res_balance_dec: float    = 0.3          # Balance between main branch (0) and residual branch (1).
+    attn_balance: float       = 0.3          # Balance between main branch (0) and self-attention (1).
+    attn_levels: list[int]    = ()           # List of resolution levels to use self-attention.
+    mlp_multiplier: int    = 2               # Multiplier for the number of channels in the MLP.
+    mlp_groups: int        = 2               # Number of groups for the MLPs.
     emb_linear_groups: int = 2
 
 class Block(torch.nn.Module):
@@ -107,16 +102,16 @@ class Block(torch.nn.Module):
         emb_linear_groups: int = 4,
         channels_per_head: int = 64,       # Number of channels per attention head.
         use_attention: bool    = False,    # Use self-attention in this block.
-        attention_window_size: int = 16
     ) -> None:
         super().__init__()
 
-        assert out_channels % channels_per_head == 0
+        assert out_channels % channels_per_head == 0 or use_attention == False
 
         self.level = level
         self.use_attention = use_attention
         self.num_heads = out_channels // channels_per_head
         self.out_channels = out_channels
+        self.emb_channels = emb_channels
         self.flavor = flavor
         self.resample_mode = resample_mode
         self.dropout = dropout
@@ -125,28 +120,40 @@ class Block(torch.nn.Module):
         self.clip_act = clip_act
         
         inner_channels = out_channels * mlp_multiplier
+        if flavor == "enc":
+            kernel = (3,3)
+            mlp_groups = 1
+        else:
+            kernel = (1,3)
 
-        if in_channels != out_channels or (mlp_groups > 1 and use_attention == False):
+        if in_channels != out_channels or mlp_groups > 1:
             self.conv_skip = MPConv(in_channels, out_channels, kernel=(1,1), groups=1)
         else:
             self.conv_skip = torch.nn.Identity()
 
-        self.conv_res0 = MPConv(out_channels, inner_channels, kernel=(3,3), groups=mlp_groups)
-        self.conv_res1 = MPConv(inner_channels, out_channels, kernel=(3,3), groups=mlp_groups)
+        self.conv_res0 = MPConv(out_channels, inner_channels, kernel=kernel, groups=mlp_groups)
+        self.conv_res1 = MPConv(inner_channels, out_channels, kernel=kernel, groups=mlp_groups)
+        #self.conv_stereo0 = MPConv(inner_channels, inner_channels, kernel=(1,1), groups=1)
         
-        self.emb_gain = torch.nn.Parameter(torch.zeros([]))
-        self.emb_linear = MPConv(emb_channels, inner_channels, kernel=(1,1), groups=emb_linear_groups)
-
+        if emb_channels > 0:
+            self.emb_gain = torch.nn.Parameter(torch.zeros([]))
+            self.emb_linear = MPConv(emb_channels, inner_channels, kernel=(1,1), groups=emb_linear_groups)
+        else:
+            self.emb_gain = None
+            self.emb_linear = None
+            
         if self.use_attention == True:
             self.attn_q = MPConv(out_channels, out_channels, kernel=(1,1))
             self.attn_k = MPConv(out_channels, out_channels, kernel=(1,1))
             self.attn_v = MPConv(out_channels, out_channels, kernel=(1,1))
             self.attn_proj = MPConv(out_channels, out_channels, kernel=(1,1))
 
-            self.emb_gain_qkv = torch.nn.Parameter(torch.zeros([]))
-            self.emb_linear_qkv = MPConv(emb_channels, out_channels, kernel=(1,1), groups=emb_linear_groups)
-
-            self.sliding_attn = SlidingWindowAttention(attention_window_size, causal=False, head_dim=channels_per_head)
+            if emb_channels > 0:
+                self.emb_gain_qkv = torch.nn.Parameter(torch.zeros([]))
+                self.emb_linear_qkv = MPConv(emb_channels, out_channels, kernel=(1,1), groups=emb_linear_groups)
+            else:
+                self.emb_gain_qkv = None
+                self.emb_linear_qkv = None
 
     def forward(self, x: torch.Tensor, emb: torch.Tensor, rope_tables: tuple[torch.Tensor, torch.Tensor]) -> torch.Tensor:
         
@@ -154,11 +161,12 @@ class Block(torch.nn.Module):
         x = normalize(self.conv_skip(x), dim=1)
 
         if self.use_attention == True:
-
-            x = x.transpose(-1, -2)
-
-            c = self.emb_linear_qkv(emb, gain=self.emb_gain_qkv) + 1.
-            y = x * c
+            
+            if self.emb_channels > 0:
+                c = self.emb_linear_qkv(emb, gain=self.emb_gain_qkv) + 1.
+                y = x * c
+            else:
+                y = x
 
             # bizarrely this is way faster than doing a single qkv projection, and uses less memory (with compile)
             q: torch.Tensor = self.attn_q(y)
@@ -174,16 +182,19 @@ class Block(torch.nn.Module):
             q_rot = _rope_pair_rotate_partial(q.transpose(-1, -2), rope_tables)
             k_rot = _rope_pair_rotate_partial(k.transpose(-1, -2), rope_tables)
 
-            #y = torch.nn.functional.scaled_dot_product_attention(q_rot, k_rot, v.transpose(-1, -2)).transpose(-1, -2)
-            y = self.sliding_attn(q_rot, k_rot, v.transpose(-1, -2)).transpose(-1, -2)
+            y = torch.nn.functional.scaled_dot_product_attention(q_rot, k_rot, v.transpose(-1, -2)).transpose(-1, -2)
 
             y = self.attn_proj(y.reshape(*x.shape))
-            x = mp_sum(x, y, t=self.attn_balance).transpose(-1, -2)
+            x = mp_sum(x, y, t=self.attn_balance)
 
         y = self.conv_res0(x)
+        #stereo: torch.Tensor = self.conv_stereo0(y).flip(dims=(2,))
+        #y = normalize(mp_sum(y, stereo, t=0.5), dim=1)
 
-        c = self.emb_linear(emb, gain=self.emb_gain) + 1.
-        y = mp_silu(normalize(y * c, dim=1))
+        if self.emb_channels > 0:
+            c = self.emb_linear(emb, gain=self.emb_gain) + 1.
+            y = y * c
+        y = mp_silu(normalize(y, dim=1))
 
         if self.dropout != 0 and self.training == True: # magnitude preserving fix for dropout
             y = torch.nn.functional.dropout(y, p=self.dropout) * (1. - self.dropout)**0.5
@@ -213,7 +224,6 @@ class DAE(DualDiffusionDAE):
         cenc = config.model_channels * config.channel_mult_enc
         cblock = [config.model_channels * x for x in config.channel_mult_dec]
         cemb = config.model_channels * config.channel_mult_emb if config.channel_mult_emb is not None else max(cblock)
-        cdata = config.in_channels
 
         self.num_levels = len(config.channel_mult_dec)
         self.downsample_ratio = 2 ** (self.num_levels - 1)
@@ -226,15 +236,15 @@ class DAE(DualDiffusionDAE):
 
         # encoder
         self.enc = torch.nn.ModuleDict()
-        self.enc[f"conv_in"] = MPConv(cdata + 1, cenc, kernel=(1,3))
+        self.enc[f"conv_in"] = MPConv(config.in_channels * 2 + 1, cenc, kernel=(3,3))
 
         for idx in range(config.num_enc_layers):
-            self.enc[f"block_0_layer{idx}"] = Block(0, cenc, cenc, cemb,
-                flavor="enc", use_attention=0 in config.attn_levels, **block_kwargs)
-                
-        self.conv_latents_out = MPConv(cenc, config.latent_channels, kernel=(1,3))
+            self.enc[f"block_0_layer{idx}"] = Block(0, cenc, cenc, 0,
+                flavor="enc", use_attention=False, **block_kwargs)
+        
+        self.conv_latents_out = MPConv(cenc, config.latent_channels, kernel=(3,3))
         self.conv_latents_out_gain = torch.nn.Parameter(torch.ones([]))
-        self.conv_latents_in  = MPConv(config.latent_channels + 1, cblock[-1], kernel=(3,3))
+        self.conv_latents_in  = MPConv(config.latent_channels * config.in_num_freqs + 1, cblock[-1], kernel=(1,3))
 
         # decoder
         block_kwargs["res_balance"] = config.res_balance_dec
@@ -258,8 +268,8 @@ class DAE(DualDiffusionDAE):
 
             cin = cout
 
-        self.conv_cond_out = MPConv(cout, config.out_channels, kernel=(3,3))
-        self.conv_cond_out_gain = torch.nn.Parameter(torch.ones([]) * 0.3) 
+        self.conv_cond_out = MPConv(cout, config.out_channels * config.in_num_freqs, kernel=(1,3))
+        self.conv_cond_out_gain = torch.nn.Parameter(torch.ones([]))
 
     def get_embeddings(self, emb_in: torch.Tensor) -> torch.Tensor:
         if self.emb_label is not None:
@@ -290,6 +300,9 @@ class DAE(DualDiffusionDAE):
             emb = mp_silu(embeddings[..., None, None]).to(dtype=torch.bfloat16)
 
         rope_tables = _rope_tables_for_stereo(x, self.config.rope_channels, self.config.rope_base)
+        x = x.view(x.shape[0], 2, self.config.in_num_freqs, 2, x.shape[3])
+        x = x.permute(0, 1, 3, 2, 4)
+        x = x.reshape(x.shape[0], 4, self.config.in_num_freqs, x.shape[4])
         x = torch.cat((x, torch.ones_like(x[:, :1])), dim=1).to(dtype=torch.bfloat16)
 
         for name, block in self.enc.items():
@@ -297,6 +310,7 @@ class DAE(DualDiffusionDAE):
 
         latents = self.conv_latents_out(x, gain=self.conv_latents_out_gain)
         latents = torch.nn.functional.avg_pool2d(latents, (1, self.downsample_ratio))
+        latents = latents.permute(0, 2, 1, 3)
 
         if training == True:
             return latents
@@ -308,17 +322,16 @@ class DAE(DualDiffusionDAE):
         if embeddings is not None:
             emb = mp_silu(embeddings[..., None, None]).to(dtype=torch.bfloat16)
         
-        rope_tables = _rope_tables_for_stereo(x, self.config.rope_channels,
-            self.config.rope_base, seq_len=x.shape[3] * self.downsample_ratio)
+        rope_tables = _rope_tables_for_stereo(x, self.config.rope_channels, self.config.rope_base)
 
         x = torch.cat((x, torch.ones_like(x[:, :1])), dim=1).to(dtype=torch.bfloat16)
         x = self.conv_latents_in(x)
 
-        for name, block in self.dec.items():
+        for block in self.dec.values():
             x = block(x, emb, rope_tables)
 
         cond_out = self.conv_cond_out(x, gain=self.conv_cond_out_gain)
-        return cond_out
+        return normalize(cond_out, dim=1) * 0.3
 
     def forward(self, samples: torch.Tensor, dae_embeddings: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
 
@@ -326,6 +339,7 @@ class DAE(DualDiffusionDAE):
         latents = normalize(pre_norm_latents, dim=1)
         
         cond_out = self.decode(latents, dae_embeddings, training=True)
+
         return latents, cond_out, pre_norm_latents
 
     def tiled_encode(self, x: torch.Tensor, embeddings: torch.Tensor, max_chunk: int = 6144, overlap: int = 256) -> torch.Tensor:
@@ -335,9 +349,10 @@ class DAE(DualDiffusionDAE):
         
         #latents = top_pca_components(latents, n_pca = latents.shape[1])
         
-        latents = latents.view(latents.shape[0], 4, latents.shape[1] // 4, 2, latents.shape[3])
+        latents = latents.view(latents.shape[0], 4, latents.shape[1] // 4, 1, latents.shape[3])
         latents = latents.permute(0, 1, 3, 2, 4)
-        latents = latents.reshape(latents.shape[0], 8, latents.shape[3], latents.shape[4])
+        latents = latents.reshape(latents.shape[0], 4, latents.shape[3], latents.shape[4])
+        self.config.latents_img_split_stereo = False
 
         #latents = normalize(latents, dim=3)
         #hz = torch.linspace(0, 16000, steps=latents.shape[2], device=latents.device)
