@@ -23,8 +23,8 @@
     "reference_dist_offset": 0,
     "reference_stratified_sampling": true,
     "reference_pdf_sanitization": true,
-    "reference_sigma_pdf_offset": 0,
-    "reference_sigma_pdf_min": 0.001,
+    "reference_sigma_pdf_offset": -0.8,
+    "reference_sigma_pdf_min": 0.2,
     "n_iter": 10000,
     "n_histo_bins": 127,
     "use_y_log_scale": false

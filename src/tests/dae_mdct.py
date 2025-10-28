@@ -147,12 +147,12 @@ def dae_test() -> None:
         if ddec_mdct is not None:
             ddec_mdct_params = SampleParams(
                 seed=5000,
-                num_steps=20, length=audio_len, cfg_scale=0, input_perturbation=0.1, input_perturbation_offset=-0.65,
-                use_heun=False, schedule="linear", rho=7, sigma_max=11, sigma_min=0.0002, stereo_fix=0
+                num_steps=30, length=audio_len, cfg_scale=1.5, input_perturbation=0.1, input_perturbation_offset=-0.65,
+                use_heun=True, schedule="linear", rho=7, sigma_max=11, sigma_min=0.0002, stereo_fix=0
             )
 
             output_ddec_mdct = pipeline.diffusion_decode(
-                ddec_mdct_params, audio_embedding=None,
+                ddec_mdct_params, audio_embedding=audio_embedding,
                 sample_shape=format.get_mdct_shape(raw_length=count),
                 x_ref=x_ref_mdct.to(dtype=ddec_mdct.dtype), module=ddec_mdct)
             

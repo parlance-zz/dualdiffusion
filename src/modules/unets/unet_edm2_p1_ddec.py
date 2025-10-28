@@ -48,8 +48,8 @@ class UNetConfig(DualDiffusionUNetConfig):
 
     in_channels:  int = 128
     out_channels: int = 128
-    in_channels_emb: int = 0
-    in_channels_x_ref: int = 128
+    in_channels_emb: int = 1024
+    in_channels_x_ref: int = 64
 
     sigma_max: float  = 11.
     sigma_min: float  = 0.0002
@@ -58,25 +58,25 @@ class UNetConfig(DualDiffusionUNetConfig):
     mp_fourier_ln_sigma_offset: float = -0.7
     mp_fourier_bandwidth:       float = 1
 
-    model_channels: int  = 1024              # Base multiplier for the number of channels.
+    model_channels: int  = 1280              # Base multiplier for the number of channels.
     logvar_channels: int = 192               # Number of channels for training uncertainty estimation.
     channel_mult: list[int]    = (1,)        # Per-resolution multipliers for the number of channels.
     channel_mult_noise: Optional[int] = 1    # Multiplier for noise embedding dimensionality.
     channel_mult_emb: Optional[int]   = 1    # Multiplier for final embedding dimensionality.
     use_skips: bool     = True
     use_conv_skip: bool = True
-    channels_per_head: int    = 64           # Number of channels per attention head.
-    rope_channels: int        = 54
-    rope_base: float          = 20000.
-    attention_window_size: int = 16
+    channels_per_head: int    = 128           # Number of channels per attention head.
+    rope_channels: int        = 112
+    rope_base: float          = 10000.
+    attention_window_size: int = 8
     num_layers_per_block: int = 9            # Number of resnet blocks per resolution.
     label_balance: float      = 0.5          # Balance between noise embedding (0) and class embedding (1).
     res_balance: float        = 0.5          # Balance between main branch (0) and residual branch (1).
     attn_balance: float       = 0.5          # Balance between main branch (0) and self-attention (1).
-    attn_levels: list[int]    = (0,)         # List of resolution levels to use self-attention.
+    attn_levels: list[int]    = ()         # List of resolution levels to use self-attention.
     mlp_multiplier: int    = 4               # Multiplier for the number of channels in the MLP.
-    mlp_groups: int        = 8               # Number of groups for the MLPs.
-    emb_linear_groups: int = 2
+    mlp_groups: int        = 4               # Number of groups for the MLPs.
+    emb_linear_groups: int = 4
 
     input_skip_t: float = 0.5
 
@@ -97,7 +97,7 @@ class Block(torch.nn.Module):
         emb_linear_groups: int = 4,
         channels_per_head: int = 64,       # Number of channels per attention head.
         use_attention: bool    = False,    # Use self-attention in this block.
-        attention_window_size: int = 16
+        attention_window_size: int = 8
     ) -> None:
         super().__init__()
 
@@ -119,8 +119,8 @@ class Block(torch.nn.Module):
         else:
             self.conv_skip = torch.nn.Identity()
 
-        self.conv_res0 = MPConv(in_channels, inner_channels, kernel=(3,3), groups=mlp_groups)
-        self.conv_res1 = MPConv(inner_channels, out_channels, kernel=(3,3), groups=mlp_groups)
+        self.conv_res0 = MPConv(in_channels, inner_channels, kernel=(1,3), groups=mlp_groups)
+        self.conv_res1 = MPConv(inner_channels, out_channels, kernel=(1,3), groups=mlp_groups)
         
         self.emb_gain = torch.nn.Parameter(torch.zeros([]))
         self.emb_linear = MPConv(emb_channels, inner_channels, kernel=(1,1), groups=emb_linear_groups)
@@ -138,7 +138,7 @@ class Block(torch.nn.Module):
 
     def forward(self, x: torch.Tensor, emb: torch.Tensor, rope_tables: tuple[torch.Tensor, torch.Tensor]) -> torch.Tensor:
         
-        x = normalize(self.conv_skip(x), dim=1)
+        x = self.conv_skip(x)
 
         if self.use_attention == True:
             
@@ -298,7 +298,7 @@ class UNet(DualDiffusionUNet):
         rope_tables = _rope_tables_for_stereo(x, self.config.rope_channels, self.config.rope_base)
 
         # Encoder.
-        x_ref = normalize(x_ref, dim=1).to(dtype=x.dtype)
+        x_ref = x_ref.to(dtype=x.dtype)
         x_input = torch.cat((x, x_ref), dim=1)
         x = torch.cat((x_input, torch.ones_like(x[:, :1])), dim=1)
 

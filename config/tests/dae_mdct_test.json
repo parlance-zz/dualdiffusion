@@ -5,7 +5,7 @@
         "device": "cuda",
         "load_checkpoints": true,
         "load_emas": {
-
+            "ddec": "ema_std0.1.safetensors"
         },
         "compile_options": {
             "fullgraph": true,
@@ -19,7 +19,7 @@
     "latents_img_use_pca": false,
     "output_lufs": -20,
     "ddec_output": true,
-    "xref_output": false,
+    "xref_output": true,
     "add_random_test_samples": 50,
     "random_test_samples_seed": 29,
     "copy_sample_source_files": true,

@@ -62,7 +62,7 @@ def _rope_tables_for_stereo(x: torch.Tensor, rope_channels: int, rope_base: floa
 class DAE_Config(DualDiffusionDAEConfig):
 
     in_channels:  int = 256
-    out_channels: int = 128
+    out_channels: int = 64
     in_channels_emb: int = 1024
     latent_channels: int = 64
     in_num_freqs: int = 128
@@ -70,24 +70,24 @@ class DAE_Config(DualDiffusionDAEConfig):
     mp_fourier_ln_sigma_offset: float = -0.7
     mp_fourier_bandwidth:       float = 1
 
-    model_channels: int   = 768              # Base multiplier for the number of channels.
+    model_channels: int   = 1024              # Base multiplier for the number of channels.
     logvar_channels: int  = 192               # Number of channels for training uncertainty estimation.
     channel_mult_enc: int = 1
     channel_mult_dec: list[int] = (1,1,1,1,1) # Per-resolution multipliers for the number of channels.
     channel_mult_emb: Optional[int] = 1       # Multiplier for final embedding dimensionality.
-    channels_per_head: int    = 64           # Number of channels per attention head.
-    rope_channels: int        = 54
-    rope_base: float          = 20000.
-    attention_window_size: int = 16
-    num_enc_layers: int       = 6
+    channels_per_head: int    = 128           # Number of channels per attention head.
+    rope_channels: int        = 112
+    rope_base: float          = 10000.
+    attention_window_size: int = 8
+    num_enc_layers: int       = 5
     num_dec_layers_per_block: int = 1        # Number of resnet blocks per resolution.
-    res_balance_enc: float    = 0.3          # Balance between main branch (0) and residual branch (1).
-    res_balance_dec: float    = 0.3          # Balance between main branch (0) and residual branch (1).
+    res_balance_enc: float    = 0.5          # Balance between main branch (0) and residual branch (1).
+    res_balance_dec: float    = 0.5          # Balance between main branch (0) and residual branch (1).
     attn_balance: float       = 0.5          # Balance between main branch (0) and self-attention (1).
-    attn_levels: list[int]    = (0,)         # List of resolution levels to use self-attention.
+    attn_levels: list[int]    = ()         # List of resolution levels to use self-attention.
     mlp_multiplier: int    = 4               # Multiplier for the number of channels in the MLP.
-    mlp_groups: int        = 8               # Number of groups for the MLPs.
-    emb_linear_groups: int = 2
+    mlp_groups: int        = 4               # Number of groups for the MLPs.
+    emb_linear_groups: int = 4
 
 class Block(torch.nn.Module):
 
@@ -107,7 +107,7 @@ class Block(torch.nn.Module):
         emb_linear_groups: int = 4,
         channels_per_head: int = 64,       # Number of channels per attention head.
         use_attention: bool    = False,    # Use self-attention in this block.
-        attention_window_size: int = 16
+        attention_window_size: int = 8
     ) -> None:
         super().__init__()
 
@@ -131,8 +131,8 @@ class Block(torch.nn.Module):
         else:
             self.conv_skip = torch.nn.Identity()
 
-        self.conv_res0 = MPConv(out_channels, inner_channels, kernel=(3,3), groups=mlp_groups)
-        self.conv_res1 = MPConv(inner_channels, out_channels, kernel=(3,3), groups=mlp_groups)
+        self.conv_res0 = MPConv(out_channels, inner_channels, kernel=(1,3), groups=mlp_groups)
+        self.conv_res1 = MPConv(inner_channels, out_channels, kernel=(1,3), groups=mlp_groups)
         
         self.emb_gain = torch.nn.Parameter(torch.zeros([]))
         self.emb_linear = MPConv(emb_channels, inner_channels, kernel=(1,1), groups=emb_linear_groups)
@@ -259,7 +259,7 @@ class DAE(DualDiffusionDAE):
             cin = cout
 
         self.conv_cond_out = MPConv(cout, config.out_channels, kernel=(3,3))
-        self.conv_cond_out_gain = torch.nn.Parameter(torch.ones([])) 
+        self.conv_cond_out_gain = torch.nn.Parameter(torch.zeros([]))
 
     def get_embeddings(self, emb_in: torch.Tensor) -> torch.Tensor:
         if self.emb_label is not None:

@@ -113,9 +113,9 @@ class DiffusionDecoder_Trainer(UNetTrainer):
         var_kl = pre_norm_latents_var - 1 - pre_norm_latents_var.log()
         kl_loss = var_kl.mean(dim=(1,2)) + pre_norm_latents.mean(dim=(1,2,3)).square()
 
-        cond_var = ddec_cond.var(dim=1).clip(min=1e-10)
-        cond_var_kl = cond_var - 1 - cond_var.log()
-        kl_loss = kl_loss + cond_var_kl.mean(dim=(1,2)) + ddec_cond.mean(dim=(1,2,3)).square()
+        #cond_var = ddec_cond.var(dim=1).clip(min=1e-10)
+        #cond_var_kl = cond_var - 1 - cond_var.log()
+        #kl_loss = kl_loss + cond_var_kl.mean(dim=(1,2)) + ddec_cond.mean(dim=(1,2,3)).square()
 
         kl_loss_weight = self.config.kl_loss_weight
         if self.trainer.global_step < self.config.kl_warmup_steps:
