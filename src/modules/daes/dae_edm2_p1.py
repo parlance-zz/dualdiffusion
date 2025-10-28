@@ -81,10 +81,10 @@ class DAE_Config(DualDiffusionDAEConfig):
     attention_window_size: int = 16
     num_enc_layers: int       = 6
     num_dec_layers_per_block: int = 1        # Number of resnet blocks per resolution.
-    res_balance_enc: float    = 0.5          # Balance between main branch (0) and residual branch (1).
-    res_balance_dec: float    = 0.5          # Balance between main branch (0) and residual branch (1).
+    res_balance_enc: float    = 0.3          # Balance between main branch (0) and residual branch (1).
+    res_balance_dec: float    = 0.3          # Balance between main branch (0) and residual branch (1).
     attn_balance: float       = 0.5          # Balance between main branch (0) and self-attention (1).
-    attn_levels: list[int]    = (0,)  # List of resolution levels to use self-attention.
+    attn_levels: list[int]    = (0,)         # List of resolution levels to use self-attention.
     mlp_multiplier: int    = 4               # Multiplier for the number of channels in the MLP.
     mlp_groups: int        = 8               # Number of groups for the MLPs.
     emb_linear_groups: int = 2
@@ -259,7 +259,7 @@ class DAE(DualDiffusionDAE):
             cin = cout
 
         self.conv_cond_out = MPConv(cout, config.out_channels, kernel=(3,3))
-        self.conv_cond_out_gain = torch.nn.Parameter(torch.ones([]) * 0.3) 
+        self.conv_cond_out_gain = torch.nn.Parameter(torch.ones([])) 
 
     def get_embeddings(self, emb_in: torch.Tensor) -> torch.Tensor:
         if self.emb_label is not None:
