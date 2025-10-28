@@ -47,6 +47,9 @@ class DiffusionDecoder_Trainer_Config(UNetTrainerConfig):
     kl_loss_weight: float = 4e-2
     kl_warmup_steps: int  = 1000
 
+    latents_reg_loss_weight: float = 0
+    latents_reg_bsz: int = 1
+
     loss_buckets_sigma_min: float = 0.0002
     loss_buckets_sigma_max: float = 11
 
@@ -69,6 +72,11 @@ class DiffusionDecoder_Trainer(UNetTrainer):
         assert self.ddec is not None, "DDEC module not found in train modules"
         assert self.dae is not None, "DAE module not found in train modules"
 
+        if self.config.latents_reg_loss_weight > 0:
+            assert self.config.latents_reg_bsz != 0, "latents_reg_loss_weight > 0 but latents_reg_bsz is 0"
+        if self.config.latents_reg_bsz == -1:
+            self.config.latents_reg_bsz = self.trainer.config.device_batch_size
+
         self.format: MDCT_Format = trainer.pipeline.format.to(self.trainer.accelerator.device)
 
         if trainer.config.enable_model_compilation:
@@ -78,13 +86,15 @@ class DiffusionDecoder_Trainer(UNetTrainer):
 
         self.logger.info(f"Training modules: {trainer.config.train_modules}")
         self.logger.info(f"KL loss weight: {self.config.kl_loss_weight} KL warmup steps: {self.config.kl_warmup_steps}")
+        self.logger.info(f"Latents reg loss weight: {self.config.latents_reg_loss_weight} Batch size: {self.config.latents_reg_bsz}")
         self.logger.info(f"Crop edges: {self.config.crop_edges}")
 
         if self.config.random_stereo_augmentation == True:
             self.logger.info("Using random stereo augmentation")
         else: self.logger.info("Random stereo augmentation is disabled")
 
-        #self.loss_weight = self.format.mdct_mel_density / self.format.mdct_mel_density.mean()
+        #self.loss_weight = self.format.mdct_mel_density**0.5
+        #self.loss_weight /= self.format.mdct_mel_density.mean()
         self.loss_weight = None
 
         self.unet = self.ddec
@@ -109,6 +119,17 @@ class DiffusionDecoder_Trainer(UNetTrainer):
         
         latents, ddec_cond, pre_norm_latents = self.dae(mdct_samples2, dae_embeddings)
 
+        if self.config.latents_reg_bsz > 0:
+
+            mdct_samples3: torch.Tensor = self.format.raw_to_mdct(raw_samples[:self.config.latents_reg_bsz], random_phase_augmentation=True, dual_channel=True).detach()
+            with torch.autocast(device_type="cuda", dtype=self.trainer.mixed_precision_dtype, enabled=self.trainer.mixed_precision_enabled):
+                latents2 = self.dae.encode(mdct_samples3, dae_embeddings[:self.config.latents_reg_bsz])
+            
+            latents_reg_loss = torch.nn.functional.mse_loss(latents.float()[:self.config.latents_reg_bsz], latents2.float(), reduction="none").mean()
+            latents_reg_loss = latents_reg_loss.expand(latents.shape[0]) # needed for per-sample logging
+        else:
+            latents_reg_loss = None
+
         pre_norm_latents_var = pre_norm_latents.var(dim=1)
         var_kl = pre_norm_latents_var - 1 - pre_norm_latents_var.log()
         kl_loss = var_kl.mean(dim=(1,2)) + pre_norm_latents.mean(dim=(1,2,3)).square()
@@ -131,11 +152,17 @@ class DiffusionDecoder_Trainer(UNetTrainer):
             "io_stats/latents_std": latents.std(dim=1).detach(),
             "io_stats/latents_mean": latents.mean(dim=1).detach(),
             "io_stats/latents_pre_norm_std": pre_norm_latents_var.sqrt(),
-            "loss/kl_latents": kl_loss,
+            "loss/kl_latents": kl_loss.detach(),
             "loss_weight/kl_latents": kl_loss_weight,
+            "loss_weight/latents_reg": self.config.latents_reg_loss_weight,
         })
 
         logs["loss"] = logs["loss"] + kl_loss * kl_loss_weight
+
+        if self.config.latents_reg_loss_weight > 0:
+            logs["loss"] = logs["loss"] + latents_reg_loss * self.config.latents_reg_loss_weight
+        if latents_reg_loss is not None:
+            logs["loss/latents_reg"] = latents_reg_loss.detach()
 
         if self.trainer.config.enable_debug_mode == True:
             print("mdct_samples.shape:", mdct_samples.shape)
