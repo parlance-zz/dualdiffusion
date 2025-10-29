@@ -46,16 +46,15 @@ from modules.sliding_attention import SlidingWindowAttention
 @dataclass
 class UNetConfig(DualDiffusionUNetConfig):
 
-    in_channels:  int = 128
-    out_channels: int = 128
+    in_channels:  int = 256
+    out_channels: int = 256
     in_channels_emb: int = 1024
-    in_channels_x_ref: int = 64
 
     sigma_max: float  = 11.
     sigma_min: float  = 0.0002
     sigma_data: float = 1.
 
-    mp_fourier_ln_sigma_offset: float = -0.7
+    mp_fourier_ln_sigma_offset: float = -0.15
     mp_fourier_bandwidth:       float = 1
 
     model_channels: int  = 1280              # Base multiplier for the number of channels.
@@ -75,7 +74,7 @@ class UNetConfig(DualDiffusionUNetConfig):
     attn_balance: float       = 0.5          # Balance between main branch (0) and self-attention (1).
     attn_levels: list[int]    = ()         # List of resolution levels to use self-attention.
     mlp_multiplier: int    = 4               # Multiplier for the number of channels in the MLP.
-    mlp_groups: int        = 4               # Number of groups for the MLPs.
+    mlp_groups: int        = 8               # Number of groups for the MLPs.
     emb_linear_groups: int = 4
 
     input_skip_t: float = 0.5
@@ -119,8 +118,8 @@ class Block(torch.nn.Module):
         else:
             self.conv_skip = torch.nn.Identity()
 
-        self.conv_res0 = MPConv(in_channels, inner_channels, kernel=(1,3), groups=mlp_groups)
-        self.conv_res1 = MPConv(inner_channels, out_channels, kernel=(1,3), groups=mlp_groups)
+        self.conv_res0 = MPConv(in_channels, inner_channels, kernel=(3,3), groups=mlp_groups)
+        self.conv_res1 = MPConv(inner_channels, out_channels, kernel=(3,3), groups=mlp_groups)
         
         self.emb_gain = torch.nn.Parameter(torch.zeros([]))
         self.emb_linear = MPConv(emb_channels, inner_channels, kernel=(1,1), groups=emb_linear_groups)
@@ -210,11 +209,13 @@ class UNet(DualDiffusionUNet):
         assert config.rope_channels % 2 == 0
         assert config.rope_channels <= config.channels_per_head
         if config.input_skip_t > 0:
-            assert cblock[0] >= cdata + config.in_channels_x_ref
+            assert cblock[0] >= cdata
 
         # Embedding.
         self.emb_fourier = MPFourier(cnoise, bandwidth=config.mp_fourier_bandwidth)
         self.emb_noise = MPConv(cnoise, cemb, kernel=())
+        self.emb_cond = MPConv(cemb, cemb, kernel=())
+
         if config.in_channels_emb > 0:
             self.emb_label = MPConv(config.in_channels_emb, cemb, kernel=())
             self.emb_label_unconditional = MPConv(1, cemb, kernel=())
@@ -229,7 +230,7 @@ class UNet(DualDiffusionUNet):
 
         # Encoder.
         self.dec = torch.nn.ModuleDict()
-        cout = cdata + config.in_channels_x_ref + 1 # 1 extra const channel
+        cout = cdata + 1 # 1 extra const channel
 
         for level, channels in enumerate(cblock):
             
@@ -293,13 +294,13 @@ class UNet(DualDiffusionUNet):
         emb: torch.Tensor = self.emb_noise(self.emb_fourier(c_noise))
         if self.config.in_channels_emb > 0:
             emb = mp_sum(emb, embeddings.to(dtype=emb.dtype), t=self.config.label_balance)
-        emb = mp_silu(emb)[..., None, None].to(dtype=torch.bfloat16) # todo: maybe no mp_silu here
+        emb = self.emb_cond(mp_silu(emb))[..., None, None]
+        emb = mp_silu(normalize(emb + x_ref.to(dtype=emb.dtype), dim=1)).to(dtype=torch.bfloat16)
       
         rope_tables = _rope_tables_for_stereo(x, self.config.rope_channels, self.config.rope_base)
 
         # Encoder.
-        x_ref = x_ref.to(dtype=x.dtype)
-        x_input = torch.cat((x, x_ref), dim=1)
+        x_input = x
         x = torch.cat((x_input, torch.ones_like(x[:, :1])), dim=1)
 
         idx = 0; skips = []

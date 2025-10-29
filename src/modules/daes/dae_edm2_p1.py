@@ -62,18 +62,15 @@ def _rope_tables_for_stereo(x: torch.Tensor, rope_channels: int, rope_base: floa
 class DAE_Config(DualDiffusionDAEConfig):
 
     in_channels:  int = 256
-    out_channels: int = 64
+    out_channels: int = 1280
     in_channels_emb: int = 1024
     latent_channels: int = 64
-    in_num_freqs: int = 128
-
-    mp_fourier_ln_sigma_offset: float = -0.7
-    mp_fourier_bandwidth:       float = 1
+    in_num_freqs: int = 256
 
     model_channels: int   = 1024              # Base multiplier for the number of channels.
     logvar_channels: int  = 192               # Number of channels for training uncertainty estimation.
     channel_mult_enc: int = 1
-    channel_mult_dec: list[int] = (1,1,1,1,1) # Per-resolution multipliers for the number of channels.
+    channel_mult_dec: list[int] = (1,1,1,1)   # Per-resolution multipliers for the number of channels.
     channel_mult_emb: Optional[int] = 1       # Multiplier for final embedding dimensionality.
     channels_per_head: int    = 128           # Number of channels per attention head.
     rope_channels: int        = 112
@@ -86,7 +83,7 @@ class DAE_Config(DualDiffusionDAEConfig):
     attn_balance: float       = 0.5          # Balance between main branch (0) and self-attention (1).
     attn_levels: list[int]    = ()         # List of resolution levels to use self-attention.
     mlp_multiplier: int    = 4               # Multiplier for the number of channels in the MLP.
-    mlp_groups: int        = 4               # Number of groups for the MLPs.
+    mlp_groups: int        = 8               # Number of groups for the MLPs.
     emb_linear_groups: int = 4
 
 class Block(torch.nn.Module):
@@ -131,8 +128,8 @@ class Block(torch.nn.Module):
         else:
             self.conv_skip = torch.nn.Identity()
 
-        self.conv_res0 = MPConv(out_channels, inner_channels, kernel=(1,3), groups=mlp_groups)
-        self.conv_res1 = MPConv(inner_channels, out_channels, kernel=(1,3), groups=mlp_groups)
+        self.conv_res0 = MPConv(out_channels, inner_channels, kernel=(3,3), groups=mlp_groups)
+        self.conv_res1 = MPConv(inner_channels, out_channels, kernel=(3,3), groups=mlp_groups)
         
         self.emb_gain = torch.nn.Parameter(torch.zeros([]))
         self.emb_linear = MPConv(emb_channels, inner_channels, kernel=(1,1), groups=emb_linear_groups)
@@ -259,7 +256,7 @@ class DAE(DualDiffusionDAE):
             cin = cout
 
         self.conv_cond_out = MPConv(cout, config.out_channels, kernel=(3,3))
-        self.conv_cond_out_gain = torch.nn.Parameter(torch.zeros([]))
+        self.conv_cond_out_gain = torch.nn.Parameter(torch.ones([]))
 
     def get_embeddings(self, emb_in: torch.Tensor) -> torch.Tensor:
         if self.emb_label is not None:
@@ -334,9 +331,14 @@ class DAE(DualDiffusionDAE):
     def latents_to_img(self, latents: torch.Tensor) -> ndarray:
         
         #latents = top_pca_components(latents, n_pca = latents.shape[1])
-        
+        #latents = sort_channels_by_correlation(latents)
+
         latents = latents.view(latents.shape[0], 4, latents.shape[1] // 4, 2, latents.shape[3])
         latents = latents.permute(0, 1, 3, 2, 4)
+
+        #latents = latents.view(latents.shape[0], latents.shape[1] // 4, 4, 2, latents.shape[3])
+        #latents = latents.permute(0, 2, 3, 1, 4)
+
         latents = latents.reshape(latents.shape[0], 8, latents.shape[3], latents.shape[4])
 
         #latents = normalize(latents, dim=3)

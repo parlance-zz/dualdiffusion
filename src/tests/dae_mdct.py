@@ -114,7 +114,7 @@ def dae_test() -> None:
         count = format.get_raw_crop_width(raw_length=min(length, audio_len))
         source_raw_sample = load_audio(file_path, count=count)
         input_raw_sample = source_raw_sample.unsqueeze(0).to(format.device)
-        input_mdct = format.raw_to_mdct(input_raw_sample, random_phase_augmentation=True, dual_channel=True)
+        input_mdct = format.raw_to_mdct(input_raw_sample, random_phase_augmentation=True)#, dual_channel=True)
 
         safetensors_file_name = os.path.join(f"{os.path.splitext(filename)[0]}.safetensors")
         safetensors_file_path = os.path.join(dataset_path, safetensors_file_name)
@@ -147,8 +147,8 @@ def dae_test() -> None:
         if ddec_mdct is not None:
             ddec_mdct_params = SampleParams(
                 seed=5000,
-                num_steps=30, length=audio_len, cfg_scale=1.5, input_perturbation=0.1, input_perturbation_offset=-0.65,
-                use_heun=True, schedule="linear", rho=7, sigma_max=11, sigma_min=0.0002, stereo_fix=0
+                num_steps=30, length=audio_len, cfg_scale=4, input_perturbation=1, input_perturbation_offset=0.3,#-0.65,
+                use_heun=False, schedule="linear", rho=7, sigma_max=11, sigma_min=0.0002, stereo_fix=0
             )
 
             output_ddec_mdct = pipeline.diffusion_decode(

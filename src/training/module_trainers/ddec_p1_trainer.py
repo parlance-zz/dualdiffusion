@@ -33,6 +33,7 @@ from modules.formats.mdct import MDCT_Format
 from modules.mp_tools import normalize
 
 
+@torch.no_grad()
 def random_stereo_augmentation(x: torch.Tensor) -> torch.Tensor:
     
     output = x.clone()
@@ -44,16 +45,19 @@ def random_stereo_augmentation(x: torch.Tensor) -> torch.Tensor:
 @dataclass
 class DiffusionDecoder_Trainer_Config(UNetTrainerConfig):
 
-    kl_loss_weight: float = 4e-2
+    kl_loss_weight: float = 1.5e-3
     kl_warmup_steps: int  = 1000
 
-    latents_reg_loss_weight: float = 0
-    latents_reg_bsz: int = 1
+    phase_invariance_loss_weight: float = 0
+    phase_invariance_loss_bsz: int = 1
+    latents_dispersion_loss_weight: float = 0
+    latents_dispersion_loss_bsz: int = 1
+    latents_regularization_warmup_steps: int = 2500
 
     loss_buckets_sigma_min: float = 0.0002
     loss_buckets_sigma_max: float = 11
 
-    random_stereo_augmentation: bool = False
+    random_stereo_augmentation: bool = True
 
     crop_edges: int = 8 # used to avoid artifacts due to mdct lapped blocks at beginning and end of sample
 
@@ -72,11 +76,18 @@ class DiffusionDecoder_Trainer(UNetTrainer):
         assert self.ddec is not None, "DDEC module not found in train modules"
         assert self.dae is not None, "DAE module not found in train modules"
 
-        if self.config.latents_reg_loss_weight > 0:
-            assert self.config.latents_reg_bsz != 0, "latents_reg_loss_weight > 0 but latents_reg_bsz is 0"
-        if self.config.latents_reg_bsz == -1:
-            self.config.latents_reg_bsz = self.trainer.config.device_batch_size
-
+        if self.config.phase_invariance_loss_weight > 0:
+            assert self.config.phase_invariance_loss_bsz != 0, "phase_invariance_loss_weight > 0 but phase_invariance_loss_bsz is 0"
+        if self.config.phase_invariance_loss_bsz == -1:
+            self.config.phase_invariance_loss_bsz = self.trainer.config.device_batch_size
+        
+        if self.config.latents_dispersion_loss_weight > 0:
+            assert self.config.latents_dispersion_loss_bsz != 0, "latents_dispersion_loss_weight > 0 but latents_dispersion_loss_bsz is 0"
+        if self.config.latents_dispersion_loss_bsz == -1:
+            self.config.latents_dispersion_loss_bsz = self.trainer.config.device_batch_size
+        else:
+            assert self.config.latents_dispersion_loss_bsz <= self.trainer.config.device_batch_size, "latents_dispersion_loss_bsz cannot be larger than device_batch_size"
+        
         self.format: MDCT_Format = trainer.pipeline.format.to(self.trainer.accelerator.device)
 
         if trainer.config.enable_model_compilation:
@@ -86,7 +97,9 @@ class DiffusionDecoder_Trainer(UNetTrainer):
 
         self.logger.info(f"Training modules: {trainer.config.train_modules}")
         self.logger.info(f"KL loss weight: {self.config.kl_loss_weight} KL warmup steps: {self.config.kl_warmup_steps}")
-        self.logger.info(f"Latents reg loss weight: {self.config.latents_reg_loss_weight} Batch size: {self.config.latents_reg_bsz}")
+        self.logger.info(f"Latents phase-invariance loss weight: {self.config.phase_invariance_loss_weight} Batch size: {self.config.phase_invariance_loss_bsz}")
+        self.logger.info(f"Latents dispersion loss weight: {self.config.latents_dispersion_loss_weight} Batch size: {self.config.latents_dispersion_loss_bsz}")
+        self.logger.info(f"Latents regularization loss warmup steps: {self.config.latents_regularization_warmup_steps}")
         self.logger.info(f"Crop edges: {self.config.crop_edges}")
 
         if self.config.random_stereo_augmentation == True:
@@ -114,21 +127,38 @@ class DiffusionDecoder_Trainer(UNetTrainer):
         else:
             raw_samples = batch["audio"]
 
+        #mdct_samples: torch.Tensor = self.format.raw_to_mdct(raw_samples, random_phase_augmentation=True).detach()
+        #mdct_samples_dae: torch.Tensor = self.format.raw_to_mdct(raw_samples, random_phase_augmentation=True, dual_channel=True).detach()
         mdct_samples: torch.Tensor = self.format.raw_to_mdct(raw_samples, random_phase_augmentation=True).detach()
-        mdct_samples2: torch.Tensor = self.format.raw_to_mdct(raw_samples, random_phase_augmentation=True, dual_channel=True).detach()
+        mdct_samples_dae: torch.Tensor = mdct_samples
         
-        latents, ddec_cond, pre_norm_latents = self.dae(mdct_samples2, dae_embeddings)
+        latents, ddec_cond, pre_norm_latents = self.dae(mdct_samples_dae, dae_embeddings)
+        latents: torch.Tensor = latents.float()
+        pre_norm_latents: torch.Tensor = pre_norm_latents.float()
 
-        if self.config.latents_reg_bsz > 0:
+        if self.config.phase_invariance_loss_bsz > 0:
 
-            mdct_samples3: torch.Tensor = self.format.raw_to_mdct(raw_samples[:self.config.latents_reg_bsz], random_phase_augmentation=True, dual_channel=True).detach()
+            #mdct_samples_dae2: torch.Tensor = self.format.raw_to_mdct(raw_samples[:self.config.phase_invariance_loss_bsz], random_phase_augmentation=True, dual_channel=True).detach()
+            mdct_samples_dae2: torch.Tensor = self.format.raw_to_mdct(raw_samples[:self.config.phase_invariance_loss_bsz], random_phase_augmentation=True).detach()
             with torch.autocast(device_type="cuda", dtype=self.trainer.mixed_precision_dtype, enabled=self.trainer.mixed_precision_enabled):
-                latents2 = self.dae.encode(mdct_samples3, dae_embeddings[:self.config.latents_reg_bsz])
+                latents2 = self.dae.encode(mdct_samples_dae2, dae_embeddings[:self.config.phase_invariance_loss_bsz])
             
-            latents_reg_loss = torch.nn.functional.mse_loss(latents.float()[:self.config.latents_reg_bsz], latents2.float(), reduction="none").mean()
-            latents_reg_loss = latents_reg_loss.expand(latents.shape[0]) # needed for per-sample logging
+            phase_invariance_loss = torch.nn.functional.mse_loss(latents[:self.config.phase_invariance_loss_bsz], latents2.float(), reduction="none").mean()
+            phase_invariance_loss = phase_invariance_loss.expand(latents.shape[0]) # needed for per-sample logging
         else:
-            latents_reg_loss = None
+            phase_invariance_loss = None
+
+        if self.config.latents_dispersion_loss_bsz > 0:
+            dispersion_loss = torch.zeros(1, device=latents.device)
+
+            for i in range(self.config.latents_dispersion_loss_bsz - 1):
+                dispersion_loss = dispersion_loss + torch.nn.functional.mse_loss(
+                    latents.roll(shifts=i+1, dims=0), latents, reduction="none").mean(dim=(1,2,3))
+            
+            dispersion_loss = -dispersion_loss / (self.config.latents_dispersion_loss_bsz - 1)
+            dispersion_loss = dispersion_loss.expand(latents.shape[0]) # needed for per-sample logging
+        else:
+            dispersion_loss = None
 
         pre_norm_latents_var = pre_norm_latents.var(dim=1)
         var_kl = pre_norm_latents_var - 1 - pre_norm_latents_var.log()
@@ -137,6 +167,13 @@ class DiffusionDecoder_Trainer(UNetTrainer):
         #cond_var = ddec_cond.var(dim=1).clip(min=1e-10)
         #cond_var_kl = cond_var - 1 - cond_var.log()
         #kl_loss = kl_loss + cond_var_kl.mean(dim=(1,2)) + ddec_cond.mean(dim=(1,2,3)).square()
+
+        phase_invariance_loss_weight = self.config.phase_invariance_loss_weight
+        dispersion_loss_weight = self.config.latents_dispersion_loss_weight
+        if self.trainer.global_step < self.config.latents_regularization_warmup_steps:
+            warmup_factor = self.trainer.global_step / self.config.latents_regularization_warmup_steps
+            phase_invariance_loss_weight *= warmup_factor
+            dispersion_loss_weight *= warmup_factor
 
         kl_loss_weight = self.config.kl_loss_weight
         if self.trainer.global_step < self.config.kl_warmup_steps:
@@ -154,19 +191,25 @@ class DiffusionDecoder_Trainer(UNetTrainer):
             "io_stats/latents_pre_norm_std": pre_norm_latents_var.sqrt(),
             "loss/kl_latents": kl_loss.detach(),
             "loss_weight/kl_latents": kl_loss_weight,
-            "loss_weight/latents_reg": self.config.latents_reg_loss_weight,
+            "loss_weight/phase_invariance": phase_invariance_loss_weight,
+            "loss_weight/dispersion": dispersion_loss_weight
         })
 
         logs["loss"] = logs["loss"] + kl_loss * kl_loss_weight
 
-        if self.config.latents_reg_loss_weight > 0:
-            logs["loss"] = logs["loss"] + latents_reg_loss * self.config.latents_reg_loss_weight
-        if latents_reg_loss is not None:
-            logs["loss/latents_reg"] = latents_reg_loss.detach()
+        if self.config.phase_invariance_loss_weight > 0:
+            logs["loss"] = logs["loss"] + phase_invariance_loss * phase_invariance_loss_weight
+        if phase_invariance_loss is not None:
+            logs["loss/phase_invariance"] = phase_invariance_loss.detach()
+        
+        if self.config.latents_dispersion_loss_weight > 0:
+            logs["loss"] = logs["loss"] + dispersion_loss * dispersion_loss_weight
+        if dispersion_loss is not None:
+            logs["loss/latents_dispersion"] = dispersion_loss.detach()
 
         if self.trainer.config.enable_debug_mode == True:
             print("mdct_samples.shape:", mdct_samples.shape)
-            print("mdct_samples2.shape:", mdct_samples2.shape)
+            print("mdct_samples_dae.shape:", mdct_samples_dae.shape)
             print("ddec_cond.shape:", ddec_cond.shape)
             print("latents.shape:", latents.shape)
 

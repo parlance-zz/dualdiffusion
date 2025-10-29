@@ -1,9 +1,9 @@
 {
     "device": "cuda",
-    "add_random_test_samples": 0,
+    "add_random_test_samples": 5000,
     "save_output": false,
     
-    "test_sample_verbose": true,
+    "test_sample_verbose": false,
     "test_samples": [
         "switch/Arcaea/_t_songs_ignotus.ogg.flac",
         "dsf/Metropolis Street Racer Prototype/file_15.adx.flac",
@@ -19,8 +19,11 @@
         "width_alignment": 32768,
 
         "mdct_to_raw_scale": 1,
-        "raw_to_mdct_scale": 196.36579562832198,
-        "mdct_window_len": 256,
+        "raw_to_mdct_scale": 276.3602013,
+        "mdct_window_len": 512,
         "mdct_window_func": "sin"
+
+        //"raw_to_mdct_scale": 196.36579562832198,
+        //"mdct_window_len": 256,
     }
 }
