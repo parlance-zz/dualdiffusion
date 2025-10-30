@@ -41,6 +41,7 @@ from modules.mp_tools import MPConv, MPFourier, mp_silu, mp_sum, normalize
 from modules.formats.format import DualDiffusionFormat
 from modules.rope import _rope_pair_rotate_partial
 from modules.sliding_attention import SlidingWindowAttention
+from modules.daes.dae_edm2_p1 import MPConvS
 
 
 @dataclass
@@ -54,17 +55,17 @@ class UNetConfig(DualDiffusionUNetConfig):
     sigma_min: float  = 0.0002
     sigma_data: float = 1.
 
-    mp_fourier_ln_sigma_offset: float = -0.15
+    mp_fourier_ln_sigma_offset: float = -0.5
     mp_fourier_bandwidth:       float = 1
 
-    model_channels: int  = 1280              # Base multiplier for the number of channels.
+    model_channels: int  = 2048              # Base multiplier for the number of channels.
     logvar_channels: int = 192               # Number of channels for training uncertainty estimation.
     channel_mult: list[int]    = (1,)        # Per-resolution multipliers for the number of channels.
     channel_mult_noise: Optional[int] = 1    # Multiplier for noise embedding dimensionality.
     channel_mult_emb: Optional[int]   = 1    # Multiplier for final embedding dimensionality.
     use_skips: bool     = True
     use_conv_skip: bool = True
-    channels_per_head: int    = 128           # Number of channels per attention head.
+    channels_per_head: int    = 128          # Number of channels per attention head.
     rope_channels: int        = 112
     rope_base: float          = 10000.
     attention_window_size: int = 8
@@ -72,21 +73,21 @@ class UNetConfig(DualDiffusionUNetConfig):
     label_balance: float      = 0.5          # Balance between noise embedding (0) and class embedding (1).
     res_balance: float        = 0.5          # Balance between main branch (0) and residual branch (1).
     attn_balance: float       = 0.5          # Balance between main branch (0) and self-attention (1).
-    attn_levels: list[int]    = ()         # List of resolution levels to use self-attention.
-    mlp_multiplier: int    = 4               # Multiplier for the number of channels in the MLP.
-    mlp_groups: int        = 8               # Number of groups for the MLPs.
-    emb_linear_groups: int = 4
+    attn_levels: list[int]    = ()           # List of resolution levels to use self-attention.
+    mlp_multiplier: int    = 1               # Multiplier for the number of channels in the MLP.
+    mlp_groups: int        = 4               # Number of groups for the MLPs.
+    emb_linear_groups: int = 1
 
     input_skip_t: float = 0.5
 
 class Block(torch.nn.Module):
 
     def __init__(self,
-        level: int,                             # Resolution level.
-        in_channels: int,                       # Number of input channels.
-        out_channels: int,                      # Number of output channels.
+        level: int,                        # Resolution level.
+        in_channels: int,                  # Number of input channels.
+        out_channels: int,                 # Number of output channels.
         skip_channels: int,
-        emb_channels: int,                      # Number of embedding channels.
+        emb_channels: int,                 # Number of embedding channels.
         dropout: float         = 0.,       # Dropout probability.
         res_balance: float     = 0.3,      # Balance between main branch (0) and residual branch (1).
         attn_balance: float    = 0.3,      # Balance between main branch (0) and self-attention (1).
@@ -113,13 +114,13 @@ class Block(torch.nn.Module):
         
         inner_channels = out_channels * mlp_multiplier
 
-        if skip_channels > 0 or (mlp_groups > 1 and use_attention == False):
+        if skip_channels > 0:
             self.conv_skip = MPConv(in_channels + skip_channels, in_channels, kernel=(1,1))
         else:
             self.conv_skip = torch.nn.Identity()
 
-        self.conv_res0 = MPConv(in_channels, inner_channels, kernel=(3,3), groups=mlp_groups)
-        self.conv_res1 = MPConv(inner_channels, out_channels, kernel=(3,3), groups=mlp_groups)
+        self.conv_res0 = MPConvS(in_channels, inner_channels,  kernel=(1,3), groups=mlp_groups)
+        self.conv_res1 = MPConvS(inner_channels, out_channels, kernel=(1,3), groups=mlp_groups)
         
         self.emb_gain = torch.nn.Parameter(torch.zeros([]))
         self.emb_linear = MPConv(emb_channels, inner_channels, kernel=(1,1), groups=emb_linear_groups)
@@ -236,7 +237,7 @@ class UNet(DualDiffusionUNet):
             
             cin = cout
             cout = channels
-            self.dec[f"conv_in"] = MPConv(cin, cout, kernel=(3,3))
+            self.dec[f"conv_in"] = MPConvS(cin, cout, kernel=(1,3))
             
             for idx in range(config.num_layers_per_block):
 
@@ -251,7 +252,7 @@ class UNet(DualDiffusionUNet):
                 self.dec[f"block{level}_layer{idx}"] = Block(level, cin, cout, cskip, cemb, use_attention=level in config.attn_levels, **block_kwargs)
                 
         self.out_gain = torch.nn.Parameter(torch.zeros([]))
-        self.conv_out = MPConv(cout, config.out_channels, kernel=(3,3))
+        self.conv_out = MPConvS(cout, config.out_channels, kernel=(1,3))
 
     def get_embeddings(self, emb_in: torch.Tensor, conditioning_mask: torch.Tensor) -> torch.Tensor:
         if self.config.in_channels_emb > 0:

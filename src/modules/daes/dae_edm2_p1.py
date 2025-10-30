@@ -42,6 +42,27 @@ from modules.rope import _rope_pair_rotate_partial, _rope_tables_for_seq
 from modules.sliding_attention import SlidingWindowAttention
 
 
+class MPConvS(torch.nn.Module):
+
+    def __init__(self, in_channels: int, out_channels: int,
+                 kernel: tuple[int, int], groups: int = 1) -> None:
+        
+        super().__init__()
+
+        assert len(kernel) == 2
+
+        self.conv0 = MPConv(in_channels,  out_channels, kernel=kernel, groups=groups)
+        self.conv1 = MPConv(out_channels, out_channels, kernel=(1,1),  groups=1)
+
+    def forward(self, x: torch.Tensor, gain: Union[float, torch.Tensor] = 1.) -> torch.Tensor:
+        
+        assert x.shape[2] == 2
+
+        x = self.conv0(x)
+        y = self.conv1(x).flip(dims=(2,))
+
+        return mp_sum(x, y) * gain
+
 def _rope_tables_for_stereo(x: torch.Tensor, rope_channels: int, rope_base: float, seq_len: Optional[int] = None) -> tuple[torch.Tensor, torch.Tensor]:
 
     rope_tables_cos, rope_tables_sin = _rope_tables_for_seq(seq_len or x.shape[3], rope_channels, rope_base, device=x.device, dtype=x.dtype)
@@ -62,12 +83,12 @@ def _rope_tables_for_stereo(x: torch.Tensor, rope_channels: int, rope_base: floa
 class DAE_Config(DualDiffusionDAEConfig):
 
     in_channels:  int = 256
-    out_channels: int = 1280
+    out_channels: int = 2048
     in_channels_emb: int = 1024
     latent_channels: int = 64
     in_num_freqs: int = 256
 
-    model_channels: int   = 1024              # Base multiplier for the number of channels.
+    model_channels: int   = 1536              # Base multiplier for the number of channels.
     logvar_channels: int  = 192               # Number of channels for training uncertainty estimation.
     channel_mult_enc: int = 1
     channel_mult_dec: list[int] = (1,1,1,1)   # Per-resolution multipliers for the number of channels.
@@ -82,9 +103,9 @@ class DAE_Config(DualDiffusionDAEConfig):
     res_balance_dec: float    = 0.5          # Balance between main branch (0) and residual branch (1).
     attn_balance: float       = 0.5          # Balance between main branch (0) and self-attention (1).
     attn_levels: list[int]    = ()         # List of resolution levels to use self-attention.
-    mlp_multiplier: int    = 4               # Multiplier for the number of channels in the MLP.
-    mlp_groups: int        = 8               # Number of groups for the MLPs.
-    emb_linear_groups: int = 4
+    mlp_multiplier: int    = 1               # Multiplier for the number of channels in the MLP.
+    mlp_groups: int        = 4               # Number of groups for the MLPs.
+    emb_linear_groups: int = 1
 
 class Block(torch.nn.Module):
 
@@ -123,13 +144,8 @@ class Block(torch.nn.Module):
         
         inner_channels = out_channels * mlp_multiplier
 
-        if in_channels != out_channels or (mlp_groups > 1 and use_attention == False):
-            self.conv_skip = MPConv(in_channels, out_channels, kernel=(1,1), groups=1)
-        else:
-            self.conv_skip = torch.nn.Identity()
-
-        self.conv_res0 = MPConv(out_channels, inner_channels, kernel=(3,3), groups=mlp_groups)
-        self.conv_res1 = MPConv(inner_channels, out_channels, kernel=(3,3), groups=mlp_groups)
+        self.conv_res0 = MPConvS(in_channels, inner_channels,  kernel=(1,3), groups=mlp_groups)
+        self.conv_res1 = MPConvS(inner_channels, out_channels, kernel=(1,3), groups=mlp_groups)
         
         self.emb_gain = torch.nn.Parameter(torch.zeros([]))
         self.emb_linear = MPConv(emb_channels, inner_channels, kernel=(1,1), groups=emb_linear_groups)
@@ -148,7 +164,6 @@ class Block(torch.nn.Module):
     def forward(self, x: torch.Tensor, emb: torch.Tensor, rope_tables: tuple[torch.Tensor, torch.Tensor]) -> torch.Tensor:
         
         x = resample_1d(x, self.resample_mode)
-        x = normalize(self.conv_skip(x), dim=1)
 
         if self.use_attention == True:
 
@@ -223,15 +238,15 @@ class DAE(DualDiffusionDAE):
 
         # encoder
         self.enc = torch.nn.ModuleDict()
-        self.enc[f"conv_in"] = MPConv(cdata + 1, cenc, kernel=(1,3))
+        self.enc[f"conv_in"] = MPConvS(cdata + 1, cenc, kernel=(1,3))
 
         for idx in range(config.num_enc_layers):
             self.enc[f"block_0_layer{idx}"] = Block(0, cenc, cenc, cemb,
                 flavor="enc", use_attention=0 in config.attn_levels, **block_kwargs)
-                
-        self.conv_latents_out = MPConv(cenc, config.latent_channels, kernel=(1,3))
+        
+        self.conv_latents_out = MPConvS(cenc, config.latent_channels, kernel=(1,3))
         self.conv_latents_out_gain = torch.nn.Parameter(torch.ones([]))
-        self.conv_latents_in  = MPConv(config.latent_channels + 1, cblock[-1], kernel=(3,3))
+        self.conv_latents_in  = MPConvS(config.latent_channels + 1, cblock[-1], kernel=(1,3))
 
         # decoder
         block_kwargs["res_balance"] = config.res_balance_dec
@@ -255,7 +270,7 @@ class DAE(DualDiffusionDAE):
 
             cin = cout
 
-        self.conv_cond_out = MPConv(cout, config.out_channels, kernel=(3,3))
+        self.conv_cond_out = MPConvS(cout, config.out_channels, kernel=(1,3))
         self.conv_cond_out_gain = torch.nn.Parameter(torch.ones([]))
 
     def get_embeddings(self, emb_in: torch.Tensor) -> torch.Tensor:

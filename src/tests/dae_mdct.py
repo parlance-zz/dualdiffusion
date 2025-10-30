@@ -114,7 +114,7 @@ def dae_test() -> None:
         count = format.get_raw_crop_width(raw_length=min(length, audio_len))
         source_raw_sample = load_audio(file_path, count=count)
         input_raw_sample = source_raw_sample.unsqueeze(0).to(format.device)
-        input_mdct = format.raw_to_mdct(input_raw_sample, random_phase_augmentation=True)#, dual_channel=True)
+        input_mdct = format.raw_to_mdct(input_raw_sample, random_phase_augmentation=True)
 
         safetensors_file_name = os.path.join(f"{os.path.splitext(filename)[0]}.safetensors")
         safetensors_file_path = os.path.join(dataset_path, safetensors_file_name)
