@@ -37,7 +37,7 @@ import torch
 
 from modules.unets.unet import DualDiffusionUNet, DualDiffusionUNetConfig
 from modules.daes.dae_edm2_p1 import _rope_tables_for_stereo
-from modules.mp_tools import MPConv, MPFourier, mp_silu, mp_sum, normalize
+from modules.mp_tools import MPConv, MPFourier, mp_silu, mp_sum, normalize, mp_cat
 from modules.formats.format import DualDiffusionFormat
 from modules.rope import _rope_pair_rotate_partial
 from modules.sliding_attention import SlidingWindowAttention
@@ -58,7 +58,7 @@ class UNetConfig(DualDiffusionUNetConfig):
     mp_fourier_ln_sigma_offset: float = -0.5
     mp_fourier_bandwidth:       float = 1
 
-    model_channels: int  = 2048              # Base multiplier for the number of channels.
+    model_channels: int  = 2560              # Base multiplier for the number of channels.
     logvar_channels: int = 192               # Number of channels for training uncertainty estimation.
     channel_mult: list[int]    = (1,)        # Per-resolution multipliers for the number of channels.
     channel_mult_noise: Optional[int] = 1    # Multiplier for noise embedding dimensionality.
@@ -69,7 +69,7 @@ class UNetConfig(DualDiffusionUNetConfig):
     rope_channels: int        = 112
     rope_base: float          = 10000.
     attention_window_size: int = 8
-    num_layers_per_block: int = 9            # Number of resnet blocks per resolution.
+    num_layers_per_block: int = 5            # Number of resnet blocks per resolution.
     label_balance: float      = 0.5          # Balance between noise embedding (0) and class embedding (1).
     res_balance: float        = 0.5          # Balance between main branch (0) and residual branch (1).
     attn_balance: float       = 0.5          # Balance between main branch (0) and self-attention (1).
@@ -231,7 +231,7 @@ class UNet(DualDiffusionUNet):
 
         # Encoder.
         self.dec = torch.nn.ModuleDict()
-        cout = cdata + 1 # 1 extra const channel
+        cout = cdata + 1 + cemb # x_ref is appended, and 1 extra const channel
 
         for level, channels in enumerate(cblock):
             
@@ -303,6 +303,7 @@ class UNet(DualDiffusionUNet):
         # Encoder.
         x_input = x
         x = torch.cat((x_input, torch.ones_like(x[:, :1])), dim=1)
+        x = mp_cat(x, normalize(x_ref, dim=1).to(dtype=x.dtype), dim=1, t=0.5)
 
         idx = 0; skips = []
         for name, block in self.dec.items():

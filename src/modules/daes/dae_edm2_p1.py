@@ -83,7 +83,7 @@ def _rope_tables_for_stereo(x: torch.Tensor, rope_channels: int, rope_base: floa
 class DAE_Config(DualDiffusionDAEConfig):
 
     in_channels:  int = 256
-    out_channels: int = 2048
+    out_channels: int = 2560
     in_channels_emb: int = 1024
     latent_channels: int = 64
     in_num_freqs: int = 256
@@ -235,6 +235,9 @@ class DAE(DualDiffusionDAE):
 
         self.emb_label = MPConv(config.in_channels_emb, cemb, kernel=())
         self.recon_loss_logvar = torch.nn.Parameter(torch.zeros([]))
+
+        self.phase_invariance_error_logvar = torch.nn.Parameter(torch.zeros([]))
+        self.dispersion_error_logvar = torch.nn.Parameter(torch.zeros([]))
 
         # encoder
         self.enc = torch.nn.ModuleDict()
