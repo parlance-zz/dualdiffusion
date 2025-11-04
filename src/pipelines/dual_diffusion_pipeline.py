@@ -27,6 +27,7 @@ import importlib
 from dataclasses import dataclass
 from typing import Optional, Union, Any
 from datetime import datetime
+from re import search
 import multiprocessing.managers
 
 import numpy as np
@@ -199,10 +200,10 @@ class DualDiffusionPipeline(torch.nn.Module):
             for path in os.listdir(model_path):
                 if os.path.isdir(os.path.join(model_path, path)):
                     path_parts = path.split("_")
-                    if module_name in path_parts and path_parts[-1].startswith("checkpoint-"):
+                    if module_name in path_parts and "_checkpoint-" in path:
                         module_inventory.checkpoints.append(path)
 
-            module_inventory.checkpoints = sorted(module_inventory.checkpoints, key=lambda x: int(x.split("-")[1]))
+            module_inventory.checkpoints = sorted(module_inventory.checkpoints, key=lambda x: int(search(r'\d+', x.split('-')[1]).group()))
 
             # get ema list for each checkpoint
             module_inventory.emas[""] = list(find_emas_in_dir(os.path.join(model_path, module_name)).values())
@@ -333,11 +334,17 @@ class DualDiffusionPipeline(torch.nn.Module):
             return latent_shape
     
     def get_mel_spec_shape(self, bsz: int = 1, raw_length: Optional[int] = None) -> tuple:
+        
+        if hasattr(self.format, "get_mel_spec_shape") == False:
+            sample_shape = self.format.get_mdct_shape(bsz=bsz, raw_length=raw_length)
+        else:
+            sample_shape = self.format.get_mel_spec_shape(bsz=bsz, raw_length=raw_length)
+
         encoder = getattr(self, "dae", None)
-        mel_spec_shape = self.format.get_mel_spec_shape(bsz=bsz, raw_length=raw_length)
         if encoder is None:
-            return mel_spec_shape
-        latent_shape = self.get_latent_shape(mel_spec_shape)
+            return sample_shape
+        
+        latent_shape = self.get_latent_shape(sample_shape)
         return encoder.get_mel_spec_shape(latent_shape)
     
     @torch.inference_mode()
@@ -634,6 +641,10 @@ class DualDiffusionPipeline(torch.nn.Module):
 
         sample = noise * (sigma_schedule[0]**2 + params.sigma_data**2)**0.5
 
+        error_logvar = unet.get_sigma_loss_logvar(sigma_schedule)
+        i = error_logvar.argmin()
+        print("Sigma with lowest loss:", sigma_schedule_list[i], "logvar:", error_logvar[i].exp().item())
+
         progress_bar = tqdm(total=params.num_steps, disable=quiet)
         for i, (sigma_curr, sigma_next) in enumerate(zip(sigma_schedule_list[:-1], sigma_schedule_list[1:])):
             
@@ -669,17 +680,17 @@ class DualDiffusionPipeline(torch.nn.Module):
             effective_cfg_scale = params.cfg_scale
 
             old_sigma_next = sigma_next
-            #ipo = np.log(sigma_next * sigma_curr) / 2 + params.input_perturbation_offset
             ipo = np.log(sigma_curr) + params.input_perturbation_offset
-            if ipo < 0 and False:
-                effective_input_perturbation = 0
+            if ipo < 0:
+                effective_input_perturbation = float(params.input_perturbation * (1 / np.cosh(ipo))**1) #**2)
             else:
-                #effective_input_perturbation = float(params.input_perturbation * (1 - 1 / np.cosh(ipo))**2)
-                #effective_input_perturbation = float(params.input_perturbation * (1 / np.cosh(ipo))**2)
-                effective_input_perturbation = float(params.input_perturbation * (1 / np.cosh(ipo))**1)
+                effective_input_perturbation = float(params.input_perturbation)
             
-            #effective_cfg_scale = (effective_cfg_scale - 1) * (effective_input_perturbation / (params.input_perturbation + 1e-15)) + 1
-            #print(f"{i+1}/{params.num_steps} effective input perturbation: {(effective_input_perturbation / (params.input_perturbation + 1e-15)):.3f}  sigma: {sigma_curr:.3f}")#  cfg scale: {effective_cfg_scale:.3f}")
+            #effective_input_perturbation = float(params.input_perturbation)
+            #effective_input_perturbation *= error_logvar[i].exp().item() #* float(params.input_perturbation)
+            effective_input_perturbation = (np.tanh(ipo)/2 + 0.5) * float(params.input_perturbation)
+            #print(f"{i+1}/{params.num_steps} input perturbation: {effective_input_perturbation:.3f}  sigma: {sigma_curr:.3f}")
+
             sigma_next *= (1 - (max(min(effective_input_perturbation, 1), 0)))
             effective_input_perturbation = 1 - sigma_next / old_sigma_next
             effective_input_perturbation = old_sigma_next - sigma_next
@@ -687,13 +698,11 @@ class DualDiffusionPipeline(torch.nn.Module):
 
             model_output = unet(input_sample, input_sigma, self.format, unet_class_embeddings, input_ref_sample).float()
             if unet_class_embeddings is not None:
-                #dist = (model_output[params.batch_size:] - model_output[:params.batch_size]).square().mean().sqrt()
-                #print(f"{i+1}/{params.num_steps} cfg dist: {dist.item():.3f}  delta_sigma: {(sigma_curr - old_sigma_next):.3f}")
                 cfg_model_output = model_output[params.batch_size:].lerp(model_output[:params.batch_size], effective_cfg_scale)
             else:
                 cfg_model_output = model_output
 
-            if params.use_heun == True:# and effective_input_perturbation == 0:
+            if params.use_heun == True:
                 sigma_hat = max(old_sigma_next, params.sigma_min)
                 t_hat = sigma_hat / sigma_curr
 
