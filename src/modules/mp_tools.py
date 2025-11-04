@@ -308,7 +308,7 @@ class MPConv(torch.nn.Module):
 
     def __init__(self, in_channels: int, out_channels: int,
                  kernel: tuple[int, int], groups: int = 1, stride: int = 1,
-                 disable_weight_norm: bool = False) -> None:
+                 disable_weight_norm: bool = False, bias: bool = False) -> None:
         
         super().__init__()
 
@@ -319,6 +319,15 @@ class MPConv(torch.nn.Module):
         self.disable_weight_norm = disable_weight_norm
         
         self.weight = torch.nn.Parameter(torch.randn(out_channels, in_channels // groups, *kernel))
+        self.weight.conv_groups = groups
+
+        if bias == True:
+            self.bias = torch.nn.Parameter(torch.zeros(out_channels))
+            group_dim = out_channels // groups
+            self.bias.data[0::2].fill_( 1. / group_dim**0.5)
+            self.bias.data[1::2].fill_(-1. / group_dim**0.5)
+        else:
+            self.bias = None
 
     def forward(self, x: torch.Tensor, gain: Union[float, torch.Tensor] = 1.) -> torch.Tensor:
         
@@ -332,7 +341,11 @@ class MPConv(torch.nn.Module):
         if w.ndim == 2:
             return x @ w.t()
         
-        return torch.nn.functional.conv2d(x, w, padding=(w.shape[-2]//2, w.shape[-1]//2), groups=self.groups, stride=self.stride)
+        x = torch.nn.functional.conv2d(x, w, padding=(w.shape[-2]//2, w.shape[-1]//2), groups=self.groups, stride=self.stride)
+        if self.bias is not None:
+            x = x + self.bias.view(1,-1, 1, 1).to(dtype=x.dtype)
+        
+        return x
 
     @torch.no_grad()
     def normalize_weights(self) -> None:
