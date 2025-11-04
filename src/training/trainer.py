@@ -480,7 +480,7 @@ class DualDiffusionTrainer:
                     muon_param = (any(fnmatch(name, pattern) for pattern in self.config.optimizer.muon_param_patterns) and
                                 (not any(fnmatch(name, pattern) for pattern in self.config.optimizer.adam_param_patterns)))
                     
-                    if (param.shape[0] == 1 or param.shape[1] == 1) and muon_param == True:
+                    if (param.ndim <= 1 or param.shape[0] == 1 or param.shape[1] == 1) and muon_param == True:
                         self.logger.warning(f"Parameter '{name}' has shape {param.shape} which is unsuitable for Muon optimizer. Forcing AdamW for this parameter instead.")
                         muon_param = False
 
