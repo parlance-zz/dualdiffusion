@@ -56,7 +56,7 @@ class UNetConfig(DualDiffusionUNetConfig):
     mp_fourier_ln_sigma_offset: float = 0.5
     mp_fourier_bandwidth:       float = 1
 
-    model_channels: int  = 1536              # Base multiplier for the number of channels.
+    model_channels: int  = 2048              # Base multiplier for the number of channels.
     logvar_channels: int = 192               # Number of channels for training uncertainty estimation.
     channel_mult: list[int]    = (1,)        # Per-resolution multipliers for the number of channels.
     channel_mult_noise: Optional[int] = 1    # Multiplier for noise embedding dimensionality.
@@ -71,9 +71,9 @@ class UNetConfig(DualDiffusionUNetConfig):
     res_balance: float        = 0.5          # Balance between main branch (0) and residual branch (1).
     attn_balance: float       = 0.5          # Balance between main branch (0) and self-attention (1).
     attn_levels: list[int]    = (0,)         # List of resolution levels to use self-attention.
-    mlp_multiplier: int    = 3               # Multiplier for the number of channels in the MLP.
-    mlp_groups: int        = 1               # Number of groups for the MLPs.
-    emb_linear_groups: int = 1
+    mlp_multiplier: int    = 4               # Multiplier for the number of channels in the MLP.
+    mlp_groups: int        = 4               # Number of groups for the MLPs.
+    emb_linear_groups: int = 4
 
     input_skip_t: float = 0.5
 
@@ -128,7 +128,7 @@ class Block(torch.nn.Module):
             self.attn_proj = MPConv(out_channels, out_channels, kernel=(1,1))
 
             self.emb_gain_qkv = torch.nn.Parameter(torch.zeros([]))
-            self.emb_linear_qkv = MPConv(emb_channels, out_channels, kernel=(1,1), groups=emb_linear_groups)
+            self.emb_linear_qkv = MPConv(emb_channels, out_channels, kernel=(1,1), groups=1)
 
     def forward(self, x: torch.Tensor, emb: torch.Tensor, rope_tables: tuple[torch.Tensor, torch.Tensor]) -> torch.Tensor:
         

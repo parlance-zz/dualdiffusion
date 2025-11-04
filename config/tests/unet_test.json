@@ -5,7 +5,7 @@
         "device": "cuda",
         "load_checkpoints": true,
         "load_emas": {
-            //"unet": "ema_std0.1.safetensors",
+            "unet": "ema_std0.1.safetensors",
             //"unet": "ema_std0.05.safetensors",
             //"unet": "ema_beta0.995.safetensors",
             "ddec": "ema_std0.1.safetensors"
@@ -22,7 +22,7 @@
     "copy_sample_source_files": true,
     "random_test_samples_seed": null,
     "add_random_test_samples": 0,
-    "shuffle_test_samples": false,
+    "shuffle_test_samples": true,
     "test_samples": [
         
 
@@ -56,7 +56,7 @@
         "wii/Kamen Rider - Chou Climax Heroes/Stage03.brstm.flac"
         /*/
 
-        //*
+        /*
         "switch/Super Smash Bros. Ultimate/_t_!Movie_c2_opening_jp.ogg.flac", // smash bros opening with female asian vocals
         "switch/Super Smash Bros. Ultimate/j40_hr_menutitle.lopus.flac", // harmonized electric guitars
         "switch/Super Smash Bros. Ultimate/crs2_01_menu.lopus.flac", // awesome rock orchestra main menu theme
@@ -99,8 +99,8 @@
         //"switch/Mario Kart 8 Deluxe",
         //"psf3/One Piece - Pirate Warriors 3"
         //"psf3/Street Fighter IV"
-        //"switch/Gravity Circuit"
-        //"psf2/King's Field - The Ancient City"
+        //"switch/Gravity Circuit",
+        //"psf2/King's Field - The Ancient City",
         //"wii/Mighty Switch Force!"
         //"ssf/Command & Conquer"
         //"smd/Gunstar Heroes"
@@ -115,36 +115,112 @@
         //"usf/Super Smash Bros"
 
 
-        /*
-        "spc/Super Metroid",
-        "spc/Chrono Trigger",
+        //*
+        
+        
         "spc/Shin Kidou Senki Gundam W - Endless Duel",
+        "spc/Gekisou Sentai Car Rangers - Zenkai! Racer Senshi",
+        "spc/Mighty Morphin Power Rangers",
+        "spc/Mighty Morphin Power Rangers - The Movie",
+        "spc/Mighty Morphin Power Rangers - The Fighting Edition",
+        "spc/Power Rangers Zeo - Battle Racers",
+        "spc/Teenage Mutant Ninja Turtles 4 - Turtles in Time",
+        "spc/Teenage Mutant Ninja Turtles - Tournament Fighters",
+        "spc/Contra III - The Alien Wars",
+        "spc/Cybernator",
+        //"spc/Super Castlevania IV",
+        //"spc/Castlevania - Dracula X",
+
+        "spc/Super Metroid",
+
+        "spc/Aero Fighters",
+        "spc/Gradius III",
+        "spc/U.N. Squadron",
+        "spc/Star Fox",
+        "spc/Star Fox 2",
+        "spc/F-Zero",
+        "spc/Vortex",
+        //"spc/Axelay",
+
+        //*
+        "spc/Mega Man 7",
+        "spc/Mega Man X",
+        "spc/Mega Man X2",
+        "spc/Mega Man X3",
+        "spc/RockMan & Forte",
+
+        "spc/Chrono Trigger",
+        //"spc/Star Ocean",
         "spc/Secret of Mana",
         "spc/Seiken Densetsu 3",
         "spc/Final Fantasy - Mystic Quest",
         "spc/Final Fantasy IV",
         "spc/Final Fantasy V",
         "spc/Final Fantasy VI",
-        "spc/Mega Man 7",
-        "spc/Mega Man X",
-        "spc/Mega Man X2",
-        "spc/Mega Man X3",
-        "spc/RockMan & Forte",
+        "spc/E.V.O. - Search for Eden",
+        //"spc/Fire Emblem - Thracia 776",
+        //"spc/Fire Emblem - Seisen no Keifu",
+        "spc/Tales of Phantasia",
+        //"spc/Fire Emblem - Monshou no Nazo",
+        "spc/Terranigma",
+        "spc/Bahamut Lagoon",
+        "spc/Legend of Zelda, The - A Link to the Past",
+        "spc/Front Mission - Gun Hazard",
+        "spc/Front Mission",
+        //"spc/Ruin Arm",
+
         "spc/Pilotwings",
         "spc/International Superstar Soccer",
-        "spc/Umihara Kawase"
+        "spc/Umihara Kawase",
+        "spc/Donkey Kong Country",
+        "spc/Donkey Kong Country 2 - Diddy's Kong Quest",
+        "spc/Donkey Kong Country 3 - Dixie Kong's Double Trouble!",
+        
+        "spc/EarthBound",
+        "spc/Kirby Super Star",
+        "spc/Kirby's Dream Course",
+        "spc/Kirby's Avalanche",
+        "spc/On the Ball",
+        "spc/Kirby's Dream Land 3",
+        "spc/SimCity",
+
+        "spc/Super Bomberman",
+        "spc/Super Bomberman 2",
+        "spc/Super Bomberman 3",
+        "spc/Super Bomberman 4",
+        "spc/Super Bomberman 5",
+
+        "spc/Super Mario All-Stars",
+        "spc/Super Mario World",
+        "spc/Super Mario Kart",
+        "spc/Mario Paint",
+        "spc/Super Mario World 2 - Yoshi's Island",
+        "spc/Super Mario RPG - The Legend of the Seven Stars"
+
         /*/
+
+        //"spc/Umihara Kawase"
+        /*
+        "spc/Shin Kidou Senki Gundam W - Endless Duel",
+        "spc/Gekisou Sentai Car Rangers - Zenkai! Racer Senshi",
+        "spc/Mighty Morphin Power Rangers",
+        "spc/Mighty Morphin Power Rangers - The Movie",
+        "spc/Mighty Morphin Power Rangers - The Fighting Edition",
+        "spc/Power Rangers Zeo - Battle Racers",
+        "spc/Teenage Mutant Ninja Turtles 4 - Turtles in Time"
+        */
+
 
         //"psf/Mega Man X4",
         //"psf/Mega Man X5",
-        //"psf/Mega Man X6"
+        //"psf/Mega Man X6",
         //"psf/Mega Man 8"
         //"switch/Mega Man X Legacy Collection",
         //"switch/Mega Man X Legacy Collection 2"
         //"psf/Suikoden 2"
         //"3sf/Super Mario 3D Land"
         //"smd/Gunstar Heroes"
-        //"xbox/Tony Hawk's Pro Skater 2x",
+        //"xbox/Tony Hawk's Pro Skater 2x"
         //"wii/Tony Hawk's Downhill Jam" // better quality
         //"xbox/AirForce Delta Storm"
 
@@ -190,7 +266,6 @@
         //"psf2/Quartett! The Stage of Love"
         
         /* // high-def pop-punk
-        "wii/Tony Hawk's Downhill Jam/_t_songs_15.logg.flac",
         "wii/Tony Hawk's Downhill Jam/_t_songs_15.logg.flac",
         "wii/Tony Hawk's Downhill Jam/_t_songs_15.logg.flac",
         "wii/Tony Hawk's Downhill Jam/_t_songs_15.logg.flac"
@@ -248,15 +323,13 @@
         //*/
         //"psf2/Fisherman's Challenge"
 
-        //* // metal
-        //"psf3/One Piece - Pirate Warriors 3/BGMLink_00000007.at3.flac",
-        //"switch/eBaseball Powerful Pro Yakyuu 2020/_t_wem_1004274880.wem.flac",
-        //"vita/Tayutama 2 - You're the only one/015.at9.flac", // sick progressive metal
-        //"switch/Super Smash Bros. Ultimate/j40_hr_menutitle.lopus.flac", // harmonized electric guitars
+        /* // metal
+        "psf3/One Piece - Pirate Warriors 3/BGMLink_00000007.at3.flac",
+        "switch/eBaseball Powerful Pro Yakyuu 2020/_t_wem_1004274880.wem.flac",
+        "vita/Tayutama 2 - You're the only one/015.at9.flac", // sick progressive metal
+        "switch/Super Smash Bros. Ultimate/j40_hr_menutitle.lopus.flac" // harmonized electric guitars
+        /*/
 
-        //"psf3/One Piece - Pirate Warriors 3/BGMLink_00000007.at3.flac",
-        //"switch/eBaseball Powerful Pro Yakyuu 2020/_t_wem_1004274880.wem.flac",
-        
         /*
         "wii/Kamen Rider - Chou Climax Heroes/Stage03.brstm.flac", // progressive metal
         "vita/Tayutama 2 - You're the only one/015.at9.flac", // sick progressive metal ***
@@ -337,29 +410,34 @@
         "seamless_loop": false,
 
         "length": null,
-        "num_steps": 100,
-        //"num_steps": 400,
-        "cfg_scale": 4,
-        "use_heun": true,//true,
+        //"num_steps": 100,
+        "num_steps": 1200,
+        //"cfg_scale": 4,
+        //"cfg_scale": 4.5,
+        "cfg_scale": 5,
+        "use_heun": false,
 
         //"schedule": "scale_invariant",
         //"rho": 4,//2.7,
 
-        "schedule": "linear",
+        //"schedule": "linear",
 
-        //"schedule": "edm2",
-        //"rho": 7,
+        "schedule": "edm2",
+        "rho": 7,
 
         //"schedule": "cos",
         //"rho": 1.688,
 
         "sigma_max": 400,
-        "sigma_min": 0.01,
+        "sigma_min": 0.004,
         //"sigma_min": 0.004,
         
         //"input_perturbation": 0.12,
-        "input_perturbation": 1,
-        "input_perturbation_offset": -0.85//-0.5
+        //"input_perturbation": 0.1,
+        //"input_perturbation": 0.01,
+        "input_perturbation": 0.004,
+        //"input_perturbation_offset": -0.85
+        "input_perturbation_offset": -0.85
     },
     "ddec_params": {
 
