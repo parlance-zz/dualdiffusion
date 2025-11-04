@@ -24,6 +24,7 @@ from dataclasses import dataclass
 from typing import Union, Optional
 
 import torch
+import numpy as np
 
 from training.trainer import DualDiffusionTrainer
 from training.module_trainers.unet_trainer import UNetTrainer, UNetTrainerConfig
@@ -35,7 +36,7 @@ from modules.mp_tools import normalize
 def get_cos_angle(x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
 
     dot = torch.einsum('bchw,bchw->bhw', x, y)
-    return dot / (x.norm(dim=1) * y.norm(dim=1) + 1e-10)
+    return dot / x.shape[1]
 
 @torch.no_grad()
 def random_stereo_augmentation(x: torch.Tensor) -> torch.Tensor:
@@ -49,22 +50,23 @@ def random_stereo_augmentation(x: torch.Tensor) -> torch.Tensor:
 @dataclass
 class DiffusionDecoder_Trainer_Config(UNetTrainerConfig):
 
-    kl_loss_weight: float = 1.5e-3
+    kl_loss_weight: float = 1-4
+    kl_mean_weight: float = 50
     kl_warmup_steps: int  = 1000
 
-    phase_invariance_loss_weight: float = 1e-3
+    phase_invariance_loss_weight: float = 1
     phase_invariance_loss_bsz: int = -1
-    latents_dispersion_loss_weight: float = 1e-3
+    latents_dispersion_loss_weight: float = 2e-2
     latents_dispersion_loss_bsz: int = -1
     latents_dispersion_num_iterations: int = 4
-    latents_regularization_warmup_steps: int = 1000
+    latents_regularization_warmup_steps: int = 12000
 
     loss_buckets_sigma_min: float = 0.0002
     loss_buckets_sigma_max: float = 11
 
     random_stereo_augmentation: bool = True
 
-    crop_edges: int = 8 # used to avoid artifacts due to mdct lapped blocks at beginning and end of sample
+    crop_edges: int = 4 # used to avoid artifacts due to mdct lapped blocks at beginning and end of sample
 
 class DiffusionDecoder_Trainer(UNetTrainer):
     
@@ -117,7 +119,7 @@ class DiffusionDecoder_Trainer(UNetTrainer):
         self.loss_weight = None
 
         self.unet = self.ddec
-        self.unet_trainer_init(crop_edges=0)#config.crop_edges)
+        self.unet_trainer_init()
 
     def train_batch(self, batch: dict) -> Optional[dict[str, Union[torch.Tensor, float]]]:
 
@@ -133,8 +135,6 @@ class DiffusionDecoder_Trainer(UNetTrainer):
         else:
             raw_samples = batch["audio"]
 
-        #mdct_samples: torch.Tensor     = self.format.raw_to_mdct(raw_samples, random_phase_augmentation=True)[:, :, :, self.config.crop_edges:-self.config.crop_edges].detach()
-        #mdct_samples_dae: torch.Tensor = self.format.raw_to_mdct(raw_samples, random_phase_augmentation=True)[:, :, :, self.config.crop_edges:-self.config.crop_edges].detach()
         mdct_samples: torch.Tensor = self.format.raw_to_mdct(raw_samples, random_phase_augmentation=True)
         mdct_samples = mdct_samples[:, :, :, self.config.crop_edges:-self.config.crop_edges].detach()
         mdct_samples_dae = mdct_samples
@@ -147,15 +147,15 @@ class DiffusionDecoder_Trainer(UNetTrainer):
 
             mdct_samples_dae2: torch.Tensor = self.format.raw_to_mdct(raw_samples[:self.config.phase_invariance_loss_bsz], random_phase_augmentation=True)
             mdct_samples_dae2 = mdct_samples_dae2[:, :, :, self.config.crop_edges:-self.config.crop_edges].detach()
+            dae_embeddings2 = dae_embeddings[:self.config.phase_invariance_loss_bsz] if dae_embeddings is not None else None
             with torch.autocast(device_type="cuda", dtype=self.trainer.mixed_precision_dtype, enabled=self.trainer.mixed_precision_enabled):
-                latents2 = self.dae.encode(mdct_samples_dae2, dae_embeddings[:self.config.phase_invariance_loss_bsz])
-            
-            #phase_invariance_loss = torch.nn.functional.mse_loss(latents[:self.config.phase_invariance_loss_bsz], latents2.float(), reduction="none").mean()
+                latents2 = self.dae.encode(mdct_samples_dae2, dae_embeddings2)
+
             cos_angle = get_cos_angle(latents[:self.config.phase_invariance_loss_bsz], latents2.float())
             phase_invariance_loss = (1 - cos_angle).mean() / 2
 
             phase_invariance_loss = phase_invariance_loss.expand(latents.shape[0]) # needed for per-sample logging
-            phase_invariance_loss_nll = phase_invariance_loss / self.dae.phase_invariance_error_logvar.exp() + self.dae.phase_invariance_error_logvar
+            phase_invariance_loss_nll = phase_invariance_loss #/ self.dae.phase_invariance_error_logvar.exp() + self.dae.phase_invariance_error_logvar
         else:
             phase_invariance_loss = phase_invariance_loss_nll = None
 
@@ -168,13 +168,14 @@ class DiffusionDecoder_Trainer(UNetTrainer):
                 repulse_latents = latents.roll(shifts=i+1, dims=0)
 
                 for j in range(self.config.latents_dispersion_num_iterations):
-                    rnd_indices_w = torch.randperm(repulse_latents.shape[3], device=latents.device)
-                    rnd_indices_h = torch.randperm(repulse_latents.shape[2], device=latents.device)
-                    repulse_latents = repulse_latents[:, :, :, rnd_indices_w]
-                    repulse_latents = repulse_latents[:, :, rnd_indices_h, :]
+                    #rnd_indices_w = torch.randperm(repulse_latents.shape[3], device=latents.device)
+                    #rnd_indices_h = torch.randperm(repulse_latents.shape[2], device=latents.device)
+                    #repulse_latents = repulse_latents[:, :, :, rnd_indices_w]
+                    #repulse_latents = repulse_latents[:, :, rnd_indices_h, :]
 
-                    #repulse_latents = repulse_latents.roll(shifts=np.random.randint(1, repulse_latents.shape[3]), dims=3)
-                    #repulse_latents = repulse_latents.roll(shifts=np.random.randint(1, repulse_latents.shape[2]), dims=2)
+                    repulse_latents = repulse_latents.roll(shifts=np.random.randint(1, repulse_latents.shape[3]), dims=3)
+                    if repulse_latents.shape[2] > 1:
+                        repulse_latents = repulse_latents.roll(shifts=np.random.randint(1, repulse_latents.shape[2]), dims=2)
 
                     cos_angle = get_cos_angle(latents, repulse_latents)
                     dispersion_loss = dispersion_loss + (cos_angle**2).mean()
@@ -183,13 +184,16 @@ class DiffusionDecoder_Trainer(UNetTrainer):
 
             dispersion_loss = dispersion_loss / total_dispersion_iterations
             dispersion_loss = dispersion_loss.expand(latents.shape[0]) # needed for per-sample logging
-            dispersion_loss_nll = dispersion_loss / self.dae.dispersion_error_logvar.exp() + self.dae.dispersion_error_logvar
+            dispersion_loss_nll = dispersion_loss# / self.dae.dispersion_error_logvar.exp() + self.dae.dispersion_error_logvar
         else:
             dispersion_loss = dispersion_loss_nll = None
 
-        pre_norm_latents_var = pre_norm_latents.var(dim=1)
+        pre_norm_latents_var = pre_norm_latents.norm(dim=1)**2 / pre_norm_latents.shape[1] + 1e-20
+        #B,C,H,W = pre_norm_latents.shape
+        #pre_norm_latents_var = pre_norm_latents.view(B, self.dae.config.mlp_groups, C//self.dae.config.mlp_groups, H, W).norm(dim=2).pow(2) / (C//self.dae.config.mlp_groups)
+        #pre_norm_latents_var = pre_norm_latents_var.mean(dim=1) + 1e-20
         var_kl = pre_norm_latents_var - 1 - pre_norm_latents_var.log()
-        kl_loss = var_kl.mean(dim=(1,2)) + pre_norm_latents.mean(dim=(1,2,3)).square()
+        kl_loss = var_kl.mean(dim=(1,2)) + pre_norm_latents.mean(dim=(1,2,3)).square() * self.config.kl_mean_weight
 
         phase_invariance_loss_weight = self.config.phase_invariance_loss_weight
         dispersion_loss_weight = self.config.latents_dispersion_loss_weight

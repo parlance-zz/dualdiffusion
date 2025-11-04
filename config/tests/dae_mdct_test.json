@@ -5,7 +5,7 @@
         "device": "cuda",
         "load_checkpoints": true,
         "load_emas": {
-            "ddec": "ema_std0.05.safetensors"
+
         },
         "compile_options": {
             "fullgraph": true,

@@ -114,9 +114,11 @@ class DualDiffusionDAE(DualDiffusionModule, ABC):
             self.decode = torch.compile(self.decode, **kwargs)
             self.forward = torch.compile(self.forward, **kwargs)
 
-    def latents_to_img(self, latents: torch.Tensor) -> ndarray:
+    def latents_to_img(self, latents: torch.Tensor, img_split_stereo: Optional[bool] = None) -> ndarray:
         
-        if self.config.latents_img_split_stereo == True:
+        if img_split_stereo is None:
+            img_split_stereo = self.config.latents_img_split_stereo
+        if img_split_stereo == True:
             if self.config.latents_img_flip_stereo == True:
                 latents = latents.clone().detach()
                 latents[:, 1::2] = latents[:, 1::2].flip(dims=(2,))
