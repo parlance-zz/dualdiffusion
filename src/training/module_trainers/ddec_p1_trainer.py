@@ -33,8 +33,8 @@ from modules.unets.unet_edm2_p1_ddec import UNet
 from modules.formats.mdct import MDCT_Format
 from modules.mp_tools import normalize
 
-def get_cos_angle(x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
 
+def get_cos_angle(x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
     dot = torch.einsum('bchw,bchw->bhw', x, y)
     return dot / x.shape[1]
 
@@ -50,16 +50,16 @@ def random_stereo_augmentation(x: torch.Tensor) -> torch.Tensor:
 @dataclass
 class DiffusionDecoder_Trainer_Config(UNetTrainerConfig):
 
-    kl_loss_weight: float = 1-4
-    kl_mean_weight: float = 50
-    kl_warmup_steps: int  = 1000
+    kl_loss_weight: float = 1-2
+    kl_mean_weight: float = 1
+    kl_warmup_steps: int  = 20000
 
     phase_invariance_loss_weight: float = 1
     phase_invariance_loss_bsz: int = -1
-    latents_dispersion_loss_weight: float = 2e-2
+    latents_dispersion_loss_weight: float = 0
     latents_dispersion_loss_bsz: int = -1
-    latents_dispersion_num_iterations: int = 4
-    latents_regularization_warmup_steps: int = 12000
+    latents_dispersion_num_iterations: int = 1
+    latents_regularization_warmup_steps: int = 20000
 
     loss_buckets_sigma_min: float = 0.0002
     loss_buckets_sigma_max: float = 11
@@ -114,10 +114,6 @@ class DiffusionDecoder_Trainer(UNetTrainer):
             self.logger.info("Using random stereo augmentation")
         else: self.logger.info("Random stereo augmentation is disabled")
 
-        #self.loss_weight = self.format.mdct_mel_density**0.5
-        #self.loss_weight /= self.format.mdct_mel_density.mean()
-        self.loss_weight = None
-
         self.unet = self.ddec
         self.unet_trainer_init()
 
@@ -164,14 +160,9 @@ class DiffusionDecoder_Trainer(UNetTrainer):
             total_dispersion_iterations = 0
 
             for i in range(self.config.latents_dispersion_loss_bsz - 1):
-
                 repulse_latents = latents.roll(shifts=i+1, dims=0)
 
                 for j in range(self.config.latents_dispersion_num_iterations):
-                    #rnd_indices_w = torch.randperm(repulse_latents.shape[3], device=latents.device)
-                    #rnd_indices_h = torch.randperm(repulse_latents.shape[2], device=latents.device)
-                    #repulse_latents = repulse_latents[:, :, :, rnd_indices_w]
-                    #repulse_latents = repulse_latents[:, :, rnd_indices_h, :]
 
                     repulse_latents = repulse_latents.roll(shifts=np.random.randint(1, repulse_latents.shape[3]), dims=3)
                     if repulse_latents.shape[2] > 1:
@@ -182,18 +173,17 @@ class DiffusionDecoder_Trainer(UNetTrainer):
 
                 total_dispersion_iterations += self.config.latents_dispersion_num_iterations
 
-            dispersion_loss = dispersion_loss / total_dispersion_iterations
+            if total_dispersion_iterations > 0:
+                dispersion_loss = dispersion_loss / total_dispersion_iterations
             dispersion_loss = dispersion_loss.expand(latents.shape[0]) # needed for per-sample logging
             dispersion_loss_nll = dispersion_loss# / self.dae.dispersion_error_logvar.exp() + self.dae.dispersion_error_logvar
         else:
             dispersion_loss = dispersion_loss_nll = None
 
-        pre_norm_latents_var = pre_norm_latents.norm(dim=1)**2 / pre_norm_latents.shape[1] + 1e-20
-        #B,C,H,W = pre_norm_latents.shape
-        #pre_norm_latents_var = pre_norm_latents.view(B, self.dae.config.mlp_groups, C//self.dae.config.mlp_groups, H, W).norm(dim=2).pow(2) / (C//self.dae.config.mlp_groups)
-        #pre_norm_latents_var = pre_norm_latents_var.mean(dim=1) + 1e-20
+        pre_norm_latents_var = pre_norm_latents.pow(2).mean(dim=(0,2,3)) + 1e-20
         var_kl = pre_norm_latents_var - 1 - pre_norm_latents_var.log()
-        kl_loss = var_kl.mean(dim=(1,2)) + pre_norm_latents.mean(dim=(1,2,3)).square() * self.config.kl_mean_weight
+        kl_loss = var_kl.mean() + pre_norm_latents.mean(dim=(0,2,3)).square().mean() * self.config.kl_mean_weight
+        kl_loss = kl_loss.expand(latents.shape[0]) # needed for per-sample logging
 
         phase_invariance_loss_weight = self.config.phase_invariance_loss_weight
         dispersion_loss_weight = self.config.latents_dispersion_loss_weight
@@ -206,7 +196,7 @@ class DiffusionDecoder_Trainer(UNetTrainer):
         if self.trainer.global_step < self.config.kl_warmup_steps:
             kl_loss_weight *= self.trainer.global_step / self.config.kl_warmup_steps
 
-        logs = self.unet_train_batch(mdct_samples, audio_embeddings, ddec_cond, self.loss_weight)
+        logs = self.unet_train_batch(mdct_samples, audio_embeddings, ddec_cond)
         
         logs.update({
             "io_stats/ddec_cond_std": ddec_cond.std(dim=(1,2,3)),

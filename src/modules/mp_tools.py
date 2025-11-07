@@ -261,8 +261,22 @@ def mp_silu(x: torch.Tensor) -> torch.Tensor:
 # Magnitude-preserving sum (Equation 88).
 
 def mp_sum(a: torch.Tensor, b: torch.Tensor, t: Union[torch.Tensor, float] = 0.5) -> torch.Tensor:
-    return a.lerp(b, t) / ((1 - t) ** 2 + t ** 2) ** 0.5
+    
+    if isinstance(t, torch.Tensor):
+        return a.lerp(b, t) / (((1 - t) ** 2 + t ** 2) ** 0.5).to(a.dtype)
+    else:
+        return a.lerp(b, t) / ((1 - t) ** 2 + t ** 2) ** 0.5
 
+def mp_sum_groups(a: torch.Tensor, b: torch.Tensor, t: torch.Tensor, groups: int) -> torch.Tensor:
+
+    Ba,Ca,Ha,Wa = a.shape; Bb,Cb,Hb,Wb = b.shape
+    a = a.view(Ba, groups, Ca // groups, Ha, Wa)
+    b = b.view(Bb, groups, Cb // groups, Hb, Wb)
+    t = t.unsqueeze(2)
+
+    x: torch.Tensor = a.lerp(b, t) / (((1 - t) ** 2 + t ** 2) ** 0.5).to(a.dtype)
+    return x.contiguous().view(Ba, Ca, Ha, Wa)
+    
 #----------------------------------------------------------------------------
 # Magnitude-preserving concatenation (Equation 103).
 

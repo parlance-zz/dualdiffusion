@@ -36,7 +36,7 @@ from typing import Union, Optional
 import torch
 
 from modules.unets.unet import DualDiffusionUNet, DualDiffusionUNetConfig
-from modules.mp_tools import MPConv, MPFourier, mp_silu, mp_sum, normalize, mp_cat_interleave
+from modules.mp_tools import MPConv, MPFourier, mp_silu, mp_sum, normalize, mp_cat_interleave, mp_sum_groups
 from modules.formats.format import DualDiffusionFormat
 from modules.daes.dae_edm2_p1 import group_normalize
 
@@ -61,20 +61,15 @@ class UNetConfig(DualDiffusionUNetConfig):
     channel_mult: list[int] = (1,)           # Per-resolution multipliers for the number of channels.
     channel_mult_noise: Optional[float] = 0.125  # Multiplier for noise embedding dimensionality.
     channel_mult_emb: Optional[float]   = 1      # Multiplier for final embedding dimensionality.
-    use_skips: bool     = True
-    use_conv_skip: bool = True
+    use_skips: bool     = False
     channels_per_head: int    = 128          # Number of channels per attention head.
     attn_logit_scale: float   = 1
     num_layers_per_block: int = 5            # Number of resnet blocks per resolution.
     label_balance: float      = 0.5          # Balance between noise embedding (0) and class embedding (1).
-    res_balance: float        = 0.5          # Balance between main branch (0) and residual branch (1).
-    attn_balance: float       = 0.5          # Balance between main branch (0) and self-attention (1).
-    skip_balance: float       = 0.5          # Balance for skip connections when not using conv skips.
+    balance_logits_offset: float = -2
     mlp_multiplier: int    = 4               # Multiplier for the number of channels in the MLP.
     mlp_groups: int        = 64              # Number of groups for the MLPs.
     emb_linear_groups: int = 64
-
-    input_skip_t: float = 0.5
 
 class Block(torch.nn.Module):
 
@@ -85,8 +80,7 @@ class Block(torch.nn.Module):
         skip_channels: int,
         emb_channels: int,                 # Number of embedding channels.
         dropout: float         = 0.,       # Dropout probability.
-        res_balance: float     = 0.3,      # Balance between main branch (0) and residual branch (1).
-        attn_balance: float    = 0.3,      # Balance between main branch (0) and self-attention (1).
+        balance_logits_offset: float = -2, # Offset for the balance logits before sigmoid.
         clip_act: float        = 256,      # Clip output activations. None = do not clip.
         mlp_multiplier: int    = 4,        # Multiplier for the number of channels in the MLP.
         mlp_groups: int        = 4,        # Number of groups for the MLP.
@@ -104,8 +98,7 @@ class Block(torch.nn.Module):
         self.mlp_groups = mlp_groups
         self.out_channels = out_channels
         self.dropout = dropout
-        self.res_balance = res_balance
-        self.attn_balance = attn_balance
+        self.balance_logits_offset = balance_logits_offset
         self.clip_act = clip_act
         self.attn_logit_scale = attn_logit_scale
 
@@ -129,6 +122,11 @@ class Block(torch.nn.Module):
         self.emb_gain = torch.nn.Parameter(torch.zeros([]))
         self.emb_linear = MPConv(emb_channels, inner_channels, kernel=(1,1), groups=emb_linear_groups)
 
+        self.emb_attn_balance = MPConv(emb_channels, mlp_groups, kernel=(1,1), groups=1, disable_weight_norm=True)
+        self.emb_res_balance  = MPConv(emb_channels, mlp_groups, kernel=(1,1), groups=1, disable_weight_norm=True)
+        self.emb_attn_balance.weight.data.fill_(0.)
+        self.emb_res_balance.weight.data.fill_(0.)
+    
         self.attn_q = MPConv(out_channels, out_channels, kernel=(1,1), groups=mlp_groups)
         self.attn_k = MPConv(out_channels, out_channels, kernel=(1,1), groups=mlp_groups)
         self.attn_v = MPConv(out_channels, out_channels, kernel=(1,1), groups=mlp_groups)
@@ -136,9 +134,12 @@ class Block(torch.nn.Module):
 
         self.emb_gain_qkv = torch.nn.Parameter(torch.zeros([]))
         self.emb_linear_qkv = MPConv(emb_channels, out_channels, kernel=(1,1), groups=emb_linear_groups)
-        
+
     def forward(self, x: torch.Tensor, emb: torch.Tensor) -> torch.Tensor:
-        
+
+        attn_balance = torch.sigmoid(self.emb_attn_balance(emb.detach()) + self.balance_logits_offset)
+        res_balance  = torch.sigmoid(self.emb_res_balance(emb.detach()) + self.balance_logits_offset)
+
         x = self.conv_skip(x)
 
         c = self.emb_linear_qkv(emb, gain=self.emb_gain_qkv) + 1.
@@ -162,7 +163,7 @@ class Block(torch.nn.Module):
         y = y.permute(0, 3, 4, 2, 1).reshape(B, C, H, W)
 
         y = self.attn_proj(y)
-        x = mp_sum(x, y, t=self.attn_balance)
+        x = mp_sum_groups(x, y, t=attn_balance, groups=self.mlp_groups)
 
         y = self.conv_res0(x)
 
@@ -173,11 +174,10 @@ class Block(torch.nn.Module):
             y = torch.nn.functional.dropout(y, p=self.dropout) * (1. - self.dropout)**0.5
 
         y: torch.Tensor = self.conv_res1(y)
-        
-        x = mp_sum(x, y, t=self.res_balance)
+        x = mp_sum_groups(x, y, t=res_balance, groups=self.mlp_groups)
 
         if self.clip_act is not None:
-            x = x.clip_(-self.clip_act, self.clip_act)
+            x = x.clip(-self.clip_act, self.clip_act)
 
         return x
 
@@ -191,8 +191,7 @@ class UNet(DualDiffusionUNet):
                         "mlp_multiplier": config.mlp_multiplier,
                         "mlp_groups": config.mlp_groups,
                         "emb_linear_groups": config.emb_linear_groups,
-                        "res_balance": config.res_balance,
-                        "attn_balance": config.attn_balance,
+                        "balance_logits_offset": config.balance_logits_offset,
                         "channels_per_head": config.channels_per_head,
                         "attn_logit_scale": config.attn_logit_scale}
 
@@ -231,14 +230,14 @@ class UNet(DualDiffusionUNet):
             
             cin = cout
             cout = channels
-            self.dec[f"conv_in"] = MPConv(cin, cout, kernel=(1,3), groups=config.mlp_groups, bias=True)
+            self.dec[f"conv_in"] = MPConv(cin, cout, kernel=(1,1), bias=True)
             
             for idx in range(config.num_layers_per_block):
 
                 cin = cout
                 cout = channels
 
-                if config.use_skips == True and config.use_conv_skip == True and idx >= config.num_layers_per_block / 2:
+                if config.use_skips == True and idx >= config.num_layers_per_block / 2:
                     cskip = channels
                 else:
                     cskip = 0
@@ -246,7 +245,7 @@ class UNet(DualDiffusionUNet):
                 self.dec[f"block{level}_layer{idx}"] = Block(level, cin, cout, cskip, cemb, **block_kwargs)
                 
         self.out_gain = torch.nn.Parameter(torch.zeros([]))
-        self.conv_out = MPConv(cout, config.out_channels, kernel=(1,3), groups=config.mlp_groups)
+        self.conv_out = MPConv(cout, config.out_channels, kernel=(1,1))
 
     def get_embeddings(self, emb_in: torch.Tensor, conditioning_mask: torch.Tensor) -> torch.Tensor:
         if self.config.in_channels_emb > 0:
@@ -294,7 +293,6 @@ class UNet(DualDiffusionUNet):
 
         # Encoder.
         x = x.reshape(x.shape[0], x.shape[1]*x.shape[2], 1, x.shape[3]).to(dtype=torch.bfloat16)
-        x_input = x
 
         idx = 0; skips = []
         for name, block in self.dec.items():
@@ -302,15 +300,8 @@ class UNet(DualDiffusionUNet):
                 x = block(x)
             else:
                 if self.config.use_skips == True and idx >= self.config.num_layers_per_block / 2:
-                    if self.config.use_conv_skip == True:
-                        x = mp_cat_interleave(x, skips.pop(), dim=1, t=self.config.skip_balance)
-                    else:
-                        x = mp_sum(x, skips.pop(), t=self.config.skip_balance)
+                    x = mp_cat_interleave(x, skips.pop(), dim=1, t=0.5)
 
-                if self.config.input_skip_t > 0:
-                    block_ch_to_input_ch = x.shape[1] // x_input.shape[1]
-                    x[:, ::block_ch_to_input_ch] = mp_sum(x[:, ::block_ch_to_input_ch], x_input, t=self.config.input_skip_t)
-                    
                 x = block(x, emb)
 
                 if self.config.use_skips == True and idx < self.config.num_layers_per_block / 2 - 0.5:
