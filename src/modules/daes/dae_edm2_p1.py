@@ -52,7 +52,7 @@ class DAE_Config(DualDiffusionDAEConfig):
     in_channels:  int = 512
     out_channels: int = 8192
     in_channels_emb: int = 1024
-    latent_channels: int = 128
+    latent_channels: int = 192
     in_num_freqs: int = 256
     sample_rate: float = 32000
 
@@ -64,7 +64,7 @@ class DAE_Config(DualDiffusionDAEConfig):
     channels_per_head: int    = 64           # Number of channels per attention head.
     attn_logit_scale: float   = 1
     num_enc_layers: int       = 5
-    num_dec_layers_per_block: int = 2        # Number of resnet blocks per resolution.
+    num_dec_layers_per_block: int = 0        # Number of resnet blocks per resolution.
     balance_logits_offset: float = -2
     mlp_multiplier: int    = 4               # Multiplier for the number of channels in the MLP.
     mlp_groups: int        = 64              # Number of groups for the MLPs.
@@ -143,8 +143,8 @@ class Block(torch.nn.Module):
 
     def forward(self, x: torch.Tensor, emb: torch.Tensor) -> torch.Tensor:
         
-        attn_balance = torch.sigmoid(self.emb_attn_balance(emb.detach()) + self.balance_logits_offset)
-        res_balance  = torch.sigmoid(self.emb_res_balance(emb.detach()) + self.balance_logits_offset)
+        attn_balance = torch.sigmoid(self.emb_attn_balance(emb) + self.balance_logits_offset)
+        res_balance  = torch.sigmoid(self.emb_res_balance(emb) + self.balance_logits_offset)
 
         x = resample_1d(x, self.resample_mode)
 

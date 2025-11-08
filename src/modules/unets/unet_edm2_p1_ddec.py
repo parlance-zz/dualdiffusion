@@ -137,8 +137,8 @@ class Block(torch.nn.Module):
 
     def forward(self, x: torch.Tensor, emb: torch.Tensor) -> torch.Tensor:
 
-        attn_balance = torch.sigmoid(self.emb_attn_balance(emb.detach()) + self.balance_logits_offset)
-        res_balance  = torch.sigmoid(self.emb_res_balance(emb.detach()) + self.balance_logits_offset)
+        attn_balance = torch.sigmoid(self.emb_attn_balance(emb) + self.balance_logits_offset)
+        res_balance  = torch.sigmoid(self.emb_res_balance(emb) + self.balance_logits_offset)
 
         x = self.conv_skip(x)
 
