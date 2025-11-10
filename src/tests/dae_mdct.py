@@ -27,6 +27,7 @@ import datetime
 import random
 
 import torch
+import numpy as np
 
 from modules.embeddings.clap import CLAP_Embedding
 from pipelines.dual_diffusion_pipeline import DualDiffusionPipeline, SampleParams
@@ -91,6 +92,7 @@ def dae_test() -> None:
     
     start_time = datetime.datetime.now()
     avg_latents_mean = avg_latents_std = 0
+    collage_img = None
 
     add_random_test_samples = test_params["add_random_test_samples"]
     if add_random_test_samples > 0:
@@ -173,7 +175,15 @@ def dae_test() -> None:
         metadata["ddec_mdct_metadata"] = dict_str(ddec_mdct_params.__dict__) if ddec_mdct is not None else "null"
 
         if latents is not None:
-            save_img(dae.latents_to_img(latents), os.path.join(output_path, "1", f"step_{last_global_step}_{filename.replace(file_ext, '_latents.png')}"))
+            latents_img = dae.latents_to_img(latents)
+            save_img(latents_img, os.path.join(output_path, "1", f"step_{last_global_step}_{filename.replace(file_ext, '_latents.png')}"))
+
+            if test_params.get("latents_img_save_collage", False) == True:
+                if collage_img is None:
+                    collage_img = latents_img
+                else:
+                    print(f"collage_img shape: {collage_img.shape}  latents_img shape: {latents_img.shape}")
+                    collage_img = np.concatenate([collage_img, latents_img], axis=0)
         
         if test_params.get("xref_output", False) == True and x_ref_mdct is not None:
             save_img(dae.latents_to_img(x_ref_mdct), os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_x_ref.png')}"))
@@ -197,6 +207,9 @@ def dae_test() -> None:
         print(f"Latents avg mean: {avg_latents_mean / len(test_samples)}")
         print(f"Latents avg std: {avg_latents_std / len(test_samples)}")
 
+    if collage_img is not None:
+        save_img(collage_img, os.path.join(output_path, "1", f"step_{last_global_step}_collage.png"))
+        print(f"Saved latents collage to {os.path.join(output_path, '1', f'_step_{last_global_step}_collage.png')}")
 
 if __name__ == "__main__":
 

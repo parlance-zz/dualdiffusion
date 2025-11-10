@@ -17,6 +17,7 @@
     "latents_tiled_max_chunk_size": 6144,
     "latents_tiled_overlap": 256,
     "latents_img_use_pca": false,
+    "latents_img_save_collage": true,
     "output_lufs": -20,
     "ddec_output": true,
     "xref_output": true,
