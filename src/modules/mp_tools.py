@@ -366,6 +366,24 @@ class MPConv(torch.nn.Module):
         if self.disable_weight_norm == False:
             self.weight.copy_(normalize(self.weight))
 
+class ConditionedGroupBalance(torch.nn.Module):
+
+    def __init__(self, emb_channels: int, groups: int = 1, balance_logits_offset: float = 0) -> None:
+        
+        super().__init__()
+
+        self.emb_channels = emb_channels
+        self.groups = groups
+        self.balance_logits_offset = balance_logits_offset
+        
+        self.emb_balance = MPConv(emb_channels, groups, kernel=(1,1), groups=1, disable_weight_norm=True)
+        self.emb_balance.weight.data.fill_(0.)
+
+    def forward(self, x: torch.Tensor, y: torch.Tensor, emb: torch.Tensor) -> torch.Tensor:
+        
+        balance: torch.Tensor = (self.emb_balance(emb) + self.balance_logits_offset).sigmoid()
+        return mp_sum_groups(x, y, balance, self.groups)
+
 class MPConv3D(torch.nn.Module):
 
     def __init__(self, in_channels: int, out_channels: int,
