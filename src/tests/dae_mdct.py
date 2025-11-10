@@ -182,7 +182,6 @@ def dae_test() -> None:
                 if collage_img is None:
                     collage_img = latents_img
                 else:
-                    print(f"collage_img shape: {collage_img.shape}  latents_img shape: {latents_img.shape}")
                     collage_img = np.concatenate([collage_img, latents_img], axis=0)
         
         if test_params.get("xref_output", False) == True and x_ref_mdct is not None:
