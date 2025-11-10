@@ -207,7 +207,7 @@ def dae_test() -> None:
         print(f"Latents avg std: {avg_latents_std / len(test_samples)}")
 
     if collage_img is not None:
-        save_img(collage_img, os.path.join(output_path, "1", f"step_{last_global_step}_collage.png"))
+        save_img(collage_img, os.path.join(output_path, "1", f"_step_{last_global_step}_collage.png"))
         print(f"Saved latents collage to {os.path.join(output_path, '1', f'_step_{last_global_step}_collage.png')}")
 
 if __name__ == "__main__":
