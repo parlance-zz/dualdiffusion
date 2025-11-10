@@ -180,9 +180,13 @@ class DiffusionDecoder_Trainer(UNetTrainer):
         else:
             dispersion_loss = dispersion_loss_nll = None
 
-        pre_norm_latents_var = pre_norm_latents.pow(2).mean(dim=(0,2,3)) + 1e-20
+        #pre_norm_latents_var = pre_norm_latents.pow(2).mean(dim=(0,2,3)) + 1e-20
+        #var_kl = pre_norm_latents_var - 1 - pre_norm_latents_var.log()
+        #kl_loss = var_kl.mean() + pre_norm_latents.mean(dim=(0,2,3)).square().mean() * self.config.kl_mean_weight
+        per_row_pre_norm_latents_var = pre_norm_latents.pow(2).mean(dim=(0,2,3))
+        pre_norm_latents_var = pre_norm_latents.pow(2).mean(dim=1) + 1e-20
         var_kl = pre_norm_latents_var - 1 - pre_norm_latents_var.log()
-        kl_loss = var_kl.mean() + pre_norm_latents.mean(dim=(0,2,3)).square().mean() * self.config.kl_mean_weight
+        kl_loss = var_kl.mean() + pre_norm_latents.mean().square() * self.config.kl_mean_weight
         kl_loss = kl_loss.expand(latents.shape[0]) # needed for per-sample logging
 
         phase_invariance_loss_weight = self.config.phase_invariance_loss_weight
@@ -206,6 +210,7 @@ class DiffusionDecoder_Trainer(UNetTrainer):
             "io_stats/latents_std": latents.std(dim=1).detach(),
             "io_stats/latents_mean": latents.mean(dim=1).detach(),
             "io_stats/latents_pre_norm_std": pre_norm_latents_var.sqrt(),
+            "io_stats/per_row_latents_pre_norm_std": per_row_pre_norm_latents_var.sqrt(),
             "loss/kl_latents": kl_loss.detach(),
             "loss_weight/kl_latents": kl_loss_weight,
             "loss_weight/phase_invariance": phase_invariance_loss_weight,
