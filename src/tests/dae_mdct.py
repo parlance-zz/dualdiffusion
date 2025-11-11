@@ -51,6 +51,9 @@ def dae_test() -> None:
     if test_params["random_test_samples_seed"] is not None:
         random.seed(test_params["random_test_samples_seed"])
 
+    if test_params.get("models_path_override", None) is not None:
+        config.MODELS_PATH = test_params["models_path_override"]
+        
     model_name = test_params["model_name"]
     model_load_options = test_params["model_load_options"]
     length = test_params["length"]
