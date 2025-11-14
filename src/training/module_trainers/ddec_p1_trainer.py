@@ -80,20 +80,32 @@ class DiffusionDecoder_Trainer(UNetTrainer):
         self.ddec: UNet = trainer.get_train_module("ddec")
         self.dae: DAE = trainer.get_train_module("dae")
 
-        assert self.ddec is not None, "DDEC module not found in train modules"
-        assert self.dae is not None, "DAE module not found in train modules"
-
-        if self.config.phase_invariance_loss_weight > 0:
-            assert self.config.phase_invariance_loss_bsz != 0, "phase_invariance_loss_weight > 0 but phase_invariance_loss_bsz is 0"
-        if self.config.phase_invariance_loss_bsz == -1:
-            self.config.phase_invariance_loss_bsz = self.trainer.config.device_batch_size
-        
-        if self.config.latents_dispersion_loss_weight > 0:
-            assert self.config.latents_dispersion_loss_bsz != 0, "latents_dispersion_loss_weight > 0 but latents_dispersion_loss_bsz is 0"
-        if self.config.latents_dispersion_loss_bsz == -1:
-            self.config.latents_dispersion_loss_bsz = self.trainer.config.device_batch_size
+        if self.ddec is None:
+            self.freeze_ddec = True
+            self.ddec: UNet = trainer.pipeline.ddec.to(device=trainer.accelerator.device, dtype=torch.bfloat16).requires_grad_(False).eval()
+            self.logger.info(f"DDEC module loaded from pipeline and frozen (step: {self.ddec.config.last_global_step})")
         else:
-            assert self.config.latents_dispersion_loss_bsz <= self.trainer.config.device_batch_size, "latents_dispersion_loss_bsz cannot be larger than device_batch_size"
+            self.freeze_ddec = False
+                                                                                   
+        if self.dae is None:
+            self.freeze_dae = True
+            self.dae: DAE = trainer.pipeline.dae.to(device=trainer.accelerator.device, dtype=torch.bfloat16).requires_grad_(False).eval()
+            self.logger.info(f"DAE module loaded from pipeline and frozen (step: {self.dae.config.last_global_step})")
+        else:
+            self.freeze_dae = False
+
+        if self.freeze_dae == False:
+            if self.config.phase_invariance_loss_weight > 0:
+                assert self.config.phase_invariance_loss_bsz != 0, "phase_invariance_loss_weight > 0 but phase_invariance_loss_bsz is 0"
+            if self.config.phase_invariance_loss_bsz == -1:
+                self.config.phase_invariance_loss_bsz = self.trainer.config.device_batch_size
+            
+            if self.config.latents_dispersion_loss_weight > 0:
+                assert self.config.latents_dispersion_loss_bsz != 0, "latents_dispersion_loss_weight > 0 but latents_dispersion_loss_bsz is 0"
+            if self.config.latents_dispersion_loss_bsz == -1:
+                self.config.latents_dispersion_loss_bsz = self.trainer.config.device_batch_size
+            else:
+                assert self.config.latents_dispersion_loss_bsz <= self.trainer.config.device_batch_size, "latents_dispersion_loss_bsz cannot be larger than device_batch_size"
         
         self.format: MDCT_Format = trainer.pipeline.format.to(self.trainer.accelerator.device)
 
@@ -103,11 +115,12 @@ class DiffusionDecoder_Trainer(UNetTrainer):
             self.format.compile(**trainer.config.compile_params)
 
         self.logger.info(f"Training modules: {trainer.config.train_modules}")
-        self.logger.info(f"KL loss weight: {self.config.kl_loss_weight} KL warmup steps: {self.config.kl_warmup_steps}")
-        self.logger.info(f"Latents phase-invariance loss weight: {self.config.phase_invariance_loss_weight} Batch size: {self.config.phase_invariance_loss_bsz}")
-        self.logger.info(f"Latents dispersion loss weight: {self.config.latents_dispersion_loss_weight} Batch size: {self.config.latents_dispersion_loss_bsz}")
-        self.logger.info(f"Latents dispersion loss num iterations: {self.config.latents_dispersion_num_iterations}")
-        self.logger.info(f"Latents regularization loss warmup steps: {self.config.latents_regularization_warmup_steps}")
+        if self.freeze_dae == False:
+            self.logger.info(f"KL loss weight: {self.config.kl_loss_weight} KL warmup steps: {self.config.kl_warmup_steps}")
+            self.logger.info(f"Latents phase-invariance loss weight: {self.config.phase_invariance_loss_weight} Batch size: {self.config.phase_invariance_loss_bsz}")
+            self.logger.info(f"Latents dispersion loss weight: {self.config.latents_dispersion_loss_weight} Batch size: {self.config.latents_dispersion_loss_bsz}")
+            self.logger.info(f"Latents dispersion loss num iterations: {self.config.latents_dispersion_num_iterations}")
+            self.logger.info(f"Latents regularization loss warmup steps: {self.config.latents_regularization_warmup_steps}")
         self.logger.info(f"Crop edges: {self.config.crop_edges}")
 
         if self.config.random_stereo_augmentation == True:
@@ -139,7 +152,7 @@ class DiffusionDecoder_Trainer(UNetTrainer):
         latents: torch.Tensor = latents.float()
         pre_norm_latents: torch.Tensor = pre_norm_latents.float()
 
-        if self.config.phase_invariance_loss_bsz > 0:
+        if self.freeze_dae == False and self.config.phase_invariance_loss_bsz > 0:
 
             mdct_samples_dae2: torch.Tensor = self.format.raw_to_mdct(raw_samples[:self.config.phase_invariance_loss_bsz], random_phase_augmentation=True)
             mdct_samples_dae2 = mdct_samples_dae2[:, :, :, self.config.crop_edges:-self.config.crop_edges].detach()
@@ -155,7 +168,7 @@ class DiffusionDecoder_Trainer(UNetTrainer):
         else:
             phase_invariance_loss = phase_invariance_loss_nll = None
 
-        if self.config.latents_dispersion_loss_bsz > 0:
+        if self.freeze_dae == False and self.config.latents_dispersion_loss_bsz > 0:
             dispersion_loss = torch.zeros(1, device=latents.device)
             total_dispersion_iterations = 0
 
@@ -180,25 +193,29 @@ class DiffusionDecoder_Trainer(UNetTrainer):
         else:
             dispersion_loss = dispersion_loss_nll = None
 
-        #pre_norm_latents_var = pre_norm_latents.pow(2).mean(dim=(0,2,3)) + 1e-20
-        #var_kl = pre_norm_latents_var - 1 - pre_norm_latents_var.log()
-        #kl_loss = var_kl.mean() + pre_norm_latents.mean(dim=(0,2,3)).square().mean() * self.config.kl_mean_weight
-        per_row_pre_norm_latents_var = pre_norm_latents.pow(2).mean(dim=(0,2,3))
-        pre_norm_latents_var = pre_norm_latents.pow(2).mean(dim=1) + 1e-20
-        var_kl = pre_norm_latents_var - 1 - pre_norm_latents_var.log()
-        kl_loss = var_kl.mean() + pre_norm_latents.mean().square() * self.config.kl_mean_weight
-        kl_loss = kl_loss.expand(latents.shape[0]) # needed for per-sample logging
+        if self.freeze_dae == False:
+            pre_norm_latents_var = pre_norm_latents.pow(2).mean(dim=(0,2,3)) + 1e-20
+            var_kl = pre_norm_latents_var - 1 - pre_norm_latents_var.log()
+            kl_loss = var_kl.mean() + pre_norm_latents.mean(dim=(0,2,3)).square().mean() * self.config.kl_mean_weight
 
-        phase_invariance_loss_weight = self.config.phase_invariance_loss_weight
-        dispersion_loss_weight = self.config.latents_dispersion_loss_weight
-        if self.trainer.global_step < self.config.latents_regularization_warmup_steps:
-            warmup_factor = self.trainer.global_step / self.config.latents_regularization_warmup_steps
-            phase_invariance_loss_weight *= warmup_factor
-            dispersion_loss_weight *= warmup_factor
+            per_row_pre_norm_latents_var = pre_norm_latents.pow(2).mean(dim=(0,2,3))
+            #pre_norm_latents_var = pre_norm_latents.pow(2).mean(dim=1) + 1e-20
+            #var_kl = pre_norm_latents_var - 1 - pre_norm_latents_var.log()
+            #kl_loss = var_kl.mean() + pre_norm_latents.mean().square() * self.config.kl_mean_weight
+            kl_loss = kl_loss.expand(latents.shape[0]) # needed for per-sample logging
 
-        kl_loss_weight = self.config.kl_loss_weight
-        if self.trainer.global_step < self.config.kl_warmup_steps:
-            kl_loss_weight *= self.trainer.global_step / self.config.kl_warmup_steps
+            phase_invariance_loss_weight = self.config.phase_invariance_loss_weight
+            dispersion_loss_weight = self.config.latents_dispersion_loss_weight
+            if self.trainer.global_step < self.config.latents_regularization_warmup_steps:
+                warmup_factor = self.trainer.global_step / self.config.latents_regularization_warmup_steps
+                phase_invariance_loss_weight *= warmup_factor
+                dispersion_loss_weight *= warmup_factor
+
+            kl_loss_weight = self.config.kl_loss_weight
+            if self.trainer.global_step < self.config.kl_warmup_steps:
+                kl_loss_weight *= self.trainer.global_step / self.config.kl_warmup_steps
+        else:
+            ddec_cond = ddec_cond.detach()
 
         logs = self.unet_train_batch(mdct_samples, audio_embeddings, ddec_cond)
         
@@ -207,29 +224,34 @@ class DiffusionDecoder_Trainer(UNetTrainer):
             "io_stats/ddec_cond_mean": ddec_cond.mean(dim=(1,2,3)),
             "io_stats/mdct_std": mdct_samples.std(dim=(1,2,3)),
             "io_stats/mdct_mean": mdct_samples.mean(dim=(1,2,3)),
-            "io_stats/latents_std": latents.std(dim=1).detach(),
-            "io_stats/latents_mean": latents.mean(dim=1).detach(),
-            "io_stats/latents_pre_norm_std": pre_norm_latents_var.sqrt(),
-            "io_stats/per_row_latents_pre_norm_std": per_row_pre_norm_latents_var.sqrt(),
-            "loss/kl_latents": kl_loss.detach(),
-            "loss_weight/kl_latents": kl_loss_weight,
-            "loss_weight/phase_invariance": phase_invariance_loss_weight,
-            "loss_weight/dispersion": dispersion_loss_weight
+
         })
+        if self.freeze_dae == False:
 
-        logs["loss"] = logs["loss"] + kl_loss * kl_loss_weight
+            logs.update({
+                "io_stats/latents_std": latents.std(dim=1).detach(),
+                "io_stats/latents_mean": latents.mean(dim=1).detach(),
+                "io_stats/latents_pre_norm_std": pre_norm_latents_var.sqrt(),
+                "io_stats/per_row_latents_pre_norm_std": per_row_pre_norm_latents_var.sqrt(),
+                "loss/kl_latents": kl_loss.detach(),
+                "loss_weight/kl_latents": kl_loss_weight,
+                "loss_weight/phase_invariance": phase_invariance_loss_weight,
+                "loss_weight/dispersion": dispersion_loss_weight
+            })
 
-        if self.config.phase_invariance_loss_weight > 0:
-            logs["loss"] = logs["loss"] + phase_invariance_loss_nll * phase_invariance_loss_weight
-        if phase_invariance_loss is not None:
-            logs["loss/phase_invariance"] = phase_invariance_loss.detach()
-            logs["loss/phase_invariance_nll"] = phase_invariance_loss_nll.detach()
+            logs["loss"] = logs["loss"] + kl_loss * kl_loss_weight
 
-        if self.config.latents_dispersion_loss_weight > 0:
-            logs["loss"] = logs["loss"] + dispersion_loss_nll * dispersion_loss_weight
-        if dispersion_loss is not None:
-            logs["loss/latents_dispersion"] = dispersion_loss.detach()
-            logs["loss/latents_dispersion_nll"] = dispersion_loss_nll.detach()
+            if self.config.phase_invariance_loss_weight > 0:
+                logs["loss"] = logs["loss"] + phase_invariance_loss_nll * phase_invariance_loss_weight
+            if phase_invariance_loss is not None:
+                logs["loss/phase_invariance"] = phase_invariance_loss.detach()
+                logs["loss/phase_invariance_nll"] = phase_invariance_loss_nll.detach()
+
+            if self.config.latents_dispersion_loss_weight > 0:
+                logs["loss"] = logs["loss"] + dispersion_loss_nll * dispersion_loss_weight
+            if dispersion_loss is not None:
+                logs["loss/latents_dispersion"] = dispersion_loss.detach()
+                logs["loss/latents_dispersion_nll"] = dispersion_loss_nll.detach()
 
         if self.trainer.config.enable_debug_mode == True:
             print("mdct_samples.shape:", mdct_samples.shape)
