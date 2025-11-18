@@ -48,6 +48,17 @@ def normalize(x: torch.Tensor, dim: Optional[Union[tuple, list]] = None,
         norm = torch.add(eps, norm, alpha=(norm.numel() / x.numel())**0.5)
         return (x.float() / norm).to(x.dtype)
 
+def normalize_groups(x: torch.Tensor, groups: int) -> torch.Tensor:
+
+    if groups == 1:
+        return normalize(x, dim=1)
+    
+    B, C, H, W = x.shape
+    x = x.reshape(B, groups, C // groups, H, W)
+    x = normalize(x, dim=2)
+    
+    return x.view(B, C, H, W)
+
 def resample_1d(x: torch.Tensor, mode: Literal["keep", "down", "up"] = "keep") -> torch.Tensor:
 
     if mode == "keep":
@@ -366,7 +377,7 @@ class MPConv(torch.nn.Module):
         if self.disable_weight_norm == False:
             self.weight.copy_(normalize(self.weight))
 
-class ConditionedGroupBalance(torch.nn.Module):
+class AdaptiveGroupBalance(torch.nn.Module):
 
     def __init__(self, emb_channels: int, groups: int = 1, balance_logits_offset: float = 0) -> None:
         

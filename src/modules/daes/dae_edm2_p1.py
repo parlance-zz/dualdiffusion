@@ -37,36 +37,28 @@ import torch
 from numpy import ndarray
 
 from modules.daes.dae import DualDiffusionDAE, DualDiffusionDAEConfig
-from modules.mp_tools import MPConv, mp_silu, normalize, resample_1d, mp_sum_groups
+from modules.mp_tools import MPConv, AdaptiveGroupBalance, mp_silu, normalize, resample_1d, normalize_groups
 
-
-def group_normalize(x: torch.Tensor, groups: int) -> torch.Tensor:
-    B, C, H, W = x.shape
-    x = x.reshape(B, groups, C // groups, H, W)
-    x = normalize(x, dim=2)
-    return x.view(B, C, H, W)
 
 @dataclass
 class DAE_Config(DualDiffusionDAEConfig):
 
     in_channels:  int = 512
-    out_channels: int = 8192
+    out_channels: int = 512
     in_channels_emb: int = 1024
     latent_channels: int = 128
     in_num_freqs: int = 256
-    sample_rate: float = 32000
 
     model_channels: int   = 4096              # Base multiplier for the number of channels.
-    logvar_channels: int  = 192               # Number of channels for training uncertainty estimation.
     channel_mult_enc: int = 1
     channel_mult_dec: list[int] = (1,1,1,1)   # Per-resolution multipliers for the number of channels.
     channel_mult_emb: Optional[int] = 1       # Multiplier for final embedding dimensionality.
-    channels_per_head: int    = 64           # Number of channels per attention head.
+    channels_per_head: int    = 64            # Number of channels per attention head.
     attn_logit_scale: float   = 1
-    num_enc_layers: int       = 5
+    num_enc_layers: int       = 8
     num_dec_layers_per_block: int = 2        # Number of resnet blocks per resolution.
     balance_logits_offset: float = -2
-    mlp_multiplier: int    = 4               # Multiplier for the number of channels in the MLP.
+    mlp_multiplier: int    = 2               # Multiplier for the number of channels in the MLP.
     mlp_groups: int        = 64              # Number of groups for the MLPs.
     emb_linear_groups: int = 64
 
@@ -121,13 +113,13 @@ class Block(torch.nn.Module):
             self.emb_gain = torch.nn.Parameter(torch.zeros([]))
             self.emb_linear = MPConv(emb_channels, inner_channels, kernel=(1,1), groups=emb_linear_groups)
 
-            self.emb_attn_balance = MPConv(emb_channels, mlp_groups, kernel=(1,1), groups=1, disable_weight_norm=True)
-            self.emb_res_balance  = MPConv(emb_channels, mlp_groups, kernel=(1,1), groups=1, disable_weight_norm=True)
-            self.emb_attn_balance.weight.data.fill_(0.)
-            self.emb_res_balance.weight.data.fill_(0.)
+            self.emb_attn_balance = AdaptiveGroupBalance(emb_channels, mlp_groups, balance_logits_offset)
+            self.emb_res_balance  = AdaptiveGroupBalance(emb_channels, mlp_groups, balance_logits_offset)
         else:
             self.emb_gain = None
             self.emb_linear = None
+            self.emb_attn_balance = None
+            self.emb_res_balance  = None
 
         self.attn_q = MPConv(out_channels, out_channels, kernel=(1,1), groups=mlp_groups)
         self.attn_k = MPConv(out_channels, out_channels, kernel=(1,1), groups=mlp_groups)
@@ -143,9 +135,6 @@ class Block(torch.nn.Module):
 
     def forward(self, x: torch.Tensor, emb: torch.Tensor) -> torch.Tensor:
         
-        attn_balance = torch.sigmoid(self.emb_attn_balance(emb) + self.balance_logits_offset)
-        res_balance  = torch.sigmoid(self.emb_res_balance(emb) + self.balance_logits_offset)
-
         x = resample_1d(x, self.resample_mode)
 
         if self.emb_linear_qkv is not None:
@@ -172,7 +161,7 @@ class Block(torch.nn.Module):
         y = y.permute(0, 3, 4, 2, 1).reshape(B, C, H, W)
 
         y = self.attn_proj(y)
-        x = mp_sum_groups(x, y, t=attn_balance, groups=self.mlp_groups)
+        x = self.emb_attn_balance(x, y, emb)
                 
         y = self.conv_res0(x)
 
@@ -180,13 +169,13 @@ class Block(torch.nn.Module):
             c = self.emb_linear(emb, gain=self.emb_gain) + 1.
             y = y * c
 
-        y = mp_silu(group_normalize(y, groups=self.mlp_groups))
+        y = mp_silu(normalize_groups(y, groups=self.mlp_groups))
         
         if self.dropout != 0 and self.training == True: # magnitude preserving fix for dropout
             y = torch.nn.functional.dropout(y, p=self.dropout) * (1. - self.dropout)**0.5
 
         y: torch.Tensor = self.conv_res1(y)
-        x = mp_sum_groups(x, y, t=res_balance, groups=self.mlp_groups)
+        x = self.emb_res_balance(x, y, emb)
 
         if self.clip_act is not None:
             x = x.clip(-self.clip_act, self.clip_act)
@@ -208,7 +197,7 @@ class DAE(DualDiffusionDAE):
 
         cenc = config.model_channels * config.channel_mult_enc
         cblock = [config.model_channels * x for x in config.channel_mult_dec]
-        cemb = config.model_channels * config.channel_mult_emb if config.channel_mult_emb is not None else max(cblock)
+        cemb = int(config.model_channels * config.channel_mult_emb) if config.channel_mult_emb is not None else max(cblock)
         cdata = config.in_channels
 
         self.num_levels = len(config.channel_mult_dec)
@@ -254,8 +243,8 @@ class DAE(DualDiffusionDAE):
 
             cin = cout
 
-        self.conv_cond_out = MPConv(cout, config.out_channels, kernel=(1,1))
-        self.conv_cond_out_gain = torch.nn.Parameter(torch.ones([]))
+        self.conv_out = MPConv(cout, config.out_channels, kernel=(1,1))
+        self.conv_out_gain = torch.nn.Parameter(torch.ones([]))
 
     def get_embeddings(self, emb_in: torch.Tensor) -> torch.Tensor:
         if self.emb_label is not None:
@@ -292,7 +281,7 @@ class DAE(DualDiffusionDAE):
         for name, block in self.enc.items():
             x = block(x) if "conv" in name else block(x, emb)
 
-        x = group_normalize(x, groups=self.config.mlp_groups)
+        x = normalize_groups(x, groups=self.config.mlp_groups)
         latents = self.conv_latents_out(x, gain=self.conv_latents_out_gain)
         latents = torch.nn.functional.avg_pool2d(latents, (1, self.downsample_ratio))
 
@@ -313,16 +302,17 @@ class DAE(DualDiffusionDAE):
         for name, block in self.dec.items():
             x = block(x, emb)
 
-        cond_out = self.conv_cond_out(x, gain=self.conv_cond_out_gain)
-        return cond_out
+        out: torch.Tensor = self.conv_out(x, gain=self.conv_out_gain)
+        out = out.reshape(out.shape[0], out.shape[1]//2, 2, out.shape[3])
+        return out
 
     def forward(self, samples: torch.Tensor, dae_embeddings: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
 
         pre_norm_latents = self.encode(samples, dae_embeddings, training=True)
         latents = normalize(pre_norm_latents, dim=1)
         
-        cond_out = self.decode(latents, dae_embeddings, training=True)
-        return latents, cond_out, pre_norm_latents
+        out = self.decode(latents, dae_embeddings, training=True)
+        return latents, out, pre_norm_latents
 
     def tiled_encode(self, x: torch.Tensor, embeddings: torch.Tensor, max_chunk: int = 6144, overlap: int = 256) -> torch.Tensor:
         raise NotImplementedError()

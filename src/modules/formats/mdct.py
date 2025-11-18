@@ -113,3 +113,9 @@ class MDCT_Format(DualDiffusionFormat):
         raw_samples = self.imdct(mdct.permute(0, 2, 1, 3).contiguous()).real.contiguous()
         
         return raw_samples * self.config.mdct_to_raw_scale
+    
+    @torch.no_grad()
+    def raw_to_mdct_psd(self, raw_samples: torch.Tensor) -> torch.Tensor:
+
+        _mclt: torch.Tensor = self.mdct(raw_samples.float()).permute(0, 2, 1, 3)
+        return _mclt.abs() / self.mdct_mel_density * self.config.raw_to_mdct_scale

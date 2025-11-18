@@ -146,14 +146,17 @@ def dae_test() -> None:
         
         ddec_cond = dae.decode(latents.to(dtype=dae.dtype), dae_embedding).float()
 
-        # ***************** ddec mdct stage ***************** 
+        # ***************** ddec mdct stage *****************
+        #ddec_cond = format.raw_to_mdct_psd(input_raw_sample)
+        ddec_cond = format.raw_to_mdct(input_raw_sample, random_phase_augmentation=True)
+        ddec_cond = ddec_cond.reshape(ddec_cond.shape[0], ddec_cond.shape[1]*2, 1, ddec_cond.shape[3])
         x_ref_mdct = ddec_cond
 
         if ddec_mdct is not None:
             ddec_mdct_params = SampleParams(
                 seed=5000,
                 num_steps=100, length=audio_len, cfg_scale=5, input_perturbation=1, input_perturbation_offset=0.3,
-                use_heun=False, schedule="linear", rho=7, sigma_max=11, sigma_min=0.0002, stereo_fix=0
+                use_heun=False, schedule="linear", rho=7, sigma_max=11, sigma_min=0.2, stereo_fix=0
             )
 
             output_ddec_mdct = pipeline.diffusion_decode(

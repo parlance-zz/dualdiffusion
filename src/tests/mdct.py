@@ -107,6 +107,7 @@ def mdct_format_test() -> None:
         raw_sample = load_audio(file_path, count=crop_width).unsqueeze(0).to(cfg.device)
 
         mdct = format.raw_to_mdct(raw_sample)
+        mdct_psd = format.raw_to_mdct_psd(raw_sample)
         raw_sample_mdct = format.mdct_to_raw(mdct)
 
         mdct_avg_bin_std += mdct.std(dim=(0, 2, 3)) / len(test_samples)
@@ -114,7 +115,8 @@ def mdct_format_test() -> None:
         stat_logger.add_logs({
             "raw_sample_std": raw_sample.std(),
             "raw_sample_mdct_std": raw_sample_mdct.std(),
-            "mdct_std": mdct.std()
+            "mdct_std": mdct.std(),
+            "mdct_psd": mdct_psd,
         })
 
         if cfg.test_sample_verbose == True:
