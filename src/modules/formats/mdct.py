@@ -91,7 +91,6 @@ class MDCT_Format(DualDiffusionFormat):
         num_mdct_frames = (raw_crop_width + self.config.mdct_num_frequencies) // num_mdct_bins
         return (bsz, num_mdct_bins, self.config.num_raw_channels, num_mdct_frames,)
 
-    @torch.no_grad()
     def raw_to_mdct(self, raw_samples: torch.Tensor, random_phase_augmentation: bool = False, dual_channel: bool = False) -> torch.Tensor:
 
         _mclt: torch.Tensor = self.mdct(raw_samples.float()).permute(0, 2, 1, 3)
@@ -106,7 +105,6 @@ class MDCT_Format(DualDiffusionFormat):
         else:
             return _mclt.real.contiguous(memory_format=self.memory_format) / self.mdct_mel_density * self.config.raw_to_mdct_scale
     
-    @torch.no_grad()
     def mdct_to_raw(self, mdct: torch.Tensor) -> torch.Tensor:
 
         mdct = mdct * self.mdct_mel_density / self.config.raw_to_mdct_scale

@@ -220,6 +220,15 @@ class DAE_Trainer(ModuleTrainer):
         latents: torch.Tensor = latents.float()
         pre_norm_latents: torch.Tensor = pre_norm_latents.float()
 
+        mdct_samples_raw = self.format.mdct_to_raw(mdct_samples)
+        recon_mdct_raw = self.format.mdct_to_raw(recon_mdct)
+        mdct_win_len = self.format.config.mdct_window_len
+        rnd_offset = np.random.randint(0, mdct_win_len)
+        mdct_samples_raw = mdct_samples_raw[..., rnd_offset:]
+        recon_mdct_raw = recon_mdct_raw[..., rnd_offset:]
+        mdct_samples = self.format.raw_to_mdct(mdct_samples_raw)[..., 1:-1]
+        recon_mdct = self.format.raw_to_mdct(recon_mdct_raw)[..., 1:-1]
+
         recon_loss = self.mss_loss.mss_loss(recon_mdct, mdct_samples)
         recon_loss_logvar = self.dae.get_recon_loss_logvar()
         recon_loss_nll = recon_loss / recon_loss_logvar.exp() + recon_loss_logvar
