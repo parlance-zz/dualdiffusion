@@ -46,7 +46,7 @@ class MSSLoss2DConfig:
     
     #block_widths: tuple[int] = (5, 7, 11, 19, 37, 71)
     #block_steps:  tuple[int] = (2, 3,  5,  7, 17, 31)
-    loss_scale: float = 1/194
+    loss_scale: float = 1/42
 
 class MSSLoss2D:
 
@@ -89,7 +89,7 @@ class MSSLoss2D:
             #x = torch.stack((x[:, 0] + x[:, 1], x[:, 0] - x[:, 1]), dim=1)
             #x = torch.cat((x, (x[:, 0:1] + x[:, 1:2])*0.5**0.5, (x[:, 0:1] - x[:, 1:2])*0.5**0.5), dim=1)
 
-        return x * self.config.loss_scale
+        return x
     
     def mss_loss(self, sample: torch.Tensor, target: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
 
@@ -109,7 +109,9 @@ class MSSLoss2D:
             with torch.no_grad():
                 target_fft = self.stft2d(target, block_width, step, window, offset_h, offset_w)
                 target_fft_abs = target_fft.abs().requires_grad_(False).detach()
-                loss_weight = (block_width / target_fft_abs.square().mean(dim=(0,1,2,3), keepdim=True).clip(min=1e-4).sqrt()).requires_grad_(False).detach()
+                loss_weight = block_width / target_fft_abs.square().mean(dim=(0,1,2,3), keepdim=True)
+                #print(block_width, loss_weight.amin().item())
+                loss_weight = (loss_weight.clip(min=1e-4).sqrt()).requires_grad_(False).detach()
                 #loss_weight = (block_width / target_fft_abs.mean(dim=(0,1,2,3), keepdim=True).clip(min=1e-2)).requires_grad_(False).detach()
 
             sample_fft = self.stft2d(sample, block_width, step, window, offset_h, offset_w)
@@ -118,7 +120,7 @@ class MSSLoss2D:
             mse_loss = torch.nn.functional.mse_loss(sample_fft_abs, target_fft_abs, reduction="none")
             loss = loss + (mse_loss * loss_weight).mean(dim=(1,2,3,4,5))
 
-        return loss
+        return loss * self.config.loss_scale
 
     def compile(self, **kwargs) -> None:
         self.mss_loss = torch.compile(self.mss_loss, **kwargs)

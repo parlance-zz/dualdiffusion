@@ -12,7 +12,7 @@
             "dynamic": false
         }
     },
-    "models_path_override": "/mnt/tensor/dualdiffusion/models",
+    "models_path_override": null,
     "length": 1408768,
     "latents_tiled_encode": false,
     "latents_tiled_max_chunk_size": 6144,
@@ -20,10 +20,10 @@
     "latents_img_use_pca": false,
     "latents_img_save_collage": true,
     "output_lufs": -20,
-    "ddec_output": true,
+    "ddec_output": false,
     "xref_output": false,
     "add_random_test_samples": 50,
-    "random_test_samples_seed": 29,
+    "random_test_samples_seed": 2995,
     "copy_sample_source_files": true,
     "test_samples": [
         "switch/Arcaea/_t_songs_ignotus.ogg.flac",

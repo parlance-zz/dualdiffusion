@@ -145,12 +145,10 @@ def dae_test() -> None:
             latents = dae.encode(input_mdct.to(dtype=dae.dtype), dae_embedding).float()
         
         ddec_cond = dae.decode(latents.to(dtype=dae.dtype), dae_embedding).float()
-
+    
         # ***************** ddec mdct stage *****************
-        #ddec_cond = format.raw_to_mdct_psd(input_raw_sample)
-        ddec_cond = format.raw_to_mdct(input_raw_sample, random_phase_augmentation=True)
-        ddec_cond = ddec_cond.reshape(ddec_cond.shape[0], ddec_cond.shape[1]*2, 1, ddec_cond.shape[3])
-        x_ref_mdct = ddec_cond
+        #ddec_cond = format.raw_to_mdct(input_raw_sample, random_phase_augmentation=True)
+        x_ref_mdct = ddec_cond.reshape(ddec_cond.shape[0], ddec_cond.shape[1]*2, 1, ddec_cond.shape[3])
 
         if ddec_mdct is not None:
             ddec_mdct_params = SampleParams(
@@ -166,7 +164,7 @@ def dae_test() -> None:
             
             output_raw = format.mdct_to_raw(output_ddec_mdct.float())
         else:
-            output_raw = None
+            output_raw = format.mdct_to_raw(ddec_cond.float())
 
         print(f"input_mdct   mean/std: {input_mdct.mean().item():.4} {input_mdct.std().item():.4}")
         print(f"ddec_cond    mean/std: {ddec_cond.mean().item():.4} {ddec_cond.std().item():.4}")
