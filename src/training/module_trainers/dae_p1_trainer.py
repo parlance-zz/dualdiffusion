@@ -77,7 +77,7 @@ class MSSLoss2D:
         return self._flat_top_window(wx.view(1, 1,-1, 1)) * self._flat_top_window(wx.view(1, 1, 1,-1))
     
     def stft2d(self, x: torch.Tensor, block_width: int,
-               step: int, window: torch.Tensor, offset_h: int, offset_w: int) -> torch.Tensor:
+               step: int, window: torch.Tensor, offset_h: int, offset_w: int, midside: bool = False) -> torch.Tensor:
         
         padding = block_width // 2
         x = torch.nn.functional.pad(x, (padding+1+step, padding, padding+1+step, padding), mode="reflect")
@@ -85,9 +85,8 @@ class MSSLoss2D:
         x = x.unfold(2, block_width, step).unfold(3, block_width, step)
 
         x = torch.fft.rfft2(x * window, norm="ortho")
-        #if x.shape[1] == 2:
-            #x = torch.stack((x[:, 0] + x[:, 1], x[:, 0] - x[:, 1]), dim=1)
-            #x = torch.cat((x, (x[:, 0:1] + x[:, 1:2])*0.5**0.5, (x[:, 0:1] - x[:, 1:2])*0.5**0.5), dim=1)
+        if midside == True:
+            x = torch.stack((x[:, 0] + x[:, 1], x[:, 0] - x[:, 1]), dim=1) / 2
 
         return x
     
@@ -105,16 +104,18 @@ class MSSLoss2D:
 
             offset_h = np.random.randint(0, step)
             offset_w = np.random.randint(0, step)
+
+            midside = np.random.randint(0, 2) == 0
             
             with torch.no_grad():
-                target_fft = self.stft2d(target, block_width, step, window, offset_h, offset_w)
+                target_fft = self.stft2d(target, block_width, step, window, offset_h, offset_w, midside)
                 target_fft_abs = target_fft.abs().requires_grad_(False).detach()
                 loss_weight = block_width / target_fft_abs.square().mean(dim=(0,1,2,3), keepdim=True)
                 #print(block_width, loss_weight.amin().item())
                 loss_weight = (loss_weight.clip(min=1e-4).sqrt()).requires_grad_(False).detach()
                 #loss_weight = (block_width / target_fft_abs.mean(dim=(0,1,2,3), keepdim=True).clip(min=1e-2)).requires_grad_(False).detach()
 
-            sample_fft = self.stft2d(sample, block_width, step, window, offset_h, offset_w)
+            sample_fft = self.stft2d(sample, block_width, step, window, offset_h, offset_w, midside)
             sample_fft_abs = sample_fft.abs()
             
             mse_loss = torch.nn.functional.mse_loss(sample_fft_abs, target_fft_abs, reduction="none")
