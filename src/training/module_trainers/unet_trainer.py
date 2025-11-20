@@ -63,9 +63,11 @@ class UNetTrainerConfig(ModuleTrainerConfig):
     loss_buckets_sigma_max: float = 200
 
     normalize_latents: bool = False
-    input_perturbation: float = 0
+    input_perturbation: float = 0.1
     conditioning_perturbation: float = 0
     conditioning_dropout: float = 0.1
+    use_dynamic_sigma_data: bool = True
+    dynamic_sigma_data_max: float = 5.
 
 class UNetTrainer(ModuleTrainer):
     
@@ -114,6 +116,7 @@ class UNetTrainer(ModuleTrainer):
             self.logger.info("Conditioning perturbation is disabled")
         
         self.logger.info(f"Dropout: {self.unet.config.dropout} Conditioning dropout: {self.config.conditioning_dropout}")
+        self.logger.info(f"Using dynamic sigma data: {self.config.use_dynamic_sigma_data} (max: {self.config.dynamic_sigma_data_max})")
 
         # sigma schedule / distribution for train batches
         sigma_sampler_config = SigmaSamplerConfig(
@@ -251,11 +254,18 @@ class UNetTrainer(ModuleTrainer):
 
         denoised = self.unet(samples + noise, batch_sigma, self.format, unet_embeddings, ref_samples, perturbed_input)
         
-        batch_loss_weight = (batch_sigma ** 2 + self.sigma_sampler.config.sigma_data ** 2) / (batch_sigma * self.sigma_sampler.config.sigma_data) ** 2
+        # improves loss weighting accuracy when using small crops with a lot of variance in total energy
+        if self.config.use_dynamic_sigma_data == True:
+            sigma_data: torch.Tensor = torch.linalg.vector_norm(samples, dim=(1,2,3), keepdim=True) / (samples.shape[1] * samples.shape[2] * samples.shape[3])**0.5
+            sigma_data = sigma_data.clip(min=1/self.config.dynamic_sigma_data_max, max=self.config.dynamic_sigma_data_max)
+        else:
+            sigma_data: float = self.sigma_sampler.config.sigma_data
+        
+        batch_loss_weight = (batch_sigma.view(-1, 1, 1, 1) ** 2 + sigma_data ** 2) / (batch_sigma.view(-1, 1, 1, 1) * sigma_data) ** 2
         batch_weighted_loss = torch.nn.functional.mse_loss(denoised, samples, reduction="none")
         if loss_weight is not None: # use custom loss weight if provided
             batch_weighted_loss = batch_weighted_loss * loss_weight
-        batch_weighted_loss = batch_weighted_loss.mean(dim=(1,2,3)) * batch_loss_weight
+        batch_weighted_loss = (batch_weighted_loss * batch_loss_weight).mean(dim=(1,2,3))
 
         if self.is_validation_batch == True:
             batch_loss = batch_weighted_loss
