@@ -46,6 +46,7 @@ class UNetConfig(DualDiffusionUNetConfig):
     in_channels:  int = 512
     out_channels: int = 512
     in_channels_emb: int = 0
+    in_channels_x_ref: int = 512
     in_num_freqs: int = 256
 
     sigma_max: float  = 20.
@@ -206,7 +207,7 @@ class UNet(DualDiffusionUNet):
         # embedding
         self.emb_fourier = MPFourier(cnoise, bandwidth=config.mp_fourier_bandwidth)
         self.emb_noise = MPConv(cnoise, cemb, kernel=())
-        self.emb_cond = MPConv(512, cemb, kernel=(1,1))
+        self.emb_x_ref = MPConv(config.in_channels_x_ref, cemb, kernel=(1,1))
 
         if config.in_channels_emb > 0:
             self.emb_label = MPConv(config.in_channels_emb, cemb, kernel=())
@@ -282,15 +283,16 @@ class UNet(DualDiffusionUNet):
             else:
                 x = (c_in * x_in).to(dtype=torch.bfloat16)
 
+        x_ref = x_ref.permute(0, 2, 1, 3).reshape(x_ref.shape[0], x_ref.shape[1]*x_ref.shape[2], 1, x_ref.shape[3]).to(dtype=torch.bfloat16)
+        x = x.permute(0, 2, 1, 3).reshape(x.shape[0], x.shape[1]*x.shape[2], 1, x.shape[3]).to(dtype=torch.bfloat16)
+
         # embedding
         emb: torch.Tensor = self.emb_noise(self.emb_fourier(c_noise)).to(dtype=torch.bfloat16)
         if self.config.in_channels_emb > 0:
             emb = mp_silu(mp_sum(emb, embeddings.to(dtype=emb.dtype), t=self.config.label_balance))
         #emb = mp_silu(mp_sum(emb[..., None, None], x_ref.to(dtype=emb.dtype), t=0.5))
-        x_ref = self.emb_cond(x_ref.to(dtype=torch.bfloat16))
+        x_ref = self.emb_x_ref(x_ref)
         emb = mp_silu(mp_sum(emb[..., None, None], x_ref, t=0.5))
-
-        x = x.reshape(x.shape[0], x.shape[1]*x.shape[2], 1, x.shape[3]).to(dtype=torch.bfloat16)
 
         idx = 0; skips = []
         for name, block in self.dec.items():
@@ -310,7 +312,7 @@ class UNet(DualDiffusionUNet):
                 idx += 1
 
         x: torch.Tensor = self.conv_out(x, gain=self.out_gain)
-        x = x.reshape(x.shape[0], x.shape[1]//2, 2, x_in.shape[3])
+        x = x.reshape(x.shape[0], x.shape[1]//2, 2, x_in.shape[3]).permute(0, 2, 1, 3).contiguous()
         D_x = c_skip * x_in + c_out * x.float()
 
         return D_x

@@ -30,7 +30,7 @@ from training.trainer import DualDiffusionTrainer
 from training.module_trainers.unet_trainer import UNetTrainer, UNetTrainerConfig
 from modules.daes.dae_edm2_p1 import DAE
 from modules.unets.unet_edm2_p1_ddec import UNet
-from modules.formats.mdct import MDCT_Format
+from modules.formats.ms_mdct_dual_2 import MS_MDCT_DualFormat
 from modules.mp_tools import normalize
 
 
@@ -64,7 +64,8 @@ class DiffusionDecoder_Trainer_Config(UNetTrainerConfig):
     loss_buckets_sigma_min: float = 0.0002
     loss_buckets_sigma_max: float = 11
 
-    random_stereo_augmentation: bool = True
+    random_stereo_augmentation: bool = False
+    random_phase_augmentation: bool  = False
 
     crop_edges: int = 4 # used to avoid artifacts due to mdct lapped blocks at beginning and end of sample
 
@@ -107,7 +108,7 @@ class DiffusionDecoder_Trainer(UNetTrainer):
             else:
                 assert self.config.latents_dispersion_loss_bsz <= self.trainer.config.device_batch_size, "latents_dispersion_loss_bsz cannot be larger than device_batch_size"
         
-        self.format: MDCT_Format = trainer.pipeline.format.to(self.trainer.accelerator.device)
+        self.format: MS_MDCT_DualFormat = trainer.pipeline.format.to(self.trainer.accelerator.device)
 
         if trainer.config.enable_model_compilation:
             self.ddec.compile(**trainer.config.compile_params)
@@ -144,13 +145,16 @@ class DiffusionDecoder_Trainer(UNetTrainer):
         else:
             raw_samples = batch["audio"]
 
-        mdct_samples: torch.Tensor = self.format.raw_to_mdct(raw_samples, random_phase_augmentation=True)
+        mdct_samples: torch.Tensor = self.format.raw_to_mdct(raw_samples, random_phase_augmentation=self.config.random_phase_augmentation)
         mdct_samples = mdct_samples[:, :, :, self.config.crop_edges:-self.config.crop_edges].detach()
-        mdct_samples_dae = mdct_samples
+        #mdct_samples_dae = mdct_samples
         
-        latents, ddec_cond, pre_norm_latents = self.dae(mdct_samples_dae, dae_embeddings)
-        latents: torch.Tensor = latents.float()
-        pre_norm_latents: torch.Tensor = pre_norm_latents.float()
+        #latents, ddec_cond, pre_norm_latents = self.dae(mdct_samples_dae, dae_embeddings)
+        #latents: torch.Tensor = latents.float()
+        #pre_norm_latents: torch.Tensor = pre_norm_latents.float()
+
+        mel_spec = self.format.raw_to_mel_spec(raw_samples)
+        ddec_cond = self.format.mel_spec_to_linear(mel_spec)[:, :, :, self.config.crop_edges:-self.config.crop_edges].detach()
 
         if self.freeze_dae == False and self.config.phase_invariance_loss_bsz > 0:
 
@@ -255,8 +259,8 @@ class DiffusionDecoder_Trainer(UNetTrainer):
 
         if self.trainer.config.enable_debug_mode == True:
             print("mdct_samples.shape:", mdct_samples.shape)
-            print("mdct_samples_dae.shape:", mdct_samples_dae.shape)
+            #print("mdct_samples_dae.shape:", mdct_samples_dae.shape)
             print("ddec_cond.shape:", ddec_cond.shape)
-            print("latents.shape:", latents.shape)
+            #print("latents.shape:", latents.shape)
 
         return logs
