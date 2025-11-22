@@ -58,7 +58,7 @@ class DAE_Config(DualDiffusionDAEConfig):
     num_enc_layers: int       = 8
     num_dec_layers_per_block: int = 2        # Number of resnet blocks per resolution.
     balance_logits_offset: float = -2
-    mlp_multiplier: int    = 2               # Multiplier for the number of channels in the MLP.
+    mlp_multiplier: int    = 3               # Multiplier for the number of channels in the MLP.
     mlp_groups: int        = 64              # Number of groups for the MLPs.
     emb_linear_groups: int = 64
 
@@ -276,7 +276,7 @@ class DAE(DualDiffusionDAE):
         else:
             emb = None
 
-        x = x.reshape(x.shape[0], x.shape[1]*x.shape[2], 1, x.shape[3]).to(dtype=torch.bfloat16)
+        x = x.permute(0, 2, 1, 3).reshape(x.shape[0], x.shape[1]*x.shape[2], 1, x.shape[3]).to(dtype=torch.bfloat16)
 
         for name, block in self.enc.items():
             x = block(x) if "conv" in name else block(x, emb)
@@ -303,7 +303,7 @@ class DAE(DualDiffusionDAE):
             x = block(x, emb)
 
         out: torch.Tensor = self.conv_out(x, gain=self.conv_out_gain)
-        out = out.reshape(out.shape[0], out.shape[1]//2, 2, out.shape[3])
+        out = out.reshape(out.shape[0], out.shape[1]//2, 2, out.shape[3]).permute(0, 2, 1, 3).contiguous()
         return out
 
     def forward(self, samples: torch.Tensor, dae_embeddings: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
