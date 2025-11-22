@@ -29,16 +29,12 @@ import numpy as np
 from training.trainer import DualDiffusionTrainer
 from training.module_trainers.module_trainer import ModuleTrainer, ModuleTrainerConfig
 from modules.daes.dae_edm2_p1 import DAE
-from modules.formats.mdct import MDCT_Format
+from modules.formats.ms_mdct_dual_2 import MS_MDCT_DualFormat
 from modules.mp_tools import normalize
 
 
 @dataclass
 class MSSLoss2DConfig:
-
-    #block_sizes: tuple[tuple[int, int]] = (
-    #    (19, 5), (29, 7), (43, 11), (53, 13), (67, 17), (79, 19), (89, 23), (113, 29), (127, 31)
-    #)
 
     block_widths: tuple[int] = (11, 13, 17, 19, 23, 29, 31)
     block_steps: tuple[int] =  ( 2,  3,  5,  7, 11, 13, 17)
@@ -91,9 +87,6 @@ class MSSLoss2D:
         return x
     
     def mss_loss(self, sample: torch.Tensor, target: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-
-        sample = sample.permute(0, 2, 1, 3)
-        target = target.permute(0, 2, 1, 3)
         
         loss = torch.zeros(target.shape[0], device=self.device)
 
@@ -110,9 +103,9 @@ class MSSLoss2D:
             with torch.no_grad():
                 target_fft = self.stft2d(target, block_width, step, window, offset_h, offset_w, midside)
                 target_fft_abs = target_fft.abs().requires_grad_(False).detach()
-                loss_weight = block_width / target_fft_abs.square().mean(dim=(0,1,2,3), keepdim=True)
+                loss_weight = block_width / target_fft_abs.square().mean(dim=(0,1,2,3), keepdim=True).clip(min=1e-4)
                 #print(block_width, loss_weight.amin().item())
-                loss_weight = (loss_weight.clip(min=1e-4).sqrt()).requires_grad_(False).detach()
+                loss_weight = (loss_weight.sqrt()).requires_grad_(False).detach()
                 #loss_weight = (block_width / target_fft_abs.mean(dim=(0,1,2,3), keepdim=True).clip(min=1e-2)).requires_grad_(False).detach()
 
             sample_fft = self.stft2d(sample, block_width, step, window, offset_h, offset_w, midside)
@@ -153,6 +146,9 @@ class DAE_Trainer_Config(ModuleTrainerConfig):
     latents_dispersion_num_iterations: int = 1
     latents_regularization_warmup_steps: int = 20000
 
+    point_loss_weight: float = 2
+    point_loss_warmup_steps: int = 100
+
     random_stereo_augmentation: bool = True
 
     crop_edges: int = 4 # used to avoid artifacts due to mdct lapped blocks at beginning and end of sample
@@ -180,7 +176,7 @@ class DAE_Trainer(ModuleTrainer):
         else:
             assert self.config.latents_dispersion_loss_bsz <= self.trainer.config.device_batch_size, "latents_dispersion_loss_bsz cannot be larger than device_batch_size"
         
-        self.format: MDCT_Format = trainer.pipeline.format.to(self.trainer.accelerator.device)
+        self.format: MS_MDCT_DualFormat = trainer.pipeline.format.to(self.trainer.accelerator.device)
 
         if trainer.config.enable_model_compilation:
             self.dae.compile(**trainer.config.compile_params)
@@ -192,6 +188,7 @@ class DAE_Trainer(ModuleTrainer):
         self.logger.info(f"Latents dispersion loss weight: {self.config.latents_dispersion_loss_weight} Batch size: {self.config.latents_dispersion_loss_bsz}")
         self.logger.info(f"Latents dispersion loss num iterations: {self.config.latents_dispersion_num_iterations}")
         self.logger.info(f"Latents regularization loss warmup steps: {self.config.latents_regularization_warmup_steps}")
+        self.logger.info(f"Point loss weight: {self.config.point_loss_weight} Point loss warmup steps: {self.config.point_loss_warmup_steps}")
         self.logger.info(f"Crop edges: {self.config.crop_edges}")
 
         if self.config.random_stereo_augmentation == True:
@@ -214,17 +211,26 @@ class DAE_Trainer(ModuleTrainer):
         else:
             raw_samples = batch["audio"]
 
-        mdct_samples: torch.Tensor = self.format.raw_to_mdct(raw_samples, random_phase_augmentation=True)
-        mdct_samples = mdct_samples[:, :, :, self.config.crop_edges:-self.config.crop_edges].detach()
+        ms_samples: torch.Tensor = self.format.raw_to_mel_spec(raw_samples)
+        ms_samples = ms_samples[:, :, :, self.config.crop_edges:-self.config.crop_edges].detach()
         
-        latents, recon_mdct, pre_norm_latents = self.dae(mdct_samples, dae_embeddings)
+        latents, recon_ms_samples, pre_norm_latents = self.dae(ms_samples, dae_embeddings)
         latents: torch.Tensor = latents.float()
         pre_norm_latents: torch.Tensor = pre_norm_latents.float()
 
-        loss_weight = 1 / mdct_samples.std(dim=(0,2,3), keepdim=True).clip(min=3e-2)
-        loss_weight /= loss_weight.mean()
-        #recon_loss = torch.nn.functional.l1_loss(recon_mdct, mdct_samples, reduction="none").mean(dim=(1,2,3))
-        recon_loss = (torch.nn.functional.l1_loss(recon_mdct, mdct_samples, reduction="none") * loss_weight).mean(dim=(1,2,3))
+        mss_loss = self.mss_loss.mss_loss(recon_ms_samples, ms_samples)
+        recon_loss = mss_loss
+
+        point_loss_weight = self.config.point_loss_weight
+        if self.trainer.global_step < self.config.point_loss_warmup_steps:
+            point_loss_weight = point_loss_weight * (1 - self.trainer.global_step / self.config.point_loss_warmup_steps)
+        else:
+            point_loss_weight = 0
+
+        point_loss = torch.nn.functional.l1_loss(recon_ms_samples, ms_samples, reduction="none").mean(dim=(1,2,3))
+        if point_loss_weight > 0:
+            recon_loss = recon_loss + point_loss * point_loss_weight
+
         recon_loss_logvar = self.dae.get_recon_loss_logvar()
         recon_loss_nll = recon_loss / recon_loss_logvar.exp() + recon_loss_logvar
 
@@ -290,21 +296,23 @@ class DAE_Trainer(ModuleTrainer):
 
         logs = {
             "loss": recon_loss_nll + kl_loss * kl_loss_weight,
-            "io_stats/recon_mdct_std": recon_mdct.std(dim=(1,2,3)),
-            "io_stats/recon_mdct_mean": recon_mdct.mean(dim=(1,2,3)),
-            "io_stats/mdct_std": mdct_samples.std(dim=(1,2,3)),
-            "io_stats/mdct_mean": mdct_samples.mean(dim=(1,2,3)),
+            "io_stats/recon_ms_samples_std": recon_ms_samples.std(dim=(1,2,3)),
+            "io_stats/recon_ms_samples_mean": recon_ms_samples.mean(dim=(1,2,3)),
+            "io_stats/ms_samples_std": ms_samples.std(dim=(1,2,3)),
+            "io_stats/ms_samples_mean": ms_samples.mean(dim=(1,2,3)),
             "io_stats/latents_std": latents.std(dim=1).detach(),
             "io_stats/latents_mean": latents.mean(dim=1).detach(),
             "io_stats/latents_pre_norm_std": pre_norm_latents_var.sqrt(),
             "io_stats/per_row_latents_pre_norm_std": per_row_pre_norm_latents_var.sqrt(),
             "loss/kl_latents": kl_loss.detach(),
             "loss/recon": recon_loss.detach(),
+            "loss/point": point_loss.detach(),
+            "loss/mss": mss_loss.detach(),
             "loss_weight/kl_latents": kl_loss_weight,
+            "loss_weight/point": point_loss_weight,
             "loss_weight/phase_invariance": phase_invariance_loss_weight,
             "loss_weight/dispersion": dispersion_loss_weight
         }
-
 
         if self.config.phase_invariance_loss_weight > 0:
             logs["loss"] = logs["loss"] + phase_invariance_loss * phase_invariance_loss_weight
@@ -316,8 +324,8 @@ class DAE_Trainer(ModuleTrainer):
             logs["loss/latents_dispersion"] = dispersion_loss.detach()
 
         if self.trainer.config.enable_debug_mode == True:
-            print("mdct_samples.shape:", mdct_samples.shape)
-            print("recon_mdct.shape:", recon_mdct.shape)
+            print("ms_samples.shape:", ms_samples.shape)
+            print("recon_ms_samples.shape:", recon_ms_samples.shape)
             print("latents.shape:", latents.shape)
 
         return logs
