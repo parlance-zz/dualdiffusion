@@ -1,29 +1,28 @@
 {
-    "model_name": "edm2_dae_d3a_v2",
+    "model_name": "edm2_dae_p1",
     "model_load_options": {
         "torch_dtype": "bfloat16",
         "device": "cuda",
         "load_checkpoints": true,
         "load_emas": {
-            "ddec": "ema_std0.1.safetensors"
         },
         "compile_options": {
             "fullgraph": true,
             "dynamic": false
         }
     },
-    "length": null,
+    "length": 1408768,
     "add_latents_noise": null,
     "latents_tiled_encode": false,
     "latents_tiled_max_chunk_size": 6144,
     "latents_tiled_overlap": 256,
     "latents_img_use_pca": true,
     "output_lufs": -20,
-    "dae_bypass": false,
+    "dae_bypass": true,
     "ddec_output": true,
     "xref_output": false,
-    "add_random_test_samples": 50,
-    "random_test_samples_seed": 29,
+    "add_random_test_samples": 10,
+    "random_test_samples_seed": 2995,
     "copy_sample_source_files": true,
     "test_samples": [
         "switch/Arcaea/_t_songs_ignotus.ogg.flac",
