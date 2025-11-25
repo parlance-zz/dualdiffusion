@@ -21,7 +21,7 @@
 # SOFTWARE.
 
 from dataclasses import dataclass
-from typing import Union, Optional
+from typing import Union, Optional, Literal
 
 import torch
 import numpy as np
@@ -32,17 +32,69 @@ from modules.daes.dae_edm2_p1 import DAE
 from modules.formats.ms_mdct_dual_2 import MS_MDCT_DualFormat
 from modules.mp_tools import normalize
 
+def vicreg_regularization(z: torch.Tensor, 
+                          lambda_: float = 25.0, 
+                          mu: float = 25.0, 
+                          nu: float = 1.0) -> torch.Tensor:
+    """
+    VICReg regularization for preventing latent collapse in autoencoders.
+    
+    Args:
+        z: Latent tensor of shape (b, c, h, w)
+        lambda_: Weight for variance loss
+        mu: Weight for invariance loss (not used here, set to 0)
+        nu: Weight for covariance loss
+    
+    Returns:
+        Regularization loss
+    """
+    b, c, h, w = z.shape
+    z_flat = z.permute(0, 2, 3, 1).reshape(-1, c)  # (b*h*w, c)
+    
+    # Standardize
+    z_norm = (z_flat - z_flat.mean(dim=0)) / (z_flat.std(dim=0) + 1e-6)
+    
+    # Variance loss: encourage non-zero variance across batch
+    #var_loss = torch.mean(torch.relu(1.0 - z_norm.std(dim=0)))
+    
+    # Covariance loss: decorrelate dimensions
+    cov_z = (z_norm.T @ z_norm) / (b * h * w - 1)
+    cov_z_off_diag = cov_z - torch.diag(torch.diag(cov_z))
+    cov_loss = torch.mean(cov_z_off_diag ** 2)
+    
+    # Total regularization
+    #reg_loss = lambda_ * var_loss + nu * cov_loss
+    reg_loss = nu * cov_loss
+    
+    return reg_loss
+
+def _is_prime(n: int) -> bool:
+    if n <= 1:
+        return False
+    if n <= 3:
+        return True
+    if n % 2 == 0 or n % 3 == 0:
+        return False
+    i = 5
+    while i * i <= n:
+        if n % i == 0 or n % (i + 2) == 0:
+            return False
+        i += 6
+    return True
 
 @dataclass
 class MSSLoss2DConfig:
 
-    block_widths: tuple[int] = (11, 13, 17, 19, 23, 29, 31)
-    block_steps: tuple[int] =  ( 2,  3,  5,  7, 11, 13, 17)
-    #block_steps: tuple[int] = ( 1,  2,  3,  5,  7, 11, 13)
-    
-    #block_widths: tuple[int] = (5, 7, 11, 19, 37, 71)
-    #block_steps:  tuple[int] = (2, 3,  5,  7, 17, 31)
-    loss_scale: float = 1/42
+    block_low:  int = 9
+    block_high: int = 254
+
+    block_sampling_replace: bool = True
+    block_sampling_scale: Literal["linear", "ln_linear"] = "ln_linear"
+
+    num_iterations: int = 100
+    midside_probability: float = 0.5
+    psd_eps: float = 1e-4
+    loss_scale: float = 3
 
 class MSSLoss2D:
 
@@ -52,15 +104,40 @@ class MSSLoss2D:
         self.config = config
         self.device = device
 
-        self.steps = []
-        self.windows = []
-        
-        for block_width, block_step in zip(config.block_widths, config.block_steps):
+        primes = [i for i in range(self.config.block_low, self.config.block_high+1) if _is_prime(i)]
 
-            self.steps.append(block_step)
-            window = self.get_flat_top_window_2d(block_width)
-            window /= window.square().mean().sqrt()
-            self.windows.append(window.to(device=device).requires_grad_(False).detach())
+        n = 25000
+
+        if self.config.block_sampling_scale == "ln_linear":
+            targets = np.exp(np.linspace(np.log(self.config.block_low), np.log(self.config.block_high), n))
+        elif self.config.block_sampling_scale == "linear":
+            targets = np.linspace(self.config.block_low, self.config.block_high, n)
+        else:
+            raise ValueError(f"Invalid block_sampling_scale: {self.config.block_sampling_scale}")
+
+        spaced_primes = []
+        for t in targets:
+            closest = min(primes, key=lambda p: abs(p - t))
+            spaced_primes.append(closest)
+
+        block_sizes = []
+        block_weights = []
+
+        for b in sorted(set(spaced_primes)):
+            count = spaced_primes.count(b)
+
+            block_sizes.append(b)
+            block_weights.append(float(count))
+
+        self.block_sizes = np.array(block_sizes)
+        self.block_weights = np.array(block_weights)
+        self.block_weights /= self.block_weights.sum()
+
+        for i in range(len(self.block_sizes)):
+            print(f"Block size: {self.block_sizes[i]:3d} Weight: {(self.block_weights[i]*100):.3f}%")
+        print(f"total unique block sizes: {len(block_sizes)}\n")
+
+        self.loss_scale = config.loss_scale / self.config.num_iterations
 
     @torch.no_grad()
     def _flat_top_window(self, x: torch.Tensor) -> torch.Tensor:
@@ -68,59 +145,75 @@ class MSSLoss2D:
                 - 0.083578947 * torch.cos(3*x) + 0.006947368 * torch.cos(4*x))
 
     @torch.no_grad()
-    def get_flat_top_window_2d(self, block_width: int) -> torch.Tensor:
-        wx = (torch.arange(block_width) + 0.5) / block_width * 2 * torch.pi
-        return self._flat_top_window(wx.view(1, 1,-1, 1)) * self._flat_top_window(wx.view(1, 1, 1,-1))
-    
-    def stft2d(self, x: torch.Tensor, block_width: int,
-               step: int, window: torch.Tensor, offset_h: int, offset_w: int, midside: bool = False) -> torch.Tensor:
-        
-        padding = block_width // 2
-        x = torch.nn.functional.pad(x, (padding+1+step, padding, padding+1+step, padding), mode="reflect")
-        x = x[:, :, offset_h:, offset_w:]
-        x = x.unfold(2, block_width, step).unfold(3, block_width, step)
+    def get_flat_top_window_2d(self, block_width: int, block_height: int) -> torch.Tensor:
 
-        x = torch.fft.rfft2(x * window, norm="ortho")
+        if block_height <= 3: hx = torch.ones(block_height, device=self.device)
+        else: hx = self._flat_top_window((torch.arange(block_height, device=self.device) + 0.5) / block_height * 2 * torch.pi)
+
+        if block_width <= 3: wx = torch.ones(block_width, device=self.device)
+        else: wx = self._flat_top_window((torch.arange(block_width,  device=self.device) + 0.5) / block_width  * 2 * torch.pi)
+
+        window = hx.view(1, 1,-1, 1) * wx.view(1, 1, 1,-1)
+        window /= window.square().mean().sqrt()
+        return window.detach().requires_grad_(False)
+    
+    def stft2d(self, x: torch.Tensor, block_width: int, block_height: int, order: tuple[int],
+               step_w: int, step_h: int, window: torch.Tensor, offset_h: int, offset_w: int, midside: bool) -> torch.Tensor:
+        
+        padding_h = block_height
+        padding_w = block_width
+        x = torch.nn.functional.pad(x, (padding_w, padding_w, padding_h, padding_h), mode="reflect")
+        x = x[:, :, offset_h:, offset_w:]
+        x = x.unfold(2, block_height, step_h).unfold(3, block_width, step_w)
+
+        x = torch.fft.rfft2(x * window, norm="ortho", dim=order)
         if midside == True:
-            x = torch.stack((x[:, 0] + x[:, 1], x[:, 0] - x[:, 1]), dim=1) / 2
+            x = torch.stack((x[:, 0] + x[:, 1], x[:, 0] - x[:, 1]), dim=1) / 2**0.5
 
         return x
     
     def mss_loss(self, sample: torch.Tensor, target: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-        
+
         loss = torch.zeros(target.shape[0], device=self.device)
 
-        for i, block_width in enumerate(self.config.block_widths):
-            
-            step = self.steps[i]
-            window = self.windows[i]
+        block_widths  = np.random.choice(self.block_sizes, size=self.config.num_iterations, replace=self.config.block_sampling_replace, p=self.block_weights)
+        block_heights = np.random.choice(self.block_sizes, size=self.config.num_iterations, replace=self.config.block_sampling_replace, p=self.block_weights)
 
-            offset_h = np.random.randint(0, step)
-            offset_w = np.random.randint(0, step)
+        for i in range(self.config.num_iterations):
 
-            midside = np.random.randint(0, 2) == 0
+            block_width = int(block_widths[i])
+            block_height = int(block_heights[i])
+
+            step_w = block_width
+            step_h = block_height
+            window = self.get_flat_top_window_2d(block_width, block_height)
+
+            offset_h = int(np.random.randint(0, step_h))
+            offset_w = int(np.random.randint(0, step_w))
             
+            order = (-1, -2) if np.random.randint(0, 2) == 0 else (-2, -1)
+            midside = np.random.rand() < self.config.midside_probability
+            #r_dims = (0, 2, 3) if midside == True else (0, 1, 2, 3)
+            r_dims = (0, 3) if midside == True else (0, 1, 3)
+
             with torch.no_grad():
-                target_fft = self.stft2d(target, block_width, step, window, offset_h, offset_w, midside)
+                target_fft = self.stft2d(target, block_width, block_height, order, step_w, step_h, window, offset_h, offset_w, midside)
                 target_fft_abs = target_fft.abs().requires_grad_(False).detach()
-                loss_weight = block_width / target_fft_abs.square().mean(dim=(0,1,2,3), keepdim=True).clip(min=1e-4)
-                #print(block_width, loss_weight.amin().item())
-                loss_weight = (loss_weight.sqrt()).requires_grad_(False).detach()
-                #loss_weight = (block_width / target_fft_abs.mean(dim=(0,1,2,3), keepdim=True).clip(min=1e-2)).requires_grad_(False).detach()
+                loss_weight = target_fft_abs.pow(2).mean(dim=r_dims, keepdim=True).clip(min=self.config.psd_eps).pow(0.5).requires_grad_(False).detach()
 
-            sample_fft = self.stft2d(sample, block_width, step, window, offset_h, offset_w, midside)
+            sample_fft = self.stft2d(sample, block_width, block_height, order, step_w, step_h, window, offset_h, offset_w, midside)
             sample_fft_abs = sample_fft.abs()
             
-            mse_loss = torch.nn.functional.mse_loss(sample_fft_abs, target_fft_abs, reduction="none")
-            loss = loss + (mse_loss * loss_weight).mean(dim=(1,2,3,4,5))
+            mse_loss = torch.nn.functional.mse_loss(sample_fft_abs.float(), target_fft_abs.float(), reduction="none")
+            loss = loss + (mse_loss / loss_weight).mean(dim=(1,2,3,4,5)) #** 2
 
-        return loss * self.config.loss_scale
+        return loss * self.loss_scale
 
     def compile(self, **kwargs) -> None:
         self.mss_loss = torch.compile(self.mss_loss, **kwargs)
 
 def get_cos_angle(x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
-    dot = torch.einsum('bchw,bchw->bhw', x, y)
+    dot = torch.einsum("bchw,bchw->bhw", x, y)
     return dot / x.shape[1]
 
 @torch.no_grad()
@@ -250,6 +343,9 @@ class DAE_Trainer(ModuleTrainer):
             phase_invariance_loss = None
 
         if self.config.latents_dispersion_loss_bsz > 0:
+            #dispersion_loss = vicreg_regularization(latents)
+
+            #"""
             dispersion_loss = torch.zeros(1, device=latents.device)
             total_dispersion_iterations = 0
 
@@ -270,6 +366,7 @@ class DAE_Trainer(ModuleTrainer):
             if total_dispersion_iterations > 0:
                 dispersion_loss = dispersion_loss / total_dispersion_iterations
             dispersion_loss = dispersion_loss.expand(latents.shape[0]) # needed for per-sample logging
+            #"""
         else:
             dispersion_loss = None
 
@@ -278,6 +375,8 @@ class DAE_Trainer(ModuleTrainer):
         kl_loss = var_kl.mean() + pre_norm_latents.mean(dim=(0,2,3)).square().mean() * self.config.kl_mean_weight
 
         per_row_pre_norm_latents_var = pre_norm_latents.pow(2).mean(dim=(0,2,3))
+        per_row_pre_norm_latents_mean = pre_norm_latents.mean(dim=(0,2,3)).abs().mean()
+
         #pre_norm_latents_var = pre_norm_latents.pow(2).mean(dim=1) + 1e-20
         #var_kl = pre_norm_latents_var - 1 - pre_norm_latents_var.log()
         #kl_loss = var_kl.mean() + pre_norm_latents.mean().square() * self.config.kl_mean_weight
@@ -303,6 +402,7 @@ class DAE_Trainer(ModuleTrainer):
             "io_stats/latents_std": latents.std(dim=1).detach(),
             "io_stats/latents_mean": latents.mean(dim=1).detach(),
             "io_stats/latents_pre_norm_std": pre_norm_latents_var.sqrt(),
+            "io_stats/per_row_latents_mean": per_row_pre_norm_latents_mean,
             "io_stats/per_row_latents_pre_norm_std": per_row_pre_norm_latents_var.sqrt(),
             "loss/kl_latents": kl_loss.detach(),
             "loss/recon": recon_loss.detach(),
