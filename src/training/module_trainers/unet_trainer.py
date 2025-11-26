@@ -66,8 +66,10 @@ class UNetTrainerConfig(ModuleTrainerConfig):
     input_perturbation: float = 0.1
     conditioning_perturbation: float = 0
     conditioning_dropout: float = 0.1
-    use_dynamic_sigma_data: bool = True
-    dynamic_sigma_data_max: float = 5.
+    use_dynamic_sigma_data: bool = False
+    dynamic_sigma_data_min: float = 0.2
+    dynamic_sigma_data_max: float = 5
+    dynamic_sigma_data_exp: float = 1
 
 class UNetTrainer(ModuleTrainer):
     
@@ -116,7 +118,10 @@ class UNetTrainer(ModuleTrainer):
             self.logger.info("Conditioning perturbation is disabled")
         
         self.logger.info(f"Dropout: {self.unet.config.dropout} Conditioning dropout: {self.config.conditioning_dropout}")
-        self.logger.info(f"Using dynamic sigma data: {self.config.use_dynamic_sigma_data} (max: {self.config.dynamic_sigma_data_max})")
+        self.logger.info(f"Using dynamic sigma data: {self.config.use_dynamic_sigma_data}")
+        if self.config.use_dynamic_sigma_data == True:
+            self.logger.info(f"Dynamic sigma data min: {self.config.dynamic_sigma_data_min} max: {self.config.dynamic_sigma_data_max}")
+            self.logger.info(f"Dynamic sigma data exponent: {self.config.dynamic_sigma_data_exp}")
 
         # sigma schedule / distribution for train batches
         sigma_sampler_config = SigmaSamplerConfig(
@@ -257,7 +262,8 @@ class UNetTrainer(ModuleTrainer):
         # improves loss weighting accuracy when using small crops with a lot of variance in total energy
         if self.config.use_dynamic_sigma_data == True:
             sigma_data: torch.Tensor = torch.linalg.vector_norm(samples, dim=(1,2,3), keepdim=True) / (samples.shape[1] * samples.shape[2] * samples.shape[3])**0.5
-            sigma_data = sigma_data.clip(min=1/self.config.dynamic_sigma_data_max, max=self.config.dynamic_sigma_data_max)
+            sigma_data = sigma_data.clip(min=self.config.dynamic_sigma_data_min,
+                max=self.config.dynamic_sigma_data_max) ** self.config.dynamic_sigma_data_exp
         else:
             sigma_data: float = self.sigma_sampler.config.sigma_data
         
