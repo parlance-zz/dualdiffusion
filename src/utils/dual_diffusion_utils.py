@@ -649,7 +649,9 @@ def tensor_to_img(x: torch.Tensor,
 
     if flip_x: img = cv2.flip(img, 1)
     if flip_y: img = cv2.flip(img, 0)
-    if colormap: img = ROSEUS_COLORMAP[img]
+    if colormap:
+        img = ROSEUS_COLORMAP[img]
+        img[..., [0, 2]] = img[..., [2, 0]] # swap blue and red
 
     return img
 

@@ -34,6 +34,7 @@ from modules.unets.unet_edm2_p1_ddec import UNet
 from modules.daes.dae_edm2_p1 import DAE
 from modules.embeddings.clap import CLAP_Embedding
 from modules.formats.ms_mdct_dual_2 import MS_MDCT_DualFormat
+from modules.mp_tools import mp_sum
 from utils.dual_diffusion_utils import (
     init_cuda, normalize, save_audio, load_audio, load_safetensors,
     save_img, get_audio_info, dict_str
@@ -46,6 +47,9 @@ def dae_test() -> None:
     test_params = config.load_json(
         os.path.join(config.CONFIG_PATH, "tests", "dae_test.json"))
     
+    if test_params.get("models_path_override", None) is not None:
+        config.MODELS_PATH = test_params["models_path_override"]
+
     torch.manual_seed(0)
     if test_params["random_test_samples_seed"] is not None:
         random.seed(test_params["random_test_samples_seed"])
@@ -84,6 +88,7 @@ def dae_test() -> None:
     length = length or format.config.default_raw_length
     sample_shape = pipeline.get_mel_spec_shape(raw_length=length)
     latent_shape = pipeline.get_latent_shape(sample_shape)
+    use_colormap = test_params.get("ms_img_use_colormap", False)
     print(f"Sample shape: {sample_shape}  Latent shape: {latent_shape}")
 
     if test_params.get("latents_img_use_pca", None) is not None:
@@ -140,9 +145,12 @@ def dae_test() -> None:
                 latents = dae.encode(input_mel_spec.to(dtype=dae.dtype), dae_embedding).float()
             
             if test_params.get("add_latents_noise", None) is not None:
-                latents = normalize(latents + torch.randn_like(latents) * test_params["add_latents_noise"]).float()
+                #latents = normalize(latents + torch.randn_like(latents) * test_params["add_latents_noise"]).float()
+                decode_latents = mp_sum(latents, torch.randn_like(latents), t=test_params["add_latents_noise"])
+            else:
+                decode_latents = latents
             
-            output_mel_spec = dae.decode(latents.to(dtype=dae.dtype), dae_embedding).float()
+            output_mel_spec = dae.decode(decode_latents.to(dtype=dae.dtype), dae_embedding).float()
         else:
             latents = None
             output_mel_spec = input_mel_spec
@@ -157,7 +165,7 @@ def dae_test() -> None:
             ddec_mdct_params = SampleParams(
                 seed=5000,
                 num_steps=100, length=audio_len, cfg_scale=1.5, input_perturbation=1, input_perturbation_offset=0.3,
-                use_heun=False, schedule="linear", rho=7, sigma_max=11, sigma_min=0.0002, stereo_fix=0
+                use_heun=False, schedule="linear", rho=7, sigma_max=50, sigma_min=0.0002, stereo_fix=0
             )
 
             output_ddec_mdct = pipeline.diffusion_decode(
@@ -183,10 +191,13 @@ def dae_test() -> None:
 
         if latents is not None:
             save_img(dae.latents_to_img(latents), os.path.join(output_path, "1", f"step_{last_global_step}_{filename.replace(file_ext, '_latents.png')}"))
-        
-        save_img(format.mel_spec_to_img(input_mel_spec), os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_input_mel_spec.png')}"))
-        save_img(format.mel_spec_to_img(output_mel_spec), os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_output_mel_spec.png')}"))
-        save_img(format.mel_spec_to_img(output_mel_spec - input_mel_spec), os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_error_mel_spec.png')}"))
+
+        save_img(format.mel_spec_to_img(input_mel_spec, use_colormap=use_colormap),
+            os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_input_mel_spec.png')}"))
+        save_img(format.mel_spec_to_img(output_mel_spec, use_colormap=use_colormap),
+            os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_output_mel_spec.png')}"))
+        save_img(format.mel_spec_to_img(output_mel_spec - input_mel_spec, use_colormap=use_colormap),
+            os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_error_mel_spec.png')}"))
 
         if output_raw is not None:
             output_flac_file_path = os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_decoded.flac')}")

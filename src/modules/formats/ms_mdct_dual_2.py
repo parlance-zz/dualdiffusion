@@ -217,9 +217,13 @@ class MS_MDCT_DualFormat(DualDiffusionFormat):
         return ms_linear * self.config.mel_spec_to_linear_scale + self.config.mel_spec_to_linear_offset
 
     @torch.inference_mode()
-    def mel_spec_to_img(self, mel_spec: torch.Tensor):
+    def mel_spec_to_img(self, mel_spec: torch.Tensor, use_colormap: bool = False, exponent: float = 0.3):
         mel_spec = (mel_spec - self.config.raw_to_mel_spec_offset) / self.config.raw_to_mel_spec_scale
-        return tensor_to_img(mel_spec.clip(min=0)**(0.25 / self.config.ms_abs_exponent), flip_y=True)
+        mel_spec = mel_spec.clip(min=0)**(exponent / self.config.ms_abs_exponent)
+        if use_colormap == True:
+            return tensor_to_img(mel_spec.mean(dim=(0,1)), flip_y=True, colormap=True)
+        else:
+            return tensor_to_img(mel_spec, flip_y=True)
     
     @torch.inference_mode()
     def mel_spec_linear_to_img(self, mel_spec_linear: torch.Tensor):
