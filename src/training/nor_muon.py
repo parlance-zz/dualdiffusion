@@ -195,8 +195,9 @@ class SingleDeviceNorMuonWithAuxAdam(torch.optim.Optimizer):
                         
                     update = normuon_update(p.grad, state["momentum_buffer"], state["second_momentum_buffer"], beta=group["momentum"], beta2=group["beta2"])
 
-                    if group["weight_decay"] > 0:
-                        p.mul_(1 - group["lr"] * group["weight_decay"])
+                    weight_decay = getattr(p, "weight_decay", group["weight_decay"])
+                    if weight_decay > 0:
+                        p.mul_(max(0, 1 - group["lr"] * weight_decay))
                     p.add_(update.reshape(p.shape), alpha=-group["lr"])
             else:
                 for p in group["params"]:
@@ -213,9 +214,10 @@ class SingleDeviceNorMuonWithAuxAdam(torch.optim.Optimizer):
 
                     update = adam_update(p.grad, state["exp_avg"], state["exp_avg_sq"],
                                          state["step"], group["betas"], group["eps"])
-                    
-                    if group["weight_decay"] > 0:
-                        p.mul_(1 - group["lr"] * group["weight_decay"])
+
+                    weight_decay = getattr(p, "weight_decay", group["weight_decay"])
+                    if weight_decay > 0:
+                        p.mul_(max(0, 1 - group["lr"] * weight_decay))
                     p.add_(update, alpha=-group["lr"])
 
         return loss
