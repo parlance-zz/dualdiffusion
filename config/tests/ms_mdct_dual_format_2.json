@@ -1,6 +1,6 @@
 {
     "device": "cuda",
-    "add_random_test_samples": 5000,
+    "add_random_test_samples": 2000,
     "save_output": false,
     
     "test_sample_verbose": false,
@@ -17,7 +17,9 @@
         "default_raw_length": 1408768,
       
         "mdct_to_raw_scale": 1,
-        "raw_to_mdct_scale": 276.3602013,
+        "raw_to_mdct_scale": 263.776329,
+        "mdct_psd_scale": 1.1892,
+        "mdct_psd_offset": -0.693,
         "mdct_window_len": 512,
         "mdct_window_func": "sin",
       

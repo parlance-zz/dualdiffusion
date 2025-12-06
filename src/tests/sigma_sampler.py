@@ -136,7 +136,7 @@ def sigma_sampler_test():
         print(f"Loading DualDiffusion model from '{model_path}'...")
         pipeline = DualDiffusionPipeline.from_pretrained(model_path, **model_load_options)
         module = getattr(pipeline, test_params["reference_module"])
-        output_path = os.path.join(output_path, f"{reference_model_name}_step_{module.config.last_global_step}")
+        output_path = os.path.join(output_path, f"{reference_model_name}_step_{module.config.last_global_step}_{test_params['reference_module']}")
     else:
         module = None
 

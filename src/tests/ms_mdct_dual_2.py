@@ -71,7 +71,7 @@ def ms_mdct_dual_format_test() -> None:
     output_path = os.path.join(config.DEBUG_PATH, "ms_mdct_dual_format_2_test")
     os.makedirs(output_path, exist_ok=True)
 
-    mdct_avg_bin_std = torch.zeros_like(format.mdct_mel_density.flatten())
+    mdct_avg_bin_var = torch.zeros_like(format.mdct_mel_density.flatten())
 
     stat_logger = StatLogger()
     print(f"\nNum test_samples: {len(test_samples)}\n")
@@ -95,16 +95,24 @@ def ms_mdct_dual_format_test() -> None:
         mdct_psd = format.raw_to_mdct_psd(raw_sample)
         raw_sample_mdct = format.mdct_to_raw(mdct)
 
-        mdct_avg_bin_std += mdct.std(dim=(0,1,3)) / len(test_samples)
+        norm_mdct_psd = format.normalize_psd(mdct_psd)
+        unnorm_mdct_psd = format.unnormalize_psd(norm_mdct_psd)
+
+        mdct_avg_bin_var += mdct.var(dim=(0,1,3)) / len(test_samples)
         stat_logger.add_logs({
-            "raw_sample_std": raw_sample.std(),
-            "raw_sample_mdct_std": raw_sample_mdct.std(),
-            "mel_spec_std": mel_spec.std(),
+            "raw_sample_var": raw_sample.var(),
+            "raw_sample_mdct_var": raw_sample_mdct.var(),
+            "mel_spec_var": mel_spec.var(),
             "mel_spec_mean": mel_spec.mean(),
-            "mel_spec_linear_std": mel_spec_linear.std(),
+            "mel_spec_linear_var": mel_spec_linear.var(),
             "mel_spec_linear_mean": mel_spec_linear.mean(),
-            "mdct_std": mdct.std(),
-            "mdct_psd_std": mdct_psd.std(),
+            "mdct_var": mdct.var(),
+            "mdct_psd_var": mdct_psd.var(),
+            "mdct_psd_mean": mdct_psd.mean(),
+            "norm_mdct_psd_var": norm_mdct_psd.var(),
+            "norm_mdct_psd_mean": norm_mdct_psd.mean(),
+            "unnorm_mdct_psd_var": unnorm_mdct_psd.var(),
+            "unnorm_mdct_psd_mean": unnorm_mdct_psd.mean(),
         })
 
         if cfg.test_sample_verbose == True:
@@ -140,9 +148,9 @@ def ms_mdct_dual_format_test() -> None:
         save_img(format.mdct_psd_to_img(mdct_psd), mdct_psd_output_path)
         print(f"Saved mdct_psd img to {mdct_psd_output_path}")
 
-    print(f"\nAverage MDCT bin std (std variance: {mdct_avg_bin_std.var().item()}):")
-    print(mdct_avg_bin_std)
-    mdct_avg_bin_std.cpu().numpy().tofile(os.path.join(output_path, "mdct_avg_bin_std.raw"))
+    print(f"\nAverage MDCT bin var (var variance: {mdct_avg_bin_var.var().item()}):")
+    print(mdct_avg_bin_var)
+    mdct_avg_bin_var.cpu().numpy().tofile(os.path.join(output_path, "mdct_avg_bin_var.raw"))
 
     print("\nAverage stats:")
     print(dict_str(stat_logger.get_logs()))

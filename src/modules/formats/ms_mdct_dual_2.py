@@ -41,7 +41,9 @@ class MS_MDCT_DualFormatConfig(DualDiffusionFormatConfig):
 
     # mdct params
     mdct_to_raw_scale: float = 1.
-    raw_to_mdct_scale: float = 276.3602013
+    raw_to_mdct_scale: float = 263.776329
+    mdct_psd_scale: float  = 1.1892
+    mdct_psd_offset: float = -0.693
     mdct_window_len: int = 512
     mdct_window_func: Literal["sin", "kaiser_bessel_derived", "vorbis"] = "sin"
 
@@ -259,13 +261,24 @@ class MS_MDCT_DualFormat(DualDiffusionFormat):
         
         return raw_samples * self.config.mdct_to_raw_scale
     
-    def raw_to_mdct_psd(self, raw_samples: torch.Tensor) -> torch.Tensor:
+    def normalize_psd(self, mdct_psd: torch.Tensor) -> torch.Tensor:
+        return (mdct_psd + self.config.mdct_psd_offset) / self.config.mdct_psd_scale
+    
+    def unnormalize_psd(self, norm_mdct_psd: torch.Tensor) -> torch.Tensor:
+        return norm_mdct_psd * self.config.mdct_psd_scale - self.config.mdct_psd_offset
+    
+    def raw_to_mdct_psd(self, raw_samples: torch.Tensor, normalize: bool = False) -> torch.Tensor:
 
         _mclt: torch.Tensor = self.mdct(raw_samples.float())
-        return _mclt.abs() / self.mdct_mel_density * self.config.raw_to_mdct_scale
+        mdct_psd = _mclt.abs() / self.mdct_mel_density * self.config.raw_to_mdct_scale
+
+        if normalize == True:
+            mdct_psd = self.normalize_psd(mdct_psd)
+        
+        return mdct_psd
 
     def mdct_psd_to_img(self, mdct_psd: torch.Tensor):
-        return tensor_to_img(mdct_psd.clip(min=0), flip_y=True)
+        return tensor_to_img(mdct_psd.clip(min=0).pow(0.25), flip_y=True)
 
 
 if __name__ == "__main__":
