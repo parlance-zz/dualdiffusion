@@ -20,10 +20,10 @@
     "latents_img_use_pca": false,
     "latents_img_save_collage": true,
     "output_lufs": -20,
-    "ddec_output": false,
+    "ddec_output": true,
     "xref_output": false,
-    "add_random_test_samples": 50,
-    "random_test_samples_seed": 2995,
+    "add_random_test_samples": 30,
+    "random_test_samples_seed": 2999,
     "copy_sample_source_files": true,
     "test_samples": [
         "switch/Arcaea/_t_songs_ignotus.ogg.flac",
