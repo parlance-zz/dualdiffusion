@@ -149,12 +149,13 @@ class DiffusionDecoder_Trainer(UNetTrainer):
         mdct_samples = mdct_samples[:, :, :, self.config.crop_edges:-self.config.crop_edges].detach()
         #mdct_samples_dae = mdct_samples
         
-        #latents, ddec_cond, pre_norm_latents = self.dae(mdct_samples_dae, dae_embeddings)
-        #latents: torch.Tensor = latents.float()
-        #pre_norm_latents: torch.Tensor = pre_norm_latents.float()
-
-        mel_spec = self.format.raw_to_mel_spec(raw_samples)
-        ddec_cond = self.format.mel_spec_to_linear(mel_spec)[:, :, :, self.config.crop_edges:-self.config.crop_edges].detach()
+        ms_samples: torch.Tensor = self.format.raw_to_mel_spec(raw_samples)
+        ms_samples = ms_samples[:, :, :, self.config.crop_edges:-self.config.crop_edges].detach()
+        latents, recon_ms_samples, pre_norm_latents = self.dae(ms_samples, dae_embeddings)
+        latents: torch.Tensor = latents.float()
+        pre_norm_latents: torch.Tensor = pre_norm_latents.float()
+        
+        ddec_cond = self.format.mel_spec_to_linear(recon_ms_samples).detach()
 
         if self.freeze_dae == False and self.config.phase_invariance_loss_bsz > 0:
 
@@ -228,7 +229,10 @@ class DiffusionDecoder_Trainer(UNetTrainer):
             "io_stats/ddec_cond_mean": ddec_cond.mean(dim=(1,2,3)),
             "io_stats/mdct_std": mdct_samples.std(dim=(1,2,3)),
             "io_stats/mdct_mean": mdct_samples.mean(dim=(1,2,3)),
-
+            "io_stats/ms_samples_std": ms_samples.std(dim=(1,2,3)),
+            "io_stats/ms_samples_mean": ms_samples.mean(dim=(1,2,3)),
+            "io_stats/recon_ms_samples_std": recon_ms_samples.std(dim=(1,2,3)),
+            "io_stats/recon_ms_samples_mean": recon_ms_samples.mean(dim=(1,2,3))
         })
         if self.freeze_dae == False:
 
