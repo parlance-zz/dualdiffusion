@@ -31,10 +31,11 @@ import numpy as np
 
 from modules.embeddings.clap import CLAP_Embedding
 from pipelines.dual_diffusion_pipeline import DualDiffusionPipeline, SampleParams
-from modules.unets.unet_edm2_p1_ddec import UNet
+from modules.unets.unet_edm2_p3_ddec import UNet
 from modules.embeddings.clap import CLAP_Embedding
-from modules.daes.dae_edm2_p1 import DAE
-from modules.formats.mdct import MDCT_Format
+from modules.daes.dae_edm2_p3 import DAE
+from modules.formats.ms_mdct_dual_2 import MS_MDCT_DualFormat
+from modules.mp_tools import mp_sum
 from utils.dual_diffusion_utils import (
     init_cuda, normalize, save_audio, load_audio, load_safetensors,
     save_img, get_audio_info, dict_str
@@ -63,7 +64,8 @@ def dae_test() -> None:
     pipeline = DualDiffusionPipeline.from_pretrained(model_path, **model_load_options)
     dae: DAE = getattr(pipeline, "dae", None)
     ddec_mdct: UNet = getattr(pipeline, "ddec", None)
-    format: MDCT_Format = pipeline.format
+    #ddec_mdct: UNet = getattr(pipeline, "ddect", None)
+    format: MS_MDCT_DualFormat = pipeline.format
     embedding: CLAP_Embedding = pipeline.embedding
 
     sample_rate = format.config.sample_rate
@@ -119,7 +121,7 @@ def dae_test() -> None:
         count = format.get_raw_crop_width(raw_length=min(length, audio_len))
         source_raw_sample = load_audio(file_path, count=count)
         input_raw_sample = source_raw_sample.unsqueeze(0).to(format.device)
-        input_mdct = format.raw_to_mdct(input_raw_sample, random_phase_augmentation=True)
+        input_mdct = format.raw_to_mdct(input_raw_sample)
 
         safetensors_file_name = os.path.join(f"{os.path.splitext(filename)[0]}.safetensors")
         safetensors_file_path = os.path.join(dataset_path, safetensors_file_name)
@@ -136,25 +138,44 @@ def dae_test() -> None:
 
         # ***************** dae stage *****************
 
+        input_mel_spec = format.raw_to_mel_spec(input_raw_sample)
+        dae_input = input_mdct #torch.cat((input_mdct, format.mel_spec_to_linear(input_mel_spec)), dim=2)
+        #dae_input = input_mel_spec
+
         dae_embedding = dae.get_embeddings(audio_embedding.to(dtype=dae.dtype))
 
         if test_params["latents_tiled_encode"] == True:
             latents = dae.tiled_encode(input_mdct.to(dtype=dae.dtype), dae_embedding,
                 max_chunk=test_params["latents_tiled_max_chunk_size"], overlap=test_params["latents_tiled_overlap"])
         else:
-            latents = dae.encode(input_mdct.to(dtype=dae.dtype), dae_embedding).float()
+            latents = dae.encode(dae_input.to(dtype=dae.dtype), dae_embedding).float()
         
-        ddec_cond = dae.decode(latents.to(dtype=dae.dtype), dae_embedding).float()
-    
+        if test_params.get("add_latents_noise", None) is not None:
+            #latents = normalize(latents + torch.randn_like(latents) * test_params["add_latents_noise"]).float()
+            decode_latents = mp_sum(latents, torch.randn_like(latents), t=test_params["add_latents_noise"]).float()
+        else:
+            decode_latents = latents
+            
+        ddec_cond = dae.decode(decode_latents.to(dtype=dae.dtype), dae_embedding).float()
+        output_mod = dae.get_mod(ddec_cond.to(dtype=dae.dtype)).float()#.abs().clip(min=1e-3)
+
+        latents = dae.latents_mean_estimator.remove_mean(latents)
+        latents = dae.latents_mean_estimator.unscale(latents)
         # ***************** ddec mdct stage *****************
         #ddec_cond = format.raw_to_mdct(input_raw_sample, random_phase_augmentation=True)
-        x_ref_mdct = ddec_cond.reshape(ddec_cond.shape[0], ddec_cond.shape[1]*2, 1, ddec_cond.shape[3])
+        #x_ref_mdct = ddec_cond.reshape(ddec_cond.shape[0], ddec_cond.shape[1]*2, 1, ddec_cond.shape[3])
+        #x_ref_mdct = None
+        x_ref_mdct = ddec_cond
 
         if ddec_mdct is not None:
             ddec_mdct_params = SampleParams(
                 seed=5000,
-                num_steps=100, length=audio_len, cfg_scale=5, input_perturbation=1, input_perturbation_offset=0.3,
-                use_heun=False, schedule="linear", rho=7, sigma_max=11, sigma_min=0.2, stereo_fix=0
+                #num_steps=100, length=audio_len, cfg_scale=5, input_perturbation=1, input_perturbation_offset=1000,
+                #use_heun=False, schedule="edm2", rho=7, sigma_max=10, sigma_min=0.1, stereo_fix=0
+                num_steps=100, length=audio_len, cfg_scale=5, input_perturbation=1, input_perturbation_offset=100,
+                use_heun=False, schedule="edm2", rho=7, sigma_max=1.00001, sigma_min=0.999999, stereo_fix=0
+                #num_steps=100, length=audio_len, cfg_scale=5, input_perturbation=1, input_perturbation_offset=100,
+                #use_heun=False, schedule="edm2", rho=7, sigma_max=0.36, sigma_min=0.35, stereo_fix=0
             )
 
             output_ddec_mdct = pipeline.diffusion_decode(
@@ -162,9 +183,11 @@ def dae_test() -> None:
                 sample_shape=format.get_mdct_shape(raw_length=count),
                 x_ref=x_ref_mdct.to(dtype=ddec_mdct.dtype), module=ddec_mdct)
             
-            output_raw = format.mdct_to_raw(output_ddec_mdct.float())
+            output_ddec_mdct: torch.Tensor = output_ddec_mdct.float() * output_mod
+            output_raw = format.mdct_to_raw(output_ddec_mdct)
+            output_mel_spec = format.raw_to_mel_spec(output_raw)
         else:
-            output_raw = format.mdct_to_raw(ddec_cond.float())
+            output_raw = output_mel_spec = None
 
         print(f"input_mdct   mean/std: {input_mdct.mean().item():.4} {input_mdct.std().item():.4}")
         print(f"ddec_cond    mean/std: {ddec_cond.mean().item():.4} {ddec_cond.std().item():.4}")
@@ -188,12 +211,14 @@ def dae_test() -> None:
                 else:
                     collage_img = np.concatenate([collage_img, latents_img], axis=0)
         
-        if test_params.get("xref_output", False) == True and x_ref_mdct is not None:
-            save_img(dae.latents_to_img(x_ref_mdct), os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_x_ref.png')}"))
+        #if test_params.get("xref_output", False) == True and x_ref_mdct is not None:
+        #    save_img(dae.latents_to_img(x_ref_mdct), os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_x_ref.png')}"))
+        
+        save_img(format.mel_spec_to_img(input_mel_spec), os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_input_mel_spec.png')}"))
+        if output_mel_spec is not None:
+            save_img(format.mel_spec_to_img(output_mel_spec), os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_output_mel_spec.png')}"))
 
-        #save_img(format.mel_spec_to_img(input_mel_spec), os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_input_mel_spec.png')}"))
-        #save_img(format.mel_spec_to_img(ddec_cond), os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_output_mel_spec.png')}"))
-        #save_img(format.mel_spec_to_img(ddec_cond - input_mel_spec), os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_error_mel_spec.png')}"))
+        save_img(format.mdct_psd_to_img(output_mod), os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_output_mod.png')}"))
 
         if output_raw is not None:
             output_flac_file_path = os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_decoded.flac')}")
