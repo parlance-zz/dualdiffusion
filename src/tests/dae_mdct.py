@@ -122,6 +122,7 @@ def dae_test() -> None:
         source_raw_sample = load_audio(file_path, count=count)
         input_raw_sample = source_raw_sample.unsqueeze(0).to(format.device)
         input_mdct = format.raw_to_mdct(input_raw_sample)
+        input_mdct_psd = format.raw_to_mdct_psd(input_raw_sample)
 
         safetensors_file_name = os.path.join(f"{os.path.splitext(filename)[0]}.safetensors")
         safetensors_file_path = os.path.join(dataset_path, safetensors_file_name)
@@ -139,7 +140,7 @@ def dae_test() -> None:
         # ***************** dae stage *****************
 
         input_mel_spec = format.raw_to_mel_spec(input_raw_sample)
-        dae_input = input_mdct #torch.cat((input_mdct, format.mel_spec_to_linear(input_mel_spec)), dim=2)
+        dae_input = torch.cat((input_mdct, input_mel_spec), dim=1)
 
         dae_embedding = dae.get_embeddings(audio_embedding.to(dtype=dae.dtype))
 
@@ -165,8 +166,8 @@ def dae_test() -> None:
 
             ddecm_params = SampleParams(
                 seed=5000,
-                num_steps=50, length=audio_len, cfg_scale=5, input_perturbation=1, input_perturbation_offset=0,
-                use_heun=False, schedule="edm2", rho=7, sigma_max=330, sigma_min=0.001, stereo_fix=0
+                num_steps=50, length=audio_len, cfg_scale=5, input_perturbation=1, input_perturbation_offset=-2,
+                use_heun=False, schedule="linear", rho=7, sigma_max=400, sigma_min=0.1, stereo_fix=0
             )
 
             output_ddecm = pipeline.diffusion_decode(
@@ -178,8 +179,8 @@ def dae_test() -> None:
             
             ddecp_params = SampleParams(
                 seed=5000,
-                num_steps=50, length=audio_len, cfg_scale=5, input_perturbation=1, input_perturbation_offset=0,
-                use_heun=False, schedule="linear", rho=7, sigma_max=10, sigma_min=0.01, stereo_fix=0
+                num_steps=50, length=audio_len, cfg_scale=5, input_perturbation=1, input_perturbation_offset=100,
+                use_heun=False, schedule="linear", rho=7, sigma_max=10, sigma_min=0.1, stereo_fix=0
             )
 
             output_ddecp = pipeline.diffusion_decode(
@@ -221,7 +222,6 @@ def dae_test() -> None:
             save_img(format.mel_spec_to_img(output_mel_spec), os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_mel_spec_output.png')}"))
 
         if output_ddecm is not None:
-            input_mdct_psd = format.raw_to_mdct_psd(input_raw_sample)
             save_img(format.mdct_psd_to_img(input_mdct_psd), os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_psd_input.png')}"))
             save_img(format.mdct_psd_to_img(output_ddecm),   os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_psd_output.png')}"))
 

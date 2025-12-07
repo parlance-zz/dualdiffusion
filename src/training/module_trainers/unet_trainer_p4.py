@@ -136,10 +136,8 @@ class UNetTrainer(ModuleTrainer):
         return None
 
     def train_batch(self, samples: torch.Tensor, embeddings: Optional[Union[torch.Tensor, list[torch.Tensor]]] = None,
-            ref_samples: Optional[torch.Tensor] = None, loss_weight: Optional[torch.Tensor] = None,
-            output_mod: Optional[torch.Tensor] = None, target: Optional[torch.Tensor] = None) -> dict[str, Union[torch.Tensor, float]]:
+            ref_samples: Optional[torch.Tensor] = None, loss_weight: Optional[torch.Tensor] = None) -> dict[str, Union[torch.Tensor, float]]:
 
-        target = samples if target is None else target
         device_bsz = self.trainer.config.device_batch_size
 
         # normal conditioning dropout
@@ -162,12 +160,10 @@ class UNetTrainer(ModuleTrainer):
             perturbed_input = None
 
         denoised: torch.Tensor = self.unet(samples + noise, batch_sigma, None, unet_embeddings, ref_samples, perturbed_input)
-        if output_mod is not None:
-            denoised = denoised * output_mod
         
         sigma_data = self.sigma_sampler.config.sigma_data
         batch_loss_weight = (batch_sigma ** 2 + sigma_data ** 2) / (batch_sigma * sigma_data) ** 2
-        batch_weighted_loss = torch.nn.functional.mse_loss(denoised, target, reduction="none")
+        batch_weighted_loss = torch.nn.functional.mse_loss(denoised, samples, reduction="none")
         if loss_weight is not None: # use custom loss weight if provided
             batch_weighted_loss = batch_weighted_loss * loss_weight
         batch_weighted_loss = batch_weighted_loss.mean(dim=(1,2,3)) * batch_loss_weight

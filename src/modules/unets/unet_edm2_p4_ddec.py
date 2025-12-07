@@ -52,7 +52,7 @@ class UNetConfig(DualDiffusionUNetConfig):
     sigma_min: float  = 0.005
     sigma_data: float = 1.
 
-    mp_fourier_ln_sigma_offset: float = 0
+    mp_fourier_ln_sigma_offset: float = 2
     mp_fourier_bandwidth:       float = 1
 
     model_channels: int  = 4096              # Base multiplier for the number of channels.
@@ -66,7 +66,7 @@ class UNetConfig(DualDiffusionUNetConfig):
     num_layers_per_block: int = 4            # Number of resnet blocks per resolution.
     label_balance: float      = 0.5          # Balance between noise embedding (0) and class embedding (1).
     balance_logits_offset: float = -2
-    mlp_multiplier: int    = 4               # Multiplier for the number of channels in the MLP.
+    mlp_multiplier: int    = 3               # Multiplier for the number of channels in the MLP.
     mlp_groups: int        = 32              # Number of groups for the MLPs.
     emb_linear_groups: int = 32
 

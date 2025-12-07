@@ -43,7 +43,7 @@ from modules.mp_tools import MPConv, AdaptiveGroupBalance, mp_silu, normalize, r
 @dataclass
 class DAE_Config(DualDiffusionDAEConfig):
 
-    in_channels:  int = 512
+    in_channels:  int = 1024
     out_channels: int = 4096
     in_channels_emb: int = 1024
     latent_channels: int = 256
@@ -58,7 +58,7 @@ class DAE_Config(DualDiffusionDAEConfig):
     num_enc_layers: int       = 6
     num_dec_layers_per_block: int = 2        # Number of resnet blocks per resolution.
     balance_logits_offset: float = -2
-    mlp_multiplier: int    = 4               # Multiplier for the number of channels in the MLP.
+    mlp_multiplier: int    = 3               # Multiplier for the number of channels in the MLP.
     mlp_groups: int        = 32              # Number of groups for the MLPs.
     emb_linear_groups: int = 32
 

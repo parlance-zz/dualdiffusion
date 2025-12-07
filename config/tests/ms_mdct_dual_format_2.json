@@ -18,8 +18,9 @@
       
         "mdct_to_raw_scale": 1,
         "raw_to_mdct_scale": 263.776329,
-        "mdct_psd_scale": 1.1892,
-        "mdct_psd_offset": -0.693,
+        "mdct_psd_scale": 0.2985,//1.1892,
+        "mdct_psd_offset": -0.713,//-0.693,
+        "mdct_psd_exponent": 0.25,
         "mdct_window_len": 512,
         "mdct_window_func": "sin",
       

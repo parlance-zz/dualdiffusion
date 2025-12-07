@@ -58,7 +58,7 @@ class DiffusionDecoder_Trainer_Config(ModuleTrainerConfig):
     latents_dispersion_loss_weight: float = 0
     latents_dispersion_loss_bsz: int = 2
     latents_dispersion_num_iterations: int = 1
-    latents_regularization_warmup_steps: int = 20000
+    latents_regularization_warmup_steps: int = 25000
 
     random_stereo_augmentation: bool = False
     random_phase_augmentation: bool  = False
@@ -151,8 +151,10 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
         mdct_psd_clipped = mdct_psd.clip(min=1e-4).detach()
         mdct_psd_normalized = self.format.normalize_psd(mdct_psd).detach()
         mdct_phase = (mdct_samples / (mdct_psd_clipped / 2**0.5)).detach()
+        mel_spec = self.format.raw_to_mel_spec(raw_samples)[:, :, :, self.config.crop_edges:-self.config.crop_edges].detach()
 
-        latents, ddec_cond, pre_norm_latents = self.dae(mdct_samples, dae_embeddings)
+        dae_input = torch.cat((mdct_samples, mel_spec), dim=1)
+        latents, ddec_cond, pre_norm_latents = self.dae(dae_input, dae_embeddings)
         latents: torch.Tensor = latents.float()
         pre_norm_latents: torch.Tensor = pre_norm_latents.float()
 
@@ -160,16 +162,13 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
 
             mdct_samples2: torch.Tensor = self.format.raw_to_mdct(raw_samples[:self.config.phase_invariance_loss_bsz], random_phase_augmentation=True)
             mdct_samples2 = mdct_samples2[:, :, :, self.config.crop_edges:-self.config.crop_edges].detach()
+            dae_input2 = torch.cat((mdct_samples2, mel_spec[:self.config.phase_invariance_loss_bsz]), dim=1)
             dae_embeddings2 = dae_embeddings[:self.config.phase_invariance_loss_bsz] if dae_embeddings is not None else None
-
+            
             with torch.autocast(device_type="cuda", dtype=self.trainer.mixed_precision_dtype, enabled=self.trainer.mixed_precision_enabled):
-                latents2 = self.dae.encode(mdct_samples2, dae_embeddings2)
+                latents2 = self.dae.encode(dae_input2, dae_embeddings2)
 
-            #cos_angle = get_cos_angle(latents[:self.config.phase_invariance_loss_bsz], latents2.float())
-            #phase_invariance_loss = (1 - cos_angle).mean() / 2
-            phase_invariance_loss = (latents[:self.config.phase_invariance_loss_bsz] - latents2.float()).pow(2).mean()
-
-            phase_invariance_loss = phase_invariance_loss.expand(latents.shape[0]) # needed for per-sample logging
+            phase_invariance_loss = (latents[:self.config.phase_invariance_loss_bsz] - latents2.float()).pow(2).mean().expand(latents.shape[0])
         else:
             phase_invariance_loss = None
 
@@ -186,8 +185,6 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
                     if repulse_latents.shape[2] > 1:
                         repulse_latents = repulse_latents.roll(shifts=np.random.randint(1, repulse_latents.shape[2]), dims=2)
 
-                    #cos_angle = get_cos_angle(latents, repulse_latents)
-                    #dispersion_loss = dispersion_loss + (cos_angle**2).mean()
                     dispersion_loss = dispersion_loss + (latents - repulse_latents).pow(2).mean()
 
                 total_dispersion_iterations += self.config.latents_dispersion_num_iterations
@@ -196,9 +193,7 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
                 dispersion_loss = dispersion_loss / total_dispersion_iterations
 
             dispersion_loss = 1 / (dispersion_loss + 1)
-            dispersion_loss = ((dispersion_loss - 1/3) * 3/2).clip(min=0)  # scale to [0,1]
-
-            dispersion_loss = dispersion_loss.expand(latents.shape[0]) # needed for per-sample logging
+            dispersion_loss = ((dispersion_loss - 1/3) * 3/2).clip(min=0).expand(latents.shape[0])
         else:
             dispersion_loss = None
 
@@ -223,6 +218,8 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
             "io_stats/ddec_cond_var": ddec_cond.var(dim=(1,2,3)),
             "io_stats/ddec_cond_mean": ddec_cond.mean(dim=(1,2,3)),
             "io_stats/mdct_var": mdct_samples.var(dim=(1,2,3)),
+            "io_stats/mel_spec_var": mel_spec.var(dim=(1,2,3)),
+            "io_stats/mel_spec_mean": mel_spec.mean(dim=(1,2,3)),
             "io_stats/latents_var": latents.var(dim=(1,2,3)).detach(),
             "io_stats/latents_mean": latents.mean(dim=(1,2,3)).detach(),
 
@@ -244,18 +241,13 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
             logs["loss"] = logs["loss"] + dispersion_loss * dispersion_loss_weight
             logs["loss/latents_dispersion"] = dispersion_loss.detach()
 
-        #loss_weight_p = mdct_psd.pow(0.25)
-        #loss_weight_p /= loss_weight_p.mean()
-        loss_weight_p = mdct_psd_clipped.pow(-0.75)
-        target_p = mdct_samples
-        mod_p = (mdct_psd_clipped / 2**0.5)
-
-        logs.update(self.ddecp_trainer.train_batch(mdct_phase, audio_embeddings, ddec_cond,
-            loss_weight=loss_weight_p, output_mod=mod_p, target=target_p))
-
+        logs.update(self.ddecp_trainer.train_batch(mdct_phase, audio_embeddings, ddec_cond, loss_weight=mdct_psd.pow(0.25)))
         logs.update(self.ddecm_trainer.train_batch(mdct_psd_normalized, audio_embeddings, ddec_cond))
 
         logs["loss"] = logs["loss"] + logs["loss/ddecp"] + logs["loss/ddecm"]
+
+        dynamic_range_ddecm = mdct_psd_normalized.amax(dim=(1,2,3)) - mdct_psd_normalized.amin(dim=(1,2,3))
+        logs["io_stats_ddecm/dynamic_range"] = dynamic_range_ddecm
 
         if self.trainer.config.enable_debug_mode == True:
             print("mdct_samples.shape:", mdct_samples.shape)
