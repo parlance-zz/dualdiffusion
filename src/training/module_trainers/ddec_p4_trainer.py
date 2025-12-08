@@ -53,6 +53,12 @@ class DiffusionDecoder_Trainer_Config(ModuleTrainerConfig):
     kl_loss_weight: float = 3e-2
     kl_warmup_steps: int  = 2000
 
+    ddecp_loss_weight_multiplier: float = 1.18
+    ddecm_loss_weight_multiplier: float = 0.68
+
+    ddecp_loss_weight_mel_density_exponent: float = 0.5
+    ddecm_loss_weight_mel_density_exponent: float = 0.25
+
     phase_invariance_loss_weight: float = 1
     phase_invariance_loss_bsz: int = -1
     latents_dispersion_loss_weight: float = 0
@@ -114,9 +120,16 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
             self.logger.info("Using random stereo augmentation")
         else: self.logger.info("Random stereo augmentation is disabled")
 
-        self.loss_weight = self.format.mdct_mel_density.clone().requires_grad_(False)
-        self.loss_weight /= self.loss_weight.mean()
-        
+        self.loss_weight_p = self.format.mdct_mel_density.clone().pow(
+            self.config.ddecp_loss_weight_mel_density_exponent).requires_grad_(False)
+        self.loss_weight_p /= self.loss_weight_p.mean()
+        self.loss_weight_p *= self.config.ddecp_loss_weight_multiplier
+
+        self.loss_weight_m = self.format.mdct_mel_density.clone().pow(
+            self.config.ddecm_loss_weight_mel_density_exponent).requires_grad_(False)
+        self.loss_weight_m /= self.loss_weight_m.mean()
+        self.loss_weight_m *= self.config.ddecm_loss_weight_multiplier
+
         self.logger.info("DDEC-P trainer:")
         self.ddecp_trainer = UNetTrainer(UNetTrainerConfig(**config.ddecp), trainer, self.ddecp, "ddecp")
         self.logger.info("DDEC-M trainer:")
@@ -241,8 +254,10 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
             logs["loss"] = logs["loss"] + dispersion_loss * dispersion_loss_weight
             logs["loss/latents_dispersion"] = dispersion_loss.detach()
 
-        logs.update(self.ddecp_trainer.train_batch(mdct_phase, audio_embeddings, ddec_cond, loss_weight=mdct_psd.pow(0.25)))
-        logs.update(self.ddecm_trainer.train_batch(mdct_psd_normalized, audio_embeddings, ddec_cond))
+        loss_weight_ddecp = self.loss_weight_p * mdct_psd.pow(0.25)
+        logs.update(self.ddecp_trainer.train_batch(mdct_phase, audio_embeddings, ddec_cond, loss_weight=loss_weight_ddecp))
+        loss_weight_ddecm = self.loss_weight_m
+        logs.update(self.ddecm_trainer.train_batch(mdct_psd_normalized, audio_embeddings, ddec_cond, loss_weight=loss_weight_ddecm))
 
         logs["loss"] = logs["loss"] + logs["loss/ddecp"] + logs["loss/ddecm"]
 
@@ -251,6 +266,7 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
 
         if self.trainer.config.enable_debug_mode == True:
             print("mdct_samples.shape:", mdct_samples.shape)
+            print("mel_spec.shape:", mel_spec.shape)
             print("ddec_cond.shape:", ddec_cond.shape)
             print("latents.shape:", latents.shape)
 
