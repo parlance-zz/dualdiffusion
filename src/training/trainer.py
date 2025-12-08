@@ -170,6 +170,7 @@ class DualDiffusionTrainerConfig:
     checkpoints_total_limit: int        = 1
     strict_checkpoint_time: bool        = False
 
+    activation_memory_budget: Optional[float] = None
     enable_bf16_reduction_in_sdp: bool  = False
     enable_anomaly_detection: bool      = False
     enable_model_compilation: bool      = True
@@ -333,6 +334,11 @@ class DualDiffusionTrainer:
         if self.config.enable_bf16_reduction_in_sdp == True:
             torch.backends.cuda.allow_fp16_bf16_reduction_math_sdp(True)
             self.logger.info("BF16 reduction in Pytorch SDP enabled")
+
+        if self.config.activation_memory_budget is not None:
+            self.logger.info(f"Using activation memory budget: {self.config.activation_memory_budget}")
+            import torch._functorch.config
+            torch._functorch.config.activation_memory_budget = self.config.activation_memory_budget
 
     def init_module_pipeline(self) -> None:
 
