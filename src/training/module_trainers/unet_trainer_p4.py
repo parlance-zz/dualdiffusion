@@ -136,7 +136,7 @@ class UNetTrainer(ModuleTrainer):
         return None
 
     def train_batch(self, samples: torch.Tensor, embeddings: Optional[Union[torch.Tensor, list[torch.Tensor]]] = None,
-            ref_samples: Optional[torch.Tensor] = None, loss_weight: Optional[torch.Tensor] = None) -> dict[str, Union[torch.Tensor, float]]:
+            ref_samples: Optional[torch.Tensor] = None, loss_weight: Optional[torch.Tensor] = None, noise: Optional[torch.Tensor] = None) -> dict[str, Union[torch.Tensor, float]]:
 
         device_bsz = self.trainer.config.device_batch_size
 
@@ -149,8 +149,9 @@ class UNetTrainer(ModuleTrainer):
         batch_sigma = local_sigma[self.trainer.accum_step * device_bsz:(self.trainer.accum_step+1) * device_bsz]
 
         # prepare model inputs
-        noise = torch.randn(samples.shape, device=samples.device)
         samples = samples.detach()
+        if noise is None:
+            noise = torch.randn(samples.shape, device=samples.device)
         noise = (noise * batch_sigma.view(-1, 1, 1, 1)).detach()
 
         if self.config.input_perturbation > 0:

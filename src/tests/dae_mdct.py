@@ -123,6 +123,8 @@ def dae_test() -> None:
         input_raw_sample = source_raw_sample.unsqueeze(0).to(format.device)
         input_mdct = format.raw_to_mdct(input_raw_sample)
         input_mdct_psd = format.raw_to_mdct_psd(input_raw_sample)
+        input_mel_spec = format.raw_to_mel_spec(input_raw_sample)
+        input_mdct_psd_normalized = format.normalize_psd(input_mdct_psd)
 
         safetensors_file_name = os.path.join(f"{os.path.splitext(filename)[0]}.safetensors")
         safetensors_file_path = os.path.join(dataset_path, safetensors_file_name)
@@ -139,9 +141,7 @@ def dae_test() -> None:
 
         # ***************** dae stage *****************
 
-        input_mel_spec = format.raw_to_mel_spec(input_raw_sample)
-        dae_input = torch.cat((input_mdct, input_mel_spec), dim=1)
-
+        dae_input = torch.cat((input_mdct, input_mdct_psd_normalized), dim=1)
         dae_embedding = dae.get_embeddings(audio_embedding.to(dtype=dae.dtype))
 
         if test_params["latents_tiled_encode"] == True:
@@ -166,7 +166,7 @@ def dae_test() -> None:
 
             ddecm_params = SampleParams(
                 seed=5000,
-                num_steps=50, length=audio_len, cfg_scale=5, input_perturbation=1, input_perturbation_offset=-2,
+                num_steps=100, length=audio_len, cfg_scale=5, input_perturbation=1, input_perturbation_offset=-2,
                 use_heun=False, schedule="linear", rho=7, sigma_max=400, sigma_min=0.1, stereo_fix=0
             )
 
@@ -179,7 +179,7 @@ def dae_test() -> None:
             
             ddecp_params = SampleParams(
                 seed=5000,
-                num_steps=50, length=audio_len, cfg_scale=5, input_perturbation=1, input_perturbation_offset=100,
+                num_steps=100, length=audio_len, cfg_scale=5, input_perturbation=1, input_perturbation_offset=100,
                 use_heun=False, schedule="linear", rho=7, sigma_max=10, sigma_min=0.1, stereo_fix=0
             )
 

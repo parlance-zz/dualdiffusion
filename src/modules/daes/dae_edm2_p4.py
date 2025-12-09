@@ -49,7 +49,7 @@ class DAE_Config(DualDiffusionDAEConfig):
     latent_channels: int = 256
     in_num_freqs: int = 256
 
-    model_channels: int   = 2048              # Base multiplier for the number of channels.
+    model_channels: int   = 4096              # Base multiplier for the number of channels.
     channel_mult_enc: int = 1
     channel_mult_dec: list[int] = (1,1,1,1)   # Per-resolution multipliers for the number of channels.
     channel_mult_emb: Optional[int] = 1       # Multiplier for final embedding dimensionality.
@@ -58,9 +58,9 @@ class DAE_Config(DualDiffusionDAEConfig):
     num_enc_layers: int       = 6
     num_dec_layers_per_block: int = 2        # Number of resnet blocks per resolution.
     balance_logits_offset: float = -2
-    mlp_multiplier: int    = 3               # Multiplier for the number of channels in the MLP.
-    mlp_groups: int        = 32              # Number of groups for the MLPs.
-    emb_linear_groups: int = 32
+    mlp_multiplier: int    = 2               # Multiplier for the number of channels in the MLP.
+    mlp_groups: int        = 64              # Number of groups for the MLPs.
+    emb_linear_groups: int = 64
 
 class LatentStatsTracker(torch.nn.Module):
 

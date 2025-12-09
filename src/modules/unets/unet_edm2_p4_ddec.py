@@ -63,10 +63,10 @@ class UNetConfig(DualDiffusionUNetConfig):
     use_skips: bool     = False
     channels_per_head: int    = 128          # Number of channels per attention head.
     attn_logit_scale: float   = 1
-    num_layers_per_block: int = 4            # Number of resnet blocks per resolution.
+    num_layers_per_block: int = 8            # Number of resnet blocks per resolution.
     label_balance: float      = 0.5          # Balance between noise embedding (0) and class embedding (1).
     balance_logits_offset: float = -2
-    mlp_multiplier: int    = 3               # Multiplier for the number of channels in the MLP.
+    mlp_multiplier: int    = 2               # Multiplier for the number of channels in the MLP.
     mlp_groups: int        = 32              # Number of groups for the MLPs.
     emb_linear_groups: int = 32
 
