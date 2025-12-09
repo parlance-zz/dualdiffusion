@@ -258,10 +258,15 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
             logs["loss/latents_dispersion"] = dispersion_loss.detach()
 
         noise = torch.randn_like(mdct_samples)
+        perturb_noise = torch.randn_like(mdct_samples)
+
         loss_weight_ddecp = self.loss_weight_p * mdct_psd.pow(0.25)
-        logs.update(self.ddecp_trainer.train_batch(mdct_phase, audio_embeddings, ddec_cond, loss_weight=loss_weight_ddecp, noise=noise))
+        logs.update(self.ddecp_trainer.train_batch(mdct_phase, audio_embeddings, ddec_cond,
+            loss_weight=loss_weight_ddecp, noise=noise, perturb_noise=perturb_noise))
+        
         loss_weight_ddecm = self.loss_weight_m
-        logs.update(self.ddecm_trainer.train_batch(mdct_psd_normalized, audio_embeddings, ddec_cond, loss_weight=loss_weight_ddecm, noise=noise))
+        logs.update(self.ddecm_trainer.train_batch(mdct_psd_normalized, audio_embeddings, ddec_cond,
+            loss_weight=loss_weight_ddecm, noise=noise, perturb_noise=perturb_noise))
 
         logs["loss"] = logs["loss"] + logs["loss/ddecp"] + logs["loss/ddecm"]
 
