@@ -59,8 +59,12 @@ class SamplingSchedule:
         return (sigma_max ** (1 / rho) + (1 - t) * (sigma_min ** (1 / rho) - sigma_max ** (1 / rho))) ** rho
         
     @staticmethod
-    def schedule_linear(t: torch.Tensor, sigma_max: float, sigma_min: float, **_) -> torch.Tensor:
+    def schedule_ln_linear(t: torch.Tensor, sigma_max: float, sigma_min: float, **_) -> torch.Tensor:
         return (np.log(sigma_min) + (np.log(sigma_max) - np.log(sigma_min)) * t).exp()
+    
+    @staticmethod
+    def schedule_linear(t: torch.Tensor, sigma_max: float, sigma_min: float, **_) -> torch.Tensor:
+        return (sigma_max - sigma_min) * t + sigma_min
     
     @staticmethod
     def schedule_cos(t: torch.Tensor, sigma_max: float, sigma_min: float, rho: float = 1., **_) -> torch.Tensor:

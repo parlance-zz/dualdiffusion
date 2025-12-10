@@ -21,7 +21,7 @@
 # SOFTWARE.
 
 from dataclasses import dataclass
-from typing import Optional, Literal
+from typing import Optional, Literal, TypeAlias
 
 import torch
 import numpy as np
@@ -30,13 +30,15 @@ from scipy.special import erf
 from modules.unets.unet import DualDiffusionUNet
 
 
+SigmaSamplerDistribution: TypeAlias = Literal["ln_normal", "ln_sech", "ln_sech^2", "ln_linear", "ln_pdf", "scale_invariant", "linear"]
+
 @dataclass
 class SigmaSamplerConfig:
 
     sigma_max: float  = 200.
     sigma_min: float  = 0.03
     sigma_data: float = 1.
-    distribution: Literal["ln_normal", "ln_sech", "ln_sech^2", "ln_linear", "ln_pdf", "scale_invariant"] = "ln_sech"
+    distribution: SigmaSamplerDistribution = "ln_sech"
     dist_scale: float  = 1.
     dist_offset: float = 0.3
     dist_pdf: Optional[torch.Tensor] = None
@@ -62,7 +64,7 @@ class SigmaSampler():
     def __init__(self, sigma_sampler_config: SigmaSamplerConfig) -> None:
         self.config = sigma_sampler_config
 
-        if self.config.distribution not in ["ln_normal", "ln_sech", "ln_sech^2", "ln_linear", "scale_invariant", "ln_pdf"]:
+        if self.config.distribution not in SigmaSamplerDistribution:
             raise ValueError(f"Invalid distribution: {self.config.distribution}")
             
         if self.config.distribution == "ln_normal":
@@ -73,6 +75,8 @@ class SigmaSampler():
             self.sample_fn = self.sample_ln_sech2
         elif self.config.distribution == "ln_linear":
             self.sample_fn = self.sample_ln_linear
+        elif self.config.distribution == "linear":
+            self.sample_fn = self.sample_linear
         elif self.config.distribution == "scale_invariant":
             self.sample_fn = self.sample_scale_invariant
         elif self.config.distribution == "ln_pdf":
@@ -153,6 +157,13 @@ class SigmaSampler():
         
         ln_sigma = quantiles * (self.config.ln_sigma_max - self.config.ln_sigma_min) + self.config.ln_sigma_min
         return ln_sigma.exp().clip(self.config.sigma_min, self.config.sigma_max)
+    
+    def sample_linear(self, n_samples: Optional[int] = None, quantiles: Optional[torch.Tensor] = None) -> torch.Tensor:
+        if quantiles is None:
+            quantiles = torch.rand(n_samples)
+        
+        sigma = quantiles * (self.config.sigma_max - self.config.sigma_min) + self.config.sigma_min
+        return sigma.clip(self.config.sigma_min, self.config.sigma_max)
     
     def _sanitize_pdf(self, pdf: torch.Tensor) -> torch.Tensor:
         max_idx = torch.argmax(pdf)
