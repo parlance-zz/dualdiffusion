@@ -43,7 +43,7 @@ from modules.mp_tools import MPConv, AdaptiveGroupBalance, mp_silu, normalize, r
 @dataclass
 class DAE_Config(DualDiffusionDAEConfig):
 
-    in_channels:  int = 1024
+    in_channels:  int = 1536
     out_channels: int = 4096
     in_channels_emb: int = 1024
     latent_channels: int = 256

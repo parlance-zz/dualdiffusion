@@ -141,7 +141,7 @@ def dae_test() -> None:
 
         # ***************** dae stage *****************
 
-        dae_input = torch.cat((input_mdct, input_mdct_psd_normalized), dim=1)
+        dae_input = torch.cat((input_mdct, input_mdct_psd_normalized, input_mel_spec), dim=1)
         dae_embedding = dae.get_embeddings(audio_embedding.to(dtype=dae.dtype))
 
         if test_params["latents_tiled_encode"] == True:
@@ -166,8 +166,8 @@ def dae_test() -> None:
 
             ddecm_params = SampleParams(
                 seed=5000,
-                num_steps=100, length=audio_len, cfg_scale=5, input_perturbation=1, input_perturbation_offset=-2,
-                use_heun=False, schedule="linear", rho=7, sigma_max=400, sigma_min=0.1, stereo_fix=0
+                num_steps=100, length=audio_len, cfg_scale=5, input_perturbation=0, input_perturbation_offset=-2,
+                use_heun=False, schedule="linear", rho=1, sigma_max=10, sigma_min=0.25, stereo_fix=0
             )
 
             output_ddecm = pipeline.diffusion_decode(
@@ -180,7 +180,7 @@ def dae_test() -> None:
             ddecp_params = SampleParams(
                 seed=5000,
                 num_steps=100, length=audio_len, cfg_scale=5, input_perturbation=1, input_perturbation_offset=100,
-                use_heun=False, schedule="linear", rho=7, sigma_max=10, sigma_min=0.1, stereo_fix=0
+                use_heun=False, schedule="cos", rho=1, sigma_max=10, sigma_min=0.1, stereo_fix=0
             )
 
             output_ddecp = pipeline.diffusion_decode(
