@@ -21,7 +21,7 @@
 # SOFTWARE.
 
 from dataclasses import dataclass
-from typing import Optional, Literal, TypeAlias
+from typing import Optional, Literal, TypeAlias, get_args
 
 import torch
 import numpy as np
@@ -64,7 +64,7 @@ class SigmaSampler():
     def __init__(self, sigma_sampler_config: SigmaSamplerConfig) -> None:
         self.config = sigma_sampler_config
 
-        if self.config.distribution not in SigmaSamplerDistribution:
+        if self.config.distribution not in get_args(SigmaSamplerDistribution):
             raise ValueError(f"Invalid distribution: {self.config.distribution}")
             
         if self.config.distribution == "ln_normal":
