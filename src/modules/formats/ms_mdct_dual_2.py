@@ -278,6 +278,26 @@ class MS_MDCT_DualFormat(DualDiffusionFormat):
         
         return mdct_psd
 
+    def raw_to_mdct_phase(self, raw_samples: torch.Tensor, random_phase_augmentation: bool = False) -> torch.Tensor:
+
+        _mclt: torch.Tensor = self.mdct(raw_samples.float())
+        if random_phase_augmentation == True:
+            phase_rotation = torch.exp(2j * torch.pi * torch.rand(_mclt.shape[0], device=_mclt.device)) 
+            _mclt *= phase_rotation.view(-1, 1, 1, 1)
+
+        mdct_phase = (_mclt.real / _mclt.abs().clip(min=1e-5)).clip(min=-1, max=1).acos()
+
+        scale_factor = 2 * 3**0.5 / torch.pi
+        return (mdct_phase - torch.pi/2) * scale_factor**2
+    
+    def mdct_phase_norm_psd_to_raw(self, mdct_phase: torch.Tensor, norm_mdct_psd: torch.Tensor) -> torch.Tensor:
+        
+        scale_factor = 2 * 3**0.5 / torch.pi
+        mdct_phase = mdct_phase / scale_factor**2 + torch.pi/2
+
+        mdct_magnitude = self.unnormalize_psd(norm_mdct_psd)
+        return self.mdct_to_raw(mdct_magnitude * mdct_phase.cos())
+    
     def mdct_psd_to_img(self, mdct_psd: torch.Tensor):
         return tensor_to_img(mdct_psd.clip(min=0).pow(0.25), flip_y=True)
 

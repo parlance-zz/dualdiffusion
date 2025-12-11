@@ -157,13 +157,15 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
         else:
             raw_samples = batch["audio"]
 
-        mdct_samples: torch.Tensor = self.format.raw_to_mdct(raw_samples, random_phase_augmentation=self.config.random_phase_augmentation)
-        mdct_samples = mdct_samples[:, :, :, self.config.crop_edges:-self.config.crop_edges].detach()
+        #mdct_samples: torch.Tensor = self.format.raw_to_mdct(raw_samples, random_phase_augmentation=self.config.random_phase_augmentation)
+        #mdct_samples = mdct_samples[:, :, :, self.config.crop_edges:-self.config.crop_edges].detach()
         mdct_psd: torch.Tensor = self.format.raw_to_mdct_psd(raw_samples)
         mdct_psd = mdct_psd[:, :, :, self.config.crop_edges:-self.config.crop_edges].detach()
-        mdct_psd_clipped = mdct_psd.clip(min=1e-4).detach()
+        #mdct_psd_clipped = mdct_psd.clip(min=1e-4).detach()
         mdct_psd_normalized = self.format.normalize_psd(mdct_psd).detach()
-        mdct_phase = (mdct_samples / (mdct_psd_clipped / 2**0.5)).detach()
+        #mdct_phase = (mdct_samples / (mdct_psd_clipped / 2**0.5)).detach()
+        mdct_phase = self.format.raw_to_mdct_phase(raw_samples, random_phase_augmentation=self.config.random_phase_augmentation)
+        mdct_phase =  mdct_phase[:, :, :, self.config.crop_edges:-self.config.crop_edges].detach()
         mel_spec = self.format.raw_to_mel_spec(raw_samples)[:, :, :, self.config.crop_edges:-self.config.crop_edges].detach()
 
         dae_input = torch.cat((mdct_phase, mdct_psd_normalized, mel_spec), dim=1)
@@ -173,9 +175,11 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
 
         if self.config.phase_invariance_loss_bsz > 0:
 
-            mdct_samples2: torch.Tensor = self.format.raw_to_mdct(raw_samples[:self.config.phase_invariance_loss_bsz], random_phase_augmentation=True)
-            mdct_samples2 = mdct_samples2[:, :, :, self.config.crop_edges:-self.config.crop_edges].detach()
-            mdct_phase2 = (mdct_samples2 / (mdct_psd_clipped[:self.config.phase_invariance_loss_bsz] / 2**0.5)).detach()
+            #mdct_samples2: torch.Tensor = self.format.raw_to_mdct(raw_samples[:self.config.phase_invariance_loss_bsz], random_phase_augmentation=True)
+            #mdct_samples2 = mdct_samples2[:, :, :, self.config.crop_edges:-self.config.crop_edges].detach()
+            #mdct_phase2 = (mdct_samples2 / (mdct_psd_clipped[:self.config.phase_invariance_loss_bsz] / 2**0.5)).detach()
+            mdct_phase2 = self.format.raw_to_mdct_phase(raw_samples[:self.config.phase_invariance_loss_bsz], random_phase_augmentation=True)
+            mdct_phase2 =  mdct_phase2[:, :, :, self.config.crop_edges:-self.config.crop_edges].detach()
             dae_input2 = torch.cat((mdct_phase2, mdct_psd_normalized[:self.config.phase_invariance_loss_bsz], mel_spec[:self.config.phase_invariance_loss_bsz]), dim=1)
             dae_embeddings2 = dae_embeddings[:self.config.phase_invariance_loss_bsz] if dae_embeddings is not None else None
             
@@ -231,7 +235,7 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
             "loss": kl_loss * kl_loss_weight,
             "io_stats/ddec_cond_var": ddec_cond.var(dim=(1,2,3)),
             "io_stats/ddec_cond_mean": ddec_cond.mean(dim=(1,2,3)),
-            "io_stats/mdct_var": mdct_samples.var(dim=(1,2,3)),
+            #"io_stats/mdct_var": mdct_samples.var(dim=(1,2,3)),
             "io_stats/mel_spec_var": mel_spec.var(dim=(1,2,3)),
             "io_stats/mel_spec_mean": mel_spec.mean(dim=(1,2,3)),
             "io_stats/latents_var": latents.var(dim=(1,2,3)).detach(),
@@ -255,8 +259,8 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
             logs["loss"] = logs["loss"] + dispersion_loss * dispersion_loss_weight
             logs["loss/latents_dispersion"] = dispersion_loss.detach()
 
-        noise = torch.randn_like(mdct_samples)
-        perturb_noise = torch.randn_like(mdct_samples)
+        noise = torch.randn_like(mdct_psd)
+        perturb_noise = torch.randn_like(mdct_psd)
 
         loss_weight_ddecp = self.loss_weight_p * mdct_psd.pow(0.25)
         logs.update(self.ddecp_trainer.train_batch(mdct_phase, audio_embeddings, ddec_cond,
@@ -272,7 +276,8 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
         logs["io_stats_ddecm/dynamic_range"] = dynamic_range_ddecm
 
         if self.trainer.config.enable_debug_mode == True:
-            print("mdct_samples.shape:", mdct_samples.shape)
+            #print("mdct_samples.shape:", mdct_samples.shape)
+            print("mdct_phase.shape:", mdct_phase.shape)
             print("mel_spec.shape:", mel_spec.shape)
             print("ddec_cond.shape:", ddec_cond.shape)
             print("latents.shape:", latents.shape)

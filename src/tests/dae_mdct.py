@@ -125,6 +125,7 @@ def dae_test() -> None:
         input_mdct_psd = format.raw_to_mdct_psd(input_raw_sample)
         input_mel_spec = format.raw_to_mel_spec(input_raw_sample)
         input_mdct_psd_normalized = format.normalize_psd(input_mdct_psd)
+        input_mdct_phase = format.raw_to_mdct_phase(input_raw_sample)
 
         safetensors_file_name = os.path.join(f"{os.path.splitext(filename)[0]}.safetensors")
         safetensors_file_path = os.path.join(dataset_path, safetensors_file_name)
@@ -141,7 +142,7 @@ def dae_test() -> None:
 
         # ***************** dae stage *****************
 
-        dae_input = torch.cat((input_mdct, input_mdct_psd_normalized, input_mel_spec), dim=1)
+        dae_input = torch.cat((input_mdct_phase, input_mdct_psd_normalized, input_mel_spec), dim=1)
         dae_embedding = dae.get_embeddings(audio_embedding.to(dtype=dae.dtype))
 
         if test_params["latents_tiled_encode"] == True:
@@ -166,7 +167,7 @@ def dae_test() -> None:
 
             ddecm_params = SampleParams(
                 seed=5000,
-                num_steps=100, length=audio_len, cfg_scale=5, input_perturbation=0, input_perturbation_offset=-2,
+                num_steps=100, length=audio_len, cfg_scale=5, input_perturbation=1, input_perturbation_offset=-1.5,
                 use_heun=False, schedule="linear", rho=1, sigma_max=10, sigma_min=0.25, stereo_fix=0
             )
 
@@ -174,8 +175,6 @@ def dae_test() -> None:
                 ddecm_params, audio_embedding=audio_embedding,
                 sample_shape=format.get_mdct_shape(raw_length=count),
                 x_ref=ddec_cond.to(dtype=ddecm.dtype), module=ddecm).float()
-            
-            output_ddecm = format.unnormalize_psd(output_ddecm)
             
             ddecp_params = SampleParams(
                 seed=5000,
@@ -188,9 +187,13 @@ def dae_test() -> None:
                 sample_shape=format.get_mdct_shape(raw_length=count),
                 x_ref=ddec_cond.to(dtype=ddecp.dtype), module=ddecp).float()
             
-            output_ddec_mdct = output_ddecp * output_ddecm / 2**0.5
-            output_raw = format.mdct_to_raw(output_ddec_mdct)
+            #output_ddecm = format.normalize_psd(input_mdct_psd)
+            #output_ddecp = input_mdct_phase
+            output_raw = format.mdct_phase_norm_psd_to_raw(output_ddecp, output_ddecm) #output_ddecp * output_ddecm / 2**0.5
+            
+            #output_raw = format.mdct_to_raw(output_ddec_mdct)
             output_mel_spec = format.raw_to_mel_spec(output_raw)
+            output_ddecm = format.unnormalize_psd(output_ddecm)
         else:
             output_raw = output_mel_spec = output_ddecm = output_ddecp = None
 
