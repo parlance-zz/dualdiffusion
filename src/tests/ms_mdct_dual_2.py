@@ -71,7 +71,7 @@ def ms_mdct_dual_format_test() -> None:
     output_path = os.path.join(config.DEBUG_PATH, "ms_mdct_dual_format_2_test")
     os.makedirs(output_path, exist_ok=True)
 
-    mdct_avg_bin_var = torch.zeros_like(format.mdct_mel_density.flatten())
+    mdct_phase_avg_bin_var = torch.zeros_like(format.mdct_mel_density.flatten())
 
     stat_logger = StatLogger()
     print(f"\nNum test_samples: {len(test_samples)}\n")
@@ -91,14 +91,10 @@ def ms_mdct_dual_format_test() -> None:
         mel_spec = format.raw_to_mel_spec(raw_sample)
         mel_spec_linear = format.mel_spec_to_linear(mel_spec)
 
-        mdct = format.raw_to_mdct(raw_sample)
-        mdct_psd = format.raw_to_mdct_psd(raw_sample)
-        raw_sample_mdct = format.mdct_to_raw(mdct)
+        mdct_phase, mdct_psd = format.raw_to_mdct_phase_psd(raw_sample)
+        raw_sample_mdct = format.mdct_phase_psd_to_raw(mdct_phase, mdct_psd)
 
-        norm_mdct_psd = format.normalize_psd(mdct_psd)
-        unnorm_mdct_psd = format.unnormalize_psd(norm_mdct_psd)
-
-        mdct_avg_bin_var += mdct.var(dim=(0,1,3)) / len(test_samples)
+        mdct_phase_avg_bin_var += mdct_phase.var(dim=(0,1,3)) / len(test_samples)
         stat_logger.add_logs({
             "raw_sample_var": raw_sample.var(),
             "raw_sample_mdct_var": raw_sample_mdct.var(),
@@ -106,20 +102,16 @@ def ms_mdct_dual_format_test() -> None:
             "mel_spec_mean": mel_spec.mean(),
             "mel_spec_linear_var": mel_spec_linear.var(),
             "mel_spec_linear_mean": mel_spec_linear.mean(),
-            "mdct_var": mdct.var(),
+            "mdct_phase_var": mdct_phase.var(),
             "mdct_psd_var": mdct_psd.var(),
             "mdct_psd_mean": mdct_psd.mean(),
-            "norm_mdct_psd_var": norm_mdct_psd.var(),
-            "norm_mdct_psd_mean": norm_mdct_psd.mean(),
-            "unnorm_mdct_psd_var": unnorm_mdct_psd.var(),
-            "unnorm_mdct_psd_mean": unnorm_mdct_psd.mean(),
         })
 
         if cfg.test_sample_verbose == True:
             print("raw_sample:", tensor_info_str(raw_sample))
             print("mel_spec:", tensor_info_str(mel_spec), f"(target shape: {format.get_mel_spec_shape(raw_length=raw_length)}")
-            print("mdct:", tensor_info_str(mdct), f"(target shape: {format.get_mdct_shape(raw_length=raw_length)}")
             print("mel_spec_linear:", tensor_info_str(mel_spec_linear))
+            print("mdct_phase:", tensor_info_str(mdct_phase), f"(target shape: {format.get_mdct_shape(raw_length=raw_length)}")
             print("mdct_psd:", tensor_info_str(mdct_psd))
             print("raw_sample_mdct:", tensor_info_str(raw_sample_mdct), "\n")
 
@@ -148,9 +140,9 @@ def ms_mdct_dual_format_test() -> None:
         save_img(format.mdct_psd_to_img(mdct_psd), mdct_psd_output_path)
         print(f"Saved mdct_psd img to {mdct_psd_output_path}")
 
-    print(f"\nAverage MDCT bin var (var variance: {mdct_avg_bin_var.var().item()}):")
-    print(mdct_avg_bin_var)
-    mdct_avg_bin_var.cpu().numpy().tofile(os.path.join(output_path, "mdct_avg_bin_var.raw"))
+    print(f"\nAverage MDCT bin var (var variance: {mdct_phase_avg_bin_var.var().item()}):")
+    print(mdct_phase_avg_bin_var)
+    mdct_phase_avg_bin_var.cpu().numpy().tofile(os.path.join(output_path, "mdct_avg_bin_var.raw"))
 
     print("\nAverage stats:")
     print(dict_str(stat_logger.get_logs()))

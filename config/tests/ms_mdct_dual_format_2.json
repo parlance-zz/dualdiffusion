@@ -1,7 +1,7 @@
 {
     "device": "cuda",
-    "add_random_test_samples": 2000,
-    "save_output": false,
+    "add_random_test_samples": 0,
+    "save_output": true,
     
     "test_sample_verbose": false,
     "test_samples": [
@@ -16,11 +16,11 @@
         "num_raw_channels": 2,
         "default_raw_length": 1408768,
       
-        "mdct_to_raw_scale": 1,
-        "raw_to_mdct_scale": 263.776329,
-        "mdct_psd_scale": 0.2985,//1.1892,
-        "mdct_psd_offset": -0.713,//-0.693,
+        "mdct_psd_scale": 0.06622,
+        "mdct_psd_offset": -0.12117,
         "mdct_psd_exponent": 0.25,
+        "mdct_phase_scale": 0.0969,
+
         "mdct_window_len": 512,
         "mdct_window_func": "sin",
       

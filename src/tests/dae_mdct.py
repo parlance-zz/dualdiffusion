@@ -121,11 +121,9 @@ def dae_test() -> None:
         count = format.get_raw_crop_width(raw_length=min(length, audio_len))
         source_raw_sample = load_audio(file_path, count=count)
         input_raw_sample = source_raw_sample.unsqueeze(0).to(format.device)
-        input_mdct = format.raw_to_mdct(input_raw_sample)
-        input_mdct_psd = format.raw_to_mdct_psd(input_raw_sample)
+        
+        input_mdct_phase, input_mdct_psd = format.raw_to_mdct_phase_psd(input_raw_sample)
         input_mel_spec = format.raw_to_mel_spec(input_raw_sample)
-        input_mdct_psd_normalized = format.normalize_psd(input_mdct_psd)
-        input_mdct_phase = format.raw_to_mdct_phase(input_raw_sample)
 
         safetensors_file_name = os.path.join(f"{os.path.splitext(filename)[0]}.safetensors")
         safetensors_file_path = os.path.join(dataset_path, safetensors_file_name)
@@ -142,11 +140,11 @@ def dae_test() -> None:
 
         # ***************** dae stage *****************
 
-        dae_input = torch.cat((input_mdct_phase, input_mdct_psd_normalized, input_mel_spec), dim=1)
+        dae_input = torch.cat((input_mdct_phase, input_mdct_psd), dim=1)
         dae_embedding = dae.get_embeddings(audio_embedding.to(dtype=dae.dtype))
 
         if test_params["latents_tiled_encode"] == True:
-            latents = dae.tiled_encode(input_mdct.to(dtype=dae.dtype), dae_embedding,
+            latents = dae.tiled_encode(dae_input.to(dtype=dae.dtype), dae_embedding,
                 max_chunk=test_params["latents_tiled_max_chunk_size"], overlap=test_params["latents_tiled_overlap"])
         else:
             latents = dae.encode(dae_input.to(dtype=dae.dtype), dae_embedding).float()
@@ -167,8 +165,8 @@ def dae_test() -> None:
 
             ddecm_params = SampleParams(
                 seed=5000,
-                num_steps=100, length=audio_len, cfg_scale=5, input_perturbation=1, input_perturbation_offset=-1.5,
-                use_heun=False, schedule="linear", rho=1, sigma_max=10, sigma_min=0.25, stereo_fix=0
+                num_steps=100, length=audio_len, cfg_scale=5, input_perturbation=1, input_perturbation_offset=-2.5,
+                use_heun=False, schedule="cos", rho=7.4, sigma_max=100, sigma_min=0.01, stereo_fix=0
             )
 
             output_ddecm = pipeline.diffusion_decode(
@@ -179,7 +177,7 @@ def dae_test() -> None:
             ddecp_params = SampleParams(
                 seed=5000,
                 num_steps=100, length=audio_len, cfg_scale=5, input_perturbation=1, input_perturbation_offset=100,
-                use_heun=False, schedule="cos", rho=1, sigma_max=10, sigma_min=0.1, stereo_fix=0
+                use_heun=False, schedule="cos", rho=1, sigma_max=50, sigma_min=0.02, stereo_fix=0
             )
 
             output_ddecp = pipeline.diffusion_decode(
@@ -187,17 +185,14 @@ def dae_test() -> None:
                 sample_shape=format.get_mdct_shape(raw_length=count),
                 x_ref=ddec_cond.to(dtype=ddecp.dtype), module=ddecp).float()
             
-            #output_ddecm = format.normalize_psd(input_mdct_psd)
+            #output_ddecm = input_mdct_psd
             #output_ddecp = input_mdct_phase
-            output_raw = format.mdct_phase_norm_psd_to_raw(output_ddecp, output_ddecm) #output_ddecp * output_ddecm / 2**0.5
-            
-            #output_raw = format.mdct_to_raw(output_ddec_mdct)
+            output_raw = format.mdct_phase_psd_to_raw(output_ddecp, output_ddecm)
             output_mel_spec = format.raw_to_mel_spec(output_raw)
-            output_ddecm = format.unnormalize_psd(output_ddecm)
         else:
             output_raw = output_mel_spec = output_ddecm = output_ddecp = None
 
-        print(f"input_mdct   mean/std: {input_mdct.mean().item():.4} {input_mdct.std().item():.4}")
+        #print(f"input_mdct   mean/std: {input_mdct.mean().item():.4} {input_mdct.std().item():.4}")
         print(f"ddec_cond    mean/std: {ddec_cond.mean().item():.4} {ddec_cond.std().item():.4}")
         if latents is not None:
             latents_mean = latents.mean().item()
