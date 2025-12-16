@@ -53,6 +53,8 @@ class DiffusionDecoder_Trainer_Config(ModuleTrainerConfig):
     kl_loss_weight: float = 3e-2
     kl_warmup_steps: int  = 2000
 
+    phase_loss_multiplier: float = 1
+
     phase_invariance_loss_weight: float = 0
     phase_invariance_loss_bsz: int = -0
     latents_dispersion_loss_weight: float = 0
@@ -251,7 +253,7 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
 
         logs.update(self.ddecp_trainer.train_batch(mdct_phase, audio_embeddings, ddec_cond, noise=noise, perturb_noise=perturb_noise))
         logs.update(self.ddecm_trainer.train_batch(mdct_psd, audio_embeddings, ddec_cond, noise=noise, perturb_noise=perturb_noise))
-        logs["loss"] = logs["loss"] + logs["loss/ddecp"] + logs["loss/ddecm"]
+        logs["loss"] = logs["loss"] + logs["loss/ddecp"] * self.config.phase_loss_multiplier + logs["loss/ddecm"]
 
         dynamic_range_ddecm = mdct_psd.amax(dim=(1,2,3)) - mdct_psd.amin(dim=(1,2,3))
         logs["io_stats_ddecm/dynamic_range"] = dynamic_range_ddecm

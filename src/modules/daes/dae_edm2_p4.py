@@ -57,7 +57,7 @@ class DAE_Config(DualDiffusionDAEConfig):
     attn_logit_scale: float   = 1
     num_enc_layers: int       = 6
     num_dec_layers_per_block: int = 2        # Number of resnet blocks per resolution.
-    balance_logits_offset: float = -1.5
+    balance_logits_offset: float = -1.75
     mlp_multiplier: int    = 2               # Multiplier for the number of channels in the MLP.
     mlp_groups: int        = 64              # Number of groups for the MLPs.
     emb_linear_groups: int = 64

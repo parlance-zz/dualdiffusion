@@ -87,7 +87,8 @@ def ms_mdct_dual_format_test() -> None:
         raw_length = min(get_audio_info(file_path).frames, cfg.format_config.default_raw_length)
         crop_width = format.get_raw_crop_width(raw_length)
 
-        raw_sample = load_audio(file_path, count=crop_width).unsqueeze(0).to(cfg.device)
+        start = -1 if cfg.save_output == False else 0
+        raw_sample = load_audio(file_path, start=start, count=crop_width).unsqueeze(0).to(cfg.device)
         mel_spec = format.raw_to_mel_spec(raw_sample)
         mel_spec_linear = format.mel_spec_to_linear(mel_spec)
 

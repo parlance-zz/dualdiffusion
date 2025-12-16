@@ -177,7 +177,7 @@ def dae_test() -> None:
             ddecp_params = SampleParams(
                 seed=5000,
                 num_steps=100, length=audio_len, cfg_scale=5, input_perturbation=1, input_perturbation_offset=100,
-                use_heun=False, schedule="cos", rho=1, sigma_max=50, sigma_min=0.02, stereo_fix=0
+                use_heun=False, schedule="cos", rho=1.34, sigma_max=100, sigma_min=0.01, stereo_fix=0
             )
 
             output_ddecp = pipeline.diffusion_decode(

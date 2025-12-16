@@ -40,10 +40,10 @@ class MS_MDCT_DualFormatConfig(DualDiffusionFormatConfig):
     default_raw_length: int = 1408768
 
     # mdct params
-    mdct_psd_scale: float  = 0.06622
-    mdct_psd_offset: float = -0.12117
+    mdct_psd_scale: float  = 0.0735479
+    mdct_psd_offset: float = -0.1766380342579693
     mdct_psd_exponent: float = 0.25
-    mdct_phase_scale: float  = 0.0969
+    mdct_phase_scale: float  = 0.0756760
 
     mdct_window_len: int = 512
     mdct_window_func: Literal["sin", "kaiser_bessel_derived", "vorbis"] = "sin"
@@ -271,17 +271,26 @@ class MS_MDCT_DualFormat(DualDiffusionFormat):
         mdct_psd = mdct_psd.pow(self.config.mdct_psd_exponent)
         mdct_phase = mdct_phase * mdct_psd
 
+        mdct_psd = mdct_psd / self.mdct_mel_density.pow(0.25)
+        mdct_phase = mdct_phase * self.mdct_mel_density.pow(0.5)
+
         return self.normalize_phase(mdct_phase), self.normalize_psd(mdct_psd)
     
     def mdct_phase_psd_to_raw(self, mdct_phase: torch.Tensor, mdct_psd: torch.Tensor) -> torch.Tensor:
 
-        mdct = self.unnormalize_phase(mdct_phase) * self.unnormalize_psd(mdct_psd).clip(min=0).pow(1 / self.config.mdct_psd_exponent - 1)
-        raw_samples = self.imdct(mdct).real.contiguous()
+        mdct_psd = self.unnormalize_psd(mdct_psd)
+        mdct_phase = self.unnormalize_phase(mdct_phase)
+
+        mdct_psd = mdct_psd * self.mdct_mel_density.pow(0.25)
+        mdct_phase = mdct_phase / self.mdct_mel_density.pow(0.5)
+
+        mdct_psd = mdct_psd.clip(min=0).pow(1 / self.config.mdct_psd_exponent - 1)
+        raw_samples = self.imdct(mdct_phase * mdct_psd).real.contiguous()
         return raw_samples
     
     def mdct_psd_to_img(self, mdct_psd: torch.Tensor):
         mdct_psd = self.unnormalize_psd(mdct_psd).clip(min=0).pow(0.25 / self.config.mdct_psd_exponent)
-        return tensor_to_img(mdct_psd / self.mdct_mel_density.pow(0.25), flip_y=True)
+        return tensor_to_img(mdct_psd, flip_y=True)
 
 
 if __name__ == "__main__":
