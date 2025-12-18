@@ -826,6 +826,7 @@ class DualDiffusionTrainer:
                 self.logger.error("".join(format_exception(type(e), e, e.__traceback__)))
                 self.logger.error(f"Error removing old checkpoints: {e}")
 
+        self.logger.info("Checkpointing complete - Resuming Training...")
         self.last_checkpoint_time = datetime.now()
 
     def load_checkpoint(self) -> None:
