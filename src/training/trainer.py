@@ -1172,17 +1172,6 @@ class DualDiffusionTrainer:
                         if (datetime.now() - self.last_checkpoint_time).total_seconds() >= self.config.min_checkpoint_time:
                             _save_checkpoint = True
 
-                    # temporary hack for adjusting learn rates without reload
-                    _inc_t_path = os.path.join(self.config.model_path, "_inc_t")
-                    if os.path.isfile(_inc_t_path):
-                        os.remove(_inc_t_path)
-                        self.lr_scheduler.scheduler.base_lrs[0] *= 1.05
-
-                    _dec_t_path = os.path.join(self.config.model_path, "_dec_t")
-                    if os.path.isfile(_dec_t_path):
-                        os.remove(_dec_t_path)
-                        self.lr_scheduler.scheduler.base_lrs[0] /= 1.05
-
                     # saves a checkpoint immediately if a file named "_save_checkpoint" is found in the model path
                     _save_checkpoint_path = os.path.join(self.config.model_path, "_save_checkpoint")
                     if os.path.isfile(_save_checkpoint_path): _save_checkpoint = True
@@ -1191,6 +1180,7 @@ class DualDiffusionTrainer:
                         if os.path.isfile(_save_checkpoint_path):
                             os.remove(_save_checkpoint_path)
                         last_sync_time = datetime.now() # exclude checkpoint saving time from train total time
+                        progress_bar.refresh()
             else:
                 assert False, "finished local_batch but accelerator.sync_gradients isn't True"
             
