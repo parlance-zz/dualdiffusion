@@ -162,7 +162,9 @@ class SigmaSampler():
         if quantiles is None:
             quantiles = torch.rand(n_samples)
         
-        sigma = quantiles * (self.config.sigma_max - self.config.sigma_min) + self.config.sigma_min
+        sigma = quantiles * (self.config.sigma_max**(1/self.config.dist_scale) - self.config.sigma_min**(1/self.config.dist_scale)) + self.config.sigma_min**(1/self.config.dist_scale)
+        sigma = sigma.pow(self.config.dist_scale)
+        
         return sigma.clip(self.config.sigma_min, self.config.sigma_max)
     
     def _sanitize_pdf(self, pdf: torch.Tensor) -> torch.Tensor:
