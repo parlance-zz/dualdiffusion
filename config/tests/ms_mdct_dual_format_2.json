@@ -1,6 +1,6 @@
 {
     "device": "cuda",
-    "add_random_test_samples": 15000,
+    "add_random_test_samples": 1000,
     "save_output": false,
     
     "test_sample_verbose": false,
@@ -14,19 +14,22 @@
     "format_config": {
         "sample_rate": 32000,
         "num_raw_channels": 2,
-        "default_raw_length": 128000, //1408768,
-      
-        "mdct_psd_scale": 0.071818319715358169886,
-        "mdct_psd_offset": -0.18079070479171344,
+        //"default_raw_length": 1408768,
+        "default_raw_length": 128000,
+        
+        "raw_to_mdct_scale": 0.00395184212251821011433253029603,
+
+        "mdct_psd_scale": 0.07177791091357421918095794407989,
+        "mdct_psd_offset": -0.18079235827096612,
         "mdct_psd_exponent": 0.25,
-        "mdct_phase_scale": 0.06569177947889,
+        "mdct_phase_scale": 0.14088231005735267613340053318382,
 
         "mdct_window_len": 512,
         "mdct_window_func": "sin",
       
-        "raw_to_mel_spec_scale": 2,
-        "raw_to_mel_spec_offset": -3,
-        "mel_spec_to_linear_scale":  0.07,
+        "raw_to_mel_spec_scale": 0.48426373582064460631823114952103,
+        "raw_to_mel_spec_offset": -1.5301612771122777,
+        "mel_spec_to_linear_scale":  18.995056282874833851024929164595,
         "mel_spec_to_linear_offset": 0,
 
         "ms_abs_exponent": 0.25,

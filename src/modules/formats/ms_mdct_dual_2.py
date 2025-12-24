@@ -40,10 +40,12 @@ class MS_MDCT_DualFormatConfig(DualDiffusionFormatConfig):
     default_raw_length: int = 1408768
 
     # mdct params
-    mdct_psd_scale: float  = 0.0735479
-    mdct_psd_offset: float = -0.1766380342579693
+    raw_to_mdct_scale: float = 0.00395184212251821011433253029603
+
+    mdct_psd_scale: float  = 0.07177791091357421918095794407989
+    mdct_psd_offset: float = -0.18079235827096612
     mdct_psd_exponent: float = 0.25
-    mdct_phase_scale: float  = 0.0756760
+    mdct_phase_scale: float  = 0.14088231005735267613340053318382
 
     mdct_window_len: int = 512
     mdct_window_func: Literal["sin", "kaiser_bessel_derived", "vorbis"] = "sin"
@@ -57,10 +59,10 @@ class MS_MDCT_DualFormatConfig(DualDiffusionFormatConfig):
         return self.mdct_window_len // 2
 
     # mel-spec params
-    raw_to_mel_spec_scale: float  = 2
-    raw_to_mel_spec_offset: float = -3
+    raw_to_mel_spec_scale: float  = 0.48426373582064460631823114952103
+    raw_to_mel_spec_offset: float = -1.5301612771122777
 
-    mel_spec_to_linear_scale: float  = 0.07
+    mel_spec_to_linear_scale: float  = 18.995056282874833851024929164595
     mel_spec_to_linear_offset: float = 0
 
     ms_abs_exponent: float = 0.25
@@ -212,17 +214,15 @@ class MS_MDCT_DualFormat(DualDiffusionFormat):
             if ms_blended is None: ms_blended = mel_spec
             else: ms_blended += mel_spec
         
-        return ms_blended ** self.config.ms_abs_exponent * self.config.raw_to_mel_spec_scale + self.config.raw_to_mel_spec_offset
+        return (ms_blended ** self.config.ms_abs_exponent + self.config.raw_to_mel_spec_offset) / self.config.raw_to_mel_spec_scale
     
     @torch.no_grad()
     def mel_spec_to_linear(self, mel_spec: torch.Tensor) -> torch.Tensor:
-        ms_linear = ((mel_spec - self.config.raw_to_mel_spec_offset) / self.config.raw_to_mel_spec_scale).clip(min=0) ** (1 / self.config.ms_abs_exponent)
-        return ms_linear * self.config.mel_spec_to_linear_scale + self.config.mel_spec_to_linear_offset
+        ms_linear = (mel_spec * self.config.raw_to_mel_spec_scale - self.config.raw_to_mel_spec_offset).clip(min=0) ** (1 / self.config.ms_abs_exponent)
+        return (ms_linear + self.config.mel_spec_to_linear_offset) / self.config.mel_spec_to_linear_scale
 
     @torch.inference_mode()
-    def mel_spec_to_img(self, mel_spec: torch.Tensor, use_colormap: bool = False, exponent: float = 0.3):
-        mel_spec = (mel_spec - self.config.raw_to_mel_spec_offset) / self.config.raw_to_mel_spec_scale
-        mel_spec = mel_spec.clip(min=0)**(exponent / self.config.ms_abs_exponent)
+    def mel_spec_to_img(self, mel_spec: torch.Tensor, use_colormap: bool = False):
         if use_colormap == True:
             return tensor_to_img(mel_spec.mean(dim=(0,1)), flip_y=True, colormap=True)
         else:
@@ -230,7 +230,6 @@ class MS_MDCT_DualFormat(DualDiffusionFormat):
     
     @torch.inference_mode()
     def mel_spec_linear_to_img(self, mel_spec_linear: torch.Tensor):
-        mel_spec_linear = (mel_spec_linear - self.config.mel_spec_to_linear_offset) / self.config.mel_spec_to_linear_scale
         return tensor_to_img(mel_spec_linear.clip(min=0), flip_y=True)
 
     # **************** mdct methods ****************
@@ -245,6 +244,22 @@ class MS_MDCT_DualFormat(DualDiffusionFormat):
         num_mdct_bins = self.config.mdct_num_frequencies
         num_mdct_frames = raw_crop_width // num_mdct_bins + 1
         return (bsz, self.config.num_raw_channels, num_mdct_bins, num_mdct_frames,)
+    
+    def raw_to_mdct(self, raw_samples: torch.Tensor, random_phase_augmentation: bool = False) -> torch.Tensor:
+
+        _mclt: torch.Tensor = self.mdct(raw_samples.float())
+        if random_phase_augmentation == True:
+            phase_rotation = torch.exp(2j * torch.pi * torch.rand(_mclt.shape[0], device=_mclt.device)) 
+            _mclt *= phase_rotation.view(-1, 1, 1, 1)
+
+        return _mclt.real.contiguous() / self.mdct_mel_density / self.config.raw_to_mdct_scale
+    
+    def mdct_to_raw(self, mdct: torch.Tensor) -> torch.Tensor:
+
+        mdct = mdct * self.mdct_mel_density * self.config.raw_to_mdct_scale
+        raw_samples = self.imdct(mdct).real.contiguous()
+        
+        return raw_samples
     
     def normalize_psd(self, mdct_psd: torch.Tensor) -> torch.Tensor:
         return (mdct_psd + self.config.mdct_psd_offset) / self.config.mdct_psd_scale
@@ -268,11 +283,8 @@ class MS_MDCT_DualFormat(DualDiffusionFormat):
         mdct_psd = _mclt.abs()
         mdct_phase = (_mclt.real / mdct_psd.clip(min=1e-20)).clip(min=-1, max=1)
 
-        mdct_psd = mdct_psd.pow(self.config.mdct_psd_exponent)
+        mdct_psd = mdct_psd.pow(self.config.mdct_psd_exponent) / self.mdct_mel_density.pow(0.25)
         mdct_phase = mdct_phase * mdct_psd
-
-        mdct_psd = mdct_psd / self.mdct_mel_density.pow(0.25)
-        mdct_phase = mdct_phase * self.mdct_mel_density.pow(0.5)
 
         return self.normalize_phase(mdct_phase), self.normalize_psd(mdct_psd)
     
@@ -281,15 +293,15 @@ class MS_MDCT_DualFormat(DualDiffusionFormat):
         mdct_psd = self.unnormalize_psd(mdct_psd)
         mdct_phase = self.unnormalize_phase(mdct_phase)
 
+        mdct_phase = mdct_phase * self.mdct_mel_density.pow(0.25)
         mdct_psd = mdct_psd * self.mdct_mel_density.pow(0.25)
-        mdct_phase = mdct_phase / self.mdct_mel_density.pow(0.5)
-
         mdct_psd = mdct_psd.clip(min=0).pow(1 / self.config.mdct_psd_exponent - 1)
+
         raw_samples = self.imdct(mdct_phase * mdct_psd).real.contiguous()
         return raw_samples
     
+    @torch.no_grad()
     def mdct_psd_to_img(self, mdct_psd: torch.Tensor):
-        mdct_psd = self.unnormalize_psd(mdct_psd).clip(min=0).pow(0.25 / self.config.mdct_psd_exponent)
         return tensor_to_img(mdct_psd, flip_y=True)
 
 
@@ -317,7 +329,6 @@ if __name__ == "__main__":
     
     _ms_windows = format.ms_windows / format.ms_windows.amax(dim=1, keepdim=True)
     _ms_windows.cpu().numpy().tofile(os.path.join(output_path, f"ms_windows.raw"))
-    #exit()
 
     ms_filters = format.ms_filters
     ms_filters.T.cpu().numpy().tofile(os.path.join(output_path, f"ms_filters.raw"))

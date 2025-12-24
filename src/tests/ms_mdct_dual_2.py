@@ -92,6 +92,7 @@ def ms_mdct_dual_format_test() -> None:
         mel_spec = format.raw_to_mel_spec(raw_sample)
         mel_spec_linear = format.mel_spec_to_linear(mel_spec)
 
+        mdct = format.raw_to_mdct(raw_sample)
         mdct_phase, mdct_psd = format.raw_to_mdct_phase_psd(raw_sample)
         raw_sample_mdct = format.mdct_phase_psd_to_raw(mdct_phase, mdct_psd)
 
@@ -103,6 +104,8 @@ def ms_mdct_dual_format_test() -> None:
             "mel_spec_mean": mel_spec.mean(),
             "mel_spec_linear_var": mel_spec_linear.var(),
             "mel_spec_linear_mean": mel_spec_linear.mean(),
+            "mel_spec_linear_mean_square": mel_spec_linear.square().mean(),
+            "mdct_var": mdct.var(),
             "mdct_phase_var": mdct_phase.var(),
             "mdct_psd_var": mdct_psd.var(),
             "mdct_psd_mean": mdct_psd.mean(),
