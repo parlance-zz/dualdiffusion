@@ -29,7 +29,7 @@ import numpy as np
 from training.sigma_sampler import SigmaSamplerConfig, SigmaSampler
 from training.trainer import DualDiffusionTrainer
 from training.module_trainers.module_trainer import ModuleTrainerConfig, ModuleTrainer
-from modules.unets.unet import DualDiffusionUNet
+from modules.unets.unet_edm2_p4_ddec import UNet
 from utils.dual_diffusion_utils import dict_str
 
 
@@ -55,10 +55,52 @@ class UNetTrainerConfig(ModuleTrainerConfig):
     input_perturbation: float   = 0.1
     conditioning_dropout: float = 0.1
 
+class UNetLossBuckets(torch.nn.Module):
+
+    def __init__(self, num_buckets: int, sigma_min: float, sigma_max: float, trainer: DualDiffusionTrainer, log_prefix: str = "ddec") -> None:
+        super().__init__()
+
+        self.num_buckets = num_buckets
+        self.sigma_min = sigma_min
+        self.sigma_max = sigma_max
+        self.log_prefix = log_prefix
+        self.trainer = trainer
+
+        self.loss_buckets: torch.Tensor; self.loss_bucket_counts: torch.Tensor
+        self.register_buffer("loss_buckets", torch.zeros(num_buckets, dtype=torch.float32))
+        self.register_buffer("loss_bucket_counts", torch.zeros(num_buckets, dtype=torch.float32))
+
+        bucket_sigma = torch.linspace(np.log(self.sigma_min), np.log(self.sigma_max), self.num_buckets + 1).exp()
+        bucket_sigma[0] = 0; bucket_sigma[-1] = float("inf")
+
+        self.bucket_names = [f"{log_prefix}_loss_σ_buckets/{bucket_sigma[i]:.4f} - {bucket_sigma[i+1]:.4f}" for i in range(num_buckets)]
+
+    def log_buckets(self, loss: torch.Tensor, sigma: torch.Tensor) -> None:
+        
+        global_loss = self.trainer.accelerator.gather(loss.detach()).cpu()
+        sigma_quantiles = (sigma.detach().log().cpu() - np.log(self.sigma_min)) / (np.log(self.sigma_max) - np.log(self.sigma_min))
+        
+        target_buckets = (sigma_quantiles * self.loss_buckets.shape[0]).long().clip(min=0, max=self.loss_buckets.shape[0] - 1)
+        self.loss_buckets.index_add_(0, target_buckets, global_loss)
+        self.loss_bucket_counts.index_add_(0, target_buckets, torch.ones_like(global_loss))
+
+    def clear(self) -> None:
+        self.loss_buckets.zero_()
+        self.loss_bucket_counts.zero_()
+
+    def get_logs(self) -> dict[str, float]:
+        logs = {}
+
+        for i in range(self.num_buckets):
+            if self.loss_bucket_counts[i].item() > 0:
+                logs[self.bucket_names[i]] = (self.loss_buckets[i] / self.loss_bucket_counts[i]).item()
+
+        return logs
+
 class UNetTrainer(ModuleTrainer):
     
     @torch.no_grad()
-    def __init__(self, config: UNetTrainerConfig, trainer: DualDiffusionTrainer, unet: DualDiffusionUNet, flavor: str) -> None:
+    def __init__(self, config: UNetTrainerConfig, trainer: DualDiffusionTrainer, unet: UNet, flavor: str) -> None:
 
         self.config = config
         self.trainer = trainer
@@ -71,17 +113,13 @@ class UNetTrainer(ModuleTrainer):
     
         if self.config.num_loss_buckets > 0: # buckets for sigma-range-specific loss tracking
             self.logger.info(f"Using {self.config.num_loss_buckets} loss buckets")
-            self.unet_loss_buckets = torch.zeros(
-                self.config.num_loss_buckets, device="cpu", dtype=torch.float32)
-            self.unet_loss_bucket_counts = torch.zeros(
-                self.config.num_loss_buckets, device="cpu", dtype=torch.float32)
-            
-            bucket_sigma = torch.linspace(np.log(self.config.loss_buckets_sigma_min),
-                np.log(self.config.loss_buckets_sigma_max), self.config.num_loss_buckets + 1).exp()
-            bucket_sigma[0] = 0; bucket_sigma[-1] = float("inf")
-
-            self.bucket_names = [f"{flavor}_loss_σ_buckets/{bucket_sigma[i]:.4f} - {bucket_sigma[i+1]:.4f}"
-                                 for i in range(self.config.num_loss_buckets)]
+            self.unet_loss_buckets = UNetLossBuckets(
+                num_buckets=self.config.num_loss_buckets,
+                sigma_min=self.config.loss_buckets_sigma_min,
+                sigma_max=self.config.loss_buckets_sigma_max,
+                trainer=trainer,
+                log_prefix=f"{flavor}"
+            )
         else:
             self.logger.info("UNet loss buckets are disabled")
 
@@ -122,8 +160,7 @@ class UNetTrainer(ModuleTrainer):
 
         # reset sigma-bucketed loss for new batch
         if self.config.num_loss_buckets > 0:
-            self.unet_loss_buckets.zero_()
-            self.unet_loss_bucket_counts.zero_()
+            self.unet_loss_buckets.clear()
 
         # if using dynamic sigma sampling with ln_pdf, update the pdf using the learned per-sigma error estimate
         if self.config.sigma_distribution == "ln_pdf":
@@ -176,15 +213,8 @@ class UNetTrainer(ModuleTrainer):
         error_logvar = self.unet.get_sigma_loss_logvar(sigma=batch_sigma)
         batch_loss = batch_weighted_loss / error_logvar.exp() + error_logvar
         
-        if self.config.num_loss_buckets > 0: # log loss bucketed by noise level range
-
-            global_weighted_loss = self.trainer.accelerator.gather(batch_weighted_loss.detach()).cpu()
-            global_sigma_quantiles = (batch_sigma.detach().log().cpu() - np.log(self.config.loss_buckets_sigma_min)) / (
-                np.log(self.config.loss_buckets_sigma_max) - np.log(self.config.loss_buckets_sigma_min))
-            
-            target_buckets = (global_sigma_quantiles * self.unet_loss_buckets.shape[0]).long().clip(min=0, max=self.unet_loss_buckets.shape[0] - 1)
-            self.unet_loss_buckets.index_add_(0, target_buckets, global_weighted_loss)
-            self.unet_loss_bucket_counts.index_add_(0, target_buckets, torch.ones_like(global_weighted_loss))
+        if self.config.num_loss_buckets > 0:
+            self.unet_loss_buckets.log_buckets(batch_weighted_loss, batch_sigma)
 
         return {
             f"loss/{self.flavor}": batch_loss,
@@ -194,12 +224,8 @@ class UNetTrainer(ModuleTrainer):
     
     @torch.no_grad()
     def finish_batch(self) -> Optional[dict[str, Union[torch.Tensor, float]]]:
-        logs = {}
 
-        # added sigma-bucketed loss to logs
         if self.config.num_loss_buckets > 0:
-            for i in range(self.config.num_loss_buckets):
-                if self.unet_loss_bucket_counts[i].item() > 0:
-                    logs[self.bucket_names[i]] = (self.unet_loss_buckets[i] / self.unet_loss_bucket_counts[i]).item()
-
-        return logs
+            return self.unet_loss_buckets.get_logs()
+        
+        return None
