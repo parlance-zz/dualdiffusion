@@ -215,6 +215,7 @@ class TrainerPersistentState:
     total_train_hours: float = 0
     grad_norm_logmean: float = 0
     grad_norm_logvar: float = 0
+    ext_state: Optional[dict[str, Any]] = None
 
 class DualDiffusionTrainer:
 
