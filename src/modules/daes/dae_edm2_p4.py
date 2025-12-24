@@ -43,8 +43,8 @@ from modules.mp_tools import MPConv, AdaptiveGroupBalance, mp_silu, normalize, r
 @dataclass
 class DAE_Config(DualDiffusionDAEConfig):
 
-    in_channels:  int = 1024
-    out_channels: int = 4096
+    in_channels:  int = 512
+    out_channels: int = 512
     in_channels_emb: int = 1024
     latent_channels: int = 256
     in_num_freqs: int = 256
@@ -72,9 +72,13 @@ class LatentStatsTracker(torch.nn.Module):
         
         self.mean: torch.Tensor
         self.register_buffer("mean", torch.zeros(num_channels))
-
         self.var: torch.Tensor
         self.register_buffer("var", torch.ones(num_channels))
+
+        self.global_mean: torch.Tensor
+        self.register_buffer("global_mean", torch.zeros(1))
+        self.global_var: torch.Tensor
+        self.register_buffer("global_var", torch.ones(1))
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
 
@@ -83,9 +87,13 @@ class LatentStatsTracker(torch.nn.Module):
 
             per_channel_mean = dx.mean(dim=(0,2,3))
             self.mean.lerp_(per_channel_mean, 1. - self.momentum)
-
             per_channel_var = dx.var(dim=(0,2,3))
             self.var.lerp_(per_channel_var, 1. - self.momentum)
+
+            global_mean = dx.mean()
+            self.global_mean.lerp_(global_mean, 1. - self.momentum)
+            global_var = dx.var()
+            self.global_var.lerp_(global_var, 1. - self.momentum)
 
         return x
     
@@ -326,8 +334,7 @@ class DAE(DualDiffusionDAE):
         latents = torch.nn.functional.avg_pool2d(latents, (1, self.downsample_ratio))
 
         self.latents_stats_tracker(latents)
-        #x = self.latents_stats_tracker.remove_mean(latents)
-        #x = self.latents_stats_tracker.unscale(latents)
+        
         return latents
 
     def decode(self, x: torch.Tensor, embeddings: torch.Tensor, training: bool = False) -> torch.Tensor:
@@ -337,22 +344,22 @@ class DAE(DualDiffusionDAE):
         else:
             emb = None
         
-        #x = self.latents_stats_tracker.rescale(x)
-        #x = self.latents_stats_tracker.add_mean(x)
         x = self.conv_latents_in(x)
 
         for name, block in self.dec.items():
             x = block(x, emb)
 
         out: torch.Tensor = self.conv_out(x, gain=self.conv_out_gain)
+        out = out.reshape(out.shape[0], out.shape[1]//2, 2, out.shape[3]).permute(0, 2, 1, 3).contiguous()
         return out
     
-    def forward(self, samples: torch.Tensor, dae_embeddings: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    def forward(self, samples: torch.Tensor, dae_embeddings: torch.Tensor, noise_sigma: Optional[torch.Tensor] = None) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
 
         pre_norm_latents = self.encode(samples, dae_embeddings, training=True)
         latents = pre_norm_latents
-        #latents = normalize(pre_norm_latents, dim=1)
-        #latents = mp_sum(latents, torch.randn_like(latents), t=0.03)
+
+        if noise_sigma is not None:
+            latents = latents + noise_sigma * torch.randn_like(latents)
         
         out = self.decode(latents, dae_embeddings, training=True)
         return latents, out, pre_norm_latents
