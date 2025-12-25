@@ -203,6 +203,8 @@ class EMA_Config:
     num_archive_steps: Optional[int]      = None  # if set, saves ema weights in bf16 every n steps to a separate path for post-hoc reconstruction
     feedback_beta: Optional[float]        = None  # if set, ema this ema's weights back into training weights with this beta
 
+    modules: Optional[list[str]] = None  # list of module names to apply this EMA to; if None, applies to all modules
+
     def __post_init__(self):
         if self.beta is not None and self.std is not None:
             raise ValueError(f"Cannot specify both beta ({self.beta}) and std ({self.std}) in EMA_Config for ema_{self.name}")
@@ -237,6 +239,10 @@ class EMA_Manager:
 
         # initialize ema_modules for each config from module
         for name, config in ema_configs.items():
+
+            if config.get("modules", None) is not None and self.module_name not in config["modules"]:
+                continue
+
             if config.get("name", None) is not None:
                 raise ValueError(f"Found unknown attribute 'name' in EMA_Config for ema_{name}")
             ema_config = EMA_Config(name, **config)
