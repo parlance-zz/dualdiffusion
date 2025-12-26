@@ -48,12 +48,18 @@ class UNetTrainerConfig(ModuleTrainerConfig):
     sigma_pdf_offset: float = -0.8
     sigma_pdf_min: float = 0.2
 
+    # for loss logging within bucketed sigma ranges
     num_loss_buckets: int = 12
     loss_buckets_sigma_max: float = 200
     loss_buckets_sigma_min: float = 0.005
     
-    input_perturbation: float   = 0.1
+    input_perturbation: float   = 0.1 # from https://arxiv.org/pdf/2301.11706
     conditioning_dropout: float = 0.1
+
+    # when using small crops this improves the edm2 loss weighting by
+    # calculating a fair sigma_data value based on each sample's actual energy
+    use_dynamic_sigma_data: bool = False
+    dynamic_sigma_data_min: float = 0.1
 
 class UNetLossBuckets(torch.nn.Module):
 
@@ -203,7 +209,11 @@ class UNetTrainer(ModuleTrainer):
 
         denoised: torch.Tensor = self.unet(samples + noise, batch_sigma, None, unet_embeddings, ref_samples, perturbed_input)
         
-        sigma_data = self.sigma_sampler.config.sigma_data
+        if self.config.use_dynamic_sigma_data == True:
+            sigma_data = samples.pow(2).mean(dim=(1,2,3)).sqrt().clip(min=self.config.dynamic_sigma_data_min)
+        else:
+            sigma_data = self.sigma_sampler.config.sigma_data
+
         batch_loss_weight = (batch_sigma ** 2 + sigma_data ** 2) / (batch_sigma * sigma_data) ** 2
         batch_weighted_loss = torch.nn.functional.mse_loss(denoised, samples, reduction="none")
         if loss_weight is not None: # use custom loss weight if provided
