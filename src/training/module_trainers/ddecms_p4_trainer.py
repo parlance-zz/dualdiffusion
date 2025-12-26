@@ -69,14 +69,12 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
         self.trainer = trainer
         self.logger = trainer.logger
 
-        #self.ddecmp: UNet = trainer.get_train_module("ddecmp")
         self.ddecms: UNet = trainer.get_train_module("ddecms")
         self.dae: DAE = trainer.get_train_module("dae")
         
         self.format: MS_MDCT_DualFormat = trainer.pipeline.format.to(self.trainer.accelerator.device)
 
         if trainer.config.enable_model_compilation:
-            #self.ddecmp.compile(**trainer.config.compile_params)
             self.ddecms.compile(**trainer.config.compile_params)
             self.dae.compile(**trainer.config.compile_params)
             self.format.compile(**trainer.config.compile_params)
@@ -84,6 +82,7 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
         self.logger.info(f"Training modules: {trainer.config.train_modules}")
         self.logger.info(f"KL loss weight: {self.config.kl_loss_weight} KL warmup steps: {self.config.kl_warmup_steps}")
         self.logger.info(f"Shift equivariance loss weight: {self.config.shift_equivariance_loss_weight}")
+        self.logger.info(f"Shift equivariance warmup steps: {self.config.shift_equivariance_warmup_steps}")
 
         assert self.config.crop_edges * 2 == self.dae.downsample_ratio
         self.logger.info(f"Crop edges: {self.config.crop_edges}")
@@ -92,8 +91,10 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
             self.logger.info("Using random stereo augmentation")
         else: self.logger.info("Random stereo augmentation is disabled")
 
-        #self.logger.info("DDECMP Trainer:")
-        #self.ddecmp_trainer = UNetTrainer(UNetTrainerConfig(**config.ddecmp), trainer, self.ddecmp, "ddecmp")
+        if self.config.random_phase_augmentation == True:
+            self.logger.info("Using random phase augmentation")
+        else: self.logger.info("Random phase augmentation is disabled")
+
         self.logger.info("DDECMS Trainer:")
         self.ddecms_trainer = UNetTrainer(UNetTrainerConfig(**config.ddecms), trainer, self.ddecms, "ddecms")
 
@@ -114,7 +115,6 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
             
     @torch.no_grad()
     def init_batch(self, validation: bool = False) -> Optional[dict[str, Union[torch.Tensor, float]]]:
-        #return self.ddecmp_trainer.init_batch(validation)
         return self.ddecms_trainer.init_batch(validation)
     
     def train_batch(self, batch: dict) -> Optional[dict[str, Union[torch.Tensor, float]]]:
@@ -133,10 +133,6 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
 
         mel_spec = self.format.raw_to_mel_spec(raw_samples)
         mel_spec = mel_spec[..., self.config.crop_edges:-self.config.crop_edges]
-        #mel_spec_linear = self.format.mel_spec_to_linear(mel_spec)
-
-        #mdct = self.format.raw_to_mdct(raw_samples, random_phase_augmentation=self.config.random_phase_augmentation)
-        #mdct = mdct[..., self.config.crop_edges:-self.config.crop_edges]
 
         latents, ddec_cond, pre_norm_latents = self.dae(mel_spec, dae_embeddings)
         latents: torch.Tensor = latents.float()
@@ -167,14 +163,8 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
             "io_stats/ddec_cond_mean": ddec_cond.mean(dim=(1,2,3)),
             "io_stats/latents_var": latents.var(dim=(1,2,3)).detach(),
             "io_stats/latents_mean": latents.mean(dim=(1,2,3)).detach(),
-
             "io_stats/mel_spec_var": mel_spec.var(dim=(1,2,3)),
             "io_stats/mel_spec_mean": mel_spec.mean(dim=(1,2,3)),
-            #"io_stats/mel_spec_linear_var": mel_spec_linear.var(dim=(1,2,3)),
-            #"io_stats/mel_spec_linear_mean": mel_spec_linear.mean(dim=(1,2,3)),
-            #"io_stats/mel_spec_linear_mean_square": mel_spec_linear.pow(2).mean(dim=(1,2,3)),
-            #"io_stats/mdct_var": mdct.var(dim=(1,2,3)),
-
             "loss/kl_latents": kl_loss.detach(),
             "loss_weight/kl_latents": kl_loss_weight,
             "loss_weight/shift_equivariance": shift_equivariance_loss_weight,
@@ -184,19 +174,14 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
             logs["loss"] = logs["loss"] + shift_equivariance_loss * shift_equivariance_loss_weight
             logs["loss/shift_equivariance"] = shift_equivariance_loss.detach()
 
-        #logs.update(self.ddecmp_trainer.train_batch(mdct, audio_embeddings, mel_spec_linear))
-        #logs["loss"] = logs["loss/ddecmp"]
         logs.update(self.ddecms_trainer.train_batch(mel_spec, audio_embeddings, ddec_cond))
         logs["loss"] = logs["loss"] + logs["loss/ddecms"]
 
         if self.trainer.config.enable_debug_mode == True:
-            #print("mdct.shape:", mdct.shape)
-            #print("mel_spec_linear.shape:", mel_spec_linear.shape)
             print("mel_spec.shape:", mel_spec.shape)
 
         return logs
       
     @torch.no_grad()
     def finish_batch(self) -> Optional[dict[str, Union[torch.Tensor, float]]]:
-        #return self.ddecmp_trainer.finish_batch()
         return self.ddecms_trainer.finish_batch()
