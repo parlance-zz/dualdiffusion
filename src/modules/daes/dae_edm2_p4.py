@@ -37,7 +37,7 @@ import torch
 from numpy import ndarray
 
 from modules.daes.dae import DualDiffusionDAE, DualDiffusionDAEConfig
-from modules.mp_tools import MPConv, AdaptiveGroupBalance, mp_silu, normalize, resample_1d, normalize_groups, mp_sum
+from modules.mp_tools import MPConv, AdaptiveGroupBalance, mp_silu, normalize, resample_1d, normalize_groups
 
 
 @dataclass
@@ -53,14 +53,14 @@ class DAE_Config(DualDiffusionDAEConfig):
     channel_mult_enc: int = 1
     channel_mult_dec: list[int] = (1,1,1,1)   # Per-resolution multipliers for the number of channels.
     channel_mult_emb: Optional[int] = 1       # Multiplier for final embedding dimensionality.
-    channels_per_head: int    = 64            # Number of channels per attention head.
+    channels_per_head: int    = 128            # Number of channels per attention head.
     attn_logit_scale: float   = 1
     num_enc_layers: int       = 6
     num_dec_layers_per_block: int = 2        # Number of resnet blocks per resolution.
     balance_logits_offset: float = -1.75
     mlp_multiplier: int    = 2               # Multiplier for the number of channels in the MLP.
-    mlp_groups: int        = 64              # Number of groups for the MLPs.
-    emb_linear_groups: int = 64
+    mlp_groups: int        = 32              # Number of groups for the MLPs.
+    emb_linear_groups: int = 32
 
 class LatentStatsTracker(torch.nn.Module):
 
