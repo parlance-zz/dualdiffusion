@@ -56,7 +56,6 @@ class DiffusionDecoder_Trainer_Config(ModuleTrainerConfig):
     shift_equivariance_warmup_steps: int  = 2000
 
     random_stereo_augmentation: bool = False
-    random_phase_augmentation: bool  = False
 
     crop_edges: int = 4 # used to avoid artifacts due to mdct lapped blocks at beginning and end of sample
 
@@ -90,10 +89,6 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
         if self.config.random_stereo_augmentation == True:
             self.logger.info("Using random stereo augmentation")
         else: self.logger.info("Random stereo augmentation is disabled")
-
-        if self.config.random_phase_augmentation == True:
-            self.logger.info("Using random phase augmentation")
-        else: self.logger.info("Random phase augmentation is disabled")
 
         self.logger.info("DDECMS Trainer:")
         self.ddecms_trainer = UNetTrainer(UNetTrainerConfig(**config.ddecms), trainer, self.ddecms, "ddecms")
