@@ -47,8 +47,8 @@ class DiffusionDecoder_Trainer_Config(ModuleTrainerConfig):
 
     ddecmp: dict[str, Any]
 
-    random_stereo_augmentation: bool = False
-    random_phase_augmentation: bool  = False
+    random_stereo_augmentation: bool = True
+    random_phase_augmentation: bool  = True
 
     crop_edges: int = 4 # used to avoid artifacts due to mdct lapped blocks at beginning and end of sample
 
@@ -98,11 +98,13 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
         else:
             raw_samples = batch["audio"]
 
+        mdct = self.format.raw_to_mdct(raw_samples, random_phase_augmentation=self.config.random_phase_augmentation)
+        raw_samples = self.format.mdct_to_raw(mdct)
+
         mel_spec = self.format.raw_to_mel_spec(raw_samples)
         mel_spec = mel_spec[..., self.config.crop_edges:-self.config.crop_edges]
         mel_spec_linear = self.format.mel_spec_to_linear(mel_spec)
 
-        mdct = self.format.raw_to_mdct(raw_samples, random_phase_augmentation=self.config.random_phase_augmentation)
         mdct = mdct[..., self.config.crop_edges:-self.config.crop_edges]
         
         logs = {
