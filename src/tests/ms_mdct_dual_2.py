@@ -94,7 +94,7 @@ def ms_mdct_dual_format_test() -> None:
 
         mdct = format.raw_to_mdct(raw_sample)
         mdct_phase, mdct_psd = format.raw_to_mdct_phase_psd(raw_sample)
-        raw_sample_mdct = format.mdct_phase_psd_to_raw(mdct_phase, mdct_psd)
+        raw_sample_mdct = format.mdct_to_raw(mdct)
 
         mdct_phase_avg_bin_var += mdct_phase.var(dim=(0,1,3)) / len(test_samples)
         stat_logger.add_logs({

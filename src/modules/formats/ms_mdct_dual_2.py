@@ -42,10 +42,10 @@ class MS_MDCT_DualFormatConfig(DualDiffusionFormatConfig):
     # mdct params
     raw_to_mdct_scale: float = 0.00395184212251821011433253029603
 
-    mdct_psd_scale: float  = 0.07177791091357421918095794407989
-    mdct_psd_offset: float = -0.18079235827096612
+    mdct_psd_scale: float    = 0.07179056842448940381561506832112
+    mdct_psd_offset: float   = -0.1806843343919556
     mdct_psd_exponent: float = 0.25
-    mdct_phase_scale: float  = 0.14088231005735267613340053318382
+    mdct_phase_scale: float  = 1
 
     mdct_window_len: int = 512
     mdct_window_func: Literal["sin", "kaiser_bessel_derived", "vorbis"] = "sin"
@@ -59,14 +59,14 @@ class MS_MDCT_DualFormatConfig(DualDiffusionFormatConfig):
         return self.mdct_window_len // 2
 
     # mel-spec params
-    raw_to_mel_spec_scale: float  = 0.48426373582064460631823114952103
-    raw_to_mel_spec_offset: float = -1.5301612771122777
+    raw_to_mel_spec_scale: float  = 0.48693139085749312574067728443989
+    raw_to_mel_spec_offset: float = -1.530891040808645
 
-    mel_spec_to_linear_scale: float  = 18.995056282874833851024929164595
+    mel_spec_to_linear_scale: float  = 15.11100987193986714324861053997
     mel_spec_to_linear_offset: float = 0
 
     ms_abs_exponent: float = 0.25
-    ms_freq_min: float = 25
+    ms_freq_min: float = 0 #25
     ms_num_filters: int = 256
     ms_ideal_num_filter_bins: float = 3
     ms_window_length: int = 4096
@@ -283,8 +283,8 @@ class MS_MDCT_DualFormat(DualDiffusionFormat):
         mdct_psd = _mclt.abs()
         mdct_phase = (_mclt.real / mdct_psd.clip(min=1e-20)).clip(min=-1, max=1)
 
-        mdct_psd = mdct_psd.pow(self.config.mdct_psd_exponent) / self.mdct_mel_density.pow(0.25)
-        mdct_phase = mdct_phase * mdct_psd
+        mdct_psd = (mdct_psd / self.mdct_mel_density).pow(self.config.mdct_psd_exponent)
+        mdct_phase = mdct_phase * 2**0.5
 
         return self.normalize_phase(mdct_phase), self.normalize_psd(mdct_psd)
     
@@ -293,9 +293,7 @@ class MS_MDCT_DualFormat(DualDiffusionFormat):
         mdct_psd = self.unnormalize_psd(mdct_psd)
         mdct_phase = self.unnormalize_phase(mdct_phase)
 
-        mdct_phase = mdct_phase * self.mdct_mel_density.pow(0.25)
-        mdct_psd = mdct_psd * self.mdct_mel_density.pow(0.25)
-        mdct_psd = mdct_psd.clip(min=0).pow(1 / self.config.mdct_psd_exponent - 1)
+        raise NotImplementedError()
 
         raw_samples = self.imdct(mdct_phase * mdct_psd).real.contiguous()
         return raw_samples
