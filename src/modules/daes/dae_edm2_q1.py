@@ -326,7 +326,7 @@ class DAE(DualDiffusionDAE):
         dec_channels = [config.model_channels * m for m in config.channel_mult_dec]
         level = 0
 
-        self.latents_stats_tracker = LatentStatsTracker(config.latent_channels)
+        self.latents_stats_tracker = LatentStatsTracker(config.latent_channels * 2)
 
         # encoder
         self.enc = torch.nn.ModuleDict()
