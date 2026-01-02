@@ -109,7 +109,7 @@ def _zeropower_via_newtonschulz5(G: torch.Tensor, steps: int = 5) -> torch.Tenso
 def normuon_update(grad, momentum, second_momentum, beta=0.95, beta2=0.95, ns_steps=5, nesterov=True):
     momentum.lerp_(grad, 1 - beta)
     update = grad.lerp_(momentum, beta) if nesterov else momentum
-    if update.ndim == 4: # reshape instead of view is needed for conv params when channels last is enabled
+    if update.ndim >= 4: # reshape instead of view is needed for conv params when channels last is enabled
         update = update.reshape(len(update), -1)
 
     # convert grouped conv params into a batch of smaller matrices for newton schulz iterations
