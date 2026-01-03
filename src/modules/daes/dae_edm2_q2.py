@@ -36,7 +36,7 @@ from typing import Union, Literal, Optional
 import torch
 
 from modules.daes.dae import DualDiffusionDAE, DualDiffusionDAEConfig
-from modules.mp_tools import MPConv, mp_silu, mp_sum, normalize, resample_2d, normalize_groups, AdaptiveGroupBalance
+from modules.mp_tools import MPConv, mp_silu, mp_sum, normalize, resample_2d, normalize_groups
 
 
 class LatentStatsTracker(torch.nn.Module):
@@ -107,7 +107,8 @@ class MPConvS(torch.nn.Module):
         y0 = self.conv0(x1) + self.conv1(x0)
         y1 = self.conv0(x0) + self.conv1(x1)
 
-        z = torch.stack((y0, y1), dim=1).reshape(x.shape)
+        B,_,H,W = x.shape
+        z = torch.stack((y0, y1), dim=1).reshape(B, self.conv0.out_channels, H, W)
 
         return z * (gain / 2**0.5)
     
@@ -130,7 +131,6 @@ class DAE_Config(DualDiffusionDAEConfig):
     res_balance: float        = 0.3          # Balance between main branch (0) and residual branch (1).
     attn_balance: float       = 0.3          # Balance between main branch (0) and self-attention (1).
     attn_levels: list[int]    = ()           # List of resolution levels to use self-attention.
-    balance_logits_offset: float = -1.75
     mlp_multiplier: int    = 2               # Multiplier for the number of channels in the MLP.
     mlp_groups: int        = 1               # Number of groups for the MLPs.
     emb_linear_groups: int = 1
@@ -147,7 +147,6 @@ class Block(torch.nn.Module):
         flavor: Literal["enc", "dec"] = "enc",
         resample_mode: Literal["keep", "up", "down"] = "keep",
         dropout: float         = 0.,       # Dropout probability.
-        balance_logits_offset: float = -2,
         res_balance: float     = 0.3,      # Balance between main branch (0) and residual branch (1).
         attn_balance: float    = 0.3,      # Balance between main branch (0) and self-attention (1).
         clip_act: float        = 256,      # Clip output activations. None = do not clip.
@@ -173,13 +172,15 @@ class Block(torch.nn.Module):
         self.clip_act = clip_act
         self.mlp_groups = mlp_groups
 
-        self.conv_res0 = MPConv(out_channels if flavor == "enc" else in_channels,
+        conv_cls = MPConvS if flavor == "dec" else MPConv
+
+        self.conv_res0 = conv_cls(out_channels if flavor == "enc" else in_channels,
                         out_channels * mlp_multiplier, kernel=(3,3), groups=mlp_groups)
-        self.conv_res1 = MPConv(out_channels * mlp_multiplier,
+        self.conv_res1 = conv_cls(out_channels * mlp_multiplier,
                     out_channels, kernel=(3,3), groups=mlp_groups)
 
         if in_channels != out_channels or mlp_groups > 1:
-            self.conv_skip = MPConvS(in_channels, out_channels, kernel=(1,1), groups=1)
+            self.conv_skip = MPConv(in_channels, out_channels, kernel=(1,1), groups=1)
         else:
             self.conv_skip = None
 
@@ -187,8 +188,6 @@ class Block(torch.nn.Module):
             self.emb_gain = torch.nn.Parameter(torch.zeros([]))
             self.emb_linear = MPConv(emb_channels, out_channels * mlp_multiplier,
                 kernel=(1,1), groups=emb_linear_groups) if emb_channels != 0 else None
-            
-            self.emb_res_balance  = AdaptiveGroupBalance(emb_channels, mlp_groups, balance_logits_offset)
         else:
             self.emb_gain = self.emb_linear = None
         
@@ -197,8 +196,7 @@ class Block(torch.nn.Module):
 
     def forward(self, x: torch.Tensor, emb: torch.Tensor) -> torch.Tensor:
         
-        if self.resample_mode == "up":
-            x = resample_2d(x, "up")
+        x = resample_2d(x, self.resample_mode)
 
         if self.flavor == "enc":
             if self.conv_skip is not None:
@@ -210,9 +208,10 @@ class Block(torch.nn.Module):
         y = self.conv_res0(x)
 
         if self.emb_linear is not None:
-            c = self.emb_linear(emb, gain=self.emb_gain) + 1.
+            c: torch.Tensor = self.emb_linear(emb, gain=self.emb_gain) + 1.
             y = y * c
 
+        #y = mp_silu(y)
         y = mp_silu(normalize_groups(y, groups=self.mlp_groups))
 
         if self.dropout != 0 and self.training == True: # magnitude preserving fix for dropout
@@ -223,16 +222,13 @@ class Block(torch.nn.Module):
         if self.flavor == "dec" and self.conv_skip is not None:
             x = self.conv_skip(x)
 
-        if self.emb_res_balance is not None:
-            x = self.emb_res_balance(x, y, emb)
-        else:
-            x = mp_sum(x, y, t=self.res_balance)
+        x = mp_sum(x, y, t=self.res_balance)
         
         if self.use_attention == True:
             raise NotImplementedError()
 
         if self.clip_act is not None:
-            x = x.clip(-self.clip_act, self.clip_act)
+            x = x.clip_(-self.clip_act, self.clip_act)
 
         return x
 
@@ -248,8 +244,7 @@ class DAE(DualDiffusionDAE):
                         "res_balance": config.res_balance,
                         "attn_balance": config.attn_balance,
                         "channels_per_head": config.channels_per_head,
-                        "use_pixel_norm": config.add_pixel_norm,
-                        "balance_logits_offset": config.balance_logits_offset}
+                        "use_pixel_norm": config.add_pixel_norm}
         
         cemb = config.model_channels * config.channel_mult_emb * config.mlp_multiplier if config.in_channels_emb > 0 else 0
 
@@ -283,7 +278,8 @@ class DAE(DualDiffusionDAE):
             self.enc[f"block{level}_layer{idx}"] = Block(level, enc_channels, enc_channels, cemb,
                 use_attention=level in config.attn_levels, flavor="enc", **block_kwargs)
 
-        self.conv_latents_out = MPConvS(enc_channels, config.latent_channels, kernel=(3,3))
+        #self.conv_latents_out = MPConvS(enc_channels, config.latent_channels, kernel=(3,3))
+        self.conv_latents_out = MPConv(enc_channels, config.latent_channels, kernel=(3,3))
         self.conv_latents_in = MPConvS(config.latent_channels + int(config.add_constant_channel), dec_channels[-1], kernel=(3,3))
 
         # decoder
@@ -341,7 +337,7 @@ class DAE(DualDiffusionDAE):
         x = torch.cat((x, torch.ones_like(x[:, :1])), dim=1)
 
         if embeddings is not None:
-            embeddings = embeddings[:, :, None, None]
+            embeddings = embeddings[:, :, None, None].repeat_interleave(2, dim=0)
 
         for name, block in self.enc.items():
             x = block(x) if "conv" in name else block(x, embeddings)
@@ -366,7 +362,7 @@ class DAE(DualDiffusionDAE):
         x = self.conv_latents_in(x)
 
         if embeddings is not None:
-            embeddings = embeddings[:, :, None, None]
+            embeddings = embeddings[:, :, None, None].repeat_interleave(2, dim=0)
 
         for block in self.dec.values():
             x = block(x, embeddings)
@@ -374,7 +370,7 @@ class DAE(DualDiffusionDAE):
         x: torch.Tensor = self.conv_out(x, gain=self.out_gain)
 
         B,C,H,W = x.shape
-        x = x.reshape(B//2, 2, C, H, W)
+        x = x.reshape(B//2, 2, H, W)
 
         return x
     
