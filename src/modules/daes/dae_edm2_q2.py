@@ -278,8 +278,7 @@ class DAE(DualDiffusionDAE):
             self.enc[f"block{level}_layer{idx}"] = Block(level, enc_channels, enc_channels, cemb,
                 use_attention=level in config.attn_levels, flavor="enc", **block_kwargs)
 
-        #self.conv_latents_out = MPConvS(enc_channels, config.latent_channels, kernel=(3,3))
-        self.conv_latents_out = MPConv(enc_channels, config.latent_channels, kernel=(3,3))
+        self.conv_latents_out = MPConvS(enc_channels, config.latent_channels, kernel=(3,3))
         self.conv_latents_in = MPConvS(config.latent_channels + int(config.add_constant_channel), dec_channels[-1], kernel=(3,3))
 
         # decoder
@@ -439,4 +438,4 @@ class DAE(DualDiffusionDAE):
             
             latents[:, :, :, dest_start:dest_end] = latents_chunk[:, :, :, valid_start:valid_end]
         
-        return normalize(latents)
+        return latents
