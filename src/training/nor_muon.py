@@ -105,28 +105,26 @@ def _zeropower_via_newtonschulz5(G: torch.Tensor, steps: int = 5) -> torch.Tenso
 
     return X
 
-# from https://github.com/zichongli5/NorMuon
-def normuon_update(grad, momentum, second_momentum, beta=0.95, beta2=0.95, ns_steps=5, nesterov=True):
+def normuon_update(grad, momentum, second_momentum, beta=0.95, beta2=0.95, ns_steps=5, nesterov=True, groups=1):
     momentum.lerp_(grad, 1 - beta)
     update = grad.lerp_(momentum, beta) if nesterov else momentum
     if update.ndim >= 4: # reshape instead of view is needed for conv params when channels last is enabled
         update = update.reshape(len(update), -1)
 
     # convert grouped conv params into a batch of smaller matrices for newton schulz iterations
-    conv_groups = second_momentum.shape[0]
-    update = update.view(conv_groups, -1, update.size(-1))
-    update = _zeropower_via_newtonschulz5(update).float()
+    update = update.view(groups,-1, update.size(-1))
+    update = _zeropower_via_newtonschulz5(update).to(dtype=grad.dtype)
     
-    ################ NorMuon added ###################
-    vnorm = update.norm(dim=(-2,-1), keepdim=True)
-    v_mean = torch.mean(update * update, dim=-1, keepdim=True)
-    second_momentum.lerp_(v_mean, 1 - beta2)
-    step_size = 1 / second_momentum.sqrt().add_(1e-20)
-    update.mul_(step_size)
-    vnorm_new = update.norm(dim=(-2,-1), keepdim=True)
-    update.mul_(vnorm / (vnorm_new.add_(1e-20))) # This scaling keep the update norm the same as pre-normalization
-    ##################################################
-    return update * max(1, update.size(-2) / update.size(-1))**0.5 # fix for conv params
+    if second_momentum is not None: #NorMuon added, from https://github.com/zichongli5/NorMuon
+        vnorm = update.norm(dim=(-2,-1), keepdim=True)
+        v_mean = torch.mean(update * update, dim=-1, keepdim=True)
+        second_momentum.lerp_(v_mean, 1 - beta2)
+        step_size = 1 / second_momentum.sqrt().add_(1e-20)
+        update.mul_(step_size)
+        vnorm_new = update.norm(dim=(-2,-1), keepdim=True)
+        update.mul_(vnorm / (vnorm_new.add_(1e-20))) # This scaling keep the update norm the same as pre-normalization
+
+    return update * max(1, update.size(-2) / update.size(-1)) ** 0.5 # fix for conv params
 
 def adam_update(grad: torch.Tensor, buf1: torch.Tensor, buf2: torch.Tensor,
         step: int, betas: tuple[float, float], eps: float) -> torch.Tensor:
@@ -153,7 +151,8 @@ class SingleDeviceNorMuonWithAuxAdam(torch.optim.Optimizer):
                 group["momentum"] = group.get("momentum", 0.95)
                 group["weight_decay"] = group.get("weight_decay", 0)
                 group["beta2"] = group.get("beta2", 0.95)
-                assert set(group.keys()) == set(["params", "lr", "momentum", "weight_decay", "use_muon", "beta2"])
+                group["normuon"] = group.get("normuon", True)
+                assert set(group.keys()) == set(["params", "lr", "momentum", "weight_decay", "use_muon", "beta2", "normuon"])
             else:
                 group["lr"] = group.get("lr", 3e-4)
                 group["betas"] = group.get("betas", (0.9, 0.95))
@@ -184,16 +183,21 @@ class SingleDeviceNorMuonWithAuxAdam(torch.optim.Optimizer):
                         p.grad = torch.zeros_like(p)  # Force synchronization
 
                     state = self.state[p]
+                    groups = getattr(p, "conv_groups", 1)
+
                     if len(state) == 0:
                         state["momentum_buffer"] = torch.zeros_like(p)
 
-                        # shape change needed for grouped conv params
-                        conv_groups = getattr(p, "conv_groups", 1)
-                        second_momentum_shape = (conv_groups, p.shape[0] // conv_groups, 1)
-                        state["second_momentum_buffer"] = torch.zeros(
-                            size=second_momentum_shape, device=p.device, dtype=p.dtype)
-                        
-                    update = normuon_update(p.grad, state["momentum_buffer"], state["second_momentum_buffer"], beta=group["momentum"], beta2=group["beta2"])
+                        if group["normuon"]:
+                            # shape change needed for grouped conv params
+                            second_momentum_shape = (groups, p.shape[0] // groups, 1)
+                            state["second_momentum_buffer"] = torch.zeros(
+                                size=second_momentum_shape, device=p.device, dtype=p.dtype)
+                        else:
+                            state["second_momentum_buffer"] = None
+                    
+                    update = normuon_update(p.grad, state["momentum_buffer"],
+                        state["second_momentum_buffer"], beta=group["momentum"], beta2=group["beta2"], groups=groups)
 
                     weight_decay = getattr(p, "weight_decay", group["weight_decay"])
                     if weight_decay > 0:

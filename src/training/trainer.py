@@ -122,6 +122,7 @@ class OptimizerConfig:
     muon_learning_rate_multiplier: float = 100
     muon_momentum_beta: float = 0.95
     muon_weight_decay: float = 0.
+    muon_use_normuon: bool = False
 
 @dataclass
 class DataLoaderConfig:
@@ -504,7 +505,7 @@ class DualDiffusionTrainer:
 
             param_groups = [
                 {
-                    "params": muon_params, "use_muon": True,
+                    "params": muon_params, "use_muon": True, "normuon": self.config.optimizer.muon_use_normuon,
                     "lr": self.config.lr_schedule.learning_rate * self.config.optimizer.muon_learning_rate_multiplier,
                     "weight_decay": self.config.optimizer.muon_weight_decay, "momentum": self.config.optimizer.muon_momentum_beta
                 }
@@ -521,14 +522,14 @@ class DualDiffusionTrainer:
             self.use_muon = True
 
         self.logger.info(f"Using {opt_cls.__name__} optimiser with learning rate {self.config.lr_schedule.learning_rate}")
-        self.logger.info(f"  AdamW param count: {len(adam_params)} Muon param count:{len(muon_params)}")
+        self.logger.info(f"  AdamW param count: {len(adam_params)} Muon param count: {len(muon_params)}")
         if self.use_muon == True:
             self.logger.info(f"  Muon learning rate multiplier: {self.config.optimizer.muon_learning_rate_multiplier}")
             self.logger.info(f"  Muon momentum: {self.config.optimizer.muon_momentum_beta} weight decay: {self.config.optimizer.muon_weight_decay}")
+            self.logger.info(f"  NorMuon: {self.config.optimizer.muon_use_normuon}")
             
         self.logger.info(f"  AdamW beta1: {self.config.optimizer.adam_beta1} beta2: {self.config.optimizer.adam_beta2}")
         self.logger.info(f"  AdamW eps: {self.config.optimizer.adam_epsilon} weight decay: {self.config.optimizer.adam_weight_decay}")
-        
         
         if self.config.optimizer.dynamic_max_grad_norm_z is not None:
             self.logger.info(f"  Dynamic max grad norm enabled"
