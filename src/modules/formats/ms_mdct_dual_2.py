@@ -219,7 +219,9 @@ class MS_MDCT_DualFormat(DualDiffusionFormat):
     @torch.no_grad()
     def mel_spec_to_linear(self, mel_spec: torch.Tensor) -> torch.Tensor:
         ms_linear = (mel_spec * self.config.raw_to_mel_spec_scale - self.config.raw_to_mel_spec_offset).clip(min=0) ** (1 / self.config.ms_abs_exponent)
-        return (ms_linear + self.config.mel_spec_to_linear_offset) / self.config.mel_spec_to_linear_scale
+        linear_psd = self.ms_freq_scale.unscale(ms_linear, rectify=False) * self.ms_stft_mel_density.pow(0.5)
+        linear_psd = linear_psd[:, :, :-1, :]
+        return (linear_psd + self.config.mel_spec_to_linear_offset) / self.config.mel_spec_to_linear_scale
 
     @torch.inference_mode()
     def mel_spec_to_img(self, mel_spec: torch.Tensor, use_colormap: bool = False):
@@ -230,7 +232,7 @@ class MS_MDCT_DualFormat(DualDiffusionFormat):
     
     @torch.inference_mode()
     def mel_spec_linear_to_img(self, mel_spec_linear: torch.Tensor):
-        return tensor_to_img(mel_spec_linear.clip(min=0), flip_y=True)
+        return tensor_to_img(mel_spec_linear.clip(min=0).pow(self.config.ms_abs_exponent), flip_y=True)
 
     # **************** mdct methods ****************
 

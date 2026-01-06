@@ -29,7 +29,8 @@
       
         "raw_to_mel_spec_scale": 0.48693139085749312574067728443989,
         "raw_to_mel_spec_offset": -1.530891040808645,
-        "mel_spec_to_linear_scale":  15.11100987193986714324861053997,
+        //"mel_spec_to_linear_scale":  60.059017268126157710076769585082, // for unit variance
+        "mel_spec_to_linear_scale":  72.59336412940382183731457116312,    // for unit mean-square / energy
         "mel_spec_to_linear_offset": 0,
 
         "ms_abs_exponent": 0.25,

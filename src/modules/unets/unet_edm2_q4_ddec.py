@@ -36,21 +36,19 @@ from typing import Union, Optional, Literal
 import torch
 
 from modules.unets.unet import DualDiffusionUNet, DualDiffusionUNetConfig
-from modules.mp_tools import MPFourier, mp_cat, mp_silu, mp_sum, normalize, resample_3d
-from modules.daes.dae_edm2_q2 import MPConv3D
+from modules.mp_tools import MPFourier, MPConv, mp_cat, mp_silu, mp_sum, normalize, resample_2d
 from modules.formats.format import DualDiffusionFormat
-from utils.dual_diffusion_utils import tensor_5d_to_4d, tensor_4d_to_5d
 
 
 @dataclass
 class UNet_Config(DualDiffusionUNetConfig):
 
-    in_channels:  int = 1
-    out_channels: int = 1
+    in_channels:  int = 2
+    out_channels: int = 2
     in_channels_emb: int = 0
 
     in_num_freqs: int = 256
-    in_psd_freqs: int = 4096
+    in_psd_freqs: int = 2048
 
     model_channels: int  = 32                # Base multiplier for the number of channels.
     logvar_channels: int = 192               # Number of channels for training uncertainty estimation.
@@ -69,7 +67,6 @@ class UNet_Config(DualDiffusionUNetConfig):
     mlp_multiplier: int    = 2               # Multiplier for the number of channels in the MLP.
     mlp_groups: int        = 1               # Number of groups for the MLPs.
     emb_linear_groups: int = 1
-    add_constant_channel: bool = True
 
 class Block(torch.nn.Module):
 
@@ -105,28 +102,25 @@ class Block(torch.nn.Module):
         self.attn_balance = attn_balance
         self.clip_act = clip_act
         
-        self.conv_res0 = MPConv3D(out_channels if flavor == "enc" else in_channels,
-                                out_channels * mlp_multiplier, kernel=(1,3,3), groups=mlp_groups)
-        self.conv_res1 = MPConv3D(out_channels * mlp_multiplier, out_channels, kernel=(1,3,3), groups=mlp_groups)
-        self.conv_skip = MPConv3D(in_channels, out_channels, kernel=(2,1,1), groups=1)
+        self.conv_res0 = MPConv(out_channels if flavor == "enc" else in_channels,
+                                out_channels * mlp_multiplier, kernel=(3,3), groups=mlp_groups)
+        self.conv_res1 = MPConv(out_channels * mlp_multiplier, out_channels, kernel=(3,3), groups=mlp_groups)
+
+        if in_channels != out_channels:
+            self.conv_skip = MPConv(in_channels, out_channels, kernel=(1,1), groups=1)
+        else:
+            self.conv_skip = None
 
         self.emb_gain = torch.nn.Parameter(torch.zeros([]))
-        self.emb_linear = MPConv3D(emb_channels, out_channels * mlp_multiplier,
-            kernel=(1,1,1), groups=emb_linear_groups) if emb_channels != 0 else None
+        self.emb_linear = MPConv(emb_channels, out_channels * mlp_multiplier,
+            kernel=(1,1), groups=emb_linear_groups) if emb_channels != 0 else None
         
         if self.use_attention:
-            self.emb_gain_qk = torch.nn.Parameter(torch.zeros([]))
-            self.emb_gain_v = torch.nn.Parameter(torch.zeros([]))
-            self.emb_linear_qk = MPConv3D(emb_channels, out_channels, kernel=(1,1,1), groups=1) if emb_channels != 0 else None
-            self.emb_linear_v = MPConv3D(emb_channels, out_channels, kernel=(1,1,1), groups=1) if emb_channels != 0 else None
-
-            self.attn_qk = MPConv3D(out_channels, out_channels * 2, kernel=(1,1,1))
-            self.attn_v = MPConv3D(out_channels, out_channels, kernel=(1,1,1))
-            self.attn_proj = MPConv3D(out_channels, out_channels, kernel=(1,1,1))
+            raise NotImplementedError()
 
     def forward(self, x: torch.Tensor, emb: torch.Tensor) -> torch.Tensor:
         
-        x = resample_3d(x, mode=self.resample_mode)
+        x = resample_2d(x, mode=self.resample_mode)
 
         if self.flavor == "enc":
             if self.conv_skip is not None:
@@ -148,27 +142,7 @@ class Block(torch.nn.Module):
         x = mp_sum(x, y, t=self.res_balance)
         
         if self.use_attention:
-
-            c = self.emb_linear_qk(emb, gain=self.emb_gain_qk) + 1.
-
-            qk = self.attn_qk(x * c)
-            qk = qk.reshape(qk.shape[0], self.num_heads, -1, 2, y.shape[2] * y.shape[3])
-            q, k = normalize(qk, dim=2).unbind(3)
-
-            v = self.attn_v(x)
-            v = v.reshape(v.shape[0], self.num_heads, -1, y.shape[2] * y.shape[3])
-            v = normalize(v, dim=2)
-
-            y = torch.nn.functional.scaled_dot_product_attention(q.transpose(-1, -2),
-                                                                 k.transpose(-1, -2),
-                                                                 v.transpose(-1, -2)).transpose(-1, -2)
-            y = y.reshape(*x.shape)
-
-            c = self.emb_linear_v(emb, gain=self.emb_gain_v) + 1.
-            y = mp_silu(y * c)
-
-            y = self.attn_proj(y)
-            x = mp_sum(x, y, t=self.attn_balance)
+            raise NotImplementedError()
 
         if self.clip_act is not None:
             x = x.clip_(-self.clip_act, self.clip_act)
@@ -176,8 +150,6 @@ class Block(torch.nn.Module):
         return x
 
 class UNet(DualDiffusionUNet):
-
-    supports_channels_last: Union[bool, Literal["3d"]] = "3d"
 
     def __init__(self, config: UNet_Config) -> None:
         super().__init__()
@@ -202,19 +174,21 @@ class UNet(DualDiffusionUNet):
         self.psd_freqs_per_freq = config.in_psd_freqs // config.in_num_freqs
         
         # Embedding.
+        assert config.in_channels_emb == 0
+
         self.emb_fourier = MPFourier(cnoise)
-        self.emb_noise = MPConv3D(cnoise, cemb, kernel=())
-        self.emb_label = MPConv3D(config.in_channels_emb, cemb, kernel=()) if config.in_channels_emb > 0 else None
-        self.emb_label_unconditional = MPConv3D(1, cemb, kernel=()) if config.in_channels_emb > 0 else None
+        self.emb_noise = MPConv(cnoise, cemb, kernel=())
+        self.emb_label = MPConv(config.in_channels_emb, cemb, kernel=()) if config.in_channels_emb > 0 else None
+        self.emb_label_unconditional = MPConv(1, cemb, kernel=()) if config.in_channels_emb > 0 else None
 
         # Training uncertainty estimation.
         self.logvar_fourier = MPFourier(config.logvar_channels)
-        self.logvar_linear = MPConv3D(config.logvar_channels, 1, kernel=(), disable_weight_norm=True)
+        self.logvar_linear = MPConv(config.logvar_channels, 1, kernel=(), disable_weight_norm=True)
         self.logvar_linear.weight.data.fill_(0)
 
         # Encoder.
         self.enc = torch.nn.ModuleDict()
-        cout = config.in_channels + self.psd_freqs_per_freq + int(config.add_constant_channel)
+        cout = config.in_channels + self.psd_freqs_per_freq * 2
 
         for level, channels in enumerate(cblock):
             
@@ -223,7 +197,7 @@ class UNet(DualDiffusionUNet):
             if level == 0:
                 cin = cout
                 cout = channels
-                self.enc[f"conv_in"] = MPConv3D(cin, cout, kernel=(2,3,3))
+                self.enc[f"conv_in"] = MPConv(cin, cout, kernel=(3,3), bias=True)
             else:
                 self.enc[f"block{level}_down"] = Block(level, cout, cout, cemb, num_freqs,
                     use_attention=level in config.attn_levels, flavor="enc", resample_mode="down", **block_kwargs)
@@ -259,7 +233,7 @@ class UNet(DualDiffusionUNet):
                     use_attention=level in config.attn_levels, flavor="dec", **block_kwargs)
                 
         self.out_gain = torch.nn.Parameter(torch.zeros([]))
-        self.conv_out = MPConv3D(cout, config.out_channels, kernel=(2,3,3))
+        self.conv_out = MPConv(cout, config.out_channels, kernel=(3,3))
 
     def get_embeddings(self, emb_in: torch.Tensor, conditioning_mask: torch.Tensor) -> torch.Tensor:
         if self.config.in_channels_emb > 0:
@@ -284,7 +258,7 @@ class UNet(DualDiffusionUNet):
                 perturbed_input: Optional[torch.Tensor] = None) -> torch.Tensor:
 
         with torch.no_grad():
-            sigma = sigma.view(-1, 1, 1, 1, 1)
+            sigma = sigma.view(-1, 1, 1, 1)
             
             # Preconditioning weights.
             c_skip = self.config.sigma_data ** 2 / (sigma ** 2 + self.config.sigma_data ** 2)
@@ -292,26 +266,23 @@ class UNet(DualDiffusionUNet):
             c_in = 1 / (self.config.sigma_data ** 2 + sigma ** 2).sqrt()
             c_noise = (sigma.flatten().log() / 4).to(self.dtype)
 
-            #x_ref = x_ref.view(x_ref.shape[0], x_ref.shape[1], self.config.in_num_freqs, self.psd_freqs_per_freq, x_ref.shape[3])
-            #x_ref = x_ref.permute(0, 3, 1, 2, 4).contiguous(memory_format=torch.channels_last_3d).to(dtype=torch.bfloat16)
+            B,C,_,W = x_ref.shape
+            x_ref = x_ref.view(B, C, self.config.in_num_freqs, self.psd_freqs_per_freq, W)
+            x_ref = x_ref.permute(0, 3, 1, 2, 4).reshape(B, self.psd_freqs_per_freq * C, self.config.in_num_freqs, W).to(dtype=torch.bfloat16)
 
             if perturbed_input is not None:
-                x = (c_in * tensor_4d_to_5d(perturbed_input, self.config.in_channels)).to(dtype=torch.bfloat16)
+                x = (c_in * perturbed_input).to(dtype=torch.bfloat16)
             else:
-                x = (c_in * tensor_4d_to_5d(x_in, self.config.in_channels)).to(dtype=torch.bfloat16)
- 
-        x_ref = x_ref.view(x_ref.shape[0], x_ref.shape[1], self.config.in_num_freqs, self.psd_freqs_per_freq, x_ref.shape[3])
-        x_ref = x_ref.permute(0, 3, 1, 2, 4).contiguous(memory_format=torch.channels_last_3d).to(dtype=torch.bfloat16)
+                x = (c_in * x_in).to(dtype=torch.bfloat16)
 
         # Embedding.
         emb = self.emb_noise(self.emb_fourier(c_noise))
         if self.config.in_channels_emb > 0:
             emb = mp_silu(mp_sum(emb, embeddings, t=self.config.label_balance))
-        emb = emb.unsqueeze(-1).unsqueeze(-1).unsqueeze(-1).to(dtype=torch.bfloat16)
+        emb = emb[:, :, None, None].to(dtype=torch.bfloat16)
 
         # Encoder.
-        inputs = (x, x_ref, torch.ones_like(x[:, :1])) if self.config.add_constant_channel else (x, x_ref)
-        x = torch.cat(inputs, dim=1)
+        x = torch.cat((x, x_ref), dim=1)
 
         skips = []
         for name, block in self.enc.items():
@@ -325,7 +296,7 @@ class UNet(DualDiffusionUNet):
             x = block(x, emb)
 
         x: torch.Tensor = self.conv_out(x, gain=self.out_gain)
-        D_x: torch.Tensor = c_skip * x_in.float().unsqueeze(1) + c_out * x.float()
+        D_x: torch.Tensor = c_skip * x_in.float() + c_out * x.float()
 
-        return tensor_5d_to_4d(D_x)
+        return D_x
     

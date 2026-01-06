@@ -150,22 +150,22 @@ def dae_test() -> None:
             else:
                 decode_latents = latents
             
-            output_mel_spec = dae.decode(decode_latents.to(dtype=dae.dtype), dae_embedding).float()
+            output_mel_spec_cond = dae.decode(decode_latents.to(dtype=dae.dtype), dae_embedding).float()
         else:
             latents = None
-            output_mel_spec = input_mel_spec
+            output_mel_spec_cond = input_mel_spec
 
         # ***************** ddec mdct stage ***************** 
         if test_params["dae_bypass"] == True:
             x_ref_mdct = format.mel_spec_to_linear(input_mel_spec)
         else:
-            x_ref_mdct = format.mel_spec_to_linear(output_mel_spec)
+            x_ref_mdct = format.mel_spec_to_linear(output_mel_spec_cond)
 
         if ddec is not None:
             ddec_mdct_params = SampleParams(
                 seed=5000,
-                num_steps=100, length=audio_len, cfg_scale=1.5, input_perturbation=1, input_perturbation_offset=0.3,
-                use_heun=False, schedule="linear", rho=7, sigma_max=50, sigma_min=0.0002, stereo_fix=0
+                num_steps=100, length=audio_len, cfg_scale=1.5, input_perturbation=1, input_perturbation_offset=0,
+                use_heun=False, schedule="ln_linear", rho=7, sigma_max=20, sigma_min=0.0002, stereo_fix=0
             )
 
             output_ddec_mdct = pipeline.diffusion_decode(
@@ -174,11 +174,12 @@ def dae_test() -> None:
                 x_ref=x_ref_mdct.to(dtype=ddec.dtype), module=ddec)
             
             output_raw = format.mdct_to_raw(output_ddec_mdct.float())
+            output_mel_spec = format.raw_to_mel_spec(output_raw)
         else:
             output_raw = None
 
         print(f"input   mean/std: {input_mel_spec.mean().item():.4} {input_mel_spec.std().item():.4}")
-        print(f"output  mean/std: {output_mel_spec.mean().item():.4} {output_mel_spec.std().item():.4}")
+        print(f"output  mean/std: {output_mel_spec_cond.mean().item():.4} {output_mel_spec_cond.std().item():.4}")
         if latents is not None:
             latents_mean = latents.mean().item()
             latents_std = latents.std().item()
@@ -192,11 +193,15 @@ def dae_test() -> None:
         if latents is not None:
             save_img(dae.latents_to_img(latents), os.path.join(output_path, "1", f"step_{last_global_step}_{filename.replace(file_ext, '_latents.png')}"))
 
+        if output_mel_spec_cond is not None:
+            save_img(format.mel_spec_to_img(output_mel_spec_cond, use_colormap=use_colormap),
+                os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_output_mel_spec_cond.png')}"))
+            
         save_img(format.mel_spec_to_img(input_mel_spec, use_colormap=use_colormap),
             os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_input_mel_spec.png')}"))
         save_img(format.mel_spec_to_img(output_mel_spec, use_colormap=use_colormap),
             os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_output_mel_spec.png')}"))
-        save_img(format.mel_spec_to_img(output_mel_spec - input_mel_spec, use_colormap=use_colormap),
+        save_img(format.mel_spec_to_img(output_mel_spec_cond - input_mel_spec, use_colormap=use_colormap),
             os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_error_mel_spec.png')}"))
 
         if output_raw is not None:
