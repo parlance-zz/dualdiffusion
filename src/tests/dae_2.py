@@ -176,7 +176,7 @@ def dae_test() -> None:
             output_raw = format.mdct_to_raw(output_ddec_mdct.float())
             output_mel_spec = format.raw_to_mel_spec(output_raw)
         else:
-            output_raw = None
+            output_raw = output_mel_spec = None
 
         print(f"input   mean/std: {input_mel_spec.mean().item():.4} {input_mel_spec.std().item():.4}")
         print(f"output  mean/std: {output_mel_spec_cond.mean().item():.4} {output_mel_spec_cond.std().item():.4}")
@@ -196,11 +196,14 @@ def dae_test() -> None:
         if output_mel_spec_cond is not None:
             save_img(format.mel_spec_to_img(output_mel_spec_cond, use_colormap=use_colormap),
                 os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_output_mel_spec_cond.png')}"))
-            
+
+        if output_mel_spec is not None:
+            save_img(format.mel_spec_to_img(output_mel_spec, use_colormap=use_colormap),
+                os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_output_mel_spec.png')}"))
+                                
         save_img(format.mel_spec_to_img(input_mel_spec, use_colormap=use_colormap),
             os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_input_mel_spec.png')}"))
-        save_img(format.mel_spec_to_img(output_mel_spec, use_colormap=use_colormap),
-            os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_output_mel_spec.png')}"))
+
         save_img(format.mel_spec_to_img(output_mel_spec_cond - input_mel_spec, use_colormap=use_colormap),
             os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_error_mel_spec.png')}"))
 
