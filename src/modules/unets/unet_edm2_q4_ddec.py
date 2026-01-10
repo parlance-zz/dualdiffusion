@@ -52,7 +52,7 @@ class UNet_Config(DualDiffusionUNetConfig):
 
     model_channels: int  = 32                # Base multiplier for the number of channels.
     logvar_channels: int = 192               # Number of channels for training uncertainty estimation.
-    channel_mult: list[int]    = (1,2,3,4)   # Per-resolution multipliers for the number of channels.
+    channel_mult: list[int]    = (1,2,3,4,5) # Per-resolution multipliers for the number of channels.
     double_midblock: bool      = True
     midblock_attn: bool        = False
     channel_mult_noise: Optional[int] = 4    # Multiplier for noise embedding dimensionality.
@@ -274,22 +274,24 @@ class UNet(DualDiffusionUNet):
                 x = (c_in * perturbed_input).to(dtype=torch.bfloat16)
             else:
                 x = (c_in * x_in).to(dtype=torch.bfloat16)
+                
+            x = mp_cat(x, x_ref, t=self.config.label_balance)
 
-        # Embedding.
-        emb = self.emb_noise(self.emb_fourier(c_noise))
+            emb = self.emb_fourier(c_noise)
+
+        # embedding
+        emb = self.emb_noise(emb)
         if self.config.in_channels_emb > 0:
             emb = mp_silu(mp_sum(emb, embeddings, t=self.config.label_balance))
         emb = emb[:, :, None, None].to(dtype=torch.bfloat16)
 
-        # Encoder.
-        x = torch.cat((x, x_ref), dim=1)
-
+        # encoder
         skips = []
         for name, block in self.enc.items():
             x = block(x) if "conv" in name else block(x, emb)
             skips.append(x)
 
-        # Decoder.
+        # decoder
         for name, block in self.dec.items():
             if "layer" in name:
                 x = mp_cat(x, skips.pop(), t=self.config.concat_balance)
