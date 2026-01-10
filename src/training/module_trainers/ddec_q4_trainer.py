@@ -63,11 +63,11 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
         self.logger = trainer.logger
 
         self.ddec: UNet = trainer.get_train_module("ddec")
-        self.dae: DAE = trainer.pipeline.dae.to(self.trainer.accelerator.device)
+        self.dae: DAE = trainer.pipeline.dae.to(self.trainer.accelerator.device).requires_grad_(False).eval()
         self.format: MS_MDCT_DualFormat = trainer.pipeline.format.to(self.trainer.accelerator.device)
 
         assert self.dae.config.last_global_step > 0
-        
+
         if trainer.config.enable_model_compilation:
             self.ddec.compile(**trainer.config.compile_params)
             self.dae.compile(**trainer.config.compile_params)
@@ -91,43 +91,52 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
         return self.ddec_trainer.init_batch(validation)
     
     def train_batch(self, batch: dict) -> Optional[dict[str, Union[torch.Tensor, float]]]:
+        
+        with torch.no_grad(): # prepare model inputs
+            
+            if "audio_embeddings" in batch:
+                audio_embeddings = normalize(batch["audio_embeddings"]).detach()
+                dae_embeddings = self.dae.get_embeddings(audio_embeddings).detach()
+            else:
+                audio_embeddings = dae_embeddings = None
 
-        # prepare model inputs
-        if "audio_embeddings" in batch:
-            audio_embeddings = normalize(batch["audio_embeddings"]).detach()
-        else:
-            audio_embeddings = None
+            if self.config.random_stereo_augmentation == True:
+                raw_samples = random_stereo_augmentation(batch["audio"])
+            else:
+                raw_samples = batch["audio"]
 
-        if self.config.random_stereo_augmentation == True:
-            raw_samples = random_stereo_augmentation(batch["audio"])
-        else:
-            raw_samples = batch["audio"]
+            mdct = self.format.raw_to_mdct(raw_samples, random_phase_augmentation=self.config.random_phase_augmentation)
+            raw_samples = self.format.mdct_to_raw(mdct)
 
-        mdct = self.format.raw_to_mdct(raw_samples, random_phase_augmentation=self.config.random_phase_augmentation)
-        raw_samples = self.format.mdct_to_raw(mdct)
+            mel_spec = self.format.raw_to_mel_spec(raw_samples)
+            latents, recon_mel_spec, _ = self.dae(mel_spec, dae_embeddings)
+            latents: torch.Tensor = latents.float()
 
-        mel_spec = self.format.raw_to_mel_spec(raw_samples)
-        mel_spec = mel_spec[..., self.config.crop_edges:-self.config.crop_edges]
-        mel_spec_linear = self.format.mel_spec_to_linear(mel_spec)
+            recon_mel_spec = recon_mel_spec[..., self.config.crop_edges:-self.config.crop_edges]
+            recon_mel_spec_linear = self.format.mel_spec_to_linear(recon_mel_spec)
 
-        mdct = mdct[..., self.config.crop_edges:-self.config.crop_edges]
+            mdct = mdct[..., self.config.crop_edges:-self.config.crop_edges]
         
         logs = {
             "io_stats/mel_spec_var": mel_spec.var(dim=(1,2,3)),
             "io_stats/mel_spec_mean": mel_spec.mean(dim=(1,2,3)),
-            "io_stats/mel_spec_linear_var": mel_spec_linear.var(dim=(1,2,3)),
-            "io_stats/mel_spec_linear_mean": mel_spec_linear.mean(dim=(1,2,3)),
-            "io_stats/mel_spec_linear_mean_square": mel_spec_linear.pow(2).mean(dim=(1,2,3)),
+            "io_stats/recon_mel_spec_linear_var": recon_mel_spec_linear.var(dim=(1,2,3)),
+            "io_stats/recon_mel_spec_linear_mean": recon_mel_spec_linear.mean(dim=(1,2,3)),
+            "io_stats/recon_mel_spec_linear_mean_square": recon_mel_spec_linear.pow(2).mean(dim=(1,2,3)),
             "io_stats/mdct_var": mdct.var(dim=(1,2,3)),
+            "io_stats/latents_var": latents.var(dim=(1,2,3)),
+            "io_stats/latents_mean": latents.mean(dim=(1,2,3)),
         }
 
-        logs.update(self.ddec_trainer.train_batch(mdct, audio_embeddings, mel_spec_linear))
+        logs.update(self.ddec_trainer.train_batch(mdct, audio_embeddings, recon_mel_spec_linear))
         logs["loss"] = logs["loss/ddec"]
 
         if self.trainer.config.enable_debug_mode == True:
             print("mdct.shape:", mdct.shape)
             print("mel_spec.shape:", mel_spec.shape)
-            print("mel_spec_linear.shape:", mel_spec_linear.shape)
+            print("recon_mel_spec.shape:", recon_mel_spec.shape)
+            print("recon_mel_spec_linear.shape:", recon_mel_spec_linear.shape)
+            print("latents.shape:", latents.shape)
 
         return logs
       

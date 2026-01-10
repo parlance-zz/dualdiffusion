@@ -197,13 +197,14 @@ class UNetTrainer(ModuleTrainer):
         if noise is None:
             noise = torch.randn(samples.shape, device=samples.device)
         noise = (noise * batch_sigma.view(-1, 1, 1, 1)).detach()
+        error_logvar = self.unet.get_sigma_loss_logvar(sigma=batch_sigma)
 
         if self.config.input_perturbation > 0:
-            if perturb_noise is not None:
-                input_perturbation = perturb_noise
-            else:
-                input_perturbation = torch.randn(samples.shape, device=samples.device)
-            perturbed_input = samples + noise + input_perturbation * batch_sigma.view(-1, 1, 1, 1) * self.config.input_perturbation
+            if perturb_noise is None:
+                perturb_noise = torch.randn(samples.shape, device=samples.device)
+            
+            input_perturbation = self.config.input_perturbation# * error_logvar.exp().view(-1, 1, 1, 1).clip(max=1).detach()
+            perturbed_input = samples + noise + perturb_noise * batch_sigma.view(-1, 1, 1, 1) * input_perturbation
         else:
             perturbed_input = None
 
@@ -220,7 +221,6 @@ class UNetTrainer(ModuleTrainer):
             batch_weighted_loss = batch_weighted_loss * loss_weight
         batch_weighted_loss = batch_weighted_loss.mean(dim=(1,2,3)) * batch_loss_weight
 
-        error_logvar = self.unet.get_sigma_loss_logvar(sigma=batch_sigma)
         batch_loss = batch_weighted_loss / error_logvar.exp() + error_logvar
         
         if self.config.num_loss_buckets > 0:
