@@ -39,13 +39,11 @@ from fnmatch import fnmatch
 from re import search
 
 import torch
-import numpy as np
 from torch.optim.lr_scheduler import LambdaLR
 from accelerate import Accelerator
 from accelerate.logging import get_logger
 from accelerate.utils import ProjectConfiguration, GradientAccumulationPlugin, set_seed
 from tqdm.auto import tqdm
-from scipy.interpolate import CubicSpline
 
 from pipelines.dual_diffusion_pipeline import DualDiffusionPipeline
 from utils.dual_diffusion_utils import dict_str, get_cuda_gpu_stats
@@ -68,8 +66,12 @@ class TrainLogger():
         self.channels.clear()
         self.counts.clear()
 
-    @torch.inference_mode()
+    @torch.no_grad()
     def add_log(self, key: str, value: Union[torch.Tensor, float]) -> None:
+
+        if value is None:
+            return
+        
         if torch.is_tensor(value):
             if self.accelerator is not None:
                 value = self.accelerator.gather(value.detach()).mean().item()
@@ -83,10 +85,8 @@ class TrainLogger():
             self.channels[key] = value
             self.counts[key] = 1
 
-    def add_logs(self, logs) -> None:
+    def add_logs(self, logs: dict[str, Any]) -> None:
         for key, value in logs.items():
-            if value is None:
-                raise ValueError(f"Error: None value in add_logs for key {key}")
             self.add_log(key, value)
 
     def get_logs(self, sort: bool = False) -> dict:
@@ -661,34 +661,6 @@ class DualDiffusionTrainer:
                     lr = max(lr * self.config.lr_schedule.learning_rate,
                         self.config.lr_schedule.min_learning_rate) / self.config.lr_schedule.learning_rate
                 return lr
-        
-        elif self.config.lr_schedule.lr_schedule == "muon":
-
-            def lr_schedule(step):
-                """
-                Calculates the learning rate for a given step based on a smooth decay schedule.
-                This function uses a cubic spline for the main decay phase for a smoother curve.
-                """
-                # Define the key points for the decay schedule
-                # Using the same initial LR at step 800 as the piecewise function for consistency
-                decay_steps = np.array([800, 2500, 4500, 14000])
-                #decay_lrs = np.array([0.4605, 0.35, 0.22, 0.02])
-                decay_lrs = np.array([0.00921, 0.007, 0.0044, 0.0004])
-
-                if step < 800:
-                    # Constant learning rate before decay starts
-                    lr = decay_lrs[0]
-                elif 800 <= step <= 14000:
-                    # Use a cubic spline for a smooth decay through the key points.
-                    # bc_type='clamped' ensures the derivative at the endpoints is zero,
-                    # creating a smoother transition.
-                    cs = CubicSpline(decay_steps, decay_lrs, bc_type='clamped')
-                    lr = cs(step)
-                else: # step > 14000
-                    # After the main decay, slowly decay towards 0.01 exponentially
-                    lr = 0.0002 + (0.0004 - 0.0002) * np.exp(-0.0001 * (step - 14000))
-
-                return float(lr * 100)
             
         elif self.config.lr_schedule.lr_schedule == "constant":
 
@@ -699,11 +671,6 @@ class DualDiffusionTrainer:
 
         else:
             raise ValueError(f"Unsupported learning rate schedule: {self.config.lr_schedule.lr_schedule}")
-        
-        def lr_schedule_constant(current_step: int) -> float:
-            if current_step < scaled_lr_warmup_steps:
-                return current_step / scaled_lr_warmup_steps
-            return 1.
 
         if len(self.optimizer.param_groups) == 2:
             schedules = [lr_schedule, lr_schedule]
