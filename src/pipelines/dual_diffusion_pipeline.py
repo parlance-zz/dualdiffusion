@@ -696,7 +696,9 @@ class DualDiffusionPipeline(torch.nn.Module):
             effective_input_perturbation = old_sigma_next - sigma_next
             debug_info["effective_input_perturbation"].append(effective_input_perturbation)
 
-            model_output = unet(input_sample, input_sigma, self.format, unet_class_embeddings, input_ref_sample).float()
+            model_output, _ = unet(input_sample, input_sigma, self.format, unet_class_embeddings, input_ref_sample)
+            model_output = model_output.float()
+
             if unet_class_embeddings is not None:
                 cfg_model_output = model_output[params.batch_size:].lerp(model_output[:params.batch_size], effective_cfg_scale)
             else:
@@ -713,7 +715,9 @@ class DualDiffusionPipeline(torch.nn.Module):
                     input_sigma_hat = torch.tensor([t_hat * sigma_curr], device=unet.device)
                     input_sample_hat = torch.lerp(cfg_model_output, sample, t_hat)
 
-                model_output_hat = unet(input_sample_hat, input_sigma_hat, self.format, unet_class_embeddings, input_ref_sample).float()
+                model_output_hat, _ = unet(input_sample_hat, input_sigma_hat, self.format, unet_class_embeddings, input_ref_sample)
+                model_output_hat = model_output_hat.float()
+                
                 if unet_class_embeddings is not None:
                     cfg_model_output_hat = model_output_hat[params.batch_size:].lerp(model_output_hat[:params.batch_size], effective_cfg_scale)
                 else:
