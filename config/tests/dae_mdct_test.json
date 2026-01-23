@@ -1,11 +1,10 @@
 {
-    "model_name": "edm2_dae_p1",
+    "model_name": "edm2_dae_p4",
     "model_load_options": {
         "torch_dtype": "bfloat16",
         "device": "cuda",
         "load_checkpoints": true,
         "load_emas": {
-
         },
         "compile_options": {
             "fullgraph": true,
@@ -14,6 +13,7 @@
     },
     "models_path_override": null,
     "length": 1408768,
+    "add_latents_noise": null,
     "latents_tiled_encode": false,
     "latents_tiled_max_chunk_size": 6144,
     "latents_tiled_overlap": 256,
@@ -26,6 +26,7 @@
     "random_test_samples_seed": 2999,
     "copy_sample_source_files": true,
     "test_samples": [
+        "switch/Muse Dash/_t_stage_jump_hard_candy_music.fsb.flac",
         "switch/Arcaea/_t_songs_ignotus.ogg.flac",
         "psf3/Iron Man/_t_! movies_HUB_05_000001C2.adx.flac",
         "dsf/Metropolis Street Racer Prototype/file_15.adx.flac",

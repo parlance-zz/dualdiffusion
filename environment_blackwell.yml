@@ -1,18 +1,18 @@
-name: dualdiffusion2 # this env is for blackwell (5000 series) GPUs
+name: dualdiffusion3 # this env is for blackwell (5000 series) GPUs
 channels:            # linux kernel 6.14+, nvidia driver 580+ with CUDA 13.0+ is required
   - nvidia
   - conda-forge
 dependencies:
-  - python
+  - python=3.13
   - nvidia::cuda-toolkit=13.0.2
   - pip
   - numpy
   - librosa       # faster backend for torchaudio i/o
   - pip:
-    - --extra-index-url https://download.pytorch.org/whl/nightly/cu130
-    - torch==2.10.0.dev20251011+cu130
-    - torchaudio==2.8.0.dev20251011+cu130   # for audio file i/o and spectrogram transforms
-    - torchvision==0.25.0.dev20251011+cu130 # required for laion-clap
+    - torch
+    - torchaudio    # for audio file i/o and spectrogram transforms
+    - torchvision   # required for laion-clap
+    - torchcodec    # required for torchaudio
     - einops        # lightweight lib for cleaner tensor manipulation
     - datasets      # load datasets for training
     - accelerate    # multi-gpu/distributed training

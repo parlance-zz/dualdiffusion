@@ -19,23 +19,23 @@
         
         "raw_to_mdct_scale": 0.00395184212251821011433253029603,
 
-        "mdct_psd_scale": 0.07179056842448940381561506832112,
-        "mdct_psd_offset": -0.1806843343919556,
-        "mdct_psd_exponent": 0.25,
-        "mdct_phase_scale": 1,
+        "mdct_psd_scale": 0.03032535876011866244447335137189,
+        "mdct_psd_offset": -0.0398019928990144,
+        "mdct_psd_exponent": 0.5,
+        "mdct_phase_scale": 0.02207491376233027552254794892546,
 
         "mdct_window_len": 512,
         "mdct_window_func": "sin",
       
-        "raw_to_mel_spec_scale": 0.48693139085749312574067728443989,
-        "raw_to_mel_spec_offset": -1.530891040808645,
-        //"mel_spec_to_linear_scale":  60.059017268126157710076769585082, // for unit variance
-        "mel_spec_to_linear_scale":  72.59336412940382183731457116312,    // for unit mean-square / energy
-        "mel_spec_to_linear_offset": 0,
+        "raw_to_mel_spec_scale": 0.48669352739470421274393545041148,
+        "raw_to_mel_spec_offset": -1.5308317033130239,
+        //"mel_spec_to_linear_scale":  59.621047629760110581437819436945, // for unit variance
+        "mel_spec_to_linear_scale":  72.019554359869035501763016242997,    // for unit mean-square / energy
+        "mel_spec_to_linear_offset": -34.599211276766496,
 
         "ms_abs_exponent": 0.25,
-        //"ms_freq_min": 25,
-        "ms_freq_min": 0,
+        "ms_freq_min": 25,
+        //"ms_freq_min": 0,
         "ms_num_filters": 256,
         "ms_ideal_num_filter_bins": 3,
         "ms_window_length": 4096,

@@ -1,5 +1,5 @@
 {
-    "reference_model_name": "edm2_dae_p1",
+    "reference_model_name": "edm2_dae_p4",
     "model_load_options": {
         "device": "cpu",
         "load_checkpoints": true,
@@ -9,7 +9,7 @@
     "sigma_max": 100,
     "sigma_min": 0.01,
     "sigma_data": 1,
-    "training_batch_size": 512,
+    "training_batch_size": 2048,
     "batch_distribution": "ln_pdf",
     "batch_dist_scale": 2,
     "batch_dist_offset": 0,
@@ -17,7 +17,7 @@
     "batch_pdf_sanitization": true,
     "batch_sigma_pdf_offset": -0.8,
     "batch_sigma_pdf_min": 0.2,
-    "reference_batch_size": 512,
+    "reference_batch_size": 2048,
     "reference_distribution": "ln_sech",
     "reference_dist_scale": 1,
     "reference_dist_offset": 0.3,

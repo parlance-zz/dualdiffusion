@@ -84,6 +84,7 @@ class UNetLossBuckets(torch.nn.Module):
     def log_buckets(self, loss: torch.Tensor, sigma: torch.Tensor) -> None:
         
         global_loss = self.trainer.accelerator.gather(loss.detach()).cpu()
+        sigma = self.trainer.accelerator.gather(sigma.detach()).cpu()
         sigma_quantiles = (sigma.detach().log().cpu() - np.log(self.sigma_min)) / (np.log(self.sigma_max) - np.log(self.sigma_min))
         
         target_buckets = (sigma_quantiles * self.loss_buckets.shape[0]).long().clip(min=0, max=self.loss_buckets.shape[0] - 1)
@@ -189,7 +190,7 @@ class UNetTrainer(ModuleTrainer):
         unet_embeddings = self.unet.get_embeddings(embeddings, conditioning_mask)
         
         # get the noise level for this sub-batch from the pre-calculated whole-batch sigma (required for stratified sampling)
-        local_sigma = self.global_sigma[self.trainer.accelerator.local_process_index::self.trainer.accelerator.num_processes]
+        local_sigma = self.global_sigma[self.trainer.accelerator.process_index::self.trainer.accelerator.num_processes]
         batch_sigma = local_sigma[self.trainer.accum_step * device_bsz:(self.trainer.accum_step+1) * device_bsz]
 
         # prepare model inputs
@@ -207,7 +208,9 @@ class UNetTrainer(ModuleTrainer):
         else:
             perturbed_input = None
 
-        denoised: torch.Tensor = self.unet(samples + noise, batch_sigma, None, unet_embeddings, ref_samples, perturbed_input)
+        #denoised: torch.Tensor = self.unet(samples + noise, batch_sigma, None, unet_embeddings, ref_samples, perturbed_input)
+        denoised, error_logvar = self.trainer.get_ddp_module(self.unet)(samples + noise, batch_sigma, None, unet_embeddings, ref_samples, perturbed_input)
+        #denoised: torch.Tensor = self.trainer.get_ddp_module(self.unet)(samples + noise, batch_sigma, None, embeddings, ref_samples, perturbed_input)
         
         if self.config.use_dynamic_sigma_data == True:
             sigma_data = samples.pow(2).mean(dim=(1,2,3)).sqrt().clip(min=self.config.dynamic_sigma_data_min)
@@ -220,7 +223,7 @@ class UNetTrainer(ModuleTrainer):
             batch_weighted_loss = batch_weighted_loss * loss_weight
         batch_weighted_loss = batch_weighted_loss.mean(dim=(1,2,3)) * batch_loss_weight
 
-        error_logvar = self.unet.get_sigma_loss_logvar(sigma=batch_sigma)
+        #error_logvar = self.unet.get_sigma_loss_logvar(sigma=batch_sigma)
         batch_loss = batch_weighted_loss / error_logvar.exp() + error_logvar
         
         if self.config.num_loss_buckets > 0:

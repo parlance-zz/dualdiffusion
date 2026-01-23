@@ -46,17 +46,16 @@ class UNetConfig(DualDiffusionUNetConfig):
     in_channels:  int = 512
     out_channels: int = 512
     in_channels_emb: int = 0
-    in_channels_x_ref: int = 512
     in_num_freqs: int = 256
 
-    sigma_max: float  = 200.
-    sigma_min: float  = 0.005
+    sigma_max: float  = 100.
+    sigma_min: float  = 0.01
     sigma_data: float = 1.
 
     mp_fourier_ln_sigma_offset: float = 0
     mp_fourier_bandwidth:       float = 1
 
-    model_channels: int  = 8192              # Base multiplier for the number of channels.
+    model_channels: int  = 4096              # Base multiplier for the number of channels.
     logvar_channels: int = 192               # Number of channels for training uncertainty estimation.
     channel_mult: list[int] = (1,)           # Per-resolution multipliers for the number of channels.
     channel_mult_noise: Optional[float] = 0.25      # Multiplier for noise embedding dimensionality.
@@ -68,8 +67,8 @@ class UNetConfig(DualDiffusionUNetConfig):
     label_balance: float      = 0.5          # Balance between noise embedding (0) and class embedding (1).
     balance_logits_offset: float = -1.75
     mlp_multiplier: int    = 2               # Multiplier for the number of channels in the MLP.
-    mlp_groups: int        = 64              # Number of groups for the MLPs.
-    emb_linear_groups: int = 64
+    mlp_groups: int        = 32              # Number of groups for the MLPs.
+    emb_linear_groups: int = 32
 
 class Block(torch.nn.Module):
 
@@ -207,7 +206,6 @@ class UNet(DualDiffusionUNet):
         # embedding
         self.emb_fourier = MPFourier(cnoise, bandwidth=config.mp_fourier_bandwidth)
         self.emb_noise = MPConv(cnoise, cemb, kernel=())
-        self.emb_x_ref = MPConv(config.in_channels_x_ref, cemb, kernel=(1,1))
 
         if config.in_channels_emb > 0:
             self.emb_label = MPConv(config.in_channels_emb, cemb, kernel=())
@@ -283,15 +281,13 @@ class UNet(DualDiffusionUNet):
             else:
                 x = (c_in * x_in).to(dtype=torch.bfloat16)
 
-        x_ref = x_ref.permute(0, 2, 1, 3).reshape(x_ref.shape[0], x_ref.shape[1]*x_ref.shape[2], 1, x_ref.shape[3]).to(dtype=torch.bfloat16)
         x = x.permute(0, 2, 1, 3).reshape(x.shape[0], x.shape[1]*x.shape[2], 1, x.shape[3]).to(dtype=torch.bfloat16)
 
         # embedding
         emb: torch.Tensor = self.emb_noise(self.emb_fourier(c_noise)).to(dtype=torch.bfloat16)
         if self.config.in_channels_emb > 0:
             emb = mp_silu(mp_sum(emb, embeddings.to(dtype=emb.dtype), t=self.config.label_balance))
-        x_ref = self.emb_x_ref(x_ref)
-        emb = mp_silu(mp_sum(emb[..., None, None], x_ref, t=0.5))
+        emb = mp_silu(mp_sum(emb[..., None, None], x_ref.to(dtype=emb.dtype), t=0.5))
 
         idx = 0; skips = []
         for name, block in self.dec.items():
@@ -311,9 +307,7 @@ class UNet(DualDiffusionUNet):
                 idx += 1
 
         x: torch.Tensor = self.conv_out(x, gain=self.out_gain)
-
-        c = self.config.out_channels // self.config.in_num_freqs
-        x = x.reshape(x.shape[0], x.shape[1]//c, c, x_in.shape[3]).permute(0, 2, 1, 3).contiguous()
+        x = x.reshape(x.shape[0], x.shape[1]//2, 2, x_in.shape[3]).permute(0, 2, 1, 3).contiguous()
         D_x = c_skip * x_in + c_out * x.float()
 
-        return D_x
+        return D_x, self.get_sigma_loss_logvar(sigma)

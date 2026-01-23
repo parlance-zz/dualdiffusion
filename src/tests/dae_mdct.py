@@ -68,6 +68,16 @@ def dae_test() -> None:
     format: MS_MDCT_DualFormat = pipeline.format
     embedding: CLAP_Embedding = pipeline.embedding
 
+    """
+    for name,param in dae.named_parameters():
+        if "emb_balance" in name:
+            balance = (param - 1.75).sigmoid()
+            #print("balance:", balance)
+            flavor = "enc" if "enc" in name else "dec"
+            print(f"{flavor} avg: {balance.mean().item():.4f}  std: {balance.std().item():.4f}")
+    """
+    #exit()
+
     sample_rate = format.config.sample_rate
     
     if test_params.get("ddec_output", False) != True:
@@ -166,6 +176,7 @@ def dae_test() -> None:
             ddecm_params = SampleParams(
                 seed=5000,
                 num_steps=100, length=audio_len, cfg_scale=5, input_perturbation=1, input_perturbation_offset=-2.5,
+                #use_heun=False, schedule="edm2", rho=7, sigma_max=100, sigma_min=0.01, stereo_fix=0
                 use_heun=False, schedule="cos", rho=7.4, sigma_max=100, sigma_min=0.01, stereo_fix=0
             )
 
@@ -177,7 +188,7 @@ def dae_test() -> None:
             ddecp_params = SampleParams(
                 seed=5000,
                 num_steps=100, length=audio_len, cfg_scale=5, input_perturbation=1, input_perturbation_offset=100,
-                use_heun=False, schedule="cos", rho=1.34, sigma_max=100, sigma_min=0.01, stereo_fix=0
+                use_heun=False, schedule="cos", rho=1, sigma_max=100, sigma_min=0.01, stereo_fix=0
             )
 
             output_ddecp = pipeline.diffusion_decode(

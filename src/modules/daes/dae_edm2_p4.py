@@ -37,31 +37,38 @@ import torch
 from numpy import ndarray
 
 from modules.daes.dae import DualDiffusionDAE, DualDiffusionDAEConfig
-from modules.mp_tools import MPConv, AdaptiveGroupBalance, mp_silu, normalize, resample_1d, normalize_groups
+from modules.mp_tools import MPConv, AdaptiveGroupBalance, mp_silu, normalize, resample_1d, normalize_groups, mp_sum
+from utils.subpixel_shift import subpixel_shift_cubic
 
 
 @dataclass
 class DAE_Config(DualDiffusionDAEConfig):
 
-    in_channels:  int = 512
-    out_channels: int = 512
-    in_channels_emb: int = 1024
+    in_channels:  int = 1024
+    out_channels: int = 4096
+    in_channels_emb: int = 0
     latent_channels: int = 256
     in_num_freqs: int = 256
 
     model_channels: int   = 4096              # Base multiplier for the number of channels.
-    channel_mult_enc: int = 1
+    #channel_mult_enc: int = 1
+    channel_mult_enc: list[int] = (1,1,1,1)   # Per-resolution multipliers for the number of channels.
     channel_mult_dec: list[int] = (1,1,1,1)   # Per-resolution multipliers for the number of channels.
     channel_mult_emb: Optional[int] = 1       # Multiplier for final embedding dimensionality.
     channels_per_head: int    = 128            # Number of channels per attention head.
     attn_logit_scale: float   = 1
-    num_enc_layers: int       = 6
-    num_dec_layers_per_block: int = 2        # Number of resnet blocks per resolution.
+    #num_enc_layers: int      = 6
+    num_enc_layers_per_block: int = 1
+    num_dec_layers_per_block: int = 1        # Number of resnet blocks per resolution.
     balance_logits_offset: float = -1.75
     mlp_multiplier: int    = 2               # Multiplier for the number of channels in the MLP.
     mlp_groups: int        = 32              # Number of groups for the MLPs.
     emb_linear_groups: int = 32
 
+    @property
+    def downsample_ratio(self) -> int:
+        return 2 ** (len(self.channel_mult_dec) - 1)
+    
 class LatentStatsTracker(torch.nn.Module):
 
     def __init__(self, num_channels: int, momentum: float = 0.99, eps: float = 1e-6) -> None:
@@ -153,7 +160,7 @@ class Block(torch.nn.Module):
         assert inner_channels % emb_linear_groups == 0
         assert out_channels % mlp_groups == 0
         assert in_channels % mlp_groups == 0
-        assert emb_channels > 0
+        #assert emb_channels > 0
 
         self.conv_res0 = MPConv(in_channels, inner_channels,  kernel=(1,3), groups=mlp_groups)
         self.conv_res1 = MPConv(inner_channels, out_channels, kernel=(1,3), groups=mlp_groups)
@@ -161,19 +168,17 @@ class Block(torch.nn.Module):
         if emb_channels > 0:
             self.emb_gain = torch.nn.Parameter(torch.zeros([]))
             self.emb_linear = MPConv(emb_channels, inner_channels, kernel=(1,1), groups=emb_linear_groups)
-
-            self.emb_attn_balance = AdaptiveGroupBalance(emb_channels, mlp_groups, balance_logits_offset)
-            self.emb_res_balance  = AdaptiveGroupBalance(emb_channels, mlp_groups, balance_logits_offset)
         else:
             self.emb_gain = None
             self.emb_linear = None
-            self.emb_attn_balance = None
-            self.emb_res_balance  = None
 
-        self.attn_q = MPConv(out_channels, out_channels, kernel=(1,1), groups=mlp_groups)
-        self.attn_k = MPConv(out_channels, out_channels, kernel=(1,1), groups=mlp_groups)
-        self.attn_v = MPConv(out_channels, out_channels, kernel=(1,1), groups=mlp_groups)
-        self.attn_proj = MPConv(out_channels, out_channels, kernel=(1,1), groups=mlp_groups)
+        #self.emb_attn_balance = AdaptiveGroupBalance(emb_channels, mlp_groups, balance_logits_offset, min_balance=0.01)
+        self.emb_res_balance  = AdaptiveGroupBalance(emb_channels, mlp_groups, balance_logits_offset, min_balance=0.01)
+
+        #self.attn_q = MPConv(out_channels, out_channels, kernel=(1,1), groups=mlp_groups)
+        #self.attn_k = MPConv(out_channels, out_channels, kernel=(1,1), groups=mlp_groups)
+        #self.attn_v = MPConv(out_channels, out_channels, kernel=(1,1), groups=mlp_groups)
+        #self.attn_proj = MPConv(out_channels, out_channels, kernel=(1,1), groups=mlp_groups)
 
         if emb_channels > 0:
             self.emb_gain_qkv = torch.nn.Parameter(torch.zeros([]))
@@ -185,7 +190,7 @@ class Block(torch.nn.Module):
     def forward(self, x: torch.Tensor, emb: torch.Tensor) -> torch.Tensor:
         
         x = resample_1d(x, self.resample_mode)
-
+        """
         if self.emb_linear_qkv is not None:
             c = self.emb_linear_qkv(emb, gain=self.emb_gain_qkv) + 1.
             y = x * c
@@ -211,7 +216,7 @@ class Block(torch.nn.Module):
 
         y = self.attn_proj(y)
         x = self.emb_attn_balance(x, y, emb)
-                
+        """
         y = self.conv_res0(x)
 
         if self.emb_linear is not None:
@@ -244,13 +249,13 @@ class DAE(DualDiffusionDAE):
                         "channels_per_head": config.channels_per_head,
                         "attn_logit_scale": config.attn_logit_scale}
 
-        cenc = config.model_channels * config.channel_mult_enc
-        cblock = [config.model_channels * x for x in config.channel_mult_dec]
-        cemb = int(config.model_channels * config.channel_mult_emb) if config.channel_mult_emb is not None else max(cblock)
+        cenc = [config.model_channels * x for x in config.channel_mult_enc]
+        cdec = [config.model_channels * x for x in config.channel_mult_dec]
+        cemb = int(config.model_channels * config.channel_mult_emb) if config.channel_mult_emb is not None else max(cdec)
         cdata = config.in_channels
 
         self.num_levels = len(config.channel_mult_dec)
-        self.downsample_ratio = 2 ** (self.num_levels - 1)
+        assert self.num_levels == len(config.channel_mult_enc)
 
         if config.in_channels_emb > 0:
             self.emb_label = MPConv(config.in_channels_emb, cemb, kernel=())
@@ -258,28 +263,43 @@ class DAE(DualDiffusionDAE):
             self.emb_label = None
             cemb = 0
 
-        self.recon_loss_logvar = torch.nn.Parameter(torch.zeros([]))
+        #self.recon_loss_logvar = torch.nn.Parameter(torch.zeros([]))
 
         # encoder
         self.enc = torch.nn.ModuleDict()
-        self.enc[f"conv_in"] = MPConv(cdata, cenc, kernel=(1,1), bias=True)
+        self.enc[f"conv_in"] = MPConv(cdata, cenc[0], kernel=(1,1), bias=True)
+        cin = cenc[0]
 
-        for idx in range(config.num_enc_layers):
-            self.enc[f"block_0_layer{idx}"] = Block(0, cenc, cenc, cemb, flavor="enc", **block_kwargs)
-        
-        self.conv_latents_out = MPConv(cenc, config.latent_channels, kernel=(1,1))
-        self.conv_latents_out_gain = torch.nn.Parameter(torch.ones([]))
-
-        self.latents_stats_tracker = LatentStatsTracker(config.latent_channels)
-        self.conv_latents_in  = MPConv(config.latent_channels, cblock[-1], kernel=(1,1), bias=True)
-
-        # decoder
-        self.dec = torch.nn.ModuleDict()
-        cin = cblock[-1]
+        #for idx in range(config.num_enc_layers):
+        #    self.enc[f"block_0_layer{idx}"] = Block(0, cenc, cenc, cemb, flavor="enc", **block_kwargs)
 
         for level in reversed(range(0, self.num_levels)):
             
-            cout = cblock[level]
+            cout = cenc[level]
+
+            if level == 0:
+                self.enc[f"block{level}_in0"] = Block(level, cin, cout, cemb, flavor="enc", **block_kwargs)
+            else:
+                self.enc[f"block{level}_down"] = Block(level, cin, cout, cemb, flavor="enc", resample_mode="down", **block_kwargs)
+
+            for idx in range(config.num_enc_layers_per_block):
+                self.enc[f"block{level}_layer{idx}"] = Block(level, cout, cout, cemb, flavor="enc", **block_kwargs)
+
+            cin = cout
+
+        self.conv_latents_out = MPConv(cenc[-1], config.latent_channels, kernel=(1,1))
+        self.conv_latents_out_gain = torch.nn.Parameter(torch.ones([]))
+
+        self.latents_stats_tracker = LatentStatsTracker(config.latent_channels)
+        self.conv_latents_in  = MPConv(config.latent_channels, cdec[-1], kernel=(1,1), bias=True)
+
+        # decoder
+        self.dec = torch.nn.ModuleDict()
+        cin = cdec[-1]
+
+        for level in reversed(range(0, self.num_levels)):
+            
+            cout = cdec[level]
 
             if level == self.num_levels - 1:
                 self.dec[f"block{level}_in0"] = Block(level, cin, cout, cemb, flavor="dec", **block_kwargs)
@@ -306,14 +326,14 @@ class DAE(DualDiffusionDAE):
     def get_latent_shape(self, mdct_shape: Union[torch.Size, tuple[int, int, int, int]]) -> torch.Size:
         if len(mdct_shape) == 4:
             return (mdct_shape[0], self.config.latent_channels, mdct_shape[2],
-                    mdct_shape[3] // self.downsample_ratio)
+                    mdct_shape[3] // self.config.downsample_ratio)
         else:
             raise ValueError(f"Invalid sample shape: {mdct_shape}")
     
     def get_mel_spec_shape(self, latent_shape: Union[torch.Size, tuple[int, int, int, int]]) -> torch.Size:
         if len(latent_shape) == 4:
             return (latent_shape[0], self.config.in_channels // 2, latent_shape[2],
-                    latent_shape[3] * self.downsample_ratio)
+                    latent_shape[3] * self.config.downsample_ratio)
         else:
             raise ValueError(f"Invalid latent shape: {latent_shape}")
 
@@ -331,7 +351,10 @@ class DAE(DualDiffusionDAE):
 
         x = normalize_groups(x, groups=self.config.mlp_groups)
         latents = self.conv_latents_out(x, gain=self.conv_latents_out_gain)
-        latents = torch.nn.functional.avg_pool2d(latents, (1, self.downsample_ratio))
+        #latents = torch.nn.functional.avg_pool2d(latents, (1, self.config.downsample_ratio))
+
+        #if training == False:
+        #    latents = normalize(latents)
 
         self.latents_stats_tracker(latents)
         
@@ -350,16 +373,24 @@ class DAE(DualDiffusionDAE):
             x = block(x, emb)
 
         out: torch.Tensor = self.conv_out(x, gain=self.conv_out_gain)
-        out = out.reshape(out.shape[0], out.shape[1]//2, 2, out.shape[3]).permute(0, 2, 1, 3).contiguous()
         return out
-    
-    def forward(self, samples: torch.Tensor, dae_embeddings: torch.Tensor, noise_sigma: Optional[torch.Tensor] = None) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+
+    def forward(self, samples: torch.Tensor, dae_embeddings: torch.Tensor, latents_sigma: Optional[torch.Tensor] = None, latents_shift: Optional[torch.Tensor] = None) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
 
         pre_norm_latents = self.encode(samples, dae_embeddings, training=True)
-        latents = pre_norm_latents
+        
+        if latents_shift is not None:
+            raise NotImplementedError()
+            latents = subpixel_shift_cubic(pre_norm_latents, latents_shift)[..., 1:-1]
+        else:
+            latents = pre_norm_latents
 
-        if noise_sigma is not None:
-            latents = latents + noise_sigma * torch.randn_like(latents)
+        if latents_sigma is not None:
+            #latents = latents + latents_sigma * torch.randn_like(latents)
+            latents_sigma = latents_sigma.view(-1, 1, 1, 1)
+            latents_norm = torch.linalg.vector_norm(latents, dim=(1,2,3), keepdim=True).detach() / latents[0].numel()**0.5
+            noise = torch.randn_like(latents) * latents_sigma
+            latents = (latents + noise) / (latents_norm**2 + latents_sigma**2)**0.5
         
         out = self.decode(latents, dae_embeddings, training=True)
         return latents, out, pre_norm_latents

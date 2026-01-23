@@ -40,10 +40,10 @@ class MS_MDCT_DualFormatConfig(DualDiffusionFormatConfig):
     default_raw_length: int = 1408768
 
     # mdct params
-    raw_to_mdct_scale: float = 0.00395184212251821011433253029603
+    raw_to_mdct_scale: float = 1
 
-    mdct_psd_scale: float    = 0.07179056842448940381561506832112
-    mdct_psd_offset: float   = -0.1806843343919556
+    mdct_psd_scale: float    = 1
+    mdct_psd_offset: float   = 0
     mdct_psd_exponent: float = 0.25
     mdct_phase_scale: float  = 1
 
@@ -59,14 +59,14 @@ class MS_MDCT_DualFormatConfig(DualDiffusionFormatConfig):
         return self.mdct_window_len // 2
 
     # mel-spec params
-    raw_to_mel_spec_scale: float  = 0.48693139085749312574067728443989
-    raw_to_mel_spec_offset: float = -1.530891040808645
+    raw_to_mel_spec_scale: float  = 1
+    raw_to_mel_spec_offset: float = 0
 
-    mel_spec_to_linear_scale: float  = 15.11100987193986714324861053997
+    mel_spec_to_linear_scale: float  = 1
     mel_spec_to_linear_offset: float = 0
 
     ms_abs_exponent: float = 0.25
-    ms_freq_min: float = 0 #25
+    ms_freq_min: float = 25
     ms_num_filters: int = 256
     ms_ideal_num_filter_bins: float = 3
     ms_window_length: int = 4096
@@ -285,8 +285,9 @@ class MS_MDCT_DualFormat(DualDiffusionFormat):
         mdct_psd = _mclt.abs()
         mdct_phase = (_mclt.real / mdct_psd.clip(min=1e-20)).clip(min=-1, max=1)
 
-        mdct_psd = (mdct_psd / self.mdct_mel_density).pow(self.config.mdct_psd_exponent)
-        mdct_phase = mdct_phase * 2**0.5
+        mdct_psd = mdct_psd.pow(self.config.mdct_psd_exponent)
+        mdct_phase = mdct_phase * mdct_psd
+        mdct_phase = mdct_phase * self.mdct_mel_density.pow(0.75)
 
         return self.normalize_phase(mdct_phase), self.normalize_psd(mdct_psd)
     
@@ -295,13 +296,18 @@ class MS_MDCT_DualFormat(DualDiffusionFormat):
         mdct_psd = self.unnormalize_psd(mdct_psd)
         mdct_phase = self.unnormalize_phase(mdct_phase)
 
-        raise NotImplementedError()
+        mdct_phase = mdct_phase / self.mdct_mel_density.pow(0.75)
 
+        mdct_psd = mdct_psd.clip(min=0).pow(1 / self.config.mdct_psd_exponent - 1)
         raw_samples = self.imdct(mdct_phase * mdct_psd).real.contiguous()
         return raw_samples
     
     @torch.no_grad()
     def mdct_psd_to_img(self, mdct_psd: torch.Tensor):
+
+        mdct_psd = self.unnormalize_psd(mdct_psd)
+        mdct_psd = mdct_psd.clip(min=0).pow(0.25 / self.config.mdct_psd_exponent)
+
         return tensor_to_img(mdct_psd, flip_y=True)
 
 
