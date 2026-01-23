@@ -269,7 +269,11 @@ class DualDiffusionTrainer:
         )
 
         self.logger = get_logger("trainer", log_level="INFO")
-        log_path = os.path.join(self.config.logging.logging_dir, f"train_{self.config.module_name}.log")
+        if self.accelerator.distributed_type == DistributedType.MULTI_GPU:
+            log_filename_suffix = f"_ddp{self.accelerator.process_index}"
+        else:
+            log_filename_suffix = ""
+        log_path = os.path.join(self.config.logging.logging_dir, f"train_{self.config.module_name}{log_filename_suffix}.log")
         logging.basicConfig(
             handlers=[
                 logging.FileHandler(log_path),
