@@ -25,7 +25,7 @@ import torch
 from modules.mp_tools import mp_silu
 
 
-def _kaiser_windowed_sinc_1d(size, cutoff, beta):
+def _kaiser_windowed_sinc_1d(size: int, cutoff: float, beta: float) -> torch.Tensor:
 
     x = (torch.arange(size) - (size-1)/2) * torch.pi * cutoff
     sinc = torch.where(x == 0, torch.tensor(1.), torch.sin(x) / x)
@@ -35,14 +35,15 @@ def _kaiser_windowed_sinc_1d(size, cutoff, beta):
 
 class FilteredResample1D(torch.nn.Module):
 
-    def __init__(self, k_size: int = 7, stride: int = 2,
-            cutoff: float = 0.5, beta: float = 1.5, gain: float = 1) -> None:
+    def __init__(self, k_size: int = 31, stride: int = 2,
+            cutoff: float = 0.5, beta: float = 6.95, gain: float = 1) -> None:
         super().__init__()
 
         self.k_size = k_size
         self.stride = stride
         self.beta = beta
 
+        self.kernel: torch.Tensor
         self.register_buffer("kernel",
             _kaiser_windowed_sinc_1d(k_size, cutoff, beta) * gain, persistent=False)
 
@@ -52,15 +53,20 @@ class FilteredResample1D(torch.nn.Module):
         else:
             self.pad_w = torch.nn.ReflectionPad2d((hk_size - even, hk_size, 0, 0))
 
+    def _apply(self, fn) -> "FilteredResample1D":
+        
+        kernel_f32 = self.kernel.clone()
+        super()._apply(fn)
+        self.kernel = kernel_f32.to(device=self.kernel.device)
+
+        return self
+    
     def forward(self, x: torch.Tensor) -> torch.Tensor:
 
-        kernel: torch.Tensor = self.kernel
-        original_dtype = x.dtype
-
-        kw = kernel[None, None, None, :].expand(x.shape[1], 1, 1, self.k_size)
+        kw = self.kernel[None, None, None, :].expand(x.shape[1], 1, 1, self.k_size)
         x = torch.nn.functional.conv2d(self.pad_w(x), kw, groups=x.shape[1], stride=(1,self.stride))
 
-        return x.to(dtype=original_dtype)
+        return x
 
     def get_filter(self) -> torch.Tensor:
         return self.kernel
@@ -70,12 +76,12 @@ class FilteredResample1D(torch.nn.Module):
 
 class FilteredDownsample1D(FilteredResample1D):
 
-    def __init__(self, k_size: int = 7, beta: float = 1.5, factor: int = 2) -> None:
+    def __init__(self, k_size: int = 31, beta: float = 6.95, factor: int = 2) -> None:
         super().__init__(k_size, factor, 1/factor, beta, gain=1)
 
 class FilteredUpsample1D(FilteredResample1D):
 
-    def __init__(self, k_size: int = 15, beta: float = 1.5, factor: int = 2) -> None:
+    def __init__(self, k_size: int = 31, beta: float = 6.95, factor: int = 2) -> None:
         super().__init__(k_size, 1, 1/factor, beta, gain=factor)
         
         self.factor = factor
@@ -90,14 +96,15 @@ class FilteredUpsample1D(FilteredResample1D):
 
 class FilteredResample2D(torch.nn.Module):
 
-    def __init__(self, k_size: int = 7, stride: int = 2,
-            cutoff: float = 0.5, beta: float = 1.5, gain: float = 1) -> None:
+    def __init__(self, k_size: int = 31, stride: int = 2,
+            cutoff: float = 0.5, beta: float = 6.95, gain: float = 1) -> None:
         super().__init__()
 
         self.k_size = k_size
         self.stride = stride
         self.beta = beta
 
+        self.kernel: torch.Tensor
         self.register_buffer("kernel",
             _kaiser_windowed_sinc_1d(k_size, cutoff, beta) * gain, persistent=False)
 
@@ -109,6 +116,14 @@ class FilteredResample2D(torch.nn.Module):
             self.pad_w = torch.nn.ReflectionPad2d((hk_size - even, hk_size, 0, 0))
             self.pad_h = torch.nn.ReflectionPad2d((0, 0, hk_size - even, hk_size))
 
+    def _apply(self, fn) -> "FilteredResample2D":
+        
+        kernel_f32 = self.kernel.clone()
+        super()._apply(fn)
+        self.kernel = kernel_f32.to(device=self.kernel.device)
+
+        return self
+    
     def forward(self, x: torch.Tensor) -> torch.Tensor:
 
         kernel: torch.Tensor = self.kernel
@@ -130,12 +145,12 @@ class FilteredResample2D(torch.nn.Module):
 
 class FilteredDownsample2D(FilteredResample2D):
 
-    def __init__(self, k_size: int = 7, beta: float = 1.5, factor: int = 2) -> None:
+    def __init__(self, k_size: int = 31, beta: float = 6.95, factor: int = 2) -> None:
         super().__init__(k_size, factor, 1/factor, beta, gain=1)
 
 class FilteredUpsample2D(FilteredResample2D):
 
-    def __init__(self, k_size: int = 15, beta: float = 1.5, factor: int = 2) -> None:
+    def __init__(self, k_size: int = 31, beta: float = 6.95, factor: int = 2) -> None:
         super().__init__(k_size, 1, 1/factor, beta, gain=factor)
         
         self.factor = factor
@@ -150,7 +165,7 @@ class FilteredUpsample2D(FilteredResample2D):
 
 class Filtered_MP_Silu_2D(torch.nn.Module):
 
-    def __init__(self, k_size: int = 7, beta: float = 1.5) -> None:
+    def __init__(self, k_size: int = 31, beta: float = 6.95) -> None:
         super().__init__()
 
         self.downsample = FilteredDownsample2D(k_size=k_size, beta=beta, factor=2)
@@ -161,14 +176,15 @@ class Filtered_MP_Silu_2D(torch.nn.Module):
 
 class FilteredResample3D(torch.nn.Module):
 
-    def __init__(self, k_size: int = 7, stride: int = 2,
-            cutoff: float = 0.5, beta: float = 1.5, gain: float = 1) -> None:
+    def __init__(self, k_size: int = 31, stride: int = 2,
+            cutoff: float = 0.5, beta: float = 6.95, gain: float = 1) -> None:
         super().__init__()
 
         self.k_size = k_size
         self.stride = stride
         self.beta = beta
 
+        self.kernel: torch.Tensor
         self.register_buffer("kernel",
             _kaiser_windowed_sinc_1d(k_size, cutoff, beta) * gain, persistent=False)
         
@@ -176,6 +192,14 @@ class FilteredResample3D(torch.nn.Module):
         self.pad_w = torch.nn.ReflectionPad3d((hk_size, hk_size - even, 0, 0, 0, 0))
         self.pad_h = torch.nn.ReflectionPad3d((0, 0, hk_size, hk_size - even, 0, 0))
 
+    def _apply(self, fn) -> "FilteredResample3D":
+        
+        kernel_f32 = self.kernel.clone()
+        super()._apply(fn)
+        self.kernel = kernel_f32.to(device=self.kernel.device)
+
+        return self
+    
     def forward(self, x: torch.Tensor) -> torch.Tensor:
 
         kw = self.kernel[None, None, None, None, :].expand(x.shape[1], 1, 1, 1, self.k_size)
@@ -195,12 +219,12 @@ class FilteredResample3D(torch.nn.Module):
     
 class FilteredDownsample3D(FilteredResample3D):
 
-    def __init__(self, k_size: int = 7, beta: float = 1.5, factor: int = 2) -> None:
+    def __init__(self, k_size: int = 31, beta: float = 6.95, factor: int = 2) -> None:
         super().__init__(k_size, factor, 1/factor, beta, gain=factor**0.5)
 
 class FilteredUpsample3D(FilteredResample3D):
 
-    def __init__(self, k_size: int = 15, beta: float = 1.5, factor: int = 2) -> None:
+    def __init__(self, k_size: int = 31, beta: float = 6.95, factor: int = 2) -> None:
         super().__init__(k_size, 1, 1/factor, beta, gain=factor**0.5)
         
         self.factor = factor
@@ -215,7 +239,7 @@ class FilteredUpsample3D(FilteredResample3D):
 
 class Filtered_MP_Silu_3D(torch.nn.Module):
 
-    def __init__(self, k_size: int = 7, beta: float = 1.5) -> None:
+    def __init__(self, k_size: int = 31, beta: float = 6.95) -> None:
         super().__init__()
 
         self.downsample = FilteredDownsample3D(k_size=k_size, beta=beta, factor=2)
@@ -226,14 +250,15 @@ class Filtered_MP_Silu_3D(torch.nn.Module):
 
 class FilteredResample1D3(torch.nn.Module):
 
-    def __init__(self, k_size: int = 7, stride: int = 2,
-            cutoff: float = 0.5, beta: float = 1.5, gain: float = 1) -> None:
+    def __init__(self, k_size: int = 31, stride: int = 2,
+            cutoff: float = 0.5, beta: float = 6.95, gain: float = 1) -> None:
         super().__init__()
 
         self.k_size = k_size
         self.stride = stride
         self.beta = beta
 
+        self.kernel: torch.Tensor
         self.register_buffer("kernel",
             _kaiser_windowed_sinc_1d(k_size, cutoff, beta) * gain, persistent=False)
 
@@ -243,6 +268,14 @@ class FilteredResample1D3(torch.nn.Module):
         else:
             self.pad_w = torch.nn.ReflectionPad3d((hk_size - even, hk_size, 0, 0, 0, 0))
 
+    def _apply(self, fn) -> "FilteredResample1D3":
+        
+        kernel_f32 = self.kernel.clone()
+        super()._apply(fn)
+        self.kernel = kernel_f32.to(device=self.kernel.device)
+
+        return self
+    
     def forward(self, x: torch.Tensor) -> torch.Tensor:
 
         kernel: torch.Tensor = self.kernel
@@ -261,12 +294,12 @@ class FilteredResample1D3(torch.nn.Module):
 
 class FilteredDownsample1D3(FilteredResample1D3):
 
-    def __init__(self, k_size: int = 7, beta: float = 1.5, factor: int = 2) -> None:
+    def __init__(self, k_size: int = 31, beta: float = 6.95, factor: int = 2) -> None:
         super().__init__(k_size, factor, 1/factor, beta, gain=1)
 
 class FilteredUpsample1D3(FilteredResample1D3):
 
-    def __init__(self, k_size: int = 15, beta: float = 1.5, factor: int = 2) -> None:
+    def __init__(self, k_size: int = 31, beta: float = 6.95, factor: int = 2) -> None:
         super().__init__(k_size, 1, 1/factor, beta, gain=factor)
         
         self.factor = factor
@@ -293,19 +326,26 @@ if __name__ == "__main__":
     init_cuda()
     output_path = os.path.join(config.DEBUG_PATH, "resample_test3")
 
-    #beta = 1.5
-    #k_size = 6
-
-    beta = 3.437
-    k_size = 23
+    beta = 6.95
+    k_size = 31
     factor = 2
 
-    downsample = FilteredDownsample1D(k_size=k_size, beta=beta, factor=factor).cuda().to(dtype=torch.bfloat16)
-    upsample = FilteredUpsample1D(k_size=k_size*factor+k_size%factor, beta=beta, factor=factor).cuda().to(dtype=torch.bfloat16)
+    #torch.backends.cuda.matmul.allow_tf32 = False
+    #torch.backends.cudnn.allow_tf32 = False
 
-    #test_data = torch.randn((1, 8, 2, 65536), device="cuda", dtype=torch.bfloat16)
-    #print(downsample(test_data).std(), downsample(downsample(test_data)).std())
-    #print(upsample(test_data).std(), upsample(upsample(test_data)).std())
+    downsample = FilteredDownsample1D(k_size=k_size, beta=beta, factor=factor).cuda()
+    upsample = FilteredUpsample1D(k_size=k_size*factor+k_size%factor, beta=beta, factor=factor).cuda()
+
+    #test_data = torch.arange(65536, device="cuda", dtype=torch.float64)[None, None, None, :]
+    #test_data = (test_data * torch.pi/2 * 1.3).cos().float()
+    test_data = torch.randn((1, 1, 1, 65536), device="cuda").float()
+    downsample.get_filter().float().cpu().numpy().tofile(os.path.join(output_path, "_1d_downsample_kernel.raw"))
+    test_data.cpu().float().numpy().tofile(os.path.join(output_path, "_1d_original.raw"))
+    downsampled = downsample(test_data)
+    downsampled = downsample(downsampled)
+    downsampled = downsample(downsampled)
+    print(downsampled.std().item())
+    downsampled.float().cpu().numpy().tofile(os.path.join(output_path, "_1d_downsampled.raw"))
     #exit()
 
     downsample = FilteredDownsample2D(k_size=k_size, beta=beta, factor=factor).cuda()
@@ -320,7 +360,7 @@ if __name__ == "__main__":
     #test_image = img_to_tensor(load_img(os.path.join(output_path, "_test_latents.png")))
     test_image = img_to_tensor(load_img(os.path.join(output_path, "__test_img.png"))).cuda()
 
-    #"""
+    """
     for i in range(3):
         print("pre-upsample std:", test_image.std())
         test_image = upsample(test_image)
@@ -329,6 +369,8 @@ if __name__ == "__main__":
         print("pre-downsample std:", test_image.std())
         test_image = downsample(test_image)
         print("post-downsample std:", test_image.std())
+    """
+    test_image = downsample(test_image)
     save_img(tensor_to_img(test_image, recenter=False, rescale=False), os.path.join(output_path, "__test_img_area.png"))
     exit()
     #"""
