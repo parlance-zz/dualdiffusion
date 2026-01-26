@@ -30,7 +30,7 @@ from scipy.special import erf
 from modules.unets.unet import DualDiffusionUNet
 
 
-SigmaSamplerDistribution: TypeAlias = Literal["ln_normal", "ln_sech", "ln_sech^2", "ln_linear", "ln_pdf", "scale_invariant", "linear"]
+SigmaSamplerDistribution: TypeAlias = Literal["ln_normal", "ln_sech", "ln_sech^2", "ln_linear", "ln_pdf", "linear"]
 
 @dataclass
 class SigmaSamplerConfig:
@@ -77,8 +77,6 @@ class SigmaSampler():
             self.sample_fn = self.sample_ln_linear
         elif self.config.distribution == "linear":
             self.sample_fn = self.sample_linear
-        elif self.config.distribution == "scale_invariant":
-            self.sample_fn = self.sample_scale_invariant
         elif self.config.distribution == "ln_pdf":
             
             if self.config.dist_pdf is None:
@@ -121,14 +119,6 @@ class SigmaSampler():
 
         ln_sigma = self.config.dist_offset + (self.config.dist_scale * 2**0.5) * (quantiles*2 - 1).erfinv().clip(min=-6, max=6)
         return ln_sigma.exp().clip(self.config.sigma_min, self.config.sigma_max)
-    
-    def sample_scale_invariant(self, n_samples: Optional[int] = None, quantiles: Optional[torch.Tensor] = None) -> torch.Tensor:
-        if quantiles is None:
-            quantiles = torch.rand(n_samples)
-
-        _min = 1/self.config.sigma_max**self.config.dist_scale
-        _max = 1/self.config.sigma_min**self.config.dist_scale
-        return 1 / (quantiles * (_max - _min) + _min) ** (1/self.config.dist_scale)
     
     def sample_ln_sech(self, n_samples: Optional[int] = None, quantiles: Optional[torch.Tensor] = None) -> torch.Tensor:
         if quantiles is None:

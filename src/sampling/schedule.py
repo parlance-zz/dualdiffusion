@@ -73,11 +73,7 @@ class SamplingSchedule:
         theta_min = np.pi/2 - np.arctan(sigma_min / rho)
         theta = (1-t) * (theta_min - theta_max) + theta_max
         return theta.cos() / theta.sin() * rho
-    
-    @staticmethod
-    def schedule_scale_invariant(t: torch.Tensor, sigma_max: float, sigma_min: float, rho: float = 1., **_) -> torch.Tensor:
-        return sigma_min / ((1 - t)**rho + sigma_min / sigma_max)
-    
+
 
 if __name__ == "__main__":
     schedule_list = SamplingSchedule.get_schedules_list()
