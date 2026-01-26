@@ -3,8 +3,8 @@ channels:
   - nvidia
   - conda-forge
 dependencies:
-  - python=3.11   # 3.11 req is for laion-clap, otherwise 3.12+
-  - nvidia::cudatoolkit
+  - python=3.11
+  - nvidia::cuda-toolkit
   - pip
   - numpy
   - librosa       # faster backend for torchaudio i/o
@@ -12,6 +12,7 @@ dependencies:
     - torch
     - torchaudio    # for audio file i/o and spectrogram transforms
     - torchvision   # required for laion-clap
+    - torchcodec    # required for torchaudio
     - einops        # lightweight lib for cleaner tensor manipulation
     - datasets      # load datasets for training
     - accelerate    # multi-gpu/distributed training
