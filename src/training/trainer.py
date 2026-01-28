@@ -383,6 +383,9 @@ class DualDiffusionTrainer:
         self.logger.info(f"Model metadata: {dict_str(self.pipeline.model_metadata)}")
 
         self.modules = self.accelerator.prepare(*self.modules)
+        if not isinstance(self.modules, (tuple, list)):
+            self.modules = [self.modules]
+            
         if self.accelerator.distributed_type == DistributedType.MULTI_GPU:
             self.ddp_modules = self.modules
             self.modules = list([self.accelerator.unwrap_model(m) for m in self.modules])
