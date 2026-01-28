@@ -1046,8 +1046,6 @@ class DualDiffusionTrainer:
                 # loss is multiplied by grad accum steps for consistent grad norm
                 self.accelerator.backward(module_logs["loss"].mean() * self.config.optimizer.loss_scale)
 
-                self.optimizer.step()
-
                 if self.accelerator.sync_gradients:
                     assert self.accum_step == (self.config.gradient_accumulation_steps - 1), \
                         f"accum_step out of sync with sync_gradients: {self.accum_step} != {self.config.gradient_accumulation_steps - 1}"
@@ -1093,6 +1091,7 @@ class DualDiffusionTrainer:
                     if self.accum_step == (self.config.gradient_accumulation_steps - 1):
                         self.logger.warning(f"Finished all grad accumulation steps but accelerator.sync_gradients is False. self.accum_step: {self.accum_step}")
 
+                self.optimizer.step()
                 self.lr_scheduler.step()
                 self.optimizer.zero_grad()
 
