@@ -68,15 +68,24 @@ def dae_test() -> None:
     format: MS_MDCT_DualFormat = pipeline.format
     embedding: CLAP_Embedding = pipeline.embedding
 
-    """
+    #""" # temporary debug output for AGB in DAE
+    total_balance = 0; balance_count = 0
     for name,param in dae.named_parameters():
         if "emb_balance" in name:
             balance = (param - 1.75).sigmoid()
-            #print("balance:", balance)
+            balance_var = balance.var().item()
+            balance = balance.mean().item()
+
             flavor = "enc" if "enc" in name else "dec"
-            print(f"{flavor} avg: {balance.mean().item():.4f}  std: {balance.std().item():.4f}")
-    """
+            print(f"{flavor} avg: {balance:.4f}  std: {balance_var:.4f}")
+
+            total_balance += balance
+            balance_count += 1
+    if balance_count > 0:
+        print(f"avg balance: {total_balance / balance_count:.4f}")
     #exit()
+    #"""
+    
 
     sample_rate = format.config.sample_rate
     
@@ -150,17 +159,18 @@ def dae_test() -> None:
 
         # ***************** dae stage *****************
 
-        dae_input = torch.cat((input_mdct_phase, input_mdct_psd), dim=1)
+        dae_input = torch.cat((input_mdct_phase, input_mel_spec), dim=1)
         dae_embedding = dae.get_embeddings(audio_embedding.to(dtype=dae.dtype))
 
         if test_params["latents_tiled_encode"] == True:
             latents = dae.tiled_encode(dae_input.to(dtype=dae.dtype), dae_embedding,
                 max_chunk=test_params["latents_tiled_max_chunk_size"], overlap=test_params["latents_tiled_overlap"])
         else:
-            latents = dae.encode(dae_input.to(dtype=dae.dtype), dae_embedding).float()
+            latents, full_latents = dae.encode(dae_input.to(dtype=dae.dtype), dae_embedding)
+            latents = latents.float(); full_latents = full_latents.float()
         
         if test_params.get("add_latents_noise", None) is not None:
-            decode_latents = mp_sum(latents, torch.randn_like(latents), t=test_params["add_latents_noise"]).float()
+            decode_latents = (latents + torch.randn_like(latents) * test_params["add_latents_noise"]) / (1 + test_params["add_latents_noise"]**2)**0.5
         else:
             decode_latents = latents
             
@@ -168,6 +178,7 @@ def dae_test() -> None:
 
         latents = dae.latents_stats_tracker.remove_mean(latents)
         latents = dae.latents_stats_tracker.unscale(latents)
+        #latents = full_latents
 
         # ***************** ddec stage *****************
 
@@ -175,9 +186,8 @@ def dae_test() -> None:
 
             ddecm_params = SampleParams(
                 seed=5000,
-                num_steps=100, length=audio_len, cfg_scale=5, input_perturbation=1, input_perturbation_offset=-2.5,
-                #use_heun=False, schedule="edm2", rho=7, sigma_max=100, sigma_min=0.01, stereo_fix=0
-                use_heun=False, schedule="cos", rho=7.4, sigma_max=100, sigma_min=0.01, stereo_fix=0
+                num_steps=50, length=audio_len, cfg_scale=5, input_perturbation=0, input_perturbation_offset=-2.5,
+                use_heun=False, schedule="edm2", rho=7, sigma_max=100, sigma_min=0.01, stereo_fix=0
             )
 
             output_ddecm = pipeline.diffusion_decode(
@@ -187,8 +197,8 @@ def dae_test() -> None:
             
             ddecp_params = SampleParams(
                 seed=5000,
-                num_steps=100, length=audio_len, cfg_scale=5, input_perturbation=1, input_perturbation_offset=100,
-                use_heun=False, schedule="cos", rho=1, sigma_max=100, sigma_min=0.01, stereo_fix=0
+                num_steps=50, length=audio_len, cfg_scale=5, input_perturbation=1, input_perturbation_offset=0,#-0.8
+                use_heun=False, schedule="cos", rho=1., sigma_max=100, sigma_min=0.01, stereo_fix=0
             )
 
             output_ddecp = pipeline.diffusion_decode(
@@ -203,7 +213,6 @@ def dae_test() -> None:
         else:
             output_raw = output_mel_spec = output_ddecm = output_ddecp = None
 
-        #print(f"input_mdct   mean/std: {input_mdct.mean().item():.4} {input_mdct.std().item():.4}")
         print(f"ddec_cond    mean/std: {ddec_cond.mean().item():.4} {ddec_cond.std().item():.4}")
         if latents is not None:
             latents_mean = latents.mean().item()

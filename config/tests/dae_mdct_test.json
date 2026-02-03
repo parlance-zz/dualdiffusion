@@ -23,13 +23,13 @@
     "ddec_output": true,
     "xref_output": false,
     "add_random_test_samples": 30,
-    "random_test_samples_seed": 2999,
+    "random_test_samples_seed": 8,
     "copy_sample_source_files": true,
     "test_samples": [
+        "3sf/Dopamix/STRM_BGM_ENDING.bcstm.flac",
         "switch/Muse Dash/_t_stage_jump_hard_candy_music.fsb.flac",
         "switch/Arcaea/_t_songs_ignotus.ogg.flac",
         "psf3/Iron Man/_t_! movies_HUB_05_000001C2.adx.flac",
-        "dsf/Metropolis Street Racer Prototype/file_15.adx.flac",
-        "3sf/Dopamix/STRM_BGM_ENDING.bcstm.flac"
+        "dsf/Metropolis Street Racer Prototype/file_15.adx.flac"
     ]
 }
