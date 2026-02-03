@@ -105,7 +105,9 @@ def _zeropower_via_newtonschulz5(G: torch.Tensor, steps: int = 5) -> torch.Tenso
 
     return X
 
-def normuon_update(grad, momentum, second_momentum, beta=0.95, beta2=0.95, ns_steps=5, nesterov=True, groups=1):
+def normuon_update(grad: torch.Tensor, momentum: torch.Tensor, second_momentum: Optional[torch.Tensor],
+        beta: float = 0.95, beta2: float =0.95, ns_steps: int = 5, nesterov: bool = True, groups: int = 1, cc_scaling: bool = True) -> torch.Tensor:
+    
     momentum.lerp_(grad, 1 - beta)
     update = grad.lerp_(momentum, beta) if nesterov else momentum
     if update.ndim >= 4: # reshape instead of view is needed for conv params when channels last is enabled
@@ -113,8 +115,13 @@ def normuon_update(grad, momentum, second_momentum, beta=0.95, beta2=0.95, ns_st
 
     # convert grouped conv params into a batch of smaller matrices for newton schulz iterations
     update = update.view(groups,-1, update.size(-1))
-    update = _zeropower_via_newtonschulz5(update).to(dtype=grad.dtype)
+    pre_ortho = update
+    update = _zeropower_via_newtonschulz5(update, steps=ns_steps).to(dtype=grad.dtype)
     
+    # use correlation coefficient between pre/post orthogonalization as an LR scaling factor
+    if cc_scaling == True:
+        f = (pre_ortho * update).sum(dim=(-2,-1), keepdim=True) / (update.norm(dim=(-2,-1), keepdim=True) * pre_ortho.norm(dim=(-2,-1), keepdim=True) + 1e-20)
+
     if second_momentum is not None: #NorMuon added, from https://github.com/zichongli5/NorMuon
         vnorm = update.norm(dim=(-2,-1), keepdim=True)
         v_mean = torch.mean(update * update, dim=-1, keepdim=True)
@@ -124,7 +131,11 @@ def normuon_update(grad, momentum, second_momentum, beta=0.95, beta2=0.95, ns_st
         vnorm_new = update.norm(dim=(-2,-1), keepdim=True)
         update.mul_(vnorm / (vnorm_new.add_(1e-20))) # This scaling keep the update norm the same as pre-normalization
 
-    return update * max(1, update.size(-2) / update.size(-1)) ** 0.5 # fix for conv params
+    update *= max(1, update.size(-2) / update.size(-1)) ** 0.5
+    if cc_scaling == True:
+        update *= f.clip(min=0, max=1)
+
+    return update
 
 def adam_update(grad: torch.Tensor, buf1: torch.Tensor, buf2: torch.Tensor,
         step: int, betas: tuple[float, float], eps: float) -> torch.Tensor:
@@ -146,13 +157,13 @@ class SingleDeviceNorMuonWithAuxAdam(torch.optim.Optimizer):
 
             # set group defaults
             if group["use_muon"]:
-                # defaults
                 group["lr"] = group.get("lr", 0.02)
                 group["momentum"] = group.get("momentum", 0.95)
                 group["weight_decay"] = group.get("weight_decay", 0)
                 group["beta2"] = group.get("beta2", 0.95)
                 group["normuon"] = group.get("normuon", True)
-                assert set(group.keys()) == set(["params", "lr", "momentum", "weight_decay", "use_muon", "beta2", "normuon"])
+                group["cc_scaling"] = group.get("cc_scaling", True)
+                assert set(group.keys()) == set(["params", "lr", "momentum", "weight_decay", "use_muon", "beta2", "normuon", "cc_scaling"])
             else:
                 group["lr"] = group.get("lr", 3e-4)
                 group["betas"] = group.get("betas", (0.9, 0.95))
@@ -161,6 +172,36 @@ class SingleDeviceNorMuonWithAuxAdam(torch.optim.Optimizer):
                 assert set(group.keys()) == set(["params", "lr", "betas", "eps", "weight_decay", "use_muon"])
 
         super().__init__(param_groups, dict())
+
+    @torch.no_grad()
+    def zero_momentum(self) -> None:
+
+        p: torch.nn.Parameter
+
+        for group in self.param_groups:
+            
+            if group["use_muon"]:
+                for p in group["params"]:
+
+                    if p.grad is not None:
+                        p.grad.zero_()
+
+                    state = self.state[p]
+                    if len(state) > 0:
+                        state["momentum_buffer"].zero_()
+                        if group["normuon"]:
+                            state["second_momentum_buffer"].zero_()
+
+            else:
+                for p in group["params"]:
+
+                    if p.grad is not None:
+                        p.grad.zero_()
+
+                    state = self.state[p]
+                    if len(state) > 0:
+                        state["exp_avg"].zero_()
+                        state["exp_avg_sq"].zero_()
 
     @torch.no_grad()
     def step(self, closure: Optional[Callable[[], float]] = None):
@@ -179,9 +220,8 @@ class SingleDeviceNorMuonWithAuxAdam(torch.optim.Optimizer):
                 for p in group["params"]:
 
                     if p.grad is None:
-                        # continue
-                        p.grad = torch.zeros_like(p)  # Force synchronization
-
+                        continue #p.grad = torch.zeros_like(p)  # Force synchronization
+                        
                     state = self.state[p]
                     groups = getattr(p, "conv_groups", 1)
 
@@ -195,9 +235,9 @@ class SingleDeviceNorMuonWithAuxAdam(torch.optim.Optimizer):
                                 size=second_momentum_shape, device=p.device, dtype=p.dtype)
                         else:
                             state["second_momentum_buffer"] = None
-                    
-                    update = normuon_update(p.grad, state["momentum_buffer"],
-                        state["second_momentum_buffer"], beta=group["momentum"], beta2=group["beta2"], groups=groups)
+                        
+                    update = normuon_update(p.grad, state["momentum_buffer"], state["second_momentum_buffer"],
+                        beta=group["momentum"], beta2=group["beta2"], groups=groups, cc_scaling=group["cc_scaling"])
 
                     weight_decay = getattr(p, "weight_decay", group["weight_decay"])
                     if weight_decay > 0:
@@ -207,7 +247,7 @@ class SingleDeviceNorMuonWithAuxAdam(torch.optim.Optimizer):
                 for p in group["params"]:
 
                     if p.grad is None:
-                        p.grad = torch.zeros_like(p)  # Force synchronization
+                        continue #p.grad = torch.zeros_like(p)  # Force synchronization
 
                     state = self.state[p]
                     if len(state) == 0:

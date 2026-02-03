@@ -98,12 +98,12 @@ class TrainLogger():
 
 @dataclass
 class LRScheduleConfig:
-    lr_schedule: Literal["edm2", "constant"] = "edm2"
-    learning_rate: float     = 3e-3
-    lr_warmup_steps: int     = 5000
-    lr_reference_steps: int  = 70000
-    lr_decay_exponent: float = 0.5
-    min_learning_rate: float = 1e-4
+    lr_schedule: Literal["edm2", "constant", "edm2_smooth"] = "edm2_smooth"
+    learning_rate: float     = 2e-2
+    lr_warmup_steps: int     = 150
+    lr_reference_steps: int  = 150
+    lr_decay_exponent: float = 1
+    min_learning_rate: float = 1e-6
 
 @dataclass
 class OptimizerConfig:
@@ -113,17 +113,18 @@ class OptimizerConfig:
     adam_weight_decay: float  = 0.
 
     loss_scale: float         = 250.
-    max_grad_norm: float      = 1.
-    grad_norm_std_ema_beta: float  = 0.999
-    grad_norm_mean_ema_beta: float = 0.99
-    dynamic_max_grad_norm_z: Optional[float] = 3
+    max_grad_norm: float      = 100.
+    grad_norm_std_ema_beta: float  = 0.9975
+    grad_norm_mean_ema_beta: float = 0.9925
+    dynamic_max_grad_norm_z: Optional[float] = 6
 
-    muon_param_patterns: list[str] = ()
-    adam_param_patterns: list[str] = ()
-    muon_learning_rate_multiplier: float = 100
+    muon_param_patterns: list[str] = ("*",)
+    adam_param_patterns: list[str] = ("*gain*", "*balance*", "*logvar*", "*fourier*", "*emb_label_unconditional*", "*emb_noise*", "*bias*")
+    muon_learning_rate_multiplier: float = 50
     muon_momentum_beta: float = 0.95
     muon_weight_decay: float = 0.
-    muon_use_normuon: bool = False
+    muon_use_normuon: bool    = True
+    muon_use_cc_scaling: bool = True
 
 @dataclass
 class DataLoaderConfig:
@@ -534,7 +535,7 @@ class DualDiffusionTrainer:
 
             param_groups = [
                 {
-                    "params": muon_params, "use_muon": True, "normuon": self.config.optimizer.muon_use_normuon,
+                    "params": muon_params, "use_muon": True, "normuon": self.config.optimizer.muon_use_normuon,"cc_scaling": self.config.optimizer.muon_use_cc_scaling,
                     "lr": self.config.lr_schedule.learning_rate * self.config.optimizer.muon_learning_rate_multiplier,
                     "weight_decay": self.config.optimizer.muon_weight_decay, "momentum": self.config.optimizer.muon_momentum_beta
                 }
