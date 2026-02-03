@@ -281,8 +281,9 @@ def save_audio(raw_samples: torch.Tensor,
     if no_clobber == True:
         output_path = get_no_clobber_filepath(output_path)
     
-    audio_format = os.path.splitext(output_path)[1].lower()[1:]
-    bits_per_sample = 16 if audio_format in ["wav", "flac"] else None
+    # these were removed for torchcodec todo: this will cause problems with copy-on-write in dataset processing
+    audio_format = None #os.path.splitext(output_path)[1].lower()[1:]
+    bits_per_sample = None# 16 if audio_format in ["wav", "flac"] else None
     
     if copy_on_write == True:
         tmp_path = f"{output_path}.tmp"
