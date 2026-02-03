@@ -379,7 +379,7 @@ class MPConv(torch.nn.Module):
 
 class AdaptiveGroupBalance(torch.nn.Module):
 
-    def __init__(self, emb_channels: int, groups: int = 1, balance_logits_offset: float = 0, min_balance: float = 0.1, max_balance: float = 0.9, weight_decay: float = 0.03) -> None:
+    def __init__(self, emb_channels: int, groups: int = 1, balance_logits_offset: float = 0, min_balance: float = 0.1, max_balance: float = 0.9, weight_decay: Optional[float] = None) -> None:
         
         super().__init__()
 
@@ -392,10 +392,12 @@ class AdaptiveGroupBalance(torch.nn.Module):
         if emb_channels > 0:
             self.emb_balance = MPConv(emb_channels, groups, kernel=(1,1), groups=1, disable_weight_norm=True)
             self.emb_balance.weight.data.fill_(0.)
-            setattr(self.emb_balance.weight, "weight_decay", weight_decay)
+            if weight_decay is not None:
+                setattr(self.emb_balance.weight, "weight_decay", weight_decay)
         else:
             self.emb_balance = torch.nn.Parameter(torch.zeros(groups))
-            setattr(self.emb_balance, "weight_decay", weight_decay)
+            if weight_decay is not None:
+                setattr(self.emb_balance, "weight_decay", weight_decay)
 
     def forward(self, x: torch.Tensor, y: torch.Tensor, emb: torch.Tensor) -> torch.Tensor:
         
