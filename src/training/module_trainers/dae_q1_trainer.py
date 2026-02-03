@@ -198,8 +198,6 @@ class DAE_Trainer_Config(ModuleTrainerConfig):
     shift_equivariance_loss_weight: float = 0
     shift_equivariance_warmup_steps: int = 2000
 
-    input_perturbation: float = 0
-    
     crop_edges: int = 4 # used to avoid artifacts due to mdct lapped blocks at beginning and end of sample
     random_stereo_augmentation: bool = True
 
@@ -222,7 +220,6 @@ class DAE_Trainer(ModuleTrainer):
         self.logger.info(f"Training modules: {trainer.config.train_modules}")
         self.logger.info(f"KL loss weight: {self.config.kl_loss_weight} KL warmup steps: {self.config.kl_warmup_steps}")
         self.logger.info(f"Latents shift-equivariance loss weight: {self.config.shift_equivariance_loss_weight} Warmup steps: {self.config.shift_equivariance_warmup_steps}")
-        self.logger.info(f"Input perturbation: {self.config.input_perturbation}")
         self.logger.info(f"Point loss weight: {self.config.point_loss_weight} Point loss warmup steps: {self.config.point_loss_warmup_steps}")
         self.logger.info(f"Crop edges: {self.config.crop_edges}")
 
@@ -256,25 +253,20 @@ class DAE_Trainer(ModuleTrainer):
         else:
             audio_embeddings = dae_embeddings = None
 
-        with torch.no_grad():
-            if self.config.random_stereo_augmentation == True:
-                raw_samples = random_stereo_augmentation(batch["audio"])
-            else:
-                raw_samples = batch["audio"]
+        if self.config.random_stereo_augmentation == True:
+            raw_samples = random_stereo_augmentation(batch["audio"])
+        else:
+            raw_samples = batch["audio"]
 
-            input_mel_spec: torch.Tensor = self.format.raw_to_mel_spec(raw_samples)
-            input_mel_spec = input_mel_spec[:, :, :, self.config.crop_edges:-self.config.crop_edges]
-            target_mel_spec = input_mel_spec.clone()
-
-            if self.config.input_perturbation > 0:
-                input_mel_spec += torch.randn_like(input_mel_spec) * self.config.input_perturbation
-                
-        latents, recon_mel_spec, pre_norm_latents = self.dae(input_mel_spec, dae_embeddings)
+        mel_spec: torch.Tensor = self.format.raw_to_mel_spec(raw_samples)
+        mel_spec = mel_spec[:, :, :, self.config.crop_edges:-self.config.crop_edges].detach()
+        
+        latents, recon_mel_spec, pre_norm_latents = self.dae(mel_spec, dae_embeddings)
         latents: torch.Tensor = latents.float()
         pre_norm_latents: torch.Tensor = pre_norm_latents.float()
 
         # reconstruction losses
-        mss_loss = self.mss_loss.mss_loss(recon_mel_spec, target_mel_spec)
+        mss_loss = self.mss_loss.mss_loss(recon_mel_spec, mel_spec)
         recon_loss = mss_loss
 
         point_loss_weight = self.config.point_loss_weight
@@ -283,7 +275,7 @@ class DAE_Trainer(ModuleTrainer):
         else:
             point_loss_weight = 0
 
-        point_loss = torch.nn.functional.l1_loss(recon_mel_spec, target_mel_spec, reduction="none").mean(dim=(1,2,3))
+        point_loss = torch.nn.functional.l1_loss(recon_mel_spec, mel_spec, reduction="none").mean(dim=(1,2,3))
         if point_loss_weight > 0:
             recon_loss = recon_loss + point_loss * point_loss_weight
 
@@ -297,7 +289,7 @@ class DAE_Trainer(ModuleTrainer):
             shift_equivariance_loss_weight *= warmup_factor
 
         if shift_equivariance_loss_weight > 0:
-            shift_equivariance_loss = self.shift_equivariance_loss(input_mel_spec, dae_embeddings, latents)
+            shift_equivariance_loss = self.shift_equivariance_loss(mel_spec, dae_embeddings, latents)
         else: shift_equivariance_loss = None
 
         # KL loss for latents
@@ -318,8 +310,8 @@ class DAE_Trainer(ModuleTrainer):
             "loss/mss": mss_loss,
             "io_stats/recon_mel_spec_var": recon_mel_spec.var(dim=(1,2,3)),
             "io_stats/recon_mel_spec_mean": recon_mel_spec.mean(dim=(1,2,3)),
-            "io_stats/mel_spec_var": target_mel_spec.var(dim=(1,2,3)),
-            "io_stats/mel_spec_mean": target_mel_spec.mean(dim=(1,2,3)),
+            "io_stats/mel_spec_var": mel_spec.var(dim=(1,2,3)),
+            "io_stats/mel_spec_mean": mel_spec.mean(dim=(1,2,3)),
             "io_stats/latents_var": latents.var(dim=(1,2,3)),
             "io_stats/latents_mean": latents.mean(dim=(1,2,3)),
             "io_stats/latents_pre_norm_var": pre_norm_latents_var,
@@ -328,16 +320,13 @@ class DAE_Trainer(ModuleTrainer):
             "loss_weight/shift_equivariance": shift_equivariance_loss_weight,
         }
 
-        if self.config.input_perturbation > 0:
-            logs["io_stats/input_perturbation"] = self.config.input_perturbation
-
         if shift_equivariance_loss_weight > 0:
             logs["loss"] = logs["loss"] + shift_equivariance_loss * shift_equivariance_loss_weight
             logs["loss/shift_equivariance"] = shift_equivariance_loss
 
 
         if self.trainer.config.enable_debug_mode == True:
-            print("mel_spec.shape:", input_mel_spec.shape)
+            print("mel_spec.shape:", mel_spec.shape)
             print("recon_mel_spec.shape:", recon_mel_spec.shape)
             print("latents.shape:", latents.shape)
 

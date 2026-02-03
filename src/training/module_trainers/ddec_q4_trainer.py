@@ -51,9 +51,6 @@ class DiffusionDecoder_Trainer_Config(ModuleTrainerConfig):
     random_stereo_augmentation: bool = True
     random_phase_augmentation: bool  = True
 
-    phase_invariance_loss_weight: float = 0
-    kl_loss_weight: float = 0
-
     crop_edges: int = 4 # used to avoid artifacts due to mdct lapped blocks at beginning and end of sample
 
 class DiffusionDecoder_Trainer(ModuleTrainer):
@@ -66,8 +63,10 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
         self.logger = trainer.logger
 
         self.ddec: UNet = trainer.get_train_module("ddec")
-        self.dae: DAE = trainer.get_train_module("dae")
+        self.dae: DAE = trainer.pipeline.dae.to(self.trainer.accelerator.device).requires_grad_(False).eval()
         self.format: MS_MDCT_DualFormat = trainer.pipeline.format.to(self.trainer.accelerator.device)
+
+        assert self.dae.config.last_global_step > 0
 
         if trainer.config.enable_model_compilation:
             self.ddec.compile(**trainer.config.compile_params)
@@ -92,12 +91,12 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
         return self.ddec_trainer.init_batch(validation)
     
     def train_batch(self, batch: dict) -> Optional[dict[str, Union[torch.Tensor, float]]]:
-
+        
         with torch.no_grad(): # prepare model inputs
             
             if "audio_embeddings" in batch:
                 audio_embeddings = normalize(batch["audio_embeddings"]).detach()
-                dae_embeddings = self.dae.get_embeddings(audio_embeddings)
+                dae_embeddings = self.dae.get_embeddings(audio_embeddings).detach()
             else:
                 audio_embeddings = dae_embeddings = None
 
@@ -106,78 +105,37 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
             else:
                 raw_samples = batch["audio"]
 
-            #mdct = self.format.raw_to_mdct(raw_samples, random_phase_augmentation=self.config.random_phase_augmentation)
-            #mdct = mdct[..., self.config.crop_edges:-self.config.crop_edges]
-            #mdct2 = self.format.raw_to_mdct(raw_samples, random_phase_augmentation=self.config.random_phase_augmentation)
-            #mdct2 = mdct2[..., self.config.crop_edges:-self.config.crop_edges]
-            mdct_phase, mdct_psd = self.format.raw_to_mdct_phase_psd(raw_samples, random_phase_augmentation=self.config.random_phase_augmentation)
-            mdct_phase = mdct_phase[..., self.config.crop_edges:-self.config.crop_edges]
-            mdct_psd = mdct_psd[..., self.config.crop_edges:-self.config.crop_edges]
-            mdct_phase_psd = torch.cat((mdct_phase, mdct_psd), dim=1)
+            mdct = self.format.raw_to_mdct(raw_samples, random_phase_augmentation=self.config.random_phase_augmentation)
+            raw_samples = self.format.mdct_to_raw(mdct)
 
-            #spec = self.format.raw_to_spec(raw_samples)
-            #spec = spec[..., self.config.crop_edges:-self.config.crop_edges]
+            mel_spec = self.format.raw_to_mel_spec(raw_samples)
+            latents, recon_mel_spec, _ = self.dae(mel_spec, dae_embeddings)
+            latents: torch.Tensor = latents.float()
 
-            #mel_spec = self.format.raw_to_mel_spec(raw_samples)
-            #mel_spec = mel_spec[..., self.config.crop_edges:-self.config.crop_edges]
+            recon_mel_spec = recon_mel_spec[..., self.config.crop_edges:-self.config.crop_edges]
+            recon_mel_spec_linear = self.format.mel_spec_to_linear(recon_mel_spec)
 
-        #latents, ddec_cond, _ = self.dae(mdct, dae_embeddings)
-        latents, ddec_cond, _ = self.dae(mdct_phase_psd, dae_embeddings)
-        #latents, ddec_cond, _ = self.dae(mel_spec, dae_embeddings)
-        #latents, ddec_cond, _ = self.dae(spec, dae_embeddings)
-        latents: torch.Tensor = latents.float()
+            mdct = mdct[..., self.config.crop_edges:-self.config.crop_edges]
         
-        if self.config.phase_invariance_loss_weight > 0:
-            raise NotImplementedError()
-            with torch.autocast(device_type="cuda", dtype=self.trainer.mixed_precision_dtype, enabled=self.trainer.mixed_precision_enabled):
-                latents2 = self.dae.encode(mdct2, dae_embeddings).float()
-
-            phase_invariance_loss = torch.nn.functional.mse_loss(latents, latents2, reduction="none").mean(dim=(1,2,3))
-        else:
-            phase_invariance_loss = None
-
-        #kl_loss = latents.mean().pow(2).expand(latents.shape[0])
-        latents_var = latents.pow(2).mean() + 1e-20
-        var_kl = latents_var - 1 - latents_var.log()
-        kl_loss = var_kl.mean() + latents.mean().square()
-        kl_loss = kl_loss.expand(latents.shape[0])
-    
         logs = {
-            "io_stats/ddec_cond_var": ddec_cond.var(dim=(1,2,3)),
-            "io_stats/ddec_cond_mean": ddec_cond.mean(dim=(1,2,3)),
-            #"io_stats/mdct_var": mdct.var(dim=(1,2,3)),
-            #"io_stats/spec_var": spec.var(dim=(1,2,3)),
-            #"io_stats/spec_mean": spec.mean(dim=(1,2,3)),
-            #"io_stats/mel_spec_var": mel_spec.var(dim=(1,2,3)),
-            #"io_stats/mel_spec_mean": mel_spec.mean(dim=(1,2,3)),
-            "io_stats/mdct_phase_var": mdct_phase.var(dim=(1,2,3)),
-            "io_stats/mdct_psd_var": mdct_psd.var(dim=(1,2,3)),
-            "io_stats/mdct_psd_mean": mdct_psd.mean(dim=(1,2,3)),
-            "io_stats/mdct_phase_psd_var": mdct_phase_psd.var(dim=(1,2,3)),
-            "io_stats/mdct_phase_psd_mean": mdct_phase_psd.mean(dim=(1,2,3)),
+            "io_stats/mel_spec_var": mel_spec.var(dim=(1,2,3)),
+            "io_stats/mel_spec_mean": mel_spec.mean(dim=(1,2,3)),
+            "io_stats/recon_mel_spec_linear_var": recon_mel_spec_linear.var(dim=(1,2,3)),
+            "io_stats/recon_mel_spec_linear_mean": recon_mel_spec_linear.mean(dim=(1,2,3)),
+            "io_stats/recon_mel_spec_linear_mean_square": recon_mel_spec_linear.pow(2).mean(dim=(1,2,3)),
+            "io_stats/mdct_var": mdct.var(dim=(1,2,3)),
             "io_stats/latents_var": latents.var(dim=(1,2,3)),
             "io_stats/latents_mean": latents.mean(dim=(1,2,3)),
-            "loss_weight/phase_invariance": self.config.phase_invariance_loss_weight,
-            "loss_weight/kl": self.config.kl_loss_weight,
-            "loss/phase_invariance": phase_invariance_loss,
-            "loss/kl": kl_loss
         }
 
-        #logs.update(self.ddec_trainer.train_batch(mdct, audio_embeddings, ddec_cond))
-        logs.update(self.ddec_trainer.train_batch(mdct_phase_psd, audio_embeddings, ddec_cond))
-        logs["loss"] = logs["loss/ddec"] + self.config.kl_loss_weight * kl_loss
-
-        if phase_invariance_loss is not None:
-            logs["loss"] = logs["loss"] + self.config.phase_invariance_loss_weight * phase_invariance_loss
+        logs.update(self.ddec_trainer.train_batch(mdct, audio_embeddings, recon_mel_spec_linear))
+        logs["loss"] = logs["loss/ddec"]
 
         if self.trainer.config.enable_debug_mode == True:
-            #print("mdct.shape:", mdct.shape)
-            #print("spec.shape:", spec.shape)
-            #print("mel_spec.shape:", mel_spec.shape)
-            print("mdct_phase.shape:", mdct_phase.shape)
-            print("mdct_psd.shape:", mdct_psd.shape)
-            print("mdct_phase_psd.shape:", mdct_phase_psd.shape)
-            print("ddec_cond.shape:", ddec_cond.shape)
+            print("mdct.shape:", mdct.shape)
+            print("mel_spec.shape:", mel_spec.shape)
+            print("recon_mel_spec.shape:", recon_mel_spec.shape)
+            print("recon_mel_spec_linear.shape:", recon_mel_spec_linear.shape)
             print("latents.shape:", latents.shape)
 
         return logs
