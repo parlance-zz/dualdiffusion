@@ -300,5 +300,5 @@ class UNet(DualDiffusionUNet):
         x: torch.Tensor = self.conv_out(x, gain=self.out_gain)
         D_x: torch.Tensor = c_skip * x_in.float() + c_out * x.float()
 
-        return D_x
+        return D_x, self.get_sigma_loss_logvar(sigma)
     
