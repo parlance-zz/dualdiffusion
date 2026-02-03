@@ -71,6 +71,7 @@ def ms_mdct_dual_format_test() -> None:
     output_path = os.path.join(config.DEBUG_PATH, "ms_mdct_dual_format_2_test")
     os.makedirs(output_path, exist_ok=True)
 
+    format.ms_filters.transpose(0, 1).cpu().numpy().tofile(os.path.join(output_path, "ms_filters.raw"))
     mdct_phase_avg_bin_var = torch.zeros_like(format.mdct_mel_density.flatten())
 
     stat_logger = StatLogger()
