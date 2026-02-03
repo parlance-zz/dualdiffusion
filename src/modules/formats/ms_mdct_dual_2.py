@@ -287,7 +287,6 @@ class MS_MDCT_DualFormat(DualDiffusionFormat):
 
         mdct_psd = mdct_psd.pow(self.config.mdct_psd_exponent)
         mdct_phase = mdct_phase * mdct_psd
-        mdct_phase = mdct_phase * self.mdct_mel_density.pow(0.75)
 
         return self.normalize_phase(mdct_phase), self.normalize_psd(mdct_psd)
     
@@ -295,8 +294,6 @@ class MS_MDCT_DualFormat(DualDiffusionFormat):
 
         mdct_psd = self.unnormalize_psd(mdct_psd)
         mdct_phase = self.unnormalize_phase(mdct_phase)
-
-        mdct_phase = mdct_phase / self.mdct_mel_density.pow(0.75)
 
         mdct_psd = mdct_psd.clip(min=0).pow(1 / self.config.mdct_psd_exponent - 1)
         raw_samples = self.imdct(mdct_phase * mdct_psd).real.contiguous()
@@ -307,6 +304,7 @@ class MS_MDCT_DualFormat(DualDiffusionFormat):
 
         mdct_psd = self.unnormalize_psd(mdct_psd)
         mdct_psd = mdct_psd.clip(min=0).pow(0.25 / self.config.mdct_psd_exponent)
+        mdct_psd /= self.mdct_mel_density.pow(0.25)
 
         return tensor_to_img(mdct_psd, flip_y=True)
 
