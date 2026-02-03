@@ -24,7 +24,6 @@ from dataclasses import dataclass
 from typing import Union, Optional, Any
 
 import torch
-import numpy as np
 
 from training.trainer import DualDiffusionTrainer
 from training.module_trainers.module_trainer import ModuleTrainer, ModuleTrainerConfig
@@ -52,17 +51,11 @@ class DiffusionDecoder_Trainer_Config(ModuleTrainerConfig):
     ddecm: dict[str, Any]
     ddecp: dict[str, Any]
 
-    kl_loss_weight: float = 3e-2
+    kl_loss_weight: float = 1
     kl_warmup_steps: int  = 2000
 
-    phase_loss_multiplier: float = 1
-
     phase_invariance_loss_weight: float = 0
-    phase_invariance_loss_bsz: int = -0
-    latents_dispersion_loss_weight: float = 0
-    latents_dispersion_loss_bsz: int = 0
-    latents_dispersion_num_iterations: int = 0
-    latents_regularization_warmup_steps: int = 25000
+    phase_invariance_warmup_steps: int = 0
 
     random_stereo_augmentation: bool = True
     random_phase_augmentation: bool  = True
@@ -85,18 +78,6 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
         assert self.ddecp is not None
         assert self.ddecm is not None
         assert self.dae is not None
-
-        if self.config.phase_invariance_loss_weight > 0:
-            assert self.config.phase_invariance_loss_bsz != 0, "phase_invariance_loss_weight > 0 but phase_invariance_loss_bsz is 0"
-        if self.config.phase_invariance_loss_bsz == -1:
-            self.config.phase_invariance_loss_bsz = self.trainer.config.device_batch_size
-        
-        if self.config.latents_dispersion_loss_weight > 0:
-            assert self.config.latents_dispersion_loss_bsz != 0, "latents_dispersion_loss_weight > 0 but latents_dispersion_loss_bsz is 0"
-        if self.config.latents_dispersion_loss_bsz == -1:
-            self.config.latents_dispersion_loss_bsz = self.trainer.config.device_batch_size
-        else:
-            assert self.config.latents_dispersion_loss_bsz <= self.trainer.config.device_batch_size, "latents_dispersion_loss_bsz cannot be larger than device_batch_size"
         
         self.format: MS_MDCT_DualFormat = trainer.pipeline.format.to(self.trainer.accelerator.device)
 
@@ -108,11 +89,7 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
 
         self.logger.info(f"Training modules: {trainer.config.train_modules}")
         self.logger.info(f"KL loss weight: {self.config.kl_loss_weight} KL warmup steps: {self.config.kl_warmup_steps}")
-        self.logger.info(f"Latents phase-invariance loss weight: {self.config.phase_invariance_loss_weight} Batch size: {self.config.phase_invariance_loss_bsz}")
-        self.logger.info(f"Latents dispersion loss weight: {self.config.latents_dispersion_loss_weight} Batch size: {self.config.latents_dispersion_loss_bsz}")
-        self.logger.info(f"Latents dispersion loss num iterations: {self.config.latents_dispersion_num_iterations}")
-        self.logger.info(f"Latents regularization loss warmup steps: {self.config.latents_regularization_warmup_steps}")
-        assert self.config.crop_edges * 2 == self.dae.downsample_ratio
+        self.logger.info(f"Latents phase-invariance loss weight: {self.config.phase_invariance_loss_weight} Warmup steps: {self.config.phase_invariance_warmup_steps}")
         self.logger.info(f"Crop edges: {self.config.crop_edges}")
 
         if self.config.random_stereo_augmentation == True:
@@ -125,17 +102,19 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
         self.ddecm_trainer = UNetTrainer(UNetTrainerConfig(**config.ddecm), trainer, self.ddecm, "ddecm")
 
         sigma_sampler_config = SigmaSamplerConfig(
-            sigma_max=0.1,
+            sigma_max=100,
             sigma_min=0.004,
             sigma_data=1,
             distribution="linear",
             dist_scale=-1,
             dist_offset=0,
-            use_stratified_sigma_sampling=False
+            use_stratified_sigma_sampling=True
         )
         self.sigma_sampler = SigmaSampler(sigma_sampler_config)
         self.logger.info("Latents noise SigmaSampler config:")
         self.logger.info(dict_str(sigma_sampler_config.__dict__))
+
+        #self.trainer.optimizer.optimizer.zero_momentum()
 
     """
     def shift_equivariance_loss(self, mdct_phase: torch.Tensor, mdct_psd: torch.Tensor,
@@ -171,6 +150,9 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
         self.ddecp_trainer.init_batch(validation)
         self.ddecm_trainer.init_batch(validation)
 
+        self.global_sigma = self.sigma_sampler.sample(self.trainer.total_batch_size, device=self.trainer.accelerator.device)
+        self.global_sigma = self.trainer.accelerator.gather(self.global_sigma.unsqueeze(0))[0]
+
         return None
     
     def train_batch(self, batch: dict) -> Optional[dict[str, Union[torch.Tensor, float]]]:
@@ -190,31 +172,20 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
         mdct_phase = mdct_phase[..., self.config.crop_edges:-self.config.crop_edges]
         mdct_psd = mdct_psd[..., self.config.crop_edges:-self.config.crop_edges]
 
-        dae_input = torch.cat((mdct_phase, mdct_psd), dim=1).detach()
+        input_mel_spec = self.format.raw_to_mel_spec(raw_samples)
+        input_mel_spec = input_mel_spec[..., self.config.crop_edges:-self.config.crop_edges]
 
-        #latents_shift = np.random.randint(0, self.dae.downsample_ratio)
+        dae_input = torch.cat((mdct_phase, input_mel_spec), dim=1).detach()
 
-        #latents_sigma = self.sigma_sampler.sample(mdct_phase.shape[0], device=mdct_phase.device)
-        #dae_input_sigma = self.sigma_sampler.sample(dae_input.shape[0], device=dae_input.device).view(-1, 1, 1, 1)
-        #dae_input = (dae_input + dae_input_sigma * torch.randn_like(dae_input)) / (1 + dae_input_sigma**2)**0.5
+        # get the noise level for this sub-batch from the pre-calculated whole-batch sigma (required for stratified sampling)
+        device_bsz = self.trainer.config.device_batch_size
+        local_sigma = self.global_sigma[self.trainer.accelerator.process_index::self.trainer.accelerator.num_processes]
+        batch_sigma = local_sigma[self.trainer.accum_step * device_bsz:(self.trainer.accum_step+1) * device_bsz]
+        latents_sigma = batch_sigma
 
-        #latents, ddec_cond, pre_norm_latents = self.dae(dae_input, dae_embeddings, latents_shift=torch.tensor([latents_shift], device=dae_input.device) / self.dae.downsample_ratio)
-        #latents, ddec_cond, pre_norm_latents = self.dae(dae_input, dae_embeddings, latents_sigma=None)#latents_sigma)
-        latents, ddec_cond, pre_norm_latents = self.trainer.get_ddp_module(self.dae)(dae_input, audio_embeddings)
+        latents, ddec_cond, pre_norm_latents = self.trainer.get_ddp_module(self.dae)(dae_input, audio_embeddings, latents_sigma=latents_sigma)
         latents: torch.Tensor = latents.float()
         pre_norm_latents: torch.Tensor = pre_norm_latents.float()
-
-        #z1, z2 = pre_norm_latents.chunk(2, dim=0)
-        #i1, i2 = dae_input.chunk(2, dim=0)
-        #id = (i1 - i2).pow(2).mean(dim=(1,2), keepdim=True) * 100
-        #id = torch.nn.functional.avg_pool2d(id, kernel_size=(1, self.dae.downsample_ratio))
-        #lipschitz_loss = (z1 - z2).pow(2).mean().expand(latents.shape[0])
-
-        #lipschitz_loss = torch.nn.functional.mse_loss(zd, id.detach(), reduction="none").mean().expand(latents.shape[0])
-        #lipschitz_loss_weight = 20
-
-        #mdct_phase = mdct_phase[..., self.dae.downsample_ratio - latents_shift: -(self.dae.downsample_ratio + latents_shift)]
-        #mdct_psd = mdct_psd[..., self.dae.downsample_ratio - latents_shift: -(self.dae.downsample_ratio + latents_shift)]
         
         #phase_invariance_loss = self.shift_equivariance_loss(
         #    mdct_phase, mdct_psd, dae_embeddings, latents)
@@ -225,8 +196,8 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
         kl_loss = kl_loss.expand(latents.shape[0]) # needed for per-sample logging
 
         phase_invariance_loss_weight = self.config.phase_invariance_loss_weight
-        if self.trainer.global_step < self.config.latents_regularization_warmup_steps:
-            warmup_factor = self.trainer.global_step / self.config.latents_regularization_warmup_steps
+        if self.trainer.global_step < self.config.phase_invariance_warmup_steps:
+            warmup_factor = self.trainer.global_step / self.config.phase_invariance_warmup_steps
             phase_invariance_loss_weight *= warmup_factor
 
         kl_loss_weight = self.config.kl_loss_weight
@@ -240,7 +211,7 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
             "io_stats/prenorm_latents_var": pre_norm_latents.var(dim=(1,2,3)).detach(),
             "io_stats/latents_var": latents.var(dim=(1,2,3)).detach(),
             "io_stats/latents_mean": latents.mean(dim=(1,2,3)).detach(),
-            #"io_stats/latents_sigma": latents_sigma.detach(),
+            "io_stats/latents_sigma": latents_sigma.detach(),
 
             "io_stats_ddecp/mdct_phase_var": mdct_phase.var(dim=(1,2,3)),
             "io_stats_ddecm/mdct_psd_var": mdct_psd.var(dim=(1,2,3)),
@@ -249,8 +220,6 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
             "loss/kl_latents": kl_loss.detach(),
             "loss_weight/kl_latents": kl_loss_weight,
             "loss_weight/phase_invariance": phase_invariance_loss_weight,
-            #"loss_weight/lipschitz": lipschitz_loss_weight,
-            #"loss/lipschitz": lipschitz_loss.detach()
         }
 
         #if self.config.phase_invariance_loss_weight > 0:
@@ -262,8 +231,7 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
 
         logs.update(self.ddecp_trainer.train_batch(mdct_phase, audio_embeddings, ddec_cond, noise=noise, perturb_noise=perturb_noise))
         logs.update(self.ddecm_trainer.train_batch(mdct_psd, audio_embeddings, ddec_cond, noise=noise, perturb_noise=perturb_noise))
-        logs["loss"] = logs["loss"] + logs["loss/ddecp"] * self.config.phase_loss_multiplier + logs["loss/ddecm"]
-        #logs["loss"] = logs["loss"] + lipschitz_loss * lipschitz_loss_weight
+        logs["loss"] = logs["loss"] + logs["loss/ddecp"] + logs["loss/ddecm"]
 
         dynamic_range_ddecm = mdct_psd.amax(dim=(1,2,3)) - mdct_psd.amin(dim=(1,2,3))
         logs["io_stats_ddecm/dynamic_range"] = dynamic_range_ddecm
