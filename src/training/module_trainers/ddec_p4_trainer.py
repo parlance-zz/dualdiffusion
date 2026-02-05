@@ -183,12 +183,17 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
         batch_sigma = local_sigma[self.trainer.accum_step * device_bsz:(self.trainer.accum_step+1) * device_bsz]
         latents_sigma = batch_sigma
 
-        latents, ddec_cond, pre_norm_latents = self.trainer.get_ddp_module(self.dae)(dae_input, audio_embeddings, latents_sigma=latents_sigma)
+        if self.config.phase_invariance_loss_weight > 0:
+            mdct_phase2, _ = self.format.raw_to_mdct_phase_psd(raw_samples, random_phase_augmentation=True)
+            mdct_phase2 = mdct_phase2[..., self.config.crop_edges:-self.config.crop_edges]
+            dae_input2 = torch.cat((mdct_phase2, input_mel_spec), dim=1).detach()
+        else:
+            dae_input2 = None
+
+        latents, ddec_cond, pre_norm_latents, phase_invariance_loss = self.trainer.get_ddp_module(self.dae)(
+            dae_input, audio_embeddings, latents_sigma=latents_sigma, samples2=dae_input2)
         latents: torch.Tensor = latents.float()
         pre_norm_latents: torch.Tensor = pre_norm_latents.float()
-        
-        #phase_invariance_loss = self.shift_equivariance_loss(
-        #    mdct_phase, mdct_psd, dae_embeddings, latents)
 
         pre_norm_latents_var = pre_norm_latents.pow(2).mean() + 1e-20
         var_kl = pre_norm_latents_var - 1 - pre_norm_latents_var.log()
@@ -222,9 +227,9 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
             "loss_weight/phase_invariance": phase_invariance_loss_weight,
         }
 
-        #if self.config.phase_invariance_loss_weight > 0:
-        #    logs["loss"] = logs["loss"] + phase_invariance_loss * phase_invariance_loss_weight
-        #    logs["loss/phase_invariance"] = phase_invariance_loss.detach()
+        if self.config.phase_invariance_loss_weight > 0:
+            logs["loss"] = logs["loss"] + phase_invariance_loss * phase_invariance_loss_weight
+            logs["loss/phase_invariance"] = phase_invariance_loss.detach()
 
         noise = torch.randn_like(mdct_psd)
         perturb_noise = torch.randn_like(mdct_psd)
