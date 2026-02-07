@@ -77,7 +77,13 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
 
         assert self.ddecp is not None
         assert self.ddecm is not None
-        assert self.dae is not None
+        
+        if self.dae is None:
+            self.dae = trainer.pipeline.dae.to(device=trainer.accelerator.device, dtype=torch.bfloat16).requires_grad_(False)
+            assert self.dae.config.last_global_step > 0
+            self.train_dae = False
+        else:
+            self.train_dae = True
         
         self.format: MS_MDCT_DualFormat = trainer.pipeline.format.to(self.trainer.accelerator.device)
 
@@ -88,8 +94,9 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
             self.format.compile(**trainer.config.compile_params)
 
         self.logger.info(f"Training modules: {trainer.config.train_modules}")
-        self.logger.info(f"KL loss weight: {self.config.kl_loss_weight} KL warmup steps: {self.config.kl_warmup_steps}")
-        self.logger.info(f"Latents phase-invariance loss weight: {self.config.phase_invariance_loss_weight} Warmup steps: {self.config.phase_invariance_warmup_steps}")
+        if self.train_dae == True:
+            self.logger.info(f"KL loss weight: {self.config.kl_loss_weight} KL warmup steps: {self.config.kl_warmup_steps}")
+            self.logger.info(f"Latents phase-invariance loss weight: {self.config.phase_invariance_loss_weight} Warmup steps: {self.config.phase_invariance_warmup_steps}")
         self.logger.info(f"Crop edges: {self.config.crop_edges}")
 
         if self.config.random_stereo_augmentation == True:
@@ -103,7 +110,7 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
 
         sigma_sampler_config = SigmaSamplerConfig(
             sigma_max=100,
-            sigma_min=0.004,
+            sigma_min=0.008,
             sigma_data=1,
             distribution="linear",
             dist_scale=-1,
@@ -111,8 +118,9 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
             use_stratified_sigma_sampling=True
         )
         self.sigma_sampler = SigmaSampler(sigma_sampler_config)
-        self.logger.info("Latents noise SigmaSampler config:")
-        self.logger.info(dict_str(sigma_sampler_config.__dict__))
+        if self.train_dae == True:
+            self.logger.info("Latents noise SigmaSampler config:")
+            self.logger.info(dict_str(sigma_sampler_config.__dict__))
 
         #self.trainer.optimizer.optimizer.zero_momentum()
 
@@ -181,7 +189,7 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
         device_bsz = self.trainer.config.device_batch_size
         local_sigma = self.global_sigma[self.trainer.accelerator.process_index::self.trainer.accelerator.num_processes]
         batch_sigma = local_sigma[self.trainer.accum_step * device_bsz:(self.trainer.accum_step+1) * device_bsz]
-        latents_sigma = batch_sigma
+        latents_sigma = batch_sigma if self.train_dae == True else None
 
         if self.config.phase_invariance_loss_weight > 0:
             mdct_phase2, _ = self.format.raw_to_mdct_phase_psd(raw_samples, random_phase_augmentation=True)
@@ -190,8 +198,14 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
         else:
             dae_input2 = None
 
-        latents, ddec_cond, pre_norm_latents, phase_invariance_loss = self.trainer.get_ddp_module(self.dae)(
-            dae_input, audio_embeddings, latents_sigma=latents_sigma, samples2=dae_input2)
+        if self.train_dae == True:
+            latents, ddec_cond, pre_norm_latents, phase_invariance_loss = self.trainer.get_ddp_module(self.dae)(
+                dae_input, audio_embeddings, latents_sigma=latents_sigma, samples2=dae_input2)
+        else:
+            latents, ddec_cond, pre_norm_latents, phase_invariance_loss = self.dae(
+                dae_input, audio_embeddings, latents_sigma=None, samples2=None)
+            ddec_cond = ddec_cond.detach()
+            
         latents: torch.Tensor = latents.float()
         pre_norm_latents: torch.Tensor = pre_norm_latents.float()
 
@@ -210,13 +224,12 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
             kl_loss_weight *= self.trainer.global_step / self.config.kl_warmup_steps
         
         logs = {
-            "loss": kl_loss * kl_loss_weight,
+            "loss": kl_loss * kl_loss_weight if self.train_dae == True else torch.zeros_like(kl_loss),
             "io_stats/ddec_cond_var": ddec_cond.var(dim=(1,2,3)),
             "io_stats/ddec_cond_mean": ddec_cond.mean(dim=(1,2,3)),
             "io_stats/prenorm_latents_var": pre_norm_latents.var(dim=(1,2,3)).detach(),
             "io_stats/latents_var": latents.var(dim=(1,2,3)).detach(),
             "io_stats/latents_mean": latents.mean(dim=(1,2,3)).detach(),
-            "io_stats/latents_sigma": latents_sigma.detach(),
 
             "io_stats_ddecp/mdct_phase_var": mdct_phase.var(dim=(1,2,3)),
             "io_stats_ddecm/mdct_psd_var": mdct_psd.var(dim=(1,2,3)),
@@ -227,9 +240,12 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
             "loss_weight/phase_invariance": phase_invariance_loss_weight,
         }
 
-        if self.config.phase_invariance_loss_weight > 0:
-            logs["loss"] = logs["loss"] + phase_invariance_loss * phase_invariance_loss_weight
-            logs["loss/phase_invariance"] = phase_invariance_loss.detach()
+        if self.train_dae == True:
+            logs["io_stats/latents_sigma"] = latents_sigma.detach()
+
+            if self.config.phase_invariance_loss_weight > 0:
+                logs["loss"] = logs["loss"] + phase_invariance_loss * phase_invariance_loss_weight
+                logs["loss/phase_invariance"] = phase_invariance_loss.detach()
 
         noise = torch.randn_like(mdct_psd)
         perturb_noise = torch.randn_like(mdct_psd)
