@@ -202,7 +202,7 @@ class IMDCT(nn.Module):
 
         # Register window tensor
         self.register_buffer(
-            "window", create_window(self.win_length, self.window_fn, self.window_kwargs)
+            "window", create_window(self.win_length, self.window_fn, self.window_kwargs), persistent=False
         )
 
     def forward(

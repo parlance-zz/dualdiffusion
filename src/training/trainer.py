@@ -275,6 +275,8 @@ class DualDiffusionTrainer:
             log_filename_suffix = f"_ddp{self.accelerator.process_index}"
         else:
             log_filename_suffix = ""
+            self.config.enable_grad_sync_debug = False
+
         log_path = os.path.join(self.config.logging.logging_dir, f"train_{self.config.module_name}{log_filename_suffix}.log")
         logging.basicConfig(
             handlers=[
@@ -1101,16 +1103,16 @@ class DualDiffusionTrainer:
             if self.accelerator.sync_gradients:
                 
                 if self.config.enable_grad_sync_debug == True:
-                    def flat_checksum(model):
+                    def param_checksum(model):
                         s = torch.zeros((), device=self.accelerator.device, dtype=torch.float64)
                         with torch.no_grad():
                             for p in model.parameters():
                                 s += p.detach().double().sum()
                         return s
 
-                    cs = flat_checksum(self.modules[0])
-                    all_cs = self.accelerator.gather(cs).cpu().numpy()
-                    param_error = (all_cs[self.accelerator.process_index:self.accelerator.process_index+1] - all_cs[:]).abs().mean()
+                    checksum = param_checksum(self.modules[0])
+                    all_cs = self.accelerator.gather(checksum).cpu()
+                    param_error = (all_cs[self.accelerator.process_index:self.accelerator.process_index+1] - all_cs[:]).abs().sum().item()
                     self.logger.info(f"Rank: {self.accelerator.process_index} Param checksum error: {param_error}", main_process_only=False)
                 
                 # log total train time, total samples processed, epoch #, and it/s stats
