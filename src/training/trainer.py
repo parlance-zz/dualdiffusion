@@ -178,6 +178,7 @@ class DualDiffusionTrainerConfig:
     enable_anomaly_detection: bool      = False
     enable_model_compilation: bool      = True
     enable_debug_mode: bool             = False
+    enable_grad_sync_debug: bool        = False
     enable_cuda_gpu_stats_logging: bool = True
     compile_params: Optional[dict]      = None
 
@@ -1099,24 +1100,18 @@ class DualDiffusionTrainer:
             # weights have now been updated in the last optimizer step
             if self.accelerator.sync_gradients:
                 
-                """
-                if self.global_step % 100 == 0:
+                if self.config.enable_grad_sync_debug == True:
                     def flat_checksum(model):
-                        import torch
                         s = torch.zeros((), device=self.accelerator.device, dtype=torch.float64)
-                        numel = 0
                         with torch.no_grad():
                             for p in model.parameters():
                                 s += p.detach().double().sum()
-                                numel += p.numel()
-                        return s / numel
+                        return s
 
-                    # after optimizer.step()
-                    cs = flat_checksum(self.modules[1])
+                    cs = flat_checksum(self.modules[0])
                     all_cs = self.accelerator.gather(cs).cpu().numpy()
-                    param_error = all_cs[0] - all_cs[1]
-                    self.logger.info(f"Avg param error: {param_error}")
-                """
+                    param_error = (all_cs[self.accelerator.process_index:self.accelerator.process_index+1] - all_cs[:]).abs().mean()
+                    self.logger.info(f"Rank: {self.accelerator.process_index} Param checksum error: {param_error}", main_process_only=False)
                 
                 # log total train time, total samples processed, epoch #, and it/s stats
                 if last_sync_time is not None:
