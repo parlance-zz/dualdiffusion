@@ -34,7 +34,7 @@ from pipelines.dual_diffusion_pipeline import DualDiffusionPipeline, SampleParam
 from modules.unets.unet_edm2_p5_ddec import UNet
 from modules.embeddings.clap import CLAP_Embedding
 from modules.daes.dae_edm2_p5 import DAE
-from modules.formats.ms_mdct_dual_2 import MS_MDCT_DualFormat
+from modules.formats.ms_mdct_dual_3 import MS_MDCT_DualFormat
 from modules.mp_tools import mp_sum
 from utils.dual_diffusion_utils import (
     init_cuda, normalize, save_audio, load_audio, load_safetensors,
@@ -158,7 +158,7 @@ def dae_test() -> None:
 
         # ***************** dae stage *****************
 
-        dae_input = torch.cat((input_mdct_phase, input_mel_spec), dim=1)
+        dae_input = input_mel_spec #torch.cat((input_mdct_phase, input_mel_spec), dim=1)
         dae_embedding = dae.get_embeddings(audio_embedding.to(dtype=dae.dtype))
 
         if test_params["latents_tiled_encode"] == True:
@@ -173,7 +173,8 @@ def dae_test() -> None:
         else:
             decode_latents = latents
             
-        ddec_cond = dae.decode(decode_latents.to(dtype=dae.dtype), dae_embedding).float()
+        #ddec_cond = dae.decode(decode_latents.to(dtype=dae.dtype), dae_embedding).float()
+        ddec_cond = input_mel_spec
 
         latents = dae.latents_stats_tracker.remove_mean(latents)
         latents = dae.latents_stats_tracker.unscale(latents)
@@ -185,8 +186,8 @@ def dae_test() -> None:
 
             ddec_params = SampleParams(
                 seed=5000,
-                num_steps=100, length=audio_len, cfg_scale=5, input_perturbation=1, input_perturbation_offset=0,
-                use_heun=False, schedule="ln_linear", rho=1, sigma_max=11, sigma_min=0.0002, stereo_fix=0
+                num_steps=100, length=audio_len, cfg_scale=5, input_perturbation=1, input_perturbation_offset=100,
+                use_heun=False, schedule="cos", rho=1, sigma_max=200, sigma_min=0.01, stereo_fix=0
             )
 
             output_ddec = pipeline.diffusion_decode(
@@ -194,7 +195,8 @@ def dae_test() -> None:
                 sample_shape=format.get_mdct_shape(raw_length=count),
                 x_ref=ddec_cond.to(dtype=ddec.dtype), module=ddec).float()
             
-            output_raw = format.mdct_to_raw(output_ddec)
+            #output_raw = format.mdct_to_raw(output_ddec)
+            output_raw = format.mdct_phase_psd_to_raw(output_ddec, None)
             output_mel_spec = format.raw_to_mel_spec(output_raw)
             _, output_mdct_psd = format.raw_to_mdct_phase_psd(output_raw)
         else:
