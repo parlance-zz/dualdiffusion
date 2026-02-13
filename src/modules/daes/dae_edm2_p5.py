@@ -357,16 +357,10 @@ class DAE(DualDiffusionDAE):
         return out
 
     def forward(self, samples: torch.Tensor, audio_embeddings: torch.Tensor,
-            latents_sigma: Optional[torch.Tensor] = None, samples2: Optional[torch.Tensor] = None) -> tuple[torch.Tensor, ...]:
+            latents_sigma: Optional[torch.Tensor] = None) -> tuple[torch.Tensor, ...]:
 
         dae_embeddings = self.get_embeddings(audio_embeddings)
         pre_norm_latents = self.encode(samples, dae_embeddings, training=True)
-
-        if samples2 is not None:
-            pre_norm_latents2 = self.encode(samples2, dae_embeddings, training=True)
-            phase_invariance_loss = torch.nn.functional.mse_loss(pre_norm_latents.float(), pre_norm_latents2.float())
-        else:
-            phase_invariance_loss = None
         
         latents = pre_norm_latents
 
@@ -374,7 +368,7 @@ class DAE(DualDiffusionDAE):
             latents = (latents + latents_sigma.view(-1, 1, 1, 1) * torch.randn_like(latents)) / (1 + latents_sigma.view(-1, 1, 1, 1)**2)**0.5
         
         out = self.decode(latents, dae_embeddings, training=True)
-        return latents, out, pre_norm_latents, phase_invariance_loss
+        return latents, out, pre_norm_latents
 
     def tiled_encode(self, x: torch.Tensor, embeddings: torch.Tensor, max_chunk: int = 6144, overlap: int = 256) -> torch.Tensor:
         raise NotImplementedError()

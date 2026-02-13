@@ -67,7 +67,7 @@ def dae_test() -> None:
     format: MS_MDCT_DualFormat = pipeline.format
     embedding: CLAP_Embedding = pipeline.embedding
 
-    #""" # temporary debug output for AGB in DAE
+    # temporary debug output for AGB values in DAE
     total_balance = 0; balance_count = 0
     for name,param in dae.named_parameters():
         if "emb_balance" in name:
@@ -83,15 +83,16 @@ def dae_test() -> None:
     if balance_count > 0:
         print(f"avg balance: {total_balance / balance_count:.4f}")
     #exit()
-    #"""
     
-
     sample_rate = format.config.sample_rate
     
     if test_params.get("ddec_output", False) != True:
         ddec = None
+    if test_params.get("dae_bypass", False) != True:
+        dae = None
+    assert dae is not None or ddec is not None
     
-    if ddec is None:
+    if dae is not None:
         last_global_step = dae.config.last_global_step
         output_path = os.path.join(model_path, "output", "dae", f"step_{last_global_step}")
     else:
@@ -158,27 +159,30 @@ def dae_test() -> None:
 
         # ***************** dae stage *****************
 
-        dae_input = input_mel_spec #torch.cat((input_mdct_phase, input_mel_spec), dim=1)
-        dae_embedding = dae.get_embeddings(audio_embedding.to(dtype=dae.dtype))
+        if dae is not None:
+            dae_input = input_mel_spec
+            dae_embedding = dae.get_embeddings(audio_embedding.to(dtype=dae.dtype))
 
-        if test_params["latents_tiled_encode"] == True:
-            latents = dae.tiled_encode(dae_input.to(dtype=dae.dtype), dae_embedding,
-                max_chunk=test_params["latents_tiled_max_chunk_size"], overlap=test_params["latents_tiled_overlap"])
-        else:
-            latents, full_latents = dae.encode(dae_input.to(dtype=dae.dtype), dae_embedding)
-            latents = latents.float(); full_latents = full_latents.float()
-        
-        if test_params.get("add_latents_noise", None) is not None:
-            decode_latents = (latents + torch.randn_like(latents) * test_params["add_latents_noise"]) / (1 + test_params["add_latents_noise"]**2)**0.5
-        else:
-            decode_latents = latents
+            if test_params["latents_tiled_encode"] == True:
+                latents = dae.tiled_encode(dae_input.to(dtype=dae.dtype), dae_embedding,
+                    max_chunk=test_params["latents_tiled_max_chunk_size"], overlap=test_params["latents_tiled_overlap"])
+            else:
+                latents, full_latents = dae.encode(dae_input.to(dtype=dae.dtype), dae_embedding)
+                latents = latents.float(); full_latents = full_latents.float()
             
-        #ddec_cond = dae.decode(decode_latents.to(dtype=dae.dtype), dae_embedding).float()
-        ddec_cond = input_mel_spec
+            if test_params.get("add_latents_noise", None) is not None:
+                decode_latents = (latents + torch.randn_like(latents) * test_params["add_latents_noise"]) / (1 + test_params["add_latents_noise"]**2)**0.5
+            else:
+                decode_latents = latents
+                
+            ddec_cond = dae.decode(decode_latents.to(dtype=dae.dtype), dae_embedding).float()
 
-        latents = dae.latents_stats_tracker.remove_mean(latents)
-        latents = dae.latents_stats_tracker.unscale(latents)
-        #latents = full_latents
+            latents = dae.latents_stats_tracker.remove_mean(latents)
+            latents = dae.latents_stats_tracker.unscale(latents)
+            #latents = full_latents
+        else:
+            latents = None
+            ddec_cond = input_mel_spec
 
         # ***************** ddec stage *****************
 
@@ -187,7 +191,7 @@ def dae_test() -> None:
             ddec_params = SampleParams(
                 seed=5000,
                 num_steps=100, length=audio_len, cfg_scale=5, input_perturbation=1, input_perturbation_offset=100,
-                use_heun=False, schedule="cos", rho=1, sigma_max=200, sigma_min=0.01, stereo_fix=0
+                use_heun=False, schedule="cos", rho=1, sigma_max=100, sigma_min=0.01, stereo_fix=0
             )
 
             output_ddec = pipeline.diffusion_decode(
@@ -195,7 +199,6 @@ def dae_test() -> None:
                 sample_shape=format.get_mdct_shape(raw_length=count),
                 x_ref=ddec_cond.to(dtype=ddec.dtype), module=ddec).float()
             
-            #output_raw = format.mdct_to_raw(output_ddec)
             output_raw = format.mdct_phase_psd_to_raw(output_ddec, None)
             output_mel_spec = format.raw_to_mel_spec(output_raw)
             _, output_mdct_psd = format.raw_to_mdct_phase_psd(output_raw)
@@ -226,6 +229,9 @@ def dae_test() -> None:
         save_img(format.mel_spec_to_img(input_mel_spec), os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_mel_spec_input.png')}"))
         if output_mel_spec is not None:
             save_img(format.mel_spec_to_img(output_mel_spec), os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_mel_spec_output.png')}"))
+
+        if dae is not None:
+            save_img(format.mel_spec_to_img(ddec_cond), os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_mel_spec_cond.png')}"))
 
         if output_mdct_psd is not None:
             save_img(format.mdct_psd_to_img(input_mdct_psd),  os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_psd_input.png')}"))
