@@ -290,7 +290,7 @@ class DAE(DualDiffusionDAE):
             cin = cout
 
         self.conv_out = MPConv(cout, config.out_channels, kernel=(1,1))
-        self.conv_out_gain = torch.nn.Parameter(torch.ones([]))
+        self.conv_out_gain = torch.nn.Parameter(torch.zeros([]))
 
     def get_embeddings(self, emb_in: torch.Tensor) -> torch.Tensor:
         if self.emb_label is not None:

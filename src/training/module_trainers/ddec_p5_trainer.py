@@ -162,11 +162,14 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
             # get the noise level for this sub-batch from the pre-calculated whole-batch sigma (required for stratified sampling)
             device_bsz = self.trainer.config.device_batch_size
             local_sigma = self.global_sigma[self.trainer.accelerator.process_index::self.trainer.accelerator.num_processes]
-            latents_batch_sigma = local_sigma[self.trainer.accum_step * device_bsz:(self.trainer.accum_step+1) * device_bsz]
+            latents_batch_sigma = None #local_sigma[self.trainer.accum_step * device_bsz:(self.trainer.accum_step+1) * device_bsz]
             
             latents, ddec_cond, pre_norm_latents = self.trainer.get_ddp_module(self.dae)(
                 input_mel_spec, audio_embeddings, latents_sigma=latents_batch_sigma)
             
+            t = torch.rand(ddec_cond.shape[0], device=self.trainer.accelerator.device)
+            ddec_cond = torch.lerp(ddec_cond.float(), input_mel_spec, t[:, None, None, None])
+
             latents: torch.Tensor = latents.float()
             pre_norm_latents: torch.Tensor = pre_norm_latents.float()
 
@@ -185,7 +188,7 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
                 "io_stats/prenorm_latents_var": pre_norm_latents.var(dim=(1,2,3)).detach(),
                 "io_stats/latents_var": latents.var(dim=(1,2,3)).detach(),
                 "io_stats/latents_mean": latents.mean(dim=(1,2,3)).detach(),
-                "io_stats/latents_sigma": latents_batch_sigma.detach(),
+                "io_stats/latents_sigma": latents_batch_sigma.detach() if latents_batch_sigma is not None else 0,
                 "loss/kl_latents": kl_loss.detach(),
                 "loss_weight/kl_latents": kl_loss_weight
             })
@@ -210,7 +213,8 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
             if self.train_dae == True:
                 print("latents.shape:", latents.shape)
                 print("pre_norm_latents.shape:", pre_norm_latents.shape)
-                print("latents_batch_sigma.shape:", latents_batch_sigma.shape)
+                if latents_batch_sigma is not None:
+                    print("latents_batch_sigma.shape:", latents_batch_sigma.shape)
 
         return logs
     
