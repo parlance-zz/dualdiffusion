@@ -354,6 +354,9 @@ class DAE(DualDiffusionDAE):
             x = block(x, emb)
 
         out: torch.Tensor = self.conv_out(x, gain=self.conv_out_gain)
+        c = self.config.out_channels // self.config.in_num_freqs
+        out = out.reshape(out.shape[0], out.shape[1]//c, c, out.shape[3]).permute(0, 2, 1, 3).contiguous()
+
         return out
 
     def forward(self, samples: torch.Tensor, audio_embeddings: torch.Tensor,
