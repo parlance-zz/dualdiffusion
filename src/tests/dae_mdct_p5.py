@@ -86,9 +86,9 @@ def dae_test() -> None:
     
     sample_rate = format.config.sample_rate
     
-    if test_params.get("ddec_output", False) != True:
+    if test_params.get("ddec_output", False) == False:
         ddec = None
-    if test_params.get("dae_bypass", False) != True:
+    if test_params.get("dae_bypass", False) == True:
         dae = None
     assert dae is not None or ddec is not None
     
@@ -111,7 +111,7 @@ def dae_test() -> None:
     latent_shape = pipeline.get_latent_shape(sample_shape)
     print(f"Sample shape: {sample_shape}  Latent shape: {latent_shape}")
 
-    if test_params.get("latents_img_use_pca", None) is not None:
+    if dae is not None and test_params.get("latents_img_use_pca", None) is not None:
         dae.config.latents_img_use_pca = test_params["latents_img_use_pca"]
     
     start_time = datetime.datetime.now()
