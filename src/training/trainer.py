@@ -410,7 +410,10 @@ class DualDiffusionTrainer:
         return self.modules[self.config.train_modules.index(module_name)]
 
     def get_ddp_module(self, module: DualDiffusionModule) -> DualDiffusionModule:
-        return self.ddp_modules[self.modules.index(module)]
+        if module in self.modules and module in self.ddp_modules:
+            return self.ddp_modules[self.modules.index(module)]
+        else:
+            return module
     
     def init_ema_manager(self) -> None:
         
