@@ -34,7 +34,7 @@ import torchaudio
 import safetensors.torch as safetensors
 
 from pipelines.dual_diffusion_pipeline import DualDiffusionPipeline
-from modules.formats.ms_mdct_dual import MS_MDCT_DualFormat, MS_MDCT_DualFormatConfig
+from modules.formats.ms_mdct_dual_2 import MS_MDCT_DualFormat, MS_MDCT_DualFormatConfig
 from modules.embeddings.embedding import DualDiffusionEmbedding
 from modules.daes.dae import DualDiffusionDAE
 from dataset.dataset_processor import DatasetProcessor, DatasetProcessStage
@@ -49,10 +49,6 @@ class EncodeProcessConfig:
     model: Optional[str]                          = None  # use the format, dae, and embeddings from this model (under $MODELS_PATH)
     dae_ema: Union[str, bool]                     = True  # use the specified ema if str, the first ema if true, and no ema if false for latents encoding
     compile_models: bool                          = True  # compile the dae before encoding
-    latents_batch_size: int                       = 1     # batch size for encoding latents. choose a value that works with your vram capacity
-    latents_num_time_offset_augmentations: int    = 8     # add augmentations for sub-pixel (latent pixel) offsets
-    latents_pitch_offset_augmentations: list[int] = ()    # add augmentations for list of pitch offsets (in semitones)
-    latents_stereo_mirroring_augmentation: bool   = True  # add augmentation with swapped stereo channels
     latents_force_overwrite: bool                 = False # (re)encode and overwrite latents
     latents_tiled_encode: bool                    = True  # enable tiled encoding for latents to save vram
     latents_tiled_max_chunk_size: int             = 6144  # max chunk size for tiled encoding
@@ -96,10 +92,6 @@ class EncodeLoad(DatasetProcessStage):
             logger.info(f"Skipping latents, encoding audio / text embeddings only")
 
         if self.process_config.embeddings_only == False:
-            logger.info(f"Latents number of time offset augmentations: {self.process_config.latents_num_time_offset_augmentations}")
-            logger.info(f"Latents number of pitch offset augmentations: {len(self.process_config.latents_pitch_offset_augmentations)}")
-            logger.info(f"Latents stereo mirroring augmentation: {self.process_config.latents_stereo_mirroring_augmentation}")
-            logger.info(f"Latents batch size: {self.process_config.latents_batch_size}")
             logger.info(f"Tiled latents encoding: {self.process_config.latents_tiled_encode}")
             if self.process_config.latents_tiled_encode == True:
                 logger.info(f"Tiled latents max chunk size: {self.process_config.latents_tiled_max_chunk_size}")
@@ -219,13 +211,6 @@ class EncodeProcess(DatasetProcessStage):
     
     def limit_output_queue_size(self) -> bool:
         return True
-    
-    def get_pitch_augmentation_format(self, shift_semitones: float) -> MS_MDCT_DualFormat:
-        shift_rate = 2 ** (shift_semitones / 12)
-        augmented_config = deepcopy(self.format_config)
-        augmented_config.min_frequency *= shift_rate
-        augmented_config.max_frequency *= shift_rate
-        return MS_MDCT_DualFormat(augmented_config)
 
     @torch.inference_mode()
     def start_process(self):
@@ -254,20 +239,9 @@ class EncodeProcess(DatasetProcessStage):
         # encode latents setup
         
         self.format_config: MS_MDCT_DualFormatConfig = self.format.config
-        
-        num_encode_offsets = self.process_config.latents_num_time_offset_augmentations
-        self.dae_encode_offset_padding = self.format_config.ms_frame_hop_length * num_encode_offsets if num_encode_offsets > 0 else 0
-        self.dae_encode_offsets = [i * self.format_config.ms_frame_hop_length for i in range(num_encode_offsets)]
-        self.dae_batch_size = self.process_config.latents_batch_size
-        self.dae_num_batches_per_sample = (num_encode_offsets + self.dae_batch_size - 1) // self.dae_batch_size
         self.use_tiled_encode = self.process_config.latents_tiled_encode
         self.tiled_max_chunk_size = self.process_config.latents_tiled_max_chunk_size
         self.tiled_overlap = self.process_config.latents_tiled_overlap
-
-        pitch_shifts = self.process_config.latents_pitch_offset_augmentations
-        pitch_augmentation_formats = [
-            self.get_pitch_augmentation_format(shift).to(self.device) for shift in pitch_shifts]
-        self.dae_encode_formats: list[MS_MDCT_DualFormat] = [self.format] + pitch_augmentation_formats
     
     @torch.inference_mode()
     def process(self, input_dict: dict) -> Optional[Union[dict, list[dict]]]:
@@ -311,46 +285,28 @@ class EncodeProcess(DatasetProcessStage):
                 audio = torchaudio.functional.resample(
                     audio, sample_rate, self.format_config.sample_rate)
 
-            # create raw audio augmentations
-            crop_width = self.format.get_raw_crop_width(audio.shape[-1] - self.dae_encode_offset_padding)
+            crop_width = self.format.get_raw_crop_width(audio.shape[-1])
+            audio = audio.unsqueeze(0)[..., :crop_width]
 
-            input_audio = []
-            for offset in self.dae_encode_offsets:
-                input_raw_offset_sample = audio[:, offset:offset + crop_width].unsqueeze(0)
-                input_audio.append(input_raw_offset_sample)
-                if self.process_config.latents_stereo_mirroring_augmentation == True:
-                    input_audio.append(torch.flip(input_raw_offset_sample, dims=(1,)))
-            audio = torch.cat(input_audio, dim=0)
-
-            # encode spectrograms of all audios
-            input_samples = []; bsz = self.process_config.latents_batch_size
-            for format in self.dae_encode_formats:
-                for b in range(self.dae_num_batches_per_sample):
-                    batch_input_raw_sample = audio[b*bsz:(b+1)*bsz]
-                    input_sample = format.raw_to_mel_spec(batch_input_raw_sample).type(torch.bfloat16)
-                    input_samples.append(input_sample)
-            input_sample = torch.cat(input_samples, dim=0)
+            # prepare dae inputs
+            input_mel_spec = self.format.raw_to_mel_spec(audio)
+            input_mdct_phase, _ = self.format.raw_to_mdct_phase_psd(audio)
+            dae_input = torch.cat((input_mdct_phase, input_mel_spec), dim=1).detach().to(dtype=torch.bfloat16)
             
             # finally, encode the latents
-            self.logger.debug(f"encoding latents: \"{safetensors_file_path}\" ({input_sample.shape[0]} variations)")
+            self.logger.debug(f"encoding latents: \"{safetensors_file_path}\"")
 
             audio_embeddings = latents["clap_audio_embeddings"].mean(dim=0, keepdim=True)
             audio_embeddings = normalize(audio_embeddings).to(device=self.dae.device, dtype=self.dae.dtype)
             dae_embeddings = self.dae.get_embeddings(audio_embeddings)
 
-            encoded_latents: list[torch.Tensor] = []
-            for b in range(input_sample.shape[0] // bsz):
-                batch_input_sample = input_sample[b*bsz:(b+1)*bsz]
+            if self.use_tiled_encode == True:
+                encoded_latents = self.dae.tiled_encode(dae_input, dae_embeddings,
+                            max_chunk=self.tiled_max_chunk_size, overlap=self.tiled_overlap)
+            else:
+                encoded_latents = self.dae.encode(dae_input, dae_embeddings)
 
-                if self.use_tiled_encode == True:
-                    batch_latents = self.dae.tiled_encode(batch_input_sample, dae_embeddings,
-                                max_chunk=self.tiled_max_chunk_size, overlap=self.tiled_overlap)
-                else:
-                    batch_latents = self.dae.encode(batch_input_sample, dae_embeddings)
-
-                encoded_latents.append(batch_latents)
-
-            latents["latents"] = torch.cat(encoded_latents, dim=0).to(dtype=torch.bfloat16)
+            latents["latents"] = encoded_latents.to(dtype=torch.bfloat16)
             assert latents["latents"].ndim == 4
             self.logger.debug(f"encoded latents shape: {latents['latents'].shape}")
             self.logger.debug(f"target latents shape: {self.pipeline.get_latent_shape(self.pipeline.get_mel_spec_shape(raw_length=crop_width))}  ({crop_width/32000:.2f}s)")

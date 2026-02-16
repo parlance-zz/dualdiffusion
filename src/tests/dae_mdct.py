@@ -86,6 +86,9 @@ def dae_test() -> None:
     #exit()
     #"""
     
+    print("latents ch mean:", dae.latents_stats_tracker.mean)
+    print("latents ch var:", dae.latents_stats_tracker.var)
+    #exit()
 
     sample_rate = format.config.sample_rate
     
@@ -115,7 +118,7 @@ def dae_test() -> None:
         dae.config.latents_img_use_pca = test_params["latents_img_use_pca"]
     
     start_time = datetime.datetime.now()
-    avg_latents_mean = avg_latents_std = 0
+    avg_latents_mean = avg_latents_var = 0
     collage_img = None
 
     add_random_test_samples = test_params["add_random_test_samples"]
@@ -166,19 +169,25 @@ def dae_test() -> None:
             latents = dae.tiled_encode(dae_input.to(dtype=dae.dtype), dae_embedding,
                 max_chunk=test_params["latents_tiled_max_chunk_size"], overlap=test_params["latents_tiled_overlap"])
         else:
-            latents, full_latents = dae.encode(dae_input.to(dtype=dae.dtype), dae_embedding)
-            latents = latents.float(); full_latents = full_latents.float()
+            latents = dae.encode(dae_input.to(dtype=dae.dtype), dae_embedding).float()
         
+        #latents = dae.latents_stats_tracker.remove_mean(latents)
+        #latents = dae.latents_stats_tracker.unscale(latents)
+
+        if latents is not None:
+            latents_mean = latents.mean().item()
+            latents_var = latents.var().item()
+            avg_latents_mean += latents_mean
+            avg_latents_var += latents_var
+            print(f"latents mean/var: {latents_mean:.4} {latents_var:.4}")
+
         if test_params.get("add_latents_noise", None) is not None:
             decode_latents = (latents + torch.randn_like(latents) * test_params["add_latents_noise"]) / (1 + test_params["add_latents_noise"]**2)**0.5
         else:
             decode_latents = latents
-            
-        ddec_cond = dae.decode(decode_latents.to(dtype=dae.dtype), dae_embedding).float()
 
-        latents = dae.latents_stats_tracker.remove_mean(latents)
-        latents = dae.latents_stats_tracker.unscale(latents)
-        #latents = full_latents
+        ddec_cond = dae.decode(decode_latents.to(dtype=dae.dtype), dae_embedding).float()
+        print(f"ddec_cond mean/var: {ddec_cond.mean().item():.4} {ddec_cond.var().item():.4}")
 
         # ***************** ddec stage *****************
 
@@ -186,8 +195,8 @@ def dae_test() -> None:
 
             ddecm_params = SampleParams(
                 seed=5000,
-                num_steps=50, length=audio_len, cfg_scale=5, input_perturbation=0, input_perturbation_offset=-2.5,
-                use_heun=False, schedule="edm2", rho=7, sigma_max=100, sigma_min=0.01, stereo_fix=0
+                num_steps=30, length=audio_len, cfg_scale=5, input_perturbation=1, input_perturbation_offset=-3.5,
+                use_heun=False, schedule="ln_linear", rho=1, sigma_max=100, sigma_min=0.01, stereo_fix=0
             )
 
             output_ddecm = pipeline.diffusion_decode(
@@ -197,8 +206,8 @@ def dae_test() -> None:
             
             ddecp_params = SampleParams(
                 seed=5000,
-                num_steps=50, length=audio_len, cfg_scale=5, input_perturbation=1, input_perturbation_offset=0,#-0.8
-                use_heun=False, schedule="cos", rho=1., sigma_max=100, sigma_min=0.01, stereo_fix=0
+                num_steps=30, length=audio_len, cfg_scale=5, input_perturbation=1, input_perturbation_offset=3.5,#-0.8
+                use_heun=False, schedule="cos", rho=1, sigma_max=100, sigma_min=0.01, stereo_fix=0
             )
 
             output_ddecp = pipeline.diffusion_decode(
@@ -212,14 +221,6 @@ def dae_test() -> None:
             output_mel_spec = format.raw_to_mel_spec(output_raw)
         else:
             output_raw = output_mel_spec = output_ddecm = output_ddecp = None
-
-        print(f"ddec_cond    mean/std: {ddec_cond.mean().item():.4} {ddec_cond.std().item():.4}")
-        if latents is not None:
-            latents_mean = latents.mean().item()
-            latents_std = latents.std().item()
-            avg_latents_mean += latents_mean
-            avg_latents_std += latents_std
-            print(f"latents mean/std: {latents_mean:.4} {latents_std:.4}")
         
         metadata = {**model_metadata}
         metadata["ddecm_metadata"] = dict_str(ddecm_params.__dict__) if ddecm is not None else "null"
@@ -256,7 +257,7 @@ def dae_test() -> None:
     print(f"\nFinished in: {datetime.datetime.now() - start_time}")
     if dae is not None:
         print(f"Latents avg mean: {avg_latents_mean / len(test_samples)}")
-        print(f"Latents avg std: {avg_latents_std / len(test_samples)}")
+        print(f"Latents avg var: {avg_latents_var / len(test_samples)}")
 
     if collage_img is not None:
         save_img(collage_img, os.path.join(output_path, "1", f"_step_{last_global_step}_collage.png"))
