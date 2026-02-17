@@ -1,16 +1,15 @@
 {
-    "model_name": "edm2_dae_p4",
+    "model_name": "edm2_dae_p5",
     "model_load_options": {
         "torch_dtype": "bfloat16",
         "device": "cuda",
         "load_checkpoints": true,
         "load_emas": {
-            "ddecm": "ema_std0.1.safetensors",
-            "ddecp": "ema_std0.1.safetensors"
+
         },
         "compile_options": {
             "fullgraph": true,
-            "dynamic": true
+            "dynamic": false
         }
     },
     "models_path_override": null,
@@ -25,8 +24,8 @@
     "dae_bypass": false,
     "ddec_output": true,
     "xref_output": false,
-    "add_random_test_samples": 100,
-    "random_test_samples_seed": 432,
+    "add_random_test_samples": 30,
+    "random_test_samples_seed": 434,
     "copy_sample_source_files": true,
     "test_samples": [
         "3sf/Dopamix/STRM_BGM_ENDING.bcstm.flac",

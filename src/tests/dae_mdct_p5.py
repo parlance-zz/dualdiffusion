@@ -191,7 +191,7 @@ def dae_test() -> None:
             ddec_params = SampleParams(
                 seed=5000,
                 num_steps=100, length=audio_len, cfg_scale=5, input_perturbation=1, input_perturbation_offset=100,
-                use_heun=False, schedule="linear", rho=1, sigma_max=25, sigma_min=0.01, stereo_fix=0
+                use_heun=False, schedule="cos", rho=0.368, sigma_max=7.4, sigma_min=0.1, stereo_fix=0
             )
 
             output_ddec = pipeline.diffusion_decode(
@@ -228,12 +228,15 @@ def dae_test() -> None:
         
         save_img(format.mel_spec_to_img(input_mel_spec), os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_mel_spec_input.png')}"))
         if output_mel_spec is not None:
+            output_mel_spec.clip_(min=input_mel_spec.amin(), max=input_mel_spec.amax())
             save_img(format.mel_spec_to_img(output_mel_spec), os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_mel_spec_output.png')}"))
 
         if dae is not None:
+            ddec_cond.clip_(min=input_mel_spec.amin(), max=input_mel_spec.amax())
             save_img(format.mel_spec_to_img(ddec_cond), os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_mel_spec_cond.png')}"))
 
         if output_mdct_psd is not None:
+            output_mdct_psd.clip_(min=input_mdct_psd.amin(), max=input_mdct_psd.amax())
             save_img(format.mdct_psd_to_img(input_mdct_psd),  os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_psd_input.png')}"))
             save_img(format.mdct_psd_to_img(output_mdct_psd), os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_psd_output.png')}"))
 

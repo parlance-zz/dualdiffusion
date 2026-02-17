@@ -172,9 +172,6 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
             "loss_weight/kl_latents": kl_loss_weight,
         })
 
-        t = (torch.rand(ddec_cond.shape[0], device=self.trainer.accelerator.device) > 0.5).float()
-        ddec_cond = torch.lerp(ddec_cond.float(), input_mel_spec, t[:, None, None, None])
-
         logs.update(self.ddec_trainer.train_batch(input_mdct_phase, audio_embeddings, ddec_cond))
         logs["loss"] = logs["loss"] + logs["loss/ddec"]
 

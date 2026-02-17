@@ -54,10 +54,10 @@ class UNetConfig(DualDiffusionUNetConfig):
     sigma_data: float = 1.
 
     mp_fourier_ln_sigma_offset: float = 0
-    mp_fourier_bandwidth:       float = 1
+    mp_fourier_bandwidth:       float = 2
 
     model_channels: int  = 8192              # Base multiplier for the number of channels.
-    #logvar_channels: int = 192               # Number of channels for training uncertainty estimation.
+    logvar_channels: int = 192               # Number of channels for training uncertainty estimation.
     channel_mult: list[int] = (1,)           # Per-resolution multipliers for the number of channels.
     channel_mult_noise: Optional[float] = 0.25      # Multiplier for noise embedding dimensionality.
     channel_mult_emb: Optional[float]   = 1         # Multiplier for final embedding dimensionality.
@@ -217,9 +217,9 @@ class UNet(DualDiffusionUNet):
             self.emb_label_unconditional = None
 
         # training uncertainty estimation
-        #self.logvar_fourier = MPFourier(config.logvar_channels)
-        #self.logvar_linear = MPConv(config.logvar_channels, 1, kernel=(), disable_weight_norm=True)
-        #self.logvar_linear.weight.data.fill_(0)
+        self.logvar_fourier = MPFourier(config.logvar_channels)
+        self.logvar_linear = MPConv(config.logvar_channels, 1, kernel=(), disable_weight_norm=True)
+        self.logvar_linear.weight.data.fill_(0)
 
         # decoder
         self.dec = torch.nn.ModuleDict()
@@ -255,9 +255,8 @@ class UNet(DualDiffusionUNet):
             return None
         
     def get_sigma_loss_logvar(self, sigma: Optional[torch.Tensor] = None) -> torch.Tensor:
-        #ln_sigma = sigma.flatten().log() - self.config.mp_fourier_ln_sigma_offset
-        #return self.logvar_linear(self.logvar_fourier(ln_sigma / 4)).view(-1, 1, 1, 1).float()
-        return None
+        ln_sigma = sigma.flatten().log() - self.config.mp_fourier_ln_sigma_offset
+        return self.logvar_linear(self.logvar_fourier(ln_sigma / 4)).view(-1, 1, 1, 1).float()
     
     def get_latent_shape(self, latent_shape: Union[torch.Size, tuple[int, int, int, int]]) -> torch.Size:
         return latent_shape
@@ -317,4 +316,4 @@ class UNet(DualDiffusionUNet):
         x = x.reshape(x.shape[0], x.shape[1]//c, c, x_in.shape[3]).permute(0, 2, 1, 3).contiguous()
         D_x = c_skip * x_in + c_out * x.float()
 
-        return D_x, None#self.get_sigma_loss_logvar(sigma)
+        return D_x, self.get_sigma_loss_logvar(sigma)

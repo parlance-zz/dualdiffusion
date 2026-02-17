@@ -1105,7 +1105,12 @@ class DualDiffusionTrainer:
             # weights have now been updated in the last optimizer step
             if self.accelerator.sync_gradients:
                 
-                if self.config.enable_grad_sync_debug == True:
+                do_param_checksum = False
+                if self.accelerator.distributed_type == DistributedType.MULTI_GPU:
+                    if self.global_step % self.num_update_steps_per_epoch == 0 and self.epoch > 0:
+                        do_param_checksum = True
+                
+                if self.config.enable_grad_sync_debug == True or do_param_checksum == True:
                     def param_checksum(model):
                         s = torch.zeros((), device=self.accelerator.device, dtype=torch.float64)
                         with torch.no_grad():
