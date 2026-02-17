@@ -119,7 +119,10 @@ class UNetTrainer(ModuleTrainer):
 
         if trainer.config.enable_model_compilation == True:
             self.unet.compile(**trainer.config.compile_params)
-    
+
+        if config.disable_loss_weight == True:
+            self.logger.info("Loss weighting is disabled")
+            
         if self.config.num_loss_buckets > 0: # buckets for sigma-range-specific loss tracking
             self.logger.info(f"Using {self.config.num_loss_buckets} loss buckets")
             self.unet_loss_buckets = UNetLossBuckets(
