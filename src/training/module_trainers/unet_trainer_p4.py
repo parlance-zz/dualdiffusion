@@ -61,6 +61,8 @@ class UNetTrainerConfig(ModuleTrainerConfig):
     use_dynamic_sigma_data: bool = False
     dynamic_sigma_data_min: float = 0.1
 
+    disable_loss_weight: bool = False
+
 class UNetLossBuckets(torch.nn.Module):
 
     def __init__(self, num_buckets: int, sigma_min: float, sigma_max: float, trainer: DualDiffusionTrainer, log_prefix: str = "ddec") -> None:
@@ -217,14 +219,21 @@ class UNetTrainer(ModuleTrainer):
         else:
             sigma_data = self.sigma_sampler.config.sigma_data
 
-        batch_loss_weight = (batch_sigma ** 2 + sigma_data ** 2) / (batch_sigma * sigma_data) ** 2
+        if self.config.disable_loss_weight == True:
+            batch_loss_weight = 1.
+        else:
+            batch_loss_weight = (batch_sigma ** 2 + sigma_data ** 2) / (batch_sigma * sigma_data) ** 2
         batch_weighted_loss = torch.nn.functional.mse_loss(denoised, samples, reduction="none")
         if loss_weight is not None: # use custom loss weight if provided
+            assert self.config.disable_loss_weight == False
             batch_weighted_loss = batch_weighted_loss * loss_weight
         batch_weighted_loss = batch_weighted_loss.mean(dim=(1,2,3)) * batch_loss_weight
 
         #error_logvar = self.unet.get_sigma_loss_logvar(sigma=batch_sigma)
-        batch_loss = batch_weighted_loss / error_logvar.exp() + error_logvar
+        if self.config.disable_loss_weight == True:
+            batch_loss = batch_weighted_loss
+        else:
+            batch_loss = batch_weighted_loss / error_logvar.exp() + error_logvar
         
         if self.config.num_loss_buckets > 0:
             self.unet_loss_buckets.log_buckets(batch_weighted_loss, batch_sigma)

@@ -69,29 +69,15 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
 
         self.ddec: UNet = trainer.get_train_module("ddec")
         self.dae: DAE = trainer.get_train_module("dae")
-        
-        if self.dae is None:
-            self.train_dae = False
-            assert self.ddec is not None
-        else:
-            self.train_dae = True
-            assert self.ddec is None
-
-            self.ddec = trainer.pipeline.ddec.to(device=trainer.accelerator.device, dtype=torch.bfloat16).requires_grad_(False)
-            assert self.ddec.config.last_global_step > 0
-        
         self.format: MS_MDCT_DualFormat = trainer.pipeline.format.to(self.trainer.accelerator.device)
 
         if trainer.config.enable_model_compilation:
             self.ddec.compile(**trainer.config.compile_params)
             self.format.compile(**trainer.config.compile_params)
-
-            if self.dae is not None:
-                self.dae.compile(**trainer.config.compile_params)
+            self.dae.compile(**trainer.config.compile_params)
 
         self.logger.info(f"Training modules: {trainer.config.train_modules}")
-        if self.train_dae == True:
-            self.logger.info(f"KL loss weight: {self.config.kl_loss_weight} KL warmup steps: {self.config.kl_warmup_steps}")
+        self.logger.info(f"KL loss weight: {self.config.kl_loss_weight} KL warmup steps: {self.config.kl_warmup_steps}")
         self.logger.info(f"Crop edges: {self.config.crop_edges}")
 
         if self.config.random_stereo_augmentation == True:
@@ -101,33 +87,26 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
         self.logger.info("DDEC trainer:")
         self.ddec_trainer = UNetTrainer(UNetTrainerConfig(**config.ddec), trainer, self.ddec, "ddec")
 
-        if self.train_dae == True:
-            latents_sigma_sampler_config = SigmaSamplerConfig(
-                sigma_max=100,
-                sigma_min=0.01,
-                sigma_data=1,
-                distribution="linear",
-                dist_scale=-1,
-                dist_offset=0,
-                use_stratified_sigma_sampling=True
-            )
-            self.latents_sigma_sampler = SigmaSampler(latents_sigma_sampler_config)
-            if self.train_dae == True:
-                self.logger.info("Latents SigmaSamplerConfig:")
-                self.logger.info(dict_str(latents_sigma_sampler_config.__dict__))
-        else:
-            self.latents_sigma_sampler = None
+        latents_sigma_sampler_config = SigmaSamplerConfig(
+            sigma_max=100,
+            sigma_min=0.01,
+            sigma_data=1,
+            distribution="linear",
+            dist_scale=-1,
+            dist_offset=0,
+            use_stratified_sigma_sampling=True
+        )
+        self.latents_sigma_sampler = SigmaSampler(latents_sigma_sampler_config)
+        self.logger.info("Latents SigmaSamplerConfig:")
+        self.logger.info(dict_str(latents_sigma_sampler_config.__dict__))
 
     @torch.no_grad()
     def init_batch(self, validation: bool = False) -> Optional[dict[str, Union[torch.Tensor, float]]]:
         
         self.ddec_trainer.init_batch(validation)
 
-        if self.train_dae == True:
-            self.global_sigma = self.latents_sigma_sampler.sample(self.trainer.total_batch_size, device=self.trainer.accelerator.device)
-            self.global_sigma = self.trainer.accelerator.gather(self.global_sigma.unsqueeze(0))[0]
-        else:
-            self.global_sigma = None
+        self.global_sigma = self.latents_sigma_sampler.sample(self.trainer.total_batch_size, device=self.trainer.accelerator.device)
+        self.global_sigma = self.trainer.accelerator.gather(self.global_sigma.unsqueeze(0))[0]
 
         return None
     
@@ -156,51 +135,45 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
             "io_stats/mdct_phase_mean": input_mdct_phase.mean(dim=(1,2,3)),
             "io_stats/mel_spec_var": input_mel_spec.var(dim=(1,2,3)),
             "io_stats/mel_spec_mean": input_mel_spec.mean(dim=(1,2,3)),
+            "io_stats/mdct_phase_range": input_mdct_phase.amax() - input_mdct_phase.amin()
         })
 
-        if self.train_dae == True:
-            # get the noise level for this sub-batch from the pre-calculated whole-batch sigma (required for stratified sampling)
-            device_bsz = self.trainer.config.device_batch_size
-            local_sigma = self.global_sigma[self.trainer.accelerator.process_index::self.trainer.accelerator.num_processes]
-            latents_batch_sigma = None #local_sigma[self.trainer.accum_step * device_bsz:(self.trainer.accum_step+1) * device_bsz]
-            
-            latents, ddec_cond, pre_norm_latents = self.trainer.get_ddp_module(self.dae)(
-                input_mel_spec, audio_embeddings, latents_sigma=latents_batch_sigma)
-            
-            t = torch.rand(ddec_cond.shape[0], device=self.trainer.accelerator.device)
-            ddec_cond = torch.lerp(ddec_cond.float(), input_mel_spec, t[:, None, None, None])
-
-            latents: torch.Tensor = latents.float()
-            pre_norm_latents: torch.Tensor = pre_norm_latents.float()
-
-            pre_norm_latents_var = pre_norm_latents.pow(2).mean() + 1e-20
-            var_kl = pre_norm_latents_var - 1 - pre_norm_latents_var.log()
-            kl_loss = var_kl.mean() + 0.5 * pre_norm_latents.mean().square().mean()
-            kl_loss = kl_loss.expand(latents.shape[0]) # needed for per-sample logging
-
-            kl_loss_weight = self.config.kl_loss_weight
-            if self.trainer.global_step < self.config.kl_warmup_steps:
-                kl_loss_weight *= self.trainer.global_step / self.config.kl_warmup_steps
-            
-            logs["loss"] = logs["loss"] + kl_loss * kl_loss_weight
-
-            logs.update({
-                "io_stats/prenorm_latents_var": pre_norm_latents.var(dim=(1,2,3)).detach(),
-                "io_stats/latents_var": latents.var(dim=(1,2,3)).detach(),
-                "io_stats/latents_mean": latents.mean(dim=(1,2,3)).detach(),
-                "io_stats/latents_sigma": latents_batch_sigma.detach() if latents_batch_sigma is not None else 0,
-                "loss/kl_latents": kl_loss.detach(),
-                "loss_weight/kl_latents": kl_loss_weight
-            })
-
-        else:
-            latents = pre_norm_latents = latents_batch_sigma = kl_loss = kl_loss_weight = None
-            ddec_cond = input_mel_spec.detach()
+        # get the noise level for this sub-batch from the pre-calculated whole-batch sigma (required for stratified sampling)
+        device_bsz = self.trainer.config.device_batch_size
+        local_sigma = self.global_sigma[self.trainer.accelerator.process_index::self.trainer.accelerator.num_processes]
+        latents_batch_sigma = None #local_sigma[self.trainer.accum_step * device_bsz:(self.trainer.accum_step+1) * device_bsz]
         
+        latents, ddec_cond, pre_norm_latents = self.trainer.get_ddp_module(self.dae)(
+            input_mel_spec, audio_embeddings, latents_sigma=latents_batch_sigma)
+
+        ddec_cond: torch.Tensor = ddec_cond.float()
+        latents: torch.Tensor = latents.float()
+        pre_norm_latents: torch.Tensor = pre_norm_latents.float()
+
+        pre_norm_latents_var = pre_norm_latents.pow(2).mean() + 1e-20
+        var_kl = pre_norm_latents_var - 1 - pre_norm_latents_var.log()
+        kl_loss_latents = var_kl.mean() + 0.5 * pre_norm_latents.mean().square().mean()
+        kl_loss_latents = kl_loss_latents.expand(latents.shape[0]) # needed for per-sample logging
+
+        kl_loss_weight = self.config.kl_loss_weight
+        if self.trainer.global_step < self.config.kl_warmup_steps:
+            kl_loss_weight *= self.trainer.global_step / self.config.kl_warmup_steps
+        
+        logs["loss"] = logs["loss"] + kl_loss_latents * kl_loss_weight
+
         logs.update({
             "io_stats/ddec_cond_var": ddec_cond.var(dim=(1,2,3)),
             "io_stats/ddec_cond_mean": ddec_cond.mean(dim=(1,2,3)),
+            "io_stats/prenorm_latents_var": pre_norm_latents.var(dim=(1,2,3)).detach(),
+            "io_stats/latents_var": latents.var(dim=(1,2,3)).detach(),
+            "io_stats/latents_mean": latents.mean(dim=(1,2,3)).detach(),
+            "io_stats/latents_sigma": latents_batch_sigma.detach() if latents_batch_sigma is not None else 0,
+            "loss/kl_latents": kl_loss_latents.detach(),
+            "loss_weight/kl_latents": kl_loss_weight,
         })
+
+        t = (torch.rand(ddec_cond.shape[0], device=self.trainer.accelerator.device) > 0.5).float()
+        ddec_cond = torch.lerp(ddec_cond.float(), input_mel_spec, t[:, None, None, None])
 
         logs.update(self.ddec_trainer.train_batch(input_mdct_phase, audio_embeddings, ddec_cond))
         logs["loss"] = logs["loss"] + logs["loss/ddec"]
@@ -209,12 +182,10 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
             print("input_mdct_phase.shape:", input_mdct_phase.shape)
             print("input_mel_spec.shape:", input_mel_spec.shape)
             print("ddec_cond.shape:", ddec_cond.shape)
-
-            if self.train_dae == True:
-                print("latents.shape:", latents.shape)
-                print("pre_norm_latents.shape:", pre_norm_latents.shape)
-                if latents_batch_sigma is not None:
-                    print("latents_batch_sigma.shape:", latents_batch_sigma.shape)
+            print("latents.shape:", latents.shape)
+            print("pre_norm_latents.shape:", pre_norm_latents.shape)
+            if latents_batch_sigma is not None:
+                print("latents_batch_sigma.shape:", latents_batch_sigma.shape)
 
         return logs
     
