@@ -52,6 +52,7 @@ class UNetTrainerConfig(ModuleTrainerConfig):
     num_loss_buckets: int = 12
     loss_buckets_sigma_max: float = 200
     loss_buckets_sigma_min: float = 0.005
+    linear_buckets: bool = False
     
     input_perturbation: float   = 0.1 # from https://arxiv.org/pdf/2301.11706
     conditioning_dropout: float = 0.1
@@ -65,7 +66,7 @@ class UNetTrainerConfig(ModuleTrainerConfig):
 
 class UNetLossBuckets(torch.nn.Module):
 
-    def __init__(self, num_buckets: int, sigma_min: float, sigma_max: float, trainer: DualDiffusionTrainer, log_prefix: str = "ddec") -> None:
+    def __init__(self, num_buckets: int, sigma_min: float, sigma_max: float, trainer: DualDiffusionTrainer, log_prefix: str = "ddec", linear_buckets: bool = False) -> None:
         super().__init__()
 
         self.num_buckets = num_buckets
@@ -78,7 +79,10 @@ class UNetLossBuckets(torch.nn.Module):
         self.register_buffer("loss_buckets", torch.zeros(num_buckets, dtype=torch.float32))
         self.register_buffer("loss_bucket_counts", torch.zeros(num_buckets, dtype=torch.float32))
 
-        bucket_sigma = torch.linspace(np.log(self.sigma_min), np.log(self.sigma_max), self.num_buckets + 1).exp()
+        if linear_buckets == False:
+            bucket_sigma = torch.linspace(np.log(self.sigma_min), np.log(self.sigma_max), self.num_buckets + 1).exp()
+        else:
+            bucket_sigma = torch.linspace(self.sigma_min, self.sigma_max, self.num_buckets + 1)
         bucket_sigma[0] = 0; bucket_sigma[-1] = float("inf")
 
         self.bucket_names = [f"{log_prefix}_loss_σ_buckets/{bucket_sigma[i]:.4f} - {bucket_sigma[i+1]:.4f}" for i in range(num_buckets)]
@@ -122,15 +126,18 @@ class UNetTrainer(ModuleTrainer):
 
         if config.disable_loss_weight == True:
             self.logger.info("Loss weighting is disabled")
-            
+
         if self.config.num_loss_buckets > 0: # buckets for sigma-range-specific loss tracking
+            if config.linear_buckets == True:
+                self.logger.info("Using linear loss buckets")
             self.logger.info(f"Using {self.config.num_loss_buckets} loss buckets")
             self.unet_loss_buckets = UNetLossBuckets(
                 num_buckets=self.config.num_loss_buckets,
                 sigma_min=self.config.loss_buckets_sigma_min,
                 sigma_max=self.config.loss_buckets_sigma_max,
                 trainer=trainer,
-                log_prefix=f"{flavor}"
+                log_prefix=f"{flavor}",
+                linear_buckets=config.linear_buckets
             )
         else:
             self.logger.info("UNet loss buckets are disabled")
