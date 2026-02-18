@@ -21,7 +21,7 @@
 # SOFTWARE.
 
 from dataclasses import dataclass
-from typing import Union, Optional, Any
+from typing import Literal, Union, Optional, Any
 
 import torch
 
@@ -52,6 +52,7 @@ class DiffusionDecoder_Trainer_Config(ModuleTrainerConfig):
 
     kl_loss_weight: float = 0.1
     kl_warmup_steps: int  = 300
+    kl_loss_mode: Literal["per_channel", "global"] = "global"
 
     random_stereo_augmentation: bool = True
     random_phase_augmentation: bool  = True
@@ -76,8 +77,11 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
             self.format.compile(**trainer.config.compile_params)
             self.dae.compile(**trainer.config.compile_params)
 
+        assert config.kl_loss_mode in ("per_channel", "global")
+
         self.logger.info(f"Training modules: {trainer.config.train_modules}")
         self.logger.info(f"KL loss weight: {self.config.kl_loss_weight} KL warmup steps: {self.config.kl_warmup_steps}")
+        self.logger.info(f"KL loss mode: {self.config.kl_loss_mode}")
         self.logger.info(f"Crop edges: {self.config.crop_edges}")
 
         if self.config.random_stereo_augmentation == True:
@@ -150,9 +154,15 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
         latents: torch.Tensor = latents.float()
         pre_norm_latents: torch.Tensor = pre_norm_latents.float()
 
-        pre_norm_latents_var = pre_norm_latents.pow(2).mean() + 1e-20
-        var_kl = pre_norm_latents_var - 1 - pre_norm_latents_var.log()
-        kl_loss_latents = var_kl.mean() + 0.5 * pre_norm_latents.mean().square().mean()
+        if self.config.kl_loss_mode == "global":
+            pre_norm_latents_var = pre_norm_latents.pow(2).mean() + 1e-20
+            var_kl = pre_norm_latents_var - 1 - pre_norm_latents_var.log()
+            kl_loss_latents = var_kl.mean() + 0.5 * pre_norm_latents.mean().pow(2).mean()
+        else:
+            pre_norm_latents_var = pre_norm_latents.pow(2).mean(dim=(0,2,3)) + 1e-20
+            var_kl = pre_norm_latents_var - 1 - pre_norm_latents_var.log()
+            kl_loss_latents = var_kl.mean() + 0.5 * pre_norm_latents.mean(dim=(0,2,3)).pow(2).mean()
+
         kl_loss_latents = kl_loss_latents.expand(latents.shape[0]) # needed for per-sample logging
 
         kl_loss_weight = self.config.kl_loss_weight
