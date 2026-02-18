@@ -1118,10 +1118,14 @@ class DualDiffusionTrainer:
                                 s += p.detach().double().sum()
                         return s
 
-                    checksum = param_checksum(self.modules[0])
-                    all_cs = self.accelerator.gather(checksum).cpu()
-                    param_error = (all_cs[self.accelerator.process_index:self.accelerator.process_index+1] - all_cs[:]).abs().sum().item()
-                    self.logger.info(f"Rank: {self.accelerator.process_index} Param checksum error: {param_error}", main_process_only=False)
+                    module_param_errors = {}
+                    for i, module_name in enumerate(self.config.train_modules):
+                        checksum = param_checksum(self.modules[i])
+                        all_cs = self.accelerator.gather(checksum).cpu()
+                        param_error = (all_cs[self.accelerator.process_index:self.accelerator.process_index+1] - all_cs[:]).abs().sum().item()
+                        module_param_errors[module_name] = param_error
+                    
+                    self.logger.info(f"Rank: {self.accelerator.process_index} - Param Checksum Errors: {dict_str(module_param_errors)}", main_process_only=False)
                 
                 # log total train time, total samples processed, epoch #, and it/s stats
                 if last_sync_time is not None:
