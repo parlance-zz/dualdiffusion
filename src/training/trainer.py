@@ -1113,17 +1113,19 @@ class DualDiffusionTrainer:
                 if self.config.enable_grad_sync_debug == True or do_param_checksum == True:
                     def param_checksum(model):
                         s = torch.zeros((), device=self.accelerator.device, dtype=torch.float64)
+                        n = 0
                         with torch.no_grad():
                             for p in model.parameters():
                                 s += p.detach().double().sum()
-                        return s
+                                n += p.numel()
+                        return s / n
 
                     module_param_errors = {}
                     for i, module_name in enumerate(self.config.train_modules):
                         checksum = param_checksum(self.modules[i])
                         all_cs = self.accelerator.gather(checksum).cpu()
                         param_error = (all_cs[self.accelerator.process_index:self.accelerator.process_index+1] - all_cs[:]).abs().sum().item()
-                        module_param_errors[module_name] = param_error
+                        module_param_errors[module_name] = param_error / (self.accelerator.num_processes - 1)
                     
                     self.logger.info(f"Rank: {self.accelerator.process_index} - Param Checksum Errors: {dict_str(module_param_errors)}", main_process_only=False)
                 
