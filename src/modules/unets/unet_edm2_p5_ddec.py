@@ -266,7 +266,8 @@ class UNet(DualDiffusionUNet):
                 format: DualDiffusionFormat,
                 embeddings: torch.Tensor,
                 x_ref: Optional[torch.Tensor] = None,
-                perturbed_input: Optional[torch.Tensor] = None) -> torch.Tensor:
+                perturbed_input: Optional[torch.Tensor] = None,
+                conditioning_mask: Optional[torch.Tensor] = None) -> torch.Tensor:
 
         with torch.no_grad():
             sigma = sigma.view(-1, 1, 1, 1)
@@ -286,6 +287,13 @@ class UNet(DualDiffusionUNet):
         x_ref = x_ref.permute(0, 2, 1, 3).reshape(x_ref.shape[0], x_ref.shape[1]*x_ref.shape[2], 1, x_ref.shape[3]).to(dtype=torch.bfloat16)
         x = x.permute(0, 2, 1, 3).reshape(x.shape[0], x.shape[1]*x.shape[2], 1, x.shape[3]).to(dtype=torch.bfloat16)
 
+        # nuisance due to ddp wrapper limitations
+        if conditioning_mask is not None:
+            assert self.training == True
+            embeddings = self.get_embeddings(embeddings, conditioning_mask)
+        else:
+            assert self.training == False
+            
         # embedding
         emb: torch.Tensor = self.emb_noise(self.emb_fourier(c_noise)).to(dtype=torch.bfloat16)
         if self.config.in_channels_emb > 0:
