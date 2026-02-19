@@ -199,7 +199,6 @@ class UNetTrainer(ModuleTrainer):
 
         # normal conditioning dropout
         conditioning_mask = (torch.rand(device_bsz, device=self.trainer.accelerator.device) > self.config.conditioning_dropout).requires_grad_(False).detach()
-        unet_embeddings = self.unet.get_embeddings(embeddings, conditioning_mask)
         
         # get the noise level for this sub-batch from the pre-calculated whole-batch sigma (required for stratified sampling)
         local_sigma = self.global_sigma[self.trainer.accelerator.process_index::self.trainer.accelerator.num_processes]
@@ -220,9 +219,8 @@ class UNetTrainer(ModuleTrainer):
         else:
             perturbed_input = None
 
-        #denoised: torch.Tensor = self.unet(samples + noise, batch_sigma, None, unet_embeddings, ref_samples, perturbed_input)
-        denoised, error_logvar = self.trainer.get_ddp_module(self.unet)(samples + noise, batch_sigma, None, unet_embeddings, ref_samples, perturbed_input)
-        #denoised: torch.Tensor = self.trainer.get_ddp_module(self.unet)(samples + noise, batch_sigma, None, embeddings, ref_samples, perturbed_input)
+        denoised, error_logvar = self.trainer.get_ddp_module(self.unet)(samples + noise, batch_sigma, None, embeddings,
+                                    x_ref=ref_samples, perturbed_input=perturbed_input, conditioning_mask=conditioning_mask)
         
         if self.config.use_dynamic_sigma_data == True:
             sigma_data = samples.pow(2).mean(dim=(1,2,3)).sqrt().clip(min=self.config.dynamic_sigma_data_min)
@@ -239,7 +237,6 @@ class UNetTrainer(ModuleTrainer):
             batch_weighted_loss = batch_weighted_loss * loss_weight
         batch_weighted_loss = batch_weighted_loss.mean(dim=(1,2,3)) * batch_loss_weight
 
-        #error_logvar = self.unet.get_sigma_loss_logvar(sigma=batch_sigma)
         if self.config.disable_loss_weight == True:
             batch_loss = batch_weighted_loss
         else:

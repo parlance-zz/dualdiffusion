@@ -65,7 +65,6 @@ class UNetConfig(DualDiffusionUNetConfig):
     channels_per_head: int    = 128          # Number of channels per attention head.
     rope_channels: int        = 112
     rope_base: float          = 10000.
-    attn_logit_scale: float   = 1
     num_layers_per_block: int = 16           # Number of resnet blocks per resolution.
     label_balance: float      = 0.5          # Balance between noise embedding (0) and class embedding (1).
     balance_logits_offset: float = -1.75
@@ -88,7 +87,6 @@ class Block(torch.nn.Module):
         mlp_groups: int        = 4,        # Number of groups for the MLP.
         emb_linear_groups: int = 4,
         channels_per_head: int = 64,       # Number of channels per attention head.
-        attn_logit_scale: float = 1.,
         attn_temporal: bool = False
     ) -> None:
         super().__init__()
@@ -103,7 +101,6 @@ class Block(torch.nn.Module):
         self.dropout = dropout
         self.balance_logits_offset = balance_logits_offset
         self.clip_act = clip_act
-        self.attn_logit_scale = attn_logit_scale
         self.attn_temporal = attn_temporal
 
         inner_channels = out_channels * mlp_multiplier
@@ -146,22 +143,22 @@ class Block(torch.nn.Module):
         B, C, H, W = y.shape
 
         if self.attn_temporal == True:
-            """
+
             q: torch.Tensor = self.attn_q(y)
             k: torch.Tensor = self.attn_k(y)
             v: torch.Tensor = self.attn_v(y)
-            q = q.reshape(q.shape[0], self.num_heads, -1, y.shape[2] * y.shape[3])
-            k = k.reshape(k.shape[0], self.num_heads, -1, y.shape[2] * y.shape[3])
-            v = v.reshape(v.shape[0], self.num_heads, -1, y.shape[2] * y.shape[3])
-            q = normalize(q, dim=2)
-            k = normalize(k, dim=2)
-            v = normalize(v, dim=2)
+            q = q.reshape(B, self.mlp_groups, self.channels_per_head, W)
+            k = k.reshape(B, self.mlp_groups, self.channels_per_head, W)
+            v = v.reshape(B, self.mlp_groups, self.channels_per_head, W)
+            q = normalize(q, dim=2).transpose(-1, -2)
+            k = normalize(k, dim=2).transpose(-1, -2)
+            v = normalize(v, dim=2).transpose(-1, -2)
 
-            q_rot = _rope_pair_rotate_partial(q.transpose(-1, -2), rope_tables)
-            k_rot = _rope_pair_rotate_partial(k.transpose(-1, -2), rope_tables)
+            q_rot = _rope_pair_rotate_partial(q, rope_tables)
+            k_rot = _rope_pair_rotate_partial(k, rope_tables)
 
-            y = torch.nn.functional.scaled_dot_product_attention(q_rot, k_rot, v.transpose(-1, -2)).transpose(-1, -2)
-            """
+            y = torch.nn.functional.scaled_dot_product_attention(q_rot, k_rot, v).transpose(-1, -2)
+            y = y.reshape(B, C, H, W)
         else:
             q: torch.Tensor = self.attn_q(y).permute(0, 3, 2, 1)
             k: torch.Tensor = self.attn_k(y).permute(0, 3, 2, 1)
@@ -173,9 +170,7 @@ class Block(torch.nn.Module):
             k = normalize(k, dim=4)
             v = normalize(v, dim=4)
 
-            y = torch.nn.functional.scaled_dot_product_attention(q, k, v,
-                scale=self.attn_logit_scale / self.channels_per_head**0.5)
-            
+            y = torch.nn.functional.scaled_dot_product_attention(q, k, v)
             y = y.permute(0, 3, 4, 2, 1).reshape(B, C, H, W)
 
         y = self.attn_proj(y)
@@ -212,8 +207,7 @@ class UNet(DualDiffusionUNet):
                         "mlp_groups": config.mlp_groups,
                         "emb_linear_groups": config.emb_linear_groups,
                         "balance_logits_offset": config.balance_logits_offset,
-                        "channels_per_head": config.channels_per_head,
-                        "attn_logit_scale": config.attn_logit_scale}
+                        "channels_per_head": config.channels_per_head}
 
         cblock = [config.model_channels * x for x in config.channel_mult]
         cnoise = int(config.model_channels * config.channel_mult_noise) if config.channel_mult_noise is not None else max(cblock)
@@ -290,7 +284,8 @@ class UNet(DualDiffusionUNet):
                 format: DualDiffusionFormat,
                 embeddings: torch.Tensor,
                 x_ref: Optional[torch.Tensor] = None,
-                perturbed_input: Optional[torch.Tensor] = None) -> torch.Tensor:
+                perturbed_input: Optional[torch.Tensor] = None,
+                conditioning_mask: Optional[torch.Tensor] = None) -> torch.Tensor:
 
         with torch.no_grad():
             sigma = sigma.view(-1, 1, 1, 1)
@@ -307,6 +302,13 @@ class UNet(DualDiffusionUNet):
             else:
                 x = (c_in * x_in).to(dtype=torch.bfloat16)
 
+        # nuisance due to ddp wrapper limitations
+        if conditioning_mask is not None:
+            assert self.training == True
+            embeddings = self.get_embeddings(embeddings, conditioning_mask)
+        else:
+            assert self.training == False
+        
         # Embedding.
         emb: torch.Tensor = self.emb_noise(self.emb_fourier(c_noise))
         emb = mp_sum(emb, embeddings.to(dtype=emb.dtype), t=self.config.label_balance)
