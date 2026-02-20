@@ -74,15 +74,6 @@
         "myon_myon.flac",
         "myon_myon.flac"
         */
-
-        /* // funky with female asian singing, medium audio quality
-        "psp/megpoid the Music#/S001.AT3.flac",
-        "psp/megpoid the Music#/S001.AT3.flac",
-        "psp/megpoid the Music#/S001.AT3.flac",
-        "psp/megpoid the Music#/S001.AT3.flac",
-        "psp/megpoid the Music#/S001.AT3.flac",
-        "psp/megpoid the Music#/S001.AT3.flac"
-        /*/
         
         //"xbox/Jet Set Radio Future"
         //"dsf/Jet Grind Radio"
@@ -109,7 +100,7 @@
         "psf2/Ar tonelico - Melody of Elemia/113 - Ken Nakagawa, Daisuke Achiwa, Akira Tsuchiya - Vidarr.adx.flac", // harmonized electric guitars
 
         //*
-        "psp/Godfather, The - Mob Wars/073 BGM #073 [GODFATH0.VIV].at3.flac", // classic 1930s jazz on vinyl
+        //"psp/Godfather, The - Mob Wars/073 BGM #073 [GODFATH0.VIV].at3.flac", // classic 1930s jazz on vinyl
         "vita/Taiko no Tatsujin - V Version/SONG_MEGM1X.at9.flac", // cool orchestral with female singing
         "wii/Nodame Cantabile - Dream Orchestra/Menu_Song10.brstm.flac", // energetic orchestral
 
@@ -384,7 +375,7 @@
         //*/
     ],
     "unet_params": {
-        "seed": null,
+        "seed": 100,
         "seamless_loop": false,
 
         "length": null,//1408768,
@@ -403,8 +394,8 @@
         "sigma_max": 200,
         "sigma_min": 0.01,
         
-        "input_perturbation": 0.1,
-        "input_perturbation_offset": -1.3
+        "input_perturbation": 0.12,
+        "input_perturbation_offset": -0.85
     },
     "ddecm_params": {
 
