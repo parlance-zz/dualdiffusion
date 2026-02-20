@@ -379,7 +379,8 @@ class MPConv(torch.nn.Module):
 
 class AdaptiveGroupBalance(torch.nn.Module):
 
-    def __init__(self, emb_channels: int, groups: int = 1, balance_logits_offset: float = 0, min_balance: float = 0.1, max_balance: float = 0.9, weight_decay: Optional[float] = None) -> None:
+    def __init__(self, emb_channels: int, groups: int = 1, balance_logits_offset: float = 0,
+            min_balance: Optional[float] = 0.1, max_balance: Optional[float] = 0.9, weight_decay: Optional[float] = None) -> None:
         
         super().__init__()
 
@@ -408,7 +409,8 @@ class AdaptiveGroupBalance(torch.nn.Module):
             balance = self.emb_balance[None, :, None, None].to(dtype=x.dtype)
 
         balance = (balance + self.balance_logits_offset).sigmoid()
-        balance = balance.clip(min=self.min_balance, max=self.max_balance)
+        if self.min_balance is not None or self.max_balance is not None:
+            balance = balance.clip(min=self.min_balance, max=self.max_balance)
 
         return mp_sum_groups(x, y, balance, self.groups)
 
