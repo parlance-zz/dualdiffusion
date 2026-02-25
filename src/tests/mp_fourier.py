@@ -52,14 +52,23 @@ def mp_fourier_test():
 
     emb_fourier = MPFourier(emb_dim, bandwidth=bandwidth)
     
-    if sigma_scale == "log_linear":
+    if sigma_scale == "ln_linear":
         sigma = torch.linspace(np.log(sigma_min), np.log(sigma_max), steps).exp()
-    elif sigma_scale == "log_sech":
+    elif sigma_scale == "ln_sech":
         theta1 = np.arctan(sigma_data / sigma_max); theta0 = np.arctan(sigma_data / sigma_min)
         theta = torch.linspace(1, 0, steps) * (theta0 - theta1) + theta1
         sigma = theta.cos() / theta.sin() * sigma_data
+    else:
+        raise ValueError()
     
-    emb = emb_fourier(sigma.log() / 4) * emb_scale / emb_dim**0.5
+    if test_params["c_noise_scale"] == "acot":
+        c_noise = (1 / sigma).atan()
+    elif test_params["c_noise_scale"] == "ln":
+        c_noise = sigma.log() / 4
+    else:
+        raise ValueError()
+
+    emb = emb_fourier(c_noise) * emb_scale / emb_dim**0.5
     inner_products = (emb.view(1, steps, emb_dim) * emb.view(steps, 1, emb_dim)).sum(dim=2)
     
     if softmax:
