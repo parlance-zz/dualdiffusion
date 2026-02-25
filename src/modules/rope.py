@@ -80,18 +80,7 @@ def _rope_tables_for_seq(N: int, rope_ch: int, rope_base: float = 10000., scale:
 
 @torch.no_grad()
 def run_test(N: int = 31, t0: int | None = None, rope_ch: int = 2, rope_base: float = 10000.0):
-    """
-    Verify RoPE same-sign behavior with PyTorch SDPA using mla.py helpers.
 
-    Setup:
-      - Build standard RoPE tables via _build_rope_width over the sequence length N.
-      - Q has a single non-zero query vector [1,0] at position t0 (default N//4).
-      - K has [1,0] at all positions before rotation.
-      - V is token-identity (D = N), so SDPA output for the query row equals attention weights over keys.
-      - Same-sign rotation (Q and K use the same RoPE) should peak at the query’s own index t0.
-
-    Prints the attention weights and asserts the argmax location.
-    """
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     B, H = 1, 1
     D = N
@@ -100,40 +89,37 @@ def run_test(N: int = 31, t0: int | None = None, rope_ch: int = 2, rope_base: fl
 
     assert rope_ch % 2 == 0 and 0 <= rope_ch <= D, "rope_ch must be even and <= D"
 
-    # RoPE tables for sequence axis
-    cos, sin = _rope_tables_for_seq(N, rope_ch, rope_base, device)
+    cos, sin = _rope_tables_for_seq(N, rope_ch, rope_base, scale=1, device=device)
 
-    # Q/K base (energy only in first two dims)
     q = torch.zeros(B, H, N, D, device=device, dtype=torch.float32)
     k = torch.zeros_like(q)
-    q[..., t0, 0] = 1.0   # query direction [1,0] at t0
-    k[..., :,  0] = 1.0   # keys all start as [1,0]
+    v = torch.zeros_like(q)
+    q[..., :rope_ch] = 1.
+    k[..., :rope_ch] = 1.
+    v[:, :, t0, :] = 1.
 
-    # Apply RoPE from mla.py (same-sign for Q and K)
-    q_rot  = _rope_pair_rotate_partial(q, cos, sin)
-    k_same = _rope_pair_rotate_partial(k, cos, sin)
+    from modules.mp_tools import normalize
+    q = normalize(q, dim=3)
+    k = normalize(k, dim=3)
+    v = normalize(v, dim=3)
 
-    # V: token identity -> SDPA outputs attention weights directly in the last dim
-    v = torch.zeros(B, H, N, D, device=device, dtype=torch.float32)
-    v[:, :, torch.arange(N), torch.arange(N)] = 1.0
+    q_rot  = _rope_pair_rotate_partial(q, (cos, sin))
+    k_same = _rope_pair_rotate_partial(k, (cos, sin))
 
-    # SDPA
-    y_same = torch.nn.functional.scaled_dot_product_attention(q_rot, k_same, v, dropout_p=0.0)  # [B,H,N,D], D==N
+    y_same = torch.nn.functional.scaled_dot_product_attention(q_rot, k_same, v, dropout_p=0.0)  # [B,H,N,D]
+    attn_same = y_same.mean(dim=(0,1,3)).cpu()  # [N]
 
-    attn_same = y_same[0, 0, t0].cpu()  # [N]
-
-    # Print results
     print(f"\nN={N}, t0={t0} (25% default), rope_ch={rope_ch}, rope_base={rope_base}")
     print(f"Same-sign (expected peak at {t0}):")
     for i, w in enumerate(attn_same.tolist()):
         print(f"  idx={i:3d}  dist_from_t0={abs(i - t0):3d}  w={w:.6f}")
 
-    # Assertions
     arg_same = int(attn_same.argmax().item())
     print(f"Same-sign peak ({attn_same.amax().item():.6f}) at index {arg_same}, expected {t0}")
     assert arg_same == t0, f"Same-sign peak expected at t0={t0}, got {arg_same}"
 
 
 if __name__ == "__main__":
-    # Distinguishing case: t0 at 25% (not center)
-    run_test(N=1280, t0=1280 // 4, rope_ch=32, rope_base=10000.)
+    from utils.dual_diffusion_utils import init_cuda
+    init_cuda()
+    run_test(N=688, t0=688 // 4, rope_ch=112, rope_base=10000.)
