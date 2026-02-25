@@ -42,8 +42,6 @@ def mp_fourier_test():
     
     steps = test_params["steps"]
     emb_dim = test_params["emb_dim"]
-    emb_scale = test_params["emb_scale"]
-    softmax = test_params["softmax"]
     sigma_data = test_params["sigma_data"]
     sigma_max = test_params["sigma_max"]
     sigma_min = test_params["sigma_min"]
@@ -62,20 +60,15 @@ def mp_fourier_test():
         raise ValueError()
     
     if test_params["c_noise_scale"] == "acot":
-        c_noise = (1 / sigma).atan()
+        c_noise = 2 * (1 / sigma).atan()
     elif test_params["c_noise_scale"] == "ln":
         c_noise = sigma.log() / 4
     else:
         raise ValueError()
 
-    emb = emb_fourier(c_noise) * emb_scale / emb_dim**0.5
+    emb = emb_fourier(c_noise)
     inner_products = (emb.view(1, steps, emb_dim) * emb.view(steps, 1, emb_dim)).sum(dim=2)
-    
-    if softmax:
-        inner_products -= inner_products.amax()
-        inner_products = inner_products.exp()
-    else:
-        inner_products /= inner_products.amax()
+    inner_products /= inner_products.abs().amax()
 
     debug_path = config.DEBUG_PATH
     if debug_path is not None:    

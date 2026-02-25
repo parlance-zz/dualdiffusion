@@ -1,12 +1,10 @@
 {
   "steps": 1024,
   "emb_dim": 1024,
-  "emb_scale": 1,
-  "softmax": false,
   "sigma_max": 200,
-  "sigma_min": 0.01,
+  "sigma_min": 0.0141,
   "sigma_data": 1,
-  "bandwidth": 2,
+  "bandwidth": 1,
   "sigma_scale": "ln_linear",
   "c_noise_scale": "acot"
 }
