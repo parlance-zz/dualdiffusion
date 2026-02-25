@@ -82,6 +82,9 @@ def dae_test() -> None:
             balance_count += 1
     if balance_count > 0:
         print(f"avg balance: {total_balance / balance_count:.4f}")
+
+    print("latents ch mean:", dae.latents_stats_tracker.mean)
+    print("latents ch var:", dae.latents_stats_tracker.var)
     #exit()
     
     sample_rate = format.config.sample_rate
@@ -191,7 +194,7 @@ def dae_test() -> None:
             ddec_params = SampleParams(
                 seed=5000,
                 num_steps=100, length=audio_len, cfg_scale=5, input_perturbation=1, input_perturbation_offset=100,
-                use_heun=False, schedule="cos", rho=0.368, sigma_max=7.4, sigma_min=0.1, stereo_fix=0
+                use_heun=True, schedule="cos", rho=0.342, sigma_max=8, sigma_min=0.1, stereo_fix=0
             )
 
             output_ddec = pipeline.diffusion_decode(

@@ -48,11 +48,12 @@ def random_stereo_augmentation(x: torch.Tensor) -> torch.Tensor:
 @dataclass
 class DiffusionDecoder_Trainer_Config(ModuleTrainerConfig):
 
+    latents_noise: dict[str, Any]
     ddec: dict[str, Any]
 
-    kl_loss_weight: float = 0.1
+    kl_loss_weight: float = 1e-2
     kl_warmup_steps: int  = 300
-    kl_loss_mode: Literal["per_channel", "global"] = "global"
+    kl_loss_mode: Literal["per_channel", "global"] = "per_channel"
 
     random_stereo_augmentation: bool = True
     random_phase_augmentation: bool  = True
@@ -91,28 +92,27 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
         self.logger.info("DDEC trainer:")
         self.ddec_trainer = UNetTrainer(UNetTrainerConfig(**config.ddec), trainer, self.ddec, "ddec")
 
-        latents_sigma_sampler_config = SigmaSamplerConfig(
-            sigma_max=100,
-            sigma_min=0.01,
-            sigma_data=1,
-            distribution="linear",
-            dist_scale=-1,
-            dist_offset=0,
-            use_stratified_sigma_sampling=True
-        )
-        self.latents_sigma_sampler = SigmaSampler(latents_sigma_sampler_config)
-        self.logger.info("Latents SigmaSamplerConfig:")
-        self.logger.info(dict_str(latents_sigma_sampler_config.__dict__))
+        if config.latents_noise is not None:
+            latents_sigma_sampler_config = SigmaSamplerConfig(**config.latents_noise)
+            self.latents_sigma_sampler = SigmaSampler(latents_sigma_sampler_config)
+            self.logger.info("Latents Noise SigmaSamplerConfig:")
+            self.logger.info(dict_str(latents_sigma_sampler_config.__dict__))
+        else:
+            self.latents_sigma_sampler = None
+            self.logger.info(f"Latents Noise is disabled")
 
     @torch.no_grad()
     def init_batch(self, validation: bool = False) -> Optional[dict[str, Union[torch.Tensor, float]]]:
         
-        self.ddec_trainer.init_batch(validation)
+        logs = self.ddec_trainer.init_batch(validation)
 
-        self.global_sigma = self.latents_sigma_sampler.sample(self.trainer.total_batch_size, device=self.trainer.accelerator.device)
-        self.global_sigma = self.trainer.accelerator.gather(self.global_sigma.unsqueeze(0))[0]
+        if self.latents_sigma_sampler is not None:
+            self.global_sigma = self.latents_sigma_sampler.sample(self.trainer.total_batch_size, device=self.trainer.accelerator.device)
+            self.global_sigma = self.trainer.accelerator.gather(self.global_sigma.unsqueeze(0))[0]
+        else:
+            self.global_sigma = None
 
-        return None
+        return logs
     
     def train_batch(self, batch: dict) -> Optional[dict[str, Union[torch.Tensor, float]]]:
 
@@ -143,9 +143,12 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
         })
 
         # get the noise level for this sub-batch from the pre-calculated whole-batch sigma (required for stratified sampling)
-        device_bsz = self.trainer.config.device_batch_size
-        local_sigma = self.global_sigma[self.trainer.accelerator.process_index::self.trainer.accelerator.num_processes]
-        latents_batch_sigma = None #local_sigma[self.trainer.accum_step * device_bsz:(self.trainer.accum_step+1) * device_bsz]
+        if self.latents_sigma_sampler is not None:
+            device_bsz = self.trainer.config.device_batch_size
+            local_sigma = self.global_sigma[self.trainer.accelerator.process_index::self.trainer.accelerator.num_processes]
+            latents_batch_sigma = local_sigma[self.trainer.accum_step * device_bsz:(self.trainer.accum_step+1) * device_bsz]
+        else:
+            latents_batch_sigma = None
         
         latents, ddec_cond, pre_norm_latents = self.trainer.get_ddp_module(self.dae)(
             input_mel_spec, audio_embeddings, latents_sigma=latents_batch_sigma)
@@ -198,8 +201,4 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
     
     @torch.no_grad()
     def finish_batch(self) -> Optional[dict[str, Union[torch.Tensor, float]]]:
-
-        logs = {}
-        logs.update(self.ddec_trainer.finish_batch())
-
-        return logs
+        return self.ddec_trainer.finish_batch()

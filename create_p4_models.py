@@ -7,6 +7,7 @@ import torch
 #from modules.daes.dae_edm2_p4 import DAE, DAE_Config
 #from modules.unets.unet_edm2_p4_ddec import UNet, UNetConfig
 from modules.unets.unet_edm2_p4 import UNet, UNetConfig
+#from modules.unets.unet_edm2_b4_3p import UNet, UNetConfig
 #from modules.formats.mdct import MDCT_FormatConfig, MDCT_Format
 #from modules.embeddings.clap import CLAP_Config, CLAP_Embedding
 

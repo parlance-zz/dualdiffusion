@@ -27,7 +27,7 @@ if input("Save module? (y/n) ").lower() == 'y':
     dae.save_pretrained(model_path, subfolder="dae")
     print(f"Saved model to {model_path}/dae")
 
-ddec = UNet(UNetConfig())
+ddec = UNet(UNetConfig(mp_fourier_bandwidth=3))
 print_module_info(ddec, "ddec")
 
 if input("Save module? (y/n) ").lower() == 'y':
