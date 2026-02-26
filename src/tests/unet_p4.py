@@ -181,7 +181,7 @@ def unet_test() -> None:
         if clap_audio_embeddings is None:
             clap_audio_embeddings = pipeline.embedding.encode_audio(input_audio, sample_rate=input_sample_rate)
         audio_embedding = normalize(clap_audio_embeddings.mean(dim=0, keepdim=True)).float()
-        input_mel_spec = format.raw_to_mel_spec(input_audio[:, :crop_width])
+        input_mel_spec = format.raw_to_mel_spec(input_audio[..., :crop_width])
         
         cfg.unet_params.seed = base_seed + i
         cfg.unet_params.prompt = filename
