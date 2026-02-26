@@ -53,18 +53,19 @@ class UNetConfig(DualDiffusionUNetConfig):
     sigma_min: float  = 0.01
     sigma_data: float = 1.
 
-    mp_fourier_ln_sigma_offset: float = 0.3
+    mp_fourier_ln_sigma_offset: float = 0.35
     mp_fourier_bandwidth:       float = 1
 
     model_channels: int  = 4096              # Base multiplier for the number of channels.
     logvar_channels: int = 192               # Number of channels for training uncertainty estimation.
     channel_mult: list[int] = (1,)           # Per-resolution multipliers for the number of channels.
-    channel_mult_noise: Optional[float] = 0.25      # Multiplier for noise embedding dimensionality.
-    channel_mult_emb: Optional[float]   = 0.25      # Multiplier for final embedding dimensionality.
+    channel_mult_noise: Optional[float] = 0.25   # Multiplier for noise embedding dimensionality.
+    channel_mult_emb: Optional[float]   = 1      # Multiplier for final embedding dimensionality.
     use_skips: bool     = False
     channels_per_head: int    = 128          # Number of channels per attention head.
     rope_channels: int        = 112
     rope_base: float          = 10000.
+    rope_scale: float         = 1024
     num_layers_per_block: int = 20           # Number of resnet blocks per resolution.
     label_balance: float      = 0.5          # Balance between noise embedding (0) and class embedding (1).
     balance_logits_offset: float = -2 #-1.75
@@ -83,10 +84,10 @@ class Block(torch.nn.Module):
         dropout: float         = 0.,       # Dropout probability.
         balance_logits_offset: float = -2, # Offset for the balance logits before sigmoid.
         clip_act: float        = 256,      # Clip output activations. None = do not clip.
-        mlp_multiplier: int    = 4,        # Multiplier for the number of channels in the MLP.
-        mlp_groups: int        = 4,        # Number of groups for the MLP.
-        emb_linear_groups: int = 4,
-        channels_per_head: int = 64,       # Number of channels per attention head.
+        mlp_multiplier: int    = 3,        # Multiplier for the number of channels in the MLP.
+        mlp_groups: int        = 32,        # Number of groups for the MLP.
+        emb_linear_groups: int = 32,
+        channels_per_head: int = 128,       # Number of channels per attention head.
         global_attention: bool = False
     ) -> None:
         super().__init__()
@@ -120,7 +121,7 @@ class Block(torch.nn.Module):
             self.skip_balance = None
 
         self.conv_res0 = MPConv(in_channels, inner_channels,  kernel=(1,3), groups=mlp_groups)
-        self.conv_res1 = MPConv(inner_channels, out_channels, kernel=(1,3), groups=mlp_groups)
+        self.conv_res1 = MPConv(inner_channels, out_channels, kernel=(1,1), groups=mlp_groups)
         
         self.emb_gain = torch.nn.Parameter(torch.zeros([]))
         self.emb_linear = MPConv(emb_channels, inner_channels, kernel=(1,1), groups=emb_linear_groups)
@@ -192,7 +193,7 @@ class Block(torch.nn.Module):
         x = self.emb_res_balance(x, y, emb)
 
         if self.clip_act is not None:
-            x = x.clip(-self.clip_act, self.clip_act)
+            x = x.clip_(-self.clip_act, self.clip_act)
 
         return x
 
@@ -218,7 +219,7 @@ class UNet(DualDiffusionUNet):
 
         assert self.num_levels == 1
         assert cnoise % 2 == 0
-        assert cemb % config.mlp_groups == 0
+        assert cemb % config.emb_linear_groups == 0
         assert config.rope_channels % 2 == 0
         assert config.rope_channels <= config.channels_per_head
 
@@ -228,10 +229,8 @@ class UNet(DualDiffusionUNet):
 
         if config.in_channels_emb > 0:
             self.emb_label = MPConv(config.in_channels_emb, cemb, kernel=())
-            self.emb_label_unconditional = MPConv(1, cemb, kernel=())
         else:
             self.emb_label = None
-            self.emb_label_unconditional = None
 
         # training uncertainty estimation
         self.logvar_fourier = MPFourier(config.logvar_channels)
@@ -266,8 +265,8 @@ class UNet(DualDiffusionUNet):
 
     def get_embeddings(self, emb_in: torch.Tensor, conditioning_mask: torch.Tensor) -> torch.Tensor:
         if self.config.in_channels_emb > 0:
-            u_embedding = self.emb_label_unconditional(torch.ones(1, device=self.device, dtype=self.dtype))
             c_embedding = self.emb_label(normalize(emb_in).to(device=self.device, dtype=self.dtype))
+            u_embedding = torch.zeros_like(c_embedding)
             return mp_sum(u_embedding, c_embedding, t=conditioning_mask.unsqueeze(1).to(u_embedding.dtype))
         else:
             return None
@@ -294,18 +293,15 @@ class UNet(DualDiffusionUNet):
             c_skip = self.config.sigma_data ** 2 / (sigma ** 2 + self.config.sigma_data ** 2)
             c_out = sigma * self.config.sigma_data / (sigma ** 2 + self.config.sigma_data ** 2).sqrt()
             c_in = 1 / (self.config.sigma_data ** 2 + sigma ** 2).sqrt()
-            ln_sigma = sigma.flatten().log() - self.config.mp_fourier_ln_sigma_offset
-            c_noise = ln_sigma / 4
+            
+            # improved lipschitz behavior at low sigma, improved conditioning resolution at snr ~= 1
+            sigma_center = torch.e ** self.config.mp_fourier_ln_sigma_offset
+            c_noise = 2 * (sigma_center / sigma.flatten()).atan() #0 <= c_noise <= pi
 
             if perturbed_input is not None:
                 x = (c_in * perturbed_input).to(dtype=torch.bfloat16)
             else:
                 x = (c_in * x_in).to(dtype=torch.bfloat16)
-
-            #x_input = torch.cat((x, -x), dim=1)
-            #x_input_c = x_input.shape[1]
-            #assert self.config.model_channels % x_input_c == 0
-            #assert self.config.num_layers_per_block <= self.config.model_channels // x_input_c
         
         # nuisance due to ddp wrapper limitations
         if conditioning_mask is not None:
@@ -319,9 +315,9 @@ class UNet(DualDiffusionUNet):
         emb = mp_sum(emb, embeddings.to(dtype=emb.dtype), t=self.config.label_balance)
         emb = mp_silu(emb).unsqueeze(2).unsqueeze(3).to(dtype=torch.bfloat16)
 
-        # build rope tables        
+        # build rope tables
         rope_tables = _rope_tables_for_seq(x.shape[3], self.config.rope_channels,
-                                self.config.rope_base, device=x.device, dtype=x.dtype)
+            self.config.rope_base, scale=self.config.rope_scale, device=x.device, dtype=x.dtype)
 
         idx = 0; skips = []
         for name, block in self.dec.items():
@@ -338,13 +334,6 @@ class UNet(DualDiffusionUNet):
 
                 x = block(x, emb, skip, rope_tables)
 
-                #x0 = x[:, :(idx+0)*x_input_c]
-                #x1 = x[:,  (idx+0)*x_input_c:(idx+1)*x_input_c]
-                #x2 = x[:,  (idx+1)*x_input_c:]
-
-                #x1 = mp_sum(x1, x_input, t=0.5)
-                #x = torch.cat((x0, x1, x2), dim=1)
-                
                 idx += 1
 
         x: torch.Tensor = self.conv_out(x, gain=self.out_gain)

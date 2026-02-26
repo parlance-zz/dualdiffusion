@@ -20,6 +20,8 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
+from typing import Optional
+
 import torch
 
 
@@ -28,7 +30,7 @@ def _rope_pair_rotate_partial(x: torch.Tensor, rope_tables: tuple[torch.Tensor, 
     Rotate only the first rope_ch channels of x using RoPE pair-wise rotation.
     - x: [..., D]
     - cos/sin: broadcastable to [..., rope_ch/2]
-    - rope_ch: even integer, 0 <= rope_ch <= D
+    - rope_ch: even integer, 0 < rope_ch <= D
     Returns x with first rope_ch channels rotated, the rest unchanged.
     """
 
@@ -45,51 +47,51 @@ def _rope_pair_rotate_partial(x: torch.Tensor, rope_tables: tuple[torch.Tensor, 
 
     return torch.cat([xr_even, xr_odd, x_tail], dim=-1)
 
-def _build_rope_width(W: int, rope_ch: int, base: float = 10000., scale: float = 1, device: torch.device = "cpu", dtype: torch.dtype = torch.float32) -> tuple[torch.Tensor, torch.Tensor]:
+def _build_rope_width(W: int, rope_ch: int, base: float = 10000., scale: Optional[float] = None,
+        device: torch.device = "cpu", dtype: torch.dtype = torch.float32) -> tuple[torch.Tensor, torch.Tensor]:
     """
     Build RoPE cos/sin tables for width axis only.
-    Returns cos, sin with shape [W, rope_ch/2] in float32.
+    Returns cos, sin with shape [W, rope_ch/2]
     """
     assert rope_ch % 2 == 0, "rope_ch must be even"
-    if rope_ch == 0:
-        # Dummy tensors (won't be used)
-        return torch.tensor([], device=device, dtype=torch.float32), torch.tensor([], device=device, dtype=torch.float32)
+    assert rope_ch > 0
+
+    cols = torch.arange(W, device=device, dtype=torch.float32)
+    if scale is not None:
+        cols = cols * (scale / W)
+
     inv_freq = 1. / (base ** (torch.arange(0, rope_ch, 2, device=device, dtype=torch.float32) / rope_ch))
-    cols = torch.arange(W, device=device, dtype=torch.float32) * scale
     ang = torch.einsum("w,d->wd", cols, inv_freq)  # [W, rope_ch/2]
+
     cos = torch.cos(ang).to(dtype=dtype)
     sin = torch.sin(ang).to(dtype=dtype)
+
     return cos, sin
 
-def _rope_tables_for_seq(N: int, rope_ch: int, rope_base: float = 10000., scale: float = 1, device: torch.device = "cpu", dtype: torch.dtype = torch.float32) -> tuple[torch.Tensor, torch.Tensor]:
+def _rope_tables_for_seq(N: int, rope_ch: int, rope_base: float = 10000., scale: Optional[float] = None,
+        device: torch.device = "cpu", dtype: torch.dtype = torch.float32) -> tuple[torch.Tensor, torch.Tensor]:
     """
-    Build RoPE cos/sin for a 1D sequence of length N using mla.py utilities.
+    Build RoPE cos/sin for a 1D sequence of length N
     Returns cos, sin shaped for broadcasting over [B, H, N, rope_ch/2].
     """
-    assert rope_ch % 2 == 0 and rope_ch >= 0
-    if rope_ch == 0:
-        return (
-            torch.tensor([], device=device, dtype=torch.float32).view(1, 1, N, 0),
-            torch.tensor([], device=device, dtype=torch.float32).view(1, 1, N, 0),
-        )
+    assert rope_ch % 2 == 0 and rope_ch > 0
+
     cos_w, sin_w = _build_rope_width(N, rope_ch, rope_base, scale=scale, device=device, dtype=dtype)  # [N, rope_ch/2]
     cos = cos_w.view(1, 1, N, rope_ch // 2)
     sin = sin_w.view(1, 1, N, rope_ch // 2)
+
     return cos, sin
 
-
 @torch.no_grad()
-def run_test(N: int = 31, t0: int | None = None, rope_ch: int = 2, rope_base: float = 10000.0):
+def run_test(N: int, t0: int, rope_ch: int = 2, rope_base: float = 10000.0):
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     B, H = 1, 1
     D = N
-    if t0 is None:
-        t0 = N // 4  # 25%
 
-    assert rope_ch % 2 == 0 and 0 <= rope_ch <= D, "rope_ch must be even and <= D"
+    assert rope_ch % 2 == 0 and 0 < rope_ch <= D, "rope_ch must be even and <= D"
 
-    cos, sin = _rope_tables_for_seq(N, rope_ch, rope_base, scale=1, device=device)
+    cos, sin = _rope_tables_for_seq(N, rope_ch, rope_base, device=device)
 
     q = torch.zeros(B, H, N, D, device=device, dtype=torch.float32)
     k = torch.zeros_like(q)
