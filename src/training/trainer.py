@@ -837,6 +837,7 @@ class DualDiffusionTrainer:
 
     def load_checkpoint(self) -> None:
 
+        self.last_loaded_checkpoint_global_step = 0
         self.accum_step = 0
         self.local_step = 0
         self.global_step = 0
@@ -943,6 +944,7 @@ class DualDiffusionTrainer:
                 shutil.copy(diff_output_path, logged_diff_output_path)
 
         if self.global_step > 0:
+            self.last_loaded_checkpoint_global_step = self.global_step
             self.epoch = self.global_step // self.num_update_steps_per_epoch
             self.resume_step = self.global_step % self.num_update_steps_per_epoch
             self.local_step = self.resume_step
@@ -1108,7 +1110,8 @@ class DualDiffusionTrainer:
                 
                 do_param_checksum = False
                 if self.accelerator.distributed_type == DistributedType.MULTI_GPU:
-                    if (self.global_step % self.num_update_steps_per_epoch == 0 and self.epoch > 0) or self.global_step == 10:
+                    if (self.global_step % self.num_update_steps_per_epoch == 0 and self.epoch > 0) or \
+                            (self.global_step == self.last_loaded_checkpoint_global_step + 10):
                         do_param_checksum = True
                 
                 if self.config.enable_grad_sync_debug == True or do_param_checksum == True:

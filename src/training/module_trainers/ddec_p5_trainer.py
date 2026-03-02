@@ -207,5 +207,6 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
         logs = {}
         logs.update(self.ddecp_trainer.finish_batch())
         logs.update(self.ddecm_trainer.finish_batch())
+        logs.update(self.unet_trainer.finish_batch())
 
         return logs
