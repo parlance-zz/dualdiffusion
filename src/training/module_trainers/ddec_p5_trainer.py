@@ -183,8 +183,9 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
         logs.update(self.ddecm_trainer.train_batch(mdct_psd, audio_embeddings, ddec_cond, noise=noise, perturb_noise=perturb_noise))
         logs["loss"] = logs["loss"] + (logs["loss/ddecp"] + logs["loss/ddecm"]) * (self.config.decoder_loss_multiplier / 2)
 
-        logs.update(self.unet_trainer.train_batch(latents, audio_embeddings))
-        logs["loss"] = logs["loss"] + logs["loss/unet"]
+        if self.train_dae == True:
+            logs.update(self.unet_trainer.train_batch(latents, audio_embeddings))
+            logs["loss"] = logs["loss"] + logs["loss/unet"]
 
         dynamic_range_ddecm = mdct_psd.amax(dim=(1,2,3)) - mdct_psd.amin(dim=(1,2,3))
         logs["io_stats_ddecm/dynamic_range"] = dynamic_range_ddecm
