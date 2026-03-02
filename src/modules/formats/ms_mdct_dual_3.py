@@ -40,12 +40,12 @@ class MS_MDCT_DualFormatConfig(DualDiffusionFormatConfig):
     default_raw_length: int = 1408768
 
     # mdct params
-    raw_to_mdct_scale: float = 0.00395184212251821011433253029603
+    raw_to_mdct_scale: float = 1
 
-    mdct_psd_scale: float  = 0.07177791091357421918095794407989
-    mdct_psd_offset: float = -0.18079235827096612
+    mdct_psd_scale: float    = 1
+    mdct_psd_offset: float   = 0
     mdct_psd_exponent: float = 0.25
-    mdct_phase_scale: float  = 0.14088231005735267613340053318382
+    mdct_phase_scale: float  = 1
 
     mdct_window_len: int = 512
     mdct_window_func: Literal["sin", "kaiser_bessel_derived", "vorbis"] = "sin"
@@ -59,11 +59,8 @@ class MS_MDCT_DualFormatConfig(DualDiffusionFormatConfig):
         return self.mdct_window_len // 2
 
     # mel-spec params
-    raw_to_mel_spec_scale: float  = 0.48426373582064460631823114952103
-    raw_to_mel_spec_offset: float = -1.5301612771122777
-
-    mel_spec_to_linear_scale: float  = 18.995056282874833851024929164595
-    mel_spec_to_linear_offset: float = 0
+    raw_to_mel_spec_scale: float  = 1
+    raw_to_mel_spec_offset: float = 0
 
     ms_abs_exponent: float = 0.25
     ms_freq_min: float = 25
@@ -71,7 +68,7 @@ class MS_MDCT_DualFormatConfig(DualDiffusionFormatConfig):
     ms_ideal_num_filter_bins: float = 3
     ms_window_length: int = 4096
     ms_blend_sharpness: float = 30
-    ms_window_exponents: list[float] = (9, 32, 112)
+    ms_window_exponents: list[float] = (3, 9, 32, 112)
     
     @property
     def ms_num_stft_bins(self) -> int:
@@ -193,7 +190,7 @@ class MS_MDCT_DualFormat(DualDiffusionFormat):
 
     def get_mel_spec_shape(self, bsz: int = 1, raw_length: Optional[int] = None) -> tuple[int, int, int, int]:
         raw_crop_width = self.get_raw_crop_width(raw_length)
-        return self._get_ms_shape((bsz, self.config.num_raw_channels, raw_crop_width))
+        return self._get_ms_shape((bsz, self.config.num_raw_channels + 1, raw_crop_width))
     
     @torch.no_grad()
     def raw_to_mel_spec(self, raw_samples: torch.Tensor) -> torch.Tensor:
@@ -205,9 +202,11 @@ class MS_MDCT_DualFormat(DualDiffusionFormat):
 
             stft = torch.stft(packed_raw, n_fft=self.config.ms_window_length, hop_length=self.config.ms_hop_length,
                 win_length=self.config.ms_window_length, window=self.ms_windows[i], center=True,
-                pad_mode="reflect", normalized=True, onesided=True, return_complex=True).abs()
+                pad_mode="reflect", normalized=True, onesided=True, return_complex=True)
             
             stft = stft.view(raw_samples.shape[0], raw_samples.shape[1], stft.shape[1], stft.shape[2]) / self.ms_stft_mel_density
+            stft = torch.cat((stft, (stft[:, 0:1] + stft[:, 1:2]) / 2), dim=1).abs()
+
             mel_spec = torch.matmul(stft.transpose(-1,-2), self.ms_filters).transpose(-1, -2)
             mel_spec *= self.ms_filter_window_weights[:, i].view(1, 1,-1, 1)
             
@@ -215,22 +214,19 @@ class MS_MDCT_DualFormat(DualDiffusionFormat):
             else: ms_blended += mel_spec
         
         return (ms_blended ** self.config.ms_abs_exponent + self.config.raw_to_mel_spec_offset) / self.config.raw_to_mel_spec_scale
-    
-    @torch.no_grad()
-    def mel_spec_to_linear(self, mel_spec: torch.Tensor) -> torch.Tensor:
-        ms_linear = (mel_spec * self.config.raw_to_mel_spec_scale - self.config.raw_to_mel_spec_offset).clip(min=0) ** (1 / self.config.ms_abs_exponent)
-        return (ms_linear + self.config.mel_spec_to_linear_offset) / self.config.mel_spec_to_linear_scale
 
     @torch.inference_mode()
     def mel_spec_to_img(self, mel_spec: torch.Tensor, use_colormap: bool = False):
         if use_colormap == True:
             return tensor_to_img(mel_spec.mean(dim=(0,1)), flip_y=True, colormap=True)
         else:
+            l, r, c = torch.chunk(mel_spec, 3, dim=1)
+            mel_spec = torch.cat((l, c, r), dim=1)
             return tensor_to_img(mel_spec, flip_y=True)
     
     @torch.inference_mode()
     def mel_spec_linear_to_img(self, mel_spec_linear: torch.Tensor):
-        return tensor_to_img(mel_spec_linear.clip(min=0), flip_y=True)
+        return tensor_to_img(mel_spec_linear.clip(min=0).pow(self.config.ms_abs_exponent), flip_y=True)
 
     # **************** mdct methods ****************
 
@@ -280,25 +276,32 @@ class MS_MDCT_DualFormat(DualDiffusionFormat):
             phase_rotation = torch.exp(2j * torch.pi * torch.rand(_mclt.shape[0], device=_mclt.device)) 
             _mclt *= phase_rotation.view(-1, 1, 1, 1)
 
-        mdct_psd = _mclt.abs().pow(self.config.mdct_psd_exponent) / self.mdct_mel_density.pow(0.25)
-        mdct_phase = _mclt.real.sign() * _mclt.real.abs().pow(self.config.mdct_psd_exponent) / self.mdct_mel_density.pow(0.25)
+        mdct_psd = _mclt.abs()
+        mdct_phase = (_mclt.real / mdct_psd.clip(min=1e-20)).clip(min=-1, max=1)
+
+        mdct_psd = mdct_psd.pow(self.config.mdct_psd_exponent)
+        mdct_phase = mdct_phase * mdct_psd
+        
+        mdct_phase *= self.mdct_mel_density.pow(self.config.mdct_psd_exponent)
+        mdct_psd /= self.mdct_mel_density.pow(self.config.mdct_psd_exponent)
 
         return self.normalize_phase(mdct_phase), self.normalize_psd(mdct_psd)
     
     def mdct_phase_psd_to_raw(self, mdct_phase: torch.Tensor, mdct_psd: torch.Tensor) -> torch.Tensor:
 
-        mdct_psd = None #self.unnormalize_psd(mdct_psd)
+        mdct_psd = self.unnormalize_psd(mdct_psd)
         mdct_phase = self.unnormalize_phase(mdct_phase)
-        
-        mdct_psd = mdct_phase.abs() * self.mdct_mel_density.pow(0.25)
-        mdct_psd = mdct_psd.clip(min=0).pow(1 / self.config.mdct_psd_exponent)
-        mdct_phase = mdct_phase.sign()
 
+        mdct_phase /= self.mdct_mel_density.pow(self.config.mdct_psd_exponent)
+        mdct_psd *= self.mdct_mel_density.pow(self.config.mdct_psd_exponent)
+
+        mdct_psd = mdct_psd.clip(min=0).pow(1 / self.config.mdct_psd_exponent - 1)
         raw_samples = self.imdct(mdct_phase * mdct_psd).real.contiguous()
         return raw_samples
     
     @torch.no_grad()
     def mdct_psd_to_img(self, mdct_psd: torch.Tensor):
+        mdct_psd = self.unnormalize_psd(mdct_psd)
         return tensor_to_img(mdct_psd, flip_y=True)
 
 
