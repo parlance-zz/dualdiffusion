@@ -44,34 +44,34 @@ from modules.formats.format import DualDiffusionFormat
 @dataclass
 class UNetConfig(DualDiffusionUNetConfig):
 
-    in_channels:  int = 128
-    out_channels: int = 128
+    in_channels:  int = 256
+    out_channels: int = 256
     in_channels_emb: int = 1024
     in_num_freqs: int = 1
 
-    sigma_max: float  = 200.
+    sigma_max: float  = 100.
     sigma_min: float  = 0.08
     sigma_data: float = 1.
 
     mp_fourier_ln_sigma_offset: float = 0.35
     mp_fourier_bandwidth:       float = 1
 
-    model_channels: int  = 2048 #4096        # Base multiplier for the number of channels.
+    model_channels: int  = 4096              # Base multiplier for the number of channels.
     logvar_channels: int = 192               # Number of channels for training uncertainty estimation.
     channel_mult: list[int] = (1,)           # Per-resolution multipliers for the number of channels.
-    channel_mult_noise: Optional[float] = 0.5 #0.25 # Multiplier for noise embedding dimensionality.
+    channel_mult_noise: Optional[float] = 0.25      # Multiplier for noise embedding dimensionality.
     channel_mult_emb: Optional[float]   = 1         # Multiplier for final embedding dimensionality.
     use_skips: bool     = False
     channels_per_head: int    = 128          # Number of channels per attention head.
     rope_channels: int        = 112
     rope_base: float          = 10000.
-    rope_scale: float         = 96 #1024
-    num_layers_per_block: int = 10 #20       # Number of resnet blocks per resolution.
+    rope_scale: float         = 40 #1024
+    num_layers_per_block: int = 18 #20       # Number of resnet blocks per resolution.
     label_balance: float      = 0.5          # Balance between noise embedding (0) and class embedding (1).
     balance_logits_offset: float = -2
     mlp_multiplier: int    = 3               # Multiplier for the number of channels in the MLP.
-    mlp_groups: int        = 16              # Number of groups for the MLPs.
-    emb_linear_groups: int = 16
+    mlp_groups: int        = 32              # Number of groups for the MLPs.
+    emb_linear_groups: int = 32
 
 class Block(torch.nn.Module):
 

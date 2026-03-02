@@ -46,30 +46,30 @@ class UNetConfig(DualDiffusionUNetConfig):
     in_channels:  int = 512
     out_channels: int = 512
     in_channels_emb: int = 0
-    in_channels_x_ref: int = 128
+    in_channels_x_ref: int = 512
     in_num_freqs: int = 256
 
-    sigma_max: float  = 200.
+    sigma_max: float  = 100.
     sigma_min: float  = 0.01
     sigma_data: float = 1.
 
     mp_fourier_ln_sigma_offset: float = 0
     mp_fourier_bandwidth:       float = 1
 
-    model_channels: int  = 2048              # Base multiplier for the number of channels.
+    model_channels: int  = 4096              # Base multiplier for the number of channels.
     logvar_channels: int = 192               # Number of channels for training uncertainty estimation.
     channel_mult: list[int] = (1,)           # Per-resolution multipliers for the number of channels.
-    channel_mult_noise: Optional[float] = 0.5      # Multiplier for noise embedding dimensionality.
-    channel_mult_emb: Optional[float]   = 1        # Multiplier for final embedding dimensionality.
+    channel_mult_noise: Optional[float] = 0.25      # Multiplier for noise embedding dimensionality.
+    channel_mult_emb: Optional[float]   = 1         # Multiplier for final embedding dimensionality.
     use_skips: bool     = False
     channels_per_head: int    = 128          # Number of channels per attention head.
     attn_logit_scale: float   = 1
-    num_layers_per_block: int = 10            # Number of resnet blocks per resolution.
+    num_layers_per_block: int = 8            # Number of resnet blocks per resolution.
     label_balance: float      = 0.5          # Balance between noise embedding (0) and class embedding (1).
     balance_logits_offset: float = -2
-    mlp_multiplier: int    = 3               # Multiplier for the number of channels in the MLP.
-    mlp_groups: int        = 16              # Number of groups for the MLPs.
-    emb_linear_groups: int = 16
+    mlp_multiplier: int    = 2               # Multiplier for the number of channels in the MLP.
+    mlp_groups: int        = 32              # Number of groups for the MLPs.
+    emb_linear_groups: int = 32
 
 class Block(torch.nn.Module):
 
@@ -119,7 +119,7 @@ class Block(torch.nn.Module):
             self.skip_balance = None
 
         self.conv_res0 = MPConv(in_channels, inner_channels,  kernel=(1,3), groups=mlp_groups)
-        self.conv_res1 = MPConv(inner_channels, out_channels, kernel=(1,1), groups=mlp_groups)
+        self.conv_res1 = MPConv(inner_channels, out_channels, kernel=(1,3), groups=mlp_groups)
         
         self.emb_gain = torch.nn.Parameter(torch.zeros([]))
         self.emb_linear = MPConv(emb_channels, inner_channels, kernel=(1,1), groups=emb_linear_groups)
@@ -282,7 +282,7 @@ class UNet(DualDiffusionUNet):
             else:
                 x = (c_in * x_in).to(dtype=torch.bfloat16)
 
-        x_ref = x_ref.to(dtype=torch.bfloat16)
+        x_ref = x_ref.permute(0, 2, 1, 3).reshape(x.shape[0], x.shape[1]*x.shape[2], 1, x.shape[3]).to(dtype=torch.bfloat16)
         x = x.permute(0, 2, 1, 3).reshape(x.shape[0], x.shape[1]*x.shape[2], 1, x.shape[3]).to(dtype=torch.bfloat16)
 
         # nuisance due to ddp wrapper limitations

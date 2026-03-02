@@ -337,14 +337,15 @@ class DAE(DualDiffusionDAE):
 
         return x
     
-    def forward(self, samples: torch.Tensor, dae_embeddings: torch.Tensor, latents_sigma: Optional[torch.Tensor] = None) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    def forward(self, samples: torch.Tensor, audio_embeddings: torch.Tensor, latents_sigma: float) -> tuple[torch.Tensor, ...]:
         
+        dae_embeddings = self.get_embeddings(audio_embeddings)
         pre_norm_latents = self.encode(samples, dae_embeddings, training=True)
 
         if latents_sigma is not None:
-            pre_norm_latents = pre_norm_latents + latents_sigma * torch.randn_like(pre_norm_latents)
-        
-        latents = pre_norm_latents
+            latents = pre_norm_latents + latents_sigma * torch.randn_like(pre_norm_latents)
+        else:
+            latents = pre_norm_latents
 
         reconstructed = self.decode(latents, dae_embeddings, training=True)
         return latents, reconstructed, pre_norm_latents
