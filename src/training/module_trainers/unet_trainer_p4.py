@@ -205,7 +205,7 @@ class UNetTrainer(ModuleTrainer):
         batch_sigma = local_sigma[self.trainer.accum_step * device_bsz:(self.trainer.accum_step+1) * device_bsz]
 
         # prepare model inputs
-        samples = samples.detach()
+        #samples = samples.detach()
         if noise is None:
             noise = torch.randn(samples.shape, device=samples.device)
         noise = (noise * batch_sigma.view(-1, 1, 1, 1)).detach()
