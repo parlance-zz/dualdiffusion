@@ -20,14 +20,12 @@ mdct_format = MDCT_Format(MDCT_FormatConfig())
 mdct_format.save_pretrained(model_path, subfolder="format")
 """
 
-"""
 dae = DAE(DAE_Config())
 print_module_info(dae, "dae")
 
 if input("Save module? (y/n) ").lower() == 'y':
     dae.save_pretrained(model_path, subfolder="dae")
     print(f"Saved model to {model_path}/dae")
-"""
 
 ddecm = UNet(UNetConfig(mp_fourier_ln_sigma_offset=2))
 print_module_info(ddecm, "ddecm")
@@ -43,7 +41,6 @@ if input("Save module? (y/n) ").lower() == 'y':
     ddecp.save_pretrained(model_path, subfolder="ddecp")
     print(f"Saved model to {model_path}/ddecp")
 
-"""
 from modules.unets.unet_edm2_p5 import UNet, UNetConfig
 unet = UNet(UNetConfig())
 print_module_info(unet, "unet")
@@ -51,4 +48,3 @@ print_module_info(unet, "unet")
 if input("Save module? (y/n) ").lower() == 'y':
     unet.save_pretrained(model_path, subfolder="unet")
     print(f"Saved model to {model_path}/unet")
-"""

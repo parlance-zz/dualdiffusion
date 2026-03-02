@@ -1108,7 +1108,7 @@ class DualDiffusionTrainer:
                 
                 do_param_checksum = False
                 if self.accelerator.distributed_type == DistributedType.MULTI_GPU:
-                    if self.global_step % self.num_update_steps_per_epoch == 0 and self.epoch > 0:
+                    if (self.global_step % self.num_update_steps_per_epoch == 0 and self.epoch > 0) or self.global_step == 10:
                         do_param_checksum = True
                 
                 if self.config.enable_grad_sync_debug == True or do_param_checksum == True:

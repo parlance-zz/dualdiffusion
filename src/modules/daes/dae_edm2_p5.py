@@ -252,9 +252,10 @@ class DAE(DualDiffusionDAE):
         for name, block in self.enc.items():
             x = block(x) if "conv" in name else block(x, emb)
 
-        x = normalize_groups(x, groups=self.config.mlp_groups)
+        #x = normalize_groups(x, groups=self.config.mlp_groups)
         latents = self.conv_latents_out(x, gain=self.conv_latents_out_gain)
         latents = torch.nn.functional.avg_pool2d(latents, kernel_size=(1, self.downsample_ratio))
+        latents = normalize(latents)
         
         if training == True:
             self.latents_stats_tracker(latents)
