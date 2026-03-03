@@ -20,12 +20,14 @@ mdct_format = MDCT_Format(MDCT_FormatConfig())
 mdct_format.save_pretrained(model_path, subfolder="format")
 """
 
+"""
 dae = DAE(DAE_Config())
 print_module_info(dae, "dae")
 
 if input("Save module? (y/n) ").lower() == 'y':
     dae.save_pretrained(model_path, subfolder="dae")
     print(f"Saved model to {model_path}/dae")
+"""
 
 ddecm = UNet(UNetConfig(mp_fourier_ln_sigma_offset=1))
 print_module_info(ddecm, "ddecm")

@@ -28,9 +28,9 @@ import torch
 from training.trainer import DualDiffusionTrainer
 from training.module_trainers.module_trainer import ModuleTrainer, ModuleTrainerConfig
 from training.module_trainers.unet_trainer_p4 import UNetTrainerConfig, UNetTrainer
-from modules.daes.dae_edm2_p5 import DAE
+from modules.daes.dae_edm2_q4 import DAE
 from modules.unets.unet_edm2_p5_ddec import UNet
-from modules.formats.ms_mdct_dual_3 import MS_MDCT_DualFormat
+from modules.formats.ms_mdct_dual_2 import MS_MDCT_DualFormat
 from modules.mp_tools import normalize
 
 
@@ -75,8 +75,8 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
         assert self.ddecp is not None and self.ddecm is not None
         
         if self.dae is None:
-            assert self.dae.config.last_global_step > 0
             self.dae = trainer.pipeline.dae.to(device=trainer.accelerator.device, dtype=torch.bfloat16).requires_grad_(False)
+            assert self.dae.config.last_global_step > 0
             self.train_dae = False
         else:
             self.train_dae = True
@@ -133,9 +133,9 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
         input_mel_spec = input_mel_spec[..., self.config.crop_edges:-self.config.crop_edges]
 
         if self.train_dae == True:
-            latents, ddec_cond = self.trainer.get_ddp_module(self.dae)(input_mel_spec, audio_embeddings, self.config.add_latents_noise)
+            latents, ddec_cond, _ = self.trainer.get_ddp_module(self.dae)(input_mel_spec, audio_embeddings, self.config.add_latents_noise)
         else:
-            latents, ddec_cond = self.dae(input_mel_spec, audio_embeddings, self.config.add_latents_noise)
+            latents, ddec_cond, _ = self.dae(input_mel_spec, audio_embeddings, self.config.add_latents_noise)
             ddec_cond = ddec_cond.detach()
             
         latents: torch.Tensor = latents.float()
