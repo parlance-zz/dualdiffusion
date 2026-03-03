@@ -30,7 +30,6 @@ from training.module_trainers.module_trainer import ModuleTrainer, ModuleTrainer
 from training.module_trainers.unet_trainer_p4 import UNetTrainerConfig, UNetTrainer
 from modules.daes.dae_edm2_p5 import DAE
 from modules.unets.unet_edm2_p5_ddec import UNet
-from modules.unets.unet_edm2_p5 import UNet as UNet_LDM
 from modules.formats.ms_mdct_dual_3 import MS_MDCT_DualFormat
 from modules.mp_tools import normalize
 
@@ -49,13 +48,11 @@ class DiffusionDecoder_Trainer_Config(ModuleTrainerConfig):
 
     ddecm: dict[str, Any]
     ddecp: dict[str, Any]
-    unet: dict[str, Any]
 
-    kl_loss_weight: float = 1e-2
+    kl_loss_weight: float = 1e-3
     kl_warmup_steps: int  = 150
 
-    decoder_loss_multiplier: float = 3
-    add_latents_noise: float = 0.08
+    add_latents_noise: float = None
 
     random_stereo_augmentation: bool = True
     random_phase_augmentation: bool  = True
@@ -71,7 +68,6 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
         self.trainer = trainer
         self.logger = trainer.logger
 
-        self.unet: UNet_LDM = trainer.get_train_module("unet")
         self.ddecp: UNet = trainer.get_train_module("ddecp")
         self.ddecm: UNet = trainer.get_train_module("ddecm")
         self.dae: DAE = trainer.get_train_module("dae")
@@ -79,11 +75,10 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
         assert self.ddecp is not None and self.ddecm is not None
         
         if self.dae is None:
-            assert self.dae.config.last_global_step > 0 and self.unet is None
+            assert self.dae.config.last_global_step > 0
             self.dae = trainer.pipeline.dae.to(device=trainer.accelerator.device, dtype=torch.bfloat16).requires_grad_(False)
             self.train_dae = False
         else:
-            assert self.unet is not None
             self.train_dae = True
         
         self.format: MS_MDCT_DualFormat = trainer.pipeline.format.to(self.trainer.accelerator.device)
@@ -94,13 +89,9 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
             self.dae.compile(**trainer.config.compile_params)
             self.format.compile(**trainer.config.compile_params)
 
-            if self.unet is not None:
-                self.unet.compile(**trainer.config.compile_params)
-
         self.logger.info(f"Training modules: {trainer.config.train_modules}")
         if self.train_dae == True:
             self.logger.info(f"KL loss weight: {self.config.kl_loss_weight} KL warmup steps: {self.config.kl_warmup_steps}")
-            self.logger.info(f"Decoder loss multiplier: {config.decoder_loss_multiplier}")
             self.logger.info(f"Add latents noise: {config.add_latents_noise}")
         self.logger.info(f"Crop edges: {self.config.crop_edges}")
 
@@ -112,15 +103,12 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
         self.ddecp_trainer = UNetTrainer(UNetTrainerConfig(**config.ddecp), trainer, self.ddecp, "ddecp")
         self.logger.info("DDEC-M trainer:")
         self.ddecm_trainer = UNetTrainer(UNetTrainerConfig(**config.ddecm), trainer, self.ddecm, "ddecm")
-        self.logger.info("UNet trainer:")
-        self.unet_trainer = UNetTrainer(UNetTrainerConfig(**config.unet), trainer, self.unet, "unet")
 
     @torch.no_grad()
     def init_batch(self, validation: bool = False) -> Optional[dict[str, Union[torch.Tensor, float]]]:
         
         self.ddecp_trainer.init_batch(validation)
         self.ddecm_trainer.init_batch(validation)
-        self.unet_trainer.init_batch(validation)
 
         return None
     
@@ -176,16 +164,15 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
             "loss_weight/kl_latents": kl_loss_weight,
         }
 
+        if self.config.add_latents_noise is not None:
+            logs["io_stats/add_latents_noise"] = self.config.add_latents_noise
+            
         noise = torch.randn_like(mdct_psd)
         perturb_noise = torch.randn_like(mdct_psd)
 
         logs.update(self.ddecp_trainer.train_batch(mdct_phase, audio_embeddings, ddec_cond, noise=noise, perturb_noise=perturb_noise))
         logs.update(self.ddecm_trainer.train_batch(mdct_psd, audio_embeddings, ddec_cond, noise=noise, perturb_noise=perturb_noise))
-        logs["loss"] = logs["loss"] + (logs["loss/ddecp"] + logs["loss/ddecm"]) * (self.config.decoder_loss_multiplier / 2)
-
-        if self.train_dae == True:
-            logs.update(self.unet_trainer.train_batch(latents, audio_embeddings))
-            logs["loss"] = logs["loss"] + logs["loss/unet"]
+        logs["loss"] = logs["loss"] + logs["loss/ddecp"] + logs["loss/ddecm"]
 
         dynamic_range_ddecm = mdct_psd.amax(dim=(1,2,3)) - mdct_psd.amin(dim=(1,2,3))
         logs["io_stats_ddecm/dynamic_range"] = dynamic_range_ddecm
@@ -207,6 +194,5 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
         logs = {}
         logs.update(self.ddecp_trainer.finish_batch())
         logs.update(self.ddecm_trainer.finish_batch())
-        logs.update(self.unet_trainer.finish_batch())
 
         return logs
