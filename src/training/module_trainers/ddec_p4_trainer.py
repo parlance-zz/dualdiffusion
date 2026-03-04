@@ -28,12 +28,11 @@ import torch
 from training.trainer import DualDiffusionTrainer
 from training.module_trainers.module_trainer import ModuleTrainer, ModuleTrainerConfig
 from training.module_trainers.unet_trainer_p4 import UNetTrainerConfig, UNetTrainer
-from training.sigma_sampler import SigmaSamplerConfig, SigmaSampler
 from modules.daes.dae_edm2_p4 import DAE
 from modules.unets.unet_edm2_p4_ddec import UNet
+from modules.unets.unet_edm2_p4 import UNet as UNet_LDM
 from modules.formats.ms_mdct_dual_2 import MS_MDCT_DualFormat
 from modules.mp_tools import normalize
-from utils.dual_diffusion_utils import dict_str
 
 
 @torch.no_grad()
@@ -48,11 +47,15 @@ def random_stereo_augmentation(x: torch.Tensor) -> torch.Tensor:
 @dataclass
 class DiffusionDecoder_Trainer_Config(ModuleTrainerConfig):
 
-    ddecm: dict[str, Any]
     ddecp: dict[str, Any]
+    ddecm: dict[str, Any]
+    unet: dict[str, Any]
 
-    kl_loss_weight: float = 1
-    kl_warmup_steps: int  = 2000
+    kl_loss_weight: float = 1e-2
+    kl_warmup_steps: int  = 150
+
+    add_latents_noise: float = 0.08
+    unet_loss_weight: float = 0.1
 
     phase_invariance_loss_weight: float = 0
     phase_invariance_warmup_steps: int = 0
@@ -74,16 +77,19 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
         self.ddecp: UNet = trainer.get_train_module("ddecp")
         self.ddecm: UNet = trainer.get_train_module("ddecm")
         self.dae: DAE = trainer.get_train_module("dae")
+        self.unet: UNet_LDM = trainer.get_train_module("unet")
 
         assert self.ddecp is not None
         assert self.ddecm is not None
         
         if self.dae is None:
             self.dae = trainer.pipeline.dae.to(device=trainer.accelerator.device, dtype=torch.bfloat16).requires_grad_(False)
-            assert self.dae.config.last_global_step > 0
             self.train_dae = False
+            assert self.dae.config.last_global_step > 0
+            assert self.unet is None
         else:
             self.train_dae = True
+            assert self.unet is not None
         
         self.format: MS_MDCT_DualFormat = trainer.pipeline.format.to(self.trainer.accelerator.device)
 
@@ -92,6 +98,9 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
             self.ddecm.compile(**trainer.config.compile_params)
             self.dae.compile(**trainer.config.compile_params)
             self.format.compile(**trainer.config.compile_params)
+
+            if self.unet is not None:
+                self.unet.compile(**trainer.config.compile_params)
 
         self.logger.info(f"Training modules: {trainer.config.train_modules}")
         if self.train_dae == True:
@@ -107,59 +116,15 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
         self.ddecp_trainer = UNetTrainer(UNetTrainerConfig(**config.ddecp), trainer, self.ddecp, "ddecp")
         self.logger.info("DDEC-M trainer:")
         self.ddecm_trainer = UNetTrainer(UNetTrainerConfig(**config.ddecm), trainer, self.ddecm, "ddecm")
-
-        sigma_sampler_config = SigmaSamplerConfig(
-            sigma_max=100,
-            sigma_min=0.008,
-            sigma_data=1,
-            distribution="linear",
-            dist_scale=-1,
-            dist_offset=0,
-            use_stratified_sigma_sampling=True
-        )
-        self.sigma_sampler = SigmaSampler(sigma_sampler_config)
-        if self.train_dae == True:
-            self.logger.info("Latents noise SigmaSampler config:")
-            self.logger.info(dict_str(sigma_sampler_config.__dict__))
-
-        #self.trainer.optimizer.optimizer.zero_momentum()
-
-    """
-    def shift_equivariance_loss(self, mdct_phase: torch.Tensor, mdct_psd: torch.Tensor,
-            dae_embeddings: torch.Tensor, latents: torch.Tensor) -> torch.Tensor:
-
-        if self.config.phase_invariance_loss_bsz == 0: return None
-
-        latents = latents[:self.config.phase_invariance_loss_bsz]
-        mdct_phase = mdct_phase[:self.config.phase_invariance_loss_bsz]
-        mdct_psd = mdct_psd[:self.config.phase_invariance_loss_bsz]
-        dae_embeddings = dae_embeddings[:self.config.phase_invariance_loss_bsz] if dae_embeddings is not None else None
-
-        crop_left = np.random.randint(1, self.config.crop_edges * 2)
-        crop_right = self.config.crop_edges * 2 - crop_left
-        
-        mdct_phase = mdct_phase[..., crop_left:-crop_right]
-        mdct_psd = mdct_psd[..., crop_left:-crop_right]
-
-        dae_input = torch.cat((mdct_phase, mdct_psd), dim=1).detach()
-        with torch.autocast(device_type="cuda", dtype=self.trainer.mixed_precision_dtype, enabled=self.trainer.mixed_precision_enabled):
-            latents2 = self.dae.encode(dae_input, dae_embeddings)
-
-        latents_up: torch.Tensor = torch.repeat_interleave(latents, self.dae.downsample_ratio, dim=-1)
-        latents_up_cropped = latents_up[..., crop_left:-crop_right]
-        latents_down: torch.Tensor = torch.nn.functional.avg_pool2d(latents_up_cropped, kernel_size=(1,self.dae.downsample_ratio))
-
-        return (latents_down - latents2.float())[..., 2:-2].pow(2).mean().expand(latents.shape[0])
-    """
+        self.logger.info("UNet-LDM trainer:")
+        self.unet_trainer = UNetTrainer(UNetTrainerConfig(**config.unet), trainer, self.unet, "unet")
 
     @torch.no_grad()
     def init_batch(self, validation: bool = False) -> Optional[dict[str, Union[torch.Tensor, float]]]:
         
         self.ddecp_trainer.init_batch(validation)
         self.ddecm_trainer.init_batch(validation)
-
-        self.global_sigma = self.sigma_sampler.sample(self.trainer.total_batch_size, device=self.trainer.accelerator.device)
-        self.global_sigma = self.trainer.accelerator.gather(self.global_sigma.unsqueeze(0))[0]
+        self.unet_trainer.init_batch(validation)
 
         return None
     
@@ -185,12 +150,6 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
 
         dae_input = torch.cat((mdct_phase, input_mel_spec), dim=1).detach()
 
-        # get the noise level for this sub-batch from the pre-calculated whole-batch sigma (required for stratified sampling)
-        device_bsz = self.trainer.config.device_batch_size
-        local_sigma = self.global_sigma[self.trainer.accelerator.process_index::self.trainer.accelerator.num_processes]
-        batch_sigma = local_sigma[self.trainer.accum_step * device_bsz:(self.trainer.accum_step+1) * device_bsz]
-        latents_sigma = batch_sigma if self.train_dae == True else None
-
         if self.config.phase_invariance_loss_weight > 0:
             mdct_phase2, _ = self.format.raw_to_mdct_phase_psd(raw_samples, random_phase_augmentation=True)
             mdct_phase2 = mdct_phase2[..., self.config.crop_edges:-self.config.crop_edges]
@@ -199,20 +158,25 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
             dae_input2 = None
 
         if self.train_dae == True:
-            latents, ddec_cond, pre_norm_latents, phase_invariance_loss = self.trainer.get_ddp_module(self.dae)(
-                dae_input, audio_embeddings, latents_sigma=latents_sigma, samples2=dae_input2)
+            latents, full_res_latents, ddec_cond, phase_invariance_loss = self.trainer.get_ddp_module(self.dae)(
+                dae_input, audio_embeddings, latents_sigma=self.config.add_latents_noise, samples2=dae_input2)
         else:
-            latents, ddec_cond, pre_norm_latents, phase_invariance_loss = self.dae(
-                dae_input, audio_embeddings, latents_sigma=None, samples2=None)
+            latents, full_res_latents, ddec_cond, phase_invariance_loss = self.dae(
+                dae_input, audio_embeddings, latents_sigma=self.config.add_latents_noise, samples2=None)
             ddec_cond = ddec_cond.detach()
-            
+        
         latents: torch.Tensor = latents.float()
-        pre_norm_latents: torch.Tensor = pre_norm_latents.float()
+        full_res_latents: torch.Tensor = full_res_latents.float()
 
-        pre_norm_latents_var = pre_norm_latents.pow(2).mean() + 1e-20
-        var_kl = pre_norm_latents_var - 1 - pre_norm_latents_var.log()
-        kl_loss = var_kl.mean() + 0.5 * pre_norm_latents.mean().square().mean()
+        latents_var = latents.pow(2).mean() + 1e-20
+        var_kl = latents_var - 1 - latents_var.log()
+        kl_loss = var_kl.mean() + 0.5 * latents.mean().square().mean()
         kl_loss = kl_loss.expand(latents.shape[0]) # needed for per-sample logging
+
+        #latents_var = full_res_latents.pow(2).mean(dim=(0,2,3)) + 1e-20
+        #var_kl = latents_var - 1 - latents_var.log()
+        #kl_loss = var_kl.mean() + 0.5 * full_res_latents.mean(dim=(0,2,3)).square().mean()
+        #kl_loss = kl_loss.expand(full_res_latents.shape[0]) # needed for per-sample logging
 
         phase_invariance_loss_weight = self.config.phase_invariance_loss_weight
         if self.trainer.global_step < self.config.phase_invariance_warmup_steps:
@@ -227,10 +191,10 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
             "loss": kl_loss * kl_loss_weight if self.train_dae == True else torch.zeros_like(kl_loss),
             "io_stats/ddec_cond_var": ddec_cond.var(dim=(1,2,3)),
             "io_stats/ddec_cond_mean": ddec_cond.mean(dim=(1,2,3)),
-            "io_stats/prenorm_latents_var": pre_norm_latents.var(dim=(1,2,3)).detach(),
             "io_stats/latents_var": latents.var(dim=(1,2,3)).detach(),
             "io_stats/latents_mean": latents.mean(dim=(1,2,3)).detach(),
-
+            "io_stats/input_mel_spec_mean": input_mel_spec.mean(dim=(1,2,3)),
+            "io_stats/input_mel_spec_var": input_mel_spec.var(dim=(1,2,3)),
             "io_stats_ddecp/mdct_phase_var": mdct_phase.var(dim=(1,2,3)),
             "io_stats_ddecm/mdct_psd_var": mdct_psd.var(dim=(1,2,3)),
             "io_stats_ddecm/mdct_psd_mean": mdct_psd.mean(dim=(1,2,3)),
@@ -238,14 +202,19 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
             "loss/kl_latents": kl_loss.detach(),
             "loss_weight/kl_latents": kl_loss_weight,
             "loss_weight/phase_invariance": phase_invariance_loss_weight,
+            "loss_weight/unet": self.config.unet_loss_weight
         }
 
         if self.train_dae == True:
-            logs["io_stats/latents_sigma"] = latents_sigma.detach()
+            if self.config.add_latents_noise is not None:
+                logs["io_stats/latents_sigma"] = self.config.add_latents_noise
 
             if self.config.phase_invariance_loss_weight > 0:
                 logs["loss"] = logs["loss"] + phase_invariance_loss * phase_invariance_loss_weight
                 logs["loss/phase_invariance"] = phase_invariance_loss.detach()
+
+            logs["io_stats/latents_per_ch_mean"] = self.dae.latents_stats_tracker.mean.pow(2).mean().pow(0.5)
+            logs["io_stats/latents_per_ch_var"] = self.dae.latents_stats_tracker.var.mean()
 
         noise = torch.randn_like(mdct_psd)
         perturb_noise = torch.randn_like(mdct_psd)
@@ -254,13 +223,20 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
         logs.update(self.ddecm_trainer.train_batch(mdct_psd, audio_embeddings, ddec_cond, noise=noise, perturb_noise=perturb_noise))
         logs["loss"] = logs["loss"] + logs["loss/ddecp"] + logs["loss/ddecm"]
 
+        #reg_latents = (latents - latents.mean(dim=(0,2,3), keepdim=True).detach()) / (latents.std(dim=(0,2,3), keepdim=True).detach() + 1e-20)
+        reg_latents = (latents - latents.mean(dim=(0,2,3), keepdim=True)) / (latents.std(dim=(0,2,3), keepdim=True) + 1e-20)
+        logs.update(self.unet_trainer.train_batch(reg_latents, audio_embeddings))
+        logs["loss"] = logs["loss"] + logs["loss/unet"] * self.config.unet_loss_weight
+
         dynamic_range_ddecm = mdct_psd.amax(dim=(1,2,3)) - mdct_psd.amin(dim=(1,2,3))
         logs["io_stats_ddecm/dynamic_range"] = dynamic_range_ddecm
         dynamic_range_ddecp = mdct_phase.amax(dim=(1,2,3)) - mdct_phase.amin(dim=(1,2,3))
         logs["io_stats_ddecp/dynamic_range"] = dynamic_range_ddecp
 
         if self.trainer.config.enable_debug_mode == True:
+            print("input_mel_spec.shape:", input_mel_spec.shape)
             print("mdct_phase.shape:", mdct_phase.shape)
+            print("mdct_psd.shape:", mdct_psd.shape)
             print("ddec_cond.shape:", ddec_cond.shape)
             print("latents.shape:", latents.shape)
 
@@ -272,5 +248,6 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
         logs = {}
         logs.update(self.ddecp_trainer.finish_batch())
         logs.update(self.ddecm_trainer.finish_batch())
+        logs.update(self.unet_trainer.finish_batch())
 
         return logs

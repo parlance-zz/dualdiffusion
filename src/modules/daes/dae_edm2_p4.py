@@ -376,31 +376,32 @@ class DAE(DualDiffusionDAE):
         x = normalize_groups(x, groups=self.config.mlp_groups)
         latents = self.conv_latents_out(x, gain=self.conv_latents_out_gain).float()
 
+        full_res_latents = latents
         for _ in range(self.num_levels - 1):
             latents = self.downsample(latents)
-
-        latents = latents.to(dtype=x.dtype)
         
         if training == True:
             self.latents_stats_tracker(latents)
-            return latents
+            return latents, full_res_latents
         else:
-            latents = self.latents_stats_tracker.remove_mean(latents, mode="per_channel")
-            latents = self.latents_stats_tracker.unscale(latents, mode="static")
-            return latents
+            #latents = self.latents_stats_tracker.remove_mean(latents, mode="per_channel")
+            #latents = self.latents_stats_tracker.unscale(latents, mode="static")
+            #return latents
+            return normalize(latents).to(dtype=x.dtype)
 
     def decode(self, x: torch.Tensor, embeddings: torch.Tensor, training: bool = False) -> torch.Tensor:
 
         if training == False:
-            x = self.latents_stats_tracker.add_mean(x, mode="per_channel")
-            x = self.latents_stats_tracker.rescale(x, mode="static")
+            #x = self.latents_stats_tracker.add_mean(x, mode="per_channel")
+            #x = self.latents_stats_tracker.rescale(x, mode="static")
+            pass
 
         if embeddings is not None:
             emb = mp_silu(embeddings[..., None, None]).to(dtype=torch.bfloat16)
         else:
             emb = None
         
-        x = self.conv_latents_in(x)
+        x = self.conv_latents_in(x.to(dtype=torch.bfloat16))
 
         for name, block in self.dec.items():
             x = block(x, emb)
@@ -409,24 +410,24 @@ class DAE(DualDiffusionDAE):
         return out
 
     def forward(self, samples: torch.Tensor, audio_embeddings: torch.Tensor,
-            latents_sigma: Optional[torch.Tensor] = None, samples2: Optional[torch.Tensor] = None) -> tuple[torch.Tensor, ...]:
+            latents_sigma: Optional[float] = None, samples2: Optional[torch.Tensor] = None) -> tuple[torch.Tensor, ...]:
 
         dae_embeddings = self.get_embeddings(audio_embeddings)
-        pre_norm_latents = self.encode(samples, dae_embeddings, training=True)
+        latents, full_res_latents = self.encode(samples, dae_embeddings, training=True)
 
         if samples2 is not None:
-            pre_norm_latents2 = self.encode(samples2, dae_embeddings, training=True)
-            phase_invariance_loss = torch.nn.functional.mse_loss(pre_norm_latents.float(), pre_norm_latents2.float())
+            latents2 = self.encode(samples2, dae_embeddings, training=True)
+            phase_invariance_loss = torch.nn.functional.mse_loss(latents.float(), latents2.float())
         else:
             phase_invariance_loss = None
-        
-        latents = pre_norm_latents
 
         if latents_sigma is not None:
-            latents = (latents + latents_sigma.view(-1, 1, 1, 1) * torch.randn_like(latents)) / (1 + latents_sigma.view(-1, 1, 1, 1)**2)**0.5
+            decode_latents = normalize(latents) + latents_sigma * torch.randn_like(latents)
+        else:
+            decode_latents = normalize(latents)
         
-        out = self.decode(latents, dae_embeddings, training=True)
-        return latents, out, pre_norm_latents, phase_invariance_loss
+        out = self.decode(decode_latents, dae_embeddings, training=True)
+        return latents, full_res_latents, out, phase_invariance_loss
 
     def tiled_encode(self, x: torch.Tensor, embeddings: torch.Tensor, max_chunk: int = 6144, overlap: int = 256) -> torch.Tensor:
         raise NotImplementedError()

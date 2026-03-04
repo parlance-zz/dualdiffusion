@@ -298,10 +298,10 @@ class UNet(DualDiffusionUNet):
             sigma_center = torch.e ** self.config.mp_fourier_ln_sigma_offset
             c_noise = 2 * (sigma_center / sigma.flatten()).atan() #0 <= c_noise <= pi
 
-            if perturbed_input is not None:
-                x = (c_in * perturbed_input).to(dtype=torch.bfloat16)
-            else:
-                x = (c_in * x_in).to(dtype=torch.bfloat16)
+        if perturbed_input is not None:
+            x = (c_in * perturbed_input).to(dtype=torch.bfloat16)
+        else:
+            x = (c_in * x_in).to(dtype=torch.bfloat16)
         
         # nuisance due to ddp wrapper limitations
         if conditioning_mask is not None:
