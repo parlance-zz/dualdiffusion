@@ -49,8 +49,8 @@ class UNetConfig(DualDiffusionUNetConfig):
     in_channels_emb: int = 1024
     in_num_freqs: int = 1
 
-    sigma_max: float  = 200.
-    sigma_min: float  = 0.01
+    sigma_max: float  = 100.
+    sigma_min: float  = 0.08
     sigma_data: float = 1.
 
     mp_fourier_ln_sigma_offset: float = 0.35
@@ -66,7 +66,7 @@ class UNetConfig(DualDiffusionUNetConfig):
     rope_channels: int        = 112
     rope_base: float          = 10000.
     rope_scale: float         = 1024
-    num_layers_per_block: int = 20           # Number of resnet blocks per resolution.
+    num_layers_per_block: int = 10           # Number of resnet blocks per resolution.
     label_balance: float      = 0.5          # Balance between noise embedding (0) and class embedding (1).
     balance_logits_offset: float = -2 #-1.75
     mlp_multiplier: int    = 3               # Multiplier for the number of channels in the MLP.
@@ -295,8 +295,11 @@ class UNet(DualDiffusionUNet):
             c_in = 1 / (self.config.sigma_data ** 2 + sigma ** 2).sqrt()
             
             # improved lipschitz behavior at low sigma, improved conditioning resolution at snr ~= 1
-            sigma_center = torch.e ** self.config.mp_fourier_ln_sigma_offset
-            c_noise = 2 * (sigma_center / sigma.flatten()).atan() #0 <= c_noise <= pi
+            #sigma_center = torch.e ** self.config.mp_fourier_ln_sigma_offset
+            #c_noise = 2 * (sigma_center / sigma.flatten()).atan() #0 <= c_noise <= pi
+
+            ln_sigma = sigma.flatten().log() - self.config.mp_fourier_ln_sigma_offset
+            c_noise = ln_sigma / 4
 
         if perturbed_input is not None:
             x = (c_in * perturbed_input).to(dtype=torch.bfloat16)

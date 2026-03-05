@@ -55,8 +55,9 @@ class DiffusionDecoder_Trainer_Config(ModuleTrainerConfig):
     kl_warmup_steps: int  = 150
     add_latents_noise: float = 0.08
 
-    unet_loss_weight: float  = 0.06
-    ddecm_loss_weight: float = 1
+    unet_loss_weight: float  = 1.5
+    unet_loss_warmup_steps: int = 2000
+    ddecm_loss_weight: float = 1.7
     ddecp_loss_weight: float = 1
 
     phase_invariance_loss_weight: float = 0
@@ -120,8 +121,8 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
         self.ddecm_trainer = UNetTrainer(UNetTrainerConfig(**config.ddecm), trainer, self.ddecm, "ddecm")
 
         if self.train_dae == True:
-            self.logger.info(f"UNet-LDM trainer (loss weight: {self.config.unet_loss_weight}):")
-            self.unet_trainer = UNetTrainer(UNetTrainerConfig(**config.unet), trainer, self.unet, "unet")
+            self.logger.info(f"UNet-LDM trainer (loss weight: {self.config.unet_loss_weight}) (warmup steps:{self.config.unet_loss_warmup_steps}):")
+            self.unet_trainer = UNetTrainer(UNetTrainerConfig(**config.unet, disable_loss_weight=True), trainer, self.unet, "unet")
 
     @torch.no_grad()
     def init_batch(self, validation: bool = False) -> Optional[dict[str, Union[torch.Tensor, float]]]:
@@ -192,6 +193,10 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
         if self.trainer.global_step < self.config.kl_warmup_steps:
             kl_loss_weight *= self.trainer.global_step / self.config.kl_warmup_steps
         
+        unet_loss_weight = self.config.unet_loss_weight
+        if self.trainer.global_step < self.config.unet_loss_warmup_steps:
+            unet_loss_weight *= self.trainer.global_step / self.config.unet_loss_warmup_steps
+
         logs = {
             "loss": kl_loss * kl_loss_weight if self.train_dae == True else torch.zeros_like(kl_loss),
             "io_stats/ddec_cond_var": ddec_cond.var(dim=(1,2,3)),
@@ -207,7 +212,7 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
             "loss/kl_latents": kl_loss.detach(),
             "loss_weight/kl_latents": kl_loss_weight,
             "loss_weight/phase_invariance": phase_invariance_loss_weight,
-            "loss_weight/unet": self.config.unet_loss_weight,
+            "loss_weight/unet": unet_loss_weight,
             "loss_weight/ddecp": self.config.ddecp_loss_weight,
             "loss_weight/ddecm": self.config.ddecm_loss_weight,
         }
@@ -235,7 +240,7 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
         if self.train_dae == True:
             reg_latents = (latents - latents.mean(dim=(0,2,3), keepdim=True)) / (latents.std(dim=(0,2,3), keepdim=True) + 1e-20)
             logs.update(self.unet_trainer.train_batch(reg_latents, audio_embeddings))
-            logs["loss"] = logs["loss"] + logs["loss/unet"] * self.config.unet_loss_weight
+            logs["loss"] = logs["loss"] + logs["loss/unet"] * unet_loss_weight
 
         dynamic_range_ddecm = mdct_psd.amax(dim=(1,2,3)) - mdct_psd.amin(dim=(1,2,3))
         logs["io_stats_ddecm/dynamic_range"] = dynamic_range_ddecm
