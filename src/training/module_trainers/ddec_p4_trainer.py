@@ -118,15 +118,18 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
         self.ddecp_trainer = UNetTrainer(UNetTrainerConfig(**config.ddecp), trainer, self.ddecp, "ddecp")
         self.logger.info(f"DDEC-M trainer (loss weight: {self.config.ddecm_loss_weight}):")
         self.ddecm_trainer = UNetTrainer(UNetTrainerConfig(**config.ddecm), trainer, self.ddecm, "ddecm")
-        self.logger.info(f"UNet-LDM trainer (loss weight: {self.config.unet_loss_weight}):")
-        self.unet_trainer = UNetTrainer(UNetTrainerConfig(**config.unet), trainer, self.unet, "unet")
+
+        if self.train_dae == True:
+            self.logger.info(f"UNet-LDM trainer (loss weight: {self.config.unet_loss_weight}):")
+            self.unet_trainer = UNetTrainer(UNetTrainerConfig(**config.unet), trainer, self.unet, "unet")
 
     @torch.no_grad()
     def init_batch(self, validation: bool = False) -> Optional[dict[str, Union[torch.Tensor, float]]]:
         
         self.ddecp_trainer.init_batch(validation)
         self.ddecm_trainer.init_batch(validation)
-        self.unet_trainer.init_batch(validation)
+        if self.train_dae == True:
+            self.unet_trainer.init_batch(validation)
 
         return None
     
@@ -254,6 +257,7 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
         logs = {}
         logs.update(self.ddecp_trainer.finish_batch())
         logs.update(self.ddecm_trainer.finish_batch())
-        logs.update(self.unet_trainer.finish_batch())
+        if self.train_dae == True:
+            logs.update(self.unet_trainer.finish_batch())
 
         return logs
