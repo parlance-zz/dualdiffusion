@@ -227,10 +227,7 @@ class UNetTrainer(ModuleTrainer):
         else:
             sigma_data = self.sigma_sampler.config.sigma_data
 
-        if self.config.disable_loss_weight == True:
-            batch_loss_weight = 1.
-        else:
-            batch_loss_weight = (batch_sigma ** 2 + sigma_data ** 2) / (batch_sigma * sigma_data) ** 2
+        batch_loss_weight = (batch_sigma ** 2 + sigma_data ** 2) / (batch_sigma * sigma_data) ** 2
         batch_weighted_loss = torch.nn.functional.mse_loss(denoised, samples, reduction="none")
         if loss_weight is not None: # use custom loss weight if provided
             assert self.config.disable_loss_weight == False
