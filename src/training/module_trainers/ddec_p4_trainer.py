@@ -53,17 +53,18 @@ class DiffusionDecoder_Trainer_Config(ModuleTrainerConfig):
 
     kl_loss_weight: float = 1e-2
     kl_warmup_steps: int  = 150
-
     add_latents_noise: float = 0.08
-    unet_loss_weight: float = 0.1
+
+    unet_loss_weight: float  = 0.06
+    ddecm_loss_weight: float = 1
+    ddecp_loss_weight: float = 1
 
     phase_invariance_loss_weight: float = 0
     phase_invariance_warmup_steps: int = 0
 
+    crop_edges: int = 4 # used to avoid artifacts due to mdct lapped blocks at beginning and end of sample
     random_stereo_augmentation: bool = True
     random_phase_augmentation: bool  = True
-
-    crop_edges: int = 4 # used to avoid artifacts due to mdct lapped blocks at beginning and end of sample
 
 class DiffusionDecoder_Trainer(ModuleTrainer):
     
@@ -105,6 +106,7 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
         self.logger.info(f"Training modules: {trainer.config.train_modules}")
         if self.train_dae == True:
             self.logger.info(f"KL loss weight: {self.config.kl_loss_weight} KL warmup steps: {self.config.kl_warmup_steps}")
+            self.logger.info(f"Add latents noise: {self.config.add_latents_noise}")
             self.logger.info(f"Latents phase-invariance loss weight: {self.config.phase_invariance_loss_weight} Warmup steps: {self.config.phase_invariance_warmup_steps}")
         self.logger.info(f"Crop edges: {self.config.crop_edges}")
 
@@ -112,11 +114,11 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
             self.logger.info("Using random stereo augmentation")
         else: self.logger.info("Random stereo augmentation is disabled")
 
-        self.logger.info("DDEC-P trainer:")
+        self.logger.info(f"DDEC-P trainer (loss weight: {self.config.ddecp_loss_weight}):")
         self.ddecp_trainer = UNetTrainer(UNetTrainerConfig(**config.ddecp), trainer, self.ddecp, "ddecp")
-        self.logger.info("DDEC-M trainer:")
+        self.logger.info(f"DDEC-M trainer (loss weight: {self.config.ddecm_loss_weight}):")
         self.ddecm_trainer = UNetTrainer(UNetTrainerConfig(**config.ddecm), trainer, self.ddecm, "ddecm")
-        self.logger.info("UNet-LDM trainer:")
+        self.logger.info(f"UNet-LDM trainer (loss weight: {self.config.unet_loss_weight}):")
         self.unet_trainer = UNetTrainer(UNetTrainerConfig(**config.unet), trainer, self.unet, "unet")
 
     @torch.no_grad()
@@ -202,7 +204,9 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
             "loss/kl_latents": kl_loss.detach(),
             "loss_weight/kl_latents": kl_loss_weight,
             "loss_weight/phase_invariance": phase_invariance_loss_weight,
-            "loss_weight/unet": self.config.unet_loss_weight
+            "loss_weight/unet": self.config.unet_loss_weight,
+            "loss_weight/ddecp": self.config.ddecp_loss_weight,
+            "loss_weight/ddecm": self.config.ddecm_loss_weight,
         }
 
         if self.train_dae == True:
@@ -220,13 +224,15 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
         perturb_noise = torch.randn_like(mdct_psd)
 
         logs.update(self.ddecp_trainer.train_batch(mdct_phase, audio_embeddings, ddec_cond, noise=noise, perturb_noise=perturb_noise))
-        logs.update(self.ddecm_trainer.train_batch(mdct_psd, audio_embeddings, ddec_cond, noise=noise, perturb_noise=perturb_noise))
-        logs["loss"] = logs["loss"] + logs["loss/ddecp"] + logs["loss/ddecm"]
+        logs["loss"] = logs["loss"] + logs["loss/ddecp"] * self.config.ddecp_loss_weight
 
-        #reg_latents = (latents - latents.mean(dim=(0,2,3), keepdim=True).detach()) / (latents.std(dim=(0,2,3), keepdim=True).detach() + 1e-20)
-        reg_latents = (latents - latents.mean(dim=(0,2,3), keepdim=True)) / (latents.std(dim=(0,2,3), keepdim=True) + 1e-20)
-        logs.update(self.unet_trainer.train_batch(reg_latents, audio_embeddings))
-        logs["loss"] = logs["loss"] + logs["loss/unet"] * self.config.unet_loss_weight
+        logs.update(self.ddecm_trainer.train_batch(mdct_psd, audio_embeddings, ddec_cond, noise=noise, perturb_noise=perturb_noise))
+        logs["loss"] = logs["loss"] + logs["loss/ddecm"] * self.config.ddecm_loss_weight
+
+        if self.train_dae == True:
+            reg_latents = (latents - latents.mean(dim=(0,2,3), keepdim=True)) / (latents.std(dim=(0,2,3), keepdim=True) + 1e-20)
+            logs.update(self.unet_trainer.train_batch(reg_latents, audio_embeddings))
+            logs["loss"] = logs["loss"] + logs["loss/unet"] * self.config.unet_loss_weight
 
         dynamic_range_ddecm = mdct_psd.amax(dim=(1,2,3)) - mdct_psd.amin(dim=(1,2,3))
         logs["io_stats_ddecm/dynamic_range"] = dynamic_range_ddecm
