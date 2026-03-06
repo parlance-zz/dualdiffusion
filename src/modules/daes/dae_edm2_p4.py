@@ -310,10 +310,7 @@ class DAE(DualDiffusionDAE):
             self.enc[f"block_0_layer{idx}"] = Block(0, cenc, cenc, cemb, flavor="enc", **block_kwargs)
 
         self.conv_latents_out = MPConv(cenc, config.latent_channels, kernel=(1,1))
-        self.conv_latents_out_gain = torch.nn.Parameter(torch.ones([]))
-
         self.downsample = FilteredDownsample1D(beta=6.95, k_size=31, factor=2)
-
         self.latents_stats_tracker = LatentStatsTracker(config.latent_channels, static_scale=config.static_latents_scale)
         self.conv_latents_in  = MPConv(config.latent_channels, cdec[-1], kernel=(1,1), bias=True)
 
@@ -336,6 +333,7 @@ class DAE(DualDiffusionDAE):
             cin = cout
 
         self.conv_out = MPConv(cout, config.out_channels, kernel=(1,1))
+        self.out_gain = torch.nn.Parameter(torch.zeros([]))
 
     def get_embeddings(self, emb_in: torch.Tensor) -> torch.Tensor:
         if self.emb_label is not None:
@@ -404,7 +402,7 @@ class DAE(DualDiffusionDAE):
         for name, block in self.dec.items():
             x = block(x, emb)
 
-        out: torch.Tensor = self.conv_out(x, gain=self.conv_out_gain)
+        out: torch.Tensor = self.conv_out(x, gain=self.out_gain)
         return out
 
     def forward(self, samples: torch.Tensor, audio_embeddings: torch.Tensor,
