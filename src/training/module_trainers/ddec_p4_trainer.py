@@ -51,14 +51,14 @@ class DiffusionDecoder_Trainer_Config(ModuleTrainerConfig):
     ddecm: dict[str, Any]
     unet: dict[str, Any]
 
-    kl_loss_weight: float = 1e-2
+    kl_loss_weight: float = 0
     kl_warmup_steps: int  = 150
     add_latents_noise: float = 0.08
 
-    unet_loss_weight: float  = 1.5
-    unet_loss_warmup_steps: int = 2000
-    ddecm_loss_weight: float = 1.7
-    ddecp_loss_weight: float = 1
+    unet_loss_weight: float  = 0.05
+    unet_loss_warmup_steps: int = 3000
+    ddecm_loss_weight: float = 1.5
+    ddecp_loss_weight: float = 1.5
 
     phase_invariance_loss_weight: float = 0
     phase_invariance_warmup_steps: int = 0
@@ -194,10 +194,6 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
         kl_loss_weight = self.config.kl_loss_weight
         if self.trainer.global_step < self.config.kl_warmup_steps:
             kl_loss_weight *= self.trainer.global_step / self.config.kl_warmup_steps
-        
-        unet_loss_weight = self.config.unet_loss_weight
-        if self.trainer.global_step < self.config.unet_loss_warmup_steps:
-            unet_loss_weight *= self.trainer.global_step / self.config.unet_loss_warmup_steps
 
         logs = {
             "loss": kl_loss * kl_loss_weight if self.train_dae == True else torch.zeros_like(kl_loss),
@@ -214,7 +210,7 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
             "loss/kl_latents": kl_loss.detach(),
             "loss_weight/kl_latents": kl_loss_weight,
             "loss_weight/phase_invariance": phase_invariance_loss_weight,
-            "loss_weight/unet": unet_loss_weight,
+            "loss_weight/unet": self.config.unet_loss_weight if self.trainer.global_step >= self.config.unet_loss_warmup_steps else 0,
             "loss_weight/ddecp": self.config.ddecp_loss_weight,
             "loss_weight/ddecm": self.config.ddecm_loss_weight,
         }
@@ -241,6 +237,11 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
 
         if self.train_dae == True:
             reg_latents = (latents - latents.mean(dim=(0,2,3), keepdim=True)) / (latents.std(dim=(0,2,3), keepdim=True) + 1e-20)
+            if self.trainer.global_step < self.config.unet_loss_warmup_steps:
+                reg_latents = reg_latents.detach()
+                unet_loss_weight = 1
+            else:
+                unet_loss_weight = self.config.unet_loss_weight
             logs.update(self.unet_trainer.train_batch(reg_latents, audio_embeddings))
             logs["loss"] = logs["loss"] + logs["loss/unet"] * unet_loss_weight
 
