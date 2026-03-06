@@ -336,7 +336,6 @@ class DAE(DualDiffusionDAE):
             cin = cout
 
         self.conv_out = MPConv(cout, config.out_channels, kernel=(1,1))
-        self.conv_out_gain = torch.nn.Parameter(torch.ones([]))
 
     def get_embeddings(self, emb_in: torch.Tensor) -> torch.Tensor:
         if self.emb_label is not None:
@@ -374,20 +373,19 @@ class DAE(DualDiffusionDAE):
             x = block(x) if "conv" in name else block(x, emb)
 
         x = normalize_groups(x, groups=self.config.mlp_groups)
-        latents = self.conv_latents_out(x, gain=self.conv_latents_out_gain).float()
+        latents = self.conv_latents_out(x).float()
 
         full_res_latents = latents
         for _ in range(self.num_levels - 1):
             latents = self.downsample(latents)
         
+        latents = normalize(latents)
+
         if training == True:
             self.latents_stats_tracker(latents)
-            return latents, full_res_latents
+            return latents, normalize(full_res_latents)
         else:
-            #latents = self.latents_stats_tracker.remove_mean(latents, mode="per_channel")
-            #latents = self.latents_stats_tracker.unscale(latents, mode="static")
-            #return latents
-            return normalize(latents).to(dtype=x.dtype)
+            return latents.to(dtype=x.dtype)
 
     def decode(self, x: torch.Tensor, embeddings: torch.Tensor, training: bool = False) -> torch.Tensor:
 
@@ -422,9 +420,9 @@ class DAE(DualDiffusionDAE):
             phase_invariance_loss = None
 
         if latents_sigma is not None:
-            decode_latents = normalize(latents) + latents_sigma * torch.randn_like(latents)
+            decode_latents = latents + latents_sigma * torch.randn_like(latents)
         else:
-            decode_latents = normalize(latents)
+            decode_latents = latents
         
         out = self.decode(decode_latents, dae_embeddings, training=True)
         return latents, full_res_latents, out, phase_invariance_loss
