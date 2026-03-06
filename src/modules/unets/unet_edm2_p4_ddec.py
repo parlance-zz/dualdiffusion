@@ -49,26 +49,26 @@ class UNetConfig(DualDiffusionUNetConfig):
     in_num_freqs: int = 256
 
     sigma_max: float  = 100.
-    sigma_min: float  = 0.01
+    sigma_min: float  = 0.08
     sigma_data: float = 1.
 
     mp_fourier_ln_sigma_offset: float = 0
     mp_fourier_bandwidth:       float = 1
 
-    model_channels: int  = 4096              # Base multiplier for the number of channels.
+    model_channels: int  = 2048              # Base multiplier for the number of channels.
     logvar_channels: int = 192               # Number of channels for training uncertainty estimation.
     channel_mult: list[int] = (1,)           # Per-resolution multipliers for the number of channels.
-    channel_mult_noise: Optional[float] = 0.25      # Multiplier for noise embedding dimensionality.
+    channel_mult_noise: Optional[float] = 0.5       # Multiplier for noise embedding dimensionality.
     channel_mult_emb: Optional[float]   = 1         # Multiplier for final embedding dimensionality.
     use_skips: bool     = False
     channels_per_head: int    = 128          # Number of channels per attention head.
     attn_logit_scale: float   = 1
-    num_layers_per_block: int = 8            # Number of resnet blocks per resolution.
+    num_layers_per_block: int = 12            # Number of resnet blocks per resolution.
     label_balance: float      = 0.5          # Balance between noise embedding (0) and class embedding (1).
-    balance_logits_offset: float = -1.75
-    mlp_multiplier: int    = 2               # Multiplier for the number of channels in the MLP.
-    mlp_groups: int        = 32              # Number of groups for the MLPs.
-    emb_linear_groups: int = 32
+    balance_logits_offset: float = -2
+    mlp_multiplier: int    = 3               # Multiplier for the number of channels in the MLP.
+    mlp_groups: int        = 16              # Number of groups for the MLPs.
+    emb_linear_groups: int = 16
 
 class Block(torch.nn.Module):
 
@@ -112,17 +112,17 @@ class Block(torch.nn.Module):
 
         if skip_channels > 0:
             self.conv_skip = MPConv(skip_channels, out_channels, kernel=(1,1), groups=mlp_groups)
-            self.skip_balance = AdaptiveGroupBalance(emb_channels, mlp_groups, balance_logits_offset)
+            self.skip_balance = AdaptiveGroupBalance(emb_channels, mlp_groups, balance_logits_offset, min_balance=None, max_balance=None)
         else:
             self.conv_skip = None
             self.skip_balance = None
 
         self.conv_res0 = MPConv(in_channels, inner_channels,  kernel=(1,3), groups=mlp_groups)
-        self.conv_res1 = MPConv(inner_channels, out_channels, kernel=(1,3), groups=mlp_groups)
+        self.conv_res1 = MPConv(inner_channels, out_channels, kernel=(1,1), groups=mlp_groups)
         
         self.emb_gain = torch.nn.Parameter(torch.zeros([]))
         self.emb_linear = MPConv(emb_channels, inner_channels, kernel=(1,1), groups=emb_linear_groups)
-        self.emb_res_balance = AdaptiveGroupBalance(emb_channels, mlp_groups, balance_logits_offset)
+        self.emb_res_balance = AdaptiveGroupBalance(emb_channels, mlp_groups, balance_logits_offset, min_balance=None, max_balance=None)
     
         self.attn_q = MPConv(out_channels, out_channels, kernel=(1,1), groups=mlp_groups)
         self.attn_k = MPConv(out_channels, out_channels, kernel=(1,1), groups=mlp_groups)
@@ -131,7 +131,7 @@ class Block(torch.nn.Module):
 
         self.emb_gain_qkv = torch.nn.Parameter(torch.zeros([]))
         self.emb_linear_qkv = MPConv(emb_channels, out_channels, kernel=(1,1), groups=emb_linear_groups)
-        self.emb_attn_balance = AdaptiveGroupBalance(emb_channels, mlp_groups, balance_logits_offset)
+        self.emb_attn_balance = AdaptiveGroupBalance(emb_channels, mlp_groups, balance_logits_offset, min_balance=None, max_balance=None)
 
     def forward(self, x: torch.Tensor, emb: torch.Tensor, skip: torch.Tensor) -> torch.Tensor:
 
@@ -209,10 +209,8 @@ class UNet(DualDiffusionUNet):
 
         if config.in_channels_emb > 0:
             self.emb_label = MPConv(config.in_channels_emb, cemb, kernel=())
-            self.emb_label_unconditional = MPConv(1, cemb, kernel=())
         else:
             self.emb_label = None
-            self.emb_label_unconditional = None
 
         # training uncertainty estimation
         self.logvar_fourier = MPFourier(config.logvar_channels)
@@ -246,9 +244,9 @@ class UNet(DualDiffusionUNet):
 
     def get_embeddings(self, emb_in: torch.Tensor, conditioning_mask: torch.Tensor) -> torch.Tensor:
         if self.config.in_channels_emb > 0:
-            u_embedding = self.emb_label_unconditional(torch.ones(1, device=self.device, dtype=self.dtype))
             c_embedding = self.emb_label(normalize(emb_in).to(device=self.device, dtype=self.dtype))
-            return mp_sum(u_embedding, c_embedding, t=conditioning_mask.unsqueeze(1).to(self.device, self.dtype))
+            u_embedding = torch.zeros_like(c_embedding)
+            return mp_sum(u_embedding, c_embedding, t=conditioning_mask.unsqueeze(1).to(u_embedding.dtype))
         else:
             return None
         

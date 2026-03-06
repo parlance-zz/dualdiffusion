@@ -4,9 +4,8 @@ import os
 
 import torch
 
-#from modules.daes.dae_edm2_p4 import DAE, DAE_Config
-#from modules.unets.unet_edm2_p4_ddec import UNet, UNetConfig
-from modules.unets.unet_edm2_p4 import UNet, UNetConfig
+from modules.daes.dae_edm2_p4 import DAE, DAE_Config
+from modules.unets.unet_edm2_p4_ddec import UNet, UNetConfig
 #from modules.unets.unet_edm2_b4_3p import UNet, UNetConfig
 #from modules.formats.mdct import MDCT_FormatConfig, MDCT_Format
 #from modules.embeddings.clap import CLAP_Config, CLAP_Embedding
@@ -22,6 +21,7 @@ embedding.save_pretrained(model_path, subfolder="embedding")
 
 mdct_format = MDCT_Format(MDCT_FormatConfig())
 mdct_format.save_pretrained(model_path, subfolder="format")
+"""
 
 dae = DAE(DAE_Config())
 print_module_info(dae, "dae")
@@ -43,8 +43,8 @@ print_module_info(ddecp, "ddecp")
 if input("Save module? (y/n) ").lower() == 'y':
     ddecp.save_pretrained(model_path, subfolder="ddecp")
     print(f"Saved model to {model_path}/ddecp")
-"""
 
+from modules.unets.unet_edm2_p4 import UNet, UNetConfig
 unet = UNet(UNetConfig())
 print_module_info(unet, "unet")
 

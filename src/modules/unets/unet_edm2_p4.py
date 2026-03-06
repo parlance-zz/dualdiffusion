@@ -44,8 +44,8 @@ from modules.formats.format import DualDiffusionFormat
 @dataclass
 class UNetConfig(DualDiffusionUNetConfig):
 
-    in_channels:  int = 256
-    out_channels: int = 256
+    in_channels:  int = 128
+    out_channels: int = 128
     in_channels_emb: int = 1024
     in_num_freqs: int = 1
 
@@ -65,8 +65,8 @@ class UNetConfig(DualDiffusionUNetConfig):
     channels_per_head: int    = 128          # Number of channels per attention head.
     rope_channels: int        = 112
     rope_base: float          = 10000.
-    rope_scale: float         = 1024
-    num_layers_per_block: int = 10           # Number of resnet blocks per resolution.
+    rope_scale: float         = 79
+    num_layers_per_block: int = 12           # Number of resnet blocks per resolution.
     label_balance: float      = 0.5          # Balance between noise embedding (0) and class embedding (1).
     balance_logits_offset: float = -2 #-1.75
     mlp_multiplier: int    = 3               # Multiplier for the number of channels in the MLP.
