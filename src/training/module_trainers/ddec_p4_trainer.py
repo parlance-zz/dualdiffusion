@@ -166,6 +166,8 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
         if self.train_dae == True:
             latents, full_res_latents, ddec_cond, phase_invariance_loss = self.trainer.get_ddp_module(self.dae)(
                 dae_input, audio_embeddings, latents_sigma=self.config.add_latents_noise, samples2=dae_input2)
+            
+            self.dae.latents_stats_tracker(latents)
         else:
             latents, full_res_latents, ddec_cond, phase_invariance_loss = self.dae(
                 dae_input, audio_embeddings, latents_sigma=self.config.add_latents_noise, samples2=None)

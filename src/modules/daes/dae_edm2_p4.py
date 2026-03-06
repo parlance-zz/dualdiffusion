@@ -333,7 +333,7 @@ class DAE(DualDiffusionDAE):
             cin = cout
 
         self.conv_out = MPConv(cout, config.out_channels, kernel=(1,1))
-        self.out_gain = torch.nn.Parameter(torch.zeros([]))
+        self.out_gain = torch.nn.Parameter(torch.ones([]))
 
     def get_embeddings(self, emb_in: torch.Tensor) -> torch.Tensor:
         if self.emb_label is not None:
@@ -380,7 +380,6 @@ class DAE(DualDiffusionDAE):
         latents = normalize(latents)
 
         if training == True:
-            self.latents_stats_tracker(latents)
             return latents, normalize(full_res_latents)
         else:
             return latents.to(dtype=x.dtype)
