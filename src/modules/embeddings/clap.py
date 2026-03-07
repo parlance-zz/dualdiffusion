@@ -102,9 +102,9 @@ class CLAP_Embedding(DualDiffusionEmbedding):
             raise ValueError(f"Cannot encode audio embedding, audio too short (len: {audio.shape[-1]})")
         audio = audio[:audio.shape[0] // chunk_size * chunk_size].reshape(-1, chunk_size)
         
-        audio_features: torch.Tensor = self.clap_processor(audios=[chunk.cpu().numpy() for chunk in audio.unbind()],
+        audio_features: torch.Tensor = self.clap_processor(audio=[chunk.cpu().numpy() for chunk in audio.unbind()],
                                     return_tensors="pt", sampling_rate=self.config.sample_rate)["input_features"]
-        audio_embeddings1 = normalize(self.clap_model1.get_audio_features(audio_features.to(self.device)))
+        audio_embeddings1 = normalize(self.clap_model1.get_audio_features(audio_features.to(self.device)).pooler_output)
         audio_embeddings2 = normalize(self.clap_model2.get_audio_embedding_from_data(audio, use_tensor=True))
 
         return torch.cat((audio_embeddings1, audio_embeddings2), dim=1)
