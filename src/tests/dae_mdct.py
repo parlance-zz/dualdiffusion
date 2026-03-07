@@ -110,9 +110,12 @@ def dae_test() -> None:
     dataset_path = config.DATASET_PATH
     test_samples: list[str] = test_params["test_samples"] or []
     length = length or format.config.default_raw_length
-    sample_shape = pipeline.get_mel_spec_shape(raw_length=length)
-    latent_shape = pipeline.get_latent_shape(sample_shape)
-    print(f"Sample shape: {sample_shape}  Latent shape: {latent_shape}")
+    if length >= 0:
+        sample_shape = pipeline.get_mel_spec_shape(raw_length=length)
+        latent_shape = pipeline.get_latent_shape(sample_shape)
+        print(f"Sample shape: {sample_shape}  Latent shape: {latent_shape}")
+    else:
+        test_params["latents_img_save_collage"] = False
 
     if test_params.get("latents_img_use_pca", None) is not None:
         dae.config.latents_img_use_pca = test_params["latents_img_use_pca"]
@@ -137,10 +140,13 @@ def dae_test() -> None:
             file_path = os.path.join(config.DEBUG_PATH, filename)
 
         audio_len = get_audio_info(file_path).frames
-        if audio_len < length:
-            print(f"WARNING: audio length {audio_len} is shorter than the test length {length}, skipping...")
-            continue
-        count = format.get_raw_crop_width(raw_length=min(length, audio_len))
+        if length >= 0:
+            if audio_len < length:
+                print(f"WARNING: audio length {audio_len} is shorter than the test length {length}, skipping...")
+                continue
+            count = format.get_raw_crop_width(raw_length=min(length, audio_len))
+        else:
+            count = format.get_raw_crop_width(raw_length=audio_len)
         source_raw_sample = load_audio(file_path, count=count)
         input_raw_sample = source_raw_sample.unsqueeze(0).to(format.device)
         
@@ -182,7 +188,8 @@ def dae_test() -> None:
             print(f"latents mean/var: {latents_mean:.4} {latents_var:.4}")
 
         if test_params.get("add_latents_noise", None) is not None:
-            decode_latents = (latents + torch.randn_like(latents) * test_params["add_latents_noise"]) / (1 + test_params["add_latents_noise"]**2)**0.5
+            #decode_latents = (latents + torch.randn_like(latents) * test_params["add_latents_noise"]) / (1 + test_params["add_latents_noise"]**2)**0.5
+            decode_latents = latents + torch.randn_like(latents) * test_params["add_latents_noise"]
         else:
             decode_latents = latents
 
@@ -195,8 +202,8 @@ def dae_test() -> None:
 
             ddecm_params = SampleParams(
                 seed=5000,
-                num_steps=30, length=audio_len, cfg_scale=5, input_perturbation=1, input_perturbation_offset=-3.5,
-                use_heun=False, schedule="ln_linear", rho=1, sigma_max=100, sigma_min=0.01, stereo_fix=0
+                num_steps=30, length=audio_len, cfg_scale=5, input_perturbation=0, input_perturbation_offset=-2,
+                use_heun=True, schedule="ln_linear", rho=1, sigma_max=100, sigma_min=0.08, stereo_fix=0
             )
 
             output_ddecm = pipeline.diffusion_decode(
@@ -206,8 +213,8 @@ def dae_test() -> None:
             
             ddecp_params = SampleParams(
                 seed=5000,
-                num_steps=30, length=audio_len, cfg_scale=5, input_perturbation=1, input_perturbation_offset=3.5,#-0.8
-                use_heun=False, schedule="cos", rho=1, sigma_max=100, sigma_min=0.01, stereo_fix=0
+                num_steps=60, length=audio_len, cfg_scale=5, input_perturbation=1, input_perturbation_offset=2,#-0.8
+                use_heun=False, schedule="cos", rho=1, sigma_max=100, sigma_min=0.08, stereo_fix=0
             )
 
             output_ddecp = pipeline.diffusion_decode(
@@ -239,6 +246,8 @@ def dae_test() -> None:
         save_img(format.mel_spec_to_img(input_mel_spec), os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_mel_spec_input.png')}"))
         if output_mel_spec is not None:
             save_img(format.mel_spec_to_img(output_mel_spec), os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_mel_spec_output.png')}"))
+        #if ddec_cond is not None:
+        #    save_img(format.mel_spec_to_img(ddec_cond), os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_mel_spec_cond.png')}"))
 
         if output_ddecm is not None:
             save_img(format.mdct_psd_to_img(input_mdct_psd), os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_psd_input.png')}"))

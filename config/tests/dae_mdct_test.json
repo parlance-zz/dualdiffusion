@@ -1,5 +1,5 @@
 {
-    "model_name": "edm2_dae_p5",
+    "model_name": "edm2_dae_p4",
     "model_load_options": {
         "torch_dtype": "bfloat16",
         "device": "cuda",
@@ -25,7 +25,7 @@
     "ddec_output": true,
     "xref_output": false,
     "add_random_test_samples": 30,
-    "random_test_samples_seed": 434,
+    "random_test_samples_seed": 485,
     "copy_sample_source_files": true,
     "test_samples": [
         "3sf/Dopamix/STRM_BGM_ENDING.bcstm.flac",
