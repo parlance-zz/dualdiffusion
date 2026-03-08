@@ -227,7 +227,11 @@ class UNetTrainer(ModuleTrainer):
         else:
             sigma_data = self.sigma_sampler.config.sigma_data
 
-        batch_loss_weight = (batch_sigma ** 2 + sigma_data ** 2) / (batch_sigma * sigma_data) ** 2
+        if self.config.disable_loss_weight == True:
+            batch_loss_weight = 1 / batch_sigma**2
+        else:
+            batch_loss_weight = (batch_sigma ** 2 + sigma_data ** 2) / (batch_sigma * sigma_data) ** 2
+            
         batch_weighted_loss = torch.nn.functional.mse_loss(denoised, samples, reduction="none")
         if loss_weight is not None: # use custom loss weight if provided
             assert self.config.disable_loss_weight == False
@@ -236,11 +240,13 @@ class UNetTrainer(ModuleTrainer):
 
         if self.config.disable_loss_weight == True:
             batch_loss = batch_weighted_loss
+            bucket_log_loss = (batch_weighted_loss * batch_sigma**2) * (batch_sigma ** 2 + sigma_data ** 2) / (batch_sigma * sigma_data) ** 2
         else:
             batch_loss = batch_weighted_loss / error_logvar.exp() + error_logvar
+            bucket_log_loss = batch_weighted_loss
         
         if self.config.num_loss_buckets > 0:
-            self.unet_loss_buckets.log_buckets(batch_weighted_loss, batch_sigma)
+            self.unet_loss_buckets.log_buckets(bucket_log_loss, batch_sigma)
 
         return {
             f"loss/{self.flavor}": batch_loss,
