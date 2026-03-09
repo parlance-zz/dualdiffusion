@@ -28,6 +28,7 @@ import torch
 from training.trainer import DualDiffusionTrainer
 from training.module_trainers.module_trainer import ModuleTrainer, ModuleTrainerConfig
 from training.module_trainers.unet_trainer_p4 import UNetTrainerConfig, UNetTrainer
+from training.loss.lipschitz import lipschitz_loss
 from modules.daes.dae_edm2_p4 import DAE
 from modules.unets.unet_edm2_p4_ddec import UNet
 from modules.unets.unet_edm2_p4 import UNet as UNet_LDM
@@ -62,6 +63,9 @@ class DiffusionDecoder_Trainer_Config(ModuleTrainerConfig):
 
     phase_invariance_loss_weight: float = 0
     phase_invariance_warmup_steps: int = 0
+
+    encoder_lipschitz_loss_weight: float = 0
+    decoder_lipschitz_loss_weight: float = 0
 
     crop_edges: int = 4 # used to avoid artifacts due to mdct lapped blocks at beginning and end of sample
     random_stereo_augmentation: bool = True
@@ -109,8 +113,10 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
             self.logger.info(f"KL loss weight: {self.config.kl_loss_weight} KL warmup steps: {self.config.kl_warmup_steps}")
             self.logger.info(f"Add latents noise: {self.config.add_latents_noise}")
             self.logger.info(f"Latents phase-invariance loss weight: {self.config.phase_invariance_loss_weight} Warmup steps: {self.config.phase_invariance_warmup_steps}")
+            self.logger.info(f"Encoder Lipschitz loss weight: {self.config.encoder_lipschitz_loss_weight}")
+            self.logger.info(f"Decoder Lipschitz loss weight: {self.config.decoder_lipschitz_loss_weight}")
+    
         self.logger.info(f"Crop edges: {self.config.crop_edges}")
-
         if self.config.random_stereo_augmentation == True:
             self.logger.info("Using random stereo augmentation")
         else: self.logger.info("Random stereo augmentation is disabled")
@@ -122,7 +128,7 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
 
         if self.train_dae == True:
             self.logger.info(f"UNet-LDM trainer (loss weight: {self.config.unet_loss_weight}) (warmup steps:{self.config.unet_loss_warmup_steps}):")
-            self.unet_trainer = UNetTrainer(UNetTrainerConfig(**config.unet, disable_loss_weight=True), trainer, self.unet, "unet")
+            self.unet_trainer = UNetTrainer(UNetTrainerConfig(**config.unet), trainer, self.unet, "unet")
 
     @torch.no_grad()
     def init_batch(self, validation: bool = False) -> Optional[dict[str, Union[torch.Tensor, float]]]:
@@ -194,7 +200,7 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
         kl_loss_weight = self.config.kl_loss_weight
         if self.trainer.global_step < self.config.kl_warmup_steps:
             kl_loss_weight *= self.trainer.global_step / self.config.kl_warmup_steps
-
+            
         logs = {
             "loss": kl_loss * kl_loss_weight if self.train_dae == True else torch.zeros_like(kl_loss),
             "io_stats/ddec_cond_var": ddec_cond.var(dim=(1,2,3)),
@@ -210,12 +216,22 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
             "loss/kl_latents": kl_loss.detach(),
             "loss_weight/kl_latents": kl_loss_weight,
             "loss_weight/phase_invariance": phase_invariance_loss_weight,
+            "loss_weight/encoder_lipschitz": self.config.encoder_lipschitz_loss_weight,
+            "loss_weight/decoder_lipschitz": self.config.decoder_lipschitz_loss_weight,
             "loss_weight/unet": self.config.unet_loss_weight if self.trainer.global_step >= self.config.unet_loss_warmup_steps else 0,
             "loss_weight/ddecp": self.config.ddecp_loss_weight,
             "loss_weight/ddecm": self.config.ddecm_loss_weight,
         }
 
         if self.train_dae == True:
+
+            if self.config.encoder_lipschitz_loss_weight > 0:
+                logs["loss/encoder_lipschitz"] = lipschitz_loss(dae_input, latents)
+                logs["loss"] = logs["loss"] + logs["loss/encoder_lipschitz"] * self.config.encoder_lipschitz_loss_weight
+            if self.config.decoder_lipschitz_loss_weight > 0:
+                logs["loss/decoder_lipschitz"] = lipschitz_loss(latents, ddec_cond)
+                logs["loss"] = logs["loss"] + logs["loss/decoder_lipschitz"] * self.config.decoder_lipschitz_loss_weight
+
             if self.config.add_latents_noise is not None:
                 logs["io_stats/latents_sigma"] = self.config.add_latents_noise
 
