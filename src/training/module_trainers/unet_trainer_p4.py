@@ -215,11 +215,11 @@ class UNetTrainer(ModuleTrainer):
                 input_perturbation = perturb_noise
             else:
                 input_perturbation = torch.randn(samples.shape, device=samples.device)
-            perturbed_input = samples + noise + input_perturbation * batch_sigma.view(-1, 1, 1, 1) * self.config.input_perturbation
+            perturbed_input = samples.detach() + noise + input_perturbation * batch_sigma.view(-1, 1, 1, 1) * self.config.input_perturbation
         else:
             perturbed_input = None
 
-        denoised, error_logvar = self.trainer.get_ddp_module(self.unet)(samples + noise, batch_sigma, None, embeddings,
+        denoised, error_logvar = self.trainer.get_ddp_module(self.unet)(samples.detach() + noise, batch_sigma, None, embeddings,
                                     x_ref=ref_samples, perturbed_input=perturbed_input, conditioning_mask=conditioning_mask)
         
         if self.config.use_dynamic_sigma_data == True:
@@ -229,6 +229,8 @@ class UNetTrainer(ModuleTrainer):
 
         if self.config.disable_loss_weight == True:
             batch_loss_weight = 1 / batch_sigma**2
+            #batch_loss_weight = (batch_sigma ** 2 + sigma_data ** 2) / (batch_sigma * sigma_data) ** 2
+            #samples = samples - samples.mean(dim=(0,2,3), keepdim=True)
         else:
             batch_loss_weight = (batch_sigma ** 2 + sigma_data ** 2) / (batch_sigma * sigma_data) ** 2
             
@@ -240,6 +242,7 @@ class UNetTrainer(ModuleTrainer):
 
         if self.config.disable_loss_weight == True:
             batch_loss = batch_weighted_loss
+            #bucket_log_loss = batch_weighted_loss
             bucket_log_loss = (batch_weighted_loss * batch_sigma**2) * (batch_sigma ** 2 + sigma_data ** 2) / (batch_sigma * sigma_data) ** 2
         else:
             batch_loss = batch_weighted_loss / error_logvar.exp() + error_logvar
