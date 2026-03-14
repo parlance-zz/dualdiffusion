@@ -73,6 +73,8 @@ def ms_mdct_dual_format_test() -> None:
 
     format.ms_filters.transpose(0, 1).cpu().numpy().tofile(os.path.join(output_path, "ms_filters.raw"))
     mdct_phase_avg_bin_var = torch.zeros_like(format.mdct_mel_density.flatten())
+    mdct_psd_avg_bin_mean = torch.zeros_like(mdct_phase_avg_bin_var)
+    mdct_psd_avg_bin_var = torch.zeros_like(mdct_phase_avg_bin_var)
 
     stat_logger = StatLogger()
     print(f"\nNum test_samples: {len(test_samples)}\n")
@@ -91,7 +93,6 @@ def ms_mdct_dual_format_test() -> None:
         start = -1 if cfg.save_output == False else 0
         raw_sample = load_audio(file_path, start=start, count=crop_width).unsqueeze(0).to(cfg.device)
         mel_spec = format.raw_to_mel_spec(raw_sample)
-        mel_spec_linear = format.mel_spec_to_linear(mel_spec)
 
         mdct = format.raw_to_mdct(raw_sample)
         mdct_phase, mdct_psd = format.raw_to_mdct_phase_psd(raw_sample)
@@ -99,14 +100,14 @@ def ms_mdct_dual_format_test() -> None:
         raw_sample_mdct = format.mdct_phase_psd_to_raw(mdct_phase, mdct_psd)
 
         mdct_phase_avg_bin_var += mdct_phase.var(dim=(0,1,3)) / len(test_samples)
+        mdct_psd_avg_bin_mean += mdct_psd.mean(dim=(0,1,3)) / len(test_samples)
+        mdct_psd_avg_bin_var += mdct_psd.var(dim=(0,1,3)) / len(test_samples)
+
         stat_logger.add_logs({
             "raw_sample_var": raw_sample.var(),
             "raw_sample_mdct_var": raw_sample_mdct.var(),
             "mel_spec_var": mel_spec.var(),
             "mel_spec_mean": mel_spec.mean(),
-            "mel_spec_linear_var": mel_spec_linear.var(),
-            "mel_spec_linear_mean": mel_spec_linear.mean(),
-            "mel_spec_linear_mean_square": mel_spec_linear.square().mean(),
             "mdct_var": mdct.var(),
             "mdct_phase_var": mdct_phase.var(),
             "mdct_psd_var": mdct_psd.var(),
@@ -116,7 +117,6 @@ def ms_mdct_dual_format_test() -> None:
         if cfg.test_sample_verbose == True:
             print("raw_sample:", tensor_info_str(raw_sample))
             print("mel_spec:", tensor_info_str(mel_spec), f"(target shape: {format.get_mel_spec_shape(raw_length=raw_length)}")
-            print("mel_spec_linear:", tensor_info_str(mel_spec_linear))
             print("mdct_phase:", tensor_info_str(mdct_phase), f"(target shape: {format.get_mdct_shape(raw_length=raw_length)}")
             print("mdct_psd:", tensor_info_str(mdct_psd))
             print("raw_sample_mdct:", tensor_info_str(raw_sample_mdct), "\n")
@@ -134,10 +134,6 @@ def ms_mdct_dual_format_test() -> None:
         save_img(format.mel_spec_to_img(mel_spec), mel_spec_output_path)
         print(f"Saved mel_spec img to {mel_spec_output_path}")
 
-        mel_spec_linear_output_path = os.path.join(output_path, f"{filename}_mel_spec_linear.png")
-        save_img(format.mel_spec_linear_to_img(mel_spec_linear), mel_spec_linear_output_path)
-        print(f"Saved mel_spec_linear img to {mel_spec_linear_output_path}")
-
         mdct_output_path = os.path.join(output_path, f"{filename}_mdct.flac")
         save_audio(raw_sample_mdct.squeeze(0), cfg.format_config.sample_rate, mdct_output_path, target_lufs=None)
         print(f"Saved raw_sample_mdct to {mdct_output_path}")
@@ -146,9 +142,17 @@ def ms_mdct_dual_format_test() -> None:
         save_img(format.mdct_psd_to_img(mdct_psd), mdct_psd_output_path)
         print(f"Saved mdct_psd img to {mdct_psd_output_path}")
 
-    print(f"\nAverage MDCT bin var (var variance: {mdct_phase_avg_bin_var.var().item()}):")
-    print(mdct_phase_avg_bin_var)
-    mdct_phase_avg_bin_var.cpu().numpy().tofile(os.path.join(output_path, "mdct_avg_bin_var.raw"))
+    print(f"\nAverage MDCT PSD bin offsets:")
+    print((-mdct_psd_avg_bin_mean.cpu()).tolist())
+    mdct_psd_avg_bin_mean.cpu().numpy().tofile(os.path.join(output_path, "mdct_psd_avg_bin_mean.raw"))
+
+    print(f"\nAverage MDCT PSD bin scales:")
+    print(mdct_psd_avg_bin_var.pow(0.5).cpu().tolist())
+    mdct_psd_avg_bin_var.cpu().numpy().tofile(os.path.join(output_path, "mdct_psd_avg_bin_var.raw"))
+
+    print(f"\nAverage MDCT phase bin scales:")
+    print(mdct_phase_avg_bin_var.pow(0.5).cpu().tolist())
+    mdct_phase_avg_bin_var.cpu().numpy().tofile(os.path.join(output_path, "mdct_phase_avg_bin_var.raw"))
 
     print("\nAverage stats:")
     print(dict_str(stat_logger.get_logs()))
