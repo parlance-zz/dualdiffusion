@@ -53,7 +53,7 @@ class UNetConfig(DualDiffusionUNetConfig):
     sigma_min: float  = 0.08
     sigma_data: float = 1.
 
-    mp_fourier_ln_sigma_offset: float = 0.35
+    mp_fourier_ln_sigma_offset: float = 0
     mp_fourier_bandwidth:       float = 1
 
     model_channels: int  = 4096              # Base multiplier for the number of channels.
@@ -305,7 +305,10 @@ class UNet(DualDiffusionUNet):
             x = (c_in * perturbed_input).to(dtype=torch.bfloat16)
         else:
             x = (c_in * x_in).to(dtype=torch.bfloat16)
-        
+
+        og_x_shape = x.shape
+        x = x.permute(0, 2, 1, 3).reshape(x.shape[0], x.shape[1]*x.shape[2], 1, x.shape[3])
+
         # nuisance due to ddp wrapper limitations
         if conditioning_mask is not None:
             assert self.training == True
@@ -340,6 +343,8 @@ class UNet(DualDiffusionUNet):
                 idx += 1
 
         x: torch.Tensor = self.conv_out(x, gain=self.out_gain)
+        x = x.reshape(og_x_shape[0], og_x_shape[2], og_x_shape[1], og_x_shape[3]).permute(0, 2, 1, 3).contiguous()
+        
         D_x = c_skip * x_in + c_out * x.float()
 
         if x_ref is not None:
