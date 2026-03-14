@@ -362,7 +362,7 @@ class DAE(DualDiffusionDAE):
         cemb = int(config.model_channels_dec * config.channel_mult_emb) if config.channel_mult_emb is not None else max(cdec)
 
         self.num_levels = len(config.channel_mult_dec)
-        assert config.in_channels % 2 == 0
+        #assert config.in_channels % 2 == 0
         self.downsample_ratio = 2 ** (self.num_levels - 1)
         assert config.in_num_freqs % self.downsample_ratio == 0
 
