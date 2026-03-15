@@ -483,9 +483,7 @@ class DAE(DualDiffusionDAE):
     def tiled_encode(self, x: torch.Tensor, embeddings: torch.Tensor, max_chunk: int = 6144, overlap: int = 256) -> torch.Tensor:
         raise NotImplementedError()
 
-    def latents_to_img(self, latents: torch.Tensor) -> ndarray:
+    def latents_to_img(self, latents: torch.Tensor, **kwargs) -> ndarray:
         
-        #latents = latents.reshape(latents.shape[0], latents.shape[1] // 4, 4, latents.shape[3])
-        #latents = latents.permute(0, 2, 1, 3).contiguous()
-        
-        return super().latents_to_img(latents, img_split_stereo=False)
+        kwargs["img_split_stereo"] = False
+        return super().latents_to_img(latents, **kwargs)

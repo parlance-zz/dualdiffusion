@@ -72,7 +72,7 @@ def dae_test() -> None:
     total_balance = 0; balance_count = 0
     for name,param in dae.named_parameters():
         if "emb_balance" in name:
-            balance = (param - 1.75).sigmoid()
+            balance = (param - 2).sigmoid()
             balance_var = balance.var().item()
             balance = balance.mean().item()
 
@@ -168,17 +168,16 @@ def dae_test() -> None:
 
         # ***************** dae stage *****************
 
-        dae_input = torch.cat((input_mdct_phase, input_mel_spec), dim=1)
+        #dae_input = torch.cat((input_mdct_phase, input_mel_spec), dim=1)
+        dae_input = input_mel_spec
         dae_embedding = dae.get_embeddings(audio_embedding.to(dtype=dae.dtype))
 
         if test_params["latents_tiled_encode"] == True:
             latents = dae.tiled_encode(dae_input.to(dtype=dae.dtype), dae_embedding,
                 max_chunk=test_params["latents_tiled_max_chunk_size"], overlap=test_params["latents_tiled_overlap"])
         else:
-            latents = dae.encode(dae_input.to(dtype=dae.dtype), dae_embedding).float()
-        
-        #latents = dae.latents_stats_tracker.remove_mean(latents)
-        #latents = dae.latents_stats_tracker.unscale(latents)
+            latents = dae.encode(dae_input.to(dtype=dae.dtype), dae_embedding, training=True)
+            latents: torch.Tensor = latents.float()
 
         if latents is not None:
             latents_mean = latents.mean().item()
@@ -196,6 +195,10 @@ def dae_test() -> None:
         ddec_cond = dae.decode(decode_latents.to(dtype=dae.dtype), dae_embedding).float()
         print(f"ddec_cond mean/var: {ddec_cond.mean().item():.4} {ddec_cond.var().item():.4}")
 
+        #latents = dae.latents_stats_tracker.remove_mean(latents)
+        #latents = dae.latents_stats_tracker.unscale(latents)
+        #latents -= latents.mean(dim=(0,2,3), keepdim=True)
+
         # ***************** ddec stage *****************
 
         if ddecm is not None:
@@ -203,7 +206,7 @@ def dae_test() -> None:
             ddecm_params = SampleParams(
                 seed=5000,
                 num_steps=30, length=audio_len, cfg_scale=5, input_perturbation=0, input_perturbation_offset=-2,
-                use_heun=True, schedule="ln_linear", rho=1, sigma_max=100, sigma_min=0.08, stereo_fix=0
+                use_heun=True, schedule="ln_linear", rho=1, sigma_max=125, sigma_min=0.008, stereo_fix=0
             )
 
             output_ddecm = pipeline.diffusion_decode(
@@ -213,8 +216,10 @@ def dae_test() -> None:
             
             ddecp_params = SampleParams(
                 seed=5000,
-                num_steps=60, length=audio_len, cfg_scale=5, input_perturbation=1, input_perturbation_offset=2,#-0.8
-                use_heun=False, schedule="cos", rho=1, sigma_max=100, sigma_min=0.08, stereo_fix=0
+                num_steps=60, length=audio_len, cfg_scale=5, input_perturbation=1, input_perturbation_offset=200,
+                use_heun=False, schedule="cos", rho=0.6, sigma_max=125, sigma_min=0.008, stereo_fix=0
+                #num_steps=30, length=audio_len, cfg_scale=5, input_perturbation=0, input_perturbation_offset=2,
+                #use_heun=True, schedule="ln_linear", rho=1, sigma_max=100, sigma_min=0.01, stereo_fix=0
             )
 
             output_ddecp = pipeline.diffusion_decode(
@@ -234,7 +239,7 @@ def dae_test() -> None:
         metadata["ddecp_metadata"] = dict_str(ddecp_params.__dict__) if ddecp is not None else "null"
 
         if latents is not None:
-            latents_img = dae.latents_to_img(latents)
+            latents_img = dae.latents_to_img(latents, align_ref=input_mel_spec)
             save_img(latents_img, os.path.join(output_path, "1", f"step_{last_global_step}_{filename.replace(file_ext, '_latents.png')}"))
 
             if test_params.get("latents_img_save_collage", False) == True:
