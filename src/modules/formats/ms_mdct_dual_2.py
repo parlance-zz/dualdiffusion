@@ -245,7 +245,7 @@ class MS_MDCT_DualFormat(DualDiffusionFormat):
             if self.config.ms_add_center_channel == True:
                 l, r, c = torch.chunk(mel_spec, 3, dim=1)
                 mel_spec = torch.cat((l, c, r), dim=1)
-            return tensor_to_img(mel_spec, flip_y=True)
+            return tensor_to_img(mel_spec, flip_y=True, gamma=0.8)
 
     # **************** mdct methods ****************
 
