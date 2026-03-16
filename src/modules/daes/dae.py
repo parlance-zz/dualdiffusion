@@ -57,13 +57,12 @@ def top_pca_components(x: torch.Tensor, n_pca: int = 4) -> torch.Tensor:
 
 def pca_align_ref(pca: torch.Tensor, ref: torch.Tensor) -> torch.Tensor:
     
-    ref = torch.nn.functional.interpolate(ref, pca.shape[2:], mode="area")
-    og_pca = pca; ref = ref.mean(dim=1, keepdim=True)
+    ref = torch.nn.functional.interpolate(ref, pca.shape[2:], mode="area").mean(dim=1, keepdim=True)
 
     alignment0 = ( pca * ref).mean(dim=(2,3), keepdim=True)
     alignment1 = (-pca * ref).mean(dim=(2,3), keepdim=True)
 
-    return torch.where(alignment0 > alignment1, -og_pca, og_pca)
+    return torch.where(alignment0 > alignment1, -pca, pca)
 
 @dataclass
 class DualDiffusionDAEConfig(DualDiffusionModuleConfig, ABC):
