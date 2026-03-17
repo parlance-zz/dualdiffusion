@@ -67,6 +67,7 @@ class MS_MDCT_DualFormatConfig(DualDiffusionFormatConfig):
     raw_to_mel_spec_offset: float = 0
 
     ms_add_center_channel: bool = False
+    ms_img_show_center_channel: bool = False
     ms_abs_exponent: float = 0.25
     ms_freq_min: float = 25
     ms_num_filters: int = 256
@@ -244,8 +245,14 @@ class MS_MDCT_DualFormat(DualDiffusionFormat):
         else:
             if self.config.ms_add_center_channel == True:
                 l, r, c = torch.chunk(mel_spec, 3, dim=1)
-                mel_spec = torch.cat((l, c, r), dim=1)
-            return tensor_to_img(mel_spec, flip_y=True, gamma=0.8)
+                if self.config.ms_img_show_center_channel == True:
+                    mel_spec = torch.cat((l, c, r), dim=1)
+                    gamma = 0.9
+                else:
+                    mel_spec = torch.cat((l, r), dim=1)
+                    gamma = None
+
+            return tensor_to_img(mel_spec, flip_y=True, gamma=gamma)
 
     # **************** mdct methods ****************
 
