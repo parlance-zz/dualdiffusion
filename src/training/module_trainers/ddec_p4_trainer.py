@@ -28,6 +28,7 @@ import torch
 from training.trainer import DualDiffusionTrainer
 from training.module_trainers.module_trainer import ModuleTrainer, ModuleTrainerConfig
 from training.module_trainers.unet_trainer_p4 import UNetTrainerConfig, UNetTrainer
+from training.loss.lipschitz import lipschitz_loss
 from modules.daes.dae_edm2_p4 import DAE
 from modules.unets.unet_edm2_p4_ddec import UNet
 from modules.unets.unet_edm2_p4 import UNet as UNet_LDM
@@ -53,6 +54,7 @@ class DiffusionDecoder_Trainer_Config(ModuleTrainerConfig):
 
     kl_loss_weight: float = 0
     kl_warmup_steps: int  = 300
+    lipschitz_loss_weight: Optional[float] = None
     add_latents_noise: Optional[float] = None
 
     unet_loss_weight: float     = 0
@@ -109,6 +111,7 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
         if self.train_dae == True:
             self.logger.info(f"KL loss weight: {self.config.kl_loss_weight} KL warmup steps: {self.config.kl_warmup_steps}")
             self.logger.info(f"Add latents noise: {self.config.add_latents_noise}")
+            self.logger.info(f"Lipschitz loss weight: {self.config.lipschitz_loss_weight}")
     
         self.logger.info(f"Crop edges: {self.config.crop_edges}")
         if self.config.random_stereo_augmentation == True:
@@ -168,15 +171,15 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
         
         latents: torch.Tensor = latents.float()
 
-        latents_var = latents.pow(2).mean() + 1e-20
-        var_kl = latents_var - 1 - latents_var.log()
-        kl_loss = var_kl.mean() + 0.5 * latents.mean().square().mean()
-        kl_loss = kl_loss.expand(latents.shape[0]) # needed for per-sample logging
-
-        #latents_var = full_res_latents.pow(2).mean(dim=(0,2,3)) + 1e-20
+        #latents_var = latents.pow(2).mean() + 1e-20
         #var_kl = latents_var - 1 - latents_var.log()
-        #kl_loss = var_kl.mean() + 0.5 * full_res_latents.mean(dim=(0,2,3)).square().mean()
-        #kl_loss = kl_loss.expand(full_res_latents.shape[0]) # needed for per-sample logging
+        #kl_loss = var_kl.mean() + 0.5 * latents.mean().square().mean()
+        #kl_loss = kl_loss.expand(latents.shape[0]) # needed for per-sample logging
+
+        latents_var = latents.pow(2).mean(dim=(0,3)) + 1e-20
+        var_kl = latents_var - 1 - latents_var.log()
+        kl_loss = var_kl.mean() + 0.5 * latents.mean(dim=(0,3)).pow(2).mean()
+        kl_loss = kl_loss.expand(latents.shape[0]) # needed for per-sample logging
 
         kl_loss_weight = self.config.kl_loss_weight
         if self.trainer.global_step < self.config.kl_warmup_steps:
@@ -223,6 +226,12 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
                 unet_loss_weight = self.config.unet_loss_weight
             logs.update(self.unet_trainer.train_batch(reg_latents, audio_embeddings))
             logs["loss"] = logs["loss"] + logs["loss/unet"] * unet_loss_weight
+
+        if self.train_dae == True and self.config.lipschitz_loss_weight is not None:
+            _lipschitz_loss = lipschitz_loss(dae_input, latents)
+            logs["loss"] = logs["loss"] + _lipschitz_loss * self.config.lipschitz_loss_weight
+            logs["loss/lipschitz"] = _lipschitz_loss.detach()
+            logs["loss_weight/lipschitz"] = self.config.lipschitz_loss_weight
 
         dynamic_range_ddecm = mdct_psd.amax(dim=(1,2,3)) - mdct_psd.amin(dim=(1,2,3))
         logs["io_stats_ddecm/dynamic_range"] = dynamic_range_ddecm
