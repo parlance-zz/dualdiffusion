@@ -21,72 +21,25 @@
 # SOFTWARE.
 
 import torch
-import torch.nn.functional as F
+import numpy as np
 
 
-def lipschitz_loss(
-    x: torch.Tensor,
-    y: torch.Tensor,
-) -> torch.Tensor:
-    """Compute the Lipschitz Loss between two batches of feature maps.
+def lipschitz_loss(x: torch.Tensor, y: torch.Tensor, eps: float = 1e-2) -> torch.Tensor:
 
-    The loss measures the discrepancy between pairwise cosine-similarity
-    structures of two representation spaces.  It encourages the mapping
-    between the spaces to be Lipschitz-continuous in the cosine-similarity
-    metric.
+    assert x.shape[-1] % y.shape[-1] == 0
+    assert x.shape[-2] % y.shape[-2] == 0
+    assert x.shape[-1] // y.shape[-1] == x.shape[-2] // y.shape[-2]
 
-    Steps
-    -----
-    1. Flatten each (B, C, H, W) tensor to (B, D) where D = C*H*W.
-    2. L2-normalise every sample along the feature dimension.
-    3. Compute pairwise cosine-similarity matrices (B, B) for both
-       tensors using ``torch.einsum`` for performance.
-    4. Return the mean absolute difference between the two similarity
-       matrices.
+    downsample_ratio = x.shape[-1] // y.shape[-1]
+    rnd_offset = int(np.random.randint(1, y.shape[-1]))
 
-    Parameters
-    ----------
-    x : torch.Tensor
-        First batch of feature maps, shape ``(B, C, H, W)``.
-    y : torch.Tensor
-        Second batch of feature maps, shape ``(B, C, H, W)``.
+    x2 = torch.roll(x, shifts=rnd_offset * downsample_ratio, dims=-1)
+    dx = torch.nn.functional.avg_pool2d((x - x2) ** 2, kernel_size=downsample_ratio).mean(dim=1, keepdim=True).detach()
 
-    Returns
-    -------
-    torch.Tensor
-        Scalar loss value.
+    y2 = torch.roll(y, shifts=rnd_offset, dims=-1)
+    dy = ((y - y2) ** 2).mean(dim=1, keepdim=True)
 
-    Raises
-    ------
-    ValueError
-        If the inputs are not 4-D or their batch sizes differ.
-    """
-    if x.ndim != 4 or y.ndim != 4:
-        raise ValueError(
-            f"Expected 4-D tensors (B, C, H, W), got x: {x.ndim}-D, y: {y.ndim}-D"
-        )
-    if x.shape[0] != y.shape[0]:
-        raise ValueError(
-            f"Batch sizes must match, got x: {x.shape[0]}, y: {y.shape[0]}"
-        )
-
-    # ---------- 1. Flatten to (B, D) ----------
-    b = x.shape[0]
-    x_flat = x.reshape(b, -1)          # (B, D_x)
-    y_flat = y.reshape(b, -1)          # (B, D_y)
-
-    # ---------- 2. L2-normalise along feature dim ----------
-    x_norm = F.normalize(x_flat, dim=1)   # (B, D_x)
-    y_norm = F.normalize(y_flat, dim=1)   # (B, D_y)
-
-    # ---------- 3. Pairwise cosine similarity via einsum ----------
-    # After L2 normalisation, cosine similarity == dot product.
-    cos_x = torch.einsum("id, jd -> ij", x_norm, x_norm)   # (B, B)
-    cos_y = torch.einsum("id, jd -> ij", y_norm, y_norm)   # (B, B)
-
-    # ---------- 4. Loss = mean | cos_x - cos_y | ----------
-    loss = (cos_x - cos_y).abs().mean()
-
+    loss = ((dx + eps) / (dy + eps)).log().pow(2).mean(dim=(1,2,3))
     return loss
 
 
@@ -94,12 +47,10 @@ if __name__ == "__main__":
     torch.manual_seed(0)
 
     B, C, H, W = 8, 64, 16, 16
-    x = torch.randn(B, C, H, W)
+    x = torch.randn(B, C, H*8, W*8)
     y = torch.randn(B, C, H, W)
 
     loss = lipschitz_loss(x, y)
-    print(f"Lipschitz loss: {loss.item():.6f}")   # e.g. ≈ 0.04–0.08 for random inputs
+    print(f"Lipschitz loss: {loss.mean().item():.6f}")
 
-    # Identical inputs → zero loss
-    assert lipschitz_loss(x, x).item() == 0.0, "Same input must yield zero loss"
-    print("✓ All checks passed.")
+    assert lipschitz_loss(x, x).mean().item() == 0.0, "Same input must yield zero loss"
