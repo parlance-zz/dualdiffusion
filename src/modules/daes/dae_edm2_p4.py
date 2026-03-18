@@ -443,16 +443,19 @@ class DAE(DualDiffusionDAE):
         if training == True:
             return latents
         else:
+            assert self.training == False
+            latents = self.latents_stats_tracker.remove_mean(latents)
+            latents = self.latents_stats_tracker.unscale(latents)
             return latents.to(dtype=x.dtype)
 
     def decode(self, x: torch.Tensor, embeddings: torch.Tensor, training: bool = False) -> torch.Tensor:
 
-        x = x.permute(0, 2, 1, 3).reshape(x.shape[0], x.shape[1]*x.shape[2], 1, x.shape[3]).to(dtype=torch.bfloat16)
-
         if training == False:
-            #x = self.latents_stats_tracker.add_mean(x, mode="per_channel")
-            #x = self.latents_stats_tracker.rescale(x, mode="static")
-            pass
+            assert self.training == False
+            x = self.latents_stats_tracker.rescale(x)
+            x = self.latents_stats_tracker.add_mean(x)
+            
+        x = x.permute(0, 2, 1, 3).reshape(x.shape[0], x.shape[1]*x.shape[2], 1, x.shape[3]).to(dtype=torch.bfloat16)
 
         if embeddings is not None:
             emb = mp_silu(embeddings[..., None, None]).to(dtype=torch.bfloat16)
