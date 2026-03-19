@@ -290,8 +290,9 @@ class EncodeProcess(DatasetProcessStage):
 
             # prepare dae inputs
             input_mel_spec = self.format.raw_to_mel_spec(audio)
-            input_mdct_phase, _ = self.format.raw_to_mdct_phase_psd(audio)
-            dae_input = torch.cat((input_mdct_phase, input_mel_spec), dim=1).detach().to(dtype=torch.bfloat16)
+            #input_mdct_phase, _ = self.format.raw_to_mdct_phase_psd(audio)
+            #dae_input = torch.cat((input_mdct_phase, input_mel_spec), dim=1).detach().to(dtype=torch.bfloat16)
+            dae_input = input_mel_spec.detach().to(dtype=torch.bfloat16)
             
             # finally, encode the latents
             self.logger.debug(f"encoding latents: \"{safetensors_file_path}\"")
