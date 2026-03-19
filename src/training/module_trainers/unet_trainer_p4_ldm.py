@@ -68,7 +68,7 @@ class UNetTrainer_LDM(ModuleTrainer):
         logs["loss"] = logs["loss/unet"]
 
         logs.update({
-            "io_stats/latents_std": latents.std(dim=(1,2,3)),
+            "io_stats/latents_var": latents.var(dim=(1,2,3)),
             "io_stats/latents_mean": latents.mean(dim=(1,2,3))
         })
 

@@ -49,8 +49,8 @@ class UNetConfig(DualDiffusionUNetConfig):
     in_channels_emb: int = 1024
     in_num_freqs: int = 1
 
-    sigma_max: float  = 100.
-    sigma_min: float  = 0.08
+    sigma_max: float  = 125.
+    sigma_min: float  = 0.008
     sigma_data: float = 1.
 
     mp_fourier_ln_sigma_offset: float = 0
@@ -66,7 +66,7 @@ class UNetConfig(DualDiffusionUNetConfig):
     rope_channels: int          = 112
     rope_base: float            = 10000.
     rope_scale: Optional[float] = None
-    num_layers_per_block: int = 10           # Number of resnet blocks per resolution.
+    num_layers_per_block: int = 20           # Number of resnet blocks per resolution.
     label_balance: float      = 0.5          # Balance between noise embedding (0) and class embedding (1).
     balance_logits_offset: float = -2
     mlp_multiplier: int    = 3               # Multiplier for the number of channels in the MLP.
