@@ -221,7 +221,7 @@ def unet_test() -> None:
         avg_latents_std += latents_std
 
         if dae is not None:
-            latents_img = dae.latents_to_img(latents)
+            latents_img = dae.latents_to_img(latents, align_ref=output_mel_spec)
         else:
             latents_img = tensor_to_img(latents, flip_y=True)
         output_latents_file_path = os.path.join(output_path, f"{output_label}_latents_output.png")
@@ -232,12 +232,11 @@ def unet_test() -> None:
         if input_latents is not None and dae is not None:
             output_latents_file_path = os.path.join(output_path, f"{output_label}_latents_input.png")
             output_latents_file_path = get_no_clobber_filepath(output_latents_file_path)
-            save_img(dae.latents_to_img(input_latents), output_latents_file_path)
+            save_img(dae.latents_to_img(input_latents.to(device=input_mel_spec.device), align_ref=input_mel_spec), output_latents_file_path)
 
-        output_mel_spec_file_path = os.path.join(output_path, f"{output_label}_mel_spec_input.png")
-        output_mel_spec_file_path = get_no_clobber_filepath(output_mel_spec_file_path)
-        save_img(format.mel_spec_to_img(input_mel_spec), output_mel_spec_file_path)
-
+        input_mel_spec_file_path = os.path.join(output_path, f"{output_label}_mel_spec_input.png")
+        input_mel_spec_file_path = get_no_clobber_filepath(input_mel_spec_file_path)
+        save_img(format.mel_spec_to_img(input_mel_spec), input_mel_spec_file_path)
         output_mel_spec_file_path = os.path.join(output_path, f"{output_label}_mel_spec_output.png")
         output_mel_spec_file_path = get_no_clobber_filepath(output_mel_spec_file_path)
         save_img(format.mel_spec_to_img(output_mel_spec), output_mel_spec_file_path)

@@ -19,7 +19,7 @@
     "output_lufs": -20,
     "copy_sample_source_files": true,
     "random_test_samples_seed": null,
-    "add_random_test_samples": 10,
+    "add_random_test_samples": 20,
     "shuffle_test_samples": true,
     "test_samples": [
         
@@ -85,10 +85,15 @@
         //"switch/Atelier Sophie 2 - The Alchemist of the Mysterious Dream", // high sound quality, orchestral et al
         //"switch/Super Smash Bros. Ultimate"
         
-        //*
+        /*
+        "psf3/Mamoru-kun wa Norowarete Shimatta! Meikai Katsugeki Wide-Han/bgm46_v03m.msf.flac", // cool electronic
         "psf3/Mamoru-kun wa Norowarete Shimatta! Meikai Katsugeki Wide-Han/bgm02_v02.msf.flac", // cool electronic
+        "switch/Grisaia Trilogy, The/MUSIC_00000043.lopus.flac", // cool orchestral
+        "switch/Shakedown Hawaii/File0111.ogg.flac", // cool electronic
         "ssf/Zero Divide - The Final Conflict/T-31601G_06.flac.flac", // cool electronic
         "switch/LoveR Kiss/BGM_23.adx.flac", // cool electronic
+        "switch/Eschatos/_t_stream_common_boss1.dspadpcm.bfstm.flac", // cool electronic
+        "switch/Arcaea/_t_songs_dl_badtek.ogg.flac", // cool electronic
 
         "psp/megpoid the Music#/S001.AT3.flac", // funky with female asian singing, medium audio quality
 
@@ -100,6 +105,7 @@
         "vita/Tayutama 2 - You're the only one/015.at9.flac", // sick progressive metal
         "wii/Kamen Rider - Chou Climax Heroes/Stage03.brstm.flac", // progressive metal
         "3sf/Future Card Buddyfight Mezase! Buddy Champion!/BGM16.dspadpcm.bcstm.flac", // metal
+        "switch/Legend of Heroes - Trails of Cold Steel III, The/ed8466.lopus.flac", // metal
 
         "psf3/One Piece - Pirate Warriors 3/BGMLink_00000007.at3.flac",
         "switch/eBaseball Powerful Pro Yakyuu 2020/_t_wem_1004274880.wem.flac",
@@ -285,7 +291,7 @@
         //*/
         //"psf2/Fisherman's Challenge"
 
-        /* // metal
+        //* // metal
         //"psf3/One Piece - Pirate Warriors 3/BGMLink_00000007.at3.flac",
         //"switch/eBaseball Powerful Pro Yakyuu 2020/_t_wem_1004274880.wem.flac",
         //"vita/Tayutama 2 - You're the only one/015.at9.flac", // sick progressive metal
@@ -296,36 +302,17 @@
         "vita/Tayutama 2 - You're the only one/015.at9.flac", // sick progressive metal ***
         "vita/Tayutama 2 - You're the only one/015.at9.flac", // sick progressive metal ***
         "vita/Tayutama 2 - You're the only one/015.at9.flac", // sick progressive metal ***
-        "vita/Tayutama 2 - You're the only one/015.at9.flac", // sick progressive metal ***
-        "vita/Tayutama 2 - You're the only one/015.at9.flac", // sick progressive metal ***
-        "vita/Tayutama 2 - You're the only one/015.at9.flac", // sick progressive metal ***
         
         "switch/Legend of Heroes - Trails of Cold Steel III, The/ed8466.lopus.flac",
         "switch/Legend of Heroes - Trails of Cold Steel III, The/ed8466.lopus.flac",
         "switch/Legend of Heroes - Trails of Cold Steel III, The/ed8466.lopus.flac",
-        "switch/Legend of Heroes - Trails of Cold Steel III, The/ed8466.lopus.flac",
-        "switch/Legend of Heroes - Trails of Cold Steel III, The/ed8466.lopus.flac",
 
         "wii/Kamen Rider - Chou Climax Heroes/Stage03.brstm.flac", // progressive metal
         "wii/Kamen Rider - Chou Climax Heroes/Stage03.brstm.flac", // progressive metal
-        "wii/Kamen Rider - Chou Climax Heroes/Stage03.brstm.flac", // progressive metal
-        "wii/Kamen Rider - Chou Climax Heroes/Stage03.brstm.flac", // progressive metal
+        "wii/Kamen Rider - Chou Climax Heroes/Stage03.brstm.flac"  // progressive metal
 
         //"switch/Super Smash Bros. Ultimate/j40_hr_menutitle.lopus.flac" // harmonized electric guitars
         //*/
-
-        /*
-        "wii/Kamen Rider - Chou Climax Heroes/Stage03.brstm.flac", // progressive metal
-        "vita/Tayutama 2 - You're the only one/015.at9.flac", // sick progressive metal ***
-        "wii/Kamen Rider - Chou Climax Heroes/Stage03.brstm.flac", // progressive metal
-        "vita/Tayutama 2 - You're the only one/015.at9.flac", // sick progressive metal ***
-        "wii/Kamen Rider - Chou Climax Heroes/Stage03.brstm.flac", // progressive metal
-        "vita/Tayutama 2 - You're the only one/015.at9.flac", // sick progressive metal ***
-        "wii/Kamen Rider - Chou Climax Heroes/Stage03.brstm.flac", // progressive metal
-        "vita/Tayutama 2 - You're the only one/015.at9.flac", // sick progressive metal ***
-        "wii/Kamen Rider - Chou Climax Heroes/Stage03.brstm.flac", // progressive metal
-        "vita/Tayutama 2 - You're the only one/015.at9.flac" // sick progressive metal ***
-        /*/
 
         /* // jazz
         "dsf/Metropolis Street Racer Prototype/file_15.adx.flac",
@@ -383,8 +370,9 @@
         "seed": 100,
         "seamless_loop": false,
 
-        "length": null,//1408768,
-        "num_steps": 300,//300,//500
+        //"length": null,
+        //"length": 1408768,
+        "num_steps": 500,//300,//500
         "cfg_scale": 4,//4,//3.5,//4//3//1.5,
         "use_heun": true,
 
@@ -398,10 +386,10 @@
         //"rho": 1.414,
 
         "sigma_max": 200,
-        "sigma_min": 0.08,
+        "sigma_min": 0.008,
         
         "input_perturbation": 0.1,//0.2,//0.016,//0.005568,//0.016,//0.12,//0.1//0.01
-        "input_perturbation_offset": -1.8//-0.85//-0.35//-0.85//100
+        "input_perturbation_offset": -1//-0.85//-0.35//-0.85//100
     },
     "ddecm_params": {
 
@@ -411,11 +399,11 @@
         "schedule": "ln_linear",
         "rho": 1,
 
-        "sigma_max": 100,
-        "sigma_min": 0.08,
+        "sigma_max": 125,
+        "sigma_min": 0.008,
 
-        "input_perturbation": 0,
-        "input_perturbation_offset": -2
+        "input_perturbation": 0.1,
+        "input_perturbation_offset": -1
     },
     "ddecp_params": {
 
@@ -423,12 +411,12 @@
         "cfg_scale": 1.5,
         "use_heun": false,
         "schedule": "cos",
-        "rho": 1,
+        "rho": 0.6,
 
-        "sigma_max": 100,
-        "sigma_min": 0.08,
+        "sigma_max": 125,
+        "sigma_min": 0.008,
 
         "input_perturbation": 1,
-        "input_perturbation_offset": 2
+        "input_perturbation_offset": 1
     }
 }
