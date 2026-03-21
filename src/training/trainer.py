@@ -854,6 +854,9 @@ class DualDiffusionTrainer:
         if path is None:
             if self.config.start_global_step_override is not None:
                 self.global_step = self.config.start_global_step_override
+                for _ in range(self.global_step):
+                    self.lr_scheduler.step() # kinda stupid that this needs to be done this way
+
             self.logger.warning(f"No existing checkpoints found, starting a new training run from step {self.global_step}")
             
             for module, module_name in zip(self.modules, self.config.train_modules):
