@@ -228,7 +228,7 @@ class UNetTrainer(ModuleTrainer):
             sigma_data = self.sigma_sampler.config.sigma_data
 
         if self.config.disable_loss_weight == True:
-            batch_loss_weight = 1 / batch_sigma**2
+            batch_loss_weight = 2 / batch_sigma**2
             #batch_loss_weight = (batch_sigma ** 2 + sigma_data ** 2) / (batch_sigma * sigma_data) ** 2
             #samples = samples - samples.mean(dim=(0,2,3), keepdim=True)
         else:
@@ -241,9 +241,10 @@ class UNetTrainer(ModuleTrainer):
         batch_weighted_loss = batch_weighted_loss.mean(dim=(1,2,3)) * batch_loss_weight
 
         if self.config.disable_loss_weight == True:
-            batch_loss = batch_weighted_loss
+            error_logvar = self.unet.get_sigma_loss_logvar(torch.ones_like(batch_sigma))
+            batch_loss = batch_weighted_loss / error_logvar.exp() + error_logvar
             #bucket_log_loss = batch_weighted_loss
-            bucket_log_loss = (batch_weighted_loss * batch_sigma**2) * (batch_sigma ** 2 + sigma_data ** 2) / (batch_sigma * sigma_data) ** 2
+            bucket_log_loss = (0.5 * batch_weighted_loss * batch_sigma**2) * (batch_sigma ** 2 + sigma_data ** 2) / (batch_sigma * sigma_data) ** 2
         else:
             batch_loss = batch_weighted_loss / error_logvar.exp() + error_logvar
             bucket_log_loss = batch_weighted_loss
