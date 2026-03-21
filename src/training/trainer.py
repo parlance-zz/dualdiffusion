@@ -172,6 +172,7 @@ class DualDiffusionTrainerConfig:
     min_checkpoint_time: int            = 3600
     checkpoints_total_limit: int        = 1
     strict_checkpoint_time: bool        = False
+    start_global_step_override: Optional[int] = None
 
     activation_memory_budget: Optional[float] = None
     enable_bf16_reduction_in_sdp: bool  = False
@@ -851,7 +852,10 @@ class DualDiffusionTrainer:
         path = dirs[-1] if len(dirs) > 0 else None
 
         if path is None:
-            self.logger.warning(f"No existing checkpoints found, starting a new training run.")
+            if self.config.start_global_step_override is not None:
+                self.global_step = self.config.start_global_step_override
+            self.logger.warning(f"No existing checkpoints found, starting a new training run from step {self.global_step}")
+            
             for module, module_name in zip(self.modules, self.config.train_modules):
                 if module.config.last_global_step > 0:
                     self.logger.warning(f"Last global step in {module_name} module config is {module.config.last_global_step}, but no checkpoint found")
