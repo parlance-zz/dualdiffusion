@@ -43,6 +43,10 @@ def lipschitz_loss(x: torch.Tensor, y: torch.Tensor, eps: float = 1e-2) -> torch
     return loss
 """
 
+def _roll_each(t: torch.Tensor, offsets: torch.Tensor) -> torch.Tensor:
+    idx = (torch.arange(t.shape[-1], device=t.device) + offsets[:, None]) % t.shape[-1]
+    return torch.gather(t, dim=-1, index=idx[:, None, None, :].expand_as(t))
+
 def lipschitz_loss(x: torch.Tensor, y: torch.Tensor, eps: float = 1e-2, num_iterations: int = 1) -> torch.Tensor:
 
     assert x.shape[-1] % y.shape[-1] == 0
@@ -56,18 +60,16 @@ def lipschitz_loss(x: torch.Tensor, y: torch.Tensor, eps: float = 1e-2, num_iter
     downsample_ratio = x.shape[-1] // y.shape[-1]
     bsz = x.shape[0]
 
-    rnd_offsets = torch.randint(1, y.shape[-1], (bsz,), device=y.device)
-    col_idx_y = (torch.arange(y.shape[-1], device=y.device).unsqueeze(0) + rnd_offsets.unsqueeze(1)) % y.shape[-1]
-    col_idx_x = (torch.arange(x.shape[-1], device=x.device).unsqueeze(0) + (rnd_offsets * downsample_ratio).unsqueeze(1)) % x.shape[-1]
+    rnd_offsets = torch.randint(1, y.shape[-1], (bsz,), device=x.device)
 
-    x2 = x[torch.arange(bsz, device=x.device)[:, None, None, None], :, :, col_idx_x[:, None, None, :]]
-    y2 = y[torch.arange(bsz, device=y.device)[:, None, None, None], :, :, col_idx_y[:, None, None, :]]
+    x2 = _roll_each(x, rnd_offsets * downsample_ratio)
+    y2 = _roll_each(y, rnd_offsets)
 
     dx = torch.nn.functional.avg_pool2d((x - x2) ** 2, kernel_size=downsample_ratio).mean(dim=1, keepdim=True).detach()
     dy = ((y - y2) ** 2).mean(dim=1, keepdim=True)
 
-    loss = ((dx + eps) / (dy + eps)).log().pow(2).mean(dim=(1,2,3))
-    return loss
+    loss = ((dx + eps) / (dy + eps)).log().pow(2)
+    return loss.mean().expand(bsz // num_iterations)
 
 
 if __name__ == "__main__":

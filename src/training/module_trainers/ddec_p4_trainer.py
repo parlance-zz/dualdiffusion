@@ -108,6 +108,7 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
             if self.unet is not None:
                 self.unet.compile(**trainer.config.compile_params)
 
+            global lipschitz_loss
             lipschitz_loss = torch.compile(lipschitz_loss, **trainer.config.compile_params)
 
         if self.train_dae == True:
