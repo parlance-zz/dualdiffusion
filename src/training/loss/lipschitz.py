@@ -21,47 +21,26 @@
 # SOFTWARE.
 
 import torch
-import numpy as np
 
-"""
+
+def _roll_each(t: torch.Tensor, offsets: torch.Tensor) -> torch.Tensor:
+    idx = (torch.arange(t.shape[-1], device=t.device) + offsets[:, None]) % t.shape[-1]
+    return torch.gather(t, dim=-1, index=idx[:, None, None, :].expand_as(t))
+
 def lipschitz_loss(x: torch.Tensor, y: torch.Tensor, eps: float = 1e-2) -> torch.Tensor:
 
     assert x.shape[-1] % y.shape[-1] == 0
     assert x.shape[-2] % y.shape[-2] == 0
     assert x.shape[-1] // y.shape[-1] == x.shape[-2] // y.shape[-2]
 
-    downsample_ratio = x.shape[-1] // y.shape[-1]
-    rnd_offset = int(np.random.randint(1, y.shape[-1]))
-
-    x2 = torch.roll(x, shifts=rnd_offset * downsample_ratio, dims=-1)
-    dx = torch.nn.functional.avg_pool2d((x - x2) ** 2, kernel_size=downsample_ratio).mean(dim=1, keepdim=True).detach()
-
-    y2 = torch.roll(y, shifts=rnd_offset, dims=-1)
-    dy = ((y - y2) ** 2).mean(dim=1, keepdim=True)
-
-    loss = ((dx + eps) / (dy + eps)).log().pow(2).mean(dim=(1,2,3))
-    return loss
-"""
-
-def _roll_each(t: torch.Tensor, offsets: torch.Tensor) -> torch.Tensor:
-    idx = (torch.arange(t.shape[-1], device=t.device) + offsets[:, None]) % t.shape[-1]
-    return torch.gather(t, dim=-1, index=idx[:, None, None, :].expand_as(t))
-
-def lipschitz_loss(x: torch.Tensor, y: torch.Tensor, eps: float = 1e-2, num_iterations: int = 1) -> torch.Tensor:
-
-    assert x.shape[-1] % y.shape[-1] == 0
-    assert x.shape[-2] % y.shape[-2] == 0
-    assert x.shape[-1] // y.shape[-1] == x.shape[-2] // y.shape[-2]
-
-    if num_iterations > 0:
-        x = x.repeat_interleave(num_iterations, dim=0)
-        y = y.repeat_interleave(num_iterations, dim=0)
+    num_iterations = y.shape[-1] - 1
+    x = x.repeat_interleave(num_iterations, dim=0)
+    y = y.repeat_interleave(num_iterations, dim=0)
 
     downsample_ratio = x.shape[-1] // y.shape[-1]
     bsz = x.shape[0]
 
-    rnd_offsets = torch.randint(1, y.shape[-1], (bsz,), device=x.device)
-
+    rnd_offsets = torch.arange(bsz, device=x.device)
     x2 = _roll_each(x, rnd_offsets * downsample_ratio)
     y2 = _roll_each(y, rnd_offsets)
 
