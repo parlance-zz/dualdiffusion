@@ -56,6 +56,7 @@ class DiffusionDecoder_Trainer_Config(ModuleTrainerConfig):
     kl_warmup_steps: int  = 300
     lipschitz_loss_weight: Optional[float] = None
     lipschitz_loss_iterations: int = 1
+    lipschitz_loss_eps: float = 1e-2
     add_latents_noise: Optional[float] = None
 
     unet_loss_weight: float     = 0
@@ -240,7 +241,9 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
             logs["loss"] = logs["loss"] + logs["loss/unet"] * unet_loss_weight
 
         if self.train_dae == True and self.config.lipschitz_loss_weight is not None:
-            _lipschitz_loss = lipschitz_loss(dae_input, latents, num_iterations=self.config.lipschitz_loss_iterations)
+            _lipschitz_loss = lipschitz_loss(dae_input, latents,
+                eps=self.config.lipschitz_loss_eps, num_iterations=self.config.lipschitz_loss_iterations)
+            
             logs["loss"] = logs["loss"] + _lipschitz_loss * self.config.lipschitz_loss_weight
             logs["loss/lipschitz"] = _lipschitz_loss.detach()
             logs["loss_weight/lipschitz"] = self.config.lipschitz_loss_weight
