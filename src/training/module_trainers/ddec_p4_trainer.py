@@ -55,6 +55,7 @@ class DiffusionDecoder_Trainer_Config(ModuleTrainerConfig):
     kl_loss_weight: float = 0
     kl_warmup_steps: int  = 300
     lipschitz_loss_weight: Optional[float] = None
+    lipschitz_loss_iterations: int = 1
     add_latents_noise: Optional[float] = None
 
     unet_loss_weight: float     = 0
@@ -107,10 +108,12 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
             if self.unet is not None:
                 self.unet.compile(**trainer.config.compile_params)
 
+            lipschitz_loss = torch.compile(lipschitz_loss, **trainer.config.compile_params)
+
         if self.train_dae == True:
             self.logger.info(f"KL loss weight: {self.config.kl_loss_weight} KL warmup steps: {self.config.kl_warmup_steps}")
             self.logger.info(f"Add latents noise: {self.config.add_latents_noise}")
-            self.logger.info(f"Lipschitz loss weight: {self.config.lipschitz_loss_weight}")
+            self.logger.info(f"Lipschitz loss weight: {self.config.lipschitz_loss_weight} Num iterations: {self.config.lipschitz_loss_iterations}")
     
         self.logger.info(f"Crop edges: {self.config.crop_edges}")
         if self.config.random_stereo_augmentation == True:
@@ -210,6 +213,10 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
             "io_stats_ddecm/mdct_psd_mean": mdct_psd.mean(dim=(1,2,3)),
         }
 
+        for i in range(self.dae.config.latent_channels):
+            logs[f"ch_stats/mean_{i}"] = self.dae.latents_stats_tracker.mean[i].detach()
+            logs[f"ch_stats/var_{i}"]  = self.dae.latents_stats_tracker.var[i].detach()
+
         noise = torch.randn_like(mdct_psd)
         perturb_noise = torch.randn_like(mdct_psd)
 
@@ -232,7 +239,7 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
             logs["loss"] = logs["loss"] + logs["loss/unet"] * unet_loss_weight
 
         if self.train_dae == True and self.config.lipschitz_loss_weight is not None:
-            _lipschitz_loss = lipschitz_loss(dae_input, latents)
+            _lipschitz_loss = lipschitz_loss(dae_input, latents, num_iterations=self.config.lipschitz_loss_iterations)
             logs["loss"] = logs["loss"] + _lipschitz_loss * self.config.lipschitz_loss_weight
             logs["loss/lipschitz"] = _lipschitz_loss.detach()
             logs["loss_weight/lipschitz"] = self.config.lipschitz_loss_weight
