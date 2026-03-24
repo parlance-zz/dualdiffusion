@@ -302,7 +302,7 @@ class EncoderBlock(torch.nn.Module):
         assert out_channels % mlp_groups == 0
         assert in_channels % mlp_groups == 0
 
-        self.conv_res0 = MPConv(in_channels, inner_channels,  kernel=(3,3), groups=mlp_groups)
+        self.conv_res0 = MPConv(out_channels, inner_channels,  kernel=(3,3), groups=mlp_groups)
         self.conv_res1 = MPConv(inner_channels, out_channels, kernel=(3,3), groups=mlp_groups)
 
         if in_channels != out_channels or mlp_groups > 1:
@@ -438,9 +438,8 @@ class DAE(DualDiffusionDAE):
             x = block(x) if "conv" in name else block(x, None)
 
         latents: torch.Tensor = self.conv_latents_out_2d(x)
-        latents = torch.nn.functional.avg_pool2d(latents.float(), self.downsample_ratio)
-        latents = normalize(latents)
-    
+        latents = normalize(latents.float())
+
         if training == True:
             return latents
         else:
