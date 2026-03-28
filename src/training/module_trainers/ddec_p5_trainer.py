@@ -28,8 +28,10 @@ import torch
 from training.trainer import DualDiffusionTrainer
 from training.module_trainers.module_trainer import ModuleTrainer, ModuleTrainerConfig
 from training.module_trainers.unet_trainer_p4 import UNetTrainerConfig, UNetTrainer
+from training.loss.lipschitz import lipschitz_loss
 from modules.daes.dae_edm2_q4 import DAE
-from modules.unets.unet_edm2_p5_ddec import UNet
+from modules.unets.unet_edm2_q4_ddec import UNet
+from modules.unets.unet_edm2_q4 import UNet as UNet_LDM
 from modules.formats.ms_mdct_dual_2 import MS_MDCT_DualFormat
 from modules.mp_tools import normalize
 
@@ -46,18 +48,24 @@ def random_stereo_augmentation(x: torch.Tensor) -> torch.Tensor:
 @dataclass
 class DiffusionDecoder_Trainer_Config(ModuleTrainerConfig):
 
-    ddecm: dict[str, Any]
     ddecp: dict[str, Any]
+    ddecm: dict[str, Any]
+    unet: dict[str, Any]
 
-    kl_loss_weight: float = 1e-3
-    kl_warmup_steps: int  = 150
+    kl_loss_weight: float = 0
+    kl_warmup_steps: int  = 300
+    lipschitz_loss_weight: Optional[float] = None
+    lipschitz_loss_eps: float = 1e-2
+    add_latents_noise: Optional[float] = None
 
-    add_latents_noise: float = None
+    unet_loss_weight: float     = 0.01325
+    unet_loss_warmup_steps: int = 0
+    ddecm_loss_weight: float = 1
+    ddecp_loss_weight: float = 1
 
+    crop_edges: int = 0 # used to avoid artifacts due to mdct lapped blocks at beginning and end of sample
     random_stereo_augmentation: bool = True
     random_phase_augmentation: bool  = True
-
-    crop_edges: int = 4 # used to avoid artifacts due to mdct lapped blocks at beginning and end of sample
 
 class DiffusionDecoder_Trainer(ModuleTrainer):
     
@@ -68,47 +76,69 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
         self.trainer = trainer
         self.logger = trainer.logger
 
+        self.logger.info(f"Training modules: {trainer.config.train_modules}")
+        
         self.ddecp: UNet = trainer.get_train_module("ddecp")
         self.ddecm: UNet = trainer.get_train_module("ddecm")
         self.dae: DAE = trainer.get_train_module("dae")
+        self.unet: UNet_LDM = trainer.get_train_module("unet")
 
-        assert self.ddecp is not None and self.ddecm is not None
-        
+        self.train_dae = self.dae is not None
+        self.train_unet = self.unet is not None
+        self.train_ddecm = self.ddecm is not None
+        self.train_ddecp = self.ddecp is not None
+
         if self.dae is None:
             self.dae = trainer.pipeline.dae.to(device=trainer.accelerator.device, dtype=torch.bfloat16).requires_grad_(False)
             assert self.dae.config.last_global_step > 0
-            self.train_dae = False
         else:
-            self.train_dae = True
+            assert self.ddecm is not None
         
         self.format: MS_MDCT_DualFormat = trainer.pipeline.format.to(self.trainer.accelerator.device)
 
         if trainer.config.enable_model_compilation:
-            self.ddecp.compile(**trainer.config.compile_params)
-            self.ddecm.compile(**trainer.config.compile_params)
             self.dae.compile(**trainer.config.compile_params)
             self.format.compile(**trainer.config.compile_params)
 
-        self.logger.info(f"Training modules: {trainer.config.train_modules}")
+            if self.ddecp is not None:
+                self.ddecp.compile(**trainer.config.compile_params)
+            if self.ddecm is not None:
+                self.ddecm.compile(**trainer.config.compile_params)
+            if self.unet is not None:
+                self.unet.compile(**trainer.config.compile_params)
+
+            global lipschitz_loss
+            lipschitz_loss = torch.compile(lipschitz_loss, **trainer.config.compile_params)
+
         if self.train_dae == True:
             self.logger.info(f"KL loss weight: {self.config.kl_loss_weight} KL warmup steps: {self.config.kl_warmup_steps}")
-            self.logger.info(f"Add latents noise: {config.add_latents_noise}")
+            self.logger.info(f"Add latents noise: {self.config.add_latents_noise}")
+            self.logger.info(f"Lipschitz loss weight: {self.config.lipschitz_loss_weight}")
+    
         self.logger.info(f"Crop edges: {self.config.crop_edges}")
-
         if self.config.random_stereo_augmentation == True:
             self.logger.info("Using random stereo augmentation")
         else: self.logger.info("Random stereo augmentation is disabled")
 
-        self.logger.info("DDEC-P trainer:")
-        self.ddecp_trainer = UNetTrainer(UNetTrainerConfig(**config.ddecp), trainer, self.ddecp, "ddecp")
-        self.logger.info("DDEC-M trainer:")
-        self.ddecm_trainer = UNetTrainer(UNetTrainerConfig(**config.ddecm), trainer, self.ddecm, "ddecm")
+        if self.train_ddecp == True:
+            self.logger.info(f"DDEC-P trainer (loss weight: {self.config.ddecp_loss_weight}):")
+            self.ddecp_trainer = UNetTrainer(UNetTrainerConfig(**config.ddecp), trainer, self.ddecp, "ddecp")
+        if self.train_ddecm == True:
+            self.logger.info(f"DDEC-M trainer (loss weight: {self.config.ddecm_loss_weight}):")
+            self.ddecm_trainer = UNetTrainer(UNetTrainerConfig(**config.ddecm), trainer, self.ddecm, "ddecm")
+        if self.train_unet == True:
+            self.logger.info(f"UNet-LDM trainer (loss weight: {self.config.unet_loss_weight}) (warmup steps:{self.config.unet_loss_warmup_steps}):")
+            self.unet_trainer = UNetTrainer(UNetTrainerConfig(**config.unet), trainer, self.unet, "unet")
 
     @torch.no_grad()
     def init_batch(self, validation: bool = False) -> Optional[dict[str, Union[torch.Tensor, float]]]:
         
-        self.ddecp_trainer.init_batch(validation)
-        self.ddecm_trainer.init_batch(validation)
+        if self.train_ddecp == True:
+            self.ddecp_trainer.init_batch(validation)
+        if self.train_ddecm == True:
+            self.ddecm_trainer.init_batch(validation)
+        if self.train_unet == True:
+            self.unet_trainer.init_batch(validation)
 
         return None
     
@@ -125,66 +155,98 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
         else:
             raw_samples = batch["audio"]
 
-        mdct_phase, mdct_psd = self.format.raw_to_mdct_phase_psd(raw_samples, random_phase_augmentation=self.config.random_phase_augmentation)
-        mdct_phase = mdct_phase[..., self.config.crop_edges:-self.config.crop_edges]
-        mdct_psd = mdct_psd[..., self.config.crop_edges:-self.config.crop_edges]
-
+        mdct_phase, _ = self.format.raw_to_mdct_phase_psd(raw_samples, random_phase_augmentation=self.config.random_phase_augmentation)
         input_mel_spec = self.format.raw_to_mel_spec(raw_samples)
-        input_mel_spec = input_mel_spec[..., self.config.crop_edges:-self.config.crop_edges]
 
         if self.train_dae == True:
-            latents, ddec_cond, _ = self.trainer.get_ddp_module(self.dae)(input_mel_spec, audio_embeddings, self.config.add_latents_noise)
-        else:
-            latents, ddec_cond, _ = self.dae(input_mel_spec, audio_embeddings, self.config.add_latents_noise)
-            ddec_cond = ddec_cond.detach()
+            latents, ddec_cond = self.trainer.get_ddp_module(self.dae)(
+                input_mel_spec, audio_embeddings, latents_sigma=self.config.add_latents_noise)
             
+            self.dae.latents_stats_tracker(latents)
+        else:
+            latents, ddec_cond = self.dae(input_mel_spec, audio_embeddings, latents_sigma=self.config.add_latents_noise)
+            latents = latents.detach()
+            ddec_cond = ddec_cond.detach()
+        
         latents: torch.Tensor = latents.float()
 
-        latents_var = latents.pow(2).mean(dim=(0,2,3)) + 1e-20
+        #latents_var = latents.pow(2).mean() + 1e-20
+        #var_kl = latents_var - 1 - latents_var.log()
+        #kl_loss = var_kl.mean() + 0.5 * latents.mean().square().mean()
+        #kl_loss = kl_loss.expand(latents.shape[0]) # needed for per-sample logging
+
+        latents_var = latents.pow(2).mean(dim=(0,3)) + 1e-20
         var_kl = latents_var - 1 - latents_var.log()
-        kl_loss = var_kl.mean() + latents.mean(dim=(0,2,3)).square().mean()
+        kl_loss = var_kl.mean() + 0.5 * latents.mean(dim=(0,3)).pow(2).mean()
         kl_loss = kl_loss.expand(latents.shape[0]) # needed for per-sample logging
 
         kl_loss_weight = self.config.kl_loss_weight
         if self.trainer.global_step < self.config.kl_warmup_steps:
             kl_loss_weight *= self.trainer.global_step / self.config.kl_warmup_steps
-        
+            
         logs = {
             "loss": kl_loss * kl_loss_weight if self.train_dae == True else torch.zeros_like(kl_loss),
+            "loss/kl_latents": kl_loss.detach(),
+
+            "loss_weight/kl_latents": kl_loss_weight,
+            "loss_weight/ddecp": self.config.ddecp_loss_weight,
+            "loss_weight/ddecm": self.config.ddecm_loss_weight,
+
             "io_stats/ddec_cond_var": ddec_cond.var(dim=(1,2,3)),
             "io_stats/ddec_cond_mean": ddec_cond.mean(dim=(1,2,3)),
             "io_stats/latents_var": latents.var(dim=(1,2,3)).detach(),
             "io_stats/latents_mean": latents.mean(dim=(1,2,3)).detach(),
-
-            "io_stats_ddecp/mdct_phase_var": mdct_phase.var(dim=(1,2,3)),
-            "io_stats_ddecm/mdct_psd_var": mdct_psd.var(dim=(1,2,3)),
-            "io_stats_ddecm/mdct_psd_mean": mdct_psd.mean(dim=(1,2,3)),
-
-            "loss/kl_latents": kl_loss.detach(),
-            "loss_weight/kl_latents": kl_loss_weight,
+            "io_stats/latents_per_ch_mean": self.dae.latents_stats_tracker.mean.pow(2).mean().pow(0.5),
+            "io_stats/latents_per_ch_var": self.dae.latents_stats_tracker.var.mean(),
+            "io_stats/latents_sigma": self.config.add_latents_noise if self.config.add_latents_noise is not None else 0,
+            "io_stats/input_mel_spec_mean": input_mel_spec.mean(dim=(1,2,3)),
+            "io_stats/input_mel_spec_var": input_mel_spec.var(dim=(1,2,3)),
+            "io_stats/mdct_phase_var": mdct_phase.var(dim=(1,2,3)),
         }
 
         if self.config.add_latents_noise is not None:
-            logs["io_stats/add_latents_noise"] = self.config.add_latents_noise
+            latents_bits = (self.dae.latents_stats_tracker.var / self.config.add_latents_noise**2 + 1).log2().sum()
+            logs["io_stats/_bits_per_pixel"] = latents_bits.detach() / self.dae.downsample_ratio**2
+
+        for i in range(self.dae.config.latent_channels):
+            logs[f"ch_stats/mean_{i}"] = self.dae.latents_stats_tracker.mean[i].detach()
+            logs[f"ch_stats/var_{i}"]  = self.dae.latents_stats_tracker.var[i].detach()
+
+        if self.train_ddecp == True:
+            logs.update(self.ddecp_trainer.train_batch(mdct_phase, audio_embeddings, input_mel_spec))
+            logs["loss"] = logs["loss"] + logs["loss/ddecp"] * self.config.ddecp_loss_weight
+
+        if self.train_ddecm == True:
+            logs.update(self.ddecm_trainer.train_batch(input_mel_spec, audio_embeddings, ddec_cond))
+            logs["loss"] = logs["loss"] + logs["loss/ddecm"] * self.config.ddecm_loss_weight
+
+        if self.train_unet == True and self.config.unet_loss_weight > 0:
             
-        noise = torch.randn_like(mdct_psd)
-        perturb_noise = torch.randn_like(mdct_psd)
+            unet_loss_weight = self.config.unet_loss_weight
+            if self.trainer.global_step < self.config.unet_loss_warmup_steps:
+                unet_loss_weight *= self.trainer.global_step / self.config.unet_loss_warmup_steps
 
-        logs.update(self.ddecp_trainer.train_batch(mdct_phase, audio_embeddings, ddec_cond, noise=noise, perturb_noise=perturb_noise))
-        logs.update(self.ddecm_trainer.train_batch(mdct_psd, audio_embeddings, ddec_cond, noise=noise, perturb_noise=perturb_noise))
-        logs["loss"] = logs["loss"] + logs["loss/ddecp"] + logs["loss/ddecm"]
+            logs.update(self.unet_trainer.train_batch(latents, audio_embeddings))
+            logs["loss"] = logs["loss"] + logs["loss/unet"] * unet_loss_weight
+            logs["loss_weight/unet"] = unet_loss_weight
 
-        dynamic_range_ddecm = mdct_psd.amax(dim=(1,2,3)) - mdct_psd.amin(dim=(1,2,3))
+        if self.train_dae == True and self.config.lipschitz_loss_weight is not None:
+            _lipschitz_loss = lipschitz_loss(input_mel_spec, latents, eps=self.config.lipschitz_loss_eps)
+            
+            logs["loss"] = logs["loss"] + _lipschitz_loss * self.config.lipschitz_loss_weight
+            logs["loss/lipschitz"] = _lipschitz_loss.detach()
+            logs["loss_weight/lipschitz"] = self.config.lipschitz_loss_weight
+
+        dynamic_range_ddecm = input_mel_spec.amax(dim=(1,2,3)) - input_mel_spec.amin(dim=(1,2,3))
         logs["io_stats_ddecm/dynamic_range"] = dynamic_range_ddecm
         dynamic_range_ddecp = mdct_phase.amax(dim=(1,2,3)) - mdct_phase.amin(dim=(1,2,3))
         logs["io_stats_ddecp/dynamic_range"] = dynamic_range_ddecp
 
         if self.trainer.config.enable_debug_mode == True:
+            print("input_mel_spec.shape:", input_mel_spec.shape)
             print("mdct_phase.shape:", mdct_phase.shape)
-            print("mdct_psd.shape:", mdct_psd.shape)
             print("ddec_cond.shape:", ddec_cond.shape)
             print("latents.shape:", latents.shape)
-            print("input_mel_spec.shape", input_mel_spec.shape)
 
         return logs
       
@@ -192,7 +254,11 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
     def finish_batch(self) -> Optional[dict[str, Union[torch.Tensor, float]]]:
 
         logs = {}
-        logs.update(self.ddecp_trainer.finish_batch())
-        logs.update(self.ddecm_trainer.finish_batch())
+        if self.train_ddecp == True:
+            logs.update(self.ddecp_trainer.finish_batch())
+        if self.train_ddecm == True:
+            logs.update(self.ddecm_trainer.finish_batch())
+        if self.train_unet == True:
+            logs.update(self.unet_trainer.finish_batch())
 
         return logs

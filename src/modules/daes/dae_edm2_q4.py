@@ -91,15 +91,15 @@ class LatentStatsTracker(torch.nn.Module):
 @dataclass
 class DAE_Config(DualDiffusionDAEConfig):
 
-    in_channels: int     = 2
+    in_channels: int     = 3
     in_channels_emb: int = 0
     in_num_freqs: int    = 256
-    out_channels: int    = 2
+    out_channels: int    = 3
     latent_channels: int = 8
 
     model_channels: int         = 64         # Base multiplier for the number of channels.
-    channel_mult_enc: int       = (1,2,4,8)
-    channel_mult_dec: list[int] = (1,2,4,8)
+    channel_mult_enc: int       = (1,2,3,4)
+    channel_mult_dec: list[int] = (1,2,3,4)
     channel_mult_emb: int     = 4            # Multiplier for final embedding dimensionality.
     channels_per_head: int    = 64           # Number of channels per attention head.
     num_enc_layers_per_block: int = 3        # Number of resnet blocks per resolution.
@@ -222,7 +222,6 @@ class DAE(DualDiffusionDAE):
         self.num_levels = len(config.channel_mult_dec)
         self.downsample_ratio = 2 ** (self.num_levels - 1)
         self.out_gain = torch.nn.Parameter(torch.ones([]))
-        self.recon_loss_logvar = torch.nn.Parameter(torch.zeros([]))
 
         # embedding
         if config.in_channels_emb > 0:
@@ -290,11 +289,11 @@ class DAE(DualDiffusionDAE):
             return None
     
     def get_recon_loss_logvar(self) -> torch.Tensor:
-        return self.recon_loss_logvar
+        return None
     
     def get_latent_shape(self, mel_spec_shape: Union[torch.Size, tuple[int, int, int, int]]) -> torch.Size:
         if len(mel_spec_shape) == 4:
-            return (mel_spec_shape[0], self.config.latent_channels * 2,
+            return (mel_spec_shape[0], self.config.latent_channels,
                     mel_spec_shape[2] // 2 ** (self.num_levels-1),
                     mel_spec_shape[3] // 2 ** (self.num_levels-1))
         else:
@@ -316,10 +315,8 @@ class DAE(DualDiffusionDAE):
         for name, block in self.enc.items():
             x = block(x) if "conv" in name else block(x, embeddings)
         
-        latents = self.conv_latents_out(x)
-
-        if training == True:
-            self.latents_stats_tracker(latents)
+        latents: torch.Tensor = self.conv_latents_out(x)
+        latents = normalize(latents.float())
         
         return latents
 
@@ -337,21 +334,23 @@ class DAE(DualDiffusionDAE):
 
         return x
     
-    def forward(self, samples: torch.Tensor, audio_embeddings: torch.Tensor, latents_sigma: float) -> tuple[torch.Tensor, ...]:
+    def forward(self, samples: torch.Tensor, audio_embeddings: torch.Tensor, latents_sigma: Optional[float] = None) -> tuple[torch.Tensor, torch.Tensor]:
         
         dae_embeddings = self.get_embeddings(audio_embeddings)
-        pre_norm_latents = self.encode(samples, dae_embeddings, training=True)
+        latents = self.encode(samples, dae_embeddings, training=True)
 
         if latents_sigma is not None:
-            latents = pre_norm_latents + latents_sigma * torch.randn_like(pre_norm_latents)
+            decode_latents = latents + latents_sigma * torch.randn_like(latents)
         else:
-            latents = pre_norm_latents
+            decode_latents = latents
 
-        reconstructed = self.decode(latents, dae_embeddings, training=True)
-        return latents, reconstructed, pre_norm_latents
+        ddec_cond = self.decode(decode_latents, dae_embeddings, training=True)
+        return latents, ddec_cond
 
     def tiled_encode(self, x: torch.Tensor, embeddings: torch.Tensor, max_chunk: int = 6144, overlap: int = 256) -> torch.Tensor:
 
+        raise NotImplementedError()
+    
         x_w = x.shape[-1]
         ds = self.downsample_ratio
         

@@ -43,10 +43,9 @@ from modules.formats.format import DualDiffusionFormat
 @dataclass
 class UNetConfig(DualDiffusionUNetConfig):
 
-    in_channels:  int = 3
-    out_channels: int = 3
+    in_channels:  int = 8
+    out_channels: int = 8
     in_channels_emb: int = 0
-    in_channels_x_ref: int = 3
 
     in_num_freqs: int = 256
 
@@ -181,7 +180,7 @@ class UNet(DualDiffusionUNet):
 
         # Encoder.
         self.enc = torch.nn.ModuleDict()
-        cout = config.in_channels + config.in_channels_x_ref
+        cout = config.in_channels
 
         for level, channels in enumerate(cblock):
             
@@ -265,9 +264,6 @@ class UNet(DualDiffusionUNet):
         else:
             x = (c_in * x_in).to(dtype=torch.bfloat16)
 
-        if self.config.in_channels_x_ref > 0:
-            x = mp_cat(x, x_ref.to(dtype=torch.bfloat16), t=self.config.label_balance)
-
         # embedding
         emb = self.emb_noise(self.emb_fourier(c_noise))
         if self.config.in_channels_emb > 0:
@@ -290,4 +286,3 @@ class UNet(DualDiffusionUNet):
         D_x: torch.Tensor = c_skip * x_in.float() + c_out * x.float()
 
         return D_x, self.get_sigma_loss_logvar(sigma)
-    
