@@ -43,6 +43,7 @@ class SigmaSamplerConfig:
     dist_offset: float = 0.3
     dist_pdf: Optional[torch.Tensor] = None
     use_stratified_sigma_sampling: bool = True
+    use_stratified_sigma_shuffling: bool = False
     use_static_sigma_sampling: bool = False
     sigma_pdf_warmup_steps: int = 5000
     sigma_pdf_resolution: int = 127
@@ -101,6 +102,9 @@ class SigmaSampler():
             quantiles = self._sample_static_stratified(n_samples)
         elif self.config.use_stratified_sigma_sampling:
             quantiles = self._sample_uniform_stratified(n_samples)
+            if self.config.use_stratified_sigma_shuffling:
+                idx = torch.randperm(n_samples)
+                quantiles = quantiles[idx]
         else:
             quantiles = None
 

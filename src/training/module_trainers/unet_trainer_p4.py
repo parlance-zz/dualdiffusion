@@ -42,6 +42,7 @@ class UNetTrainerConfig(ModuleTrainerConfig):
     sigma_dist_scale: float = 1.
     sigma_dist_offset: float = 0
     use_stratified_sigma_sampling: bool = True
+    use_stratified_sigma_shuffling: bool = False
     sigma_pdf_resolution: Optional[int] = 127
     sigma_pdf_sanitization: bool = True
     sigma_pdf_warmup_steps: int = 1000
@@ -159,6 +160,7 @@ class UNetTrainer(ModuleTrainer):
             dist_scale=self.config.sigma_dist_scale,
             dist_offset=self.config.sigma_dist_offset,
             use_stratified_sigma_sampling=self.config.use_stratified_sigma_sampling,
+            use_stratified_sigma_shuffling=self.config.use_stratified_sigma_shuffling,
             sigma_pdf_resolution=self.config.sigma_pdf_resolution,
             sigma_pdf_sanitization=self.config.sigma_pdf_sanitization,
             sigma_pdf_warmup_steps=self.config.sigma_pdf_warmup_steps,
