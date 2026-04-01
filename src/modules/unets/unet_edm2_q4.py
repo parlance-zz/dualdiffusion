@@ -49,11 +49,11 @@ class UNetConfig(DualDiffusionUNetConfig):
 
     in_num_freqs: int = 256
 
-    model_channels: int  = 32                # Base multiplier for the number of channels.
+    model_channels: int  = 64                # Base multiplier for the number of channels.
     logvar_channels: int = 192               # Number of channels for training uncertainty estimation.
     channel_mult: list[int]    = (1,2,3,4,5) # Per-resolution multipliers for the number of channels.
     double_midblock: bool      = True
-    midblock_attn: bool        = False
+    midblock_attn: bool        = True
     channel_mult_noise: Optional[int] = 5    # Multiplier for noise embedding dimensionality.
     channel_mult_emb: Optional[int]   = 5    # Multiplier for final embedding dimensionality.
     channels_per_head: int    = 64           # Number of channels per attention head.
@@ -62,7 +62,7 @@ class UNetConfig(DualDiffusionUNetConfig):
     concat_balance: float     = 0.5          # Balance between skip connections (0) and main path (1).
     res_balance: float        = 0.3          # Balance between main branch (0) and residual branch (1).
     attn_balance: float       = 0.3          # Balance between main branch (0) and self-attention (1).
-    attn_levels: list[int]    = ()           # List of resolution levels to use self-attention.
+    attn_levels: list[int]    = (3,4)        # List of resolution levels to use self-attention.
     mlp_multiplier: int    = 2               # Multiplier for the number of channels in the MLP.
     mlp_groups: int        = 1               # Number of groups for the MLPs.
     emb_linear_groups: int = 1
@@ -93,6 +93,7 @@ class Block(torch.nn.Module):
         self.num_freqs = num_freqs
         self.use_attention = use_attention
         self.num_heads = out_channels // channels_per_head
+        self.channels_per_head = channels_per_head
         self.out_channels = out_channels
         self.flavor = flavor
         self.resample_mode = resample_mode
@@ -114,8 +115,14 @@ class Block(torch.nn.Module):
         self.emb_linear = MPConv(emb_channels, out_channels * mlp_multiplier,
             kernel=(1,1), groups=emb_linear_groups) if emb_channels != 0 else None
         
-        if self.use_attention:
-            raise NotImplementedError()
+        if self.use_attention == True:
+            self.attn_q = MPConv(out_channels, out_channels, kernel=(1,1))
+            self.attn_k = MPConv(out_channels, out_channels, kernel=(1,1))
+            self.attn_v = MPConv(out_channels, out_channels, kernel=(1,1))
+            self.attn_proj = MPConv(out_channels, out_channels, kernel=(1,1))
+
+            self.emb_gain_qkv = torch.nn.Parameter(torch.zeros([]))
+            self.emb_linear_qkv = MPConv(emb_channels, out_channels, kernel=(1,1), groups=1)
 
     def forward(self, x: torch.Tensor, emb: torch.Tensor) -> torch.Tensor:
         
@@ -141,7 +148,25 @@ class Block(torch.nn.Module):
         x = mp_sum(x, y, t=self.res_balance)
         
         if self.use_attention:
-            raise NotImplementedError()
+
+            c = self.emb_linear_qkv(emb, gain=self.emb_gain_qkv) + 1.
+            y: torch.Tensor = x * c
+            B, C, H, W = y.shape
+
+            q: torch.Tensor = self.attn_q(y)
+            k: torch.Tensor = self.attn_k(y)
+            v: torch.Tensor = self.attn_v(y)
+            q = q.reshape(B, self.num_heads, self.channels_per_head, H*W)
+            k = k.reshape(B, self.num_heads, self.channels_per_head, H*W)
+            v = v.reshape(B, self.num_heads, self.channels_per_head, H*W)
+            q = normalize(q, dim=2).transpose(-1, -2)
+            k = normalize(k, dim=2).transpose(-1, -2)
+            v = normalize(v, dim=2).transpose(-1, -2)
+
+            y = torch.nn.functional.scaled_dot_product_attention(q, k, v).transpose(-1, -2)
+
+            y = self.attn_proj(y.reshape(*x.shape))
+            x = mp_sum(x, y, t=self.attn_balance)
 
         if self.clip_act is not None:
             x = x.clip_(-self.clip_act, self.clip_act)
