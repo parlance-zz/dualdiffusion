@@ -217,11 +217,11 @@ class UNetTrainer(ModuleTrainer):
                 input_perturbation = perturb_noise
             else:
                 input_perturbation = torch.randn(samples.shape, device=samples.device)
-            perturbed_input = samples.detach() + noise + input_perturbation * batch_sigma.view(-1, 1, 1, 1) * self.config.input_perturbation
+            perturbed_input = samples + noise + input_perturbation * batch_sigma.view(-1, 1, 1, 1) * self.config.input_perturbation
         else:
             perturbed_input = None
 
-        denoised, error_logvar = self.trainer.get_ddp_module(self.unet)(samples.detach() + noise, batch_sigma, None, embeddings,
+        denoised, error_logvar = self.trainer.get_ddp_module(self.unet)(samples + noise, batch_sigma, None, embeddings,
                                     x_ref=ref_samples, perturbed_input=perturbed_input, conditioning_mask=conditioning_mask)
         
         if self.config.use_dynamic_sigma_data == True:
