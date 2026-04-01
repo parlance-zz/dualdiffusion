@@ -45,7 +45,7 @@ if input("Save module? (y/n) ").lower() == 'y':
     print(f"Saved model to {model_path}/ddecp")
 
 
-from modules.unets.unet_edm2_p6_ddec import UNet, UNetConfig
+from modules.unets.unet_edm2_p6 import UNet, UNetConfig
 unet = UNet(UNetConfig(num_layers_per_block=10))
 print_module_info(unet, "unet")
 

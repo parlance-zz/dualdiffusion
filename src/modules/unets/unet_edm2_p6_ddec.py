@@ -322,4 +322,4 @@ class UNet(DualDiffusionUNet):
         x = x.reshape(x.shape[0], x.shape[1]//c, c, x_in.shape[3]).permute(0, 2, 1, 3).contiguous()
         D_x = c_skip * x_in + c_out * x.float()
 
-        return D_x
+        return D_x, self.get_sigma_loss_logvar(sigma)

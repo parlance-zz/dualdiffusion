@@ -60,7 +60,6 @@ class DiffusionDecoder_Trainer_Config(ModuleTrainerConfig):
     unet_loss_weight: float     = 0.2
     unet_loss_warmup_steps: int = 300
 
-    crop_edges: int = 0 # used to avoid artifacts due to mdct lapped blocks at beginning and end of sample
     random_stereo_augmentation: bool = True
     random_phase_augmentation: bool  = True
 
@@ -85,18 +84,20 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
         self.train_ddecm = self.ddecm is not None
         self.train_ddecp = self.ddecp is not None
 
-        if self.dae is None:
-            self.dae = trainer.pipeline.dae.to(device=trainer.accelerator.device, dtype=torch.bfloat16).requires_grad_(False)
-            assert self.dae.config.last_global_step > 0
+        if self.train_dae == False:
+            if self.train_ddecm == True:
+                self.dae = trainer.pipeline.dae.to(device=trainer.accelerator.device, dtype=torch.bfloat16).requires_grad_(False)
+                assert self.dae.config.last_global_step > 0
         else:
-            assert self.ddecm is not None
+            assert self.train_ddecm == True
         
         self.format: MS_MDCT_DualFormat = trainer.pipeline.format.to(self.trainer.accelerator.device)
 
         if trainer.config.enable_model_compilation:
-            self.dae.compile(**trainer.config.compile_params)
             self.format.compile(**trainer.config.compile_params)
 
+            if self.dae is not None:
+                self.dae.compile(**trainer.config.compile_params)
             if self.ddecp is not None:
                 self.ddecp.compile(**trainer.config.compile_params)
             if self.ddecm is not None:
@@ -107,19 +108,22 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
             global lipschitz_loss
             lipschitz_loss = torch.compile(lipschitz_loss, **trainer.config.compile_params)
 
-        if self.train_dae == True:
-            self.logger.info(f"KL loss weight: {self.config.kl_loss_weight} KL warmup steps: {self.config.kl_warmup_steps}")
+        if self.train_dae == True or self.train_ddecm == True:
             self.logger.info(f"Add latents noise: {self.config.add_latents_noise}")
             self.logger.info(f"Lipschitz loss weight: {self.config.lipschitz_loss_weight}")
     
-        self.logger.info(f"Crop edges: {self.config.crop_edges}")
         if self.config.random_stereo_augmentation == True:
             self.logger.info("Using random stereo augmentation")
         else: self.logger.info("Random stereo augmentation is disabled")
 
         if self.train_ddecp == True:
-            self.logger.info(f"DDEC-P trainer:")
+            self.logger.info(f"DDEC-P trainer (add mel spec noise: {self.config.add_mel_spec_noise}):")
             self.ddecp_trainer = UNetTrainer(UNetTrainerConfig(**config.ddecp), trainer, self.ddecp, "ddecp")
+
+            if self.config.random_phase_augmentation == True:
+                self.logger.info("Using random phase augmentation")
+            else: self.logger.info("Random phase augmentation is disabled")
+
         if self.train_ddecm == True:
             self.logger.info(f"DDEC-M trainer:")
             self.ddecm_trainer = UNetTrainer(UNetTrainerConfig(**config.ddecm), trainer, self.ddecm, "ddecm")
@@ -141,6 +145,8 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
     
     def train_batch(self, batch: dict) -> Optional[dict[str, Union[torch.Tensor, float]]]:
 
+        logs = {"loss": torch.zeros(self.trainer.config.device_batch_size, device=self.trainer.accelerator.device)}
+
         # prepare model inputs
         if "audio_embeddings" in batch:
             audio_embeddings = normalize(batch["audio_embeddings"]).detach()
@@ -155,42 +161,45 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
         mdct_phase = self.format.raw_to_mdct_phase(raw_samples, random_phase_augmentation=self.config.random_phase_augmentation)
         input_mel_spec = self.format.raw_to_mel_spec(raw_samples)
 
+        logs.update({
+            "io_stats/input_mel_spec_mean": input_mel_spec.mean(dim=(1,2,3)),
+            "io_stats/input_mel_spec_var": input_mel_spec.var(dim=(1,2,3)),
+            "io_stats/mdct_phase_var": mdct_phase.var(dim=(1,2,3)),
+        })
+
         if self.train_dae == True:
             latents, ddec_cond = self.trainer.get_ddp_module(self.dae)(
                 input_mel_spec, audio_embeddings, latents_sigma=self.config.add_latents_noise)
             
             self.dae.latents_stats_tracker(latents)
-        else:
+
+        elif self.train_ddecm == True:
             latents, ddec_cond = self.dae(input_mel_spec, audio_embeddings, latents_sigma=self.config.add_latents_noise)
-            latents = latents.detach()
-            ddec_cond = ddec_cond.detach()
+            latents = latents.detach(); ddec_cond = ddec_cond.detach()
+
+        else:
+            latents = ddec_cond = None
         
-        latents: torch.Tensor = latents.float()
+        if latents is not None:
+            latents: torch.Tensor = latents.float()
             
-        logs = {
-            "loss": torch.zeros(input_mel_spec.shape[0], device=self.trainer.accelerator.device),
-            "io_stats/ddec_cond_var": ddec_cond.var(dim=(1,2,3)),
-            "io_stats/ddec_cond_mean": ddec_cond.mean(dim=(1,2,3)),
-            "io_stats/latents_var": latents.var(dim=(1,2,3)).detach(),
-            "io_stats/latents_mean": latents.mean(dim=(1,2,3)).detach(),
-            "io_stats/latents_per_ch_mean": self.dae.latents_stats_tracker.mean.pow(2).mean().pow(0.5),
-            "io_stats/latents_per_ch_var": self.dae.latents_stats_tracker.var.mean(),
-            "io_stats/latents_sigma": self.config.add_latents_noise if self.config.add_latents_noise is not None else 0,
-            "io_stats/input_mel_spec_mean": input_mel_spec.mean(dim=(1,2,3)),
-            "io_stats/input_mel_spec_var": input_mel_spec.var(dim=(1,2,3)),
-            "io_stats/mdct_phase_var": mdct_phase.var(dim=(1,2,3)),
-        }
+            logs.update({
+                "io_stats/latents_var": latents.var(dim=(1,2,3)).detach(),
+                "io_stats/latents_mean": latents.mean(dim=(1,2,3)).detach(),
+                "io_stats/latents_per_ch_mean": self.dae.latents_stats_tracker.mean.pow(2).mean().pow(0.5),
+                "io_stats/latents_per_ch_var": self.dae.latents_stats_tracker.var.mean(),
+                "io_stats/latents_sigma": self.config.add_latents_noise if self.config.add_latents_noise is not None else 0,
+                "io_stats/ddec_cond_var": ddec_cond.var(dim=(1,2,3)),
+                "io_stats/ddec_cond_mean": ddec_cond.mean(dim=(1,2,3))
+            })
 
-        if self.config.add_latents_noise is not None:
-            latents_bits = (self.dae.latents_stats_tracker.var / self.config.add_latents_noise**2 + 1).log2().sum()
-            logs["io_stats/_bits_per_pixel"] = latents_bits.detach() / self.dae.downsample_ratio**2
-
-        for i in range(self.dae.config.latent_channels):
-            logs[f"ch_stats/mean_{i}"] = self.dae.latents_stats_tracker.mean[i].detach()
-            logs[f"ch_stats/var_{i}"]  = self.dae.latents_stats_tracker.var[i].detach()
+            for i in range(self.dae.config.latent_channels):
+                logs[f"ch_stats/mean_{i}"] = self.dae.latents_stats_tracker.mean[i].detach()
+                logs[f"ch_stats/var_{i}"]  = self.dae.latents_stats_tracker.var[i].detach()
 
         if self.train_ddecp == True:
-            logs.update(self.ddecp_trainer.train_batch(mdct_phase, audio_embeddings, input_mel_spec))
+            ddecp_x_ref = input_mel_spec + torch.randn_like(input_mel_spec) * self.config.add_mel_spec_noise
+            logs.update(self.ddecp_trainer.train_batch(mdct_phase, audio_embeddings, ddecp_x_ref))
             logs["loss"] = logs["loss"] + logs["loss/ddecp"]
 
         if self.train_ddecm == True:
@@ -222,8 +231,10 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
         if self.trainer.config.enable_debug_mode == True:
             print("input_mel_spec.shape:", input_mel_spec.shape)
             print("mdct_phase.shape:", mdct_phase.shape)
-            print("ddec_cond.shape:", ddec_cond.shape)
-            print("latents.shape:", latents.shape)
+
+            if latents is not None:
+                print("ddec_cond.shape:", ddec_cond.shape)
+                print("latents.shape:", latents.shape)
 
         return logs
       
