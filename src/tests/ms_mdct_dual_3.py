@@ -28,7 +28,7 @@ import random
 
 import torch
 
-from modules.formats.ms_mdct_dual_3 import MS_MDCT_DualFormat, MS_MDCT_DualFormatConfig
+from modules.formats.ms_mdct_dual_2 import MS_MDCT_DualFormat, MS_MDCT_DualFormatConfig
 from training.trainer import TrainLogger as StatLogger
 from utils.dual_diffusion_utils import (
     init_cuda, save_audio, load_audio,
@@ -55,7 +55,7 @@ def ms_mdct_dual_format_test() -> None:
     random.seed()
 
     cfg: MS_MDCT_DualFormat_TestConfig = config.load_config(MS_MDCT_DualFormat_TestConfig,
-        os.path.join(config.CONFIG_PATH, "tests", "ms_mdct_dual_format_3.json"))
+        os.path.join(config.CONFIG_PATH, "tests", "ms_mdct_dual_format_2.json"))
     format: MS_MDCT_DualFormat = MS_MDCT_DualFormat(cfg.format_config).to(cfg.device)
 
     print("Format config:")
@@ -68,7 +68,7 @@ def ms_mdct_dual_format_test() -> None:
         train_samples = config.load_json(os.path.join(config.DATASET_PATH, "train.jsonl"))
         test_samples += [sample["file_name"] for sample in random.sample(train_samples, cfg.add_random_test_samples)]
 
-    output_path = os.path.join(config.DEBUG_PATH, "ms_mdct_dual_format_3_test")
+    output_path = os.path.join(config.DEBUG_PATH, "ms_mdct_dual_format_2_test")
     os.makedirs(output_path, exist_ok=True)
 
     format.ms_filters.transpose(0, 1).cpu().numpy().tofile(os.path.join(output_path, "ms_filters.raw"))
@@ -93,11 +93,12 @@ def ms_mdct_dual_format_test() -> None:
         mel_spec = format.raw_to_mel_spec(raw_sample)
 
         mdct = format.raw_to_mdct(raw_sample)
-        mdct_phase, mdct_psd = format.raw_to_mdct_phase_psd(raw_sample)
+        mdct_phase = format.raw_to_mdct_phase(raw_sample)
         #raw_sample_mdct = format.mdct_to_raw(mdct)
-        raw_sample_mdct = format.mdct_phase_psd_to_raw(mdct_phase, mdct_psd)
+        raw_sample_mdct = format.mdct_phase_to_raw(mdct_phase)
 
         mdct_phase_avg_bin_var += mdct_phase.var(dim=(0,1,3)) / len(test_samples)
+
         stat_logger.add_logs({
             "raw_sample_var": raw_sample.var(),
             "raw_sample_mdct_var": raw_sample_mdct.var(),
@@ -105,15 +106,12 @@ def ms_mdct_dual_format_test() -> None:
             "mel_spec_mean": mel_spec.mean(),
             "mdct_var": mdct.var(),
             "mdct_phase_var": mdct_phase.var(),
-            "mdct_psd_var": mdct_psd.var(),
-            "mdct_psd_mean": mdct_psd.mean(),
         })
 
         if cfg.test_sample_verbose == True:
             print("raw_sample:", tensor_info_str(raw_sample))
             print("mel_spec:", tensor_info_str(mel_spec), f"(target shape: {format.get_mel_spec_shape(raw_length=raw_length)}")
             print("mdct_phase:", tensor_info_str(mdct_phase), f"(target shape: {format.get_mdct_shape(raw_length=raw_length)}")
-            print("mdct_psd:", tensor_info_str(mdct_psd))
             print("raw_sample_mdct:", tensor_info_str(raw_sample_mdct), "\n")
 
         if cfg.save_output == False:
@@ -133,13 +131,9 @@ def ms_mdct_dual_format_test() -> None:
         save_audio(raw_sample_mdct.squeeze(0), cfg.format_config.sample_rate, mdct_output_path, target_lufs=None)
         print(f"Saved raw_sample_mdct to {mdct_output_path}")
 
-        mdct_psd_output_path = os.path.join(output_path, f"{filename}_mdct_psd.png")
-        save_img(format.mdct_psd_to_img(mdct_psd), mdct_psd_output_path)
-        print(f"Saved mdct_psd img to {mdct_psd_output_path}")
-
-    print(f"\nAverage MDCT bin var (var variance: {mdct_phase_avg_bin_var.var().item()}):")
-    print(mdct_phase_avg_bin_var)
-    mdct_phase_avg_bin_var.cpu().numpy().tofile(os.path.join(output_path, "mdct_avg_bin_var.raw"))
+    print(f"\nAverage MDCT phase bin scales:")
+    print(mdct_phase_avg_bin_var.pow(0.5).cpu().tolist())
+    mdct_phase_avg_bin_var.cpu().numpy().tofile(os.path.join(output_path, "mdct_phase_avg_bin_var.raw"))
 
     print("\nAverage stats:")
     print(dict_str(stat_logger.get_logs()))

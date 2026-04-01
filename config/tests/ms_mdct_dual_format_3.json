@@ -1,7 +1,7 @@
 {
     "device": "cuda",
-    "add_random_test_samples": 0,
-    "save_output": true,
+    "add_random_test_samples": 5000,
+    "save_output": false,
     
     "test_sample_verbose": false,
     "test_samples": [
@@ -12,27 +12,25 @@
     ],
 
     "format_config": {
+
         "sample_rate": 32000,
         "num_raw_channels": 2,
         //"default_raw_length": 1408768,
         "default_raw_length": 128000,
+        //"default_raw_length": 160000,
         
-        "raw_to_mdct_scale": 0.00395184212251821011433253029603,
-
-        "mdct_psd_scale": 0.071940817,
-        "mdct_psd_offset": -0.18100002228008372,
-        "mdct_psd_exponent": 0.25,
-        "mdct_phase_scale": 0.077068436,
+        "raw_to_mdct_scale": 0.0039518421225182105,
+        "mdct_phase_scale": 0.174272762,
 
         "mdct_window_len": 512,
         "mdct_window_func": "sin",
-      
+
         "raw_to_mel_spec_scale": 0.483531295,
         "raw_to_mel_spec_offset": -1.5152252381256526,
+        "ms_add_center_channel": true,
 
         "ms_abs_exponent": 0.25,
-        //"ms_freq_min": 25,
-        "ms_freq_min": 20,
+        "ms_freq_min": 25,
         "ms_num_filters": 256,
         "ms_ideal_num_filter_bins": 3,
         "ms_window_length": 4096,
