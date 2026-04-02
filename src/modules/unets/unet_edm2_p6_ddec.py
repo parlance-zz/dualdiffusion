@@ -56,7 +56,11 @@ class UNetConfig(DualDiffusionUNetConfig):
     mp_fourier_ln_sigma_offset: float = 0
     mp_fourier_bandwidth:       float = 1
 
-    model_channels: int  = 4096              # Base multiplier for the number of channels.
+    adg_min_balance: Optional[float]  = 0.1
+    adg_max_balance: Optional[float]  = 0.9
+    adg_weight_decay: Optional[float] = None
+
+    model_channels: int  = 8192              # Base multiplier for the number of channels.
     logvar_channels: int = 192               # Number of channels for training uncertainty estimation.
     channel_mult: list[int] = (1,)           # Per-resolution multipliers for the number of channels.
     channel_mult_noise: Optional[float] = 0.25      # Multiplier for noise embedding dimensionality.
@@ -66,10 +70,10 @@ class UNetConfig(DualDiffusionUNetConfig):
     attn_logit_scale: float   = 1
     num_layers_per_block: int = 8            # Number of resnet blocks per resolution.
     label_balance: float      = 0.5          # Balance between noise embedding (0) and class embedding (1).
-    balance_logits_offset: float = -2
+    balance_logits_offset: float = -1.75
     mlp_multiplier: int    = 2               # Multiplier for the number of channels in the MLP.
-    mlp_groups: int        = 32              # Number of groups for the MLPs.
-    emb_linear_groups: int = 32
+    mlp_groups: int        = 64              # Number of groups for the MLPs.
+    emb_linear_groups: int = 64
 
 class Block(torch.nn.Module):
 
@@ -86,7 +90,10 @@ class Block(torch.nn.Module):
         mlp_groups: int        = 4,        # Number of groups for the MLP.
         emb_linear_groups: int = 4,
         channels_per_head: int = 64,       # Number of channels per attention head.
-        attn_logit_scale: float = 1.
+        attn_logit_scale: float = 1.,
+        adg_min_balance: Optional[float]  = 0.1,
+        adg_max_balance: Optional[float]  = 0.9,
+        adg_weight_decay: Optional[float] = 0.03
     ) -> None:
         super().__init__()
 
@@ -113,7 +120,8 @@ class Block(torch.nn.Module):
 
         if skip_channels > 0:
             self.conv_skip = MPConv(skip_channels, out_channels, kernel=(1,1), groups=mlp_groups)
-            self.skip_balance = AdaptiveGroupBalance(emb_channels, mlp_groups, balance_logits_offset, min_balance=None, max_balance=None)
+            self.skip_balance = AdaptiveGroupBalance(emb_channels, mlp_groups, balance_logits_offset,
+                min_balance=adg_min_balance, max_balance=adg_max_balance, weight_decay=adg_weight_decay)
         else:
             self.conv_skip = None
             self.skip_balance = None
@@ -123,7 +131,8 @@ class Block(torch.nn.Module):
         
         self.emb_gain = torch.nn.Parameter(torch.zeros([]))
         self.emb_linear = MPConv(emb_channels, inner_channels, kernel=(1,1), groups=emb_linear_groups)
-        self.emb_res_balance = AdaptiveGroupBalance(emb_channels, mlp_groups, balance_logits_offset, min_balance=None, max_balance=None)
+        self.emb_res_balance = AdaptiveGroupBalance(emb_channels, mlp_groups, balance_logits_offset,
+            min_balance=adg_min_balance, max_balance=adg_max_balance, weight_decay=adg_weight_decay)
     
         self.attn_q = MPConv(out_channels, out_channels, kernel=(1,1), groups=mlp_groups)
         self.attn_k = MPConv(out_channels, out_channels, kernel=(1,1), groups=mlp_groups)
@@ -132,7 +141,8 @@ class Block(torch.nn.Module):
 
         self.emb_gain_qkv = torch.nn.Parameter(torch.zeros([]))
         self.emb_linear_qkv = MPConv(emb_channels, out_channels, kernel=(1,1), groups=emb_linear_groups)
-        self.emb_attn_balance = AdaptiveGroupBalance(emb_channels, mlp_groups, balance_logits_offset, min_balance=None, max_balance=None)
+        self.emb_attn_balance = AdaptiveGroupBalance(emb_channels, mlp_groups, balance_logits_offset,
+            min_balance=adg_min_balance, max_balance=adg_max_balance, weight_decay=adg_weight_decay)
 
     def forward(self, x: torch.Tensor, emb: torch.Tensor, skip: torch.Tensor) -> torch.Tensor:
 
@@ -191,7 +201,10 @@ class UNet(DualDiffusionUNet):
                         "emb_linear_groups": config.emb_linear_groups,
                         "balance_logits_offset": config.balance_logits_offset,
                         "channels_per_head": config.channels_per_head,
-                        "attn_logit_scale": config.attn_logit_scale}
+                        "attn_logit_scale": config.attn_logit_scale,
+                        "adg_min_balance": config.adg_min_balance,
+                        "adg_max_balance": config.adg_max_balance,
+                        "adg_weight_decay": config.adg_weight_decay}
 
         cblock = [config.model_channels * x for x in config.channel_mult]
         cnoise = int(config.model_channels * config.channel_mult_noise) if config.channel_mult_noise is not None else max(cblock)

@@ -410,7 +410,8 @@ class AdaptiveGroupBalance(torch.nn.Module):
 
         balance = (balance + self.balance_logits_offset).sigmoid()
         if self.min_balance is not None or self.max_balance is not None:
-            balance = balance.clip(min=self.min_balance, max=self.max_balance)
+            min_bal = self.min_balance or 0; max_bal = self.max_balance or 1
+            balance = balance * (max_bal - min_bal) + min_bal
 
         return mp_sum_groups(x, y, balance, self.groups)
 
