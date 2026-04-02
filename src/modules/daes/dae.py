@@ -138,7 +138,7 @@ class DualDiffusionDAE(DualDiffusionModule, ABC):
             pca = top_pca_components(latents.float())
             if align_ref is not None:
                 pca = pca_align_ref(pca, align_ref)
-            return tensor_to_img(pca, flip_y=True, channel_order=self.config.latents_img_channel_order, gamma=0.66)
+            return tensor_to_img(pca, flip_y=True, channel_order=self.config.latents_img_channel_order, gamma=0.8)
         else:
             return tensor_to_img(latents, flip_y=True,
                 channel_order=self.config.latents_img_channel_order)

@@ -34,11 +34,11 @@ from pipelines.dual_diffusion_pipeline import DualDiffusionPipeline, SampleParam
 from modules.unets.unet_edm2_p4_ddec import UNet
 from modules.embeddings.clap import CLAP_Embedding
 from modules.daes.dae_edm2_p4 import DAE
-from modules.formats.ms_mdct_dual_2 import MS_MDCT_DualFormat
+from modules.formats.ms_mdct_dual_3 import MS_MDCT_DualFormat
 from modules.mp_tools import mp_sum
 from utils.dual_diffusion_utils import (
     init_cuda, normalize, save_audio, load_audio, load_safetensors,
-    save_img, get_audio_info, dict_str
+    save_img, get_audio_info, dict_str, tensor_to_img
 )
 
 
@@ -75,12 +75,20 @@ def dae_test() -> None:
     
     if test_params.get("ddec_output", False) != True:
         ddecm = ddecp = None
-    
-    if ddecm is None:
+    if ddecp is not None and ddecp.config.last_global_step == 0:
+        ddecp = None
+    if ddecm is not None and ddecm.config.last_global_step == 0:
+        ddecm = None
+
+    if ddecm is None and ddecp is None:
         last_global_step = dae.config.last_global_step
         output_path = os.path.join(model_path, "output", "dae", f"step_{last_global_step}")
     else:
-        last_global_step = ddecm.config.last_global_step
+        if ddecm is not None: last_global_step = ddecm.config.last_global_step
+        else: last_global_step = 0
+        if ddecp is not None:
+            last_global_step = last_global_step or ddecp.config.last_global_step
+        
         output_path = os.path.join(model_path, "output", "ddec", f"step_{last_global_step}")
 
     os.makedirs(output_path, exist_ok=True)
@@ -131,8 +139,6 @@ def dae_test() -> None:
             count = format.get_raw_crop_width(raw_length=audio_len)
         source_raw_sample = load_audio(file_path, count=count)
         input_raw_sample = source_raw_sample.unsqueeze(0).to(format.device)
-        
-        input_mdct_phase, input_mdct_psd = format.raw_to_mdct_phase_psd(input_raw_sample)
         input_mel_spec = format.raw_to_mel_spec(input_raw_sample)
 
         safetensors_file_name = os.path.join(f"{os.path.splitext(filename)[0]}.safetensors")
@@ -169,7 +175,6 @@ def dae_test() -> None:
             print(f"latents mean/var: {latents_mean:.4} {latents_var:.4}")
 
         if test_params.get("add_latents_noise", None) is not None:
-            #decode_latents = (latents + torch.randn_like(latents) * test_params["add_latents_noise"]) / (1 + test_params["add_latents_noise"]**2)**0.5
             decode_latents = latents + torch.randn_like(latents) * test_params["add_latents_noise"]
         else:
             decode_latents = latents
@@ -187,8 +192,8 @@ def dae_test() -> None:
 
             ddecm_params = SampleParams(
                 seed=5000,
-                num_steps=50, length=audio_len, cfg_scale=5, input_perturbation=0, input_perturbation_offset=-1,
-                use_heun=True, schedule="ln_linear", rho=1, sigma_max=200, sigma_min=0.008, stereo_fix=0
+                num_steps=50, length=audio_len, cfg_scale=5, input_perturbation=1, input_perturbation_offset=-1,
+                use_heun=True, schedule="ln_linear", rho=1, sigma_max=200, sigma_min=0.01, stereo_fix=0
             )
 
             output_ddecm = pipeline.diffusion_decode(
@@ -200,26 +205,31 @@ def dae_test() -> None:
         else:
             output_mel_spec = output_ddecm = None
 
-        if ddecp is not None and output_ddecm is not None:
+        if ddecp is not None:
+
+            if output_ddecm is None:
+                ddecp_x_ref = input_mel_spec
+                if test_params["add_mel_spec_noise"] is not None:
+                    ddecp_x_ref = ddecp_x_ref + torch.randn_like(ddecp_x_ref) * test_params["add_mel_spec_noise"]
+            else:
+                ddecp_x_ref = output_ddecm
 
             ddecp_params = SampleParams(
                 seed=5000,
-                num_steps=100, length=audio_len, cfg_scale=5, input_perturbation=1, input_perturbation_offset=1,
-                use_heun=False, schedule="cos", rho=0.6, sigma_max=125, sigma_min=0.008, stereo_fix=0
-                #num_steps=30, length=audio_len, cfg_scale=5, input_perturbation=0, input_perturbation_offset=2,
-                #use_heun=True, schedule="ln_linear", rho=1, sigma_max=100, sigma_min=0.01, stereo_fix=0
+                num_steps=100, length=audio_len, cfg_scale=5, input_perturbation=1, input_perturbation_offset=100,
+                use_heun=False, schedule="cos", rho=0.6, sigma_max=60, sigma_min=0.01, stereo_fix=0
             )
 
             output_ddecp = pipeline.diffusion_decode(
                 ddecp_params, audio_embedding=audio_embedding,
                 sample_shape=format.get_mdct_shape(raw_length=count),
-                x_ref=output_ddecm.to(dtype=ddecp.dtype), module=ddecp).float()
+                x_ref=ddecp_x_ref.to(dtype=ddecp.dtype), module=ddecp).float()
             
-            #output_ddecm = input_mdct_psd
-            #output_ddecp = input_mdct_phase
-            output_raw = format.mdct_phase_psd_to_raw(output_ddecp, output_ddecm)
+
+            output_raw = format.mdct_phase_to_raw(output_ddecp)
             output_mel_spec = format.raw_to_mel_spec(output_raw)
-            _, output_mdct_psd = format.raw_to_mdct_phase_psd(output_raw)
+            #_, output_mdct_psd = format.raw_to_mdct_phase_psd(output_raw)
+            output_mdct_psd = None
         else:
             output_raw = output_ddecp = output_mdct_psd = None
         
@@ -242,14 +252,13 @@ def dae_test() -> None:
             output_mel_spec.clip_(input_mel_spec.amin(), input_mel_spec.amax())
             output_mel_spec[0, 0, 0, 0] = input_mel_spec.amin(); output_mel_spec[0, 0, 0, 1] = input_mel_spec.amax()
             save_img(format.mel_spec_to_img(output_mel_spec), os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_mel_spec_output.png')}"))
+            
         if ddec_cond is not None:
-            l, r, c = ddec_cond.chunk(3, dim=1)       # todo: temp
-            ddec_cond = torch.cat((l, -c, -r), dim=1) # todo: temp
-            save_img(format.mel_spec_to_img(ddec_cond), os.path.join(output_path, "2", f"step_{last_global_step}_{filename.replace(file_ext, '_mel_spec_output_cond.png')}"))
+            save_img(tensor_to_img(ddec_cond, flip_y=True), os.path.join(output_path, "2", f"step_{last_global_step}_{filename.replace(file_ext, '_mel_spec_output_cond.png')}"))
 
-        if output_mdct_psd is not None:
-            save_img(format.mdct_psd_to_img(input_mdct_psd), os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_psd_input.png')}"))
-            save_img(format.mdct_psd_to_img(output_mdct_psd),   os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_psd_output.png')}"))
+        #if output_mdct_psd is not None:
+        #    save_img(format.mdct_psd_to_img(input_mdct_psd), os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_psd_input.png')}"))
+        #    save_img(format.mdct_psd_to_img(output_mdct_psd),   os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_psd_output.png')}"))
 
         if output_raw is not None:
             output_flac_file_path = os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_decoded.flac')}")

@@ -1,5 +1,5 @@
 {
-    "model_name": "edm2_dae_p5",
+    "model_name": "edm2_dae_p6",
     "model_load_options": {
         "torch_dtype": "bfloat16",
         "device": "cuda",
@@ -14,7 +14,8 @@
     },
     "models_path_override": null,
     "length": 1408768,
-    "add_latents_noise": 0.08,
+    "add_latents_noise": null,
+    "add_mel_spec_noise": null,
     "latents_tiled_encode": false,
     "latents_tiled_max_chunk_size": 6144,
     "latents_tiled_overlap": 256,
