@@ -29,6 +29,7 @@
     "random_test_samples_seed": 485,
     "copy_sample_source_files": true,
     "test_samples": [
+        "dae_tests",
         "3sf/Dopamix/STRM_BGM_ENDING.bcstm.flac",
         "switch/Muse Dash/_t_stage_jump_hard_candy_music.fsb.flac",
         "switch/Arcaea/_t_songs_ignotus.ogg.flac",

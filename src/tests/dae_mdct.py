@@ -216,9 +216,8 @@ def dae_test() -> None:
                 sample_shape=format.get_mel_spec_shape(raw_length=count),
                 x_ref=ddec_cond.to(dtype=ddecm.dtype), module=ddecm).float()
 
-            output_mel_spec = output_ddecm
         else:
-            output_mel_spec = output_ddecm = None
+            output_ddecm = None
 
         if ddecp is not None:
 
@@ -246,7 +245,7 @@ def dae_test() -> None:
             #_, output_mdct_psd = format.raw_to_mdct_phase_psd(output_raw)
             output_mdct_psd = None
         else:
-            output_raw = output_ddecp = output_mdct_psd = None
+            output_raw = output_mel_spec = output_ddecp = output_mdct_psd = None
         
         metadata = {**model_metadata}
         metadata["ddecm_metadata"] = dict_str(ddecm_params.__dict__) if ddecm is not None else "null"
@@ -267,9 +266,13 @@ def dae_test() -> None:
             output_mel_spec.clip_(input_mel_spec.amin(), input_mel_spec.amax())
             output_mel_spec[0, 0, 0, 0] = input_mel_spec.amin(); output_mel_spec[0, 0, 0, 1] = input_mel_spec.amax()
             save_img(format.mel_spec_to_img(output_mel_spec), os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_mel_spec_output.png')}"))
-            
+        if output_ddecm is not None:
+            output_ddecm.clip_(input_mel_spec.amin(), input_mel_spec.amax())
+            output_ddecm[0, 0, 0, 0] = input_mel_spec.amin(); output_ddecm[0, 0, 0, 1] = input_mel_spec.amax()
+            save_img(format.mel_spec_to_img(output_ddecm), os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_mel_spec_output_cond.png')}"))
+
         if ddec_cond is not None:
-            save_img(tensor_to_img(ddec_cond, flip_y=True), os.path.join(output_path, "2", f"step_{last_global_step}_{filename.replace(file_ext, '_mel_spec_output_cond.png')}"))
+            save_img(tensor_to_img(ddec_cond, flip_y=True), os.path.join(output_path, "2", f"step_{last_global_step}_{filename.replace(file_ext, '_ddec_cond.png')}"))
 
         #if output_mdct_psd is not None:
         #    save_img(format.mdct_psd_to_img(input_mdct_psd), os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_psd_input.png')}"))
