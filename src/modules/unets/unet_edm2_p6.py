@@ -56,6 +56,10 @@ class UNetConfig(DualDiffusionUNetConfig):
     mp_fourier_ln_sigma_offset: float = 0
     mp_fourier_bandwidth:       float = 1
 
+    adg_min_balance: Optional[float]  = 0.1
+    adg_max_balance: Optional[float]  = 0.9
+    adg_weight_decay: Optional[float] = None
+
     model_channels: int  = 4096                # Base multiplier for the number of channels.
     logvar_channels: int = 192                 # Number of channels for training uncertainty estimation.
     channel_mult: list[int] = (1,)             # Per-resolution multipliers for the number of channels.
@@ -88,7 +92,10 @@ class Block(torch.nn.Module):
         mlp_groups: int        = 32,        # Number of groups for the MLP.
         emb_linear_groups: int = 32,
         channels_per_head: int = 128,       # Number of channels per attention head.
-        global_attention: bool = False
+        global_attention: bool = False,
+        adg_min_balance: Optional[float]  = 0.1,
+        adg_max_balance: Optional[float]  = 0.9,
+        adg_weight_decay: Optional[float] = None
     ) -> None:
         super().__init__()
 
@@ -115,7 +122,8 @@ class Block(torch.nn.Module):
 
         if skip_channels > 0:
             self.conv_skip = MPConv(skip_channels, out_channels, kernel=(1,1), groups=mlp_groups)
-            self.skip_balance = AdaptiveGroupBalance(emb_channels, mlp_groups, balance_logits_offset, min_balance=None, max_balance=None)
+            self.skip_balance = AdaptiveGroupBalance(emb_channels, mlp_groups, balance_logits_offset,
+                min_balance=adg_min_balance, max_balance=adg_max_balance, weight_decay=adg_weight_decay)
         else:
             self.conv_skip = None
             self.skip_balance = None
@@ -125,7 +133,8 @@ class Block(torch.nn.Module):
         
         self.emb_gain = torch.nn.Parameter(torch.zeros([]))
         self.emb_linear = MPConv(emb_channels, inner_channels, kernel=(1,1), groups=emb_linear_groups)
-        self.emb_res_balance = AdaptiveGroupBalance(emb_channels, mlp_groups, balance_logits_offset, min_balance=None, max_balance=None)
+        self.emb_res_balance = AdaptiveGroupBalance(emb_channels, mlp_groups, balance_logits_offset,
+            min_balance=adg_min_balance, max_balance=adg_max_balance, weight_decay=adg_weight_decay)
     
         self.attn_q = MPConv(out_channels, out_channels, kernel=(1,1), groups=mlp_groups)
         self.attn_k = MPConv(out_channels, out_channels, kernel=(1,1), groups=mlp_groups)
@@ -134,7 +143,8 @@ class Block(torch.nn.Module):
 
         self.emb_gain_qkv = torch.nn.Parameter(torch.zeros([]))
         self.emb_linear_qkv = MPConv(emb_channels, out_channels, kernel=(1,1), groups=emb_linear_groups)
-        self.emb_attn_balance = AdaptiveGroupBalance(emb_channels, mlp_groups, balance_logits_offset, min_balance=None, max_balance=None)
+        self.emb_attn_balance = AdaptiveGroupBalance(emb_channels, mlp_groups, balance_logits_offset,
+            min_balance=adg_min_balance, max_balance=adg_max_balance, weight_decay=adg_weight_decay)
 
     def forward(self, x: torch.Tensor, emb: torch.Tensor, skip: torch.Tensor, rope_tables: tuple[torch.Tensor, torch.Tensor]) -> torch.Tensor:
 
@@ -208,7 +218,10 @@ class UNet(DualDiffusionUNet):
                         "mlp_groups": config.mlp_groups,
                         "emb_linear_groups": config.emb_linear_groups,
                         "balance_logits_offset": config.balance_logits_offset,
-                        "channels_per_head": config.channels_per_head}
+                        "channels_per_head": config.channels_per_head,
+                        "adg_min_balance": config.adg_min_balance,
+                        "adg_max_balance": config.adg_max_balance,
+                        "adg_weight_decay": config.adg_weight_decay}
 
         cblock = [config.model_channels * x for x in config.channel_mult]
         cnoise = int(config.model_channels * config.channel_mult_noise) if config.channel_mult_noise is not None else max(cblock)
