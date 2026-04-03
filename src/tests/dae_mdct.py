@@ -25,6 +25,7 @@ from utils import config
 import os
 import datetime
 import random
+import glob
 
 import torch
 import numpy as np
@@ -114,6 +115,20 @@ def dae_test() -> None:
     avg_latents_mean = avg_latents_var = 0
     collage_img = None
 
+    # if the test sample path is a directory, instead add all the flac files in that directory
+    expanded_test_samples = []
+    for filename in test_samples:
+        root = config.DATASET_PATH
+        audio_full_path = os.path.join(config.DATASET_PATH, filename)
+        if os.path.isdir(audio_full_path) == False:
+            root = config.DEBUG_PATH
+            audio_full_path = os.path.join(config.DEBUG_PATH, filename)
+        if os.path.isdir(audio_full_path) == True:
+            expanded_test_samples += [os.path.relpath(path, root) for path in glob.glob(f"{audio_full_path}/*.flac")]
+        else:
+            expanded_test_samples += [filename]
+    test_samples = expanded_test_samples
+
     add_random_test_samples = test_params["add_random_test_samples"]
     if add_random_test_samples > 0:
         train_samples = config.load_json(os.path.join(config.DATASET_PATH, "train.jsonl"))
@@ -192,7 +207,7 @@ def dae_test() -> None:
 
             ddecm_params = SampleParams(
                 seed=5000,
-                num_steps=50, length=audio_len, cfg_scale=5, input_perturbation=1, input_perturbation_offset=-1,
+                num_steps=50, length=audio_len, cfg_scale=5, input_perturbation=0.5, input_perturbation_offset=-1,
                 use_heun=True, schedule="ln_linear", rho=1, sigma_max=200, sigma_min=0.01, stereo_fix=0
             )
 
@@ -217,7 +232,7 @@ def dae_test() -> None:
             ddecp_params = SampleParams(
                 seed=5000,
                 num_steps=100, length=audio_len, cfg_scale=5, input_perturbation=1, input_perturbation_offset=100,
-                use_heun=False, schedule="cos", rho=0.6, sigma_max=60, sigma_min=0.01, stereo_fix=0
+                use_heun=False, schedule="cos", rho=1, sigma_max=100, sigma_min=0.01, stereo_fix=0
             )
 
             output_ddecp = pipeline.diffusion_decode(

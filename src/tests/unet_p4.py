@@ -33,9 +33,10 @@ import inspect
 import torch
 
 from pipelines.dual_diffusion_pipeline import DualDiffusionPipeline, SampleParams
-from modules.unets.unet_edm2_p4_ddec import UNet as UNet_DDEC
-from modules.daes.dae_edm2_p4 import DualDiffusionDAE
-from modules.formats.ms_mdct_dual_2 import MS_MDCT_DualFormat
+from modules.unets.unet_edm2_p6_ddec import UNet as UNet_DDECP
+from modules.unets.unet_edm2_q4_ddec import UNet as UNet_DDECM
+from modules.daes.dae_edm2_q4 import DualDiffusionDAE
+from modules.formats.ms_mdct_dual_3 import MS_MDCT_DualFormat
 from utils.dual_diffusion_utils import (
     init_cuda, normalize, save_audio, load_audio, load_safetensors,
     save_img, dict_str, get_no_clobber_filepath, get_audio_metadata,
@@ -77,8 +78,8 @@ def unet_test() -> None:
     print(f"Loading DualDiffusion model from '{model_path}'...")
     pipeline = DualDiffusionPipeline.from_pretrained(model_path, **cfg.model_load_options)
     dae: DualDiffusionDAE = pipeline.dae
-    ddecm: UNet_DDEC = pipeline.ddecm
-    ddecp: UNet_DDEC = pipeline.ddecp
+    ddecm: UNet_DDECM = pipeline.ddecm
+    ddecp: UNet_DDECP = pipeline.ddecp
     format: MS_MDCT_DualFormat = pipeline.format
 
     sample_rate = format.config.sample_rate
@@ -205,12 +206,12 @@ def unet_test() -> None:
 
         cfg.ddecm_params.seed = cfg.unet_params.seed
         output_ddecm = pipeline.diffusion_decode(cfg.ddecm_params, audio_embedding=audio_embedding,
-            sample_shape=format.get_mdct_shape(raw_length=crop_width), x_ref=ddec_cond.to(ddecm.dtype), module=ddecm).float()
+            sample_shape=format.get_mel_spec_shape(raw_length=crop_width), x_ref=ddec_cond.to(ddecm.dtype), module=ddecm).float()
         cfg.ddecp_params.seed = cfg.unet_params.seed
         output_ddecp = pipeline.diffusion_decode(cfg.ddecp_params, audio_embedding=audio_embedding,
-            sample_shape=format.get_mdct_shape(raw_length=crop_width), x_ref=ddec_cond.to(ddecp.dtype), module=ddecp).float()
+            sample_shape=format.get_mdct_shape(raw_length=crop_width), x_ref=output_ddecm.to(ddecp.dtype), module=ddecp).float()
         
-        output_raw = format.mdct_phase_psd_to_raw(output_ddecp, output_ddecm).float()
+        output_raw = format.mdct_phase_to_raw(output_ddecp).float()
         output_mel_spec = format.raw_to_mel_spec(output_raw)
         
         output_label = cfg.unet_params.get_label(pipeline.model_metadata)
