@@ -49,6 +49,10 @@ class DAE_Config(DualDiffusionDAEConfig):
     latent_channels: int = 8
     in_num_freqs: int = 256
 
+    adg_min_balance: Optional[float]  = 0.1
+    adg_max_balance: Optional[float]  = 0.9
+    adg_weight_decay: Optional[float] = None
+
     model_channels_enc: int = 64
     model_channels_dec: int = 4096            # Base multiplier for the number of channels.
     channel_mult_enc: list[int] = (1,2,3,4)   # Per-resolution multipliers for the number of channels.
@@ -172,7 +176,10 @@ class Block(torch.nn.Module):
         mlp_groups: int        = 4,        # Number of groups for the MLP.
         emb_linear_groups: int = 4,
         channels_per_head: int = 64,       # Number of channels per attention head.
-        attn_logit_scale: float = 1.
+        attn_logit_scale: float = 1.,
+        adg_min_balance: Optional[float]  = 0.1,
+        adg_max_balance: Optional[float]  = 0.9,
+        adg_weight_decay: Optional[float] = None
     ) -> None:
         super().__init__()
 
@@ -209,8 +216,10 @@ class Block(torch.nn.Module):
             self.emb_gain = None
             self.emb_linear = None
 
-        self.emb_attn_balance = AdaptiveGroupBalance(emb_channels, mlp_groups, balance_logits_offset, min_balance=None, max_balance=None)
-        self.emb_res_balance  = AdaptiveGroupBalance(emb_channels, mlp_groups, balance_logits_offset, min_balance=None, max_balance=None)
+        self.emb_attn_balance = AdaptiveGroupBalance(emb_channels, mlp_groups, balance_logits_offset,
+            min_balance=adg_min_balance, max_balance=adg_max_balance, weight_decay=adg_weight_decay)
+        self.emb_res_balance  = AdaptiveGroupBalance(emb_channels, mlp_groups, balance_logits_offset,
+            min_balance=adg_min_balance, max_balance=adg_max_balance, weight_decay=adg_weight_decay)
 
         self.attn_q = MPConv(out_channels, out_channels, kernel=(1,1), groups=mlp_groups)
         self.attn_k = MPConv(out_channels, out_channels, kernel=(1,1), groups=mlp_groups)
@@ -344,7 +353,10 @@ class DAE(DualDiffusionDAE):
                         "emb_linear_groups": config.emb_linear_groups,
                         "balance_logits_offset": config.balance_logits_offset,
                         "channels_per_head": config.channels_per_head,
-                        "attn_logit_scale": config.attn_logit_scale}
+                        "attn_logit_scale": config.attn_logit_scale,
+                        "adg_min_balance": config.adg_min_balance,
+                        "adg_max_balance": config.adg_max_balance,
+                        "adg_weight_decay": config.adg_weight_decay}
 
         cenc = [config.model_channels_enc * x for x in config.channel_mult_enc]
         cdec = [config.model_channels_dec * x for x in config.channel_mult_dec]
