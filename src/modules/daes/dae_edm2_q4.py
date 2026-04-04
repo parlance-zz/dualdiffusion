@@ -236,6 +236,7 @@ class DAE(DualDiffusionDAE):
         dec_channels = [config.model_channels * m for m in config.channel_mult_dec]
 
         self.latents_stats_tracker = LatentStatsTracker(config.latent_channels)
+        self.recon_loss_logvar = torch.nn.Parameter(torch.zeros([]))
 
         # encoder
         self.enc = torch.nn.ModuleDict()
