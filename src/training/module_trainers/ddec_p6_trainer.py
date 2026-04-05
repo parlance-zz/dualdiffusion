@@ -88,8 +88,6 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
             if self.train_ddecm == True:
                 self.dae = trainer.pipeline.dae.to(device=trainer.accelerator.device, dtype=torch.bfloat16).requires_grad_(False)
                 assert self.dae.config.last_global_step > 0
-        else:
-            assert self.train_ddecm == True
         
         self.format: MS_MDCT_DualFormat = trainer.pipeline.format.to(self.trainer.accelerator.device)
 
@@ -182,6 +180,7 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
         
         if latents is not None:
             latents: torch.Tensor = latents.float()
+            ddec_cond: torch.Tensor = ddec_cond.float()
             
             logs.update({
                 "io_stats/latents_var": latents.var(dim=(1,2,3)).detach(),
@@ -205,6 +204,19 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
         if self.train_ddecm == True:
             logs.update(self.ddecm_trainer.train_batch(input_mel_spec, audio_embeddings, ddec_cond))
             logs["loss"] = logs["loss"] + logs["loss/ddecm"]
+
+        elif self.train_dae == True:
+
+            logs["loss/mel_spec_mse"] = torch.nn.functional.mse_loss(ddec_cond, input_mel_spec, reduction="none").mean(dim=(1,2,3))
+            recon_loss_logvar: torch.nn.Parameter = getattr(self.dae, "recon_loss_logvar", None)
+            
+            if recon_loss_logvar is not None:
+                mel_spec_loss = logs["loss/mel_spec_mse"] / recon_loss_logvar.exp() + recon_loss_logvar
+                logs["loss/mel_spec_nll"] = mel_spec_loss
+            else:
+                mel_spec_loss = logs["loss/mel_spec_mse"]
+
+            logs["loss"] = logs["loss"] + mel_spec_loss
 
         if self.train_unet == True and self.config.unet_loss_weight > 0:
             
