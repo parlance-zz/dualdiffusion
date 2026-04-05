@@ -142,3 +142,13 @@ class DualDiffusionDAE(DualDiffusionModule, ABC):
         else:
             return tensor_to_img(latents, flip_y=True,
                 channel_order=self.config.latents_img_channel_order)
+        
+    def ddec_cond_to_img(self, ddec_cond: torch.Tensor, align_ref: Optional[torch.Tensor] = None) -> ndarray:
+        
+        if ddec_cond.shape[1] > 3:
+            pca = top_pca_components(ddec_cond.float())
+            if align_ref is not None:
+                pca = pca_align_ref(pca, align_ref)
+            return tensor_to_img(pca, flip_y=True, channel_order=self.config.latents_img_channel_order, gamma=0.8)
+        else:
+            return tensor_to_img(ddec_cond, flip_y=True)

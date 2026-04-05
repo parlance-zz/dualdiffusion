@@ -207,7 +207,7 @@ def dae_test() -> None:
 
             ddecm_params = SampleParams(
                 seed=5000,
-                num_steps=50, length=audio_len, cfg_scale=5, input_perturbation=0.5, input_perturbation_offset=-1,
+                num_steps=50, length=audio_len, cfg_scale=5, input_perturbation=0, input_perturbation_offset=-1,
                 use_heun=True, schedule="ln_linear", rho=1, sigma_max=200, sigma_min=0.01, stereo_fix=0
             )
 
@@ -272,7 +272,8 @@ def dae_test() -> None:
             save_img(format.mel_spec_to_img(output_ddecm), os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_mel_spec_output_cond.png')}"))
 
         if ddec_cond is not None:
-            save_img(tensor_to_img(ddec_cond, flip_y=True), os.path.join(output_path, "2", f"step_{last_global_step}_{filename.replace(file_ext, '_ddec_cond.png')}"))
+            ddec_cond_img = dae.ddec_cond_to_img(ddec_cond, align_ref=input_mel_spec)
+            save_img(ddec_cond_img, os.path.join(output_path, "2", f"step_{last_global_step}_{filename.replace(file_ext, '_ddec_cond.png')}"))
 
         #if output_mdct_psd is not None:
         #    save_img(format.mdct_psd_to_img(input_mdct_psd), os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_psd_input.png')}"))
