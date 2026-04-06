@@ -207,7 +207,7 @@ def dae_test() -> None:
 
             ddecm_params = SampleParams(
                 seed=5000,
-                num_steps=50, length=audio_len, cfg_scale=5, input_perturbation=0, input_perturbation_offset=-1,
+                num_steps=50, length=audio_len, cfg_scale=5, input_perturbation=0.15, input_perturbation_offset=-1,
                 use_heun=True, schedule="ln_linear", rho=1, sigma_max=200, sigma_min=0.01, stereo_fix=0
             )
 
@@ -248,6 +248,7 @@ def dae_test() -> None:
             output_raw = output_mel_spec = output_ddecp = output_mdct_psd = None
         
         metadata = {**model_metadata}
+        metadata["test_config.json"] = dict_str(test_params)
         metadata["ddecm_metadata"] = dict_str(ddecm_params.__dict__) if ddecm is not None else "null"
         metadata["ddecp_metadata"] = dict_str(ddecp_params.__dict__) if ddecp is not None else "null"
 
