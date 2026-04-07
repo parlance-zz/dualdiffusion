@@ -45,7 +45,7 @@ class UNetConfig(DualDiffusionUNetConfig):
 
     in_channels:  int = 8
     out_channels: int = 8
-    in_channels_emb: int = 0
+    in_channels_emb: int = 1024
 
     in_num_freqs: int = 256
 
@@ -289,6 +289,13 @@ class UNet(DualDiffusionUNet):
         else:
             x = (c_in * x_in).to(dtype=torch.bfloat16)
 
+        # nuisance due to ddp wrapper limitations
+        if conditioning_mask is not None:
+            assert self.training == True
+            embeddings = self.get_embeddings(embeddings, conditioning_mask)
+        else:
+            assert self.training == False
+            
         # embedding
         emb = self.emb_noise(self.emb_fourier(c_noise))
         if self.config.in_channels_emb > 0:
