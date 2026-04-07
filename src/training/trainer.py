@@ -352,10 +352,15 @@ class DualDiffusionTrainer:
             torch.backends.cuda.allow_fp16_bf16_reduction_math_sdp(True)
             self.logger.info("BF16 reduction in Pytorch SDP enabled")
 
+        if self.config.enable_debug_mode == True:
+            torch.backends.cudnn.benchmark = False
+            
         if self.config.activation_memory_budget is not None:
             self.logger.info(f"Using activation memory budget: {self.config.activation_memory_budget}")
-            import torch._functorch.config
-            torch._functorch.config.activation_memory_budget = self.config.activation_memory_budget
+            def enable_activation_memory_budget() -> None:
+                import torch._functorch.config
+                torch._functorch.config.activation_memory_budget = self.config.activation_memory_budget
+            enable_activation_memory_budget()
 
     def init_module_pipeline(self) -> None:
 
