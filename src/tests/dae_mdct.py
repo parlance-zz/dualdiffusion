@@ -167,6 +167,7 @@ def dae_test() -> None:
             audio_embedding = normalize(embedding.encode_audio(
                 input_raw_sample, sample_rate=format.config.sample_rate).mean(dim=0, keepdim=True)).float()
 
+        full_filename = filename
         filename = os.path.basename(filename)
 
         # ***************** dae stage *****************
@@ -249,6 +250,7 @@ def dae_test() -> None:
         
         metadata = {**model_metadata}
         metadata["test_config.json"] = dict_str(test_params)
+        metadata["source"] = full_filename
         metadata["ddecm_metadata"] = dict_str(ddecm_params.__dict__) if ddecm is not None else "null"
         metadata["ddecp_metadata"] = dict_str(ddecp_params.__dict__) if ddecp is not None else "null"
 
