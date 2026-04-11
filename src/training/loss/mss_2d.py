@@ -26,8 +26,6 @@ from typing import Literal
 import torch
 import numpy as np
 
-import utils.custom_operators.rfft2_abs
-
 
 def _is_prime(n: int) -> bool:
     if n <= 1:
@@ -108,63 +106,63 @@ class MSSLoss2D:
     @torch.no_grad()
     def get_flat_top_window_2d(self, block_width: int, block_height: int) -> torch.Tensor:
 
-        hx = (torch.arange(block_height, device=self.device) + 0.5) / block_height * 2 * torch.pi
-        wx = (torch.arange(block_width, device=self.device)  + 0.5) / block_width  * 2 * torch.pi
+        if block_height <= 3: hx = torch.ones(block_height, device=self.device)
+        else: hx = self._flat_top_window((torch.arange(block_height, device=self.device) + 0.5) / block_height * 2 * torch.pi)
 
-        window = self._flat_top_window(hx).view(-1, 1) * self._flat_top_window(wx).view(1,-1)
-        window /= torch.linalg.vector_norm(window) / (block_width * block_height)**0.5
-        return window
+        if block_width <= 3: wx = torch.ones(block_width, device=self.device)
+        else: wx = self._flat_top_window((torch.arange(block_width,  device=self.device) + 0.5) / block_width  * 2 * torch.pi)
+
+        window = hx.view(1, 1,-1, 1) * wx.view(1, 1, 1,-1)
+        window /= window.square().mean().sqrt()
+        return window.detach().requires_grad_(False)
     
-    def stft2d_abs(self, x: torch.Tensor, block_width: int, block_height: int,
-            step_w: int, step_h: int, window: torch.Tensor, offset_h: int, offset_w: int, midside: bool) -> torch.Tensor:
+    def stft2d(self, x: torch.Tensor, block_width: int, block_height: int, order: tuple[int],
+               step_w: int, step_h: int, window: torch.Tensor, offset_h: int, offset_w: int, midside: bool) -> torch.Tensor:
         
         padding_h = block_height
         padding_w = block_width
         x = torch.nn.functional.pad(x, (padding_w, padding_w, padding_h, padding_h), mode="reflect")
         x = x[:, :, offset_h:, offset_w:]
-
-        if midside == True:
-            x = torch.stack((x[:, 0] + x[:, 1], x[:, 0] - x[:, 1]), dim=1) / 2**0.5
-
         x = x.unfold(2, block_height, step_h).unfold(3, block_width, step_w)
-        #x = torch.fft.rfft2(x * window, norm="ortho", dim=order)
-        x = torch.ops.custom.rfft2_abs(x * window)
+
+        x = torch.fft.rfft2(x * window, norm="ortho", dim=order)
+        if midside == True:
+            #x = torch.stack((x[:, 0] + x[:, 1], x[:, 0] - x[:, 1]), dim=1) / 2**0.5
+            x = torch.fft.fft(x, dim=1, norm="ortho")
 
         return x
     
     def mss_loss(self, sample: torch.Tensor, target: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
 
+        loss = torch.zeros(target.shape[0], device=self.device)
+
         block_widths  = np.random.choice(self.block_sizes, size=self.config.num_iterations, replace=self.config.block_sampling_replace, p=self.block_weights)
         block_heights = np.random.choice(self.block_sizes, size=self.config.num_iterations, replace=self.config.block_sampling_replace, p=self.block_weights)
 
-        offsets_h = []; offsets_w = []
-        for i in range(self.config.num_iterations):
-            offsets_h.append(int(np.random.randint(0, block_heights[i])))
-            offsets_w.append(int(np.random.randint(0, block_widths[i])))
-
-        return self._mss_loss(sample, target, list(block_widths), list(block_heights), offsets_h, offsets_w)
-
-    def _mss_loss(self, sample: torch.Tensor, target: torch.Tensor, block_widths: list[int], block_heights: list[int], offsets_h: list[int], offsets_w: list[int]) -> tuple[torch.Tensor, torch.Tensor]:
-
-        loss = torch.zeros(target.shape[0], device=self.device)
-
         for i in range(self.config.num_iterations):
 
-            block_width = block_widths[i]; block_height = block_heights[i]
+            block_width = int(block_widths[i])
+            block_height = int(block_heights[i])
+
+            step_w = block_width
+            step_h = block_height
             window = self.get_flat_top_window_2d(block_width, block_height)
 
-            step_w = block_width; step_h = block_height
-            offset_h = offsets_h[i]; offset_w = offsets_w[i]
-
-            midside = bool(i % 2)
+            offset_h = int(np.random.randint(0, step_h))
+            offset_w = int(np.random.randint(0, step_w))
+            
+            order = (-1, -2) if np.random.randint(0, 2) == 0 else (-2, -1)
+            midside = np.random.rand() < self.config.midside_probability
             #r_dims = (0, 2, 3) if midside == True else (0, 1, 2, 3)
             r_dims = (0, 3) if midside == True else (0, 1, 3)
 
             with torch.no_grad():
-                target_fft_abs = self.stft2d_abs(target, block_width, block_height, step_w, step_h, window, offset_h, offset_w, midside)
-                loss_weight = target_fft_abs.pow(2).mean(dim=r_dims, keepdim=True).clip(min=self.config.psd_eps).pow(0.5)
+                target_fft = self.stft2d(target, block_width, block_height, order, step_w, step_h, window, offset_h, offset_w, midside)
+                target_fft_abs = target_fft.abs().requires_grad_(False).detach()
+                loss_weight = target_fft_abs.pow(2).mean(dim=r_dims, keepdim=True).clip(min=self.config.psd_eps).pow(0.5).requires_grad_(False).detach()
 
-            sample_fft_abs = self.stft2d_abs(sample, block_width, block_height, step_w, step_h, window, offset_h, offset_w, midside)
+            sample_fft = self.stft2d(sample, block_width, block_height, order, step_w, step_h, window, offset_h, offset_w, midside)
+            sample_fft_abs = sample_fft.abs()
             
             mse_loss = torch.nn.functional.mse_loss(sample_fft_abs.float(), target_fft_abs.float(), reduction="none")
             loss = loss + (mse_loss / loss_weight).mean(dim=(1,2,3,4,5)) #** 2
@@ -172,7 +170,7 @@ class MSSLoss2D:
         return loss * self.loss_scale
 
     def compile(self, **kwargs) -> None:
-        self._mss_loss = torch.compile(self._mss_loss, fullgraph=True, dynamic=True)
+        self.mss_loss = torch.compile(self.mss_loss, fullgraph=False, dynamic=True)
 
 
 if __name__ == "__main__":
@@ -181,7 +179,7 @@ if __name__ == "__main__":
 
     config = MSSLoss2DConfig()
     loss_fn = MSSLoss2D(config, device)
-    loss_fn.compile()
+    #loss_fn.compile()
 
     batch_size = 4
     channels = 2
