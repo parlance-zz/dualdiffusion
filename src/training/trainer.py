@@ -628,7 +628,6 @@ class DualDiffusionTrainer:
                         if self.accelerator.is_main_process:
                             if input("Continue? (y/n): ").lower() not in ["y", "yes"]:
                                 raise ValueError("Aborting training due to EMA load errors")
-                        self.accelerator.wait_for_everyone()
                     else:
                         self.logger.info(f"Successfully loaded EMA weights for {module_name}")
 
