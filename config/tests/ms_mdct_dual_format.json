@@ -1,10 +1,10 @@
 {
     "device": "cuda",
-    "add_random_test_samples": 1000,
+    "add_random_test_samples": 2000,
     "save_output": false,
     "downsample_mdct_psd": false,
     
-    "test_sample_verbose": false,
+    "test_sample_verbose": true,
     "test_samples": [
         "switch/Arcaea/_t_songs_ignotus.ogg.flac",
         "dsf/Metropolis Street Racer Prototype/file_15.adx.flac",
@@ -150,7 +150,9 @@
     "format_config": {
         "sample_rate": 32000,
         "num_raw_channels": 2,
-        "default_raw_length": 1408768,
+        //"default_raw_length": 2817536,
+        //"default_raw_length": 1408768,
+        "default_raw_length": 128000,
       
         "raw_to_mel_spec_scale": 9.29379224133,
         "raw_to_mel_spec_offset": -2.90285315,       // below is for 0-mean unit std mel_spec_mdct_psd
