@@ -153,8 +153,8 @@ class MSSLoss2D:
             
             order = (-1, -2) if np.random.randint(0, 2) == 0 else (-2, -1)
             midside = np.random.rand() < self.config.midside_probability
-            #r_dims = (0, 2, 3) if midside == True else (0, 1, 2, 3)
-            r_dims = (0, 3) if midside == True else (0, 1, 3)
+            r_dims = (0, 2, 3) if midside == True else (0, 1, 2, 3)
+            #r_dims = (0, 3) if midside == True else (0, 1, 3)
 
             with torch.no_grad():
                 target_fft = self.stft2d(target, block_width, block_height, order, step_w, step_h, window, offset_h, offset_w, midside)
