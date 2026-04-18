@@ -138,7 +138,7 @@ def _zeropower_via_newtonschulz5(G: torch.Tensor, steps: int = 5) -> torch.Tenso
     return X
 
 def normuon_update(grad: torch.Tensor, momentum: torch.Tensor, second_momentum: Optional[torch.Tensor],
-        beta: float = 0.95, beta2: float =0.95, ns_steps: int = 5, nesterov: bool = True, groups: int = 1, cc_scaling: bool = True) -> torch.Tensor:
+        beta: float = 0.95, beta2: float =0.95, ns_steps: int = 5, nesterov: bool = True, groups: int = 1) -> torch.Tensor:
     
     momentum.lerp_(grad, 1 - beta)
     update = grad.lerp_(momentum, beta) if nesterov else momentum
@@ -147,13 +147,9 @@ def normuon_update(grad: torch.Tensor, momentum: torch.Tensor, second_momentum: 
 
     # convert grouped conv params into a batch of smaller matrices for newton schulz iterations
     update = update.view(groups,-1, update.size(-1))
-    pre_ortho = update
+    
     #update = _zeropower_via_newtonschulz5(update, steps=ns_steps).to(dtype=grad.dtype)
     update = _polar_express(update, steps=ns_steps).to(dtype=grad.dtype)
-    
-    # use correlation coefficient between pre/post orthogonalization as an LR scaling factor
-    if cc_scaling == True:
-        f = (pre_ortho * update).sum(dim=(-2,-1), keepdim=True) / (update.norm(dim=(-2,-1), keepdim=True) * pre_ortho.norm(dim=(-2,-1), keepdim=True) + 1e-20)
 
     if second_momentum is not None: #NorMuon added, from https://github.com/zichongli5/NorMuon
         vnorm = update.norm(dim=(-2,-1), keepdim=True)
@@ -165,8 +161,6 @@ def normuon_update(grad: torch.Tensor, momentum: torch.Tensor, second_momentum: 
         update.mul_(vnorm / (vnorm_new.add_(1e-20))) # This scaling keep the update norm the same as pre-normalization
 
     update *= max(1, update.size(-2) / update.size(-1)) ** 0.5
-    if cc_scaling == True:
-        update *= f.clip(min=0, max=1)
 
     return update
 
@@ -195,8 +189,7 @@ class SingleDeviceNorMuonWithAuxAdam(torch.optim.Optimizer):
                 group["weight_decay"] = group.get("weight_decay", 0)
                 group["beta2"] = group.get("beta2", 0.95)
                 group["normuon"] = group.get("normuon", True)
-                group["cc_scaling"] = group.get("cc_scaling", True)
-                assert set(group.keys()) == set(["params", "lr", "momentum", "weight_decay", "use_muon", "beta2", "normuon", "cc_scaling"])
+                assert set(group.keys()) == set(["params", "lr", "momentum", "weight_decay", "use_muon", "beta2", "normuon"])
             else:
                 group["lr"] = group.get("lr", 3e-4)
                 group["betas"] = group.get("betas", (0.9, 0.95))
@@ -270,7 +263,7 @@ class SingleDeviceNorMuonWithAuxAdam(torch.optim.Optimizer):
                             state["second_momentum_buffer"] = None
                         
                     update = normuon_update(p.grad, state["momentum_buffer"], state["second_momentum_buffer"],
-                        beta=group["momentum"], beta2=group["beta2"], groups=groups, cc_scaling=group["cc_scaling"])
+                        beta=group["momentum"], beta2=group["beta2"], groups=groups)
 
                     weight_decay = getattr(p, "weight_decay", group["weight_decay"])
                     if weight_decay > 0:

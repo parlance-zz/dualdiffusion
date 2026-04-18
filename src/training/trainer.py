@@ -124,7 +124,6 @@ class OptimizerConfig:
     muon_momentum_beta: float = 0.95
     muon_weight_decay: float = 0.
     muon_use_normuon: bool    = True
-    muon_use_cc_scaling: bool = True
 
 @dataclass
 class DataLoaderConfig:
@@ -548,7 +547,7 @@ class DualDiffusionTrainer:
 
             param_groups = [
                 {
-                    "params": muon_params, "use_muon": True, "normuon": self.config.optimizer.muon_use_normuon,"cc_scaling": self.config.optimizer.muon_use_cc_scaling,
+                    "params": muon_params, "use_muon": True, "normuon": self.config.optimizer.muon_use_normuon,
                     "lr": self.config.lr_schedule.learning_rate * self.config.optimizer.muon_learning_rate_multiplier,
                     "weight_decay": self.config.optimizer.muon_weight_decay, "momentum": self.config.optimizer.muon_momentum_beta
                 }
