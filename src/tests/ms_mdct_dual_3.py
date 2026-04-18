@@ -28,7 +28,7 @@ import random
 
 import torch
 
-from modules.formats.ms_mdct_dual_2 import MS_MDCT_DualFormat, MS_MDCT_DualFormatConfig
+from modules.formats.ms_mdct_dual_3 import MS_MDCT_DualFormat, MS_MDCT_DualFormatConfig
 from training.trainer import TrainLogger as StatLogger
 from utils.dual_diffusion_utils import (
     init_cuda, save_audio, load_audio,
@@ -55,7 +55,7 @@ def ms_mdct_dual_format_test() -> None:
     random.seed()
 
     cfg: MS_MDCT_DualFormat_TestConfig = config.load_config(MS_MDCT_DualFormat_TestConfig,
-        os.path.join(config.CONFIG_PATH, "tests", "ms_mdct_dual_format_2.json"))
+        os.path.join(config.CONFIG_PATH, "tests", "ms_mdct_dual_format_3.json"))
     format: MS_MDCT_DualFormat = MS_MDCT_DualFormat(cfg.format_config).to(cfg.device)
 
     print("Format config:")
@@ -68,10 +68,11 @@ def ms_mdct_dual_format_test() -> None:
         train_samples = config.load_json(os.path.join(config.DATASET_PATH, "train.jsonl"))
         test_samples += [sample["file_name"] for sample in random.sample(train_samples, cfg.add_random_test_samples)]
 
-    output_path = os.path.join(config.DEBUG_PATH, "ms_mdct_dual_format_2_test")
+    output_path = os.path.join(config.DEBUG_PATH, "ms_mdct_dual_format_3_test")
     os.makedirs(output_path, exist_ok=True)
 
     format.ms_filters.transpose(0, 1).cpu().numpy().tofile(os.path.join(output_path, "ms_filters.raw"))
+    format.ms_windows.transpose(0, 1).cpu().numpy().tofile(os.path.join(output_path, "ms_windows.raw"))
     mdct_phase_avg_bin_var = torch.zeros_like(format.mdct_mel_density.flatten())
 
     stat_logger = StatLogger()
