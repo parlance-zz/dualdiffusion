@@ -94,12 +94,12 @@ class DAE_Config(DualDiffusionDAEConfig):
     in_channels: int     = 3
     in_channels_emb: int = 0
     in_num_freqs: int    = 256
-    out_channels: int    = 16
+    out_channels: int    = 3
     latent_channels: int = 8
 
     model_channels: int         = 64         # Base multiplier for the number of channels.
-    channel_mult_enc: int       = (1,2,3,4)
-    channel_mult_dec: list[int] = (1,2,3,4)
+    channel_mult_enc: int       = (1,2,4,8)
+    channel_mult_dec: list[int] = (1,2,4,8)
     channel_mult_emb: int     = 4            # Multiplier for final embedding dimensionality.
     channels_per_head: int    = 64           # Number of channels per attention head.
     num_enc_layers_per_block: int = 3        # Number of resnet blocks per resolution.
@@ -236,7 +236,7 @@ class DAE(DualDiffusionDAE):
         dec_channels = [config.model_channels * m for m in config.channel_mult_dec]
 
         self.latents_stats_tracker = LatentStatsTracker(config.latent_channels)
-        #self.recon_loss_logvar = torch.nn.Parameter(torch.zeros([]))
+        self.recon_loss_logvar = torch.nn.Parameter(torch.zeros([]))
 
         # encoder
         self.enc = torch.nn.ModuleDict()
