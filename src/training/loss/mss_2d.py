@@ -161,6 +161,20 @@ class MSSLoss2D:
                 target_fft_abs = target_fft.abs().requires_grad_(False).detach()
                 loss_weight = target_fft_abs.pow(2).mean(dim=r_dims, keepdim=True).clip(min=self.config.psd_eps).pow(0.5).requires_grad_(False).detach()
 
+                """
+                if order == (-2, -1):
+                    blockfreq_y = torch.fft.fftfreq(block_height, 1/block_height, device=self.device)
+                    blockfreq_x = torch.arange(block_width//2 + 1, device=self.device)
+                else:
+                    blockfreq_y = torch.arange(block_height//2 + 1, device=self.device)
+                    blockfreq_x = torch.fft.fftfreq(block_width, 1/block_width, device=self.device)
+                loss_weight = 1 / ((blockfreq_y.square().view(-1, 1) + blockfreq_x.square().view(1, -1)).sqrt() + 1)
+                loss_weight = loss_weight[None, None, None, None, :, :] / 0.100311111
+                if midside == True:
+                    #loss_weight = loss_weight / (torch.arange(target_fft_abs.shape[1], device=self.device) + 1)[None, :, None, None, None, None]
+                    loss_weight = loss_weight * target_fft_abs.pow(2).mean(dim=(0,2,3,4,5), keepdim=True).clip(min=self.config.psd_eps).pow(0.5) 
+                """
+
             sample_fft = self.stft2d(sample, block_width, block_height, order, step_w, step_h, window, offset_h, offset_w, midside)
             sample_fft_abs = sample_fft.abs()
             

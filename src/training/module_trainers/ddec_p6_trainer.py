@@ -29,6 +29,7 @@ from training.trainer import DualDiffusionTrainer
 from training.module_trainers.module_trainer import ModuleTrainer, ModuleTrainerConfig
 from training.module_trainers.unet_trainer_p4 import UNetTrainerConfig, UNetTrainer
 from training.loss.lipschitz import lipschitz_loss
+from training.loss.mss_2d import MSSLoss2D, MSSLoss2DConfig
 from modules.daes.dae_edm2_p6 import DAE
 from modules.unets.unet_edm2_p6_ddec import UNet
 from modules.unets.unet_edm2_p6 import UNet as UNet_LDM
@@ -51,6 +52,10 @@ class DiffusionDecoder_Trainer_Config(ModuleTrainerConfig):
     ddecp: dict[str, Any]
     ddecm: dict[str, Any]
     unet: dict[str, Any]
+
+    mss_2d: dict[str, Any]
+    mse_dae_loss_weight: float = 1e-2
+    mse_dae_warmup_steps: int = 200
 
     lipschitz_loss_weight: Optional[float] = None
     lipschitz_loss_eps: float = 1e-2
@@ -85,10 +90,12 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
         self.train_ddecp = self.ddecp is not None
 
         if self.train_dae == False:
-            if self.train_ddecm == True:
+            if self.train_ddecm == True or self.train_ddecp == True:
                 self.dae = trainer.pipeline.dae.to(device=trainer.accelerator.device, dtype=torch.bfloat16).requires_grad_(False)
                 assert self.dae.config.last_global_step > 0
-        
+        else:
+            self.mss_2d = MSSLoss2D(MSSLoss2DConfig(), device=trainer.accelerator.device)
+
         self.format: MS_MDCT_DualFormat = trainer.pipeline.format.to(self.trainer.accelerator.device)
 
         if trainer.config.enable_model_compilation:
@@ -116,7 +123,7 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
 
         if self.train_ddecp == True:
             self.logger.info(f"DDEC-P trainer (add mel spec noise: {self.config.add_mel_spec_noise}):")
-            self.ddecp_trainer = UNetTrainer(UNetTrainerConfig(**config.ddecp), trainer, self.ddecp, "ddecp")
+            self.ddecp_trainer = UNetTrainer(UNetTrainerConfig(**config.ddecp), trainer, self.ddecp, "ddecmp")
 
             if self.config.random_phase_augmentation == True:
                 self.logger.info("Using random phase augmentation")
@@ -158,6 +165,7 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
 
         mdct_phase = self.format.raw_to_mdct_phase(raw_samples, random_phase_augmentation=self.config.random_phase_augmentation)
         input_mel_spec = self.format.raw_to_mel_spec(raw_samples)
+        dae_input = input_mel_spec
 
         logs.update({
             "io_stats/input_mel_spec_mean": input_mel_spec.mean(dim=(1,2,3)),
@@ -166,15 +174,16 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
         })
 
         if self.train_dae == True:
+            
             latents, ddec_cond = self.trainer.get_ddp_module(self.dae)(
-                input_mel_spec, audio_embeddings, latents_sigma=self.config.add_latents_noise)
+                dae_input, audio_embeddings, latents_sigma=self.config.add_latents_noise)
             
             self.dae.latents_stats_tracker(latents)
 
-        elif self.train_ddecm == True:
-            latents, ddec_cond = self.dae(input_mel_spec, audio_embeddings, latents_sigma=self.config.add_latents_noise)
+        elif self.train_ddecm == True or self.train_ddecp == True:
+            latents, ddec_cond = self.dae(dae_input, audio_embeddings, latents_sigma=self.config.add_latents_noise)
             latents = latents.detach(); ddec_cond = ddec_cond.detach()
-
+            #latents = ddec_cond = None
         else:
             latents = ddec_cond = None
         
@@ -192,37 +201,48 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
                 "io_stats/ddec_cond_mean": ddec_cond.mean(dim=(1,2,3))
             })
 
-            for i in range(self.dae.config.latent_channels):
-                logs[f"ch_stats/mean_{i}"] = self.dae.latents_stats_tracker.mean[i].detach()
-                logs[f"ch_stats/var_{i}"]  = self.dae.latents_stats_tracker.var[i].detach()
+            if self.dae.config.latent_channels <= 32:
+                for i in range(self.dae.config.latent_channels):
+                    logs[f"ch_stats/mean_{i}"] = self.dae.latents_stats_tracker.mean[i].detach()
+                    logs[f"ch_stats/var_{i}"]  = self.dae.latents_stats_tracker.var[i].detach()
 
         if self.train_ddecp == True:
-            ddecp_x_ref = input_mel_spec + torch.randn_like(input_mel_spec) * self.config.add_mel_spec_noise
+            #ddecp_x_ref = input_mel_spec + torch.randn_like(input_mel_spec) * self.config.add_mel_spec_noise
+            ddecp_x_ref = ddec_cond
             logs.update(self.ddecp_trainer.train_batch(mdct_phase, audio_embeddings, ddecp_x_ref))
-            logs["loss"] = logs["loss"] + logs["loss/ddecp"]
+            logs["loss"] = logs["loss"] + logs["loss/ddecmp"]
 
         if self.train_ddecm == True:
             logs.update(self.ddecm_trainer.train_batch(input_mel_spec, audio_embeddings, ddec_cond))
             logs["loss"] = logs["loss"] + logs["loss/ddecm"]
-
-        elif self.train_dae == True:
-
-            logs["loss/mel_spec_mse"] = torch.nn.functional.mse_loss(ddec_cond, input_mel_spec, reduction="none").mean(dim=(1,2,3))
-            recon_loss_logvar: torch.nn.Parameter = getattr(self.dae, "recon_loss_logvar", None)
+        #"""
+        #elif self.train_dae == True:
+        if self.train_dae == True:
             
+            recon_loss_logvar: torch.nn.Parameter = getattr(self.dae, "recon_loss_logvar", None)
+            logs["loss/mel_spec_mse"] = torch.nn.functional.mse_loss(ddec_cond, input_mel_spec, reduction="none").mean(dim=(1,2,3))
+            logs["loss/mel_spec_mss2d"] = self.mss_2d.mss_loss(ddec_cond, input_mel_spec)
+
+            mse_dae_loss_weight = max(10 - 10 * self.trainer.global_step / self.config.mse_dae_warmup_steps, self.config.mse_dae_loss_weight)
+            recon_loss = logs["loss/mel_spec_mss2d"] + logs["loss/mel_spec_mse"] * mse_dae_loss_weight
+
             if recon_loss_logvar is not None:
-                mel_spec_loss = logs["loss/mel_spec_mse"] / recon_loss_logvar.exp() + recon_loss_logvar
-                logs["loss/mel_spec_nll"] = mel_spec_loss
-            else:
-                mel_spec_loss = logs["loss/mel_spec_mse"]
+                recon_loss = recon_loss / recon_loss_logvar.exp() + recon_loss_logvar
+                logs["loss/mel_spec_recon_loss_nll"] = recon_loss
 
-            logs["loss"] = logs["loss"] + mel_spec_loss
-
-        if self.train_unet == True and self.config.unet_loss_weight > 0:
+            logs["loss"] = logs["loss"] + recon_loss
+            logs["loss_weight/mel_spec_mse"] = mse_dae_loss_weight
+        #"""
+        
+        if self.train_unet == True:
             
             unet_loss_weight = self.config.unet_loss_weight
             if self.trainer.global_step < self.config.unet_loss_warmup_steps:
                 unet_loss_weight *= self.trainer.global_step / self.config.unet_loss_warmup_steps
+
+            #if self.config.unet_loss_weight <= 0:
+            #    latents = latents.detach()
+            #    unet_loss_weight = 1
 
             logs.update(self.unet_trainer.train_batch(latents, audio_embeddings))
             logs["loss"] = logs["loss"] + logs["loss/unet"] * unet_loss_weight
