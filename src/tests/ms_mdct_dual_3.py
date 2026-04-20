@@ -31,7 +31,7 @@ import torch
 from modules.formats.ms_mdct_dual_3 import MS_MDCT_DualFormat, MS_MDCT_DualFormatConfig
 from training.trainer import TrainLogger as StatLogger
 from utils.dual_diffusion_utils import (
-    init_cuda, save_audio, load_audio,
+    init_cuda, save_audio, load_audio, tensor_to_img,
     save_img, get_audio_info, dict_str, tensor_info_str
 )
 
@@ -92,6 +92,7 @@ def ms_mdct_dual_format_test() -> None:
         start = -1 if cfg.save_output == False else 0
         raw_sample = load_audio(file_path, start=start, count=crop_width).unsqueeze(0).to(cfg.device)
         mel_spec = format.raw_to_mel_spec(raw_sample)
+        linear_psd = format.mel_spec_to_linear_psd(mel_spec)
 
         mdct = format.raw_to_mdct(raw_sample)
         mdct_phase = format.raw_to_mdct_phase(raw_sample)
@@ -107,12 +108,15 @@ def ms_mdct_dual_format_test() -> None:
             "mel_spec_mean": mel_spec.mean(),
             "mdct_var": mdct.var(),
             "mdct_phase_var": mdct_phase.var(),
+            "linear_psd_mean": linear_psd.mean(),
+            "linear_psd_var": linear_psd.var()
         })
 
         if cfg.test_sample_verbose == True:
             print("raw_sample:", tensor_info_str(raw_sample))
             print("mel_spec:", tensor_info_str(mel_spec), f"(target shape: {format.get_mel_spec_shape(raw_length=raw_length)}")
             print("mdct_phase:", tensor_info_str(mdct_phase), f"(target shape: {format.get_mdct_shape(raw_length=raw_length)}")
+            print("linear_psd:", tensor_info_str(linear_psd))
             print("raw_sample_mdct:", tensor_info_str(raw_sample_mdct), "\n")
 
         if cfg.save_output == False:
@@ -131,6 +135,27 @@ def ms_mdct_dual_format_test() -> None:
         mdct_output_path = os.path.join(output_path, f"{filename}_mdct.flac")
         save_audio(raw_sample_mdct.squeeze(0), cfg.format_config.sample_rate, mdct_output_path, target_lufs=None)
         print(f"Saved raw_sample_mdct to {mdct_output_path}")
+
+        linear_psd_path = os.path.join(output_path, f"{filename}_linear_psd.png")
+        save_img(format.mel_spec_to_img(linear_psd), linear_psd_path)
+        print(f"Saved linear_psd img to {linear_psd_path}")
+
+        mdct_psd = format.raw_to_mdct_psd(raw_sample)
+        mdct_psd_path = os.path.join(output_path, f"{filename}_mdct_psd.png")
+        save_img(tensor_to_img(mdct_psd, flip_y=True), mdct_psd_path)
+        print(f"Saved mdct_psd img to {mdct_psd_path}")
+
+        # make sure both of these images are scaled the same for visual comparison
+        linear_psd_downscaled = torch.nn.functional.interpolate(linear_psd, mdct_psd.shape[2:], mode="area")
+
+        mdct_psd /= mdct_psd.amax()
+        linear_psd_downscaled /= linear_psd_downscaled.amax()
+        linear_psd_downscaled.clip_(mdct_psd.amin(), mdct_psd.amax())
+        linear_psd_downscaled[0, 0, 0, 0] = mdct_psd.amin(); linear_psd_downscaled[0, 0, 0, 1] = mdct_psd.amax()
+    
+        linear_psd_downscaled_path = os.path.join(output_path, f"{filename}_mdct_psd_linear_downscaled.png")
+        save_img(format.mel_spec_to_img(linear_psd_downscaled), linear_psd_downscaled_path)
+        print(f"Saved linear_psd_downscaled img to {linear_psd_downscaled_path}")
 
     print(f"\nAverage MDCT phase bin scales:")
     print(mdct_phase_avg_bin_var.pow(0.5).cpu().tolist())
