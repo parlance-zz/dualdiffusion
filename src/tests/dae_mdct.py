@@ -263,7 +263,8 @@ def dae_test() -> None:
         metadata["ddecp_metadata"] = dict_str(ddecp_params.__dict__) if ddecp is not None else "null"
 
         if latents is not None:
-            latents_img = dae.latents_to_img(latents, align_ref=input_mel_spec)
+            align_ref = (input_mel_spec - input_mel_spec.amin()) * torch.linspace(2, 1, steps=input_mel_spec.shape[2], device=input_mel_spec.device).view(1, 1,-1, 1)
+            latents_img = dae.latents_to_img(latents, align_ref=align_ref)
             save_img(latents_img, os.path.join(output_path, "1", f"step_{last_global_step}_{filename.replace(file_ext, '_latents.png')}"))
 
             if test_params.get("latents_img_save_collage", False) == True:
