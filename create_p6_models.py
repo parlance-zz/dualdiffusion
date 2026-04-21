@@ -21,6 +21,7 @@ format.save_pretrained(model_path, subfolder="format")
 
 
 from modules.daes.dae_edm2_q4 import DAE, DAE_Config
+#from modules.daes.dae_edm2_p4 import DAE, DAE_Config
 dae = DAE(DAE_Config())
 print_module_info(dae, "dae")
 
@@ -28,7 +29,7 @@ if input("Save module? (y/n) ").lower() == 'y':
     dae.save_pretrained(model_path, subfolder="dae")
     print(f"Saved model to {model_path}/dae")
 
-
+"""
 from modules.unets.unet_edm2_q4_ddec import UNet, UNetConfig
 ddecm = UNet(UNetConfig())
 print_module_info(ddecm, "ddecm")
@@ -36,10 +37,11 @@ print_module_info(ddecm, "ddecm")
 if input("Save module? (y/n) ").lower() == 'y':
     ddecm.save_pretrained(model_path, subfolder="ddecm")
     print(f"Saved model to {model_path}/ddecm")
+"""
 
-
-from modules.unets.unet_edm2_p6_ddec import UNet, UNetConfig
-ddecp = UNet(UNetConfig(in_channels=512, out_channels=512, in_channels_x_ref=768))
+#from modules.unets.unet_edm2_p6_ddec import UNet, UNetConfig
+from modules.unets.unet_edm2_q4_ddec import UNet, UNetConfig
+ddecp = UNet(UNetConfig())
 print_module_info(ddecp, "ddecp")
 
 if input("Save module? (y/n) ").lower() == 'y':
@@ -48,6 +50,7 @@ if input("Save module? (y/n) ").lower() == 'y':
 
 
 from modules.unets.unet_edm2_q4 import UNet, UNetConfig
+#from modules.unets.unet_edm2_p6 import UNet, UNetConfig
 unet = UNet(UNetConfig())
 print_module_info(unet, "unet")
 

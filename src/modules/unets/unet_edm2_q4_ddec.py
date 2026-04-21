@@ -53,9 +53,9 @@ class UNetConfig(DualDiffusionUNetConfig):
 
     model_channels: int  = 32                # Base multiplier for the number of channels.
     logvar_channels: int = 192               # Number of channels for training uncertainty estimation.
-    channel_mult: list[int]    = (1,2,3,4,5) # Per-resolution multipliers for the number of channels.
+    channel_mult: list[int]    = (1,2,3,5,8) # Per-resolution multipliers for the number of channels.
     double_midblock: bool      = True
-    midblock_attn: bool        = False
+    midblock_attn: bool        = True
     channel_mult_noise: Optional[int] = 6    # Multiplier for noise embedding dimensionality.
     channel_mult_emb: Optional[int]   = 6    # Multiplier for final embedding dimensionality.
     channels_per_head: int    = 64           # Number of channels per attention head.
@@ -117,7 +117,13 @@ class Block(torch.nn.Module):
             kernel=(1,1), groups=emb_linear_groups) if emb_channels != 0 else None
         
         if self.use_attention:
-            raise NotImplementedError()
+            self.attn_q = MPConv(out_channels, out_channels, kernel=(1,1))
+            self.attn_k = MPConv(out_channels, out_channels, kernel=(1,1))
+            self.attn_v = MPConv(out_channels, out_channels, kernel=(1,1))
+            self.attn_proj = MPConv(out_channels, out_channels, kernel=(1,1))
+
+            self.emb_gain_qkv = torch.nn.Parameter(torch.zeros([]))
+            self.emb_linear_qkv = MPConv(emb_channels, out_channels, kernel=(1,1))
 
     def forward(self, x: torch.Tensor, emb: torch.Tensor) -> torch.Tensor:
         
@@ -143,7 +149,24 @@ class Block(torch.nn.Module):
         x = mp_sum(x, y, t=self.res_balance)
         
         if self.use_attention:
-            raise NotImplementedError()
+            c = self.emb_linear_qkv(emb, gain=self.emb_gain_qkv) + 1.
+            y = x * c
+
+            # bizarrely this is way faster than doing a single qkv projection, and uses less memory (with compile)
+            q: torch.Tensor = self.attn_q(y)
+            k: torch.Tensor = self.attn_k(y)
+            v: torch.Tensor = self.attn_v(y)
+            q = q.reshape(q.shape[0], self.num_heads, -1, y.shape[2] * y.shape[3])
+            k = k.reshape(k.shape[0], self.num_heads, -1, y.shape[2] * y.shape[3])
+            v = v.reshape(v.shape[0], self.num_heads, -1, y.shape[2] * y.shape[3])
+            q = normalize(q, dim=2).transpose(-1, -2)
+            k = normalize(k, dim=2).transpose(-1, -2)
+            v = normalize(v, dim=2).transpose(-1, -2)
+
+            y = torch.nn.functional.scaled_dot_product_attention(q, k, v).transpose(-1, -2)
+
+            y = self.attn_proj(y.reshape(*x.shape))
+            x = mp_sum(x, y, t=self.attn_balance)
 
         if self.clip_act is not None:
             x = x.clip_(-self.clip_act, self.clip_act)
