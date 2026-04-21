@@ -305,8 +305,8 @@ class UNet(DualDiffusionUNet):
             x_ref = x_ref.view(B, C, self.config.in_num_freqs, self.psd_freqs_per_freq, W)
             x_ref = x_ref.permute(0, 3, 1, 2, 4).reshape(B, self.psd_freqs_per_freq * C, self.config.in_num_freqs, W)
 
-        #x = mp_cat(x, x_ref.to(dtype=torch.bfloat16), t=0.5)
-        x = torch.cat((x, x_ref.to(dtype=torch.bfloat16)), dim=1)
+        x = mp_cat(x, x_ref.to(dtype=torch.bfloat16), t=0.5)
+        #x = torch.cat((x, x_ref.to(dtype=torch.bfloat16)), dim=1)
         
         # embedding
         emb = self.emb_noise(emb)
