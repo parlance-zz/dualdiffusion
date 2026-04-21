@@ -122,7 +122,7 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
         else: self.logger.info("Random stereo augmentation is disabled")
 
         if self.train_ddecp == True:
-            self.logger.info(f"DDEC-P trainer (add mel spec noise: {self.config.add_mel_spec_noise}):")
+            self.logger.info(f"DDEC-P trainer:") # (add mel spec noise: {self.config.add_mel_spec_noise}):")
             self.ddecp_trainer = UNetTrainer(UNetTrainerConfig(**config.ddecp), trainer, self.ddecp, "ddecmp")
 
             if self.config.random_phase_augmentation == True:
@@ -208,7 +208,7 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
 
         if self.train_ddecp == True:
             #ddecp_x_ref = input_mel_spec + torch.randn_like(input_mel_spec) * self.config.add_mel_spec_noise
-            ddecp_x_ref = ddec_cond
+            ddecp_x_ref = self.format.mel_spec_to_linear_psd(ddec_cond).detach()
             logs.update(self.ddecp_trainer.train_batch(mdct_phase, audio_embeddings, ddecp_x_ref))
             logs["loss"] = logs["loss"] + logs["loss/ddecmp"]
 
