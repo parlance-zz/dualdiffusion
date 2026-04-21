@@ -25,6 +25,7 @@ from utils import config
 import os
 import datetime
 import random
+import glob
 
 import torch
 
@@ -93,11 +94,26 @@ def dae_test() -> None:
     start_time = datetime.datetime.now()
     avg_latents_mean = avg_latents_std = 0
 
+    expanded_test_samples = []
+    for filename in test_samples:
+        root = config.DATASET_PATH
+        audio_full_path = os.path.join(config.DATASET_PATH, filename)
+        if os.path.isdir(audio_full_path) == False:
+            root = config.DEBUG_PATH
+            audio_full_path = os.path.join(config.DEBUG_PATH, filename)
+        if os.path.isdir(audio_full_path) == True:
+            expanded_test_samples += [os.path.relpath(path, root) for path in glob.glob(f"{audio_full_path}/*.flac")]
+        else:
+            expanded_test_samples += [filename]
+    test_samples = expanded_test_samples
+
     add_random_test_samples = test_params["add_random_test_samples"]
     if add_random_test_samples > 0:
         train_samples = config.load_json(os.path.join(config.DATASET_PATH, "train.jsonl"))
         test_samples += [sample["file_name"] for sample in random.sample(train_samples, add_random_test_samples)]
     copy_sample_source_files: bool = test_params["copy_sample_source_files"]
+
+    avg_mse_error = 0; n_mse_samples = 0
 
     for i, filename in enumerate(test_samples):
         
@@ -199,6 +215,10 @@ def dae_test() -> None:
             avg_latents_std += latents_std
             print(f"latents mean/std: {latents_mean:.4} {latents_std:.4}")
         
+        avg_mse_error += ((output_mel_spec - input_mel_spec) ** 2).mean().item()
+        n_mse_samples += 1
+        #continue
+
         metadata = {**model_metadata}
         metadata["ddec_ms_metadata"] = dict_str(ddec_ms_params.__dict__) if ddec_ms is not None else "null"
         metadata["ddec_mdct_metadata"] = dict_str(ddec_mdct_params.__dict__) if ddec_mdct is not None else "null"
@@ -228,6 +248,8 @@ def dae_test() -> None:
     if dae is not None:
         print(f"Latents avg mean: {avg_latents_mean / len(test_samples)}")
         print(f"Latents avg std: {avg_latents_std / len(test_samples)}")
+    if n_mse_samples > 0:
+        print(f"Avg MSE error: {avg_mse_error / n_mse_samples}")
 
 
 if __name__ == "__main__":

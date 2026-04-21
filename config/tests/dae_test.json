@@ -1,5 +1,5 @@
 {
-    "model_name": "edm2_dae_q1",
+    "model_name": "edm2_dae_d3a_v3",
     "model_load_options": {
         "torch_dtype": "bfloat16",
         "device": "cuda",
@@ -22,15 +22,18 @@
     "ms_img_use_colormap": false,
     "output_lufs": -20,
     "dae_bypass": false,
-    "ddec_output": true,
+    "ddec_output": false,
     "xref_output": false,
-    "add_random_test_samples": 50,
-    "random_test_samples_seed": 29999,
+    "add_random_test_samples": 300,
+    "random_test_samples_seed": 485565621,
     "copy_sample_source_files": true,
     "test_samples": [
-        "switch/Arcaea/_t_songs_ignotus.ogg.flac",
         "psf3/Iron Man/_t_! movies_HUB_05_000001C2.adx.flac",
-        "dsf/Metropolis Street Racer Prototype/file_15.adx.flac",
-        "3sf/Dopamix/STRM_BGM_ENDING.bcstm.flac"
+        "psf3/Tekken Hybrid/_t_Tekken Tag Tournament 2 Prologue_charasele.lwav.flac",
+        "dae_tests",
+        "3sf/Dopamix/STRM_BGM_ENDING.bcstm.flac",
+        "switch/Muse Dash/_t_stage_jump_hard_candy_music.fsb.flac",
+        "switch/Arcaea/_t_songs_ignotus.ogg.flac",
+        "dsf/Metropolis Street Racer Prototype/file_15.adx.flac"
     ]
 }

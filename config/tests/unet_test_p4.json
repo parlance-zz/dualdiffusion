@@ -19,7 +19,7 @@
     "output_lufs": -20,
     "copy_sample_source_files": true,
     "random_test_samples_seed": null,
-    "add_random_test_samples": 9,
+    "add_random_test_samples": 0,
     "shuffle_test_samples": true,
     "test_samples": [
         
@@ -291,7 +291,7 @@
         //*/
         //"psf2/Fisherman's Challenge"
 
-        /* // metal
+        //* // metal
         //"psf3/One Piece - Pirate Warriors 3/BGMLink_00000007.at3.flac",
         //"switch/eBaseball Powerful Pro Yakyuu 2020/_t_wem_1004274880.wem.flac",
         //"vita/Tayutama 2 - You're the only one/015.at9.flac", // sick progressive metal
@@ -301,15 +301,15 @@
         //"switch/eBaseball Powerful Pro Yakyuu 2020/_t_wem_1004274880.wem.flac",
         "vita/Tayutama 2 - You're the only one/015.at9.flac", // sick progressive metal ***
         "vita/Tayutama 2 - You're the only one/015.at9.flac", // sick progressive metal ***
-        "vita/Tayutama 2 - You're the only one/015.at9.flac", // sick progressive metal ***
         
-        "switch/Legend of Heroes - Trails of Cold Steel III, The/ed8466.lopus.flac",
         "switch/Legend of Heroes - Trails of Cold Steel III, The/ed8466.lopus.flac",
         "switch/Legend of Heroes - Trails of Cold Steel III, The/ed8466.lopus.flac",
 
         "wii/Kamen Rider - Chou Climax Heroes/Stage03.brstm.flac", // progressive metal
         "wii/Kamen Rider - Chou Climax Heroes/Stage03.brstm.flac", // progressive metal
-        "wii/Kamen Rider - Chou Climax Heroes/Stage03.brstm.flac"  // progressive metal
+
+        "vita/Gundam Breaker 2/bgm.awb.00011.at9.flac",
+        "vita/Gundam Breaker 2/bgm.awb.00011.at9.flac"
 
         //"switch/Super Smash Bros. Ultimate/j40_hr_menutitle.lopus.flac" // harmonized electric guitars
         //*/
@@ -373,7 +373,7 @@
         //"length": null,
         //"length": 1408768,
         //"length": 2097152,
-        //"length": 408768,
+        "length": 308768,
         
         "num_steps": 400,//300,//500
         "cfg_scale": 4,//4,//3.5,//4//3//1.5,
@@ -405,8 +405,8 @@
         "sigma_max": 200,
         "sigma_min": 0.01,
 
-        "input_perturbation": 0.5,      //  0
-        "input_perturbation_offset": -1 // -1
+        "input_perturbation": 1,
+        "input_perturbation_offset": -0.3
     },
     "ddecp_params": {
 
