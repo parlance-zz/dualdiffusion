@@ -232,13 +232,12 @@ def dae_test() -> None:
 
         if ddecp is not None:
             
-            if ddec_cond is None:
-                assert False
-                ddecp_x_ref = input_mel_spec
-                if test_params["add_mel_spec_noise"] is not None:
-                    ddecp_x_ref = ddecp_x_ref + torch.randn_like(ddecp_x_ref) * test_params["add_mel_spec_noise"]
-            else:
-                ddecp_x_ref = ddec_cond
+            #if ddec_cond is None:
+            #    ddecp_x_ref = input_mel_spec
+            #    if test_params["add_mel_spec_noise"] is not None:
+            #        ddecp_x_ref = ddecp_x_ref + torch.randn_like(ddecp_x_ref) * test_params["add_mel_spec_noise"]
+
+            ddecp_x_ref = format.mel_spec_to_linear_psd(ddec_cond)
 
             ddecp_params = SampleParams(
                 seed=5000,
@@ -255,7 +254,7 @@ def dae_test() -> None:
             output_mel_spec = format.raw_to_mel_spec(output_raw)
             output_mdct_psd = format.raw_to_mdct_psd(output_raw)
         else:
-            output_raw = output_mel_spec = output_ddecp = output_mdct_psd = None
+            output_raw = output_mel_spec = output_ddecp = output_mdct_psd = ddecp_x_ref = None
         
         metadata = {**model_metadata}
         metadata["test_config.json"] = dict_str(test_params)
@@ -278,6 +277,11 @@ def dae_test() -> None:
             output_mel_spec.clip_(input_mel_spec.amin(), input_mel_spec.amax())
             output_mel_spec[0, 0, 0, 0] = input_mel_spec.amin(); output_mel_spec[0, 0, 0, 1] = input_mel_spec.amax()
             save_img(format.mel_spec_to_img(output_mel_spec), os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_mel_spec_output.png')}"))
+
+        if ddecp_x_ref is not None:
+            save_img(format.mel_spec_to_img(format.mel_spec_to_linear_psd(input_mel_spec)), os.path.join(output_path, "2", f"step_{last_global_step}_{filename.replace(file_ext, '_linear_psd_input.png')}"))
+            save_img(format.mel_spec_to_img(ddecp_x_ref), os.path.join(output_path, "2", f"step_{last_global_step}_{filename.replace(file_ext, '_linear_psd_output.png')}"))
+
         if ddec_cond is not None:
             ddec_cond.clip_(input_mel_spec.amin(), input_mel_spec.amax())
             ddec_cond[0, 0, 0, 0] = input_mel_spec.amin(); ddec_cond[0, 0, 0, 1] = input_mel_spec.amax()
@@ -290,8 +294,8 @@ def dae_test() -> None:
             #    os.path.join(output_path, "2", f"step_{last_global_step}_{filename.replace(file_ext, '_error.png')}"))
 
         if output_mdct_psd is not None:
-            save_img(format.mdct_psd_to_img(input_mdct_psd),  os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_mdct_psd_input.png')}"))
-            save_img(format.mdct_psd_to_img(output_mdct_psd), os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_mdct_psd_output.png')}"))
+            save_img(tensor_to_img(input_mdct_psd, flip_y=True),  os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_mdct_psd_input.png')}"))
+            save_img(tensor_to_img(output_mdct_psd, flip_y=True), os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_mdct_psd_output.png')}"))
 
         if output_raw is not None:
             output_flac_file_path = os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_decoded.flac')}")
