@@ -133,9 +133,9 @@ class MSSLoss2D:
         return window
     
     def stft2d(self, x: torch.Tensor, block_width: int, block_height: int, order: tuple[int],
-               step_w: int, step_h: int, window: torch.Tensor, offset_h: int, offset_w: int, midside: bool) -> torch.Tensor:
+               step_w: int, step_h: int, window: torch.Tensor, offset_h: int, offset_w: int, end_offset_h: int, end_offset_w: int, midside: bool) -> torch.Tensor:
         
-        x = x[:, :, offset_h:-offset_h+1, offset_w:-offset_w+1]
+        x = x[:, :, offset_h:end_offset_h, offset_w:end_offset_w]
         x = x.unfold(2, block_height, step_h).unfold(3, block_width, step_w)
 
         x = torch.fft.rfft2(x * window, norm="ortho", dim=order)
@@ -148,7 +148,7 @@ class MSSLoss2D:
 
         loss = torch.zeros(target.shape[0], device=self.device)
 
-        static_pad = int(self.block_sizes[-1] // 2 + 1)
+        static_pad = int(self.block_sizes[-1])
         sample = torch.nn.functional.pad(sample, (static_pad, static_pad, static_pad, static_pad), mode="reflect")
         target = torch.nn.functional.pad(target, (static_pad, static_pad, static_pad, static_pad), mode="reflect")
 
@@ -164,13 +164,15 @@ class MSSLoss2D:
             step_h = block_height
             window = self.get_flat_top_window_2d(block_width, block_height)
 
-            offset_min_h = int(max(0, static_pad - (block_height//2 - 1)))
-            offset_max_h = int(max(offset_min_h, static_pad - 1))
+            offset_min_h = int(max(0, static_pad - block_height))
+            offset_max_h = int(max(offset_min_h, static_pad))
             offset_h = int(np.random.randint(offset_min_h, offset_max_h + 1))
+            end_offset_h = -(static_pad - block_height) or None
 
-            offset_min_w = int(max(0, static_pad - (block_width//2 - 1)))
-            offset_max_w = int(max(offset_min_w, static_pad - 1))
+            offset_min_w = int(max(0, static_pad - block_width))
+            offset_max_w = int(max(offset_min_w, static_pad))
             offset_w = int(np.random.randint(offset_min_w, offset_max_w + 1))
+            end_offset_w = -(static_pad - block_width) or None
             
             order = (-1, -2) if np.random.randint(0, 2) == 0 else (-2, -1)
             midside = np.random.rand() < self.config.midside_probability
@@ -178,7 +180,8 @@ class MSSLoss2D:
             #r_dims = (0, 3) if midside == True else (0, 1, 3)
 
             with torch.no_grad():
-                target_fft = self.stft2d(target, block_width, block_height, order, step_w, step_h, window, offset_h, offset_w, midside)
+                target_fft = self.stft2d(target, block_width, block_height, order,
+                    step_w, step_h, window, offset_h, offset_w, end_offset_h, end_offset_w, midside)
                 target_fft_abs = target_fft.abs().requires_grad_(False).detach()
                 loss_weight = target_fft_abs.pow(2).mean(dim=r_dims, keepdim=True).clip(min=self.config.psd_eps).pow(0.5).requires_grad_(False).detach()
 
@@ -196,7 +199,7 @@ class MSSLoss2D:
                     loss_weight = loss_weight * target_fft_abs.pow(2).mean(dim=(0,2,3,4,5), keepdim=True).clip(min=self.config.psd_eps).pow(0.5) 
                 """
 
-            sample_fft = self.stft2d(sample, block_width, block_height, order, step_w, step_h, window, offset_h, offset_w, midside)
+            sample_fft = self.stft2d(sample, block_width, block_height, order, step_w, step_h, window, offset_h, offset_w, end_offset_h, end_offset_w, midside)
 
             #rnd_t = torch.rand_like(target_fft[:, 0, :, :, 0, 0].real).pow(4) * 0.08 + 0j
             #sample_fft = torch.lerp(sample_fft, target_fft.detach(), rnd_t[:, None, :, :, None, None])
