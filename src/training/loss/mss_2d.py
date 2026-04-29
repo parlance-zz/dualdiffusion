@@ -21,7 +21,7 @@
 # SOFTWARE.
 
 from dataclasses import dataclass
-from typing import Literal
+from typing import Literal, Optional
 
 import torch
 import numpy as np
@@ -44,16 +44,13 @@ def _is_prime(n: int) -> bool:
 @dataclass
 class MSSLoss2DConfig:
 
-    #block_low:  int = 7
-    #block_high: int = 254
     block_low:  int = 5
-    block_high: int = 128
+    block_high: int = 254
 
     block_sampling_replace: bool = True
     block_sampling_scale: Literal["linear", "ln_linear"] = "ln_linear"
 
-    #num_iterations: int = 100
-    num_iterations: int = 50
+    num_iterations: int = 1
     midside_probability: float = 0.5
     psd_eps: float = 1e-4
     loss_scale: float = 3
@@ -144,8 +141,13 @@ class MSSLoss2D:
 
         return x
     
-    def mss_loss(self, sample: torch.Tensor, target: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+    def mss_loss(self, sample: torch.Tensor, target: torch.Tensor,
+            leak_pow: Optional[float] = None, leak_max: Optional[float] = None) -> torch.Tensor:
 
+        if leak_pow is not None and leak_max is not None:  # useful at start of training for preventing polarity mismatch
+            rnd_t = np.random.rand()**leak_pow * leak_max  # disable afterwards for better performance
+            sample = torch.lerp(sample, target.detach(), rnd_t)
+        
         loss = torch.zeros(target.shape[0], device=self.device)
 
         static_pad = int(self.block_sizes[-1])
@@ -203,12 +205,6 @@ class MSSLoss2D:
 
             sample_fft = self.stft2d(sample, block_width, block_height, order,
                 step_w, step_h, window, offset_h, offset_w, end_offset_h, end_offset_w, midside)
-
-            #rnd_t = torch.rand_like(target_fft[:, 0, :, :, 0, 0].real).pow(4) * 0.08 + 0j
-            #sample_fft = torch.lerp(sample_fft, target_fft.detach(), rnd_t[:, None, :, :, None, None])
-
-            #rnd_t = torch.rand_like(target_fft.real).pow(4) * 0.08 + 0j
-            #sample_fft = torch.lerp(sample_fft, target_fft.detach(), rnd_t)
 
             sample_fft_abs = sample_fft.abs()
             
