@@ -99,7 +99,7 @@ class MSSLoss2D:
             print(f"Block size: {self.block_sizes[i]:3d} Weight: {(self.block_weights[i]*100):.3f}%")
         print(f"total unique block sizes: {len(block_sizes)}\n")
 
-        torch.backends.cuda.cufft_plan_cache.max_size = len(block_sizes)**2 * 2 + 250
+        torch.backends.cuda.cufft_plan_cache.max_size = len(block_sizes)**2 * 2 + 250 # slight performance boost if fft plans are cached
         self.windows: dict[tuple[int, int], torch.Tensor] = {}
         self.loss_scale = config.loss_scale / self.config.num_iterations
 
@@ -152,8 +152,10 @@ class MSSLoss2D:
         sample = torch.nn.functional.pad(sample, (static_pad, static_pad, static_pad, static_pad), mode="reflect")
         target = torch.nn.functional.pad(target, (static_pad, static_pad, static_pad, static_pad), mode="reflect")
 
-        block_widths  = np.random.choice(self.block_sizes, size=self.config.num_iterations, replace=self.config.block_sampling_replace, p=self.block_weights)
-        block_heights = np.random.choice(self.block_sizes, size=self.config.num_iterations, replace=self.config.block_sampling_replace, p=self.block_weights)
+        block_widths  = np.random.choice(self.block_sizes, size=self.config.num_iterations,
+            replace=self.config.block_sampling_replace, p=self.block_weights)
+        block_heights = np.random.choice(self.block_sizes, size=self.config.num_iterations,
+            replace=self.config.block_sampling_replace, p=self.block_weights)
 
         for i in range(self.config.num_iterations):
 
@@ -199,7 +201,8 @@ class MSSLoss2D:
                     loss_weight = loss_weight * target_fft_abs.pow(2).mean(dim=(0,2,3,4,5), keepdim=True).clip(min=self.config.psd_eps).pow(0.5) 
                 """
 
-            sample_fft = self.stft2d(sample, block_width, block_height, order, step_w, step_h, window, offset_h, offset_w, end_offset_h, end_offset_w, midside)
+            sample_fft = self.stft2d(sample, block_width, block_height, order,
+                step_w, step_h, window, offset_h, offset_w, end_offset_h, end_offset_w, midside)
 
             #rnd_t = torch.rand_like(target_fft[:, 0, :, :, 0, 0].real).pow(4) * 0.08 + 0j
             #sample_fft = torch.lerp(sample_fft, target_fft.detach(), rnd_t[:, None, :, :, None, None])
