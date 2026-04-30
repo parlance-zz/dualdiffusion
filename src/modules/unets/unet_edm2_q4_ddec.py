@@ -43,21 +43,21 @@ from modules.formats.format import DualDiffusionFormat
 @dataclass
 class UNetConfig(DualDiffusionUNetConfig):
 
-    in_channels:  int = 2
-    out_channels: int = 2
+    in_channels:  int = 4
+    out_channels: int = 4
     in_channels_emb: int = 0
     in_channels_x_ref: int = 3
 
     in_num_freqs: int = 256
     in_psd_freqs: int = 2048
 
-    model_channels: int  = 32                # Base multiplier for the number of channels.
+    model_channels: int  = 64                # Base multiplier for the number of channels.
     logvar_channels: int = 192               # Number of channels for training uncertainty estimation.
-    channel_mult: list[int]    = (1,2,3,5,8) # Per-resolution multipliers for the number of channels.
-    double_midblock: bool      = True
-    midblock_attn: bool        = True
-    channel_mult_noise: Optional[int] = 6    # Multiplier for noise embedding dimensionality.
-    channel_mult_emb: Optional[int]   = 6    # Multiplier for final embedding dimensionality.
+    channel_mult: list[int]    = (1,2,3,4,5) # Per-resolution multipliers for the number of channels.
+    double_midblock: bool      = False
+    midblock_attn: bool        = False
+    channel_mult_noise: Optional[int] = 4    # Multiplier for noise embedding dimensionality.
+    channel_mult_emb: Optional[int]   = 4    # Multiplier for final embedding dimensionality.
     channels_per_head: int    = 64           # Number of channels per attention head.
     num_layers_per_block: int = 3            # Number of resnet blocks per resolution.
     label_balance: float      = 0.5          # Balance between noise embedding (0) and class embedding (1).
@@ -213,6 +213,7 @@ class UNet(DualDiffusionUNet):
         self.logvar_linear.weight.data.fill_(0)
 
         # Encoder.
+        self.x_ref_gain = torch.nn.Parameter(torch.zeros([]))
         self.enc = torch.nn.ModuleDict()
         cout = config.in_channels + c_x_ref
 
@@ -305,7 +306,7 @@ class UNet(DualDiffusionUNet):
             x_ref = x_ref.view(B, C, self.config.in_num_freqs, self.psd_freqs_per_freq, W)
             x_ref = x_ref.permute(0, 3, 1, 2, 4).reshape(B, self.psd_freqs_per_freq * C, self.config.in_num_freqs, W)
 
-        x = mp_cat(x, x_ref.to(dtype=torch.bfloat16), t=0.5)
+        x = mp_cat(x, x_ref.to(dtype=torch.bfloat16) * self.x_ref_gain, t=0.5)
         #x = torch.cat((x, x_ref.to(dtype=torch.bfloat16)), dim=1)
         
         # embedding
