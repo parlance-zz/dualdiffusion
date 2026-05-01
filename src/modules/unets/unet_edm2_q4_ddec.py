@@ -213,7 +213,7 @@ class UNet(DualDiffusionUNet):
         self.logvar_linear.weight.data.fill_(0)
 
         # Encoder.
-        self.x_ref_gain = torch.nn.Parameter(torch.zeros([]))
+        self.x_ref_balance = torch.nn.Parameter(torch.zeros([]))
         self.enc = torch.nn.ModuleDict()
         cout = config.in_channels + c_x_ref
 
@@ -306,7 +306,7 @@ class UNet(DualDiffusionUNet):
             x_ref = x_ref.view(B, C, self.config.in_num_freqs, self.psd_freqs_per_freq, W)
             x_ref = x_ref.permute(0, 3, 1, 2, 4).reshape(B, self.psd_freqs_per_freq * C, self.config.in_num_freqs, W)
 
-        x = mp_cat(x, x_ref.to(dtype=torch.bfloat16) * self.x_ref_gain, t=0.5)
+        x = mp_cat(x, x_ref.to(dtype=torch.bfloat16), t=self.x_ref_balance.sigmoid())
         #x = torch.cat((x, x_ref.to(dtype=torch.bfloat16)), dim=1)
         
         # embedding
