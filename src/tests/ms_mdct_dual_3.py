@@ -100,6 +100,7 @@ def ms_mdct_dual_format_test() -> None:
         raw_sample_mdct = format.mdct_phase_to_raw(mdct_phase)
 
         mdct_phase_avg_bin_var += mdct_phase.var(dim=(0,1,3)) / len(test_samples)
+        mdct_phase_separate, mdct_psd_separate = torch.chunk(mdct_phase, 2, dim=1)
 
         stat_logger.add_logs({
             "raw_sample_var": raw_sample.var(),
@@ -107,7 +108,11 @@ def ms_mdct_dual_format_test() -> None:
             "mel_spec_var": mel_spec.var(),
             "mel_spec_mean": mel_spec.mean(),
             "mdct_var": mdct.var(),
-            "mdct_phase_var": mdct_phase.var(),
+            "mdct_phase_var_(combined)": mdct_phase.var(),
+            "mdct_phase_var_(separate)": mdct_phase_separate.var(),
+            "mdct_psd_var_(separate)": mdct_psd_separate.var(),
+            "mdct_psd_mean_(separate)": mdct_psd_separate.mean(),
+            "mdct_psd_sq_mean_(separate)": (mdct_psd_separate**2).mean(),
             "linear_psd_mean": linear_psd.mean(),
             "linear_psd_var": linear_psd.var()
         })

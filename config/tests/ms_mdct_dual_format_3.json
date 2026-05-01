@@ -1,6 +1,6 @@
 {
     "device": "cuda",
-    "add_random_test_samples": 1000,
+    "add_random_test_samples": 5000,
     "save_output": false,
     
     "test_sample_verbose": false,
@@ -22,13 +22,15 @@
         "default_raw_length": 128000,
         
         "raw_to_mdct_scale": 0.0039518421225182105,
-        "mdct_phase_scale": 0.174272762,
+        "mdct_phase_scale": 0.141144241,
+        "mdct_psd_scale": 0.071906238,
+        "mdct_psd_offset": -0.18111679575449746,
 
         "mdct_window_len": 512,
         "mdct_window_func": "sin",
 
-        "raw_to_mel_spec_scale": 0.481574127,
-        "raw_to_mel_spec_offset": -1.5377374631791627,
+        "raw_to_mel_spec_scale": 0.477767313,
+        "raw_to_mel_spec_offset": -1.5223092223196428,
         "ms_add_center_channel": true,
         "ms_img_show_center_channel": false,
 
@@ -38,7 +40,7 @@
         "ms_ideal_num_filter_bins": 3,
         "ms_window_length": 4096,
         "ms_blend_sharpness": 30,
-        "ms_window_exponents": [32],
-        "mel_spec_to_linear_psd_scale": 0.878634143
+        "ms_window_exponents": [15],
+        "mel_spec_to_linear_psd_scale": 0.863659473
     }
 }
