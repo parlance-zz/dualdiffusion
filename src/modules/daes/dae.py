@@ -77,6 +77,10 @@ class DualDiffusionDAEConfig(DualDiffusionModuleConfig, ABC):
     latents_img_use_pca: bool      = True
     latents_img_channel_order: Optional[tuple[int]] = (1, 3, 2, 0)
     latents_img_flip_stereo: bool = False
+    latents_img_brightness: Optional[float] = 1
+    latents_img_contrast: Optional[float] = 0.94
+    latents_img_saturation: Optional[float] = 1.13
+    latents_img_gamma: Optional[float] = 1.46
 
 class DualDiffusionDAE(DualDiffusionModule, ABC):
 
@@ -138,10 +142,11 @@ class DualDiffusionDAE(DualDiffusionModule, ABC):
             pca = top_pca_components(latents.float())
             if align_ref is not None:
                 pca = pca_align_ref(pca, align_ref)
-            return tensor_to_img(pca, flip_y=True, channel_order=self.config.latents_img_channel_order)
-        else:
-            return tensor_to_img(latents, flip_y=True,
-                channel_order=self.config.latents_img_channel_order)
+            latents = pca
+        
+        return tensor_to_img(latents, flip_y=True, channel_order=self.config.latents_img_channel_order,
+            brightness=self.config.latents_img_brightness, contrast=self.config.latents_img_contrast,
+            saturation=self.config.latents_img_saturation, gamma=self.config.latents_img_gamma)
         
     def ddec_cond_to_img(self, ddec_cond: torch.Tensor, align_ref: Optional[torch.Tensor] = None) -> ndarray:
         

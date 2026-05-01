@@ -35,6 +35,7 @@ import subprocess
 import numpy as np
 import torch
 import torchaudio
+import torchvision.transforms.functional as TF
 import cv2
 import safetensors.torch as safetensors
 import mutagen
@@ -609,7 +610,10 @@ def tensor_to_img(x: torch.Tensor,
                   flip_y: bool = False,
                   colormap: bool = False,
                   channel_order: Optional[tuple[int, int, int]] = None,
-                  gamma: Optional[float] = None) -> np.ndarray:
+                  gamma: Optional[float] = None,
+                  brightness: Optional[float] = None,
+                  contrast: Optional[float] = None,
+                  saturation: Optional[float] = None) -> np.ndarray:
     
     x = x.clone().detach().real.float().resolve_conj().cpu()
     while x.ndim < 4: x.unsqueeze_(0)
@@ -645,10 +649,18 @@ def tensor_to_img(x: torch.Tensor,
     elif x.shape[-1] > 4:
         raise ValueError(f"Unsupported number of channels in tensor_to_img: {x.shape[-1]}")
 
-    if gamma is not None:    
-        x **= (1 / gamma)
+    x = x.transpose(0, -1).clip(min=0, max=1)
 
-    img = (x * 255).clip(min=0, max=255).numpy().astype(np.uint8)
+    if brightness is not None:
+        x = TF.adjust_brightness(x, brightness)
+    if contrast is not None:
+        x = TF.adjust_contrast(x, contrast)
+    if saturation is not None:
+        x = TF.adjust_saturation(x, saturation)
+    if gamma is not None:
+        x = TF.adjust_gamma(x, gamma)
+    
+    img = (x.transpose(0, -1) * 255).clip(min=0, max=255).numpy().astype(np.uint8)
 
     if flip_x: img = cv2.flip(img, 1)
     if flip_y: img = cv2.flip(img, 0)
