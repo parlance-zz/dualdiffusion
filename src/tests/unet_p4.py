@@ -33,8 +33,8 @@ import inspect
 import torch
 
 from pipelines.dual_diffusion_pipeline import DualDiffusionPipeline, SampleParams
-from modules.unets.unet_edm2_p6_ddec import UNet as UNet_DDECP
-from modules.unets.unet_edm2_q4_ddec import UNet as UNet_DDECM
+from modules.unets.unet_edm2_q4_ddec import UNet as UNet_DDECP
+#from modules.unets.unet_edm2_q4_ddec import UNet as UNet_DDECM
 from modules.daes.dae_edm2_q4 import DualDiffusionDAE
 from modules.formats.ms_mdct_dual_3 import MS_MDCT_DualFormat
 from utils.dual_diffusion_utils import (
@@ -78,7 +78,7 @@ def unet_test() -> None:
     print(f"Loading DualDiffusion model from '{model_path}'...")
     pipeline = DualDiffusionPipeline.from_pretrained(model_path, **cfg.model_load_options)
     dae: DualDiffusionDAE = pipeline.dae
-    ddecm: UNet_DDECM = pipeline.ddecm
+    #ddecm: UNet_DDECM = pipeline.ddecm
     ddecp: UNet_DDECP = pipeline.ddecp
     format: MS_MDCT_DualFormat = pipeline.format
 
@@ -100,7 +100,7 @@ def unet_test() -> None:
     latent_shape = pipeline.get_latent_shape(sample_shape)
     print(f"Sample shape: {sample_shape}  Latent shape: {latent_shape}")
     print("UNet Params: ", dict_str(cfg.unet_params.__dict__))
-    print("DDec-M Params: ", dict_str(cfg.ddecm_params.__dict__))
+    #print("DDec-M Params: ", dict_str(cfg.ddecm_params.__dict__))
     print("DDec-P Params: ", dict_str(cfg.ddecp_params.__dict__))
 
     output_path = os.path.join(model_path, "output", f"step_{last_global_step}")
@@ -183,6 +183,7 @@ def unet_test() -> None:
             clap_audio_embeddings = pipeline.embedding.encode_audio(input_audio, sample_rate=input_sample_rate)
         audio_embedding = normalize(clap_audio_embeddings.mean(dim=0, keepdim=True)).float()
         input_mel_spec = format.raw_to_mel_spec(input_audio[..., :crop_width])
+        input_mdct_phase = format.raw_to_mdct_phase(input_audio[..., :crop_width])
         
         cfg.unet_params.seed = base_seed + i
         cfg.unet_params.prompt = filename
@@ -195,21 +196,24 @@ def unet_test() -> None:
         unet_output = pipeline.diffusion_decode(cfg.unet_params,
             audio_embedding=audio_embedding, module=pipeline.unet).float()
         
-        latents = unet_output.float()
+        latents = normalize(unet_output).float()
         print(f"latents mean/std: {latents.mean().item():.4} {latents.std().item():.4}")    
         if cfg.add_latents_noise is not None:
-            latents = (latents + torch.randn_like(latents) * cfg.add_latents_noise) / (latents.var() + cfg.add_latents_noise**2)**0.5
+            decode_latents = latents + torch.randn_like(latents) * cfg.add_latents_noise
+        else:
+            decode_latents = latents
         
         dae_embeddings = dae.get_embeddings(audio_embedding.to(dtype=dae.dtype, device=dae.device))
-        ddec_cond = dae.decode(latents.to(dtype=dae.dtype), dae_embeddings).float()
+        ddec_cond = dae.decode(decode_latents.to(dtype=dae.dtype), dae_embeddings).float()
         print(f"ddec_cond mean/std: {ddec_cond.mean().item():.4} {ddec_cond.std().item():.4}")
 
-        cfg.ddecm_params.seed = cfg.unet_params.seed
-        output_ddecm = pipeline.diffusion_decode(cfg.ddecm_params, audio_embedding=audio_embedding,
-            sample_shape=format.get_mel_spec_shape(raw_length=crop_width), x_ref=ddec_cond.to(ddecm.dtype), module=ddecm).float()
+        #cfg.ddecm_params.seed = cfg.unet_params.seed
+        #output_ddecm = pipeline.diffusion_decode(cfg.ddecm_params, audio_embedding=audio_embedding,
+        #    sample_shape=format.get_mel_spec_shape(raw_length=crop_width), x_ref=ddec_cond.to(ddecm.dtype), module=ddecm).float()
+        ddecp_x_ref = format.mel_spec_to_linear_psd(ddec_cond)
         cfg.ddecp_params.seed = cfg.unet_params.seed
         output_ddecp = pipeline.diffusion_decode(cfg.ddecp_params, audio_embedding=audio_embedding,
-            sample_shape=format.get_mdct_shape(raw_length=crop_width), x_ref=output_ddecm.to(ddecp.dtype), module=ddecp).float()
+            sample_shape=input_mdct_phase.shape, x_ref=ddecp_x_ref.to(ddecp.dtype), module=ddecp).float()
         
         output_raw = format.mdct_phase_to_raw(output_ddecp).float()
         output_mel_spec = format.raw_to_mel_spec(output_raw)
@@ -222,7 +226,8 @@ def unet_test() -> None:
         avg_latents_std += latents_std
 
         if dae is not None:
-            latents_img = dae.latents_to_img(latents, align_ref=output_mel_spec)
+            align_ref = (output_mel_spec - output_mel_spec.amin()) #* torch.linspace(2, 1, steps=output_mel_spec.shape[2], device=output_mel_spec.device).view(1, 1,-1, 1)
+            latents_img = dae.latents_to_img(latents, align_ref=align_ref)
         else:
             latents_img = tensor_to_img(latents, flip_y=True)
         output_latents_file_path = os.path.join(output_path, f"{output_label}_latents_output.png")
@@ -243,7 +248,7 @@ def unet_test() -> None:
         save_img(format.mel_spec_to_img(output_mel_spec), output_mel_spec_file_path)
 
         metadata = {**model_metadata, "diffusion_metadata": dict_str(cfg.unet_params.__dict__)}
-        metadata["ddecm_metadata"] = dict_str(cfg.ddecm_params.__dict__)
+        #metadata["ddecm_metadata"] = dict_str(cfg.ddecm_params.__dict__)
         metadata["ddecp_metadata"] = dict_str(cfg.ddecp_params.__dict__)
         metadata["src"] = str(inspect.getsource(pipeline.diffusion_decode))
 

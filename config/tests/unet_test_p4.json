@@ -15,7 +15,7 @@
             "dynamic": false
         }
     },
-    "add_latents_noise": null,
+    "add_latents_noise": 0.08,
     "output_lufs": -20,
     "copy_sample_source_files": true,
     "random_test_samples_seed": null,
@@ -410,16 +410,16 @@
     },
     "ddecp_params": {
 
-        "num_steps": 100,
+        "num_steps": 50,
         "cfg_scale": 1.5,
         "use_heun": false,
         "schedule": "cos",
         "rho": 1,
 
-        "sigma_max": 100,
-        "sigma_min": 0.01,
+        "sigma_max": 200,
+        "sigma_min": 1e-3,
 
-        "input_perturbation": 1,
-        "input_perturbation_offset": 100
+        "input_perturbation": 0.5,
+        "input_perturbation_offset": 0
     }
 }
