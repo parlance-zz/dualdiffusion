@@ -41,11 +41,17 @@ from modules.mp_tools import MPConv, mp_silu, mp_sum, normalize, resample_2d, no
 
 class LatentStatsTracker(torch.nn.Module):
 
-    def __init__(self, num_channels: int, momentum: float = 0.99, eps: float = 1e-6) -> None:
+    def __init__(self, num_channels: int, momentum: float = 0.99, eps: float = 1e-6,
+            static_mean: Optional[float] = None, static_scale: Optional[float] = None) -> None:
+        
         super().__init__()
+
         self.num_channels = num_channels
         self.momentum = momentum
         self.eps = eps
+
+        self.static_mean = static_mean
+        self.static_scale = static_scale
         
         self.mean: torch.Tensor
         self.register_buffer("mean", torch.zeros(num_channels))
@@ -74,19 +80,65 @@ class LatentStatsTracker(torch.nn.Module):
 
         return x
     
-    def remove_mean(self, x: torch.Tensor) -> torch.Tensor:
-        return (x - self.mean[None, :, None, None].detach()).to(dtype=x.dtype)
+    def remove_mean(self, x: torch.Tensor, mode: Literal["per_channel", "global", "static", "none"] = "per_channel") -> torch.Tensor:
+
+        assert mode in ["per_channel", "global", "static", "none"]
+        
+        if mode == "per_channel":
+            return (x - self.mean[None, :, None, None].detach()).to(dtype=x.dtype)
+        elif mode == "global":
+            return (x - self.global_mean.detach()).to(dtype=x.dtype)
+        elif mode == "static":
+            if self.static_mean is not None:
+                return (x - self.static_mean).to(dtype=x.dtype)
+
+        return x
     
-    def add_mean(self, x: torch.Tensor) -> torch.Tensor:
-        return x + self.mean[None, :, None, None].detach().to(dtype=x.dtype)
+    def add_mean(self, x: torch.Tensor, mode: Literal["per_channel", "global", "static", "none"] = "per_channel") -> torch.Tensor:
+
+        assert mode in ["per_channel", "global", "static", "none"]
+
+        if mode == "per_channel":
+            return (x + self.mean[None, :, None, None].detach()).to(dtype=x.dtype)
+        elif mode == "global":
+            return (x + self.global_mean.detach()).to(dtype=x.dtype)
+        elif mode == "static":
+            if self.static_mean is not None:
+                return (x + self.static_mean).to(dtype=x.dtype)
+            
+        return x
     
-    def unscale(self, x: torch.Tensor) -> torch.Tensor:
-        std = (self.var + self.eps).pow(0.5)
-        return (x / std[None, :, None, None].detach()).to(dtype=x.dtype)
+    def unscale(self, x: torch.Tensor, mode: Literal["per_channel", "global", "static", "none"] = "per_channel") -> torch.Tensor:
+
+        assert mode in ["per_channel", "global", "static", "none"]
+
+        if mode == "per_channel":
+            std = (self.var[None, :, None, None] + self.eps).pow(0.5)
+            return (x / std.detach()).to(dtype=x.dtype)
+        elif mode == "global":
+            std = (self.global_var + self.eps).pow(0.5)
+            return (x / std.detach()).to(dtype=x.dtype)
+        elif mode == "static":
+            if self.static_scale is not None:
+                return (x / self.static_scale).to(dtype=x.dtype)
+            
+        return x
     
-    def rescale(self, x: torch.Tensor) -> torch.Tensor:
-        std = (self.var + self.eps).pow(0.5)
-        return (x * std[None, :, None, None].detach()).to(dtype=x.dtype)
+    def rescale(self, x: torch.Tensor, mode: Literal["per_channel", "global", "static", "none"] = "per_channel") -> torch.Tensor:
+        
+        assert mode in ["per_channel", "global", "static", "none"]
+
+        if mode == "per_channel":
+            std = (self.var[None, :, None, None] + self.eps).pow(0.5)
+            return (x * std.detach()).to(dtype=x.dtype)
+        elif mode == "global":
+            std = (self.global_var + self.eps).pow(0.5)
+            return (x * std.detach()).to(dtype=x.dtype)
+        elif mode == "static":
+            if self.static_scale is not None:
+                return (x * self.static_scale).to(dtype=x.dtype)
+            
+        return x
    
 @dataclass
 class DAE_Config(DualDiffusionDAEConfig):
@@ -111,6 +163,8 @@ class DAE_Config(DualDiffusionDAEConfig):
     mlp_groups: int        = 1               # Number of groups for the MLPs.
     emb_linear_groups: int = 1
     add_pixel_norm: bool   = False
+
+    static_latents_scale: Optional[float] = None
     
 class Block(torch.nn.Module):
 
@@ -235,7 +289,7 @@ class DAE(DualDiffusionDAE):
         enc_channels = [config.model_channels * m for m in config.channel_mult_enc]
         dec_channels = [config.model_channels * m for m in config.channel_mult_dec]
 
-        self.latents_stats_tracker = LatentStatsTracker(config.latent_channels)
+        self.latents_stats_tracker = LatentStatsTracker(config.latent_channels, static_scale=config.static_latents_scale)
         self.recon_loss_logvar = torch.nn.Parameter(torch.zeros([]))
 
         # encoder
@@ -313,17 +367,35 @@ class DAE(DualDiffusionDAE):
         if embeddings is not None:
             embeddings = embeddings[:, :, None, None]
 
+        x = x.to(dtype=torch.bfloat16)
+
         for name, block in self.enc.items():
             x = block(x) if "conv" in name else block(x, embeddings)
         
         latents: torch.Tensor = self.conv_latents_out(x)
         latents = normalize(latents.float())
         
+        if training == True:
+            assert self.training == True
+        else:
+            assert self.training == False
+            latents = self.latents_stats_tracker.remove_mean(latents, mode="per_channel")
+            latents = self.latents_stats_tracker.unscale(latents, mode="static")
+
         return latents
 
     def decode(self, x: torch.Tensor, embeddings: torch.Tensor, training: bool = False) -> torch.Tensor:
 
-        x = self.conv_latents_in(x)
+        if training == True:
+            assert self.training == True
+        else:
+            assert self.training == False
+            x = x.float()
+            x = self.latents_stats_tracker.rescale(x, mode="static")
+            x = self.latents_stats_tracker.add_mean(x, mode="per_channel")
+            x = normalize(x)
+
+        x = self.conv_latents_in(x.to(dtype=torch.bfloat16))
 
         if embeddings is not None:
             embeddings = embeddings[:, :, None, None]
