@@ -106,7 +106,7 @@ class Block(torch.nn.Module):
                                 out_channels * mlp_multiplier, kernel=(3,3), groups=mlp_groups)
         self.conv_res1 = MPConv(out_channels * mlp_multiplier, out_channels, kernel=(3,3), groups=mlp_groups)
 
-        if in_channels != out_channels:
+        if in_channels != out_channels or mlp_groups > 1:
             self.conv_skip = MPConv(in_channels, out_channels, kernel=(1,1), groups=1)
         else:
             self.conv_skip = None
