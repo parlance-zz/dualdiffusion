@@ -375,9 +375,7 @@ class DAE(DualDiffusionDAE):
         latents: torch.Tensor = self.conv_latents_out(x)
         latents = normalize(latents.float())
         
-        if training == True:
-            assert self.training == True
-        else:
+        if training == False:
             assert self.training == False
             latents = self.latents_stats_tracker.remove_mean(latents, mode="per_channel")
             latents = self.latents_stats_tracker.unscale(latents, mode="static")
@@ -386,9 +384,7 @@ class DAE(DualDiffusionDAE):
 
     def decode(self, x: torch.Tensor, embeddings: torch.Tensor, training: bool = False) -> torch.Tensor:
 
-        if training == True:
-            assert self.training == True
-        else:
+        if training == False:
             assert self.training == False
             x = x.float()
             x = self.latents_stats_tracker.rescale(x, mode="static")
