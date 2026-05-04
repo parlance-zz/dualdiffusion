@@ -23,7 +23,7 @@ dependencies:
     - mutagen       # audio file metadata extraction and editing
     - nicegui       # for interactive web ui
     - transformers  # larger_clap_music
-    - laion-clap    # laion-clap (music_audioset_epoch_15_esc_90.14)
+    - laion-clap==1.1.7  # laion-clap (music_audioset_epoch_15_esc_90.14)
     - pyloudnorm    # faster lufs without memory leak
     - pyjson5       # json with comments and some formatting improvements
     - py7zr         # (optional) for dataset unzip util
