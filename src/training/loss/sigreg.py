@@ -27,8 +27,8 @@ from accelerate import Accelerator
 
 
 # initial implementation taken from https://github.com/kreasof-ai/sigreg (no license specified)
-def sigreg_strong_loss(x: torch.Tensor, sketch_dim: int = -1, accelerator: Optional[Accelerator] = None,
-        t_min: float = -5, t_max: float = 5, num_t: int = 17, target_var: float = 1, eps: float = 1e-6) -> torch.Tensor:
+def sigreg_strong_loss(x: torch.Tensor, sketch_dim: int = 64, accelerator: Optional[Accelerator] = None,
+        t_min: float = -5, t_max: float = 5, num_t: int = 17, eps: float = 1e-6) -> torch.Tensor:
     """
     Strong-SIGReg (LeJEPA): Forces ECF(x) ~ ECF(Gaussian).
     Matches all moments using random 1D projections.
@@ -53,7 +53,7 @@ def sigreg_strong_loss(x: torch.Tensor, sketch_dim: int = -1, accelerator: Optio
     A = A / (A.norm(p=2, dim=0, keepdim=True) + eps)
 
     t = torch.linspace(t_min, t_max, num_t, device=x.device)
-    exp_f = torch.exp(-0.5 * t**2 / target_var)
+    exp_f = torch.exp(-0.5 * t**2)
 
     proj: torch.Tensor = x @ A
     args = proj.unsqueeze(2) * t.view(1, 1,-1)
@@ -68,3 +68,9 @@ def sigreg_strong_loss(x: torch.Tensor, sketch_dim: int = -1, accelerator: Optio
     
     loss = torch.trapz(err, t, dim=1)# * N
     return loss.mean().expand(B) # return per-sample loss for compatibility
+
+
+if __name__ == "__main__":
+    
+    x = torch.randn(4, 8, 256, 384)
+    print(sigreg_strong_loss(x))
