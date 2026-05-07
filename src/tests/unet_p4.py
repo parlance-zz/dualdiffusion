@@ -196,7 +196,7 @@ def unet_test() -> None:
         unet_output = pipeline.diffusion_decode(cfg.unet_params,
             audio_embedding=audio_embedding, module=pipeline.unet).float()
         
-        latents = normalize(unet_output).float()
+        latents = unet_output.float()
         print(f"latents mean/std: {latents.mean().item():.4} {latents.std().item():.4}")    
         if cfg.add_latents_noise is not None:
             decode_latents = latents + torch.randn_like(latents) * cfg.add_latents_noise

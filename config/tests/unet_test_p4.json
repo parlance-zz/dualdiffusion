@@ -15,7 +15,7 @@
             "dynamic": false
         }
     },
-    "add_latents_noise": 0.08,
+    "add_latents_noise": null,
     "output_lufs": -20,
     "copy_sample_source_files": true,
     "random_test_samples_seed": null,
@@ -85,7 +85,7 @@
         //"switch/Atelier Sophie 2 - The Alchemist of the Mysterious Dream", // high sound quality, orchestral et al
         //"switch/Super Smash Bros. Ultimate"
         
-        /*
+        //*
         "psf3/Mamoru-kun wa Norowarete Shimatta! Meikai Katsugeki Wide-Han/bgm46_v03m.msf.flac", // cool electronic
         "psf3/Mamoru-kun wa Norowarete Shimatta! Meikai Katsugeki Wide-Han/bgm02_v02.msf.flac", // cool electronic
         "switch/Grisaia Trilogy, The/MUSIC_00000043.lopus.flac", // cool orchestral
@@ -291,7 +291,7 @@
         //*/
         //"psf2/Fisherman's Challenge"
 
-        //* // metal
+        /* // metal
         //"psf3/One Piece - Pirate Warriors 3/BGMLink_00000007.at3.flac",
         //"switch/eBaseball Powerful Pro Yakyuu 2020/_t_wem_1004274880.wem.flac",
         //"vita/Tayutama 2 - You're the only one/015.at9.flac", // sick progressive metal
@@ -300,16 +300,16 @@
         //"psf3/One Piece - Pirate Warriors 3/BGMLink_00000007.at3.flac",
         //"switch/eBaseball Powerful Pro Yakyuu 2020/_t_wem_1004274880.wem.flac",
         "vita/Tayutama 2 - You're the only one/015.at9.flac", // sick progressive metal ***
-        "vita/Tayutama 2 - You're the only one/015.at9.flac", // sick progressive metal ***
+        //"vita/Tayutama 2 - You're the only one/015.at9.flac", // sick progressive metal ***
         
         "switch/Legend of Heroes - Trails of Cold Steel III, The/ed8466.lopus.flac",
-        "switch/Legend of Heroes - Trails of Cold Steel III, The/ed8466.lopus.flac",
+        //"switch/Legend of Heroes - Trails of Cold Steel III, The/ed8466.lopus.flac",
 
         "wii/Kamen Rider - Chou Climax Heroes/Stage03.brstm.flac", // progressive metal
-        "wii/Kamen Rider - Chou Climax Heroes/Stage03.brstm.flac", // progressive metal
+        //"wii/Kamen Rider - Chou Climax Heroes/Stage03.brstm.flac", // progressive metal
 
-        "vita/Gundam Breaker 2/bgm.awb.00011.at9.flac",
         "vita/Gundam Breaker 2/bgm.awb.00011.at9.flac"
+        //"vita/Gundam Breaker 2/bgm.awb.00011.at9.flac"
 
         //"switch/Super Smash Bros. Ultimate/j40_hr_menutitle.lopus.flac" // harmonized electric guitars
         //*/
@@ -367,32 +367,32 @@
         //*/
     ],
     "unet_params": {
-        //"seed": 100,
+        "seed": 100,
         "seamless_loop": false,
 
         //"length": null,
         //"length": 1408768,
         //"length": 2097152,
-        "length": 308768,
+        //"length": 308768,
         
-        "num_steps": 400,//300,//500
-        "cfg_scale": 4,//4,//3.5,//4//3//1.5,
+        "num_steps": 300,//300,//500
+        "cfg_scale": 3,//4,//3.5,//4//3//1.5,
         "use_heun": true,
 
-        //"schedule": "ln_linear",
-        //"rho": 1,
+        "schedule": "ln_linear",
+        "rho": 1,
 
-        "schedule": "edm2",
-        "rho": 7,
+        //"schedule": "edm2",
+        //"rho": 7,
 
         //"schedule": "cos",
-        //"rho": 1.414,
+        //"rho": 1.35,
 
         "sigma_max": 200,
         "sigma_min": 0.08,
         
-        "input_perturbation": 0.2,//0.2,//0.016,//0.005568,//0.016,//0.12,//0.1//0.01
-        "input_perturbation_offset": -0.85//-1//-0.85//-0.35//-0.85//100
+        "input_perturbation": 0.1,//0.2,//0.016,//0.005568,//0.016,//0.12,//0.1//0.01
+        "input_perturbation_offset": -1//-1//-0.85//-0.35//-0.85//100
     },
     "ddecm_params": {
 
