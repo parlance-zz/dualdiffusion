@@ -309,13 +309,13 @@ class UNet(DualDiffusionUNet):
         emb: torch.Tensor = self.emb_noise(self.emb_fourier(c_noise)).to(dtype=torch.bfloat16)
         if self.config.in_channels_emb > 0:
             emb = mp_silu(mp_sum(emb, embeddings.to(dtype=emb.dtype), t=self.config.label_balance))
-        x_ref = self.emb_x_ref(x_ref)
-        emb = mp_silu(mp_sum(emb[..., None, None], x_ref, t=0.5))
+        #emb = mp_silu(mp_sum(emb[..., None, None], x_ref, t=0.5))
+        emb = mp_silu(emb)[..., None, None]
 
         idx = 0; skips = []
         for name, block in self.dec.items():
             if "conv" in name:
-                x = block(x)
+                x = block(x) + self.emb_x_ref(x_ref)
             else:
                 skip = None
 

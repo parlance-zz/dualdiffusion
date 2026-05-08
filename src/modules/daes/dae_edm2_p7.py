@@ -381,6 +381,7 @@ class DAE(DualDiffusionDAE):
         x = normalize_groups(x, groups=self.config.mlp_groups)
         latents: torch.Tensor = self.conv_latents_out(x)
         latents = torch.nn.functional.avg_pool2d(latents.float(), kernel_size=(1, self.downsample_ratio))
+        latents = normalize(latents, dim=1)
 
         return latents
 

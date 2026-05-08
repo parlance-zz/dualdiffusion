@@ -27,7 +27,7 @@ from accelerate import Accelerator
 
 
 # initial implementation taken from https://github.com/kreasof-ai/sigreg (no license specified)
-def sigreg_strong_loss(x: torch.Tensor, sketch_dim: int = 64, accelerator: Optional[Accelerator] = None,
+def sigreg_strong_loss(x: torch.Tensor, sketch_dim: int = 64,
         t_min: float = -5, t_max: float = 5, num_t: int = 17, eps: float = 1e-6) -> torch.Tensor:
     """
     Strong-SIGReg (LeJEPA): Forces ECF(x) ~ ECF(Gaussian).
@@ -59,8 +59,6 @@ def sigreg_strong_loss(x: torch.Tensor, sketch_dim: int = 64, accelerator: Optio
     args = proj.unsqueeze(2) * t.view(1, 1,-1)
     
     ecf = torch.exp(1j * args)
-    if accelerator is not None: # use ddp to boost ecf accuracy
-        ecf = accelerator.gather(ecf)
     ecf = ecf.mean(dim=0)
     
     diff_sq = (ecf - exp_f.unsqueeze(0)).abs().square()
