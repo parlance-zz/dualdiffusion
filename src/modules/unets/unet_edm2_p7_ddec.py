@@ -43,14 +43,14 @@ from modules.formats.format import DualDiffusionFormat
 @dataclass
 class UNetConfig(DualDiffusionUNetConfig):
 
-    in_channels:  int = 512
-    out_channels: int = 512
+    in_channels:  int = 256
+    out_channels: int = 256
     in_channels_emb: int = 0
     in_channels_x_ref: int = 512
     in_num_freqs: int = 256
 
     sigma_max: float  = 200
-    sigma_min: float  = 0.01
+    sigma_min: float  = 0.08
     sigma_data: float = 1
 
     mp_fourier_ln_sigma_offset: float = 0
@@ -60,7 +60,7 @@ class UNetConfig(DualDiffusionUNetConfig):
     adg_max_balance: Optional[float]  = 0.9
     adg_weight_decay: Optional[float] = None
 
-    model_channels: int  = 8192              # Base multiplier for the number of channels.
+    model_channels: int  = 4096              # Base multiplier for the number of channels.
     logvar_channels: int = 192               # Number of channels for training uncertainty estimation.
     channel_mult: list[int] = (1,)           # Per-resolution multipliers for the number of channels.
     channel_mult_noise: Optional[float] = 0.125     # Multiplier for noise embedding dimensionality.
@@ -70,10 +70,10 @@ class UNetConfig(DualDiffusionUNetConfig):
     attn_logit_scale: float   = 1
     num_layers_per_block: int = 8            # Number of resnet blocks per resolution.
     label_balance: float      = 0.5          # Balance between noise embedding (0) and class embedding (1).
-    balance_logits_offset: float = -2
+    balance_logits_offset: float = -4
     mlp_multiplier: int    = 2               # Multiplier for the number of channels in the MLP.
-    mlp_groups: int        = 64              # Number of groups for the MLPs.
-    emb_linear_groups: int = 64
+    mlp_groups: int        = 32              # Number of groups for the MLPs.
+    emb_linear_groups: int = 32
 
 class Block(torch.nn.Module):
 

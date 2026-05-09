@@ -37,34 +37,34 @@ import torch
 from numpy import ndarray
 
 from modules.daes.dae import DualDiffusionDAE, DualDiffusionDAEConfig
-from modules.mp_tools import MPConv, AdaptiveGroupBalance, mp_silu, normalize, resample_1d, normalize_groups
+from modules.mp_tools import MPConv, AdaptiveGroupBalance, mp_silu, normalize, resample_1d, normalize_groups, mp_sum
 
 
 @dataclass
 class DAE_Config(DualDiffusionDAEConfig):
 
-    in_channels:  int = 512
-    out_channels: int = 512
+    in_channels:  int = 256
+    out_channels: int = 256
     in_channels_emb: int = 0
     latent_channels: int = 256
-    in_num_freqs: int = 256
+    in_num_freqs: int = 128
 
     adg_min_balance: Optional[float]  = 0.1
     adg_max_balance: Optional[float]  = 0.9
     adg_weight_decay: Optional[float] = None
 
-    model_channels: int   = 4096              # Base multiplier for the number of channels.
+    model_channels: int   = 2048              # Base multiplier for the number of channels.
     channel_mult_enc: int = 1 
-    channel_mult_dec: list[int] = (1,1,1,1)   # Per-resolution multipliers for the number of channels.
+    channel_mult_dec: list[int] = (1,1,1,1,1) # Per-resolution multipliers for the number of channels.
     channel_mult_emb: Optional[int] = 1       # Multiplier for final embedding dimensionality.
     channels_per_head: int    = 128           # Number of channels per attention head.
     attn_logit_scale: float   = 1
-    num_enc_layers: int = 8
+    num_enc_layers: int = 12
     num_dec_layers_per_block: int = 2        # Number of resnet blocks per resolution.
-    balance_logits_offset: float = -2
+    balance_logits_offset: float = -4
     mlp_multiplier: int    = 2               # Multiplier for the number of channels in the MLP.
-    mlp_groups: int        = 32              # Number of groups for the MLPs.
-    emb_linear_groups: int = 32
+    mlp_groups: int        = 16              # Number of groups for the MLPs.
+    emb_linear_groups: int = 16
 
 class LatentStatsTracker(torch.nn.Module):
 
@@ -398,6 +398,9 @@ class DAE(DualDiffusionDAE):
             x = block(x, emb)
 
         out: torch.Tensor = self.conv_out(x, gain=self.conv_out_gain).float()
+        c = self.config.out_channels // self.config.in_num_freqs
+        out = out.reshape(out.shape[0], out.shape[1]//c, c, out.shape[3]).permute(0, 2, 1, 3).contiguous()
+
         return out
 
     def forward(self, samples: torch.Tensor, audio_embeddings: torch.Tensor, latents_sigma: Optional[float] = None) -> tuple[torch.Tensor, ...]:
@@ -410,7 +413,8 @@ class DAE(DualDiffusionDAE):
         else:
             decode_latents = latents
         
-        out = self.decode(decode_latents, dae_embeddings, training=True)
+        #out = self.decode(decode_latents, dae_embeddings, training=True)
+        out = torch.zeros_like(samples)
         return latents, out
 
     def tiled_encode(self, x: torch.Tensor, embeddings: torch.Tensor, max_chunk: int = 6144, overlap: int = 256) -> torch.Tensor:

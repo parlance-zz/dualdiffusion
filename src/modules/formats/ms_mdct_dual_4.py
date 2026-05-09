@@ -67,7 +67,6 @@ class MS_MDCT_DualFormatConfig(DualDiffusionFormatConfig):
     ms_window_length: int = 4096
     ms_blend_sharpness: float = 30
     ms_window_exponents: list[float] = (9, 32, 112)
-    mel_spec_to_linear_psd_scale: float = 1
     
     @property
     def ms_num_stft_bins(self) -> int:
@@ -114,17 +113,6 @@ class MS_MDCT_DualFormat(DualDiffusionFormat):
             filter_shape="triangular"
         )
 
-        self.ms_freq_scale_linear_psd = FrequencyScale(
-            freq_scale="mel",
-            freq_min=self.config.ms_freq_min,
-            freq_max=self.config.ms_freq_max,
-            sample_rate=self.config.sample_rate,
-            num_stft_bins=self.config.ms_window_length,
-            num_filters=self.config.ms_num_filters,
-            filter_norm="slaney",
-            filter_shape="triangular"
-        )
-
         mel_freqs = self.ms_freq_scale.get_unscaled(self.config.ms_num_filters + 2)
 
         ms_filter_center_hz = mel_freqs[1:-1]
@@ -161,10 +149,6 @@ class MS_MDCT_DualFormat(DualDiffusionFormat):
         ms_stft_hz = torch.linspace(0, config.sample_rate / 2, config.ms_num_stft_bins)
         self.ms_stft_mel_density: torch.Tensor
         self.register_buffer("ms_stft_mel_density", get_mel_density(ms_stft_hz).view(1, 1,-1, 1))
-
-        ms_linear_psd_hz = torch.linspace(0, config.sample_rate / 2, config.ms_window_length)
-        self.ms_linear_psd_mel_density: torch.Tensor
-        self.register_buffer("ms_linear_psd_mel_density", get_mel_density(ms_linear_psd_hz).view(1, 1,-1, 1))
 
         # ***** mdct setup *****
         self.mdct_hz: torch.Tensor
@@ -235,16 +219,6 @@ class MS_MDCT_DualFormat(DualDiffusionFormat):
         
         return (ms_blended ** self.config.ms_abs_exponent + self.config.raw_to_mel_spec_offset) / self.config.raw_to_mel_spec_scale
 
-    @torch.no_grad()
-    def mel_spec_to_linear_psd(self, mel_spec: torch.Tensor) -> torch.Tensor:
-
-        ms_linear = (mel_spec * self.config.raw_to_mel_spec_scale - self.config.raw_to_mel_spec_offset).clip(min=0).pow(2)
-
-        linear_psd = self.ms_freq_scale_linear_psd.unscale(ms_linear, rectify=False) * self.ms_linear_psd_mel_density.pow(self.config.ms_abs_exponent)
-        linear_psd = torch.nn.functional.avg_pool2d(linear_psd, (2, 1)).clip(min=0).pow(0.5)
-
-        return linear_psd / self.config.mel_spec_to_linear_psd_scale
-
     @torch.inference_mode()
     def mel_spec_to_img(self, mel_spec: torch.Tensor, use_colormap: bool = False):
         if use_colormap == True:
@@ -291,7 +265,6 @@ class MS_MDCT_DualFormat(DualDiffusionFormat):
         
         return raw_samples
 
-    """
     def raw_to_mdct_phase(self, raw_samples: torch.Tensor, random_phase_augmentation: bool = False) -> torch.Tensor:
 
         _mclt: torch.Tensor = self.mdct(raw_samples.float())
@@ -315,41 +288,10 @@ class MS_MDCT_DualFormat(DualDiffusionFormat):
 
         raw_samples = self.imdct(mdct_phase * mdct_psd).real.contiguous()
         return raw_samples
-    """
-
-    def raw_to_mdct_phase(self, raw_samples: torch.Tensor, random_phase_augmentation: bool = False) -> torch.Tensor:
-
-        _mclt: torch.Tensor = self.mdct(raw_samples.float())
-
-        phase_rotation = torch.exp(torch.tensor(1j * torch.pi / 4, device=_mclt.device))
-        if random_phase_augmentation == True:
-            phase_rotation = phase_rotation * torch.exp(2j * torch.pi * torch.rand(_mclt.shape[0], device=_mclt.device)) 
-        _mclt *= phase_rotation.view(-1, 1, 1, 1)
-
-        mdct_phase = _mclt / _mclt.abs().clip(min=1e-20)**0.75 / self.mdct_mel_density**0.25 / self.config.mdct_phase_scale
-        mdct_phase = torch.cat((mdct_phase.real, mdct_phase.imag), dim=1)
-
-        return mdct_phase
-    
-    def mdct_phase_to_raw(self, mdct_phase: torch.Tensor) -> torch.Tensor:
-
-        real, imag = torch.chunk(mdct_phase, 2, dim=1)
-        mdct_phase = torch.complex(real, imag) * self.mdct_mel_density**0.25 * self.config.mdct_phase_scale
-
-        phase_rotation = torch.exp(torch.tensor(1j * torch.pi / 4, device=mdct_phase.device))
-        mdct_phase *= mdct_phase.abs()**3 / phase_rotation
-
-        raw_samples = self.imdct(mdct_phase.real).real.contiguous()
-        return raw_samples
     
     def raw_to_mdct_psd(self, raw_samples: torch.Tensor) -> torch.Tensor:
         _mclt: torch.Tensor = self.mdct(raw_samples.float())
-        return _mclt.abs().pow(0.25) / self.mdct_mel_density.pow(0.25) / self.config.mdct_phase_scale
-    
-    @torch.no_grad()
-    def raw_to_mdct_psd_linear(self, raw_samples: torch.Tensor) -> torch.Tensor:
-        _mclt: torch.Tensor = self.mdct(raw_samples.float())
-        return _mclt.abs() / self.mdct_mel_density / self.config.raw_to_mdct_scale
+        return _mclt.abs().pow(self.config.ms_abs_exponent) / self.mdct_mel_density.pow(self.config.ms_abs_exponent) / self.config.mdct_phase_scale
 
 if __name__ == "__main__":
 

@@ -1,7 +1,7 @@
 {
     "device": "cuda",
-    "add_random_test_samples": 5000,
-    "save_output": false,
+    "add_random_test_samples": 0,
+    "save_output": true,
     
     "test_sample_verbose": false,
     "test_samples": [
@@ -18,27 +18,28 @@
         "sample_rate": 32000,
         "num_raw_channels": 2,
         //"default_raw_length": 2097152,
-        //"default_raw_length": 1408768,
-        "default_raw_length": 128000,
+        "default_raw_length": 1408768,
+        //"default_raw_length": 128000,
         
-        "raw_to_mdct_scale": 0.0039518421225182105,
-        "mdct_phase_scale": 0.141079472,
+        "raw_to_mdct_scale": 0.0056192554322475096,
+        "mdct_phase_scale": 0.193319905,
 
-        "mdct_window_len": 512,
+        "mdct_window_len": 256,
         "mdct_window_func": "sin",
 
-        "raw_to_mel_spec_scale": 0.477767313,
-        "raw_to_mel_spec_offset": -1.5223092223196428,
+        "raw_to_mel_spec_scale": 0.433267411,
+        "raw_to_mel_spec_offset": -1.4400670918058907,
         "ms_add_center_channel": true,
         "ms_img_show_center_channel": false,
 
         "ms_abs_exponent": 0.25,
-        "ms_freq_min": 0,
-        "ms_num_filters": 256,
+        "ms_freq_min": 20,
+        //"ms_freq_min": 0,
+        "ms_num_filters": 128,
         "ms_ideal_num_filter_bins": 3,
-        "ms_window_length": 4096,
-        "ms_blend_sharpness": 30,
-        "ms_window_exponents": [15],
-        "mel_spec_to_linear_psd_scale": 0.863659473
+        "ms_window_length": 2048,
+        "ms_blend_sharpness": 50,
+        //"ms_window_exponents": [10.1, 16.34, 26.44, 42.78, 69.2198, 112]
+        "ms_window_exponents": [16,32,64]
     }
 }

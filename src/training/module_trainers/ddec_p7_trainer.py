@@ -24,6 +24,7 @@ from dataclasses import dataclass
 from typing import Union, Optional, Any
 
 import torch
+import numpy as np
 
 from training.trainer import DualDiffusionTrainer
 from training.module_trainers.module_trainer import ModuleTrainer, ModuleTrainerConfig
@@ -97,7 +98,7 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
 
             self.mss_2d = None
         else:
-            self.mss_2d = None #MSSLoss2D(MSSLoss2DConfig(**config.mss_2d), device=trainer.accelerator.device)
+            self.mss_2d = MSSLoss2D(MSSLoss2DConfig(**config.mss_2d), device=trainer.accelerator.device)
 
         self.format: MS_MDCT_DualFormat = trainer.pipeline.format.to(self.trainer.accelerator.device)
 
@@ -160,7 +161,10 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
         mdct_phase = self.format.raw_to_mdct_phase(raw_samples, random_phase_augmentation=self.config.random_phase_augmentation)
         mdct = self.format.raw_to_mdct(raw_samples, random_phase_augmentation=self.config.random_phase_augmentation)
         input_mel_spec = self.format.raw_to_mel_spec(raw_samples)
-        dae_input = mdct
+
+        dae_input0 = self.format.raw_to_mdct_phase(raw_samples, random_phase_augmentation=True) + torch.randn_like(mdct_phase) * 0.05
+        dae_input1 = self.format.raw_to_mdct_phase(raw_samples, random_phase_augmentation=True) + torch.randn_like(mdct_phase) * 0.05
+        dae_input = torch.cat([dae_input0, dae_input1], dim=0)
 
         logs.update({
             "io_stats/input_mel_spec_mean": input_mel_spec.mean(dim=(1,2,3)),
@@ -206,7 +210,7 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
             ddec_x_ref = None
 
         if self.train_ddecp == True:
-            logs.update(self.ddecp_trainer.train_batch(mdct, audio_embeddings, ddec_x_ref))
+            logs.update(self.ddecp_trainer.train_batch(mdct_phase, audio_embeddings, ddec_x_ref))
             logs["loss"] = logs["loss"] + logs["loss/ddecp"]
 
         if self.train_ddecm == True:
@@ -222,11 +226,12 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
             else:
                 leak_max = None
 
-            logs["loss/mel_spec_mse"] = torch.nn.functional.mse_loss(ddec_cond, input_mel_spec, reduction="none").mean(dim=(1,2,3))
-            logs["loss/mel_spec_mss2d"] = self.mss_2d.mss_loss(ddec_cond, input_mel_spec, leak_pow=self.config.mss_2d_leak_pow, leak_max=leak_max)
+            logs["loss/mel_spec_mse"] = torch.nn.functional.mse_loss(ddec_cond, mdct_phase, reduction="none").mean(dim=(1,2,3))
+            logs["loss/mel_spec_mss2d"] = self.mss_2d.mss_loss(ddec_cond, mdct_phase, leak_pow=self.config.mss_2d_leak_pow, leak_max=leak_max)
+            recon_loss = logs["loss/mel_spec_mss2d"] * 2
+            """
 
-            recon_loss = logs["loss/mel_spec_mss2d"]
-
+            """
             recon_loss_logvar: torch.nn.Parameter = getattr(self.dae, "recon_loss_logvar", None)
             if recon_loss_logvar is not None:
                 recon_loss = recon_loss / recon_loss_logvar.exp() + recon_loss_logvar
@@ -234,14 +239,34 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
 
             logs["loss"] = logs["loss"] + recon_loss
             """
+            #logs["loss"] = logs["loss"] + recon_loss
+
+            #latents1, latents2 = latents.chunk(2, dim=0)
+            #consistency_loss = torch.nn.functional.mse_loss(latents1, latents2, reduction="none").mean(dim=(1,2,3))
+            #logs["loss/consistency"] = consistency_loss
+            #logs["loss"] = logs["loss"] + logs["loss/consistency"]
+
+            #recon_mse = torch.nn.functional.mse_loss(ddec_cond, mdct_phase.repeat(2,1,1,1), reduction="none").mean(dim=(1,2,3))
+            #logs["loss/recon_mse"] = recon_mse.mean().expand(recon_mse.shape[0]//2)
+            #logs["loss"] = logs["loss"] + logs["loss/recon_mse"] * 2
+
+            latents1, latents2 = latents.chunk(2, dim=0)
+            invar_mse = 1 - (latents1 * latents2).mean(dim=(1,2,3))
+            logs["loss/invar_mse"] = invar_mse
+            logs["loss"] = logs["loss"] + logs["loss/invar_mse"]
 
             sigreg_loss_weight = self.config.sigreg_loss_weight
             if self.trainer.global_step < self.config.sigreg_loss_warmup_steps:
                 sigreg_loss_weight *= self.trainer.global_step / self.config.sigreg_loss_warmup_steps
             logs["loss_weight/sigreg"] = sigreg_loss_weight
+            #if self.dae.latents_stats_tracker.var.mean().item() > 0.99:
+            #    sigreg_loss_weight = 0
+
             if sigreg_loss_weight > 0:
-                sigreg_latents = latents
+                unfold_width = int(np.random.randint(1, 4))
+                sigreg_latents = latents.unfold(3, unfold_width, 1).transpose(2,4).flatten(1,2).contiguous()
                 logs["loss/sigreg"] = sigreg_strong_loss(sigreg_latents, sketch_dim=self.config.sigreg_sketch_dim)
+                logs["loss/sigreg"] = logs["loss/sigreg"].mean().expand(logs["loss"].shape[0])
                 logs["loss"] = logs["loss"] + logs["loss/sigreg"] * sigreg_loss_weight
         
         if self.train_unet == True:
