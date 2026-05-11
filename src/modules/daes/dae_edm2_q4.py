@@ -165,6 +165,7 @@ class DAE_Config(DualDiffusionDAEConfig):
     add_pixel_norm: bool   = False
 
     static_latents_scale: Optional[float] = None
+    static_latents_noise: Optional[float] = None
     
 class Block(torch.nn.Module):
 
@@ -390,6 +391,8 @@ class DAE(DualDiffusionDAE):
             x = self.latents_stats_tracker.rescale(x, mode="static")
             x = self.latents_stats_tracker.add_mean(x, mode="per_channel")
             x = normalize(x)
+            if self.config.static_latents_noise is not None:
+                x = x + torch.randn_like(x) * self.config.static_latents_noise
 
         x = self.conv_latents_in(x.to(dtype=torch.bfloat16))
 
