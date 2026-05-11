@@ -72,7 +72,7 @@ class UNetConfig(DualDiffusionUNetConfig):
     rope_scale: Optional[float] = None
     num_layers_per_block: int = 20           # Number of resnet blocks per resolution.
     label_balance: float      = 0.5          # Balance between noise embedding (0) and class embedding (1).
-    balance_logits_offset: float = -2
+    balance_logits_offset: float = -4
     mlp_multiplier: int    = 3               # Multiplier for the number of channels in the MLP.
     mlp_groups: int        = 32              # Number of groups for the MLPs.
     emb_linear_groups: int = 32
@@ -129,7 +129,7 @@ class Block(torch.nn.Module):
             self.skip_balance = None
 
         self.conv_res0 = MPConv(in_channels, inner_channels,  kernel=(1,3), groups=mlp_groups)
-        self.conv_res1 = MPConv(inner_channels, out_channels, kernel=(1,1), groups=mlp_groups)
+        self.conv_res1 = MPConv(inner_channels, out_channels, kernel=(1,3), groups=mlp_groups)
         
         self.emb_gain = torch.nn.Parameter(torch.zeros([]))
         self.emb_linear = MPConv(emb_channels, inner_channels, kernel=(1,1), groups=emb_linear_groups)
