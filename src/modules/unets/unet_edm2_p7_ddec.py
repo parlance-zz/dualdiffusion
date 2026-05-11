@@ -46,8 +46,8 @@ class UNetConfig(DualDiffusionUNetConfig):
     in_channels:  int = 256
     out_channels: int = 256
     in_channels_emb: int = 0
-    in_channels_x_ref: int = 512
-    in_num_freqs: int = 256
+    in_channels_x_ref: int = 384
+    in_num_freqs: int = 128
 
     sigma_max: float  = 200
     sigma_min: float  = 0.08
@@ -221,6 +221,7 @@ class UNet(DualDiffusionUNet):
         self.emb_fourier = MPFourier(cnoise, bandwidth=config.mp_fourier_bandwidth)
         self.emb_noise = MPConv(cnoise, cemb, kernel=())
         self.emb_x_ref = MPConv(config.in_channels_x_ref, cemb, kernel=(1,1))
+        self.x_ref_gain = torch.nn.Parameter(torch.zeros([]))
 
         if config.in_channels_emb > 0:
             self.emb_label = MPConv(config.in_channels_emb, cemb, kernel=())
@@ -315,7 +316,7 @@ class UNet(DualDiffusionUNet):
         idx = 0; skips = []
         for name, block in self.dec.items():
             if "conv" in name:
-                x = block(x) + self.emb_x_ref(x_ref)
+                x = block(x) + self.emb_x_ref(x_ref) * self.x_ref_gain
             else:
                 skip = None
 
