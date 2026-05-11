@@ -275,6 +275,12 @@ class MS_MDCT_DualFormat(DualDiffusionFormat):
         num_mdct_bins = self.config.mdct_num_frequencies
         num_mdct_frames = raw_crop_width // num_mdct_bins + 1
         return (bsz, self.config.num_raw_channels, num_mdct_bins, num_mdct_frames,)
+
+    def get_mdct_phase_shape(self, bsz: int = 1, raw_length: Optional[int] = None):
+        raw_crop_width = self.get_raw_crop_width(raw_length=raw_length)
+        num_mdct_bins = self.config.mdct_num_frequencies
+        num_mdct_frames = raw_crop_width // num_mdct_bins + 1
+        return (bsz, self.config.num_raw_channels * 2, num_mdct_bins, num_mdct_frames,)
     
     def raw_to_mdct(self, raw_samples: torch.Tensor, random_phase_augmentation: bool = False) -> torch.Tensor:
 
