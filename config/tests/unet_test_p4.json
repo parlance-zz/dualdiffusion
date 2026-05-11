@@ -6,7 +6,8 @@
         "load_checkpoints": true,
         "load_emas": {
             //"unet": "ema_beta0.995.safetensors",
-            //"unet": "ema_std0.1.safetensors",
+            //"unet": "ema_std0.1.safetensors"
+            "unet": "ema_std0.05.safetensors"
             //"ddecm": "ema_std0.1.safetensors",
             //"ddecp": "ema_std0.1.safetensors"
         },
@@ -77,15 +78,15 @@
         "myon_myon.flac"
         */
         
-        //"xbox/Jet Set Radio Future"
+        //"xbox/Jet Set Radio Future",
         //"dsf/Jet Grind Radio"
-        //"psf3/Elder Scrolls IV, The - Oblivion"
+        //"psf3/Elder Scrolls IV, The - Oblivion",
         //"xbox/Elder Scrolls III, The - Morrowind"
 
         //"switch/Atelier Sophie 2 - The Alchemist of the Mysterious Dream", // high sound quality, orchestral et al
         //"switch/Super Smash Bros. Ultimate"
         
-        //*
+        /*
         "psf3/Mamoru-kun wa Norowarete Shimatta! Meikai Katsugeki Wide-Han/bgm46_v03m.msf.flac", // cool electronic
         "psf3/Mamoru-kun wa Norowarete Shimatta! Meikai Katsugeki Wide-Han/bgm02_v02.msf.flac", // cool electronic
         "switch/Grisaia Trilogy, The/MUSIC_00000043.lopus.flac", // cool orchestral
@@ -193,7 +194,7 @@
         "3sf/Monster Hunter 4 Ultimate",
         "3sf/Monster Hunter Generations",
         "3sf/Monster Hunter XX"
-        */
+        /*/
 
         //"smd/Sonic CD",
         //"psf/Mega Man 8" // cool shit
@@ -291,7 +292,7 @@
         //*/
         //"psf2/Fisherman's Challenge"
 
-        /* // metal
+        //* // metal
         //"psf3/One Piece - Pirate Warriors 3/BGMLink_00000007.at3.flac",
         //"switch/eBaseball Powerful Pro Yakyuu 2020/_t_wem_1004274880.wem.flac",
         //"vita/Tayutama 2 - You're the only one/015.at9.flac", // sick progressive metal
@@ -306,7 +307,9 @@
         //"switch/Legend of Heroes - Trails of Cold Steel III, The/ed8466.lopus.flac",
 
         "wii/Kamen Rider - Chou Climax Heroes/Stage03.brstm.flac", // progressive metal
-        //"wii/Kamen Rider - Chou Climax Heroes/Stage03.brstm.flac", // progressive metal
+        "wii/Kamen Rider - Chou Climax Heroes/Stage03.brstm.flac", // progressive metal
+        "wii/Kamen Rider - Chou Climax Heroes/Stage03.brstm.flac", // progressive metal
+        "wii/Kamen Rider - Chou Climax Heroes/Stage03.brstm.flac", // progressive metal
 
         "vita/Gundam Breaker 2/bgm.awb.00011.at9.flac"
         //"vita/Gundam Breaker 2/bgm.awb.00011.at9.flac"
@@ -375,15 +378,15 @@
         //"length": 2097152,
         //"length": 308768,
         
-        "num_steps": 300,//300,//500
-        "cfg_scale": 3,//4,//3.5,//4//3//1.5,
-        "use_heun": true,
+        "num_steps": 200,//300,//500
+        "cfg_scale": 4,//5,//4,//3.5,//4//3//1.5,
+        "use_heun": false,
 
-        "schedule": "ln_linear",
-        "rho": 1,
+        //"schedule": "ln_linear",
+        //"rho": 1,
 
-        //"schedule": "edm2",
-        //"rho": 7,
+        "schedule": "edm2",
+        "rho": 7,
 
         //"schedule": "cos",
         //"rho": 1.35,
@@ -391,8 +394,8 @@
         "sigma_max": 200,
         "sigma_min": 0.08,
         
-        "input_perturbation": 0.1,//0.2,//0.016,//0.005568,//0.016,//0.12,//0.1//0.01
-        "input_perturbation_offset": -1//-1//-0.85//-0.35//-0.85//100
+        "input_perturbation": 1,//0.2,//0.016,//0.005568,//0.016,//0.12,//0.1//0.01
+        "input_perturbation_offset": -2.5//-1//-0.85//-0.35//-0.85//100
     },
     "ddecm_params": {
 

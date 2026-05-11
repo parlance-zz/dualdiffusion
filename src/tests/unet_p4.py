@@ -213,7 +213,7 @@ def unet_test() -> None:
         ddecp_x_ref = format.mel_spec_to_linear_psd(ddec_cond)
         cfg.ddecp_params.seed = cfg.unet_params.seed
         output_ddecp = pipeline.diffusion_decode(cfg.ddecp_params, audio_embedding=audio_embedding,
-            sample_shape=input_mdct_phase.shape, x_ref=ddecp_x_ref.to(ddecp.dtype), module=ddecp).float()
+            sample_shape=format.get_mdct_phase_shape(raw_length=crop_width), x_ref=ddecp_x_ref.to(ddecp.dtype), module=ddecp).float()
         
         output_raw = format.mdct_phase_to_raw(output_ddecp).float()
         output_mel_spec = format.raw_to_mel_spec(output_raw)
