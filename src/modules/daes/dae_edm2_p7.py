@@ -43,11 +43,12 @@ from modules.mp_tools import MPConv, AdaptiveGroupBalance, mp_silu, normalize, r
 @dataclass
 class DAE_Config(DualDiffusionDAEConfig):
 
-    in_channels:  int = 256
-    out_channels: int = 256
+    in_channels:  int = 384
+    out_channels: int = 384
     in_channels_emb: int = 0
     latent_channels: int = 256
     in_num_freqs: int = 128
+    latents_sigma: float = 0.01
 
     adg_min_balance: Optional[float]  = 0.1
     adg_max_balance: Optional[float]  = 0.9
@@ -59,8 +60,8 @@ class DAE_Config(DualDiffusionDAEConfig):
     channel_mult_emb: Optional[int] = 1       # Multiplier for final embedding dimensionality.
     channels_per_head: int    = 128           # Number of channels per attention head.
     attn_logit_scale: float   = 1
-    num_enc_layers: int = 12
-    num_dec_layers_per_block: int = 2        # Number of resnet blocks per resolution.
+    num_enc_layers: int = 8
+    num_dec_layers_per_block: int = 1        # Number of resnet blocks per resolution.
     balance_logits_offset: float = -4
     mlp_multiplier: int    = 2               # Multiplier for the number of channels in the MLP.
     mlp_groups: int        = 16              # Number of groups for the MLPs.
@@ -392,7 +393,8 @@ class DAE(DualDiffusionDAE):
         else:
             emb = None
         
-        x = self.conv_latents_in(x.to(dtype=torch.bfloat16))
+        x = (x + torch.randn_like(x) * self.config.latents_sigma).to(dtype=torch.bfloat16)
+        x = self.conv_latents_in(x)
 
         for _, block in self.dec.items():
             x = block(x, emb)
@@ -403,23 +405,18 @@ class DAE(DualDiffusionDAE):
 
         return out
 
-    def forward(self, samples: torch.Tensor, audio_embeddings: torch.Tensor, latents_sigma: Optional[float] = None) -> tuple[torch.Tensor, ...]:
+    def forward(self, samples: torch.Tensor, audio_embeddings: torch.Tensor) -> tuple[torch.Tensor, ...]:
 
         dae_embeddings = self.get_embeddings(audio_embeddings)
         latents = self.encode(samples, dae_embeddings, training=True)
+        out = self.decode(latents, dae_embeddings, training=True)
 
-        if latents_sigma is not None:
-            decode_latents = latents + latents_sigma * torch.randn_like(latents)
-        else:
-            decode_latents = latents
-        
-        #out = self.decode(decode_latents, dae_embeddings, training=True)
-        out = torch.zeros_like(samples)
         return latents, out
 
     def tiled_encode(self, x: torch.Tensor, embeddings: torch.Tensor, max_chunk: int = 6144, overlap: int = 256) -> torch.Tensor:
         raise NotImplementedError()
     
+    #"""
     def latents_to_img(self, latents: torch.Tensor, **kwargs) -> ndarray:
         
         #from modules.daes.dae import top_pca_components
@@ -429,3 +426,4 @@ class DAE(DualDiffusionDAE):
         latents = latents.permute(0, 2, 1, 3).contiguous()
         
         return super().latents_to_img(latents, img_split_stereo=False)
+    #"""

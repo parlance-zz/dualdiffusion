@@ -41,7 +41,10 @@ class MS_MDCT_DualFormatConfig(DualDiffusionFormatConfig):
 
     # mdct params
     raw_to_mdct_scale: float = 1
-    mdct_phase_scale: float  = 1
+    mdct_phase_scales: Optional[list[float]] = None
+    mdct_psd_scales: Optional[list[float]]   = None
+    mdct_psd_offsets: Optional[list[float]]  = None
+    mdct_psd_final_scale: float = 1
 
     mdct_window_len: int = 512
     mdct_window_func: Literal["sin", "kaiser_bessel_derived", "vorbis"] = "sin"
@@ -55,8 +58,9 @@ class MS_MDCT_DualFormatConfig(DualDiffusionFormatConfig):
         return self.mdct_window_len // 2
 
     # mel-spec params
-    raw_to_mel_spec_scale: float  = 1
-    raw_to_mel_spec_offset: float = 0
+    raw_to_mel_spec_scales: Optional[list[float]] = None
+    raw_to_mel_spec_offsets: Optional[list[float]] = None
+    raw_to_mel_spec_final_scale: float = 1
 
     ms_add_center_channel: bool = False
     ms_img_show_center_channel: bool = False
@@ -150,6 +154,13 @@ class MS_MDCT_DualFormat(DualDiffusionFormat):
         self.ms_stft_mel_density: torch.Tensor
         self.register_buffer("ms_stft_mel_density", get_mel_density(ms_stft_hz).view(1, 1,-1, 1))
 
+        self.mel_spec_scales: torch.Tensor
+        self.mel_spec_offsets: torch.Tensor
+        if config.raw_to_mel_spec_scales is not None:
+            self.register_buffer("mel_spec_scales", torch.Tensor(config.raw_to_mel_spec_scales).view(1, 1,-1, 1))
+        if config.raw_to_mel_spec_offsets is not None:
+            self.register_buffer("mel_spec_offsets", torch.Tensor(config.raw_to_mel_spec_offsets).view(1, 1,-1, 1))
+
         # ***** mdct setup *****
         self.mdct_hz: torch.Tensor
         self.mdct_mel_density: torch.Tensor
@@ -157,6 +168,17 @@ class MS_MDCT_DualFormat(DualDiffusionFormat):
         mdct_hz = (torch.arange(config.mdct_num_frequencies) + 0.5) * config.sample_rate / config.mdct_window_len
         self.register_buffer("mdct_hz", mdct_hz)
         self.register_buffer("mdct_mel_density", get_mel_density(mdct_hz).view(1, 1,-1, 1))
+
+        self.mdct_psd_scales: torch.Tensor
+        self.mdct_psd_offsets: torch.Tensor
+        if config.mdct_psd_scales is not None:
+            self.register_buffer("mdct_psd_scales", torch.Tensor(config.mdct_psd_scales).view(1, 1,-1, 1))
+        if config.mdct_psd_offsets is not None:
+            self.register_buffer("mdct_psd_offsets", torch.Tensor(config.mdct_psd_offsets).view(1, 1,-1, 1))
+
+        self.mdct_phase_scales: torch.Tensor
+        if config.mdct_phase_scales is not None:
+            self.register_buffer("mdct_phase_scales", torch.Tensor(config.mdct_phase_scales).view(1, 1,-1, 1))
 
         mdct_hz = (torch.arange(config.mdct_num_frequencies) + 0.5) * config.sample_rate / config.mdct_window_len
         self.register_buffer("mdct_hz", mdct_hz)
@@ -217,7 +239,14 @@ class MS_MDCT_DualFormat(DualDiffusionFormat):
             if ms_blended is None: ms_blended = mel_spec
             else: ms_blended += mel_spec
         
-        return (ms_blended ** self.config.ms_abs_exponent + self.config.raw_to_mel_spec_offset) / self.config.raw_to_mel_spec_scale
+        ms_blended = ms_blended.pow(self.config.ms_abs_exponent)
+
+        if self.config.raw_to_mel_spec_offsets is not None:
+            ms_blended = ms_blended + self.mel_spec_offsets        
+        if self.config.raw_to_mel_spec_scales is not None:
+            ms_blended = ms_blended / self.mel_spec_scales
+
+        return ms_blended / self.config.raw_to_mel_spec_final_scale
 
     @torch.inference_mode()
     def mel_spec_to_img(self, mel_spec: torch.Tensor, use_colormap: bool = False):
@@ -272,26 +301,44 @@ class MS_MDCT_DualFormat(DualDiffusionFormat):
             phase_rotation = torch.exp(2j * torch.pi * torch.rand(_mclt.shape[0], device=_mclt.device)) 
             _mclt *= phase_rotation.view(-1, 1, 1, 1)
 
-        mdct_psd = _mclt.real.abs()
-        mdct_psd = mdct_psd.pow(self.config.ms_abs_exponent) / self.mdct_mel_density.pow(self.config.ms_abs_exponent)
-        mdct_phase = _mclt.real.sign() * mdct_psd
+        mdct_psd = _mclt.abs()
+        mdct_phase = (_mclt.real / mdct_psd.clip(min=1e-20)).clip(min=-1, max=1)
 
-        return mdct_phase / self.config.mdct_phase_scale
+        mdct_psd = mdct_psd.pow(self.config.ms_abs_exponent)
+        mdct_phase = mdct_phase * mdct_psd
+
+        if self.config.mdct_phase_scales is not None:
+            mdct_phase = mdct_phase / self.mdct_phase_scales
+        if self.config.mdct_psd_offsets is not None:
+            mdct_psd = mdct_psd + self.mdct_psd_offsets
+        if self.config.mdct_psd_scales is not None:
+            mdct_psd = mdct_psd / self.mdct_psd_scales
+
+        mdct_psd /= self.config.mdct_psd_final_scale
+
+        mdct_phase_psd = torch.cat((mdct_phase, mdct_psd), dim=1)
+        return mdct_phase_psd
     
     def mdct_phase_to_raw(self, mdct_phase: torch.Tensor) -> torch.Tensor:
 
-        mdct_phase = mdct_phase * self.config.mdct_phase_scale
-        
-        mdct_psd = mdct_phase.abs() * self.mdct_mel_density.pow(self.config.ms_abs_exponent)
-        mdct_psd = mdct_psd.clip(min=0).pow(1 / self.config.ms_abs_exponent)
-        mdct_phase = mdct_phase.sign()
+        mdct_phase, mdct_psd = torch.chunk(mdct_phase, 2, dim=1)
 
+        mdct_psd = mdct_psd * self.config.mdct_psd_final_scale
+        
+        if self.config.mdct_phase_scales is not None:
+            mdct_phase = mdct_phase * self.mdct_phase_scales
+        if self.config.mdct_psd_scales is not None:
+            mdct_psd = mdct_psd * self.mdct_psd_scales
+        if self.config.mdct_psd_offsets is not None:
+            mdct_psd = mdct_psd - self.mdct_psd_offsets
+
+        mdct_psd = mdct_psd.clip(min=0).pow(1 / self.config.ms_abs_exponent - 1)
         raw_samples = self.imdct(mdct_phase * mdct_psd).real.contiguous()
         return raw_samples
     
     def raw_to_mdct_psd(self, raw_samples: torch.Tensor) -> torch.Tensor:
         _mclt: torch.Tensor = self.mdct(raw_samples.float())
-        return _mclt.abs().pow(self.config.ms_abs_exponent) / self.mdct_mel_density.pow(self.config.ms_abs_exponent) / self.config.mdct_phase_scale
+        return _mclt.abs().pow(self.config.ms_abs_exponent) / self.mdct_mel_density.pow(self.config.ms_abs_exponent)
 
 if __name__ == "__main__":
 
