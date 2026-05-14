@@ -1065,6 +1065,7 @@ class DualDiffusionTrainer:
 
                 # loss is multiplied by grad accum steps for consistent grad norm
                 self.accelerator.backward(module_logs["loss"].mean() * self.config.optimizer.loss_scale)
+                del module_logs
 
                 if self.accelerator.sync_gradients:
                     assert self.accum_step == (self.config.gradient_accumulation_steps - 1), \

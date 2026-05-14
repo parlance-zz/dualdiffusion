@@ -287,6 +287,7 @@ class MS_MDCT_DualFormat(DualDiffusionFormat):
 
         return _mclt.real.contiguous() / self.mdct_mel_density / self.config.raw_to_mdct_scale
     
+    @torch.no_grad()
     def mdct_to_raw(self, mdct: torch.Tensor) -> torch.Tensor:
 
         mdct = mdct * self.mdct_mel_density * self.config.raw_to_mdct_scale
@@ -294,6 +295,7 @@ class MS_MDCT_DualFormat(DualDiffusionFormat):
         
         return raw_samples
 
+    @torch.no_grad()
     def raw_to_mdct_phase(self, raw_samples: torch.Tensor, random_phase_augmentation: bool = False) -> torch.Tensor:
 
         _mclt: torch.Tensor = self.mdct(raw_samples.float())
@@ -319,6 +321,7 @@ class MS_MDCT_DualFormat(DualDiffusionFormat):
         mdct_phase_psd = torch.cat((mdct_phase, mdct_psd), dim=1)
         return mdct_phase_psd
     
+    @torch.no_grad()
     def mdct_phase_to_raw(self, mdct_phase: torch.Tensor) -> torch.Tensor:
 
         mdct_phase, mdct_psd = torch.chunk(mdct_phase, 2, dim=1)
@@ -336,6 +339,7 @@ class MS_MDCT_DualFormat(DualDiffusionFormat):
         raw_samples = self.imdct(mdct_phase * mdct_psd).real.contiguous()
         return raw_samples
     
+    @torch.no_grad()
     def raw_to_mdct_psd(self, raw_samples: torch.Tensor) -> torch.Tensor:
         _mclt: torch.Tensor = self.mdct(raw_samples.float())
         return _mclt.abs().pow(self.config.ms_abs_exponent) / self.mdct_mel_density.pow(self.config.ms_abs_exponent)

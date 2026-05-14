@@ -246,8 +246,8 @@ class SingleDeviceNorMuonWithAuxAdam(torch.optim.Optimizer):
                 for p in group["params"]:
 
                     if p.grad is None:
-                        continue #p.grad = torch.zeros_like(p)  # Force synchronization
-                        
+                        p.grad = torch.zeros_like(p)  # workaround for ddp nuisance unused param errors
+                    
                     state = self.state[p]
                     groups = getattr(p, "conv_groups", 1)
 
@@ -273,7 +273,7 @@ class SingleDeviceNorMuonWithAuxAdam(torch.optim.Optimizer):
                 for p in group["params"]:
 
                     if p.grad is None:
-                        continue #p.grad = torch.zeros_like(p)  # Force synchronization
+                        p.grad = torch.zeros_like(p)  # workaround for ddp nuisance unused param errors
 
                     state = self.state[p]
                     if len(state) == 0:

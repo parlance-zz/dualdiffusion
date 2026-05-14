@@ -53,8 +53,8 @@ class DiffusionDecoder_Trainer_Config(ModuleTrainerConfig):
     ddecm: dict[str, Any]
     unet: dict[str, Any]
 
-    #out_sigreg_loss_weight: float = 1
     sigreg: dict[str, Any]
+    out_sigreg_loss_weight: float = 1
     latents_sigreg_loss_weight: float = 1
     sigreg_loss_warmup_steps: int = 300
 
@@ -185,8 +185,8 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
                 "io_stats/latents_mean": latents.mean(dim=(1,2,3)).detach(),
                 "io_stats/latents_per_ch_mean": self.dae.latents_stats_tracker.mean.pow(2).mean().pow(0.5),
                 "io_stats/latents_per_ch_var": self.dae.latents_stats_tracker.var.mean(),
-                "io_stats/ddec_cond_var": ddec_cond.var(dim=(1,2,3)),
-                "io_stats/ddec_cond_mean": ddec_cond.mean(dim=(1,2,3))
+                "io_stats/ddec_cond_var": ddec_cond.var(dim=(1,2,3)).detach(),
+                "io_stats/ddec_cond_mean": ddec_cond.mean(dim=(1,2,3)).detach()
             })
 
             if self.dae.config.latent_channels <= 32:
@@ -196,8 +196,8 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
 
         if self.train_ddecp == True or self.train_ddecm == True:
             ddec_x_ref = ddec_cond
-            logs["io_stats/ddec_x_ref_mean"] = ddec_x_ref.mean(dim=(1,2,3))
-            logs["io_stats/ddec_x_ref_var"]  = ddec_x_ref.var(dim=(1,2,3))
+            logs["io_stats/ddec_x_ref_mean"] = ddec_x_ref.mean(dim=(1,2,3)).detach()
+            logs["io_stats/ddec_x_ref_var"]  = ddec_x_ref.var(dim=(1,2,3)).detach()
         else:
             ddec_x_ref = None
 
@@ -217,49 +217,43 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
 
         if self.train_dae == True:
             
-            #out_sigreg_loss_weight = self.config.out_sigreg_loss_weight
+            out_sigreg_loss_weight = self.config.out_sigreg_loss_weight
             latents_sigreg_loss_weight = self.config.latents_sigreg_loss_weight
             if self.trainer.global_step < self.config.sigreg_loss_warmup_steps:
-                #out_sigreg_loss_weight *= self.trainer.global_step / self.config.sigreg_loss_warmup_steps
-                latents_sigreg_loss_weight *= self.trainer.global_step / self.config.sigreg_loss_warmup_steps
-            #logs["loss_weight/sigreg_out"] = out_sigreg_loss_weight
+                latents_sigreg_loss_weight *= (self.trainer.global_step + 1) / self.config.sigreg_loss_warmup_steps
+            logs["loss_weight/sigreg_out"] = out_sigreg_loss_weight
             logs["loss_weight/sigreg_latents"] = latents_sigreg_loss_weight
+            
+            latents_sigreg_loss = torch.zeros_like(logs["loss"]); num_sigreg_losses = 0
+            for unfold_width in range(1, 17, 2): #range(1, 8):
+                step = max(unfold_width // 2 - 1, 1) # 1
 
-            if latents_sigreg_loss_weight > 0:
-                
-                latents_sigreg_loss = torch.zeros_like(logs["loss"]); num_sigreg_losses = 0
-                for unfold_width in range(1, 17, 2): #range(1, 8):
-                    step = max(unfold_width // 2 - 1, 1) # 1
+                sigreg_latents = latents.unfold(3, unfold_width, step).transpose(2,4).flatten(1,2).contiguous()
+                _latents_sigreg_loss = sigreg_strong_loss(sigreg_latents, **self.config.sigreg).mean().expand(latents_sigreg_loss.shape[0])
+                latents_sigreg_loss = latents_sigreg_loss + _latents_sigreg_loss
+                logs[f"loss/latents_sigreg_{unfold_width}"] = _latents_sigreg_loss.detach()
 
-                    sigreg_latents = latents.unfold(3, unfold_width, step).transpose(2,4).flatten(1,2).contiguous()
-                    _latents_sigreg_loss = sigreg_strong_loss(sigreg_latents, **self.config.sigreg).mean().expand(latents_sigreg_loss.shape[0])
-                    latents_sigreg_loss = latents_sigreg_loss + _latents_sigreg_loss
-                    logs[f"loss/latents_sigreg_{unfold_width}"] = _latents_sigreg_loss.detach()
+                num_sigreg_losses += 1
 
-                    num_sigreg_losses += 1
+            latents_sigreg_loss = latents_sigreg_loss / num_sigreg_losses
+            logs["loss/latents_sigreg"] = latents_sigreg_loss.detach()
+            logs["loss"] = logs["loss"] + latents_sigreg_loss * latents_sigreg_loss_weight
 
-                latents_sigreg_loss = latents_sigreg_loss / num_sigreg_losses
-                logs["loss/latents_sigreg"] = latents_sigreg_loss.detach()
-                logs["loss"] = logs["loss"] + latents_sigreg_loss * latents_sigreg_loss_weight
+            out_sigreg_loss = torch.zeros_like(logs["loss"]); num_sigreg_losses = 0
+            for unfold_width in range(1, 17, 2):
+                step = max(unfold_width // 2 - 1, 1)
+            
+                sigreg_x = ddec_cond.unfold(3, unfold_width, step).transpose(2,4).flatten(1,2).contiguous()
+                sigreg_y = input_mel_spec.unfold(3, unfold_width, step).transpose(2,4).flatten(1,2).contiguous()
+                #sigreg_y = mdct_phase.unfold(3, unfold_width, step).transpose(2,4).flatten(1,2).contiguous()
+                _out_sigreg_loss = sigreg2(sigreg_x, sigreg_y.detach(), **self.config.sigreg).mean().expand(out_sigreg_loss.shape[0])
+                out_sigreg_loss = out_sigreg_loss + _out_sigreg_loss
+                logs[f"loss/out_sigreg_{unfold_width}"] = _out_sigreg_loss.detach()
 
-                """
-                out_sigreg_loss = torch.zeros_like(logs["loss"]); num_sigreg_losses = 0
-                for unfold_width in range(1, 17, 2):
-                    step = max(unfold_width // 2 - 1, 1)
-                
-                    sigreg_x = ddec_cond.unfold(3, unfold_width, step).transpose(2,4).flatten(1,2).contiguous()
-                    #sigreg_y = input_mel_spec.unfold(3, unfold_width, step).transpose(2,4).flatten(1,2).contiguous()
-                    sigreg_y = mdct_phase.unfold(3, unfold_width, step).transpose(2,4).flatten(1,2).contiguous()
-                    _out_sigreg_loss = sigreg2(sigreg_x, sigreg_y.detach(), sketch_dim=self.config.sigreg_sketch_dim,
-                                               num_t=self.config.sigreg_num_t).mean().expand(out_sigreg_loss.shape[0])
-                    out_sigreg_loss = out_sigreg_loss + _out_sigreg_loss
-                    logs[f"loss/out_sigreg_{unfold_width}"] = _out_sigreg_loss.detach()
+                num_sigreg_losses += 1
 
-                    num_sigreg_losses += 1
-
-                logs["loss/out_sigreg"] = out_sigreg_loss.detach() / num_sigreg_losses
-                logs["loss"] = logs["loss"] + out_sigreg_loss * out_sigreg_loss_weight
-                """
+            logs["loss/out_sigreg"] = out_sigreg_loss.detach() / num_sigreg_losses
+            logs["loss"] = logs["loss"] + out_sigreg_loss * out_sigreg_loss_weight
 
         if self.train_unet == True:
             

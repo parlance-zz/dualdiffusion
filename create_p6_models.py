@@ -49,9 +49,9 @@ if input("Save module? (y/n) ").lower() == 'y':
     print(f"Saved model to {model_path}/ddecp")
 
 
-from modules.unets.unet_edm2_q4 import UNet, UNetConfig
-#from modules.unets.unet_edm2_p6 import UNet, UNetConfig
-unet = UNet(UNetConfig())
+#from modules.unets.unet_edm2_q4 import UNet, UNetConfig
+from modules.unets.unet_edm2_p6 import UNet, UNetConfig
+unet = UNet(UNetConfig(sigma_max=200, sigma_min=0.08, sigma_data=1))
 print_module_info(unet, "unet")
 
 if input("Save module? (y/n) ").lower() == 'y':
