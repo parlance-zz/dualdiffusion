@@ -73,6 +73,7 @@ class UNetConfig(DualDiffusionUNetConfig):
     num_layers_per_block: int = 20           # Number of resnet blocks per resolution.
     label_balance: float      = 0.5          # Balance between noise embedding (0) and class embedding (1).
     balance_logits_offset: float = -4
+    block_kernel_size: int = 3
     mlp_multiplier: int    = 3               # Multiplier for the number of channels in the MLP.
     mlp_groups: int        = 32              # Number of groups for the MLPs.
     emb_linear_groups: int = 32
@@ -95,7 +96,8 @@ class Block(torch.nn.Module):
         global_attention: bool = False,
         adg_min_balance: Optional[float]  = 0.1,
         adg_max_balance: Optional[float]  = 0.9,
-        adg_weight_decay: Optional[float] = None
+        adg_weight_decay: Optional[float] = None,
+        block_kernel_size: int = 3
     ) -> None:
         super().__init__()
 
@@ -128,8 +130,8 @@ class Block(torch.nn.Module):
             self.conv_skip = None
             self.skip_balance = None
 
-        self.conv_res0 = MPConv(in_channels, inner_channels,  kernel=(1,3), groups=mlp_groups)
-        self.conv_res1 = MPConv(inner_channels, out_channels, kernel=(1,3), groups=mlp_groups)
+        self.conv_res0 = MPConv(in_channels, inner_channels,  kernel=(1,block_kernel_size), groups=mlp_groups)
+        self.conv_res1 = MPConv(inner_channels, out_channels, kernel=(1,block_kernel_size), groups=mlp_groups)
         
         self.emb_gain = torch.nn.Parameter(torch.zeros([]))
         self.emb_linear = MPConv(emb_channels, inner_channels, kernel=(1,1), groups=emb_linear_groups)
@@ -221,7 +223,8 @@ class UNet(DualDiffusionUNet):
                         "channels_per_head": config.channels_per_head,
                         "adg_min_balance": config.adg_min_balance,
                         "adg_max_balance": config.adg_max_balance,
-                        "adg_weight_decay": config.adg_weight_decay}
+                        "adg_weight_decay": config.adg_weight_decay,
+                        "block_kernel_size": config.block_kernel_size}
 
         cblock = [config.model_channels * x for x in config.channel_mult]
         cnoise = int(config.model_channels * config.channel_mult_noise) if config.channel_mult_noise is not None else max(cblock)
