@@ -50,7 +50,7 @@ from torch.nn import functional as F
 
 
 def mdct(
-    waveform: torch.Tensor, window: torch.Tensor, padding: bool = True, return_complex: bool = False
+    waveform: torch.Tensor, window: torch.Tensor, padding: bool = True, return_complex: bool = False, last_frame: int = -1
 ) -> torch.Tensor:
     """
     Compute the Modified Discrete Cosine Transform (MDCT) of a waveform.
@@ -118,7 +118,7 @@ def mdct(
     spectrogram = spectrogram.reshape(shape[:-1] + spectrogram.shape[-2:])
 
     if padding:
-        spectrogram = spectrogram[..., :-1]
+        spectrogram = spectrogram[..., :last_frame]
 
     # Normalize the output to account for the FFT scaling (sqrt(win_length)) and the window contribution (sqrt(win_length // 2)).
     # The window's power, sum(window ** 2), equals (win_length // 2) due to energy conservation with 50% overlap.

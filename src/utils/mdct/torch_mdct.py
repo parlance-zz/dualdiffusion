@@ -118,6 +118,7 @@ class MDCT(nn.Module):
         window_kwargs: Optional[Dict[str, Any]] = None,
         padding: bool = True,
         return_complex: bool = False,
+        last_frame: int = -1,
     ) -> None:
         super().__init__()
 
@@ -126,6 +127,7 @@ class MDCT(nn.Module):
         self.window_kwargs = window_kwargs or {}
         self.padding = padding
         self.return_complex = return_complex
+        self.last_frame = last_frame
         self.fn = mdct
 
         self.register_buffer(
@@ -149,7 +151,7 @@ class MDCT(nn.Module):
             MDCT spectrogram of shape (..., win_length // 2, n_frames).
         """
         return_complex = return_complex or self.return_complex
-        return self.fn(waveform, self.window, padding=self.padding, return_complex=return_complex)
+        return self.fn(waveform, self.window, padding=self.padding, return_complex=return_complex, last_frame=self.last_frame)
 
 
 class IMDCT(nn.Module):
