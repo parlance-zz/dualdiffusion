@@ -310,6 +310,17 @@ def mp_cat_interleave(a: torch.Tensor, b: torch.Tensor,
     return torch.stack([wa * a , wb * b], dim=dim+1).reshape(
         *a.shape[:dim], a.shape[dim]*2, *a.shape[dim+1:])
 
+def cat_interleave(a: torch.Tensor, b: torch.Tensor, dim: int = 0) -> torch.Tensor:
+
+    if a.shape != b.shape:
+        raise ValueError(f"Shapes must match exactly, got {a.shape} and {b.shape}")
+
+    dim = dim % a.ndim
+    stacked = torch.stack((a, b), dim=dim + 1)
+    out_shape = list(a.shape)
+    out_shape[dim] *= 2
+    return stacked.reshape(out_shape)
+
 #----------------------------------------------------------------------------
 # Magnitude-preserving Fourier features (Equation 75).
 
