@@ -47,16 +47,20 @@ def _is_prime(n: int) -> bool:
 class MSSLoss1DConfig:
 
     block_low:  int = 31
-    block_high: int = 4098
+    block_high: int = 8200#4100
 
     block_sampling_replace: bool = True
     block_sampling_scale: Literal["linear", "ln_linear"] = "ln_linear"
 
     sample_rate: float = 32000
-    num_iterations: int = 20
-    midside_probability: float = 0.5
-    psd_eps: float = 1e-6#1e-4
-    loss_scale: float = 3
+    num_iterations: int = 10#20
+    midside_probability: float = 0#0.5
+    psd_eps: float = 1e-10#1e-6#1e-4
+    loss_scale: float = 0#3
+
+    cepstrum_pow: float = 0.25
+    loss_scale_cepstrum: float = 100
+
 
 class MSSLoss1D:
 
@@ -102,7 +106,9 @@ class MSSLoss1D:
         torch.backends.cuda.cufft_plan_cache.max_size = len(block_sizes) + 250 # slight performance boost if fft plans are cached
         self.windows: dict[int, torch.Tensor] = {}
         self.mel_densities: dict[int, torch.Tensor] = {}
+
         self.loss_scale = config.loss_scale / self.config.num_iterations
+        self.cepstrum_loss_scale = config.loss_scale_cepstrum / self.config.num_iterations
 
     @torch.no_grad()
     def _flat_top_window(self, x: torch.Tensor) -> torch.Tensor:
@@ -154,6 +160,7 @@ class MSSLoss1D:
             sample = torch.lerp(sample, target.detach(), rnd_t)
         
         loss = torch.zeros(target.shape[0], device=self.device)
+        loss_cepstrum = torch.zeros_like(loss)
 
         static_pad = int(self.block_sizes[-1])
         sample = torch.nn.functional.pad(sample, (static_pad, static_pad), mode="reflect")
@@ -179,9 +186,14 @@ class MSSLoss1D:
             with torch.no_grad():
                 target_fft = self.stft1d(target, block_width, step_w, window, offset_w, end_offset_w, midside)
                 target_fft_abs = target_fft.abs().requires_grad_(False).detach()
-                loss_weight = target_fft_abs.pow(2).mean(dim=r_dims, keepdim=True)
-                #print(block_width, loss_weight.amin())
-                loss_weight = loss_weight.clip(min=self.config.psd_eps).pow(0.5).requires_grad_(False).detach()
+
+                if self.loss_scale > 0:
+                    loss_weight = target_fft_abs.pow(2).mean(dim=r_dims, keepdim=True)
+                    #print(block_width, loss_weight.amin())
+                    loss_weight = loss_weight.clip(min=self.config.psd_eps).pow(0.5).requires_grad_(False).detach()
+
+                if self.cepstrum_loss_scale > 0:
+                    target_cepstrum = torch.fft.rfft(target_fft_abs.clip(min=self.config.psd_eps**0.5).pow(self.config.cepstrum_pow), norm="ortho").abs()
 
                 """
                 if order == (-2, -1):
@@ -199,11 +211,20 @@ class MSSLoss1D:
 
             sample_fft = self.stft1d(sample, block_width, step_w, window, offset_w, end_offset_w, midside)
             sample_fft_abs = sample_fft.abs()
-            
-            mse_loss = torch.nn.functional.mse_loss(sample_fft_abs.float(), target_fft_abs.float(), reduction="none")
-            loss = loss + (mse_loss / loss_weight).mean(dim=(1,2,3)) #** 2
 
-        return loss * self.loss_scale
+            if self.loss_scale > 0:
+                mse_loss = torch.nn.functional.mse_loss(sample_fft_abs.float(), target_fft_abs.float(), reduction="none")
+                loss = loss + (mse_loss / loss_weight).mean(dim=(1,2,3)) #** 2
+
+            if self.cepstrum_loss_scale > 0:
+                sample_cepstrum = torch.fft.rfft(sample_fft_abs.clip(min=self.config.psd_eps**0.5).pow(self.config.cepstrum_pow), norm="ortho").abs()
+                mse_loss = torch.nn.functional.mse_loss(sample_cepstrum.float(), target_cepstrum.float(), reduction="none")
+                loss_cepstrum = loss_cepstrum + mse_loss.mean(dim=(1,2,3))
+
+        return {
+            "loss/mss1d": loss * self.loss_scale,
+            "loss/mss1d_cepstrum": loss_cepstrum * self.cepstrum_loss_scale,
+        }
 
 
 if __name__ == "__main__":
