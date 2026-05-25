@@ -119,7 +119,7 @@ class FrequencyScale(torch.nn.Module):
         else:
             raise ValueError(f"Unknown frequency scale: {freq_scale}")
         
-        self.register_buffer("filters", self.get_filters())
+        self.register_buffer("filters", self.get_filters(), persistent=False)
 
         if (self.filters.max(dim=0).values == 0.0).any():
             getLogger().warning("WARNING: At least one FrequencyScale filterbank has all zero values")
