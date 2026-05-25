@@ -153,7 +153,7 @@ class MSSLoss1D:
         return x
     
     def mss_loss(self, sample: torch.Tensor, target: torch.Tensor,
-            leak_pow: Optional[float] = None, leak_max: Optional[float] = None) -> torch.Tensor:
+            leak_pow: Optional[float] = None, leak_max: Optional[float] = None) -> dict[str, torch.Tensor]:
 
         if leak_pow is not None and leak_max is not None:  # useful at start of training for preventing polarity mismatch
             rnd_t = np.random.rand()**leak_pow * leak_max  # disable afterwards for better performance
