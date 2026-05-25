@@ -92,7 +92,7 @@ class FrequencyScale(torch.nn.Module):
         sample_rate: int = 32000,
         num_stft_bins: int = 3201,
         num_filters: int = 256,
-        filter_norm: Optional[Literal["slaney"]] = None,
+        filter_norm: Optional[Literal["slaney", "l2"]] = None,
         unscale_driver: Literal["gels", "gelsy", "gelsd", "gelss"] = "gels",
         filter_shape: Literal["triangular", "cos"] = "triangular",
     ) -> None:
@@ -119,6 +119,7 @@ class FrequencyScale(torch.nn.Module):
         else:
             raise ValueError(f"Unknown frequency scale: {freq_scale}")
         
+        self.filters: torch.Tensor
         self.register_buffer("filters", self.get_filters(), persistent=False)
 
         if (self.filters.max(dim=0).values == 0.0).any():
@@ -132,7 +133,6 @@ class FrequencyScale(torch.nn.Module):
         original_shape = spectrogram.size()
         spectrogram = spectrogram.reshape(-1, original_shape[-2], original_shape[-1])
 
-        #unscaled = regularized_filter_unmixing(self.filters.T, spectrogram, lam=5e-3)
         unscaled = torch.linalg.lstsq(self.filters.transpose(-1, -2)[None], spectrogram, driver=self.unscale_driver).solution
         
         if rectify == True:
@@ -166,4 +166,7 @@ class FrequencyScale(torch.nn.Module):
             enorm = 2. / (unscaled_freqs[2:self.num_filters+2] - unscaled_freqs[:self.num_filters])
             filters *= enorm.unsqueeze(0)
 
+        elif self.filter_norm == "l2": # plays nicer with end-to-end training through the filterbank
+            filters /= filters.pow(2).mean(dim=0, keepdim=True).pow(0.5)
+        
         return filters
