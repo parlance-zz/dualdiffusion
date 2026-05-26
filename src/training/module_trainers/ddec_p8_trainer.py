@@ -225,7 +225,7 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
             ddec_x_ref = None
 
         if self.train_ddecp == True:
-            ddecp_loss_weight = None #self.format.mdct_mel_density / self.format.mdct_mel_density.mean()
+            ddecp_loss_weight = self.format.mdct_mel_density / self.format.mdct_mel_density.mean()
             logs.update(self.ddecp_trainer.train_batch(mdct_phase_psd, audio_embeddings, ddec_x_ref, loss_weight=ddecp_loss_weight))
             logs["loss"] = logs["loss"] + logs["loss/ddecp"]
 

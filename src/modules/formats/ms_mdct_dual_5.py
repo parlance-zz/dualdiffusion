@@ -54,7 +54,7 @@ class MS_MDCT_DualFormatConfig(DualDiffusionFormatConfig):
 
     # mdct params
     mdct_window_len: int = 128
-    mdct_window_func: Literal["sin", "kaiser_bessel_derived", "vorbis"] = "sin"
+    mdct_window_func: Literal["sin", "kaiser_bessel_derived", "vorbis"] = "vorbis"
 
     @property
     def mdct_num_frequencies(self) -> int:
@@ -127,19 +127,19 @@ class MS_MDCT_DualFormat(DualDiffusionFormat):
             )
             self.ms_psd_linear_freq_scales.append(ms_linear_freq_scale)
 
-            self.register_buffer(f"ms_psd_scale_{i}", torch.ones(1), persistent=True)
-            self.register_buffer(f"ms_psd_offset_{i}", torch.zeros(1), persistent=True)
-            self.register_buffer(f"ms_psd_linear_scale_{i}", torch.ones(1), persistent=True)
-            self.register_buffer(f"ms_psd_linear_offset_{i}", torch.zeros(1), persistent=True)
+            self.register_buffer(f"ms_psd_scale_{i}", torch.ones(config.ms_psds[i].ms_num_filters).view(1, 1,-1, 1), persistent=True)
+            self.register_buffer(f"ms_psd_offset_{i}", torch.zeros(config.ms_psds[i].ms_num_filters).view(1, 1,-1, 1), persistent=True)
+            self.register_buffer(f"ms_psd_linear_scale_{i}", torch.ones(config.ms_psds[i].ms_window_length // 2).view(1, 1,-1, 1), persistent=True)
+            self.register_buffer(f"ms_psd_linear_offset_{i}", torch.zeros(config.ms_psds[i].ms_window_length // 2).view(1, 1,-1, 1), persistent=True)
 
             #ms_stft_hz = torch.linspace(0, config.sample_rate / 2, config.ms_psds[i].ms_num_stft_bins)
             #self.ms_stft_mel_density: torch.Tensor
-            #self.register_buffer(f"ms_stft_mel_density_{i}", get_mel_density(ms_stft_hz).view(1, 1,-1, 1))
+            #self.register_buffer(f"ms_stft_mel_density_{i}", get_mel_density(ms_stft_hz).view(1, 1,-1, 1), persistent=False)
             
             # needed to undo mel-density gain when going back from mel-scale to linear
-            ms_psd_linear_hz = torch.linspace(0, config.sample_rate / 2, config.ms_psds[i].ms_window_length)
-            self.ms_psd_linear_mel_density: torch.Tensor
-            self.register_buffer(f"ms_psd_linear_mel_density_{i}", get_mel_density(ms_psd_linear_hz).view(1, 1,-1, 1))
+            #ms_psd_linear_hz = torch.linspace(0, config.sample_rate / 2, config.ms_psds[i].ms_window_length)
+            #self.ms_psd_linear_mel_density: torch.Tensor
+            #self.register_buffer(f"ms_psd_linear_mel_density_{i}", get_mel_density(ms_psd_linear_hz).view(1, 1,-1, 1), persistent=False)
             
         # ***** mdct setup *****
 
@@ -156,11 +156,11 @@ class MS_MDCT_DualFormat(DualDiffusionFormat):
         self.imdct = IMDCT(win_length=config.mdct_window_len, window_fn=mdct_window_fn)
 
         self.mdct_phase_scale: torch.Tensor
-        self.register_buffer("mdct_phase_scale", torch.ones(1), persistent=True)
+        self.register_buffer("mdct_phase_scale", torch.ones(config.mdct_num_frequencies).view(1, 1,-1, 1), persistent=True)
 
         self.mdct_psd_scale: torch.Tensor; self.mdct_psd_offset: torch.Tensor
-        self.register_buffer("mdct_psd_scale", torch.ones(1), persistent=True)
-        self.register_buffer("mdct_psd_offset", torch.zeros(1), persistent=True)
+        self.register_buffer("mdct_psd_scale", torch.ones(config.mdct_num_frequencies).view(1, 1,-1, 1), persistent=True)
+        self.register_buffer("mdct_psd_offset", torch.zeros(config.mdct_num_frequencies).view(1, 1,-1, 1), persistent=True)
 
         mdct_hz = (torch.arange(config.mdct_num_frequencies) + 0.5) * config.sample_rate / config.mdct_window_len
         self.mdct_hz: torch.Tensor; self.mdct_mel_density: torch.Tensor
@@ -223,12 +223,12 @@ class MS_MDCT_DualFormat(DualDiffusionFormat):
 
             ms_psd_offset: torch.Tensor = getattr(self, f"ms_psd_offset_{i}")
             ms_psd_scale: torch.Tensor = getattr(self, f"ms_psd_scale_{i}")
-            ms_psd = (ms_psds[i].float() * ms_psd_scale - ms_psd_offset).pow(2)
+            ms_psd = (ms_psds[i].float() * ms_psd_scale - ms_psd_offset)#.pow(2)
 
             linear_psd = self.ms_psd_linear_freq_scales[i].unscale(ms_psd, rectify=False)
-            ms_psd_linear_mel_density: torch.Tensor = getattr(self, f"ms_psd_linear_mel_density_{i}")
-            linear_psd = linear_psd / ms_psd_linear_mel_density.pow(2 * self.config.ms_abs_exponent)
-            linear_psd = torch.nn.functional.avg_pool2d(linear_psd, (2, 1)).clip(min=self.config.ms_psd_linear_eps).pow(0.5)
+            #ms_psd_linear_mel_density: torch.Tensor = getattr(self, f"ms_psd_linear_mel_density_{i}")
+            #linear_psd = linear_psd / ms_psd_linear_mel_density.pow(2 * self.config.ms_abs_exponent)
+            linear_psd = torch.nn.functional.avg_pool2d(linear_psd, (2, 1))#.clip(min=self.config.ms_psd_linear_eps).pow(0.5)
             
             ms_psd_linear_scale: torch.Tensor = getattr(self, f"ms_psd_linear_scale_{i}")
             ms_psd_linear_offset: torch.Tensor = getattr(self, f"ms_psd_linear_offset_{i}")
@@ -304,8 +304,8 @@ class MS_MDCT_DualFormat(DualDiffusionFormat):
         mdct_psd = mdct_psd.pow(self.config.ms_abs_exponent)
         mdct_phase = mdct_phase * mdct_psd
 
-        mdct_psd /= self.mdct_mel_density.pow(self.config.ms_abs_exponent)
-        mdct_phase /= self.mdct_mel_density.pow(self.config.ms_abs_exponent)
+        #mdct_psd /= self.mdct_mel_density.pow(self.config.ms_abs_exponent)
+        #mdct_phase /= self.mdct_mel_density.pow(self.config.ms_abs_exponent)
 
         mdct_phase = mdct_phase / self.mdct_phase_scale
         mdct_psd = (mdct_psd + self.mdct_psd_offset) / self.mdct_psd_scale
@@ -319,8 +319,8 @@ class MS_MDCT_DualFormat(DualDiffusionFormat):
         mdct_phase = mdct_phase * self.mdct_phase_scale
         mdct_psd = mdct_psd * self.mdct_psd_scale - self.mdct_psd_offset
 
-        mdct_phase *= self.mdct_mel_density.pow(self.config.ms_abs_exponent)
-        mdct_psd *= self.mdct_mel_density.pow(self.config.ms_abs_exponent)
+        #mdct_phase *= self.mdct_mel_density.pow(self.config.ms_abs_exponent)
+        #mdct_psd *= self.mdct_mel_density.pow(self.config.ms_abs_exponent)
 
         mdct_psd = mdct_psd.clip(min=0).pow(1 / self.config.ms_abs_exponent - 1)
         raw_samples = self.imdct(mdct_phase * mdct_psd).real.contiguous()
