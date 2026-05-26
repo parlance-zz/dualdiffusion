@@ -29,6 +29,7 @@ import numpy as np
 from training.sigma_sampler import SigmaSamplerConfig, SigmaSampler
 from training.trainer import DualDiffusionTrainer
 from training.module_trainers.module_trainer import ModuleTrainerConfig, ModuleTrainer
+from training.loss.mss_1d import MSSLoss1D
 from modules.unets.unet_edm2_p4_ddec import UNet
 from utils.dual_diffusion_utils import dict_str
 
@@ -114,13 +115,14 @@ class UNetLossBuckets(torch.nn.Module):
 class UNetTrainer(ModuleTrainer):
     
     @torch.no_grad()
-    def __init__(self, config: UNetTrainerConfig, trainer: DualDiffusionTrainer, unet: UNet, flavor: str) -> None:
+    def __init__(self, config: UNetTrainerConfig, trainer: DualDiffusionTrainer, unet: UNet, flavor: str, mss_1d: Optional[MSSLoss1D] = None) -> None:
 
         self.config = config
         self.trainer = trainer
         self.logger = trainer.logger
         self.unet = unet
         self.flavor = flavor
+        self.mss_1d = mss_1d
 
         if trainer.config.enable_model_compilation == True:
             self.unet.compile(**trainer.config.compile_params)
@@ -237,6 +239,14 @@ class UNetTrainer(ModuleTrainer):
             batch_loss_weight = (batch_sigma ** 2 + sigma_data ** 2) / (batch_sigma * sigma_data) ** 2
             
         batch_weighted_loss = torch.nn.functional.mse_loss(denoised, samples, reduction="none")
+        if self.mss_1d is not None:
+            denoised_raw = self.trainer.module_trainer.format.mdct_phase_psd_to_raw(denoised)
+            sample_raw = self.trainer.module_trainer.format.mdct_phase_psd_to_raw(samples).detach()
+            mss_loss_logs = self.mss_1d.mss_loss(denoised_raw, sample_raw)
+            #for k, v in mss_loss_logs.items():
+            #    if k.startswith("loss/"):
+            #        mss_loss_logs[k] = v * batch_loss_weight
+
         if loss_weight is not None: # use custom loss weight if provided
             assert self.config.disable_loss_weight == False
             batch_weighted_loss = batch_weighted_loss * loss_weight
@@ -254,11 +264,21 @@ class UNetTrainer(ModuleTrainer):
         if self.config.num_loss_buckets > 0:
             self.unet_loss_buckets.log_buckets(bucket_log_loss, batch_sigma)
 
-        return {
+        #if self.mss_1d is not None:
+        #    for k, v in mss_loss_logs.items():
+        #        if k.startswith("loss/"):
+        #            batch_loss = batch_loss + v / error_logvar.exp() + error_logvar
+
+        logs = {
             f"loss/{self.flavor}": batch_loss,
             f"io_stats_{self.flavor}/denoised_var": denoised.var(dim=(1,2,3)),
             f"io_stats_{self.flavor}/denoised_mean": denoised.mean(dim=(1,2,3))
         }
+
+        if self.mss_1d is not None:
+            logs.update(mss_loss_logs)
+
+        return logs
     
     @torch.no_grad()
     def finish_batch(self) -> Optional[dict[str, Union[torch.Tensor, float]]]:
