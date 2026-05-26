@@ -1067,6 +1067,13 @@ class DualDiffusionTrainer:
                 self.accelerator.backward(module_logs["loss"].mean() * self.config.optimizer.loss_scale)
                 del module_logs
 
+                # for whatever reason DDP gets very angry about unused parameters
+                if self.config.enable_grad_sync_debug == True:
+                    for module_name, module in zip(self.config.train_modules, self.modules):
+                        for name, p in module.named_parameters():
+                            if p.requires_grad and p.grad is None:
+                                self.logger.warning(f"module: {module_name} param: {name} has no grad but DDP is enabled")
+                        
                 if self.accelerator.sync_gradients:
                     assert self.accum_step == (self.config.gradient_accumulation_steps - 1), \
                         f"accum_step out of sync with sync_gradients: {self.accum_step} != {self.config.gradient_accumulation_steps - 1}"
