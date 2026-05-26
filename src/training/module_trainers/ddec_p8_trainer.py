@@ -216,7 +216,7 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
                     logs[f"ch_stats/var_{i}"]  = self.dae.latents_stats_tracker.var[i].detach()
 
         if self.train_ddecp == True or self.train_ddecm == True:
-            ddec_x_ref: list[torch.Tensor] = [x.detach() for x in self.format.ms_psd_to_psd_linear(ddec_cond)]
+            ddec_x_ref: list[torch.Tensor] = self.format.ms_psd_to_psd_linear(ddec_cond)
             for i, x in enumerate(ddec_x_ref):
                 logs[f"io_stats/ddec_x_ref_{i}_msq"] = x.pow(2).mean(dim=(1,2,3)).detach()
                 logs[f"io_stats/ddec_x_ref_{i}_mean"] = x.mean(dim=(1,2,3)).detach()
@@ -225,7 +225,8 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
             ddec_x_ref = None
 
         if self.train_ddecp == True:
-            logs.update(self.ddecp_trainer.train_batch(mdct_phase_psd, audio_embeddings, ddec_x_ref))
+            ddecp_loss_weight = None #self.format.mdct_mel_density / self.format.mdct_mel_density.mean()
+            logs.update(self.ddecp_trainer.train_batch(mdct_phase_psd, audio_embeddings, ddec_x_ref, loss_weight=ddecp_loss_weight))
             logs["loss"] = logs["loss"] + logs["loss/ddecp"]
 
             if self.config.mss_loss_weight > 0 or self.config.cepstrum_loss_weight > 0:

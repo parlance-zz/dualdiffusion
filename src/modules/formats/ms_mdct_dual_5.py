@@ -227,7 +227,7 @@ class MS_MDCT_DualFormat(DualDiffusionFormat):
 
             linear_psd = self.ms_psd_linear_freq_scales[i].unscale(ms_psd, rectify=False)
             ms_psd_linear_mel_density: torch.Tensor = getattr(self, f"ms_psd_linear_mel_density_{i}")
-            linear_psd /= ms_psd_linear_mel_density.pow(2 * self.config.ms_abs_exponent)
+            linear_psd = linear_psd / ms_psd_linear_mel_density.pow(2 * self.config.ms_abs_exponent)
             linear_psd = torch.nn.functional.avg_pool2d(linear_psd, (2, 1)).clip(min=self.config.ms_psd_linear_eps).pow(0.5)
             
             ms_psd_linear_scale: torch.Tensor = getattr(self, f"ms_psd_linear_scale_{i}")
