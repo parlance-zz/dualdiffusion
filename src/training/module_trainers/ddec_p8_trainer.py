@@ -120,9 +120,14 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
         else: self.logger.info("Random stereo augmentation is disabled")
 
         if self.train_ddecp == True:
+            
+            self.logger.info(f"MSS-1D loss weight: {self.config.mss_loss_weight} (cepstrum loss weight: {self.config.cepstrum_loss_weight})")
 
-            self.mss_1d = MSSLoss1D(MSSLoss1DConfig(**config.mss_1d), device=trainer.accelerator.device)
-            self.logger.info(f"MSS-1D config: {dict_str(self.mss_1d.config.__dict__)}")
+            if self.config.mss_loss_weight > 0 or self.config.cepstrum_loss_weight > 0:
+                self.mss_1d = MSSLoss1D(MSSLoss1DConfig(**config.mss_1d), device=trainer.accelerator.device)
+                self.logger.info(f"MSS-1D config: {dict_str(self.mss_1d.config.__dict__)}")
+            else:
+                self.mss_1d = None
 
             self.logger.info(f"DDEC-P trainer:")
             self.ddecp_trainer = UNetTrainer(UNetTrainerConfig(**config.ddecp), trainer, self.ddecp, "ddecp", mss_1d=self.mss_1d)
@@ -222,8 +227,10 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
         if self.train_ddecp == True:
             logs.update(self.ddecp_trainer.train_batch(mdct_phase_psd, audio_embeddings, ddec_x_ref))
             logs["loss"] = logs["loss"] + logs["loss/ddecp"]
-            logs["loss"] = logs["loss"] + logs["loss/mss1d"] * self.config.mss_loss_weight
-            logs["loss"] = logs["loss"] + logs["loss/mss1d_cepstrum"] * self.config.cepstrum_loss_weight
+
+            if self.config.mss_loss_weight > 0 or self.config.cepstrum_loss_weight > 0:
+                logs["loss"] = logs["loss"] + logs["loss/mss1d"] * self.config.mss_loss_weight
+                logs["loss"] = logs["loss"] + logs["loss/mss1d_cepstrum"] * self.config.cepstrum_loss_weight
 
         if self.train_ddecm == True:
             raise NotImplementedError()
