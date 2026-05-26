@@ -1,0 +1,70 @@
+{
+    "device": "cuda",
+    "add_random_test_samples": 0,
+    "save_output": true,
+    
+    "test_sample_verbose": false,
+    "test_samples": [
+        "switch/Arcaea/_t_songs_ignotus.ogg.flac",
+        "dsf/Metropolis Street Racer Prototype/file_15.adx.flac",
+        "psf3/Iron Man/_t_! movies_HUB_05_000001C2.adx.flac",
+        "psf/Gradius Gaiden/SLPM-86042_BGM1_0000096c.XA.flac",
+        "psf/Pukunpa - Joshikousei no Houkago/SARU1.DA.ape.flac",
+        "psf3/Tekken Hybrid/_t_Tekken Tag Tournament 2 Prologue_charasele.lwav.flac",
+        "switch/Muse Dash/_t_stage_jump_hard_candy_music.fsb.flac"
+    ],
+
+    "format_config": {
+
+        "last_global_step": 0,
+        
+        "sample_rate": 32000,
+        "num_raw_channels": 2,
+        //"default_raw_length": 3833600,
+        //"default_raw_length": 2817536,
+        //"default_raw_length": 2097152,
+        "default_raw_length": 1408768,
+        //"default_raw_length": 128000,
+        "width_alignment": 4096,
+
+        "mdct_window_len": 128,
+        "mdct_window_func": "vorbis",
+        "mdct_psd_exponent": 0.25,
+
+        "ms_psd_img_show_center_channel": true,
+        "ms_psds": [
+            {
+                "window_len": 128,
+                "window_func": "vorbis",
+                "add_center_channel": false
+            },
+            {
+                "window_len": 256,
+                "window_func": "vorbis",
+                "add_center_channel": false
+            },
+            {
+                "window_len": 512,
+                "window_func": "vorbis",
+                "add_center_channel": false
+            },
+            {
+                "window_len": 1024,
+                "window_func": "vorbis",
+                "add_center_channel": false
+            }
+        ],
+
+        "mel_spec_config": {
+            "sample_rate": 32000,
+            "ms_add_center_channel": true,
+            "ms_img_show_center_channel": true,
+            "ms_abs_exponent": 0.25,
+            "ms_freq_min": 0,
+            "ms_num_filters": 256,
+            "ms_hop_length": 256,
+            "ms_window_length": 4096,
+            "ms_window_exponent": 15
+        }
+    }
+}
