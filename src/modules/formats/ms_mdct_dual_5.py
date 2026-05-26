@@ -70,6 +70,7 @@ class MS_MDCT_DualFormatConfig(DualDiffusionFormatConfig):
     ms_img_show_center_channel: bool = True
     ms_abs_exponent: float = 0.25
     ms_freq_min: float = 0
+    ms_psd_linear_eps: float = 1e-8
     
     ms_psds: list[MS_PSD_Config] = None
 
@@ -222,12 +223,12 @@ class MS_MDCT_DualFormat(DualDiffusionFormat):
 
             ms_psd_offset: torch.Tensor = getattr(self, f"ms_psd_offset_{i}")
             ms_psd_scale: torch.Tensor = getattr(self, f"ms_psd_scale_{i}")
-            ms_psd = (ms_psds[i] * ms_psd_scale - ms_psd_offset).clip(min=0).pow(2)
+            ms_psd = (ms_psds[i].float() * ms_psd_scale - ms_psd_offset).pow(2)
 
             linear_psd = self.ms_psd_linear_freq_scales[i].unscale(ms_psd, rectify=False)
             ms_psd_linear_mel_density: torch.Tensor = getattr(self, f"ms_psd_linear_mel_density_{i}")
             linear_psd /= ms_psd_linear_mel_density.pow(2 * self.config.ms_abs_exponent)
-            linear_psd = torch.nn.functional.avg_pool2d(linear_psd, (2, 1)).clip(min=0).pow(0.5)
+            linear_psd = torch.nn.functional.avg_pool2d(linear_psd, (2, 1)).clip(min=self.config.ms_psd_linear_eps).pow(0.5)
             
             ms_psd_linear_scale: torch.Tensor = getattr(self, f"ms_psd_linear_scale_{i}")
             ms_psd_linear_offset: torch.Tensor = getattr(self, f"ms_psd_linear_offset_{i}")
@@ -261,6 +262,9 @@ class MS_MDCT_DualFormat(DualDiffusionFormat):
         num_mdct_frames = raw_crop_width // num_mdct_bins + 1
         return (bsz, self.config.num_raw_channels * 2, num_mdct_bins, num_mdct_frames,)
 
+    def get_mdct_shape(self, bsz: int = 1, raw_length: Optional[int] = None):
+        return self.get_mdct_phase_psd_shape(bsz=bsz, raw_length=raw_length)
+    
     """
     def raw_to_mdct_phase(self, raw_samples: torch.Tensor, random_phase_augmentation: bool = False) -> torch.Tensor:
 
@@ -311,7 +315,7 @@ class MS_MDCT_DualFormat(DualDiffusionFormat):
     
     def mdct_phase_psd_to_raw(self, mdct_phase_psd: torch.Tensor) -> torch.Tensor:
 
-        mdct_phase, mdct_psd = torch.chunk(mdct_phase_psd, 2, dim=1)
+        mdct_phase, mdct_psd = torch.chunk(mdct_phase_psd.float(), 2, dim=1)
         mdct_phase = mdct_phase * self.mdct_phase_scale
         mdct_psd = mdct_psd * self.mdct_psd_scale - self.mdct_psd_offset
 
@@ -324,6 +328,6 @@ class MS_MDCT_DualFormat(DualDiffusionFormat):
     
     def raw_to_mdct_psd(self, raw_samples: torch.Tensor) -> torch.Tensor:
 
-        mdct_phase_psd = self.raw_to_mdct_phase_psd(raw_samples)
+        mdct_phase_psd = self.raw_to_mdct_phase_psd(raw_samples.float())
         _, mdct_psd = torch.chunk(mdct_phase_psd, 2, dim=1)
         return mdct_psd

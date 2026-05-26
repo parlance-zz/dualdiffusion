@@ -47,18 +47,22 @@ def _is_prime(n: int) -> bool:
 class MSSLoss1DConfig:
 
     block_low:  int = 31
-    block_high: int = 8200#4100
+    block_high: int = 8200
 
     block_sampling_replace: bool = True
     block_sampling_scale: Literal["linear", "ln_linear"] = "ln_linear"
 
-    sample_rate: float = 32000
-    num_iterations: int = 10#20
-    midside_probability: float = 0#0.5
-    psd_eps: float = 1e-10#1e-6#1e-4
-    loss_scale: float = 0#3
+    leak_pow: float = 4
+    leak_max: float = 1
 
+    sample_rate: float = 32000
+    num_iterations: int = 10
+    midside_probability: float = 0.5
+    psd_eps: float = 1e-6
+    
     cepstrum_pow: float = 0.25
+
+    loss_scale: float = 100
     loss_scale_cepstrum: float = 100
 
 
@@ -154,6 +158,9 @@ class MSSLoss1D:
     
     def mss_loss(self, sample: torch.Tensor, target: torch.Tensor,
             leak_pow: Optional[float] = None, leak_max: Optional[float] = None) -> dict[str, torch.Tensor]:
+
+        leak_pow = self.config.leak_pow or leak_pow
+        leak_max = self.config.leak_max or leak_max
 
         if leak_pow is not None and leak_max is not None:  # useful at start of training for preventing polarity mismatch
             rnd_t = np.random.rand()**leak_pow * leak_max  # disable afterwards for better performance
