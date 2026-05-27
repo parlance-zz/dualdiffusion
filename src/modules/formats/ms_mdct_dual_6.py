@@ -67,6 +67,8 @@ class MS_MDCT_DualFormatConfig(DualDiffusionFormatConfig):
     default_raw_length: int = 1408768
     width_alignment: int    = 4096
 
+    use_per_freq_preconditioning: bool = True
+
     # mdct params
     mdct_window_len: int = 128
     mdct_window_func: Literal["sin", "kaiser_bessel_derived", "vorbis"] = "vorbis"
@@ -125,6 +127,9 @@ class MS_MDCT_DualFormat(DualDiffusionFormat):
             self.register_buffer(f"ms_psd_offset_{i}", torch.zeros(config.ms_psds[i].num_frequencies).view(1, 1,-1, 1), persistent=True)
             self.register_buffer(f"ms_psd_scale_{i}",  torch.ones(config.ms_psds[i].num_frequencies).view(1, 1,-1, 1),  persistent=True)
             
+            psd_hz = (torch.arange(config.ms_psds[i].num_frequencies) + 0.5) * config.sample_rate / config.ms_psds[i].window_len
+            self.register_buffer(f"ms_psd_mel_density_{i}", get_mel_density(psd_hz).view(1, 1,-1, 1), persistent=False)
+            
         # ***** mdct setup *****
 
         mdct_window_func = _get_mdct_window_func(config.mdct_window_func)
@@ -163,6 +168,10 @@ class MS_MDCT_DualFormat(DualDiffusionFormat):
                 ms_psd = torch.cat((mclt, (mclt[:, 0:1] + mclt[:, 1:2]) / 2), dim=1).abs()
             else:
                 ms_psd = mclt.abs()
+
+            if self.config.use_per_freq_preconditioning == False:
+                ms_psd_mel_density: torch.Tensor = getattr(self, f"ms_psd_mel_density_{i}")
+                ms_psd /= ms_psd_mel_density
 
             ms_psd_offset: torch.Tensor = getattr(self, f"ms_psd_offset_{i}")
             ms_psd_scale: torch.Tensor = getattr(self, f"ms_psd_scale_{i}")                      
@@ -239,8 +248,9 @@ class MS_MDCT_DualFormat(DualDiffusionFormat):
         mdct_psd = mdct_psd.pow(self.config.mdct_psd_exponent)
         mdct_phase = mdct_phase * mdct_psd
 
-        #mdct_psd /= self.mdct_mel_density.pow(self.config.ms_abs_exponent)
-        #mdct_phase /= self.mdct_mel_density.pow(self.config.ms_abs_exponent)
+        if self.config.use_per_freq_preconditioning == False:
+            mdct_psd /= self.mdct_mel_density.pow(self.config.mdct_psd_exponent)
+            mdct_phase /= self.mdct_mel_density.pow(self.config.mdct_psd_exponent)
 
         mdct_phase = mdct_phase / self.mdct_phase_scale
         mdct_psd = (mdct_psd + self.mdct_psd_offset) / self.mdct_psd_scale
@@ -254,8 +264,9 @@ class MS_MDCT_DualFormat(DualDiffusionFormat):
         mdct_phase = mdct_phase * self.mdct_phase_scale
         mdct_psd = mdct_psd * self.mdct_psd_scale - self.mdct_psd_offset
 
-        #mdct_phase *= self.mdct_mel_density.pow(self.config.ms_abs_exponent)
-        #mdct_psd *= self.mdct_mel_density.pow(self.config.ms_abs_exponent)
+        if self.config.use_per_freq_preconditioning == False:
+            mdct_phase *= self.mdct_mel_density.pow(self.config.mdct_psd_exponent)
+            mdct_psd *= self.mdct_mel_density.pow(self.config.mdct_psd_exponent)
 
         mdct_psd = mdct_psd.clip(min=0).pow(1 / self.config.mdct_psd_exponent - 1)
         raw_samples = self.imdct(mdct_phase * mdct_psd).real.contiguous()

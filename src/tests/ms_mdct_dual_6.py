@@ -90,6 +90,8 @@ def ms_mdct_dual_format_test() -> None:
         ms_psd_avg_bin_msqs.append( torch.zeros(num_ms_psd_freqs, dtype=torch.float64, device=cfg.device).view(1, 1,-1, 1))
         ms_psd_avg_bin_means.append(torch.zeros(num_ms_psd_freqs, dtype=torch.float64, device=cfg.device).view(1, 1,-1, 1))
 
+    r_dims = (0, 1, 3) if format.config.use_per_freq_preconditioning == True else (0, 1, 2, 3)
+
     stat_logger = StatLogger()
     print(f"\nNum test_samples: {len(test_samples)}\n")
 
@@ -113,15 +115,15 @@ def ms_mdct_dual_format_test() -> None:
         raw_sample_recon = format.mdct_phase_psd_to_raw(mdct_phase_psd)
 
         mdct_phase, mdct_psd = mdct_phase_psd.to(dtype=torch.float64).chunk(2, dim=1)
-        mdct_phase_avg_bin_msq += mdct_phase.pow(2).mean(dim=(0,1,3), keepdim=True) / len(test_samples)
-        mdct_psd_avg_bin_msq  += mdct_psd.pow(2).mean(dim=(0,1,3), keepdim=True) / len(test_samples)
-        mdct_psd_avg_bin_mean += mdct_psd.mean(dim=(0,1,3), keepdim=True) / len(test_samples)
+        mdct_phase_avg_bin_msq += mdct_phase.pow(2).mean(dim=r_dims, keepdim=True) / len(test_samples)
+        mdct_psd_avg_bin_msq  += mdct_psd.pow(2).mean(dim=r_dims, keepdim=True) / len(test_samples)
+        mdct_psd_avg_bin_mean += mdct_psd.mean(dim=r_dims, keepdim=True) / len(test_samples)
     
         for i in range(format.config.num_ms_psds):
 
             _ms_psd = ms_psds[i].to(dtype=torch.float64)
-            _ms_psd_msq = _ms_psd.pow(2).mean(dim=(0,1,3), keepdim=True)
-            _ms_psd_mean = _ms_psd.mean(dim=(0,1,3), keepdim=True)
+            _ms_psd_msq = _ms_psd.pow(2).mean(dim=r_dims, keepdim=True)
+            _ms_psd_mean = _ms_psd.mean(dim=r_dims, keepdim=True)
 
             ms_psd_avg_bin_msqs[i]  += _ms_psd_msq / len(test_samples)
             ms_psd_avg_bin_means[i] += _ms_psd_mean / len(test_samples)
@@ -211,11 +213,11 @@ def ms_mdct_dual_format_test() -> None:
         
         mdct_phase_psd = format.raw_to_mdct_phase_psd(raw_sample)
         mdct_phase, mdct_psd = mdct_phase_psd.to(dtype=torch.float64).chunk(2, dim=1)
-        mdct_psd_avg_bin_msq += mdct_psd.pow(2).mean(dim=(0,1,3), keepdim=True) / len(test_samples)
+        mdct_psd_avg_bin_msq += mdct_psd.pow(2).mean(dim=r_dims, keepdim=True) / len(test_samples)
 
         ms_psds = format.raw_to_ms_psd(raw_sample, level=-1)
         for i in range(format.config.num_ms_psds):
-            _ms_psd_msq = ms_psds[i].to(dtype=torch.float64).pow(2).mean(dim=(0,1,3), keepdim=True)
+            _ms_psd_msq = ms_psds[i].to(dtype=torch.float64).pow(2).mean(dim=r_dims, keepdim=True)
             ms_psd_avg_bin_msqs[i] += _ms_psd_msq / len(test_samples)
 
     format.mdct_psd_scale.copy_(mdct_psd_avg_bin_msq.pow(0.5).float())
