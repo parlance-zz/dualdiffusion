@@ -52,8 +52,8 @@ class MSSLoss1DConfig:
     block_sampling_replace: bool = True
     block_sampling_scale: Literal["linear", "ln_linear"] = "linear"
 
-    leak_pow: float = 4
-    leak_max: float = 1
+    leak_pow: float = None
+    leak_max: float = None
 
     sample_rate: float = 32000
     num_iterations: int = 20
@@ -102,10 +102,6 @@ class MSSLoss1D:
         self.block_sizes = np.array(block_sizes)
         self.block_weights = np.array(block_weights)
         self.block_weights /= self.block_weights.sum()
-
-        for i in range(len(self.block_sizes)):
-            print(f"Block size: {self.block_sizes[i]:3d} Weight: {(self.block_weights[i]*100):.3f}%")
-        print(f"total unique block sizes: {len(block_sizes)}\n")
 
         torch.backends.cuda.cufft_plan_cache.max_size = len(block_sizes) + 250 # slight performance boost if fft plans are cached
         self.windows: dict[int, torch.Tensor] = {}
@@ -157,15 +153,18 @@ class MSSLoss1D:
         return x
     
     def mss_loss(self, sample: torch.Tensor, target: torch.Tensor,
-            leak_pow: Optional[float] = None, leak_max: Optional[float] = None) -> dict[str, torch.Tensor]:
+            leak_pow: Optional[float] = None, leak_max: Optional[float] = None, t: Optional[torch.Tensor] = None) -> dict[str, torch.Tensor]:
 
-        leak_pow = self.config.leak_pow or leak_pow
-        leak_max = self.config.leak_max or leak_max
+        if t is None:
+            leak_pow = self.config.leak_pow or leak_pow
+            leak_max = self.config.leak_max or leak_max
 
-        if leak_pow is not None and leak_max is not None:  # useful at start of training for preventing polarity mismatch
-            rnd_t = np.random.rand()**leak_pow * leak_max  # disable afterwards for better performance
-            sample = torch.lerp(sample, target.detach(), rnd_t)
-        
+            if leak_pow is not None and leak_max is not None:  # useful at start of training for preventing polarity mismatch
+                rnd_t = np.random.rand()**leak_pow * leak_max  # disable afterwards for better performance
+                sample = torch.lerp(sample, target.detach(), rnd_t)
+        else:
+            sample = torch.lerp(sample, target.detach(), 1 - t.view(-1, 1, 1))
+
         loss = torch.zeros(target.shape[0], device=self.device)
         loss_cepstrum = torch.zeros_like(loss)
 
@@ -225,9 +224,13 @@ if __name__ == "__main__":
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    config = MSSLoss1DConfig()
+    config = MSSLoss1DConfig(block_sampling_scale="ln_linear")
     loss_fn = MSSLoss1D(config, device)
 
+    for i in range(len(loss_fn.block_sizes)):
+        print(f"Block size: {loss_fn.block_sizes[i]:3d} Weight: {(loss_fn.block_weights[i]*100):.3f}%")
+    print(f"total unique block sizes: {len(loss_fn.block_sizes)}\n")
+    
     batch_size = 4
     channels = 2
     width = 128000

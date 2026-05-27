@@ -243,6 +243,10 @@ class UNetTrainer(ModuleTrainer):
             denoised_raw = self.trainer.module_trainer.format.mdct_phase_psd_to_raw(denoised)
             sample_raw = self.trainer.module_trainer.format.mdct_phase_psd_to_raw(samples).detach()
             mss_loss_logs = self.mss_1d.mss_loss(denoised_raw, sample_raw)
+
+            #t = 1 / (sigma_data ** 2 + batch_sigma ** 2).pow(0.5)
+            #mss_loss_logs = self.mss_1d.mss_loss(denoised_raw, sample_raw, t=t)
+
             #for k, v in mss_loss_logs.items():
             #    if k.startswith("loss/"):
             #        mss_loss_logs[k] = v * batch_loss_weight
