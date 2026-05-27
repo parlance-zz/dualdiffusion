@@ -349,7 +349,7 @@ class MPConv(torch.nn.Module):
 
     def __init__(self, in_channels: int, out_channels: int,
                  kernel: tuple[int, int], groups: int = 1, stride: int = 1,
-                 disable_weight_norm: bool = False, bias: bool = False) -> None:
+                 disable_weight_norm: bool = False, bias: bool = False, padding: Optional[tuple[int, int]] = None) -> None:
         
         super().__init__()
 
@@ -358,6 +358,7 @@ class MPConv(torch.nn.Module):
         self.groups = groups
         self.stride = stride
         self.disable_weight_norm = disable_weight_norm
+        self.padding = padding or (kernel[0] // 2, kernel[1] // 2)
         
         self.weight = torch.nn.Parameter(torch.randn(out_channels, in_channels // groups, *kernel))
         self.weight.conv_groups = groups
@@ -382,7 +383,7 @@ class MPConv(torch.nn.Module):
         if w.ndim == 2:
             return x @ w.t()
         
-        x = torch.nn.functional.conv2d(x, w, padding=(w.shape[-2]//2, w.shape[-1]//2), groups=self.groups, stride=self.stride)
+        x = torch.nn.functional.conv2d(x, w, padding=self.padding, groups=self.groups, stride=self.stride)
         if self.bias is not None:
             x = x + self.bias.view(1,-1, 1, 1).to(dtype=x.dtype)
         
