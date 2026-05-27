@@ -50,20 +50,20 @@ class MSSLoss1DConfig:
     block_high: int = 8200
 
     block_sampling_replace: bool = True
-    block_sampling_scale: Literal["linear", "ln_linear"] = "ln_linear"
+    block_sampling_scale: Literal["linear", "ln_linear"] = "linear"
 
     leak_pow: float = 4
     leak_max: float = 1
 
     sample_rate: float = 32000
-    num_iterations: int = 10
+    num_iterations: int = 20
     midside_probability: float = 0.5
-    psd_eps: float = 1e-6
+    psd_eps: float = 1e-5
     
     cepstrum_pow: float = 0.25
 
     loss_scale: float = 100
-    loss_scale_cepstrum: float = 100
+    loss_scale_cepstrum: float = 120
 
 
 class MSSLoss1D:
@@ -140,7 +140,7 @@ class MSSLoss1D:
 
         freqs = torch.fft.rfftfreq(width, device=self.device) * self.config.sample_rate
         mel_density = get_mel_density(freqs).view(1, 1, 1,-1)
-        #mel_density /=mel_density.mean()
+        mel_density /= mel_density.mean()
 
         self.mel_densities[width] = mel_density
         return mel_density
@@ -196,25 +196,11 @@ class MSSLoss1D:
 
                 if self.loss_scale > 0:
                     loss_weight = target_fft_abs.pow(2).mean(dim=r_dims, keepdim=True)
-                    #print(block_width, loss_weight.amin())
+                    #print(block_width, loss_weight.amin(), loss_weight.mean())
                     loss_weight = loss_weight.clip(min=self.config.psd_eps).pow(0.5).requires_grad_(False).detach()
 
                 if self.cepstrum_loss_scale > 0:
-                    target_cepstrum = torch.fft.rfft(target_fft_abs.clip(min=self.config.psd_eps**0.5).pow(self.config.cepstrum_pow), norm="ortho").abs()
-
-                """
-                if order == (-2, -1):
-                    blockfreq_y = torch.fft.fftfreq(block_height, 1/block_height, device=self.device)
-                    blockfreq_x = torch.arange(block_width//2 + 1, device=self.device)
-                else:
-                    blockfreq_y = torch.arange(block_height//2 + 1, device=self.device)
-                    blockfreq_x = torch.fft.fftfreq(block_width, 1/block_width, device=self.device)
-                loss_weight = 1 / ((blockfreq_y.square().view(-1, 1) + blockfreq_x.square().view(1, -1)).sqrt() + 1)
-                loss_weight = loss_weight[None, None, None, None, :, :] / 0.100311111
-                if midside == True:
-                    #loss_weight = loss_weight / (torch.arange(target_fft_abs.shape[1], device=self.device) + 1)[None, :, None, None, None, None]
-                    loss_weight = loss_weight * target_fft_abs.pow(2).mean(dim=(0,2,3,4,5), keepdim=True).clip(min=self.config.psd_eps).pow(0.5) 
-                """
+                    target_cepstrum: torch.Tensor = torch.fft.rfft((target_fft_abs + self.config.psd_eps).pow(self.config.cepstrum_pow), norm="ortho").abs()
 
             sample_fft = self.stft1d(sample, block_width, step_w, window, offset_w, end_offset_w, midside)
             sample_fft_abs = sample_fft.abs()
@@ -224,7 +210,8 @@ class MSSLoss1D:
                 loss = loss + (mse_loss / loss_weight).mean(dim=(1,2,3)) #** 2
 
             if self.cepstrum_loss_scale > 0:
-                sample_cepstrum = torch.fft.rfft(sample_fft_abs.clip(min=self.config.psd_eps**0.5).pow(self.config.cepstrum_pow), norm="ortho").abs()
+                sample_cepstrum: torch.Tensor = torch.fft.rfft((sample_fft_abs + self.config.psd_eps).pow(self.config.cepstrum_pow), norm="ortho").abs()
+
                 mse_loss = torch.nn.functional.mse_loss(sample_cepstrum.float(), target_cepstrum.float(), reduction="none")
                 loss_cepstrum = loss_cepstrum + mse_loss.mean(dim=(1,2,3))
 
