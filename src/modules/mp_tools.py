@@ -358,7 +358,10 @@ class MPConv(torch.nn.Module):
         self.groups = groups
         self.stride = stride
         self.disable_weight_norm = disable_weight_norm
-        self.padding = padding or (kernel[0] // 2, kernel[1] // 2)
+        if len(kernel) > 0:
+            self.padding = padding or (kernel[0] // 2, kernel[1] // 2)
+        else:
+            self.padding = (0, 0)
         
         self.weight = torch.nn.Parameter(torch.randn(out_channels, in_channels // groups, *kernel))
         self.weight.conv_groups = groups
