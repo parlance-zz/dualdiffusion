@@ -68,10 +68,10 @@ def resample_1d(x: torch.Tensor, mode: Literal["keep", "down", "up"] = "keep") -
     elif mode == 'up':
         return torch.repeat_interleave(x, 2, dim=-1)
     
-def resample_2d(x: torch.Tensor, mode: Literal["keep", "down", "up", "up_down", "down_up"] = "keep",
+def resample_2d(x: torch.Tensor, mode: Literal["keep", "down", "up", "up_down", "down_up", "keep_down", "keep_up", "down_keep", "up_keep"] = "keep",
                 ratio: int = 2, filtering: str = "nearest") -> torch.Tensor:
     
-    assert mode in ["keep", "down", "up", "up_down", "down_up"], f"Invalid mode: {mode}"
+    assert mode in ["keep", "down", "up", "up_down", "down_up", "keep_down", "keep_up", "down_keep", "up_keep"], f"Invalid mode: {mode}"
     if mode == "keep":
         return x
     elif mode == 'down':
@@ -79,9 +79,17 @@ def resample_2d(x: torch.Tensor, mode: Literal["keep", "down", "up", "up_down", 
     elif mode == 'up':                              
         return torch.nn.functional.interpolate(x, scale_factor=ratio, mode=filtering).to(x.dtype)
     elif mode == "up_down":
-        return torch.nn.functional.interpolate(x, scale_factor=(ratio, 0.5), mode=filtering).to(x.dtype)
+        return torch.nn.functional.interpolate(x, scale_factor=(ratio, 1/ratio), mode=filtering).to(x.dtype)
     elif mode == "down_up":
-        return torch.nn.functional.interpolate(x, scale_factor=(0.5, ratio), mode=filtering).to(x.dtype)
+        return torch.nn.functional.interpolate(x, scale_factor=(1/ratio, ratio), mode=filtering).to(x.dtype)
+    elif mode == "keep_down":
+        return torch.nn.functional.interpolate(x, scale_factor=(1, 1/ratio), mode=filtering).to(x.dtype)
+    elif mode == "keep_up":
+        return torch.nn.functional.interpolate(x, scale_factor=(1, ratio), mode=filtering).to(x.dtype)
+    elif mode == "down_keep":
+        return torch.nn.functional.interpolate(x, scale_factor=(1/ratio, 1), mode=filtering).to(x.dtype)
+    elif mode == "up_keep":
+        return torch.nn.functional.interpolate(x, scale_factor=(ratio, 1), mode=filtering).to(x.dtype)
 
 def resample_3d(x: torch.Tensor, mode: Literal["keep", "down", "up"] = "keep") -> torch.Tensor:
 
