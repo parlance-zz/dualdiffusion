@@ -334,7 +334,7 @@ class UNet(DualDiffusionUNet):
             if "down" in name:
                 x = mp_sum(x, self.conv_in[f"conv_in{block.level}"](_x_in[block.level]), t=0.5)
 
-            elif ("down" in name or "in" in name) and block.level < self.num_psd_levels:
+            if ("down" in name or "in" in name) and block.level < self.num_psd_levels:
                 x = x + self.conv_x_ref_in[f"conv_x_ref_in{block.level}"](x_ref[block.level]) * self.x_ref_in_gain[block.level]
 
             skips.append(x)
