@@ -152,20 +152,22 @@ class MSSLoss1D:
 
         return x
     
-    def mss_loss(self, sample: torch.Tensor, target: torch.Tensor,
+    def mss_loss(self, sample1: torch.Tensor, sample2: torch.Tensor, target: torch.Tensor,
             leak_pow: Optional[float] = None, leak_max: Optional[float] = None, t: Optional[torch.Tensor] = None) -> dict[str, torch.Tensor]:
+
+        sample = torch.cat((sample1, sample2), dim=0)
 
         if t is None:
             leak_pow = self.config.leak_pow or leak_pow
             leak_max = self.config.leak_max or leak_max
 
             if leak_pow is not None and leak_max is not None:  # useful at start of training for preventing polarity mismatch
-                rnd_t = np.random.rand()**leak_pow * leak_max  # disable afterwards for better performance
-                sample = torch.lerp(sample, target.detach(), rnd_t)
+                rnd_t = (torch.rand(sample1.shape[0], device=sample1.device).pow(leak_pow) * leak_max).repeat(2).view(-1, 1, 1)
+                sample = torch.lerp(sample, target.repeat(2, 1, 1).detach(), rnd_t)
         else:
-            sample = torch.lerp(sample, target.detach(), 1 - t.view(-1, 1, 1))
+            sample = torch.lerp(sample, target.repeat(2, 1, 1).detach(), 1 - t.view(-1, 1, 1))
 
-        loss = torch.zeros(target.shape[0], device=self.device)
+        loss = torch.zeros(sample.shape[0], device=self.device)
         loss_cepstrum = torch.zeros_like(loss)
 
         static_pad = int(self.block_sizes[-1])
@@ -200,6 +202,9 @@ class MSSLoss1D:
 
                 if self.cepstrum_loss_scale > 0:
                     target_cepstrum: torch.Tensor = torch.fft.rfft((target_fft_abs + self.config.psd_eps).pow(self.config.cepstrum_pow), norm="ortho").abs()
+                    target_cepstrum = target_cepstrum.repeat(2, 1, 1, 1)
+
+                target_fft_abs = target_fft_abs.repeat(2, 1, 1, 1)
 
             sample_fft = self.stft1d(sample, block_width, step_w, window, offset_w, end_offset_w, midside)
             sample_fft_abs = sample_fft.abs()
@@ -213,6 +218,12 @@ class MSSLoss1D:
 
                 mse_loss = torch.nn.functional.mse_loss(sample_cepstrum.float(), target_cepstrum.float(), reduction="none")
                 loss_cepstrum = loss_cepstrum + mse_loss.mean(dim=(1,2,3))
+
+        loss1, loss2 = loss.chunk(2, dim=0)
+        loss_cepstrum1, loss_cepstrum2 = loss_cepstrum.chunk(2, dim=0)
+
+        loss = (loss1 + loss2) / 2
+        loss_cepstrum = (loss_cepstrum1 + loss_cepstrum2) / 2
 
         return {
             "loss/mss1d": loss * self.loss_scale,

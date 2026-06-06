@@ -23,7 +23,7 @@ if input("Save module? (y/n) ").lower() == 'y':
     print(f"Saved model to {model_path}/dae")
 
 """
-from modules.unets.unet_edm2_p7_ddec import UNet, UNetConfig
+from modules.unets.unet_edm2_q7_ddec import UNet, UNetConfig
 ddecm = UNet(UNetConfig())
 print_module_info(ddecm, "ddecm")
 

@@ -146,18 +146,18 @@ class DAE_Config(DualDiffusionDAEConfig):
     in_channels: int     = 2
     out_channels: int    = 2
     in_channels_emb: int = 0
-    latent_channels: int = 16
-    in_num_freqs: int    = 16
-    in_psd_num_freqs: list[int] = (16, 32, 64, 128, 256, 512, 1024)
+    latent_channels: int = 32
+    in_num_freqs: int    = 64
+    in_psd_num_freqs: list[int] = (64, 128, 256, 512)
 
-    model_channels: int         = 32        # Base multiplier for the number of channels.
-    channel_mult_enc: int       = (1,2,3,4,5,6,7,8)
-    channel_mult_dec: list[int] = (1,2,3,4,5,6,7,8)
+    model_channels: int         = 32         # Base multiplier for the number of channels.
+    channel_mult_enc: int       = (1,2,4,8,16,16)
+    channel_mult_dec: list[int] = (1,2,4,8,16,16)
     channel_mult_emb: int     = 4            # Multiplier for final embedding dimensionality.
     channels_per_head: int    = 64           # Number of channels per attention head.
     num_enc_layers_per_block: int = 3        # Number of resnet blocks per resolution.
     num_dec_layers_per_block: int = 3        # Number of resnet blocks per resolution.
-    res_balance: float        = 0.1          # Balance between main branch (0) and residual branch (1).
+    res_balance: float        = 0.15          # Balance between main branch (0) and residual branch (1).
     attn_balance: float       = 0.3          # Balance between main branch (0) and self-attention (1).
     attn_levels: list[int]    = ()           # List of resolution levels to use self-attention.
     mlp_multiplier: int    = 2               # Multiplier for the number of channels in the MLP.
@@ -283,7 +283,7 @@ class DAE(DualDiffusionDAE):
 
         self.psd_freqs_per_freq: list[int] = []
         for i in range(self.num_psd_levels):
-            level_freqs = config.in_num_freqs #// (2 ** i)
+            level_freqs = config.in_num_freqs // (2 ** i)
             assert config.in_psd_num_freqs[i] % level_freqs == 0
             self.psd_freqs_per_freq.append(config.in_psd_num_freqs[i] // level_freqs)
 
@@ -303,7 +303,6 @@ class DAE(DualDiffusionDAE):
         #self.recon_loss_logvar = torch.nn.Parameter(torch.zeros([]))
 
         # encoder
-        self.psd_in_gain = torch.nn.Parameter(1 / (1 + torch.arange(self.num_psd_levels - 1)))
         self.conv_psd_in = torch.nn.ModuleDict()
         for i in range(self.num_psd_levels):
             in_psd_channels = self.psd_freqs_per_freq[i] * config.in_channels
@@ -317,7 +316,7 @@ class DAE(DualDiffusionDAE):
             cout = enc_channels[level]
             
             if level > 0:
-                resample_mode = "keep_down" #"down" if level < self.num_psd_levels else "keep_down"
+                resample_mode = "down" if level < self.num_psd_levels else "keep_down"
                 self.enc[f"block{level}_down"] = Block(level, cin, cout, cemb,
                     use_attention=level in config.attn_levels, flavor="enc", resample_mode=resample_mode, **block_kwargs)
             
@@ -342,7 +341,7 @@ class DAE(DualDiffusionDAE):
                 self.dec[f"block{level}_in0"] = Block(level, cin, cout, cemb,
                     use_attention=level in config.attn_levels, flavor="dec", **block_kwargs)
             else:
-                resample_mode = "keep_up" #"up" if level < self.num_psd_levels - 1 else "keep_up"
+                resample_mode = "up" if level < self.num_psd_levels - 1 else "keep_up"
                 self.dec[f"block{level}_up"] = Block(level, cin, cout, cemb,
                     use_attention=level in config.attn_levels, flavor="dec", resample_mode=resample_mode, **block_kwargs)
             
@@ -368,7 +367,7 @@ class DAE(DualDiffusionDAE):
     def get_latent_shape(self, mel_spec_shape: Union[torch.Size, tuple[int, int, int, int]]) -> torch.Size:
         if len(mel_spec_shape) == 4:
             return (mel_spec_shape[0], self.config.latent_channels,
-                    mel_spec_shape[2],
+                    mel_spec_shape[2] // 2 ** (self.num_levels-1),
                     mel_spec_shape[3] // 2 ** (self.num_levels-1))
         else:
             raise ValueError(f"Invalid sample shape: {mel_spec_shape}")
@@ -376,7 +375,7 @@ class DAE(DualDiffusionDAE):
     def get_mel_spec_shape(self, latent_shape: Union[torch.Size, tuple[int, int, int, int]]) -> torch.Size:
         if len(latent_shape) == 4:
             return (latent_shape[0], self.config.in_channels,
-                    latent_shape[2],
+                    latent_shape[2] * 2 ** (self.num_levels-1),
                     latent_shape[3] * 2 ** (self.num_levels-1))
         else:
             raise ValueError(f"Invalid latent shape: {latent_shape}")
@@ -400,7 +399,7 @@ class DAE(DualDiffusionDAE):
             x = block(x, embeddings)
 
             if "down" in name and block.level < self.num_psd_levels:
-                x = x + self.conv_psd_in[f"conv_psd_in{block.level}"](in_x[block.level]) * self.psd_in_gain[block.level - 1]
+                x = mp_sum(x, self.conv_psd_in[f"conv_psd_in{block.level}"](in_x[block.level]), t=0.5)
         
         latents: torch.Tensor = self.conv_latents_out(x)
         latents = normalize(latents.float())

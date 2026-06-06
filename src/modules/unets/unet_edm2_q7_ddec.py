@@ -36,7 +36,7 @@ from typing import Union, Optional, Literal
 import torch
 
 from modules.unets.unet import DualDiffusionUNet, DualDiffusionUNetConfig
-from modules.mp_tools import MPFourier, MPConv, mp_cat, mp_silu, mp_sum, normalize, resample_1d, resample_2d, patchify_2d
+from modules.mp_tools import MPFourier, MPConv, mp_cat, mp_silu, mp_sum, normalize, resample_2d
 from modules.formats.ms_mdct_dual_7 import MS_MDCT_DualFormat
 
 
@@ -301,21 +301,19 @@ class UNet(DualDiffusionUNet):
             c_out = sigma * self.config.sigma_data / (sigma ** 2 + self.config.sigma_data ** 2).sqrt()
             c_in = 1 / (self.config.sigma_data ** 2 + sigma ** 2).sqrt()
             c_noise = (sigma.flatten().log() / 4).to(self.dtype)
-
-            if perturbed_input is not None:
-                x = (c_in * perturbed_input).to(dtype=torch.bfloat16)
-            else:
-                x = (c_in * x_in).to(dtype=torch.bfloat16)
-
+            
             emb = self.emb_fourier(c_noise)
 
+        if perturbed_input is not None:
+            x = (c_in * perturbed_input).to(dtype=torch.bfloat16)
+        else:
+            x = (c_in * x_in).to(dtype=torch.bfloat16)
+            
         _x_out: list[torch.Tensor] = []
         _x_in = format.unflatten_mdct_phase_psd(x)
 
         x_ref = [_x.to(dtype=torch.bfloat16) for _x in x_ref]
         assert len(x_ref) == self.num_psd_levels
-        #for i in range(self.num_psd_levels):
-        #    x_ref[i] = patchify_2d(x_ref[i].to(dtype=torch.bfloat16), self.psd_freqs_per_freq[i], 1)
         
         # embedding
         emb = self.emb_noise(emb)

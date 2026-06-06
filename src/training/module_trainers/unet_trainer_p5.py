@@ -131,14 +131,20 @@ class UNetTrainer(ModuleTrainer):
             if config.linear_buckets == True:
                 self.logger.info("Using linear loss buckets")
             self.logger.info(f"Using {self.config.num_loss_buckets} loss buckets")
-            self.unet_loss_buckets = UNetLossBuckets(
-                num_buckets=self.config.num_loss_buckets,
-                sigma_min=self.config.loss_buckets_sigma_min,
-                sigma_max=self.config.loss_buckets_sigma_max,
-                trainer=trainer,
-                log_prefix=f"{flavor}",
-                linear_buckets=config.linear_buckets
-            )
+            self.unet_loss_buckets: list[UNetLossBuckets] = []
+            
+            for i in range(self.format.config.num_mdcts):
+
+                buckets = UNetLossBuckets(
+                    num_buckets=self.config.num_loss_buckets,
+                    sigma_min=self.config.loss_buckets_sigma_min,
+                    sigma_max=self.config.loss_buckets_sigma_max,
+                    trainer=trainer,
+                    log_prefix=f"{flavor}_{i}",
+                    linear_buckets=config.linear_buckets
+                )
+                self.unet_loss_buckets.append(buckets)
+
             if mss_1d is not None:
                 self.mss1d_loss_buckets = UNetLossBuckets(
                     num_buckets=self.config.num_loss_buckets,
@@ -198,7 +204,8 @@ class UNetTrainer(ModuleTrainer):
 
         # reset sigma-bucketed loss for new batch
         if self.config.num_loss_buckets > 0:
-            self.unet_loss_buckets.clear()
+            for bucket in self.unet_loss_buckets:
+                bucket.clear()
 
             if self.mss_1d is not None:
                 self.mss1d_loss_buckets.clear()
@@ -215,8 +222,7 @@ class UNetTrainer(ModuleTrainer):
         return None
 
     def train_batch(self, samples: torch.Tensor, embeddings: Optional[Union[torch.Tensor, list[torch.Tensor]]] = None,
-            ref_samples: Optional[torch.Tensor] = None, loss_weight: Optional[torch.Tensor] = None,
-            noise: Optional[torch.Tensor] = None, perturb_noise: Optional[torch.Tensor] = None) -> dict[str, Union[torch.Tensor, float]]:
+            ref_samples: Optional[torch.Tensor] = None, target_ref_samples: Optional[torch.Tensor] = None) -> dict[str, Union[torch.Tensor, float]]:
 
         device_bsz = self.trainer.config.device_batch_size
 
@@ -229,45 +235,77 @@ class UNetTrainer(ModuleTrainer):
 
         # prepare model inputs
         #samples = samples.detach()
-        if noise is None:
-            noise = torch.randn(samples.shape, device=samples.device)
+        noise = torch.randn(samples.shape, device=samples.device)
         noise = (noise * batch_sigma.view(-1, 1, 1, 1)).detach()
 
         if self.config.input_perturbation > 0:
-            if perturb_noise is not None:
-                input_perturbation = perturb_noise
-            else:
-                input_perturbation = torch.randn(samples.shape, device=samples.device)
+            input_perturbation = torch.randn(samples.shape, device=samples.device)
             perturbed_input = samples + noise + input_perturbation * batch_sigma.view(-1, 1, 1, 1) * self.config.input_perturbation
         else:
             perturbed_input = None
 
-        denoised, error_logvar = self.trainer.get_ddp_module(self.unet)(samples + noise, batch_sigma, self.format, embeddings,
-                                    x_ref=ref_samples, perturbed_input=perturbed_input, conditioning_mask=conditioning_mask)
+        if target_ref_samples is not None:
+            #target_denoised, _ = self.unet(samples + noise, batch_sigma, self.format, embeddings,
+            #    x_ref=target_ref_samples, perturbed_input=perturbed_input, conditioning_mask=conditioning_mask)
+            target_denoised = None
+            
+            denoised, error_logvar = self.unet(samples + noise, batch_sigma, self.format, embeddings,
+                x_ref=ref_samples, perturbed_input=perturbed_input, conditioning_mask=conditioning_mask)
+
+        else:
+            denoised, error_logvar = self.trainer.get_ddp_module(self.unet)(samples + noise, batch_sigma, self.format, embeddings,
+                x_ref=ref_samples, perturbed_input=perturbed_input, conditioning_mask=conditioning_mask)
+            
+            target_denoised = None
         
-        error_logvar: torch.Tensor = error_logvar.mean(dim=1, keepdim=True)
+        if target_denoised is not None:
+            samples = self.format.unflatten_mdct_phase_psd(target_denoised)
+        else:
+            samples = self.format.unflatten_mdct_phase_psd(samples)
+        denoised = self.format.unflatten_mdct_phase_psd(denoised)
+        mel_density = self.format.get_mdct_mel_density(level=-1)
+        error_logvar = error_logvar[:, :, 0, 0]
+        
+        assert len(samples) == len(denoised) == len(mel_density)
+        assert error_logvar.ndim == 2 and error_logvar.shape[0] == samples[0].shape[0] and error_logvar.shape[1] == len(samples)
+
         sigma_data = self.sigma_sampler.config.sigma_data
 
         if self.config.disable_loss_weight == True:
             batch_loss_weight = 2 / batch_sigma**2
-            #batch_loss_weight = (batch_sigma ** 2 + sigma_data ** 2) / (batch_sigma * sigma_data) ** 2
-            #samples = samples - samples.mean(dim=(0,2,3), keepdim=True)
         else:
             batch_loss_weight = (batch_sigma ** 2 + sigma_data ** 2) / (batch_sigma * sigma_data) ** 2
-            
-        batch_weighted_loss = torch.nn.functional.mse_loss(denoised, samples, reduction="none")
+        
+        batch_weighted_loss = []
+        for i, (x, y, loss_weight) in enumerate(zip(denoised, samples, mel_density)):
+            #loss_weight = loss_weight.pow(i / (len(samples) - 1))
+            loss_weight = loss_weight / loss_weight.mean()
+            loss = (torch.nn.functional.mse_loss(x, y.detach(), reduction="none") * loss_weight).mean(dim=(1,2,3)) * batch_loss_weight
+            batch_weighted_loss.append(loss)
+        batch_weighted_loss = torch.stack(batch_weighted_loss, dim=1)
+
         if self.mss_1d is not None:
-            target_phase, target_psd = torch.chunk(samples, 2, dim=1)
-            denoised_phase, denoised_psd = torch.chunk(denoised, 2, dim=1)
-
-            denoised1 = torch.cat((denoised_phase, target_psd), dim=1)
-            denoised2 = torch.cat((target_phase, denoised_psd), dim=1)
-
-            denoised1_raw = self.trainer.module_trainer.format.mdct_phase_psd_to_raw(denoised1)
-            denoised2_raw = self.trainer.module_trainer.format.mdct_phase_psd_to_raw(denoised2)
-            target_raw = self.trainer.module_trainer.format.mdct_phase_psd_to_raw(samples).detach()
             
-            mss_loss_logs = self.mss_1d.mss_loss(denoised1_raw, denoised2_raw, target_raw)
+            mss_loss_logs = None
+
+            for i, (_sample, _denoised) in enumerate(zip(samples, denoised)):
+
+                target_phase, target_psd = torch.chunk(_sample, 2, dim=1)
+                denoised_phase, denoised_psd = torch.chunk(_denoised, 2, dim=1)
+
+                denoised1 = torch.cat((denoised_phase, target_psd), dim=1)
+                denoised2 = torch.cat((target_phase, denoised_psd), dim=1)
+
+                denoised1_raw = self.trainer.module_trainer.format.mdct_phase_psd_to_raw(denoised1, level=i)
+                denoised2_raw = self.trainer.module_trainer.format.mdct_phase_psd_to_raw(denoised2, level=i)
+                target_raw = self.trainer.module_trainer.format.mdct_phase_psd_to_raw(_sample, level=i).detach()
+                
+                _mss_loss_logs = self.mss_1d.mss_loss(denoised1_raw, denoised2_raw, target_raw)
+                if mss_loss_logs is None:
+                    mss_loss_logs = _mss_loss_logs
+                else:
+                    for k in mss_loss_logs.keys():
+                        mss_loss_logs[k] = mss_loss_logs[k] + _mss_loss_logs[k]
 
             #mss_loss_logs["loss/mss1d"] = mss_loss_logs["loss/mss1d"] / batch_sigma.clip(min=0.2)
             #mss_loss_logs["loss/mss1d_cepstrum"] = mss_loss_logs["loss/mss1d_cepstrum"] / batch_sigma.clip(min=0.2)
@@ -279,11 +317,6 @@ class UNetTrainer(ModuleTrainer):
             #    if k.startswith("loss/"):
             #        mss_loss_logs[k] = v * batch_loss_weight
 
-        if loss_weight is not None: # use custom loss weight if provided
-            assert self.config.disable_loss_weight == False
-            batch_weighted_loss = batch_weighted_loss * loss_weight
-        batch_weighted_loss = batch_weighted_loss.mean(dim=(1,2,3)) * batch_loss_weight
-
         if self.config.disable_loss_weight == True:
             error_logvar = self.unet.get_sigma_loss_logvar(torch.ones_like(batch_sigma))
             batch_loss = batch_weighted_loss / error_logvar.exp() + error_logvar
@@ -294,7 +327,8 @@ class UNetTrainer(ModuleTrainer):
             bucket_log_loss = batch_weighted_loss
         
         if self.config.num_loss_buckets > 0:
-            self.unet_loss_buckets.log_buckets(bucket_log_loss, batch_sigma)
+            for i in range(bucket_log_loss.shape[1]):
+                self.unet_loss_buckets[i].log_buckets(bucket_log_loss[:, i], batch_sigma)
 
             if self.mss_1d is not None:
                 self.mss1d_loss_buckets.log_buckets(mss_loss_logs["loss/mss1d"], batch_sigma)
@@ -306,11 +340,14 @@ class UNetTrainer(ModuleTrainer):
         #            batch_loss = batch_loss + v / error_logvar.exp() + error_logvar
 
         logs = {
-            f"loss/{self.flavor}": batch_loss,
-            f"io_stats_{self.flavor}/denoised_var": denoised.var(dim=(1,2,3)),
-            f"io_stats_{self.flavor}/denoised_mean": denoised.mean(dim=(1,2,3))
+            f"loss/{self.flavor}": batch_loss.mean(dim=1),
+            #f"io_stats_{self.flavor}/denoised_var": denoised.var(dim=(1,2,3)),
+            #f"io_stats_{self.flavor}/denoised_mean": denoised.mean(dim=(1,2,3))
         }
 
+        for i in range(batch_loss.shape[1]):
+            logs[f"loss/{self.flavor}_{i}"] = batch_loss[:, i]
+            
         if self.mss_1d is not None:
             logs.update(mss_loss_logs)
 
@@ -320,10 +357,14 @@ class UNetTrainer(ModuleTrainer):
     def finish_batch(self) -> Optional[dict[str, Union[torch.Tensor, float]]]:
 
         if self.config.num_loss_buckets > 0:
-            logs = self.unet_loss_buckets.get_logs()
+            logs = {}
+            for bucket in self.unet_loss_buckets:
+                logs.update(bucket.get_logs())
+
             if self.mss_1d is not None:
                 logs.update(self.mss1d_loss_buckets.get_logs())
                 logs.update(self.mss1d_ceptrum_loss_buckets.get_logs())
+
             return logs
         
         return None
