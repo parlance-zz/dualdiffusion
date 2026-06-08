@@ -210,7 +210,7 @@ class UNet(DualDiffusionUNet):
 
         # Training uncertainty estimation.
         self.logvar_fourier = MPFourier(config.logvar_channels)
-        self.logvar_linear = MPConv(config.logvar_channels, self.num_levels, kernel=(), disable_weight_norm=True)
+        self.logvar_linear = MPConv(config.logvar_channels, config.in_num_mdct_levels, kernel=(), disable_weight_norm=True)
         self.logvar_linear.weight.data.fill_(0)
 
         # Encoder.
