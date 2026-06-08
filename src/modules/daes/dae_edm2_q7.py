@@ -34,6 +34,7 @@ from dataclasses import dataclass
 from typing import Union, Literal, Optional
 
 import torch
+from numpy import ndarray
 
 from modules.daes.dae import DualDiffusionDAE, DualDiffusionDAEConfig
 from modules.mp_tools import MPConv, mp_silu, mp_sum, normalize, resample_1d, resample_2d, normalize_groups, patchify_2d
@@ -455,6 +456,13 @@ class DAE(DualDiffusionDAE):
 
         ddec_cond = self.decode(decode_latents, dae_embeddings, training=True)
         return latents, ddec_cond
+
+    def latents_to_img(self, latents: torch.Tensor, **kwargs) -> ndarray:
+        
+        latents = latents.reshape(latents.shape[0], -1, 4, latents.shape[3])
+        latents = latents.permute(0, 2, 1, 3).contiguous()
+        
+        return super().latents_to_img(latents, img_split_stereo=False)
 
     def tiled_encode(self, x: torch.Tensor, embeddings: torch.Tensor, max_chunk: int = 6144, overlap: int = 256) -> torch.Tensor:
 

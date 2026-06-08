@@ -49,6 +49,7 @@ class UNetConfig(DualDiffusionUNetConfig):
     in_channels_x_ref: int = 2
     in_num_freqs: int = 64
     in_psd_num_freqs: list[int] = (64, 128, 256, 512)
+    in_num_mdct_levels: int = 4
 
     model_channels: int  = 64                # Base multiplier for the number of channels.
     logvar_channels: int = 192               # Number of channels for training uncertainty estimation.
@@ -193,6 +194,8 @@ class UNet(DualDiffusionUNet):
         self.num_levels = len(config.channel_mult)
         self.num_psd_levels = len(config.in_psd_num_freqs)
         assert self.num_psd_levels <= self.num_levels
+        assert config.in_num_mdct_levels <= self.num_levels
+        assert config.in_num_mdct_levels > 0
         
         self.psd_freqs_per_freq: list[int] = []
         for i in range(self.num_psd_levels):
@@ -217,7 +220,7 @@ class UNet(DualDiffusionUNet):
             self.conv_x_ref_in[f"conv_x_ref_in{i}"] = MPConv(config.in_channels_x_ref, cblock[i], kernel=(3,3), bias=True)
 
         self.conv_in = torch.nn.ModuleDict()
-        for i in range(self.num_levels):
+        for i in range(config.in_num_mdct_levels):
             self.conv_in[f"conv_in{i}"] = MPConv(config.in_channels, cblock[i], kernel=(3,3), bias=True)
 
         self.enc = torch.nn.ModuleDict()
@@ -265,9 +268,10 @@ class UNet(DualDiffusionUNet):
                 self.dec[f"block{level}_layer{idx}"] = Block(level, cin, cout, cemb, num_freqs,
                     use_attention=level in config.attn_levels, flavor="dec", **block_kwargs)
 
-            self.dec[f"conv_out{level}"] = MPConv(cout, config.out_channels, kernel=(3,3))
+            if level < config.in_num_mdct_levels:
+                self.dec[f"conv_out{level}"] = MPConv(cout, config.out_channels, kernel=(3,3))
 
-        self.out_gain = torch.nn.Parameter(torch.zeros(self.num_levels))
+        self.out_gain = torch.nn.Parameter(torch.zeros(config.in_num_mdct_levels))
 
     def get_embeddings(self, emb_in: torch.Tensor, conditioning_mask: torch.Tensor) -> torch.Tensor:
         if self.config.in_channels_emb > 0:
@@ -276,7 +280,7 @@ class UNet(DualDiffusionUNet):
             return mp_sum(u_embedding, c_embedding, t=conditioning_mask.unsqueeze(1).to(u_embedding.dtype))
         else:
             return None
-        
+    
     def get_sigma_loss_logvar(self, sigma: Optional[torch.Tensor] = None) -> torch.Tensor:
         return self.logvar_linear(self.logvar_fourier(sigma.flatten().log() / 4))[:, :, None, None].float()
     
@@ -311,6 +315,7 @@ class UNet(DualDiffusionUNet):
             
         _x_out: list[torch.Tensor] = []
         _x_in = format.unflatten_mdct_phase_psd(x)
+        assert len(_x_in) == self.config.in_num_mdct_levels
 
         x_ref = [_x.to(dtype=torch.bfloat16) for _x in x_ref]
         assert len(x_ref) == self.num_psd_levels
@@ -329,7 +334,7 @@ class UNet(DualDiffusionUNet):
 
             x = block(x, emb)
 
-            if "down" in name:
+            if "down" in name and block.level < self.config.in_num_mdct_levels:
                 x = mp_sum(x, self.conv_in[f"conv_in{block.level}"](_x_in[block.level]), t=0.5)
 
             if ("down" in name or "in" in name) and block.level < self.num_psd_levels:
