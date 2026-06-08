@@ -27,8 +27,8 @@ import torch
 
 from training.trainer import DualDiffusionTrainer
 from training.module_trainers.module_trainer import ModuleTrainer, ModuleTrainerConfig
-#from training.module_trainers.unet_trainer_p5 import UNetTrainerConfig, UNetTrainer
-from training.module_trainers.unet_chain_trainer_p5 import UNetTrainerConfig, UNetTrainer
+from training.module_trainers.unet_trainer_p5 import UNetTrainerConfig, UNetTrainer
+#from training.module_trainers.unet_chain_trainer_p5 import UNetTrainerConfig, UNetTrainer
 from training.loss.mss_2d import MSSLoss2D, MSSLoss2DConfig
 from training.loss.sigreg import sigreg_strong_loss
 from training.loss.mss_1d import MSSLoss1D, MSSLoss1DConfig
@@ -100,9 +100,9 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
 
         if self.train_dae == False:
             if self.train_ddecm == True or self.train_ddecp == True:
-                self.dae = trainer.pipeline.dae.to(device=trainer.accelerator.device, dtype=torch.bfloat16).requires_grad_(False)
-                assert self.dae.config.last_global_step > 0
-                #pass
+                #self.dae = trainer.pipeline.dae.to(device=trainer.accelerator.device, dtype=torch.bfloat16).requires_grad_(False)
+                #assert self.dae.config.last_global_step > 0
+                pass
         else:
             #assert self.train_ddecp == False
             #self.ddecp = trainer.pipeline.ddecp.to(device=trainer.accelerator.device, dtype=torch.bfloat16).requires_grad_(False)
@@ -208,9 +208,9 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
             
             self.dae.latents_stats_tracker(latents)
 
-        elif self.train_ddecm == True or self.train_ddecp == True:
-            latents, ddec_cond = self.dae(ms_psds, audio_embeddings, latents_sigma=self.config.add_latents_noise)
-            latents = latents.detach(); ddec_cond: list[torch.Tensor] = [x.detach() for x in ddec_cond]
+        #elif self.train_ddecm == True or self.train_ddecp == True:
+        #    latents, ddec_cond = self.dae(ms_psds, audio_embeddings, latents_sigma=self.config.add_latents_noise)
+        #    latents = latents.detach(); ddec_cond: list[torch.Tensor] = [x.detach() for x in ddec_cond]
         else:
             latents = ddec_cond = None
         
@@ -280,7 +280,8 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
             mel_densities = self.format.get_mdct_mel_density(level=-1)
             logs["loss/ms_psd_mse"] = torch.zeros_like(logs["loss"])
             for i, (cond, target, weight) in enumerate(zip(ddec_cond, target_ddec_x_ref, mel_densities)):
-                weight = weight / weight.mean()
+                #weight = weight / weight.mean()
+                weight = 1
                 ms_psd_mse = (torch.nn.functional.mse_loss(cond, target, reduction="none") * weight).mean(dim=(1,2,3))
                 logs[f"loss/ms_psd_mse_{i}"] = ms_psd_mse.detach()
                 logs[f"loss/ms_psd_mse"] = logs[f"loss/ms_psd_mse"] + ms_psd_mse / len(ddec_cond)

@@ -279,7 +279,9 @@ class UNetTrainer(ModuleTrainer):
         batch_weighted_loss = []
         for i, (x, y, loss_weight) in enumerate(zip(denoised, samples, mel_density)):
             #loss_weight = loss_weight.pow(i / (len(samples) - 1))
-            loss_weight = loss_weight / loss_weight.mean()
+            #loss_weight = loss_weight.pow(0.5)
+            #loss_weight = loss_weight / loss_weight.mean()
+            loss_weight = 1
             loss = (torch.nn.functional.mse_loss(x, y.detach(), reduction="none") * loss_weight).mean(dim=(1,2,3)) * batch_loss_weight
             batch_weighted_loss.append(loss)
         batch_weighted_loss = torch.stack(batch_weighted_loss, dim=1)
@@ -288,9 +290,10 @@ class UNetTrainer(ModuleTrainer):
             
             mss_loss_logs = None
 
-            for i, (_sample, _denoised) in enumerate(zip(samples, denoised)):
+            for i, (_target, _denoised) in enumerate(zip(samples, denoised)):
 
-                target_phase, target_psd = torch.chunk(_sample, 2, dim=1)
+                """
+                target_phase, target_psd = torch.chunk(_target, 2, dim=1)
                 denoised_phase, denoised_psd = torch.chunk(_denoised, 2, dim=1)
 
                 denoised1 = torch.cat((denoised_phase, target_psd), dim=1)
@@ -298,9 +301,18 @@ class UNetTrainer(ModuleTrainer):
 
                 denoised1_raw = self.trainer.module_trainer.format.mdct_phase_psd_to_raw(denoised1, level=i)
                 denoised2_raw = self.trainer.module_trainer.format.mdct_phase_psd_to_raw(denoised2, level=i)
-                target_raw = self.trainer.module_trainer.format.mdct_phase_psd_to_raw(_sample, level=i).detach()
+                target_raw = self.trainer.module_trainer.format.mdct_phase_psd_to_raw(_target, level=i).detach()
                 
                 _mss_loss_logs = self.mss_1d.mss_loss(denoised1_raw, denoised2_raw, target_raw)
+                """
+                
+                target_raw = self.format.mdct_phase_psd_to_raw(_target, level=i).detach()
+                denoised_raw = self.format.mdct_phase_psd_to_raw(_denoised, level=i)
+                _mss_loss_logs = self.mss_1d.mss_loss(denoised_raw, target_raw)
+
+                #for k in _mss_loss_logs.keys():
+                #    _mss_loss_logs[k] = _mss_loss_logs[k] / batch_sigma
+
                 if mss_loss_logs is None:
                     mss_loss_logs = _mss_loss_logs
                 else:
@@ -335,9 +347,10 @@ class UNetTrainer(ModuleTrainer):
                 self.mss1d_ceptrum_loss_buckets.log_buckets(mss_loss_logs["loss/mss1d_cepstrum"], batch_sigma)
 
         #if self.mss_1d is not None:
+        #    error_logvar = error_logvar.mean(dim=1)
         #    for k, v in mss_loss_logs.items():
         #        if k.startswith("loss/"):
-        #            batch_loss = batch_loss + v / error_logvar.exp() + error_logvar
+        #            mss_loss_logs[k] = v / error_logvar.exp() + error_logvar
 
         logs = {
             f"loss/{self.flavor}": batch_loss.mean(dim=1),

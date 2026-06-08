@@ -229,20 +229,21 @@ class UNetTrainer(ModuleTrainer):
             else:
                 sigma_next = torch.zeros_like(sigma)
             
-            old_sigma_next = sigma_next
-            effective_ip = sigma.log().tanh() / 2 + 0.5
-            sigma_next = sigma_next * (1 - effective_ip)
+            #old_sigma_next = sigma_next
+            #effective_ip = sigma.log().tanh() / 2 + 0.5
+            #sigma_next = sigma_next * (1 - effective_ip)
 
             samples = torch.lerp(denoised, samples.clone(), (sigma_next / sigma).view(-1, 1, 1, 1))
 
-            if i < self.config.num_sampling_steps - 1:
-                p = (old_sigma_next**2 - sigma_next**2).clip(min=0)**0.5
-                samples = samples + torch.randn_like(samples) * p.view(-1, 1, 1, 1)
+            #if i < self.config.num_sampling_steps - 1:
+            #    p = (old_sigma_next**2 - sigma_next**2).clip(min=0)**0.5
+            #    samples = samples + torch.randn_like(samples) * p.view(-1, 1, 1, 1)
     
         mss_loss_logs = None
 
         for i, (_target, _denoised) in enumerate(zip(target_samples_unflattened, self.format.unflatten_mdct_phase_psd(samples))):
-
+            
+            """
             target_phase, target_psd = torch.chunk(_target, 2, dim=1)
             denoised_phase, denoised_psd = torch.chunk(_denoised, 2, dim=1)
 
@@ -254,6 +255,12 @@ class UNetTrainer(ModuleTrainer):
             target_raw = self.trainer.module_trainer.format.mdct_phase_psd_to_raw(_target, level=i).detach()
             
             _mss_loss_logs = self.mss_1d.mss_loss(denoised1_raw, denoised2_raw, target_raw)
+            """
+            
+            target_raw = self.format.mdct_phase_psd_to_raw(_target, level=i).detach()
+            denoised_raw = self.format.mdct_phase_psd_to_raw(_denoised, level=i)
+            _mss_loss_logs = self.mss_1d.mss_loss(denoised_raw, target_raw)
+
             if mss_loss_logs is None:
                 mss_loss_logs = _mss_loss_logs
             else:
