@@ -180,7 +180,7 @@ def ms_mdct_dual_format_test() -> None:
         
         # copy our calculated means for mdct/ms psd to format buffers, zero the psd msqs for recalculation in 2nd pass
 
-        for i in range(format.config.num_ms_psds):
+        for i in range(format.config.num_mdcts):
             getattr(format, f"mdct_phase_scale_{i}").copy_(mdct_phase_avg_bin_msqs[i].pow(0.5).float())
             getattr(format, f"mdct_psd_offset_{i}").copy_(-mdct_psd_avg_bin_means[i].float())
             mdct_psd_avg_bin_msqs[i].zero_()
