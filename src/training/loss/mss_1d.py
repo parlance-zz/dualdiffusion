@@ -50,20 +50,22 @@ class MSSLoss1DConfig:
     block_high: int = 8200
 
     block_sampling_replace: bool = True
-    block_sampling_scale: Literal["linear", "ln_linear"] = "linear"
+    block_sampling_scale: Literal["linear", "ln_linear", "natural"] = "natural"
 
     leak_pow: float = None
     leak_max: float = None
 
     sample_rate: float = 32000
-    num_iterations: int = 20
+    num_iterations: int = 10
     midside_probability: float = 0.5
     psd_eps: float = 1e-5
     
     cepstrum_pow: float = 0.25
 
-    loss_scale: float = 100
-    loss_scale_cepstrum: float = 120
+    loss_scale: float = 6.42
+    loss_scale_cepstrum: float = 90
+
+    mel_density_pow: float = 0.5
 
 
 class MSSLoss1D:
@@ -83,21 +85,26 @@ class MSSLoss1D:
         elif self.config.block_sampling_scale == "linear":
             targets = np.linspace(self.config.block_low, self.config.block_high, n)
         else:
-            raise ValueError(f"Invalid block_sampling_scale: {self.config.block_sampling_scale}")
+            if self.config.block_sampling_scale != "natural":
+                raise ValueError(f"Invalid block_sampling_scale: {self.config.block_sampling_scale}")
 
-        spaced_primes = []
-        for t in targets:
-            closest = min(primes, key=lambda p: abs(p - t))
-            spaced_primes.append(closest)
+        if self.config.block_sampling_scale == "natural":
+            block_sizes = primes
+            block_weights = [1.] * len(primes)
+        else:
+            spaced_primes = []
+            for t in targets:
+                closest = min(primes, key=lambda p: abs(p - t))
+                spaced_primes.append(closest)
 
-        block_sizes = []
-        block_weights = []
+            block_sizes = []
+            block_weights = []
 
-        for b in sorted(set(spaced_primes)):
-            count = spaced_primes.count(b)
+            for b in sorted(set(spaced_primes)):
+                count = spaced_primes.count(b)
 
-            block_sizes.append(b)
-            block_weights.append(float(count))
+                block_sizes.append(b)
+                block_weights.append(float(count))
 
         self.block_sizes = np.array(block_sizes)
         self.block_weights = np.array(block_weights)
@@ -135,7 +142,7 @@ class MSSLoss1D:
             return self.mel_densities[width]
 
         freqs = torch.fft.rfftfreq(width, device=self.device) * self.config.sample_rate
-        mel_density = get_mel_density(freqs).view(1, 1, 1,-1)
+        mel_density = get_mel_density(freqs).view(1, 1, 1,-1).pow(self.config.mel_density_pow)
         mel_density /= mel_density.mean()
 
         self.mel_densities[width] = mel_density
@@ -179,8 +186,8 @@ class MSSLoss1D:
         sample = torch.nn.functional.pad(sample, (static_pad, static_pad), mode="reflect")
         target = torch.nn.functional.pad(target, (static_pad, static_pad), mode="reflect")
 
-        block_widths  = np.random.choice(self.block_sizes, size=self.config.num_iterations,
-            replace=self.config.block_sampling_replace, p=self.block_weights)
+        block_widths = np.random.choice(self.block_sizes, size=self.config.num_iterations,
+            replace=self.config.block_sampling_replace, p=self.block_weights if self.config.block_sampling_scale != "natural" else None)
 
         for i in range(self.config.num_iterations):
 
@@ -203,10 +210,19 @@ class MSSLoss1D:
                 if self.loss_scale > 0:
                     loss_weight = target_fft_abs.pow(2).mean(dim=r_dims, keepdim=True)
                     #print(block_width, loss_weight.amin(), loss_weight.mean())
-                    loss_weight = loss_weight.clip(min=self.config.psd_eps).pow(0.5).requires_grad_(False).detach()
+                    loss_weight = loss_weight.clip(min=self.config.psd_eps).pow(0.75).requires_grad_(False).detach()
+
+                    if self.config.mel_density_pow > 0:
+                        mel_density = self.get_mel_density(block_width)
+                        loss_weight /= mel_density
+
+                        mel_density_half = mel_density.pow(0.5)
+                        mel_density_half /= mel_density_half.mean()
 
                 if self.cepstrum_loss_scale > 0:
-                    target_cepstrum: torch.Tensor = torch.fft.rfft((target_fft_abs + self.config.psd_eps).pow(self.config.cepstrum_pow), norm="ortho").abs()
+                    #target_cepstrum: torch.Tensor = torch.fft.rfft(target_fft_abs / loss_weight.pow(0.5), norm="ortho").abs()
+                    #target_cepstrum: torch.Tensor = torch.fft.rfft((target_fft_abs + self.config.psd_eps).pow(self.config.cepstrum_pow), norm="ortho").abs()
+                    target_cepstrum: torch.Tensor = torch.fft.rfft((target_fft_abs + self.config.psd_eps).pow(self.config.cepstrum_pow) / mel_density_half, norm="ortho").abs()
                     #target_cepstrum = torch.fft.rfft(target_fft_abs.clip(min=self.config.psd_eps**0.5).pow(0.25), norm="ortho").abs()
                     #target_cepstrum = target_cepstrum.repeat(2, 1, 1, 1)
 
@@ -220,7 +236,9 @@ class MSSLoss1D:
                 loss = loss + (mse_loss / loss_weight).mean(dim=(1,2,3)) #** 2
 
             if self.cepstrum_loss_scale > 0:
-                sample_cepstrum: torch.Tensor = torch.fft.rfft((sample_fft_abs + self.config.psd_eps).pow(self.config.cepstrum_pow), norm="ortho").abs()
+                #sample_cepstrum: torch.Tensor = torch.fft.rfft(sample_fft_abs / loss_weight.pow(0.5), norm="ortho").abs()
+                sample_cepstrum: torch.Tensor = torch.fft.rfft((sample_fft_abs + self.config.psd_eps).pow(self.config.cepstrum_pow) / mel_density_half, norm="ortho").abs()
+                #sample_cepstrum: torch.Tensor = torch.fft.rfft((sample_fft_abs + self.config.psd_eps).pow(self.config.cepstrum_pow), norm="ortho").abs()
                 #sample_cepstrum = torch.fft.rfft(sample_fft_abs.clip(min=self.config.psd_eps**0.5).pow(0.25), norm="ortho").abs()
 
                 mse_loss = torch.nn.functional.mse_loss(sample_cepstrum.float(), target_cepstrum.float(), reduction="none")
