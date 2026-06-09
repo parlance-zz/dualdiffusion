@@ -186,7 +186,10 @@ class UNetTrainer(ModuleTrainer):
         noise = (noise * sigma_schedule[0].view(-1, 1, 1, 1)).detach()
         samples = target_samples + noise
 
-        unet_module = self.trainer.get_ddp_module(self.unet)
+        try:
+            unet_module = self.trainer.get_ddp_module(self.unet)
+        except:
+            unet_module = self.unet
 
         def unet_forward(_samples: torch.Tensor, _sigma: torch.Tensor, _embeddings: torch.Tensor, _ref_samples, _conditioning_mask):
             return unet_module(_samples, _sigma, self.format, _embeddings,
