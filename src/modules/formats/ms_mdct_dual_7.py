@@ -99,6 +99,8 @@ class MS_MDCT_DualFormat(DualDiffusionFormat):
         super().__init__()
         self.config = config
 
+        assert int(1/self.config.mdct_psd_exponent) == 1/self.config.mdct_psd_exponent, "mdct_psd_exponent must be the reciprocal of an integer"
+
         # ***** mel_spec setup *****
 
         if config.mel_spec_config is not None:
@@ -262,7 +264,9 @@ class MS_MDCT_DualFormat(DualDiffusionFormat):
             mdct_phase *= getattr(self, f"mdct_mel_density_{level}").pow(self.config.mdct_psd_exponent)
             mdct_psd *= getattr(self, f"mdct_mel_density_{level}").pow(self.config.mdct_psd_exponent)
 
-        mdct_psd = mdct_psd.clip(min=0).pow(1 / self.config.mdct_psd_exponent - 1)
+        #mdct_psd = mdct_psd.clip(min=0).pow(1 / self.config.mdct_psd_exponent - 1)
+        recon_exp = int((1 / self.config.mdct_psd_exponent - 1) / 2) * 2 + 1
+        mdct_psd = mdct_psd.pow(recon_exp)
         raw_samples = self.imdcts[level](mdct_phase * mdct_psd).real.contiguous()
         return raw_samples
     
