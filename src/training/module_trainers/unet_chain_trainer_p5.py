@@ -44,13 +44,14 @@ class UNetTrainerConfig(ModuleTrainerConfig):
     sigma_data: float = 1.
     num_sampling_steps: int = 7
 
+    use_gradient_checkpointing: bool = True
+
     # for loss logging within bucketed sigma ranges
     num_loss_buckets: int = 12
     loss_buckets_sigma_max: float = 100
     loss_buckets_sigma_min: float = 0.01
     linear_buckets: bool = False
     
-    input_perturbation: float   = 0.1 # from https://arxiv.org/pdf/2301.11706
     conditioning_dropout: float = 0.1
 
 class UNetLossBuckets(torch.nn.Module):
@@ -139,11 +140,7 @@ class UNetTrainer(ModuleTrainer):
             self.logger.info("UNet loss buckets are disabled")
 
         # log unet trainer specific config / settings
-        if self.config.input_perturbation > 0:
-            self.logger.info(f"Using input perturbation: {self.config.input_perturbation}")
-        else:
-            self.logger.info("Input perturbation is disabled")
-        
+        self.logger.info(f"Use gradient checkpointing: {self.config.use_gradient_checkpointing}")
         self.logger.info(f"Conditioning dropout: {self.config.conditioning_dropout}")
 
         # sigma schedule / distribution for train batches
@@ -192,21 +189,19 @@ class UNetTrainer(ModuleTrainer):
         unet_module = self.trainer.get_ddp_module(self.unet)
 
         def unet_forward(_samples: torch.Tensor, _sigma: torch.Tensor, _embeddings: torch.Tensor, _ref_samples, _conditioning_mask):
-            if self.config.input_perturbation > 0:
-                input_perturbation = torch.randn(_samples.shape, device=_samples.device)
-                perturbed_input = _samples + input_perturbation * _sigma.view(-1, 1, 1, 1) * self.config.input_perturbation
-            else:
-                perturbed_input = None
             return unet_module(_samples, _sigma, self.format, _embeddings,
-                x_ref=_ref_samples, perturbed_input=perturbed_input, conditioning_mask=_conditioning_mask)
+                x_ref=_ref_samples, perturbed_input=None, conditioning_mask=_conditioning_mask)
 
         for i in range(self.config.num_sampling_steps):
             sigma = sigma_schedule[i].expand(samples.shape[0])
 
-            denoised, error_logvar = torch.utils.checkpoint.checkpoint(
-                unet_forward, samples, sigma, embeddings, ref_samples, conditioning_mask,
-                use_reentrant=False,
-            )
+            if self.config.use_gradient_checkpointing == True:
+                denoised, error_logvar = torch.utils.checkpoint.checkpoint(
+                    unet_forward, samples, sigma, embeddings, ref_samples, conditioning_mask, use_reentrant=False)
+            else:
+                denoised, error_logvar = unet_forward(samples, sigma, embeddings, ref_samples, conditioning_mask)
+
+            logs[f"io_stats/{self.flavor}_denoised_std_{i}"] = denoised.std()
 
             batch_loss_weight = (sigma ** 2 + self.config.sigma_data ** 2) / (sigma * self.config.sigma_data) ** 2
             batch_weighted_loss = []
