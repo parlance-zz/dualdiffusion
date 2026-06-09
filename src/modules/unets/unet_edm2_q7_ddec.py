@@ -209,9 +209,9 @@ class UNet(DualDiffusionUNet):
         self.emb_label = MPConv(config.in_channels_emb, cemb, kernel=()) if config.in_channels_emb > 0 else None
 
         # Training uncertainty estimation.
-        self.logvar_fourier = MPFourier(config.logvar_channels)
-        self.logvar_linear = MPConv(config.logvar_channels, config.in_num_mdct_levels, kernel=(), disable_weight_norm=True)
-        self.logvar_linear.weight.data.fill_(0)
+        #self.logvar_fourier = MPFourier(config.logvar_channels)
+        #self.logvar_linear = MPConv(config.logvar_channels, config.in_num_mdct_levels, kernel=(), disable_weight_norm=True)
+        #self.logvar_linear.weight.data.fill_(0)
 
         # Encoder.
         self.x_ref_in_gain = torch.nn.Parameter(torch.zeros(self.num_psd_levels))
@@ -282,7 +282,8 @@ class UNet(DualDiffusionUNet):
             return None
     
     def get_sigma_loss_logvar(self, sigma: Optional[torch.Tensor] = None) -> torch.Tensor:
-        return self.logvar_linear(self.logvar_fourier(sigma.flatten().log() / 4))[:, :, None, None].float()
+        #return self.logvar_linear(self.logvar_fourier(sigma.flatten().log() / 4))[:, :, None, None].float()
+        return torch.zeros_like(sigma)
     
     def get_latent_shape(self, latent_shape: Union[torch.Size, tuple[int, int, int, int]]) -> torch.Size:
         #return latent_shape[0:2] + ((latent_shape[2] // 2**(self.num_levels-1)) * 2**(self.num_levels-1),
