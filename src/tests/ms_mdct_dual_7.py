@@ -176,6 +176,12 @@ def ms_mdct_dual_format_test() -> None:
             save_img(format.ms_psd_to_img(ms_psds[i]), ms_psd_output_path)
             print(f"Saved ms_psd_{i} img to {ms_psd_output_path}")
 
+        recon_mel_spec = format.mel_spec.raw_to_mel_spec(raw_sample_recon)
+        recon_mel_spec_img = format.mel_spec.mel_spec_to_img(recon_mel_spec)
+        recon_mel_spec_output_path = os.path.join(output_path, f"{filename}_recon_mel_spec.png")
+        save_img(recon_mel_spec_img, recon_mel_spec_output_path)
+        print(f"Saved recon_mel_spec img to {recon_mel_spec_output_path}")
+
     if format_loaded == False:
         
         # copy our calculated means for mdct/ms psd to format buffers, zero the psd msqs for recalculation in 2nd pass
