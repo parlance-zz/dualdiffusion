@@ -218,11 +218,12 @@ class MSSLoss1D:
 
                         mel_density_half = mel_density.pow(0.5)
                         mel_density_half /= mel_density_half.mean()
+                        #mel_density_half = 1
 
                 if self.cepstrum_loss_scale > 0:
                     #target_cepstrum: torch.Tensor = torch.fft.rfft(target_fft_abs / loss_weight.pow(0.5), norm="ortho").abs()
                     #target_cepstrum: torch.Tensor = torch.fft.rfft((target_fft_abs + self.config.psd_eps).pow(self.config.cepstrum_pow), norm="ortho").abs()
-                    target_cepstrum: torch.Tensor = torch.fft.rfft((target_fft_abs + self.config.psd_eps).pow(self.config.cepstrum_pow) / mel_density_half, norm="ortho").abs()
+                    target_cepstrum: torch.Tensor = torch.fft.rfft((target_fft_abs + self.config.psd_eps).pow(self.config.cepstrum_pow) * mel_density_half, norm="ortho").abs()
                     #target_cepstrum = torch.fft.rfft(target_fft_abs.clip(min=self.config.psd_eps**0.5).pow(0.25), norm="ortho").abs()
                     #target_cepstrum = target_cepstrum.repeat(2, 1, 1, 1)
 
@@ -237,7 +238,7 @@ class MSSLoss1D:
 
             if self.cepstrum_loss_scale > 0:
                 #sample_cepstrum: torch.Tensor = torch.fft.rfft(sample_fft_abs / loss_weight.pow(0.5), norm="ortho").abs()
-                sample_cepstrum: torch.Tensor = torch.fft.rfft((sample_fft_abs + self.config.psd_eps).pow(self.config.cepstrum_pow) / mel_density_half, norm="ortho").abs()
+                sample_cepstrum: torch.Tensor = torch.fft.rfft((sample_fft_abs + self.config.psd_eps).pow(self.config.cepstrum_pow) * mel_density_half, norm="ortho").abs()
                 #sample_cepstrum: torch.Tensor = torch.fft.rfft((sample_fft_abs + self.config.psd_eps).pow(self.config.cepstrum_pow), norm="ortho").abs()
                 #sample_cepstrum = torch.fft.rfft(sample_fft_abs.clip(min=self.config.psd_eps**0.5).pow(0.25), norm="ortho").abs()
 
