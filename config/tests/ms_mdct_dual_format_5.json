@@ -1,10 +1,11 @@
 {
     "device": "cuda",
-    "add_random_test_samples": 0,
-    "save_output": true,
+    "add_random_test_samples": 30000,
+    "save_output": false,
     
     "test_sample_verbose": false,
     "test_samples": [
+        "SuspectT/Knife Party - Destroy Them With Lazers.flac",
         "switch/Arcaea/_t_songs_ignotus.ogg.flac",
         "dsf/Metropolis Street Racer Prototype/file_15.adx.flac",
         "psf3/Iron Man/_t_! movies_HUB_05_000001C2.adx.flac",
@@ -23,42 +24,39 @@
         //"default_raw_length": 3833600,
         //"default_raw_length": 2817536,
         //"default_raw_length": 2097152,
-        "default_raw_length": 1408768,
+        //"default_raw_length": 1408768,
         //"default_raw_length": 128000,
+        "default_raw_length": 96000,
         "width_alignment": 4096,
 
         "mdct_window_len": 128,
         "mdct_window_func": "vorbis",
 
-        "ms_add_center_channel": true,
+        "ms_add_center_channel": false,
         "ms_img_show_center_channel": true,
         "ms_abs_exponent": 0.25,
         "ms_freq_min": 0,
 
         "ms_psds": [
             {
-                "ms_num_filters": 32,
+                "ms_num_filters": 16,
                 "ms_hop_length": 64,
-                "ms_window_length": 512,
-                "ms_window_exponent": 8
+                "ms_window_length": 256
+            },
+            {
+                "ms_num_filters": 32,
+                "ms_hop_length": 128,
+                "ms_window_length": 512
             },
             {
                 "ms_num_filters": 64,
-                "ms_hop_length": 128,
-                "ms_window_length": 1024,
-                "ms_window_exponent": 8
+                "ms_hop_length": 256,
+                "ms_window_length": 1024
             },
             {
                 "ms_num_filters": 128,
-                "ms_hop_length": 256,
-                "ms_window_length": 2048,
-                "ms_window_exponent": 8
-            },
-            {
-                "ms_num_filters": 256,
                 "ms_hop_length": 512,
-                "ms_window_length": 4096,
-                "ms_window_exponent": 8
+                "ms_window_length": 2048
             }
         ]
     }

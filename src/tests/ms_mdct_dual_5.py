@@ -58,6 +58,7 @@ def ms_mdct_dual_format_test() -> None:
         os.path.join(config.CONFIG_PATH, "tests", "ms_mdct_dual_format_5.json"))
     
     output_path = os.path.join(config.DEBUG_PATH, "ms_mdct_dual_format_5_test")
+    output_suffix = ""
     os.makedirs(output_path, exist_ok=True)
 
     format_load_path = os.path.join(output_path, "format")
@@ -86,7 +87,7 @@ def ms_mdct_dual_format_test() -> None:
         ms_window: torch.Tensor = getattr(format, f"ms_psd_window_{i}")
 
         ms_filters.transpose(0, 1).cpu().numpy().tofile(os.path.join(output_path, f"ms_filters_{i}.raw"))
-        ms_window.cpu().numpy().tofile(os.path.join(output_path, f"ms_windows_{i}.raw"))
+        ms_window.cpu().numpy().tofile(os.path.join(output_path, f"ms_windows_{i}{output_suffix}.raw"))
 
     mdct_phase_avg_bin_msq = torch.zeros(format.config.mdct_num_frequencies, dtype=torch.float64, device=cfg.device).view(1, 1,-1, 1)
     mdct_psd_avg_bin_msq = torch.zeros(format.config.mdct_num_frequencies, dtype=torch.float64, device=cfg.device).view(1, 1,-1, 1)
@@ -188,11 +189,11 @@ def ms_mdct_dual_format_test() -> None:
         print(f"Saved raw_sample_recon to {recon_output_path}")
 
         for i in range(format.config.num_ms_psds):
-            ms_psd_output_path = os.path.join(output_path, f"{filename}_ms_psd_{i}.png")
+            ms_psd_output_path = os.path.join(output_path, f"{filename}_ms_psd_{i}{output_suffix}.png")
             save_img(format.ms_psd_to_img(ms_psds[i]), ms_psd_output_path)
             print(f"Saved ms_psd_{i} img to {ms_psd_output_path}")
 
-            linear_psd_output_path = os.path.join(output_path, f"{filename}_ms_psd_linear_{i}.png")
+            linear_psd_output_path = os.path.join(output_path, f"{filename}_ms_psd_linear_{i}{output_suffix}.png")
             save_img(format.ms_psd_to_img(ms_psds_linear[i]), linear_psd_output_path)
             print(f"Saved ms_psd_linear_{i} img to {linear_psd_output_path}")
 

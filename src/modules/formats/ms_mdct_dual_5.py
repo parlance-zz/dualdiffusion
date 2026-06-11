@@ -31,13 +31,19 @@ from utils.dual_diffusion_utils import tensor_to_img
 from utils.mdct import MDCT, IMDCT, sin_window, kaiser_bessel_derived, vorbis
 
 
+def _flat_top_window(x: torch.Tensor) -> torch.Tensor:
+    return (0.21557895 - 0.41663158 * torch.cos(x) + 0.277263158 * torch.cos(2*x)
+            - 0.083578947 * torch.cos(3*x) + 0.006947368 * torch.cos(4*x))
+
+def flat_top_window(width: int) -> torch.Tensor:
+    return _flat_top_window((torch.arange(width) + 0.5) / width  * 2 * torch.pi)
+
 @dataclass()
 class MS_PSD_Config:
 
     ms_num_filters: int = 256
     ms_hop_length: int = 256
     ms_window_length: int = 4096
-    ms_window_exponent: float = 15
 
     @property
     def ms_num_stft_bins(self) -> int:
@@ -98,8 +104,7 @@ class MS_MDCT_DualFormat(DualDiffusionFormat):
 
         for i in range(self.config.num_ms_psds):
 
-            window = torch.hann_window(config.ms_psds[i].ms_window_length, periodic=True, requires_grad=False)
-            window = window.pow(config.ms_psds[i].ms_window_exponent)
+            window = flat_top_window(config.ms_psds[i].ms_window_length)
             window /= window.pow(2).mean().pow(0.5)
             self.register_buffer(f"ms_psd_window_{i}", window, persistent=False)    
 
@@ -110,7 +115,7 @@ class MS_MDCT_DualFormat(DualDiffusionFormat):
                 sample_rate=config.sample_rate,
                 num_stft_bins=config.ms_psds[i].ms_num_stft_bins,
                 num_filters=config.ms_psds[i].ms_num_filters,
-                filter_norm="l2",
+                filter_norm=None,
                 filter_shape="triangular"
             )
             self.ms_psd_freq_scales.append(ms_freq_scale)
@@ -122,7 +127,7 @@ class MS_MDCT_DualFormat(DualDiffusionFormat):
                 sample_rate=config.sample_rate,
                 num_stft_bins=config.ms_psds[i].ms_window_length,
                 num_filters=config.ms_psds[i].ms_num_filters,
-                filter_norm="l2",
+                filter_norm=None,
                 filter_shape="triangular"
             )
             self.ms_psd_linear_freq_scales.append(ms_linear_freq_scale)
