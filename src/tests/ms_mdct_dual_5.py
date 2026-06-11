@@ -81,6 +81,8 @@ def ms_mdct_dual_format_test() -> None:
         train_samples = config.load_json(os.path.join(config.DATASET_PATH, "train.jsonl"))
         test_samples += [sample["file_name"] for sample in random.sample(train_samples, cfg.add_random_test_samples)]
 
+    format.mdct_mel_density.cpu().numpy().tofile(os.path.join(output_path, f"mdct_mel_density.raw"))
+    
     for i in range(format.config.num_ms_psds):
 
         ms_filters: torch.Tensor = format.ms_psd_freq_scales[i].filters
