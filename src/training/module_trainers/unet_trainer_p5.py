@@ -31,7 +31,7 @@ from training.trainer import DualDiffusionTrainer
 from training.module_trainers.module_trainer import ModuleTrainerConfig, ModuleTrainer
 from training.loss.mss_1d import MSSLoss1D
 from modules.unets.unet_edm2_q6_ddec import UNet
-from modules.formats.ms_mdct_dual_7 import MS_MDCT_DualFormat
+from modules.formats.ms_mdct_dual_5 import MS_MDCT_DualFormat
 from utils.dual_diffusion_utils import dict_str
 
 
@@ -133,7 +133,8 @@ class UNetTrainer(ModuleTrainer):
             self.logger.info(f"Using {self.config.num_loss_buckets} loss buckets")
             self.unet_loss_buckets: list[UNetLossBuckets] = []
             
-            for i in range(self.format.config.num_mdcts):
+            #for i in range(self.format.config.num_mdcts):
+            for i in range(1):
 
                 buckets = UNetLossBuckets(
                     num_buckets=self.config.num_loss_buckets,
@@ -222,7 +223,7 @@ class UNetTrainer(ModuleTrainer):
         return None
 
     def train_batch(self, samples: torch.Tensor, embeddings: Optional[Union[torch.Tensor, list[torch.Tensor]]] = None,
-            ref_samples: Optional[torch.Tensor] = None, target_ref_samples: Optional[torch.Tensor] = None) -> dict[str, Union[torch.Tensor, float]]:
+            ref_samples: Optional[torch.Tensor] = None) -> dict[str, Union[torch.Tensor, float]]:
 
         device_bsz = self.trainer.config.device_batch_size
 
@@ -244,26 +245,12 @@ class UNetTrainer(ModuleTrainer):
         else:
             perturbed_input = None
 
-        if target_ref_samples is not None:
-            #target_denoised, _ = self.unet(samples + noise, batch_sigma, self.format, embeddings,
-            #    x_ref=target_ref_samples, perturbed_input=perturbed_input, conditioning_mask=conditioning_mask)
-            target_denoised = None
-            
-            denoised, error_logvar = self.unet(samples + noise, batch_sigma, self.format, embeddings,
-                x_ref=ref_samples, perturbed_input=perturbed_input, conditioning_mask=conditioning_mask)
-
-        else:
-            denoised, error_logvar = self.trainer.get_ddp_module(self.unet)(samples + noise, batch_sigma, self.format, embeddings,
-                x_ref=ref_samples, perturbed_input=perturbed_input, conditioning_mask=conditioning_mask)
-            
-            target_denoised = None
+        denoised, error_logvar = self.trainer.get_ddp_module(self.unet)(samples + noise, batch_sigma, self.format, embeddings,
+            x_ref=ref_samples, perturbed_input=perturbed_input, conditioning_mask=conditioning_mask)
         
-        if target_denoised is not None:
-            samples = self.format.unflatten_mdct_phase_psd(target_denoised)
-        else:
-            samples = self.format.unflatten_mdct_phase_psd(samples)
-        denoised = self.format.unflatten_mdct_phase_psd(denoised)
-        mel_density = self.format.get_mdct_mel_density(level=-1)
+        samples = [samples]# self.format.unflatten_mdct_phase_psd(samples)
+        denoised = [denoised] #self.format.unflatten_mdct_phase_psd(denoised)
+        mel_density = [self.format.mdct_mel_density] #self.format.get_mdct_mel_density(level=-1)
         error_logvar = error_logvar[:, :, 0, 0]
         
         assert len(samples) == len(denoised) == len(mel_density)
@@ -280,8 +267,7 @@ class UNetTrainer(ModuleTrainer):
         for i, (x, y, loss_weight) in enumerate(zip(denoised, samples, mel_density)):
             #loss_weight = loss_weight.pow(i / (len(samples) - 1))
             #loss_weight = loss_weight.pow(0.5)
-            #loss_weight = loss_weight / loss_weight.mean()
-            loss_weight = 1
+            loss_weight = loss_weight / loss_weight.mean()
             loss = (torch.nn.functional.mse_loss(x, y.detach(), reduction="none") * loss_weight).mean(dim=(1,2,3)) * batch_loss_weight
             batch_weighted_loss.append(loss)
         batch_weighted_loss = torch.stack(batch_weighted_loss, dim=1)
@@ -290,10 +276,9 @@ class UNetTrainer(ModuleTrainer):
             
             mss_loss_logs = None
 
-            for i, (_target, _denoised) in enumerate(zip(samples, denoised)):
+            for i, (_sample, _denoised) in enumerate(zip(samples, denoised)):
 
-                """
-                target_phase, target_psd = torch.chunk(_target, 2, dim=1)
+                target_phase, target_psd = torch.chunk(_sample, 2, dim=1)
                 denoised_phase, denoised_psd = torch.chunk(_denoised, 2, dim=1)
 
                 denoised1 = torch.cat((denoised_phase, target_psd), dim=1)
@@ -301,18 +286,9 @@ class UNetTrainer(ModuleTrainer):
 
                 denoised1_raw = self.trainer.module_trainer.format.mdct_phase_psd_to_raw(denoised1, level=i)
                 denoised2_raw = self.trainer.module_trainer.format.mdct_phase_psd_to_raw(denoised2, level=i)
-                target_raw = self.trainer.module_trainer.format.mdct_phase_psd_to_raw(_target, level=i).detach()
+                target_raw = self.trainer.module_trainer.format.mdct_phase_psd_to_raw(_sample, level=i).detach()
                 
                 _mss_loss_logs = self.mss_1d.mss_loss(denoised1_raw, denoised2_raw, target_raw)
-                """
-                
-                target_raw = self.format.mdct_phase_psd_to_raw(_target, level=i).detach()
-                denoised_raw = self.format.mdct_phase_psd_to_raw(_denoised, level=i)
-                _mss_loss_logs = self.mss_1d.mss_loss(denoised_raw, target_raw)
-
-                #for k in _mss_loss_logs.keys():
-                #    _mss_loss_logs[k] = _mss_loss_logs[k] / batch_sigma
-
                 if mss_loss_logs is None:
                     mss_loss_logs = _mss_loss_logs
                 else:
@@ -347,10 +323,9 @@ class UNetTrainer(ModuleTrainer):
                 self.mss1d_ceptrum_loss_buckets.log_buckets(mss_loss_logs["loss/mss1d_cepstrum"], batch_sigma)
 
         #if self.mss_1d is not None:
-        #    error_logvar = error_logvar.mean(dim=1)
         #    for k, v in mss_loss_logs.items():
         #        if k.startswith("loss/"):
-        #            mss_loss_logs[k] = v / error_logvar.exp() + error_logvar
+        #            batch_loss = batch_loss + v / error_logvar.exp() + error_logvar
 
         logs = {
             f"loss/{self.flavor}": batch_loss.mean(dim=1),

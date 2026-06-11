@@ -36,7 +36,7 @@ from typing import Union, Optional, Literal
 import torch
 
 from modules.unets.unet import DualDiffusionUNet, DualDiffusionUNetConfig
-from modules.mp_tools import MPFourier, MPConv, mp_cat, mp_silu, mp_sum, normalize, resample_2d
+from modules.mp_tools import MPFourier, MPConv, mp_cat, mp_silu, mp_sum, normalize, resample_2d, patchify_2d
 from modules.formats.ms_mdct_dual_7 import MS_MDCT_DualFormat
 
 
@@ -48,8 +48,8 @@ class UNetConfig(DualDiffusionUNetConfig):
     in_channels_emb: int = 0
     in_channels_x_ref: int = 2
     in_num_freqs: int = 64
-    in_psd_num_freqs: list[int] = (64, 128, 256, 512)
-    in_num_mdct_levels: int = 4
+    in_psd_num_freqs: list[int] = (128, 256, 512, 1024)
+    in_num_mdct_levels: int = 1
 
     model_channels: int  = 64                # Base multiplier for the number of channels.
     logvar_channels: int = 192               # Number of channels for training uncertainty estimation.
@@ -209,15 +209,15 @@ class UNet(DualDiffusionUNet):
         self.emb_label = MPConv(config.in_channels_emb, cemb, kernel=()) if config.in_channels_emb > 0 else None
 
         # Training uncertainty estimation.
-        #self.logvar_fourier = MPFourier(config.logvar_channels)
-        #self.logvar_linear = MPConv(config.logvar_channels, config.in_num_mdct_levels, kernel=(), disable_weight_norm=True)
-        #self.logvar_linear.weight.data.fill_(0)
+        self.logvar_fourier = MPFourier(config.logvar_channels)
+        self.logvar_linear = MPConv(config.logvar_channels, config.in_num_mdct_levels, kernel=(), disable_weight_norm=True)
+        self.logvar_linear.weight.data.fill_(0)
 
         # Encoder.
         self.x_ref_in_gain = torch.nn.Parameter(torch.zeros(self.num_psd_levels))
         self.conv_x_ref_in = torch.nn.ModuleDict()
         for i in range(self.num_psd_levels):
-            self.conv_x_ref_in[f"conv_x_ref_in{i}"] = MPConv(config.in_channels_x_ref, cblock[i], kernel=(3,3), bias=True)
+            self.conv_x_ref_in[f"conv_x_ref_in{i}"] = MPConv(config.in_channels_x_ref * self.psd_freqs_per_freq[i], cblock[i], kernel=(3,3), bias=True)
 
         self.conv_in = torch.nn.ModuleDict()
         for i in range(config.in_num_mdct_levels):
@@ -282,8 +282,7 @@ class UNet(DualDiffusionUNet):
             return None
     
     def get_sigma_loss_logvar(self, sigma: Optional[torch.Tensor] = None) -> torch.Tensor:
-        #return self.logvar_linear(self.logvar_fourier(sigma.flatten().log() / 4))[:, :, None, None].float()
-        return torch.zeros_like(sigma)
+        return self.logvar_linear(self.logvar_fourier(sigma.flatten().log() / 4))[:, :, None, None].float()
     
     def get_latent_shape(self, latent_shape: Union[torch.Size, tuple[int, int, int, int]]) -> torch.Size:
         #return latent_shape[0:2] + ((latent_shape[2] // 2**(self.num_levels-1)) * 2**(self.num_levels-1),
@@ -315,12 +314,17 @@ class UNet(DualDiffusionUNet):
             x = (c_in * x_in).to(dtype=torch.bfloat16)
             
         _x_out: list[torch.Tensor] = []
-        _x_in = format.unflatten_mdct_phase_psd(x)
-        assert len(_x_in) == self.config.in_num_mdct_levels
+        _x_in = [x] #format.unflatten_mdct_phase_psd(x)
+        #assert len(_x_in) == self.config.in_num_mdct_levels
 
-        x_ref = [_x.to(dtype=torch.bfloat16) for _x in x_ref]
+        #x_ref = [_x.to(dtype=torch.bfloat16) for _x in x_ref]
+        #assert len(x_ref) == self.num_psd_levels
+
+        x_ref = [*x_ref]
         assert len(x_ref) == self.num_psd_levels
-        
+        for i in range(self.num_psd_levels):
+            x_ref[i] = patchify_2d(x_ref[i].to(dtype=torch.bfloat16), self.psd_freqs_per_freq[i], 1)
+
         # embedding
         emb = self.emb_noise(emb)
         if self.config.in_channels_emb > 0:
@@ -354,7 +358,8 @@ class UNet(DualDiffusionUNet):
                 x = block(x, emb)
 
         _x_out.reverse()
-        x = format.flatten_mdct_phase_psd(_x_out)
+        #x = format.flatten_mdct_phase_psd(_x_out)
+        x = _x_out[0]
         
         D_x: torch.Tensor = c_skip * x_in.float() + c_out * x.float()
 
