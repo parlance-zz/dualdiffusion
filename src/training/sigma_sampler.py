@@ -182,7 +182,7 @@ class SigmaSampler():
 
         ln_sigma = torch.linspace(self.config.ln_sigma_min, self.config.ln_sigma_max,
             self.config.sigma_pdf_resolution, device=unet.device)
-        ln_sigma_error = unet.get_sigma_loss_logvar(ln_sigma.exp()).float().flatten().detach()
+        ln_sigma_error = unet.get_sigma_loss_logvar(ln_sigma.exp()).float().mean(dim=1, keepdim=True).flatten().detach()
         
         sigma_distribution_pdf = (-warmup_scale * self.config.dist_scale * ln_sigma_error).exp()
         sigma_distribution_pdf = (sigma_distribution_pdf + self.config.sigma_pdf_offset).clip(min=self.config.sigma_pdf_min)
