@@ -345,7 +345,11 @@ class DualDiffusionPipeline(torch.nn.Module):
             return sample_shape
         
         latent_shape = self.get_latent_shape(sample_shape)
-        return encoder.get_mel_spec_shape(latent_shape)
+        enc_shape = encoder.get_mel_spec_shape(latent_shape)
+        if enc_shape is not None:
+            return enc_shape
+        else:
+            return sample_shape
     
     @torch.inference_mode()
     def __call__(self, params: SampleParams, model_server_state: Optional[multiprocessing.managers.DictProxy] = None, quiet: bool = False) -> SampleOutput:

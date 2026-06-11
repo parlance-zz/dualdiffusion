@@ -367,19 +367,14 @@ class DAE(DualDiffusionDAE):
     
     def get_latent_shape(self, mel_spec_shape: Union[torch.Size, tuple[int, int, int, int]]) -> torch.Size:
         if len(mel_spec_shape) == 4:
-            return (mel_spec_shape[0], self.config.latent_channels,
-                    mel_spec_shape[2] // 2 ** (self.num_levels-1),
+            num_latent_freqs = self.config.in_num_freqs * (2 ** (self.num_psd_levels * 2 - self.num_levels - 1))
+            return (mel_spec_shape[0], self.config.latent_channels, num_latent_freqs,
                     mel_spec_shape[3] // 2 ** (self.num_levels-1))
         else:
             raise ValueError(f"Invalid sample shape: {mel_spec_shape}")
         
     def get_mel_spec_shape(self, latent_shape: Union[torch.Size, tuple[int, int, int, int]]) -> torch.Size:
-        if len(latent_shape) == 4:
-            return (latent_shape[0], self.config.in_channels,
-                    latent_shape[2] * 2 ** (self.num_levels-1),
-                    latent_shape[3] * 2 ** (self.num_levels-1))
-        else:
-            raise ValueError(f"Invalid latent shape: {latent_shape}")
+        return None
         
     def encode(self, in_x: list[torch.Tensor], embeddings: torch.Tensor, training: bool = False) -> torch.Tensor:
 
