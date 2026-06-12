@@ -229,15 +229,14 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
                 logs[f"io_stats/ddec_cond_level_{i}_msq"] = cond.pow(2).mean(dim=(1,2,3)).detach()
                 logs[f"io_stats/ddec_cond_level_{i}_mean"] = cond.mean(dim=(1,2,3)).detach()
                 
-            if self.dae.config.latent_channels <= 16:
+            if self.dae.config.latent_channels <= 8:
                 for i in range(self.dae.config.latent_channels):
                     logs[f"ch_stats/mean_{i}"] = self.dae.latents_stats_tracker.mean[i].detach()
                     logs[f"ch_stats/var_{i}"]  = self.dae.latents_stats_tracker.var[i].detach()
 
         if ddec_cond is not None:
-            ddec_x_ref: list[torch.Tensor] = ddec_cond
+            ddec_x_ref: list[torch.Tensor] = self.format.ms_psd_to_psd_linear(ddec_cond)
         else:
-            #ddec_x_ref: list[torch.Tensor] = [x + torch.randn_like(x) * self.config.add_x_ref_noise for x in ms_psds]
             ddec_x_ref: list[torch.Tensor] = [x + torch.randn_like(x) * self.config.add_x_ref_noise for x in self.format.ms_psd_to_psd_linear(ms_psds)]
 
         if self.train_ddecp == True:
@@ -268,33 +267,6 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
                     latents_sigreg_loss = latents_sigreg_loss.detach()
                 logs["loss/latents_sigreg"] = latents_sigreg_loss.detach()
                 logs["loss"] = logs["loss"] + latents_sigreg_loss * latents_sigreg_loss_weight
-
-            """
-            if self.trainer.global_step < self.config.mss_2d_leak_steps:
-                leak_max = 1 - (self.trainer.global_step + 1) / self.config.mss_2d_leak_steps
-                logs["io_stats/mss_2d_leak_max"] = leak_max
-            else:
-                leak_max = None
-            """
-            """
-            mel_densities = self.format.get_mdct_mel_density(level=-1)
-            logs["loss/ms_psd_mse"] = torch.zeros_like(logs["loss"])
-            for i, (cond, target, weight) in enumerate(zip(ddec_cond, target_ddec_x_ref, mel_densities)):
-                weight = weight.pow(0.5)
-                weight = weight / weight.mean()
-                ms_psd_mse = (torch.nn.functional.mse_loss(cond, target, reduction="none") * weight).mean(dim=(1,2,3))
-                logs[f"loss/ms_psd_mse_{i}"] = ms_psd_mse.detach()
-                logs[f"loss/ms_psd_mse"] = logs[f"loss/ms_psd_mse"] + ms_psd_mse / len(ddec_cond)
-            """
-            #logs["loss"] = logs["loss"] + logs["loss/ms_psd_mse"] * 1
-            
-            #if self.config.mss_2d_loss_weight > 0:
-            #    logs["loss/ms_psd_mss2d"] = torch.zeros_like(logs["loss"])
-            #    for i, (cond, target) in enumerate(zip(ddec_cond, target_ddec_x_ref)):
-            #        logs[f"loss/ms_psd_mss2d_{i}"] = self.mss_2d.mss_loss(cond, target, leak_pow=self.config.mss_2d_leak_pow, leak_max=leak_max)
-            #        logs[f"loss/ms_psd_mss2d"] = logs[f"loss/ms_psd_mss2d"] + logs[f"loss/ms_psd_mss2d_{i}"]
-            #
-            #    logs["loss"] = logs["loss"] + logs[f"loss/ms_psd_mss2d"] * self.config.mss_2d_loss_weight
 
         if self.train_unet == True:
             

@@ -278,17 +278,10 @@ class UNetTrainer(ModuleTrainer):
 
             for i, (_sample, _denoised) in enumerate(zip(samples, denoised)):
 
-                target_phase, target_psd = torch.chunk(_sample, 2, dim=1)
-                denoised_phase, denoised_psd = torch.chunk(_denoised, 2, dim=1)
-
-                denoised1 = torch.cat((denoised_phase, target_psd), dim=1)
-                denoised2 = torch.cat((target_phase, denoised_psd), dim=1)
-
-                denoised1_raw = self.trainer.module_trainer.format.mdct_phase_psd_to_raw(denoised1, level=i)
-                denoised2_raw = self.trainer.module_trainer.format.mdct_phase_psd_to_raw(denoised2, level=i)
-                target_raw = self.trainer.module_trainer.format.mdct_phase_psd_to_raw(_sample, level=i).detach()
+                denoised_raw = self.trainer.module_trainer.format.mdct_phase_psd_to_raw(_denoised)
+                target_raw = self.trainer.module_trainer.format.mdct_phase_psd_to_raw(_sample).detach()
                 
-                _mss_loss_logs = self.mss_1d.mss_loss(denoised1_raw, denoised2_raw, target_raw)
+                _mss_loss_logs = self.mss_1d.mss_loss(denoised_raw, target_raw)
                 if mss_loss_logs is None:
                     mss_loss_logs = _mss_loss_logs
                 else:
