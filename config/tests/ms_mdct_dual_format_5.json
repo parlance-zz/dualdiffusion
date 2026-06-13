@@ -1,9 +1,10 @@
 {
     "device": "cuda",
-    "add_random_test_samples": 0,
-    "save_output": true,
-    
-    "test_sample_verbose": false,
+    "add_random_test_samples": 100000,
+    "save_output": false,
+    "output_suffix": "_beta4",
+    "verbose": false,
+
     "test_samples": [
         "SuspectT/Knife Party - Destroy Them With Lazers.flac",
         "switch/Arcaea/_t_songs_ignotus.ogg.flac",
@@ -24,13 +25,14 @@
         //"default_raw_length": 3833600,
         //"default_raw_length": 2817536,
         //"default_raw_length": 2097152,
-        "default_raw_length": 1408768,
+        //"default_raw_length": 1408768,
         //"default_raw_length": 128000,
-        //"default_raw_length": 96000,
+        "default_raw_length": 96000,
         "width_alignment": 4096,
 
         "mdct_window_len": 128,
-        "mdct_window_func": "vorbis",
+        "mdct_window_func": "kaiser_bessel_derived",
+        "mdct_window_kwargs": {"beta": 4},
 
         "ms_add_center_channel": false,
         "ms_img_show_center_channel": true,

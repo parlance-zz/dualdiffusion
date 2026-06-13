@@ -61,6 +61,7 @@ class MS_MDCT_DualFormatConfig(DualDiffusionFormatConfig):
     # mdct params
     mdct_window_len: int = 128
     mdct_window_func: Literal["sin", "kaiser_bessel_derived", "vorbis"] = "vorbis"
+    mdct_window_kwargs: dict = None
 
     @property
     def mdct_num_frequencies(self) -> int:
@@ -157,8 +158,8 @@ class MS_MDCT_DualFormat(DualDiffusionFormat):
         else:
             raise ValueError(f"Unsupported mdct window function: {config.mdct_window_func}. Supported functions are 'sin', 'kaiser_bessel_derived', and 'vorbis'.")
         
-        self.mdct = MDCT(win_length=config.mdct_window_len, window_fn=mdct_window_fn, return_complex=True)
-        self.imdct = IMDCT(win_length=config.mdct_window_len, window_fn=mdct_window_fn)
+        self.mdct = MDCT(win_length=config.mdct_window_len, window_fn=mdct_window_fn, window_kwargs=config.mdct_window_kwargs, return_complex=True)
+        self.imdct = IMDCT(win_length=config.mdct_window_len, window_fn=mdct_window_fn, window_kwargs=config.mdct_window_kwargs)
 
         self.mdct_phase_scale: torch.Tensor
         self.register_buffer("mdct_phase_scale", torch.ones(config.mdct_num_frequencies).view(1, 1,-1, 1), persistent=True)
