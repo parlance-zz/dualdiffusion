@@ -158,6 +158,8 @@ def imdct(
     # The window's power, sum(window ** 2), equals (win_length // 2) due to energy conservation with 50% overlap.
     scaling_factor = 1.0 / math.sqrt(win_length * (win_length // 2))
     spectrogram = spectrogram / scaling_factor
+    if torch.is_complex(spectrogram):
+        spectrogram = spectrogram * 0.5
 
     # Flatten the input tensor
     shape = spectrogram.shape
