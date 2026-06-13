@@ -82,7 +82,7 @@ def ms_mdct_dual_format_test() -> None:
         test_samples += [sample["file_name"] for sample in random.sample(train_samples, cfg.add_random_test_samples)]
 
     format.mdct_mel_density.cpu().numpy().tofile(os.path.join(output_path, f"mdct_mel_density{cfg.output_suffix}.raw"))
-    format.mdct.mdct_window.cpu().numpy().tofile(os.path.join(output_path, f"mdct_window{cfg.output_suffix}.raw"))
+    format.mdct.window.cpu().numpy().tofile(os.path.join(output_path, f"mdct_window{cfg.output_suffix}.raw"))
     
     for i in range(format.config.num_ms_psds):
 
