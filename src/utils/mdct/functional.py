@@ -161,7 +161,7 @@ def imdct(
 
     # Flatten the input tensor
     shape = spectrogram.shape
-    spectrogram = spectrogram.real.flatten(end_dim=-3)
+    spectrogram = spectrogram.flatten(end_dim=-3)
 
     # Prepare pre&post processing arrays
     pre_twiddle = torch.exp(
