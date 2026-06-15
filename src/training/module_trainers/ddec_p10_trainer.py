@@ -27,7 +27,7 @@ import torch
 
 from training.trainer import DualDiffusionTrainer
 from training.module_trainers.module_trainer import ModuleTrainer, ModuleTrainerConfig
-from training.module_trainers.unet_trainer_p5 import UNetTrainerConfig, UNetTrainer
+from training.module_trainers.unet_trainer_f8 import UNetTrainerConfig, UNetTrainer
 from training.loss.sigreg import sigreg_strong_loss
 from training.loss.mss_1d import MSSLoss1D, MSSLoss1DConfig
 from modules.daes.dae_edm2_q7 import DAE
