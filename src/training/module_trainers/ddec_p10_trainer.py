@@ -28,13 +28,12 @@ import torch
 from training.trainer import DualDiffusionTrainer
 from training.module_trainers.module_trainer import ModuleTrainer, ModuleTrainerConfig
 from training.module_trainers.unet_trainer_p5 import UNetTrainerConfig, UNetTrainer
-from training.loss.mss_2d import MSSLoss2D, MSSLoss2DConfig
 from training.loss.sigreg import sigreg_strong_loss
 from training.loss.mss_1d import MSSLoss1D, MSSLoss1DConfig
 from modules.daes.dae_edm2_q7 import DAE
-from modules.unets.unet_edm2_q7_ddec import UNet
+from modules.unets.unet_edm2_q7_ddec_f8 import UNet
 from modules.unets.unet_edm2_p6 import UNet as UNet_LDM
-from modules.formats.ms_mdct_dual_5 import MS_MDCT_DualFormat
+from modules.formats.ms_mdct_dual_8 import MS_MDCT_DualFormat
 from modules.mp_tools import normalize
 from utils.dual_diffusion_utils import dict_str
 
@@ -188,8 +187,8 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
         else:
             raw_samples = batch["audio"]
 
-        mdct_phase_psd = self.format.raw_to_mdct_phase_psd(raw_samples, random_phase_augmentation=self.config.random_phase_augmentation)#, level=-1)
-        #mdct_phase_psd = self.format.flatten_mdct_phase_psd(mdct_phase_psd)
+        mdct_phase_psd = self.format.raw_to_mdct_phase_psd(raw_samples, random_phase_augmentation=self.config.random_phase_augmentation, level=-1)
+        mdct_phase_psd = self.format.flatten_mdct_phase_psd(mdct_phase_psd)
         ms_psds = self.format.raw_to_ms_psd(raw_samples, level=-1)
 
         logs.update({

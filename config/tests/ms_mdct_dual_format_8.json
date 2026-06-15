@@ -1,17 +1,17 @@
 {
     "device": "cuda",
-    "add_random_test_samples": 0,
-    "save_output": true,
+    "add_random_test_samples": 100000,
+    "save_output": false,
     
     "test_sample_verbose": false,
     "test_samples": [
         "SuspectT/Knife Party - Destroy Them With Lazers.flac",
-        "switch/Arcaea/_t_songs_ignotus.ogg.flac",
-        "dsf/Metropolis Street Racer Prototype/file_15.adx.flac",
-        "psf3/Iron Man/_t_! movies_HUB_05_000001C2.adx.flac",
-        "psf/Gradius Gaiden/SLPM-86042_BGM1_0000096c.XA.flac",
-        "psf/Pukunpa - Joshikousei no Houkago/SARU1.DA.ape.flac",
-        "psf3/Tekken Hybrid/_t_Tekken Tag Tournament 2 Prologue_charasele.lwav.flac",
+        //"switch/Arcaea/_t_songs_ignotus.ogg.flac",
+        //"dsf/Metropolis Street Racer Prototype/file_15.adx.flac",
+        //"psf3/Iron Man/_t_! movies_HUB_05_000001C2.adx.flac",
+        //"psf/Gradius Gaiden/SLPM-86042_BGM1_0000096c.XA.flac",
+        //"psf/Pukunpa - Joshikousei no Houkago/SARU1.DA.ape.flac",
+        //"psf3/Tekken Hybrid/_t_Tekken Tag Tournament 2 Prologue_charasele.lwav.flac",
         "switch/Muse Dash/_t_stage_jump_hard_candy_music.fsb.flac"
     ],
 
@@ -24,9 +24,9 @@
         //"default_raw_length": 3833600,
         //"default_raw_length": 2817536,
         //"default_raw_length": 2097152,
-        "default_raw_length": 1408768,
+        //"default_raw_length": 1408768,
         //"default_raw_length": 128000,
-        //"default_raw_length": 96000,
+        "default_raw_length": 96000,
         "width_alignment": 4096,
 
         "mdct_psd_exponent": 0.25,

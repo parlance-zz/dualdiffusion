@@ -84,6 +84,7 @@ def ms_mdct_dual_format_test() -> None:
     mdct_mel_densities = format.get_mdct_mel_density(level=-1)
     for i in range(format.config.num_mdcts):
         mdct_mel_densities[i].cpu().numpy().tofile(os.path.join(output_path, f"mdct_mel_density_{i}.raw"))
+        format.mdcts[i].window.cpu().numpy().tofile(os.path.join(output_path, f"mdct_window_{i}.raw"))
     
     mdct_psd_avg_bin_msqs: list[torch.Tensor] = []; mdct_psd_avg_bin_means: list[torch.Tensor] = []
     mdct_phase_avg_bin_msqs: list[torch.Tensor] = []
@@ -99,7 +100,7 @@ def ms_mdct_dual_format_test() -> None:
         ms_window: torch.Tensor = getattr(format, f"ms_psd_window_{i}")
 
         ms_filters.transpose(0, 1).cpu().numpy().tofile(os.path.join(output_path, f"ms_filters_{i}.raw"))
-        ms_window.cpu().numpy().tofile(os.path.join(output_path, f"ms_windows_{i}{output_suffix}.raw"))
+        ms_window.cpu().numpy().tofile(os.path.join(output_path, f"ms_window_{i}{output_suffix}.raw"))
 
     ms_psd_avg_bin_msqs: list[torch.Tensor] = []; ms_psd_avg_bin_means: list[torch.Tensor] = []
     ms_psd_linear_avg_bin_msqs: list[torch.Tensor] = []; ms_psd_linear_avg_bin_means: list[torch.Tensor] = []
@@ -271,6 +272,14 @@ def ms_mdct_dual_format_test() -> None:
     for i in range(format.config.num_ms_psds):
         getattr(format, f"ms_psd_scale_{i}").copy_(ms_psd_avg_bin_msqs[i].pow(0.5).float())
         getattr(format, f"ms_psd_linear_scale_{i}").copy_(ms_psd_linear_avg_bin_msqs[i].pow(0.5).float())
+
+        # it seems that just upscaling the ms_psd pcond values is basically the same but smoother
+        ms_psd_linear_scale: torch.Tensor = format.ms_psd_linear_freq_scales[i].unscale(getattr(format, f"ms_psd_scale_{i}"), rectify=False)
+        ms_psd_linear_offset: torch.Tensor = format.ms_psd_linear_freq_scales[i].unscale(getattr(format, f"ms_psd_offset_{i}"), rectify=False)
+        ms_psd_linear_scale = torch.nn.functional.avg_pool2d(ms_psd_linear_scale, (2, 1))
+        ms_psd_linear_offset = torch.nn.functional.avg_pool2d(ms_psd_linear_offset, (2, 1))
+        getattr(format, f"ms_psd_linear_scale_{i}").copy_(ms_psd_linear_scale)
+        getattr(format, f"ms_psd_linear_offset_{i}").copy_(ms_psd_linear_offset)
     
     if format_loaded == False:
         if input("\nSave format? (y/n): ") == "y":

@@ -138,7 +138,7 @@ class MS_MDCT_DualFormat(DualDiffusionFormat):
                 sample_rate=config.sample_rate,
                 num_stft_bins=config.ms_psds[i].ms_num_stft_bins,
                 num_filters=config.ms_psds[i].ms_num_filters,
-                filter_norm=None,
+                filter_norm="slaney",
                 filter_shape="triangular"
             )
             self.ms_psd_freq_scales.append(ms_freq_scale)
@@ -150,7 +150,7 @@ class MS_MDCT_DualFormat(DualDiffusionFormat):
                 sample_rate=config.sample_rate,
                 num_stft_bins=config.ms_psds[i].ms_window_length,
                 num_filters=config.ms_psds[i].ms_num_filters,
-                filter_norm=None,
+                filter_norm="slaney",
                 filter_shape="triangular"
             )
             self.ms_psd_linear_freq_scales.append(ms_linear_freq_scale)
@@ -218,7 +218,7 @@ class MS_MDCT_DualFormat(DualDiffusionFormat):
             else:
                 stft = stft.abs()
 
-            ms_psd: torch.Tensor = self.ms_psd_freq_scales[i].scale(stft).pow(self.config.ms_abs_exponent)
+            ms_psd: torch.Tensor = self.ms_psd_freq_scales[i].scale(stft.pow(self.config.ms_abs_exponent))
 
             ms_psd_offset: torch.Tensor = getattr(self, f"ms_psd_offset_{i}")
             ms_psd_scale: torch.Tensor = getattr(self, f"ms_psd_scale_{i}")
@@ -248,6 +248,7 @@ class MS_MDCT_DualFormat(DualDiffusionFormat):
             
             ms_psd_linear_scale: torch.Tensor = getattr(self, f"ms_psd_linear_scale_{i}")
             ms_psd_linear_offset: torch.Tensor = getattr(self, f"ms_psd_linear_offset_{i}")
+
             linear_psd = (linear_psd + ms_psd_linear_offset) / ms_psd_linear_scale
             linear_psds.append(linear_psd)
             
