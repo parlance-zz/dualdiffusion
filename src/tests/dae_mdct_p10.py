@@ -163,9 +163,9 @@ def dae_test() -> None:
         source_raw_sample = load_audio(file_path, count=count)
         input_raw_sample = source_raw_sample.unsqueeze(0).to(format.device)
         #input_mel_spec = format.mel_spec.raw_to_mel_spec(input_raw_sample)
-        input_mdct_phase_psd = format.raw_to_mdct_phase_psd(input_raw_sample)#, level=-1)
-        #input_mdct_phase_psd = format.flatten_mdct_phase_psd(input_mdct_phase_psd)
-        input_mdct_psd = format.raw_to_mdct_psd(input_raw_sample)#, level=0)
+        input_mdct_phase_psd = format.raw_to_mdct_phase_psd(input_raw_sample, level=-1)
+        input_mdct_phase_psd = format.flatten_mdct_phase_psd(input_mdct_phase_psd)
+        input_mdct_psd = format.raw_to_mdct_psd(input_raw_sample, level=0)
         input_ms_psds = format.raw_to_ms_psd(input_raw_sample, level=-1)
         input_mel_spec = input_ms_psds[-1]
 
@@ -253,11 +253,11 @@ def dae_test() -> None:
                 sample_shape=input_mdct_phase_psd.shape,
                 x_ref=ddecp_x_ref, module=ddecp).float()
 
-            #output_ddecp = format.unflatten_mdct_phase_psd(output_ddecp)
+            output_ddecp = format.unflatten_mdct_phase_psd(output_ddecp)
             
-            #decode_level = 0
-            output_mdct_phase_psd = output_ddecp#output_ddecp[decode_level]
-            output_raw = format.mdct_phase_psd_to_raw(output_mdct_phase_psd)#, level=decode_level)
+            decode_level = 2
+            output_mdct_phase_psd = output_ddecp[decode_level]
+            output_raw = format.mdct_phase_psd_to_raw(output_mdct_phase_psd, level=decode_level)
             #for i in range(1, len(output_ddecp)):
             #    _level_raw = format.mdct_phase_psd_to_raw(output_ddecp[i], level=i)
             #    output_raw[:, :, :_level_raw.shape[-1]] += _level_raw
@@ -265,7 +265,7 @@ def dae_test() -> None:
             
             #output_mel_spec = format.mel_spec.raw_to_mel_spec(output_raw)
             output_mel_spec = format.raw_to_ms_psd(output_raw, level=format.config.num_ms_psds - 1)
-            output_mdct_psd = format.raw_to_mdct_psd(output_raw)#, level=0)
+            output_mdct_psd = format.raw_to_mdct_psd(output_raw, level=0)
         else:
             output_raw = output_mel_spec = output_ddecp = output_mdct_psd = ddecp_x_ref = decode_level = None
         
@@ -274,7 +274,7 @@ def dae_test() -> None:
         metadata["source"] = full_filename
         #metadata["ddecm_metadata"] = dict_str(ddecm_params.__dict__) if ddecm is not None else "null"
         metadata["ddecp_metadata"] = dict_str(ddecp_params.__dict__) if ddecp is not None else "null"
-        #metadata["decode_level"] = str(decode_level)
+        metadata["decode_level"] = str(decode_level)
 
         if latents is not None:
             align_ref = (input_mdct_psd - input_mdct_psd.amin())
