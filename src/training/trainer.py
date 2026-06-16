@@ -525,8 +525,10 @@ class DualDiffusionTrainer:
                 exit(1)
 
             muon_param_names = []; adam_param_names = []
-            for module in self.modules:
+            for module, module_name in zip(self.modules, self.config.train_modules):
+
                 for name, param in module.named_parameters():
+                    name = f"{module_name}.{name}"
                     muon_param = (any(fnmatch(name, pattern) for pattern in self.config.optimizer.muon_param_patterns) and
                                 (not any(fnmatch(name, pattern) for pattern in self.config.optimizer.adam_param_patterns)))
                     
