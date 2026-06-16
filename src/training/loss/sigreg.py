@@ -25,7 +25,7 @@ import torch
 
 # initial implementation taken from https://github.com/kreasof-ai/sigreg (no license specified)
 def sigreg_strong_loss(x: torch.Tensor, sketch_dim: int = 64,
-        t_min: float = -5, t_max: float = 5, num_t: int = 17, eps: float = 1e-6) -> torch.Tensor:
+        t_min: float = -5, t_max: float = 5, num_t: int = 17, eps: float = 1e-6, height_to_channels: bool = False) -> torch.Tensor:
     """
     Strong-SIGReg (LeJEPA): Forces ECF(x) ~ ECF(Gaussian).
     Matches all moments using random 1D projections.
@@ -34,8 +34,12 @@ def sigreg_strong_loss(x: torch.Tensor, sketch_dim: int = 64,
     # use frequency axis slices as channels for 2d image-like tensors
     B = x.shape[0]
 
-    x = x.permute(0, 3, 1, 2)
-    x = x.reshape(x.shape[0] * x.shape[1], x.shape[2] * x.shape[3])
+    if height_to_channels == True:
+        x = x.permute(0, 3, 1, 2)
+        x = x.reshape(x.shape[0] * x.shape[1], x.shape[2] * x.shape[3])
+    else:
+        x = x.permute(0, 2, 3, 1)
+        x = x.reshape(x.shape[0] * x.shape[1] * x.shape[2], x.shape[3])
 
     N, C = x.size()
 
@@ -65,16 +69,22 @@ def sigreg_strong_loss(x: torch.Tensor, sketch_dim: int = 64,
     return loss.mean().expand(B) # return per-sample loss for compatibility
 
 def sigreg2(x: torch.Tensor, y: torch.Tensor, sketch_dim: int = 64,
-        t_min: float = -5, t_max: float = 5, num_t: int = 17, eps: float = 1e-6) -> torch.Tensor:
+        t_min: float = -5, t_max: float = 5, num_t: int = 17, eps: float = 1e-6, height_to_channels: bool = False) -> torch.Tensor:
 
     assert x.shape == y.shape
     # use frequency axis slices as channels for 2d image-like tensors
     B = x.shape[0]
 
-    x = x.permute(0, 3, 1, 2)
-    x = x.reshape(x.shape[0] * x.shape[1], x.shape[2] * x.shape[3])
-    y = y.permute(0, 3, 1, 2)
-    y = y.reshape(y.shape[0] * y.shape[1], y.shape[2] * y.shape[3])
+    if height_to_channels == True:
+        x = x.permute(0, 3, 1, 2)
+        x = x.reshape(x.shape[0] * x.shape[1], x.shape[2] * x.shape[3])
+        y = y.permute(0, 3, 1, 2)
+        y = y.reshape(y.shape[0] * y.shape[1], y.shape[2] * y.shape[3])
+    else:
+        x = x.permute(0, 2, 3, 1)
+        x = x.reshape(x.shape[0] * x.shape[1] * x.shape[2], x.shape[3])
+        y = y.permute(0, 2, 3, 1)
+        y = y.reshape(y.shape[0] * y.shape[1] * y.shape[2], y.shape[3])
 
     N, C = x.size()
 
