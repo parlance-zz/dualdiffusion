@@ -243,7 +243,10 @@ class UNetTrainer(ModuleTrainer):
         else:
             perturbed_input = None
 
-        denoised, error_logvar = self.trainer.get_ddp_module(self.unet)(samples + noise, batch_sigma, self.format, embeddings,
+        try: unet_module = self.trainer.get_ddp_module(self.unet)
+        except: unet_module = self.unet
+
+        denoised, error_logvar = unet_module(samples + noise, batch_sigma, self.format, embeddings,
             x_ref=ref_samples, perturbed_input=perturbed_input, conditioning_mask=conditioning_mask)
         
         samples = self.format.unflatten_mdct_phase_psd(samples)
@@ -263,7 +266,6 @@ class UNetTrainer(ModuleTrainer):
         
         batch_weighted_loss = []
         for i, (x, y, loss_weight) in enumerate(zip(denoised, samples, mel_density)):
-            #loss_weight = loss_weight.pow(i / (len(samples) - 1))
             loss_weight = loss_weight / loss_weight.mean()
             loss = (torch.nn.functional.mse_loss(x, y.detach(), reduction="none") * loss_weight).mean(dim=(1,2,3)) * batch_loss_weight
             batch_weighted_loss.append(loss)

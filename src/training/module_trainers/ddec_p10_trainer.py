@@ -28,6 +28,7 @@ import torch
 from training.trainer import DualDiffusionTrainer
 from training.module_trainers.module_trainer import ModuleTrainer, ModuleTrainerConfig
 from training.module_trainers.unet_trainer_f8 import UNetTrainerConfig, UNetTrainer
+from training.module_trainers.unet_trainer_p5 import UNetTrainerConfig as UNetTrainerConfig_LDM, UNetTrainer as UNetTrainer_LDM
 from training.loss.sigreg import sigreg_strong_loss
 from training.loss.mss_1d import MSSLoss1D, MSSLoss1DConfig
 from modules.daes.dae_edm2_q7 import DAE
@@ -55,11 +56,6 @@ class DiffusionDecoder_Trainer_Config(ModuleTrainerConfig):
     unet: dict[str, Any]
     sigreg: dict[str, Any]
     mss_1d: dict[str, Any]
-
-    mss_2d: dict[str, Any]
-    mss_2d_leak_pow: float = 4
-    mss_2d_leak_steps: int = 200
-    mss_2d_loss_weight: float = 0
 
     latents_sigreg_loss_weight: float = 0
     sigreg_loss_warmup_steps: int = 0
@@ -97,21 +93,15 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
         self.train_ddecp = self.ddecp is not None
 
         if self.train_dae == False:
-            if self.train_ddecm == True or self.train_ddecp == True:
-                #self.dae = trainer.pipeline.dae.to(device=trainer.accelerator.device, dtype=torch.bfloat16).requires_grad_(False)
-                #assert self.dae.config.last_global_step > 0
-                pass
+            if self.trainer.pipeline.dae.config.last_global_step > 0:
+                self.dae = trainer.pipeline.dae.to(device=trainer.accelerator.device, dtype=torch.bfloat16).requires_grad_(False)
+            else:
+                self.dae = None
         else:
-            #assert self.train_ddecp == False
-            #self.ddecp = trainer.pipeline.ddecp.to(device=trainer.accelerator.device, dtype=torch.bfloat16).requires_grad_(False)
-            #assert self.ddecp.config.last_global_step > 0
-
-            #self.train_ddecp = True
-            #if config.mss_2d_loss_weight > 0:
-            #    self.mss_2d = MSSLoss2D(MSSLoss2DConfig(**config.mss_2d), device=trainer.accelerator.device)
-            #else:
-            #    self.mss_2d = None
-            pass
+            if self.train_ddecp == False:
+                self.ddecp = trainer.pipeline.ddecp.to(device=trainer.accelerator.device, dtype=torch.bfloat16).requires_grad_(False)
+                assert self.ddecp.config.last_global_step > 0
+                self.train_ddecp = True
 
         self.format: MS_MDCT_DualFormat = trainer.pipeline.format.to(self.trainer.accelerator.device)
 
@@ -158,7 +148,7 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
             self.ddecm_trainer = UNetTrainer(UNetTrainerConfig(**config.ddecm), trainer, self.ddecm, "ddecm")
         if self.train_unet == True:
             self.logger.info(f"UNet-LDM trainer (loss weight: {self.config.unet_loss_weight}) (warmup steps:{self.config.unet_loss_warmup_steps}):")
-            self.unet_trainer = UNetTrainer(UNetTrainerConfig(**config.unet), trainer, self.unet, "unet")
+            self.unet_trainer = UNetTrainer_LDM(UNetTrainerConfig_LDM(**config.unet), trainer, self.unet, "unet")
 
     @torch.no_grad()
     def init_batch(self, validation: bool = False) -> Optional[dict[str, Union[torch.Tensor, float]]]:
@@ -206,9 +196,9 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
             
             self.dae.latents_stats_tracker(latents)
 
-        #elif self.train_ddecm == True or self.train_ddecp == True:
-        #    latents, ddec_cond = self.dae(ms_psds, audio_embeddings, latents_sigma=self.config.add_latents_noise)
-        #    latents = latents.detach(); ddec_cond: list[torch.Tensor] = [x.detach() for x in ddec_cond]
+        elif self.dae is not None:
+            latents, ddec_cond = self.dae(ms_psds, audio_embeddings, latents_sigma=self.config.add_latents_noise)
+            latents = latents.detach(); ddec_cond: list[torch.Tensor] = [x.detach() for x in ddec_cond]
         else:
             latents = ddec_cond = None
         
