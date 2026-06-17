@@ -253,15 +253,12 @@ def dae_test() -> None:
                 sample_shape=input_mdct_phase_psd.shape,
                 x_ref=ddecp_x_ref, module=ddecp).float()
 
-            output_ddecp = format.unflatten_mdct_phase_psd(output_ddecp)
-            
-            decode_level = 2
-            output_mdct_phase_psd = output_ddecp[decode_level]
+            decode_level = -1
+            if decode_level >= 0:
+                output_mdct_phase_psd = format.unflatten_mdct_phase_psd(output_ddecp)[decode_level]
+            else:
+                output_mdct_phase_psd = output_ddecp
             output_raw = format.mdct_phase_psd_to_raw(output_mdct_phase_psd, level=decode_level)
-            #for i in range(1, len(output_ddecp)):
-            #    _level_raw = format.mdct_phase_psd_to_raw(output_ddecp[i], level=i)
-            #    output_raw[:, :, :_level_raw.shape[-1]] += _level_raw
-            #output_raw /= len(output_ddecp)
             
             #output_mel_spec = format.mel_spec.raw_to_mel_spec(output_raw)
             output_mel_spec = format.raw_to_ms_psd(output_raw, level=format.config.num_ms_psds - 1)

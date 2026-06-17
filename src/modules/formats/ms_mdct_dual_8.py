@@ -31,6 +31,35 @@ from utils.dual_diffusion_utils import tensor_to_img
 from utils.mdct import MDCT, IMDCT, sin_window, kaiser_bessel_derived, vorbis
 
 
+def _combine_fft_crossover(xs: list[torch.Tensor], sample_rate: float, crossovers: list[float], crossfade_hz: float = 100.0) -> torch.Tensor:
+    n = xs[0].shape[-1]
+    f = torch.fft.rfftfreq(n, d=1 / sample_rate).to(xs[0].device)
+    X = torch.stack([torch.fft.rfft(x, dim=-1) for x in xs])  # (bands, b, c, F)
+
+    edges = [0.0, *crossovers]
+    masks = []
+    for i in range(len(xs)):
+        if i == 0:
+            m = (f < edges[1]).to(X.real.dtype)
+        elif i == len(xs) - 1:
+            m = (f >= edges[i]).to(X.real.dtype)
+        else:
+            m = ((f >= edges[i]) & (f < edges[i + 1])).to(X.real.dtype)
+        masks.append(m)
+
+    masks = torch.stack(masks)
+
+    for k, fc in enumerate(crossovers, start=1):
+        lo, hi = fc - crossfade_hz, fc + crossfade_hz
+        region = (f >= lo) & (f <= hi)
+        t = (f[region] - lo) / (hi - lo)
+        left = 0.5 * (1 + torch.cos(torch.pi * t))
+        masks[k - 1, region] = left
+        masks[k, region] = 1 - left
+
+    Y = (X * masks[:, None, None, :]).sum(0)
+    return torch.fft.irfft(Y, n=n, dim=-1)
+
 def _flat_top_window(x: torch.Tensor) -> torch.Tensor:
     return (0.21557895 - 0.41663158 * torch.cos(x) + 0.277263158 * torch.cos(2*x)
             - 0.083578947 * torch.cos(3*x) + 0.006947368 * torch.cos(4*x))
@@ -84,8 +113,9 @@ class MS_MDCT_DualFormatConfig(DualDiffusionFormatConfig):
     width_alignment: int    = 4096
 
     # mdct params
-
     mdcts: list[MDCT_Config] = ()
+    mdct_out_crossover_freqs: list[float] = (300, 600, 1200)
+    mdct_out_crossover_width_hz: float = 100
     mdct_psd_exponent: float = 0.25
 
     @property
@@ -93,7 +123,6 @@ class MS_MDCT_DualFormatConfig(DualDiffusionFormatConfig):
         return len(self.mdcts)
 
     # mel-spec params
-
     ms_add_center_channel: bool = False
     ms_img_show_center_channel: bool = True
     ms_abs_exponent: float = 0.25
@@ -319,15 +348,28 @@ class MS_MDCT_DualFormat(DualDiffusionFormat):
     
     def mdct_phase_psd_to_raw(self, mdct_phase_psd: torch.Tensor, level: int = 0) -> torch.Tensor:
 
-        mdct_phase, mdct_psd = torch.chunk(mdct_phase_psd.float(), 2, dim=1)
-        mdct_phase = mdct_phase * getattr(self, f"mdct_phase_scale_{level}")
-        mdct_psd = mdct_psd * getattr(self, f"mdct_psd_scale_{level}") - getattr(self, f"mdct_psd_offset_{level}")
+        if level >=0 :
+            mdct_phase, mdct_psd = torch.chunk(mdct_phase_psd.float(), 2, dim=1)
+            mdct_phase = mdct_phase * getattr(self, f"mdct_phase_scale_{level}")
+            mdct_psd = mdct_psd * getattr(self, f"mdct_psd_scale_{level}") - getattr(self, f"mdct_psd_offset_{level}")
 
-        #mdct_psd = mdct_psd.clip(min=0).pow(1 / self.config.mdct_psd_exponent - 1)
-        recon_exp = int((1 / self.config.mdct_psd_exponent - 1) / 2) * 2 + 1
-        mdct_psd = mdct_psd.pow(recon_exp)
-        raw_samples = self.imdcts[level](mdct_phase * mdct_psd).real.contiguous()
-        return raw_samples
+            #mdct_psd = mdct_psd.clip(min=0).pow(1 / self.config.mdct_psd_exponent - 1)
+            recon_exp = int((1 / self.config.mdct_psd_exponent - 1) / 2) * 2 + 1
+            mdct_psd = mdct_psd.pow(recon_exp)
+            raw_samples = self.imdcts[level](mdct_phase * mdct_psd).real.contiguous()
+            return raw_samples
+        else:
+            input_mdcts = self.unflatten_mdct_phase_psd(mdct_phase_psd)[:len(self.config.mdct_out_crossover_freqs) + 1]
+            output_mdcts: list[torch.Tensor] = []
+            for i in range(len(input_mdcts)):
+                output_mdcts.append(self.mdct_phase_psd_to_raw(input_mdcts[i], level=i))
+
+            crop_length = min(x.shape[-1] for x in output_mdcts)
+            output_mdcts = [x[..., :crop_length] for x in output_mdcts]
+            output_mdcts.reverse()
+
+            return _combine_fft_crossover(output_mdcts, sample_rate=self.config.sample_rate,
+                crossovers=self.config.mdct_out_crossover_freqs, crossfade_hz=self.config.mdct_out_crossover_width_hz)
 
     def flatten_mdct_phase_psd(self, mdct_phase_psds: list[torch.Tensor]) -> torch.Tensor:
         mdct_phase_psds = [x.flatten(2, 3)[:, :, None, :] for x in mdct_phase_psds]
