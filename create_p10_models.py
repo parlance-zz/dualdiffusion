@@ -32,7 +32,7 @@ if input("Save module? (y/n) ").lower() == 'y':
     print(f"Saved model to {model_path}/ddecm")
 """
 
-from modules.unets.unet_edm2_q7_ddec import UNet, UNetConfig
+from modules.unets.unet_edm2_q7_ddec_f8 import UNet, UNetConfig
 ddecp = UNet(UNetConfig())
 print_module_info(ddecp, "ddecp")
 
@@ -42,7 +42,7 @@ if input("Save module? (y/n) ").lower() == 'y':
 
 
 from modules.unets.unet_edm2_p6 import UNet, UNetConfig
-unet = UNet(UNetConfig(num_layers_per_block=8, block_kernel_size=1))
+unet = UNet(UNetConfig(num_layers_per_block=10, block_kernel_size=3))
 print_module_info(unet, "unet")
 
 if input("Save module? (y/n) ").lower() == 'y':

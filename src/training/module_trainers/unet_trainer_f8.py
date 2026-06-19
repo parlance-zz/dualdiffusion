@@ -225,6 +225,7 @@ class UNetTrainer(ModuleTrainer):
             ref_samples: Optional[torch.Tensor] = None) -> dict[str, Union[torch.Tensor, float]]:
 
         device_bsz = self.trainer.config.device_batch_size
+        logs: dict[str, Union[torch.Tensor, float]] = {}
 
         # normal conditioning dropout
         conditioning_mask = (torch.rand(device_bsz, device=self.trainer.accelerator.device) > self.config.conditioning_dropout).requires_grad_(False).detach()
@@ -248,7 +249,12 @@ class UNetTrainer(ModuleTrainer):
 
         denoised, error_logvar = unet_module(samples + noise, batch_sigma, self.format, embeddings,
             x_ref=ref_samples, perturbed_input=perturbed_input, conditioning_mask=conditioning_mask)
-        
+
+        logs.update({
+            f"io_stats_{self.flavor}/denoised_var": denoised.var(dim=(1,2,3)).detach(),
+            f"io_stats_{self.flavor}/denoised_mean": denoised.mean(dim=(1,2,3)).detach()
+        })
+    
         samples = self.format.unflatten_mdct_phase_psd(samples)
         denoised = self.format.unflatten_mdct_phase_psd(denoised)
         mel_density = self.format.get_mdct_mel_density(level=-1)
@@ -266,6 +272,7 @@ class UNetTrainer(ModuleTrainer):
         
         batch_weighted_loss = []
         for i, (x, y, loss_weight) in enumerate(zip(denoised, samples, mel_density)):
+            loss_weight = loss_weight.pow((i + 1) / len(denoised))
             loss_weight = loss_weight / loss_weight.mean()
             loss = (torch.nn.functional.mse_loss(x, y.detach(), reduction="none") * loss_weight).mean(dim=(1,2,3)) * batch_loss_weight
             batch_weighted_loss.append(loss)
@@ -319,14 +326,10 @@ class UNetTrainer(ModuleTrainer):
         #        if k.startswith("loss/"):
         #            batch_loss = batch_loss + v / error_logvar.exp() + error_logvar
 
-        logs = {
-            f"loss/{self.flavor}": batch_loss.mean(dim=1),
-            #f"io_stats_{self.flavor}/denoised_var": denoised.var(dim=(1,2,3)),
-            #f"io_stats_{self.flavor}/denoised_mean": denoised.mean(dim=(1,2,3))
-        }
+        logs[f"loss/{self.flavor}"] = batch_loss.mean(dim=1)
 
         for i in range(batch_loss.shape[1]):
-            logs[f"loss/{self.flavor}_{i}"] = batch_loss[:, i]
+            logs[f"loss/{self.flavor}_{i}"] = batch_loss[:, i].detach()
             
         if self.mss_1d is not None:
             logs.update(mss_loss_logs)

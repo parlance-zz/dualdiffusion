@@ -238,6 +238,9 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
                 logs["loss"] = logs["loss"] + logs["loss/mss1d"] * self.config.mss_loss_weight
                 logs["loss"] = logs["loss"] + logs["loss/mss1d_cepstrum"] * self.config.cepstrum_loss_weight
 
+            for i in range(len(self.ddecp.config.in_psd_num_freqs)):
+                logs[f"io_stats_ddecp/x_ref_in_gain_{i}"] = self.ddecp.x_ref_in_gain[i].detach()
+
         if self.train_ddecm == True:
             raise NotImplementedError()
             #logs.update(self.ddecm_trainer.train_batch(input_mel_spec, audio_embeddings, ddec_x_ref))
