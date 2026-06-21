@@ -68,7 +68,8 @@ class FrequencyScale(torch.nn.Module):
         num_stft_bins: int = 3201,
         num_filters: int = 256,
         filter_norm: Optional[Literal["slaney", "l2"]] = None,
-        unscale_driver: Literal["gels", "gelsy", "gelsd", "gelss"] = "gels",
+        unscale_mode: Literal["lstsq", "grid_sample"] = "lstsq",
+        unscale_lstsq_driver: Literal["gels", "gelsy", "gelsd", "gelss"] = "gels",
         filter_shape: Literal["triangular", "cos"] = "triangular",
     ) -> None:
         
@@ -82,8 +83,12 @@ class FrequencyScale(torch.nn.Module):
         self.num_filters = num_filters
         self.filter_norm = filter_norm
         self.filter_shape = filter_shape
-        self.unscale_driver = unscale_driver
-        
+        self.unscale_lstsq_driver = unscale_lstsq_driver
+        self.unscale_mode = unscale_mode
+
+        assert unscale_mode in ["lstsq", "grid_sample"], f"Invalid unscale_mode: {unscale_mode}"
+        assert unscale_lstsq_driver in ["gels", "gelsy", "gelsd", "gelss"], f"Invalid unscale_lstsq_driver: {unscale_lstsq_driver}"
+
         if freq_scale == "mel":
             self.scale_fn = _hz_to_mel
             self.unscale_fn = _mel_to_hz
@@ -103,18 +108,48 @@ class FrequencyScale(torch.nn.Module):
     def scale(self, specgram: torch.Tensor) -> torch.Tensor:
         return torch.matmul(specgram.transpose(-1, -2), self.filters).transpose(-1, -2)
     
-    def unscale(self, spectrogram: torch.Tensor, rectify: bool = True) -> torch.Tensor:
+    def _unscale_lstsq(self, spectrogram: torch.Tensor) -> torch.Tensor:
         # pack batch
         original_shape = spectrogram.size()
         spectrogram = spectrogram.reshape(-1, original_shape[-2], original_shape[-1])
 
-        unscaled = torch.linalg.lstsq(self.filters.transpose(-1, -2)[None], spectrogram, driver=self.unscale_driver).solution
-        
-        if rectify == True:
-            unscaled = torch.relu(unscaled)
+        unscaled = torch.linalg.lstsq(self.filters.transpose(-1, -2)[None], spectrogram, driver=self.unscale_lstsq_driver).solution
         
         # unpack batch
         return unscaled.view(original_shape[:-2] + (self.num_stft_bins, original_shape[-1]))
+    
+    def _unscale_grid_sample(self, spectrogram: torch.Tensor) -> torch.Tensor:
+        # pack batch
+        original_shape = spectrogram.size()
+        spectrogram = spectrogram.reshape(-1, 1, original_shape[-2], original_shape[-1])
+
+        # filter center freqs are evenly spaced in scaled domain (indices 1..num_filters of the +2 boundary points)
+        scaled_freqs = np.linspace(self.scale_fn(self.freq_min), self.scale_fn(self.freq_max), self.num_filters + 2)
+        stft_freqs = self.scale_fn(np.linspace(0, self.sample_rate / 2, self.num_stft_bins))
+
+        grid_y = torch.from_numpy((stft_freqs - scaled_freqs[1]) / (scaled_freqs[-2] - scaled_freqs[1]) * 2 - 1)
+        grid_y = grid_y.to(dtype=spectrogram.dtype, device=spectrogram.device)
+        grid_x = torch.linspace(-1, 1, original_shape[-1], dtype=spectrogram.dtype, device=spectrogram.device)
+
+        grid_y, grid_x = torch.meshgrid(grid_y, grid_x, indexing="ij")
+        grid = torch.stack((grid_x, grid_y), dim=-1).unsqueeze(0).expand(spectrogram.shape[0], -1, -1, -1)
+
+        unscaled = torch.nn.functional.grid_sample(spectrogram, grid, mode="bicubic", padding_mode="border", align_corners=True)
+
+        # unpack batch
+        return unscaled.squeeze(1).view(original_shape[:-2] + (self.num_stft_bins, original_shape[-1]))
+
+    def unscale(self, spectrogram: torch.Tensor, rectify: bool = True) -> torch.Tensor:
+        
+        if self.unscale_mode == "lstsq":
+            unscaled = self._unscale_lstsq(spectrogram)
+        elif self.unscale_mode == "grid_sample":
+            unscaled = self._unscale_grid_sample(spectrogram)
+
+        if rectify == True:
+            unscaled = torch.relu(unscaled)
+
+        return unscaled
     
     def get_unscaled(self, num_points: int, device: Optional[torch.device] = None) -> torch.Tensor:
 
