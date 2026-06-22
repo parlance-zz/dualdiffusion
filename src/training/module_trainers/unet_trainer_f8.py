@@ -30,8 +30,8 @@ from training.sigma_sampler import SigmaSamplerConfig, SigmaSampler
 from training.trainer import DualDiffusionTrainer
 from training.module_trainers.module_trainer import ModuleTrainerConfig, ModuleTrainer
 from training.loss.mss_1d import MSSLoss1D
-from modules.unets.unet_edm2_q7_ddec_f8 import UNet
-from modules.formats.ms_mdct_dual_8 import MS_MDCT_DualFormat
+from modules.unets.unet_edm2_q7_ddec_f9 import UNet
+from modules.formats.ms_mdct_dual_9 import MS_MDCT_DualFormat
 from utils.dual_diffusion_utils import dict_str
 
 
@@ -254,7 +254,8 @@ class UNetTrainer(ModuleTrainer):
             f"io_stats_{self.flavor}/denoised_var": denoised.var(dim=(1,2,3)).detach(),
             f"io_stats_{self.flavor}/denoised_mean": denoised.mean(dim=(1,2,3)).detach()
         })
-    
+
+        """
         samples = self.format.unflatten_mdct_phase_psd(samples)
         denoised = self.format.unflatten_mdct_phase_psd(denoised)
         mel_density = self.format.get_mdct_mel_density(level=-1)
@@ -262,6 +263,8 @@ class UNetTrainer(ModuleTrainer):
         
         assert len(samples) == len(denoised) == len(mel_density)
         assert error_logvar.ndim == 2 and error_logvar.shape[0] == samples[0].shape[0] and error_logvar.shape[1] == len(samples)
+        """
+        error_logvar: torch.Tensor = error_logvar[:, :, 0, 0]
 
         sigma_data = self.sigma_sampler.config.sigma_data
 
@@ -270,14 +273,8 @@ class UNetTrainer(ModuleTrainer):
         else:
             batch_loss_weight = (batch_sigma ** 2 + sigma_data ** 2) / (batch_sigma * sigma_data) ** 2
         
-        batch_weighted_loss = []
-        for i, (x, y, loss_weight) in enumerate(zip(denoised, samples, mel_density)):
-            loss_weight = loss_weight.pow((i + 1) / len(denoised))
-            loss_weight = loss_weight / loss_weight.mean()
-            loss = (torch.nn.functional.mse_loss(x, y.detach(), reduction="none") * loss_weight).mean(dim=(1,2,3)) * batch_loss_weight
-            batch_weighted_loss.append(loss)
-        batch_weighted_loss = torch.stack(batch_weighted_loss, dim=1)
-
+        batch_weighted_loss = self.format.get_mdct_phase_psd_loss(denoised, samples) * batch_loss_weight.unsqueeze(-1)
+        
         if self.mss_1d is not None:
             
             mss_loss_logs = None

@@ -47,15 +47,15 @@ class UNetConfig(DualDiffusionUNetConfig):
     out_channels: int = 4
     in_channels_emb: int = 0
     in_channels_x_ref: int = 2
-    in_num_freqs: list[int] = (60, 12, 12, 16)
+    in_num_freqs: list[int] = (64, 64, 64, 64)
 
     @property
     def in_num_mdct_levels(self) -> int:
         return len(self.in_num_freqs)
 
-    model_channels: int  = 1024              # Base multiplier for the number of channels.
+    model_channels: int  = 32                # Base multiplier for the number of channels.
     logvar_channels: int = 192               # Number of channels for training uncertainty estimation.
-    channel_mult: list[int]    = (1,1,1,1)   # Per-resolution multipliers for the number of channels.
+    channel_mult: list[int]    = (1,2,3,4)  # Per-resolution multipliers for the number of channels.
     double_midblock: bool      = False
     midblock_attn: bool        = False
     channel_mult_noise: Optional[int] = 1    # Multiplier for noise embedding dimensionality.
@@ -68,8 +68,8 @@ class UNetConfig(DualDiffusionUNetConfig):
     attn_balance: float       = 0.3          # Balance between main branch (0) and self-attention (1).
     attn_levels: list[int]    = ()           # List of resolution levels to use self-attention.
     mlp_multiplier: int    = 2               # Multiplier for the number of channels in the MLP.
-    mlp_groups: int        = 8               # Number of groups for the MLPs.
-    emb_linear_groups: int = 8
+    mlp_groups: int        = 1               # Number of groups for the MLPs.
+    emb_linear_groups: int = 1
 
 class Block(torch.nn.Module):
 
@@ -106,8 +106,8 @@ class Block(torch.nn.Module):
         self.clip_act = clip_act
         
         self.conv_res0 = MPConv(out_channels if flavor == "enc" else in_channels,
-                                out_channels * mlp_multiplier, kernel=(1,3), groups=mlp_groups)
-        self.conv_res1 = MPConv(out_channels * mlp_multiplier, out_channels, kernel=(1,3), groups=mlp_groups)
+                                out_channels * mlp_multiplier, kernel=(3,3), groups=mlp_groups)
+        self.conv_res1 = MPConv(out_channels * mlp_multiplier, out_channels, kernel=(3,3), groups=mlp_groups)
 
         if in_channels != out_channels or mlp_groups > 1:
             self.conv_skip = MPConv(in_channels, out_channels, kernel=(1,1), groups=1)
@@ -210,18 +210,18 @@ class UNet(DualDiffusionUNet):
         self.x_ref_in_gain = torch.nn.Parameter(torch.zeros(self.num_levels))
         self.conv_x_ref_in = torch.nn.ModuleDict()
         for i in range(self.num_levels):
-            self.conv_x_ref_in[f"conv_x_ref_in{i}"] = MPConv(config.in_channels_x_ref * config.in_num_freqs[i], cblock[i], kernel=(1,3), bias=True)
+            self.conv_x_ref_in[f"conv_x_ref_in{i}"] = MPConv(config.in_channels_x_ref, cblock[i], kernel=(3,3), bias=True)
 
         self.conv_in = torch.nn.ModuleDict()
         for i in range(self.num_levels):
-            self.conv_in[f"conv_in{i}"] = MPConv(config.in_channels * config.in_num_freqs[i], cblock[i], kernel=(1,3), bias=True)
+            self.conv_in[f"conv_in{i}"] = MPConv(config.in_channels, cblock[i], kernel=(3,3), bias=True)
 
         self.enc = torch.nn.ModuleDict()
         cin = cblock[0]
 
         for level, channels in enumerate(cblock):
             
-            num_freqs = 1
+            num_freqs = config.in_num_freqs[level]
             cout = channels
 
             if level == 0:    
@@ -243,7 +243,7 @@ class UNet(DualDiffusionUNet):
         
         for level, channels in reversed(list(enumerate(cblock))):
             
-            num_freqs = 1
+            num_freqs = config.in_num_freqs[level]
 
             if level == len(cblock) - 1:
                 self.dec[f"block{level}_in0"] = Block(level, cout, cout, cemb, num_freqs,
@@ -262,7 +262,7 @@ class UNet(DualDiffusionUNet):
                     use_attention=level in config.attn_levels, flavor="dec", **block_kwargs)
 
             if level < config.in_num_mdct_levels:
-                self.dec[f"conv_out{level}"] = MPConv(cout, config.out_channels * config.in_num_freqs[level], kernel=(1,3))
+                self.dec[f"conv_out{level}"] = MPConv(cout, config.out_channels, kernel=(3,3))
 
         self.out_gain = torch.nn.Parameter(torch.zeros(self.num_levels))
 
@@ -311,10 +311,7 @@ class UNet(DualDiffusionUNet):
         assert len(_x_in) == self.config.in_num_mdct_levels
 
         assert len(x_ref) == self.num_levels
-        x_ref = format.crop_unflattened(x_ref)
-        for i in range(self.num_levels):
-            x_ref[i] = patchify_2d(x_ref[i].to(dtype=torch.bfloat16), self.config.in_num_freqs[i], 1)
-            _x_in[i] = patchify_2d(_x_in[i], self.config.in_num_freqs[i], 1)
+        x_ref = format.crop_unflattened([x.to(dtype=torch.bfloat16) for x in x_ref])
 
         # embedding
         emb = self.emb_noise(emb)
@@ -341,9 +338,7 @@ class UNet(DualDiffusionUNet):
         # decoder
         for name, block in self.dec.items():
             if "conv_out" in name:
-                level = -1 - len(_x_out)
-                out = block(x, gain=self.out_gain[level])
-                _x_out.append(unpatchify_2d(out, self.config.in_num_freqs[level], 1))
+                _x_out.append(block(x, gain=self.out_gain[-1 - len(_x_out)]))
             else:
                 if "layer" in name:
                     x = mp_cat(x, skips.pop(), t=self.config.concat_balance)

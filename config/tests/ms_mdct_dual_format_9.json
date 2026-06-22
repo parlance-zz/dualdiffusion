@@ -37,26 +37,26 @@
             {
                 "window_len": 128,
                 "window_func": "vorbis",
-                "crop_lo": 0.0625,
+                "crop_lo": 0,
                 "crop_hi": 1
             },
             {
                 "window_len": 256,
                 "window_func": "vorbis",
-                "crop_lo": 0.03125,
-                "crop_hi": 0.125
+                "crop_lo": 0,
+                "crop_hi": 0.5
             },
             {
                 "window_len": 512,
                 "window_func": "vorbis",
-                "crop_lo": 0.015625,
-                "crop_hi": 0.0625
+                "crop_lo": 0,
+                "crop_hi": 0.25
             },
             {
                 "window_len": 1024,
                 "window_func": "vorbis",
                 "crop_lo": 0,
-                "crop_hi": 0.03125
+                "crop_hi": 0.125
             }
         ],
 

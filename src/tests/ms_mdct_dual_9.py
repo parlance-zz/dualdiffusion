@@ -163,9 +163,15 @@ def ms_mdct_dual_format_test() -> None:
             save_img(format.ms_psd_to_img(ms_psds[i]), ms_psd_output_path)
             print(f"Saved ms_psd_{i} img to {ms_psd_output_path}")
 
+        input_mel_spec = format.mel_spec.raw_to_mel_spec(raw_sample)
+        input_mel_spec_img = format.mel_spec.mel_spec_to_img(input_mel_spec)
+        input_mel_spec_output_path = os.path.join(output_path, f"{filename}_mel_spec_input.png")
+        save_img(input_mel_spec_img, input_mel_spec_output_path)
+        print(f"Saved input_mel_spec img to {input_mel_spec_output_path}")
+
         recon_mel_spec = format.mel_spec.raw_to_mel_spec(raw_sample_recon)
         recon_mel_spec_img = format.mel_spec.mel_spec_to_img(recon_mel_spec)
-        recon_mel_spec_output_path = os.path.join(output_path, f"{filename}_recon_mel_spec.png")
+        recon_mel_spec_output_path = os.path.join(output_path, f"{filename}_mel_spec_recon.png")
         save_img(recon_mel_spec_img, recon_mel_spec_output_path)
         print(f"Saved recon_mel_spec img to {recon_mel_spec_output_path}")
 

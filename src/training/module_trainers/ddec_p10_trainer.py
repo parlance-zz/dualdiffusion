@@ -32,9 +32,9 @@ from training.module_trainers.unet_trainer_p5 import UNetTrainerConfig as UNetTr
 from training.loss.sigreg import sigreg_strong_loss
 from training.loss.mss_1d import MSSLoss1D, MSSLoss1DConfig
 from modules.daes.dae_edm2_q7 import DAE
-from modules.unets.unet_edm2_q7_ddec_f8 import UNet
+from modules.unets.unet_edm2_q7_ddec_f9 import UNet
 from modules.unets.unet_edm2_p6 import UNet as UNet_LDM
-from modules.formats.ms_mdct_dual_8 import MS_MDCT_DualFormat
+from modules.formats.ms_mdct_dual_9 import MS_MDCT_DualFormat
 from modules.mp_tools import normalize
 from utils.dual_diffusion_utils import dict_str
 
@@ -224,9 +224,9 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
                     logs[f"ch_stats/var_{i}"]  = self.dae.latents_stats_tracker.var[i].detach()
 
         if ddec_cond is not None:
-            ddec_x_ref: list[torch.Tensor] = self.format.ms_psd_to_psd_linear(ddec_cond)
+            ddec_x_ref: list[torch.Tensor] = ddec_cond
         else:
-            ddec_x_ref: list[torch.Tensor] = [x + torch.randn_like(x) * self.config.add_x_ref_noise for x in self.format.ms_psd_to_psd_linear(ms_psds)]
+            ddec_x_ref: list[torch.Tensor] = [x + torch.randn_like(x) * self.config.add_x_ref_noise for x in ms_psds]
 
         if self.train_ddecp == True:
             logs.update(self.ddecp_trainer.train_batch(mdct_phase_psd, audio_embeddings, ref_samples=ddec_x_ref))
@@ -238,7 +238,7 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
                 logs["loss"] = logs["loss"] + logs["loss/mss1d"] * self.config.mss_loss_weight
                 logs["loss"] = logs["loss"] + logs["loss/mss1d_cepstrum"] * self.config.cepstrum_loss_weight
 
-            for i in range(len(self.ddecp.config.in_psd_num_freqs)):
+            for i in range(self.ddecp.config.in_num_mdct_levels):
                 logs[f"io_stats_ddecp/x_ref_in_gain_{i}"] = self.ddecp.x_ref_in_gain[i].detach()
 
         if self.train_ddecm == True:
@@ -259,6 +259,17 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
                     latents_sigreg_loss = latents_sigreg_loss.detach()
                 logs["loss/latents_sigreg"] = latents_sigreg_loss.detach()
                 logs["loss"] = logs["loss"] + latents_sigreg_loss * latents_sigreg_loss_weight
+
+            """
+            logs["loss/ms_psd_mse"] = torch.zeros_like(logs["loss"])
+            for i, (cond, ms_psd) in enumerate(zip(ddec_cond, ms_psds)):
+                logs[f"loss/ms_psd_mse_{i}"] = torch.nn.functional.mse_loss(cond, ms_psd, reduction="none").mean(dim=(1,2,3))
+                logs["loss/ms_psd_mse"] = logs["loss/ms_psd_mse"] + logs[f"loss/ms_psd_mse_{i}"] / len(ms_psds)
+
+            ms_psd_mse_loss_weight = 0
+            logs["loss_weight/ms_psd_mse"] = ms_psd_mse_loss_weight
+            logs["loss"] = logs["loss"] + logs["loss/ms_psd_mse"] * ms_psd_mse_loss_weight
+            """
 
         if self.train_unet == True:
             
