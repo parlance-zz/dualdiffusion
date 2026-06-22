@@ -258,7 +258,26 @@ class MS_MDCT_DualFormat(DualDiffusionFormat):
             #mdct_psd = mdct_psd.clip(min=0).pow(1 / self.config.mdct_psd_exponent - 1)
             recon_exp = int((1 / self.config.mdct_psd_exponent - 1) / 2) * 2 + 1
             mdct_psd = mdct_psd.pow(recon_exp)
-            raw_samples = self.imdcts[level](mdct_phase * mdct_psd).real.contiguous()
+            mdct: torch.Tensor = mdct_phase * mdct_psd
+
+            mdct[:, :, :self.config.mdcts[level].bin_lo] = 0
+            mdct[:, :, self.config.mdcts[level].bin_hi:] = 0
+
+            if level < self.config.num_mdcts - 1:
+                blend_lo = int(self.config.mdcts[level + 1].crop_hi * self.config.mdcts[level].num_frequencies)
+                blend_num_bins = blend_lo - self.config.mdcts[level].bin_lo
+                blend_weight = (torch.arange(blend_num_bins, device=mdct.device) + 0.5).view(1, 1,-1, 1) / blend_num_bins
+                blend_weight = (((1 - blend_weight) * torch.pi).cos() + 1) / 2
+                mdct[:, :, self.config.mdcts[level].bin_lo:blend_lo] *= blend_weight
+
+            if level > 0:
+                blend_hi = int(self.config.mdcts[level - 1].crop_lo * self.config.mdcts[level].num_frequencies)
+                blend_num_bins = self.config.mdcts[level].bin_hi - blend_hi
+                blend_weight = 1 - (torch.arange(blend_num_bins, device=mdct.device) + 0.5).view(1, 1,-1, 1) / blend_num_bins
+                blend_weight = (((1 - blend_weight) * torch.pi).cos() + 1) / 2
+                mdct[:, :, blend_hi:self.config.mdcts[level].bin_hi] *= blend_weight
+
+            raw_samples = self.imdcts[level](mdct).real.contiguous()
             return raw_samples
         else:
             output_mdct_raws: list[torch.Tensor] = []
