@@ -207,10 +207,10 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
             ddec_cond: list[torch.Tensor] = [x.float() for x in ddec_cond]
             
             logs.update({
-                "io_stats/latents_var": latents.var(dim=(1,2,3)).detach(),
+                "io_stats/latents_msq": latents.pow(2).mean(dim=(1,2,3)).detach(),
                 "io_stats/latents_mean": latents.mean(dim=(1,2,3)).detach(),
-                "io_stats/latents_per_ch_mean": self.dae.latents_stats_tracker.mean.pow(2).mean().pow(0.5),
-                "io_stats/latents_per_ch_var": self.dae.latents_stats_tracker.var.mean(),
+                "io_stats/latents_per_ch_mean": self.dae.latents_stats_tracker.mean.abs().mean(),
+                "io_stats/latents_per_ch_msq": self.dae.latents_stats_tracker.msq.mean(),
                 "io_stats/latents_sigma": self.config.add_latents_noise if self.config.add_latents_noise is not None else 0,
             })
 
@@ -221,7 +221,7 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
             if self.dae.config.latent_channels <= 8:
                 for i in range(self.dae.config.latent_channels):
                     logs[f"ch_stats/mean_{i}"] = self.dae.latents_stats_tracker.mean[i].detach()
-                    logs[f"ch_stats/var_{i}"]  = self.dae.latents_stats_tracker.var[i].detach()
+                    logs[f"ch_stats/msq_{i}"]  = self.dae.latents_stats_tracker.msq[i].detach()
 
         if ddec_cond is not None:
             ddec_x_ref: list[torch.Tensor] = ddec_cond

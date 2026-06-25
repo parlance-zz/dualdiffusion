@@ -572,3 +572,104 @@ class FilteredDownsample2D(torch.nn.Module):
             return torch.nn.functional.conv2d(self.pad(x), self.filter.squeeze(1), stride=self.stride, groups=x.shape[1])
         else:
             return torch.nn.functional.conv2d(self.pad(x), self.filter, stride=self.stride, groups=x.shape[1])
+
+class LatentStatsTracker(torch.nn.Module):
+
+    def __init__(self, num_channels: int, momentum: float = 0.99, eps: float = 1e-6,
+            static_mean: Optional[float] = None, static_scale: Optional[float] = None) -> None:
+        
+        super().__init__()
+
+        self.num_channels = num_channels
+        self.momentum = momentum
+        self.eps = eps
+
+        self.static_mean = static_mean
+        self.static_scale = static_scale
+        
+        self.mean: torch.Tensor
+        self.register_buffer("mean", torch.zeros(num_channels))
+        self.msq: torch.Tensor
+        self.register_buffer("msq", torch.ones(num_channels))
+
+        self.global_mean: torch.Tensor
+        self.register_buffer("global_mean", torch.zeros(1))
+        self.global_msq: torch.Tensor
+        self.register_buffer("global_msq", torch.ones(1))
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+
+        if self.training == True:
+            dx = x.detach().to(dtype=self.mean.dtype)
+
+            per_channel_mean = dx.mean(dim=(0,2,3))
+            self.mean.lerp_(per_channel_mean, 1. - self.momentum)
+            per_channel_msq = (dx - per_channel_mean[None, :, None, None]).pow(2).mean(dim=(0,2,3))
+            self.msq.lerp_(per_channel_msq, 1. - self.momentum)
+
+            global_mean = dx.mean()
+            self.global_mean.lerp_(global_mean, 1. - self.momentum)
+            global_msq = (dx - global_mean).pow(2).mean()
+            self.global_msq.lerp_(global_msq, 1. - self.momentum)
+
+        return x
+    
+    def remove_mean(self, x: torch.Tensor, mode: Literal["per_channel", "global", "static", "none"] = "per_channel") -> torch.Tensor:
+
+        assert mode in ["per_channel", "global", "static", "none"]
+        
+        if mode == "per_channel":
+            return (x - self.mean[None, :, None, None].detach()).to(dtype=x.dtype)
+        elif mode == "global":
+            return (x - self.global_mean.detach()).to(dtype=x.dtype)
+        elif mode == "static":
+            if self.static_mean is not None:
+                return (x - self.static_mean).to(dtype=x.dtype)
+
+        return x
+    
+    def add_mean(self, x: torch.Tensor, mode: Literal["per_channel", "global", "static", "none"] = "per_channel") -> torch.Tensor:
+
+        assert mode in ["per_channel", "global", "static", "none"]
+
+        if mode == "per_channel":
+            return (x + self.mean[None, :, None, None].detach()).to(dtype=x.dtype)
+        elif mode == "global":
+            return (x + self.global_mean.detach()).to(dtype=x.dtype)
+        elif mode == "static":
+            if self.static_mean is not None:
+                return (x + self.static_mean).to(dtype=x.dtype)
+            
+        return x
+    
+    def unscale(self, x: torch.Tensor, mode: Literal["per_channel", "global", "static", "none"] = "per_channel") -> torch.Tensor:
+
+        assert mode in ["per_channel", "global", "static", "none"]
+
+        if mode == "per_channel":
+            rms = (self.msq[None, :, None, None] + self.eps).pow(0.5)
+            return (x / rms.detach()).to(dtype=x.dtype)
+        elif mode == "global":
+            rms = (self.global_msq + self.eps).pow(0.5)
+            return (x / rms.detach()).to(dtype=x.dtype)
+        elif mode == "static":
+            if self.static_scale is not None:
+                return (x / self.static_scale).to(dtype=x.dtype)
+            
+        return x
+    
+    def rescale(self, x: torch.Tensor, mode: Literal["per_channel", "global", "static", "none"] = "per_channel") -> torch.Tensor:
+        
+        assert mode in ["per_channel", "global", "static", "none"]
+
+        if mode == "per_channel":
+            rms = (self.msq[None, :, None, None] + self.eps).pow(0.5)
+            return (x * rms.detach()).to(dtype=x.dtype)
+        elif mode == "global":
+            rms = (self.global_msq + self.eps).pow(0.5)
+            return (x * rms.detach()).to(dtype=x.dtype)
+        elif mode == "static":
+            if self.static_scale is not None:
+                return (x * self.static_scale).to(dtype=x.dtype)
+            
+        return x
