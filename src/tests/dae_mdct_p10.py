@@ -32,10 +32,10 @@ import numpy as np
 
 from modules.embeddings.clap import CLAP_Embedding
 from pipelines.dual_diffusion_pipeline import DualDiffusionPipeline, SampleParams
-from modules.unets.unet_edm2_q7_ddec import UNet
+from modules.unets.unet_edm2_q7_ddec_f9 import UNet
 from modules.embeddings.clap import CLAP_Embedding
 from modules.daes.dae_edm2_q7 import DAE
-from modules.formats.ms_mdct_dual_5 import MS_MDCT_DualFormat
+from modules.formats.ms_mdct_dual_9 import MS_MDCT_DualFormat
 from modules.mp_tools import mp_sum
 from utils.dual_diffusion_utils import (
     init_cuda, normalize, save_audio, load_audio, load_safetensors,
@@ -162,12 +162,12 @@ def dae_test() -> None:
             count = format.get_raw_crop_width(raw_length=audio_len)
         source_raw_sample = load_audio(file_path, count=count)
         input_raw_sample = source_raw_sample.unsqueeze(0).to(format.device)
-        #input_mel_spec = format.mel_spec.raw_to_mel_spec(input_raw_sample)
+        input_mel_spec = format.mel_spec.raw_to_mel_spec(input_raw_sample)
         input_mdct_phase_psd = format.raw_to_mdct_phase_psd(input_raw_sample, level=-1)
         input_mdct_phase_psd = format.flatten_mdct_phase_psd(input_mdct_phase_psd)
         input_mdct_psd = format.raw_to_mdct_psd(input_raw_sample, level=0)
         input_ms_psds = format.raw_to_ms_psd(input_raw_sample, level=-1)
-        input_mel_spec = input_ms_psds[-1]
+        #input_mel_spec = input_ms_psds[-1]
 
         safetensors_file_name = os.path.join(f"{os.path.splitext(filename)[0]}.safetensors")
         safetensors_file_path = os.path.join(dataset_path, safetensors_file_name)
@@ -184,34 +184,33 @@ def dae_test() -> None:
         filename = os.path.basename(filename)
 
         # ***************** dae stage *****************
-        """
-        dae_input = input_ms_psds
-        dae_embedding = dae.get_embeddings(audio_embedding.to(dtype=dae.dtype))
+        if test_params.get("dae_bypass", False) == False:
+            dae_input = input_ms_psds
+            dae_embedding = dae.get_embeddings(audio_embedding.to(dtype=dae.dtype))
 
-        if test_params["latents_tiled_encode"] == True:
-            latents = dae.tiled_encode(dae_input, dae_embedding,
-                max_chunk=test_params["latents_tiled_max_chunk_size"], overlap=test_params["latents_tiled_overlap"])
+            if test_params["latents_tiled_encode"] == True:
+                latents = dae.tiled_encode(dae_input, dae_embedding,
+                    max_chunk=test_params["latents_tiled_max_chunk_size"], overlap=test_params["latents_tiled_overlap"])
+            else:
+                latents = dae.encode(dae_input, dae_embedding)
+                latents: torch.Tensor = latents.float()
+
+            if latents is not None:
+                latents_mean = latents.mean().item()
+                latents_var = latents.var().item()
+                avg_latents_mean += latents_mean
+                avg_latents_var += latents_var
+                print(f"latents mean/var: {latents_mean:.4} {latents_var:.4}")
+
+            if test_params.get("add_latents_noise", None) is not None:
+                decode_latents = latents + torch.randn_like(latents) * test_params["add_latents_noise"]
+            else:
+                decode_latents = latents
+
+            ddec_cond = dae.decode(decode_latents.to(dtype=dae.dtype), dae_embedding)
         else:
-            latents = dae.encode(dae_input, dae_embedding)
-            latents: torch.Tensor = latents.float()
-
-        if latents is not None:
-            latents_mean = latents.mean().item()
-            latents_var = latents.var().item()
-            avg_latents_mean += latents_mean
-            avg_latents_var += latents_var
-            print(f"latents mean/var: {latents_mean:.4} {latents_var:.4}")
-
-        if test_params.get("add_latents_noise", None) is not None:
-            decode_latents = latents + torch.randn_like(latents) * test_params["add_latents_noise"]
-        else:
-            decode_latents = latents
-
-        ddec_cond = dae.decode(decode_latents.to(dtype=dae.dtype), dae_embedding)
-        #"""
-
-        latents = None
-        ddec_cond = input_ms_psds
+            latents = None
+            ddec_cond = input_ms_psds
 
         # ***************** ddec stage *****************
         """
@@ -239,12 +238,12 @@ def dae_test() -> None:
         if ddecp is not None:
             
             #ddecp_x_ref = [(x + torch.randn_like(x) * 0.3) for x in ddec_cond]
-            #ddecp_x_ref = ddec_cond
-            ddecp_x_ref = format.ms_psd_to_psd_linear(ddec_cond)
+            ddecp_x_ref = ddec_cond
+            #ddecp_x_ref = format.ms_psd_to_psd_linear(ddec_cond)
 
             ddecp_params = SampleParams(
                 seed=5000,
-                num_steps=50, length=audio_len, cfg_scale=0, input_perturbation=1, input_perturbation_offset=0,
+                num_steps=50, length=audio_len, cfg_scale=0, input_perturbation=1, input_perturbation_offset=100,
                 use_heun=False, schedule="cos", rho=1, sigma_max=1000, sigma_min=0.001, stereo_fix=0
             )
 
@@ -257,11 +256,11 @@ def dae_test() -> None:
             if decode_level >= 0:
                 output_mdct_phase_psd = format.unflatten_mdct_phase_psd(output_ddecp)[decode_level]
             else:
-                output_mdct_phase_psd = output_ddecp
+                output_mdct_phase_psd = format.unflatten_mdct_phase_psd(output_ddecp)
             output_raw = format.mdct_phase_psd_to_raw(output_mdct_phase_psd, level=decode_level)
             
-            #output_mel_spec = format.mel_spec.raw_to_mel_spec(output_raw)
-            output_mel_spec = format.raw_to_ms_psd(output_raw, level=format.config.num_ms_psds - 1)
+            output_mel_spec = format.mel_spec.raw_to_mel_spec(output_raw)
+            #output_mel_spec = format.raw_to_ms_psd(output_raw, level=format.config.num_ms_psds - 1)
             output_mdct_psd = format.raw_to_mdct_psd(output_raw, level=0)
         else:
             output_raw = output_mel_spec = output_ddecp = output_mdct_psd = ddecp_x_ref = decode_level = None
@@ -275,6 +274,8 @@ def dae_test() -> None:
 
         if latents is not None:
             align_ref = (input_mdct_psd - input_mdct_psd.amin())
+            #latents = torch.cat((latents[:, 0:4], latents[:, 4:]), dim=2)
+            #latents = latents + torch.randn_like(latents) * 0.05
             latents_img = dae.latents_to_img(latents, align_ref=align_ref)
             save_img(latents_img, os.path.join(output_path, "1", f"step_{last_global_step}_{filename.replace(file_ext, '_latents.png')}"))
 

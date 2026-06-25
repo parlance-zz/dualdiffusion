@@ -1,5 +1,5 @@
 {
-    "model_name": "edm2_dae_p6",
+    "model_name": "edm2_dae_p10",
     "model_load_options": {
         "torch_dtype": "bfloat16",
         "device": "cuda",
@@ -14,7 +14,7 @@
     },
     "models_path_override": null,
     "length": 1408768,
-    "add_latents_noise": 0.08,
+    "add_latents_noise": null,
     "add_mel_spec_noise": null,
     "ms_img_show_center_channel": true,
     "latents_tiled_encode": false,
@@ -24,21 +24,26 @@
     "latents_img_use_pca": true,
     "latents_img_save_collage": true,
     "output_lufs": -20,
-    "dae_bypass": false,
+    "dae_bypass": true,
     "ddec_output": true,
     "xref_output": false,
-    "add_random_test_samples": 30,
-    "random_test_samples_seed": 485565621,
+    "add_random_test_samples": 20,
+    "random_test_samples_seed": 299999999999,
     "copy_sample_source_files": true,
     "test_samples": [
+        "wii/Just Dance 2014/otherside.wav.ckd.flac",
+        "switch/Astral Chain/_t_wem_810084485.wem.flac",
+        "SuspectT",
+        "3sf/Dopamix/STRM_BGM_ENDING.bcstm.flac",
+        "3sf/Dopamix/STRM_BGM_ENDING.bcstm.flac",
+        "dsf/Metropolis Street Racer Prototype/file_15.adx.flac",
+        "psf3/Tekken Hybrid/_t_Tekken Tag Tournament 2 Prologue_charasele.lwav.flac",
+        "psf3/Iron Man/_t_! movies_HUB_05_000001C2.adx.flac",
+        "dae_tests",
+        "switch/Muse Dash/_t_stage_jump_hard_candy_music.fsb.flac",
+
         "wii/Kamen Rider - Chou Climax Heroes/Stage03.brstm.flac",
         "vita/Tayutama 2 - You're the only one/015.at9.flac",
-        "psf3/Iron Man/_t_! movies_HUB_05_000001C2.adx.flac",
-        "psf3/Tekken Hybrid/_t_Tekken Tag Tournament 2 Prologue_charasele.lwav.flac",
-        "dae_tests",
-        "3sf/Dopamix/STRM_BGM_ENDING.bcstm.flac",
-        "switch/Muse Dash/_t_stage_jump_hard_candy_music.fsb.flac",
-        "switch/Arcaea/_t_songs_ignotus.ogg.flac",
-        "dsf/Metropolis Street Racer Prototype/file_15.adx.flac"
+        "switch/Arcaea/_t_songs_ignotus.ogg.flac"
     ]
 }

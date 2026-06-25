@@ -36,7 +36,7 @@ from typing import Union, Optional, Literal
 import torch
 
 from modules.unets.unet import DualDiffusionUNet, DualDiffusionUNetConfig
-from modules.mp_tools import MPFourier, MPConv, mp_cat, mp_silu, mp_sum, normalize, resample_1d, patchify_2d, unpatchify_2d
+from modules.mp_tools import MPFourier, MPConv, mp_cat, mp_silu, mp_sum, normalize, resample_1d, resample_2d, patchify_2d, unpatchify_2d
 from modules.formats.ms_mdct_dual_9 import MS_MDCT_DualFormat
 
 
@@ -47,15 +47,15 @@ class UNetConfig(DualDiffusionUNetConfig):
     out_channels: int = 4
     in_channels_emb: int = 0
     in_channels_x_ref: int = 2
-    in_num_freqs: list[int] = (64, 64, 64, 64)
+    in_num_freqs: list[int] = (64, 128, 256, 512)
 
     @property
     def in_num_mdct_levels(self) -> int:
         return len(self.in_num_freqs)
 
-    model_channels: int  = 32                # Base multiplier for the number of channels.
+    model_channels: int  = 64                # Base multiplier for the number of channels.
     logvar_channels: int = 192               # Number of channels for training uncertainty estimation.
-    channel_mult: list[int]    = (1,2,3,4)  # Per-resolution multipliers for the number of channels.
+    channel_mult: list[int]    = (1,1,1,1)  # Per-resolution multipliers for the number of channels.
     double_midblock: bool      = False
     midblock_attn: bool        = False
     channel_mult_noise: Optional[int] = 1    # Multiplier for noise embedding dimensionality.
@@ -129,7 +129,7 @@ class Block(torch.nn.Module):
 
     def forward(self, x: torch.Tensor, emb: torch.Tensor) -> torch.Tensor:
         
-        x = resample_1d(x, mode=self.resample_mode)
+        x = resample_2d(x, mode=self.resample_mode)
 
         if self.flavor == "enc":
             if self.conv_skip is not None:
@@ -229,7 +229,7 @@ class UNet(DualDiffusionUNet):
                     use_attention=level in config.attn_levels, flavor="enc", **block_kwargs)
             else:
                 self.enc[f"block{level}_down"] = Block(level, cin, cout, cemb, num_freqs,
-                    use_attention=level in config.attn_levels, flavor="enc", resample_mode="down", **block_kwargs)
+                    use_attention=level in config.attn_levels, flavor="enc", resample_mode="up_down", **block_kwargs)
             
             for idx in range(config.num_layers_per_block):
                 cin = cout
@@ -253,7 +253,7 @@ class UNet(DualDiffusionUNet):
                         use_attention=config.midblock_attn, flavor="dec", **block_kwargs)
             else:
                 self.dec[f"block{level}_up"] = Block(level, cout, cout, cemb, num_freqs,
-                    use_attention=level in config.attn_levels, flavor="dec", resample_mode="up", **block_kwargs)
+                    use_attention=level in config.attn_levels, flavor="dec", resample_mode="down_up", **block_kwargs)
 
             for idx in range(config.num_layers_per_block + 1):
                 cin = cout + skips.pop()
@@ -308,10 +308,12 @@ class UNet(DualDiffusionUNet):
             
         _x_out: list[torch.Tensor] = []
         _x_in = format.crop_unflattened(format.unflatten_mdct_phase_psd(x))
+        #_x_in.reverse()
         assert len(_x_in) == self.config.in_num_mdct_levels
 
         assert len(x_ref) == self.num_levels
         x_ref = format.crop_unflattened([x.to(dtype=torch.bfloat16) for x in x_ref])
+        #x_ref.reverse()
 
         # embedding
         emb = self.emb_noise(emb)
