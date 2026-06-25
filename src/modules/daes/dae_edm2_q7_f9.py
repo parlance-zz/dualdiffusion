@@ -49,9 +49,9 @@ class DAE_Config(DualDiffusionDAEConfig):
     in_num_freqs: int    = 64
     in_psd_num_freqs: list[int] = (64, 128, 256, 512)
 
-    model_channels: int         = 64             # Base multiplier for the number of channels.
-    channel_mult_enc: int       = (1,1,1,1,4,8)
-    channel_mult_dec: list[int] = (1,1,1,1,4,8)
+    model_channels: int         = 32             # Base multiplier for the number of channels.
+    channel_mult_enc: int       = (1,2,3,4,8,16)
+    channel_mult_dec: list[int] = (1,2,3,4,8,16)
     channel_mult_emb: int     = 4            # Multiplier for final embedding dimensionality.
     channels_per_head: int    = 64           # Number of channels per attention head.
     num_enc_layers_per_block: int = 3        # Number of resnet blocks per resolution.
@@ -124,13 +124,14 @@ class Block(torch.nn.Module):
 
     def forward(self, x: torch.Tensor, emb: torch.Tensor) -> torch.Tensor:
         
-        x = resample_2d(x, self.resample_mode)
-
         if self.flavor == "enc":
             if self.conv_skip is not None:
                 x = self.conv_skip(x)
-            if self.use_pixel_norm == True:
-                x = normalize_groups(x, groups=self.mlp_groups)
+
+        x = resample_2d(x, self.resample_mode)
+
+        if self.flavor == "enc" and self.use_pixel_norm == True:
+            x = normalize_groups(x, groups=self.mlp_groups)
 
         y = self.conv_res0(x)
 
