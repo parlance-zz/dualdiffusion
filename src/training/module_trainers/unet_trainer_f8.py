@@ -222,7 +222,7 @@ class UNetTrainer(ModuleTrainer):
         return None
 
     def train_batch(self, samples: torch.Tensor, embeddings: Optional[Union[torch.Tensor, list[torch.Tensor]]] = None,
-            ref_samples: Optional[torch.Tensor] = None, logvar: Optional[torch.Tensor] = None) -> dict[str, Union[torch.Tensor, float]]:
+            ref_samples: Optional[torch.Tensor] = None) -> dict[str, Union[torch.Tensor, float]]:
 
         device_bsz = self.trainer.config.device_batch_size
         logs: dict[str, Union[torch.Tensor, float]] = {}
@@ -264,10 +264,7 @@ class UNetTrainer(ModuleTrainer):
         assert len(samples) == len(denoised) == len(mel_density)
         assert error_logvar.ndim == 2 and error_logvar.shape[0] == samples[0].shape[0] and error_logvar.shape[1] == len(samples)
         """
-        if logvar is None:
-            error_logvar: torch.Tensor = error_logvar[:, :, 0, 0]
-        else:
-            error_logvar = logvar
+        error_logvar: torch.Tensor = error_logvar[:, :, 0, 0]
 
         sigma_data = self.sigma_sampler.config.sigma_data
 

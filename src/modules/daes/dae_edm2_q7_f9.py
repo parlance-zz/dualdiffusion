@@ -193,7 +193,7 @@ class DAE(DualDiffusionDAE):
         dec_channels = [config.model_channels * m for m in config.channel_mult_dec]
 
         self.latents_stats_tracker = LatentStatsTracker(config.latent_channels, static_scale=config.static_latents_scale)
-        self.recon_loss_logvar = torch.nn.Parameter(torch.zeros([self.num_psd_levels]))
+        #self.recon_loss_logvar = torch.nn.Parameter(torch.zeros([self.num_psd_levels]))
 
         # encoder
         self.conv_psd_in = torch.nn.ModuleDict()
@@ -253,7 +253,7 @@ class DAE(DualDiffusionDAE):
             return None
     
     def get_recon_loss_logvar(self) -> torch.Tensor:
-        return self.recon_loss_logvar
+        return None
     
     def get_latent_shape(self, mel_spec_shape: Union[torch.Size, tuple[int, int, int, int]]) -> torch.Size:
         if len(mel_spec_shape) == 4:
@@ -331,7 +331,7 @@ class DAE(DualDiffusionDAE):
             decode_latents = latents
 
         ddec_cond = self.decode(decode_latents, dae_embeddings, training=True)
-        return latents, ddec_cond, self.get_recon_loss_logvar()
+        return latents, ddec_cond
 
     def tiled_encode(self, x: torch.Tensor, embeddings: torch.Tensor, max_chunk: int = 6144, overlap: int = 256) -> torch.Tensor:
 
