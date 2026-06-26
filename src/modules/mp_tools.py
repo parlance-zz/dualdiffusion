@@ -69,7 +69,7 @@ def resample_1d(x: torch.Tensor, mode: Literal["keep", "down", "up"] = "keep") -
         return torch.repeat_interleave(x, 2, dim=-1)
     
 def subsample_2d(x: torch.Tensor, mode: Literal["keep", "down", "up", "up_down", "down_up", "keep_down", "keep_up", "down_keep", "up_keep"] = "keep",
-                ratio: int = 2, filtering: str = "nearest") -> torch.Tensor:
+                ratio: int = 2, filtering: str = "nearest-exact") -> torch.Tensor:
     
     if mode == "keep":
         return x
