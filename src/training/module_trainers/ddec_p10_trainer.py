@@ -191,13 +191,13 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
 
         if self.train_dae == True:
             
-            latents, ddec_cond = self.trainer.get_ddp_module(self.dae)(
+            latents, ddec_cond, logvar = self.trainer.get_ddp_module(self.dae)(
                 ms_psds, audio_embeddings, latents_sigma=self.config.add_latents_noise)
             
             self.dae.latents_stats_tracker(latents)
 
         elif self.dae is not None:
-            latents, ddec_cond = self.dae(ms_psds, audio_embeddings, latents_sigma=self.config.add_latents_noise)
+            latents, ddec_cond, _ = self.dae(ms_psds, audio_embeddings, latents_sigma=self.config.add_latents_noise)
             latents = latents.detach(); ddec_cond: list[torch.Tensor] = [x.detach() for x in ddec_cond]
         else:
             latents = ddec_cond = None
@@ -229,7 +229,8 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
             ddec_x_ref: list[torch.Tensor] = [x + torch.randn_like(x) * self.config.add_x_ref_noise for x in ms_psds]
 
         if self.train_ddecp == True:
-            logs.update(self.ddecp_trainer.train_batch(mdct_phase_psd, audio_embeddings, ref_samples=ddec_x_ref))
+            logvar = logvar.unsqueeze(0) if self.train_dae == True else None
+            logs.update(self.ddecp_trainer.train_batch(mdct_phase_psd, audio_embeddings, ref_samples=ddec_x_ref, logvar=logvar))
             logs["loss"] = logs["loss"] + logs["loss/ddecp"]
 
             logs["loss_weight/mss1d"] = self.config.mss_loss_weight

@@ -15,7 +15,7 @@ embedding.save_pretrained(model_path, subfolder="embedding")
 """
 
 from modules.daes.dae_edm2_q7_f9 import DAE, DAE_Config
-dae = DAE(DAE_Config())
+dae = DAE(DAE_Config(latents_img_use_pca=False, latents_img_channel_order=None))
 print_module_info(dae, "dae")
 
 if input("Save module? (y/n) ").lower() == 'y':

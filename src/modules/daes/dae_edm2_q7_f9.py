@@ -49,9 +49,9 @@ class DAE_Config(DualDiffusionDAEConfig):
     in_num_freqs: int    = 64
     in_psd_num_freqs: list[int] = (64, 128, 256, 512)
 
-    model_channels: int         = 32             # Base multiplier for the number of channels.
-    channel_mult_enc: int       = (1,2,3,4,8,16)
-    channel_mult_dec: list[int] = (1,2,3,4,8,16)
+    model_channels: int         = 64             # Base multiplier for the number of channels.
+    channel_mult_enc: int       = (1,1,1,1,4,8)
+    channel_mult_dec: list[int] = (1,1,1,1,4,8)
     channel_mult_emb: int     = 4            # Multiplier for final embedding dimensionality.
     channels_per_head: int    = 64           # Number of channels per attention head.
     num_enc_layers_per_block: int = 3        # Number of resnet blocks per resolution.
@@ -193,7 +193,7 @@ class DAE(DualDiffusionDAE):
         dec_channels = [config.model_channels * m for m in config.channel_mult_dec]
 
         self.latents_stats_tracker = LatentStatsTracker(config.latent_channels, static_scale=config.static_latents_scale)
-        #self.recon_loss_logvar = torch.nn.Parameter(torch.zeros([]))
+        self.recon_loss_logvar = torch.nn.Parameter(torch.zeros([self.num_psd_levels]))
 
         # encoder
         self.conv_psd_in = torch.nn.ModuleDict()
@@ -253,7 +253,7 @@ class DAE(DualDiffusionDAE):
             return None
     
     def get_recon_loss_logvar(self) -> torch.Tensor:
-        return None
+        return self.recon_loss_logvar
     
     def get_latent_shape(self, mel_spec_shape: Union[torch.Size, tuple[int, int, int, int]]) -> torch.Size:
         if len(mel_spec_shape) == 4:
@@ -288,8 +288,8 @@ class DAE(DualDiffusionDAE):
         
         if training == False:
             assert self.training == False
-            latents = self.latents_stats_tracker.remove_mean(latents, mode="per_channel")
-            latents = self.latents_stats_tracker.unscale(latents, mode="static")
+            #latents = self.latents_stats_tracker.remove_mean(latents, mode="per_channel")
+            #latents = self.latents_stats_tracker.unscale(latents, mode="static")
 
         return latents
 
@@ -298,8 +298,8 @@ class DAE(DualDiffusionDAE):
         if training == False:
             assert self.training == False
             x = x.float()
-            x = self.latents_stats_tracker.rescale(x, mode="static")
-            x = self.latents_stats_tracker.add_mean(x, mode="per_channel")
+            #x = self.latents_stats_tracker.rescale(x, mode="static")
+            #x = self.latents_stats_tracker.add_mean(x, mode="per_channel")
             x = normalize(x)
             if self.config.static_latents_noise is not None:
                 x = x + torch.randn_like(x) * self.config.static_latents_noise
@@ -331,7 +331,7 @@ class DAE(DualDiffusionDAE):
             decode_latents = latents
 
         ddec_cond = self.decode(decode_latents, dae_embeddings, training=True)
-        return latents, ddec_cond
+        return latents, ddec_cond, self.get_recon_loss_logvar()
 
     def tiled_encode(self, x: torch.Tensor, embeddings: torch.Tensor, max_chunk: int = 6144, overlap: int = 256) -> torch.Tensor:
 
