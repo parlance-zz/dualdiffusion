@@ -58,8 +58,8 @@ class UNetConfig(DualDiffusionUNetConfig):
     channel_mult: list[int]    = (1,1,1,1)  # Per-resolution multipliers for the number of channels.
     double_midblock: bool      = False
     midblock_attn: bool        = False
-    channel_mult_noise: Optional[int] = 1    # Multiplier for noise embedding dimensionality.
-    channel_mult_emb: Optional[int]   = 1    # Multiplier for final embedding dimensionality.
+    channel_mult_noise: Optional[int] = 2    # Multiplier for noise embedding dimensionality.
+    channel_mult_emb: Optional[int]   = 2    # Multiplier for final embedding dimensionality.
     channels_per_head: int    = 64           # Number of channels per attention head.
     num_layers_per_block: int = 3            # Number of resnet blocks per resolution.
     label_balance: float      = 0.5          # Balance between noise embedding (0) and class embedding (1).
@@ -298,22 +298,20 @@ class UNet(DualDiffusionUNet):
             c_out = sigma * self.config.sigma_data / (sigma ** 2 + self.config.sigma_data ** 2).sqrt()
             c_in = 1 / (self.config.sigma_data ** 2 + sigma ** 2).sqrt()
             c_noise = (sigma.flatten().log() / 4).to(self.dtype)
-            
-            emb = self.emb_fourier(c_noise)
 
-        if perturbed_input is not None:
-            x = (c_in * perturbed_input).to(dtype=torch.bfloat16)
-        else:
-            x = (c_in * x_in).to(dtype=torch.bfloat16)
+            if perturbed_input is not None:
+                x = (c_in * perturbed_input).to(dtype=torch.bfloat16)
+            else:
+                x = (c_in * x_in).to(dtype=torch.bfloat16)
+
+            emb = self.emb_fourier(c_noise)
             
         _x_out: list[torch.Tensor] = []
         _x_in = format.crop_unflattened(format.unflatten_mdct_phase_psd(x))
-        #_x_in.reverse()
         assert len(_x_in) == self.config.in_num_mdct_levels
 
         assert len(x_ref) == self.num_levels
         x_ref = format.crop_unflattened([x.to(dtype=torch.bfloat16) for x in x_ref])
-        #x_ref.reverse()
 
         # embedding
         emb = self.emb_noise(emb)
