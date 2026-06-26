@@ -67,42 +67,6 @@ def resample_1d(x: torch.Tensor, mode: Literal["keep", "down", "up"] = "keep") -
         return torch.lerp(x[..., ::2], x[..., 1::2], 0.5) # should be multiplied by 2**0.5 to be magnitude preserving,
     elif mode == 'up':
         return torch.repeat_interleave(x, 2, dim=-1)
-    
-def subsample_2d(x: torch.Tensor, mode: Literal["keep", "down", "up", "up_down", "down_up", "keep_down", "keep_up", "down_keep", "up_keep"] = "keep",
-                ratio: int = 2, filtering: str = "nearest-exact") -> torch.Tensor:
-    
-    if mode == "keep":
-        return x
-    elif mode == 'down':
-        return torch.nn.functional.interpolate(x, scale_factor=(1/ratio, 1/ratio), mode=filtering).to(x.dtype)
-    elif mode == 'up':                              
-        return torch.nn.functional.interpolate(x, scale_factor=ratio, mode=filtering).to(x.dtype)
-    elif mode == "up_down":
-        return torch.nn.functional.interpolate(x, scale_factor=(ratio, 1/ratio), mode=filtering).to(x.dtype)
-    elif mode == "down_up":
-        return torch.nn.functional.interpolate(x, scale_factor=(1/ratio, ratio), mode=filtering).to(x.dtype)
-    elif mode == "keep_down":
-        return torch.nn.functional.interpolate(x, scale_factor=(1, 1/ratio), mode=filtering).to(x.dtype)
-    elif mode == "keep_up":
-        return torch.nn.functional.interpolate(x, scale_factor=(1, ratio), mode=filtering).to(x.dtype)
-    elif mode == "down_keep":
-        return torch.nn.functional.interpolate(x, scale_factor=(1/ratio, 1), mode=filtering).to(x.dtype)
-    elif mode == "up_keep":
-        return torch.nn.functional.interpolate(x, scale_factor=(ratio, 1), mode=filtering).to(x.dtype)
-    else:
-        raise ValueError(f"Invalid mode: {mode}")
-
-def _down_h(t: torch.Tensor, ratio: int) -> torch.Tensor:
-    return torch.nn.functional.avg_pool2d(t, kernel_size=(ratio, 1), stride=(ratio, 1))
-
-def _down_w(t: torch.Tensor, ratio: int) -> torch.Tensor:
-    return torch.nn.functional.avg_pool2d(t, kernel_size=(1, ratio), stride=(1, ratio))
-
-def _up_h(t: torch.Tensor, ratio: int) -> torch.Tensor:
-    return t.repeat_interleave(ratio, dim=-2)
-
-def _up_w(t: torch.Tensor, ratio: int) -> torch.Tensor:
-    return t.repeat_interleave(ratio, dim=-1)
 
 def resample_2d(
     x: torch.Tensor,
