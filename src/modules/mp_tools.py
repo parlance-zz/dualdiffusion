@@ -123,19 +123,19 @@ def resample_2d(
     elif mode == "up":
         return torch.nn.functional.interpolate(x, scale_factor=ratio, mode="nearest").to(x.dtype)
     elif mode == "up_down":
-        return _down_w(_up_h(x, ratio), ratio)
+        return torch.nn.functional.interpolate(x, scale_factor=(ratio, 1/ratio), mode="area").to(x.dtype)
     elif mode == "down_up":
-        return _down_h(_up_w(x, ratio), ratio)
+        return torch.nn.functional.interpolate(x, scale_factor=(1/ratio, ratio), mode="area").to(x.dtype)
     elif mode == "keep_down":
-        return _down_w(x, ratio)
+        return torch.nn.functional.interpolate(x, scale_factor=(1, 1/ratio), mode="area").to(x.dtype)
     elif mode == "keep_up":
-        return _up_w(x, ratio)
+        return torch.nn.functional.interpolate(x, scale_factor=(1, ratio), mode="area").to(x.dtype)
     elif mode == "down_keep":
-        return _down_h(x, ratio)
+        return torch.nn.functional.interpolate(x, scale_factor=(1/ratio, 1), mode="area").to(x.dtype)
     elif mode == "up_keep":
-        return _up_h(x, ratio)
-
-    raise ValueError(f"Invalid mode: {mode}")
+        return torch.nn.functional.interpolate(x, scale_factor=(ratio, 1), mode="area").to(x.dtype)
+    else:
+        raise ValueError(f"Invalid mode: {mode}")
 
 def resample_3d(x: torch.Tensor, mode: Literal["keep", "down", "up"] = "keep") -> torch.Tensor:
 
