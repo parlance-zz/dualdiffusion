@@ -27,14 +27,14 @@ import torch
 
 from training.trainer import DualDiffusionTrainer
 from training.module_trainers.module_trainer import ModuleTrainer, ModuleTrainerConfig
-from training.module_trainers.unet_trainer_f8 import UNetTrainerConfig, UNetTrainer
+from training.module_trainers.unet_trainer_p5 import UNetTrainerConfig, UNetTrainer
 from training.module_trainers.unet_trainer_p5 import UNetTrainerConfig as UNetTrainerConfig_LDM, UNetTrainer as UNetTrainer_LDM
 from training.loss.sigreg import sigreg_strong_loss
 from training.loss.mss_1d import MSSLoss1D, MSSLoss1DConfig
 from modules.daes.dae_edm2_q7 import DAE
-from modules.unets.unet_edm2_q7_ddec_f9 import UNet
+from modules.unets.unet_edm2_q4_ddec import UNet
 from modules.unets.unet_edm2_p6 import UNet as UNet_LDM
-from modules.formats.ms_mdct_dual_9 import MS_MDCT_DualFormat
+from modules.formats.ms_mdct_dual_10 import MS_MDCT_DualFormat
 from modules.mp_tools import normalize
 from utils.dual_diffusion_utils import dict_str
 
@@ -137,7 +137,7 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
                 self.mss_1d = None
 
             self.logger.info(f"DDEC-P trainer:")
-            self.ddecp_trainer = UNetTrainer(UNetTrainerConfig(**config.ddecp), trainer, self.ddecp, "ddecp", mss_1d=self.mss_1d)
+            self.ddecp_trainer = UNetTrainer(UNetTrainerConfig(**config.ddecp), trainer, self.ddecp, "ddecp")
 
             if self.config.random_phase_augmentation == True:
                 self.logger.info("Using random phase augmentation")
@@ -177,34 +177,33 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
         else:
             raw_samples = batch["audio"]
 
-        mdct_phase_psd = self.format.raw_to_mdct_phase_psd(raw_samples, random_phase_augmentation=self.config.random_phase_augmentation, level=-1)
-        mdct_phase_psd = self.format.flatten_mdct_phase_psd(mdct_phase_psd)
-        ms_psds = self.format.raw_to_ms_psd(raw_samples, level=-1)
+        mdct_phase_psd = self.format.raw_to_mdct_phase_psd(raw_samples, random_phase_augmentation=self.config.random_phase_augmentation)
+        #mdct_phase_psd = self.format.flatten_mdct_phase_psd(mdct_phase_psd)
+        ms_psd = self.format.raw_to_ms_psd(raw_samples)
 
         logs.update({
             "io_stats/mdct_phase_psd_msq": mdct_phase_psd.pow(2).mean(dim=(1,2,3)),
             "io_stats/mdct_phase_psd_mean": mdct_phase_psd.mean(dim=(1,2,3)),
+            "io_stats/ms_psd_msq": ms_psd.pow(2).mean(dim=(1,2,3)),
+            "io_stats/ms_psd_mean": ms_psd.mean(dim=(1,2,3))
         })
-        for i, psd in enumerate(ms_psds):
-            logs[f"io_stats/ms_psd_level_{i}_msq"] = psd.pow(2).mean(dim=(1,2,3))
-            logs[f"io_stats/ms_psd_level_{i}_mean"] = psd.mean(dim=(1,2,3))
 
         if self.train_dae == True:
             
             latents, ddec_cond = self.trainer.get_ddp_module(self.dae)(
-                ms_psds, audio_embeddings, latents_sigma=self.config.add_latents_noise)
+                ms_psd, audio_embeddings, latents_sigma=self.config.add_latents_noise)
             
             self.dae.latents_stats_tracker(latents)
 
         elif self.dae is not None:
-            latents, ddec_cond = self.dae(ms_psds, audio_embeddings, latents_sigma=self.config.add_latents_noise)
-            latents = latents.detach(); ddec_cond: list[torch.Tensor] = [x.detach() for x in ddec_cond]
+            latents, ddec_cond = self.dae(ms_psd, audio_embeddings, latents_sigma=self.config.add_latents_noise)
+            latents = latents.detach(); ddec_cond: torch.Tensor = ddec_cond.detach()
         else:
             latents = ddec_cond = None
         
         if latents is not None:
             latents: torch.Tensor = latents.float()
-            ddec_cond: list[torch.Tensor] = [x.float() for x in ddec_cond]
+            ddec_cond: torch.Tensor = ddec_cond.float()
             
             logs.update({
                 "io_stats/latents_msq": latents.pow(2).mean(dim=(1,2,3)).detach(),
@@ -214,9 +213,9 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
                 "io_stats/latents_sigma": self.config.add_latents_noise if self.config.add_latents_noise is not None else 0,
             })
 
-            for i, cond in enumerate(ddec_cond):
-                logs[f"io_stats/ddec_cond_level_{i}_msq"] = cond.pow(2).mean(dim=(1,2,3)).detach()
-                logs[f"io_stats/ddec_cond_level_{i}_mean"] = cond.mean(dim=(1,2,3)).detach()
+            #for i, cond in enumerate(ddec_cond):
+            #    logs[f"io_stats/ddec_cond_level_{i}_msq"] = cond.pow(2).mean(dim=(1,2,3)).detach()
+            #    logs[f"io_stats/ddec_cond_level_{i}_mean"] = cond.mean(dim=(1,2,3)).detach()
                 
             if self.dae.config.latent_channels <= 8:
                 for i in range(self.dae.config.latent_channels):
@@ -224,12 +223,14 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
                     logs[f"ch_stats/msq_{i}"]  = self.dae.latents_stats_tracker.msq[i].detach()
 
         if ddec_cond is not None:
-            ddec_x_ref: list[torch.Tensor] = ddec_cond
+            ddec_x_ref: torch.Tensor = ddec_cond
         else:
-            ddec_x_ref: list[torch.Tensor] = [x + torch.randn_like(x) * self.config.add_x_ref_noise for x in ms_psds]
+            ddec_x_ref: torch.Tensor = ms_psd + torch.randn_like(ms_psd) * self.config.add_x_ref_noise
 
         if self.train_ddecp == True:
-            logs.update(self.ddecp_trainer.train_batch(mdct_phase_psd, audio_embeddings, ref_samples=ddec_x_ref))
+            loss_weight = self.format.mdct_mel_density / self.format.mdct_mel_density.mean()
+            logs.update(self.ddecp_trainer.train_batch(
+                mdct_phase_psd, audio_embeddings, ref_samples=ddec_x_ref, loss_weight=loss_weight))
             logs["loss"] = logs["loss"] + logs["loss/ddecp"]
 
             logs["loss_weight/mss1d"] = self.config.mss_loss_weight
@@ -237,9 +238,6 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
             if self.config.mss_loss_weight > 0 or self.config.cepstrum_loss_weight > 0:
                 logs["loss"] = logs["loss"] + logs["loss/mss1d"] * self.config.mss_loss_weight
                 logs["loss"] = logs["loss"] + logs["loss/mss1d_cepstrum"] * self.config.cepstrum_loss_weight
-
-            for i in range(self.ddecp.config.in_num_mdct_levels):
-                logs[f"io_stats_ddecp/x_ref_in_gain_{i}"] = self.ddecp.x_ref_in_gain[i].detach()
 
         if self.train_ddecm == True:
             raise NotImplementedError()
@@ -269,6 +267,13 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
             ms_psd_mse_loss_weight = 0
             logs["loss_weight/ms_psd_mse"] = ms_psd_mse_loss_weight
             logs["loss"] = logs["loss"] + logs["loss/ms_psd_mse"] * ms_psd_mse_loss_weight
+            """
+            """
+            for i in range(self.dae.num_psd_levels - 1):
+                logs[f"io_stats_dae/in_balance_{i+1}"] = self.dae.in_balance[i].sigmoid().detach()
+
+            for i in range(self.dae.num_psd_levels):
+                logs[f"io_stats_dae/out_gain_{i}"] = self.dae.out_gain[i].detach()
             """
 
         if self.train_unet == True:
