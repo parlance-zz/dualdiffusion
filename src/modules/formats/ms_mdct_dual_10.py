@@ -164,7 +164,10 @@ class MS_MDCT_DualFormat(DualDiffusionFormat):
     
     @torch.no_grad()
     def ms_psd_to_img(self, ms_psd: torch.Tensor, use_colormap: bool = False):
-        ms_psd = torch.cat(ms_psd.chunk(4, dim=1), dim=2)
+        
+        if ms_psd.shape[1] == 4 * self.config.num_raw_channels:
+            ms_psd = torch.cat(ms_psd.chunk(4, dim=1), dim=2)
+
         if use_colormap == True:
             return tensor_to_img(ms_psd.mean(dim=(0,1)), flip_y=True, colormap=True)
         else:
