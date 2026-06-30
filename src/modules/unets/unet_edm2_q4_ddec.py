@@ -46,10 +46,10 @@ class UNetConfig(DualDiffusionUNetConfig):
     in_channels:  int = 4
     out_channels: int = 4
     in_channels_emb: int = 0
-    in_channels_x_ref: int = 3
+    in_channels_x_ref: int = 8
 
     in_num_freqs: int = 256
-    in_psd_freqs: int = 2048
+    in_psd_freqs: int = 512
 
     model_channels: int  = 64                # Base multiplier for the number of channels.
     logvar_channels: int = 192               # Number of channels for training uncertainty estimation.
@@ -127,11 +127,13 @@ class Block(torch.nn.Module):
 
     def forward(self, x: torch.Tensor, emb: torch.Tensor) -> torch.Tensor:
         
-        x = resample_2d(x, mode=self.resample_mode)
-
         if self.flavor == "enc":
             if self.conv_skip is not None:
                 x = self.conv_skip(x)
+
+        x = resample_2d(x, mode=self.resample_mode)
+
+        if self.flavor == "enc":
             x = normalize(x, dim=1) # pixel norm
 
         y = self.conv_res0(mp_silu(x))
@@ -215,18 +217,17 @@ class UNet(DualDiffusionUNet):
         # Encoder.
         self.x_ref_balance = torch.nn.Parameter(torch.zeros([]))
         self.enc = torch.nn.ModuleDict()
-        cout = config.in_channels + c_x_ref
+        cin = config.in_channels + c_x_ref
 
         for level, channels in enumerate(cblock):
             
             num_freqs = config.in_num_freqs // 2**level
+            cout = channels
 
             if level == 0:
-                cin = cout
-                cout = channels
                 self.enc[f"conv_in"] = MPConv(cin, cout, kernel=(3,3), bias=True)
             else:
-                self.enc[f"block{level}_down"] = Block(level, cout, cout, cemb, num_freqs,
+                self.enc[f"block{level}_down"] = Block(level, cin, cout, cemb, num_freqs,
                     use_attention=level in config.attn_levels, flavor="enc", resample_mode="down", **block_kwargs)
             
             for idx in range(config.num_layers_per_block):

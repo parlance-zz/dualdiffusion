@@ -191,7 +191,7 @@ class UNetTrainer(ModuleTrainer):
         return None
 
     def train_batch(self, samples: torch.Tensor, embeddings: Optional[Union[torch.Tensor, list[torch.Tensor]]] = None,
-            ref_samples: Optional[torch.Tensor] = None) -> dict[str, Union[torch.Tensor, float]]:
+            ref_samples: Optional[torch.Tensor] = None, loss_weight: Optional[torch.Tensor] = None) -> dict[str, Union[torch.Tensor, float]]:
 
         device_bsz = self.trainer.config.device_batch_size
 
@@ -221,7 +221,10 @@ class UNetTrainer(ModuleTrainer):
         else:
             batch_loss_weight = (batch_sigma ** 2 + sigma_data ** 2) / (batch_sigma * sigma_data) ** 2
         
-        batch_weighted_loss = torch.nn.functional.mse_loss(denoised, samples, reduction="none").mean(dim=(1,2,3)) * batch_loss_weight
+        batch_weighted_loss = torch.nn.functional.mse_loss(denoised, samples, reduction="none")
+        if loss_weight is not None:
+            batch_weighted_loss = batch_weighted_loss * loss_weight
+        batch_weighted_loss = batch_weighted_loss.mean(dim=(1,2,3)) * batch_loss_weight
 
         if self.config.disable_loss_weight == True:
             error_logvar = self.unet.get_sigma_loss_logvar(torch.ones_like(batch_sigma))
