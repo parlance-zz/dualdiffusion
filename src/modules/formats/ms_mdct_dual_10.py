@@ -20,7 +20,13 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
-from typing import Optional, Literal, Union
+# this is an implementation of the transform described in the paper:
+# "Multi-Window STFT Phase Retrieval Lattice Uniqueness" (https://arxiv.org/pdf/2207.10620) by PHILIPP GROHS, LUKAS LIEHR, AND MARTIN RATHMAIR
+# TLDR: 4 magnitude spectrograms on the same sampling lattice with windows that are complex linear combinations of the first 2 hermite functions
+#  are sufficient to uniquely determine the phase of a signal up to a global phase factor with only 2x density (for real signals)
+#  these 4 spectrograms are used as conditioning for a diffusion decoder to synthesize an MDCT/MCLT representation of the full signal
+
+from typing import Optional, Literal
 from dataclasses import dataclass
 
 import torch
@@ -50,7 +56,7 @@ def _get_mdct_window_func(mdct_window_func: str) -> callable:
     else:
         raise ValueError(f"Unsupported mdct window function: {mdct_window_func}. Supported functions are 'sin', 'kaiser_bessel_derived', and 'vorbis'.")
     return mdct_window_fn
-    
+
 @dataclass()
 class MS_MDCT_DualFormatConfig(DualDiffusionFormatConfig):
 
@@ -138,7 +144,7 @@ class MS_MDCT_DualFormat(DualDiffusionFormat):
     @torch.no_grad()
     def raw_to_ms_psd(self, raw_samples: torch.Tensor) -> torch.Tensor:
 
-        raw_samples = torch.cat((raw_samples, raw_samples[..., -1:]), dim=-1) # todo:???
+        raw_samples = torch.cat((raw_samples, raw_samples[..., -1:]), dim=-1) # fix stft shape with odd window length
         packed_raw = raw_samples.float().view(raw_samples.shape[0] * raw_samples.shape[1], raw_samples.shape[2])
 
         stft_h0 = torch.stft(packed_raw, n_fft=self.config.ms_psd_window_len, hop_length=self.config.hop_length,
