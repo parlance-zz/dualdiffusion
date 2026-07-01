@@ -32,6 +32,15 @@
         "window_len": 512,
         "window_func": "vorbis",
         
+        // attempt #1
+        //"ms_psd_t_scale": 2.37,
+        //"ms_psd_window_len": 1023,
+
+        "ms_psd_t_scale": 2.37,
+        "ms_psd_window_len": 1023,
+        "ms_psd_downsample": 2,
+
+
         "mel_spec_config": {
             "sample_rate": 32000,
             "ms_add_center_channel": true,

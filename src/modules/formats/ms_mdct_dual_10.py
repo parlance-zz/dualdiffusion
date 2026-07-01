@@ -76,12 +76,13 @@ class MS_MDCT_DualFormatConfig(DualDiffusionFormatConfig):
     # ms psd params
     ms_psd_t_scale: float = 2.37
     ms_psd_window_len: int = 1023
+    ms_psd_downsample: int = 1
     ms_psd_p_real: list[tuple[float, float]] = ( (2,0), (1,1), (-1,1), (0,1) )
     ms_psd_p_imag: list[tuple[float, float]] = ( (0,0), (0,0), ( 0,0), (1,0) )
 
     @property
     def ms_psd_num_frequencies(self) -> int:
-        return self.ms_psd_window_len // 2 + 1
+        return (self.ms_psd_window_len // 2 + 1) // self.ms_psd_downsample
 
     # mel-spec params
     mel_spec_config: Optional[MelSpecConfig] = None
@@ -157,7 +158,9 @@ class MS_MDCT_DualFormat(DualDiffusionFormat):
                 (self.config.ms_psd_p_imag[i][0] * stft_h0 + self.config.ms_psd_p_imag[i][1] * stft_h1) * 1j
             ).abs().pow(self.config.mdct_psd_exponent))
 
-        ms_psd = torch.cat(ms_psds, dim=1)                    
+        ms_psd = torch.cat(ms_psds, dim=1)
+        if self.config.ms_psd_downsample > 1:
+            ms_psd = torch.nn.functional.avg_pool2d(ms_psd, (self.config.ms_psd_downsample, 1))
         ms_psd = (ms_psd + self.ms_psd_offset) / self.ms_psd_scale
 
         return ms_psd
