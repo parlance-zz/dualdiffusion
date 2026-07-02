@@ -31,7 +31,7 @@ from training.module_trainers.unet_trainer_p5 import UNetTrainerConfig, UNetTrai
 from training.module_trainers.unet_trainer_p5 import UNetTrainerConfig as UNetTrainerConfig_LDM, UNetTrainer as UNetTrainer_LDM
 from training.loss.sigreg import sigreg_strong_loss
 from training.loss.mss_1d import MSSLoss1D, MSSLoss1DConfig
-from modules.daes.dae_edm2_q7 import DAE
+from modules.daes.dae_edm2_q4 import DAE
 from modules.unets.unet_edm2_q4_ddec import UNet
 from modules.unets.unet_edm2_p6 import UNet as UNet_LDM
 from modules.formats.ms_mdct_dual_10 import MS_MDCT_DualFormat

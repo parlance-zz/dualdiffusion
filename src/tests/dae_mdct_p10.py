@@ -32,9 +32,9 @@ import numpy as np
 
 from modules.embeddings.clap import CLAP_Embedding
 from pipelines.dual_diffusion_pipeline import DualDiffusionPipeline, SampleParams
-from modules.unets.unet_edm2_q7_ddec_f9 import UNet
+from modules.unets.unet_edm2_q4_ddec import UNet
 from modules.embeddings.clap import CLAP_Embedding
-from modules.daes.dae_edm2_q7_f9 import DAE
+from modules.daes.dae_edm2_q4 import DAE
 from modules.formats.ms_mdct_dual_10 import MS_MDCT_DualFormat
 from modules.mp_tools import mp_sum
 from utils.dual_diffusion_utils import (
@@ -243,13 +243,14 @@ def dae_test() -> None:
 
         if ddecp is not None:
             
-            #ddecp_x_ref = [(x + torch.randn_like(x) * 0.1) for x in ddec_cond]
+            #ddecp_x_ref = [(x + torch.randn_like(x) * 0.08) for x in ddec_cond]
+            #ddecp_x_ref = ddec_cond + torch.randn_like(ddec_cond) * 0.08
             ddecp_x_ref = ddec_cond
             #ddecp_x_ref = format.ms_psd_to_psd_linear(ddec_cond)
 
             ddecp_params = SampleParams(
                 seed=5000,
-                num_steps=50, length=audio_len, cfg_scale=0, input_perturbation=1, input_perturbation_offset=0,
+                num_steps=50, length=audio_len, cfg_scale=0, input_perturbation=0.5, input_perturbation_offset=0,
                 use_heun=False, schedule="cos", rho=1, sigma_max=1000, sigma_min=1e-3, stereo_fix=0
             )
 
