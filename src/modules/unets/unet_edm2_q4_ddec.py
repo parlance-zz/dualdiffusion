@@ -300,13 +300,13 @@ class UNet(DualDiffusionUNet):
             else:
                 x = (c_in * x_in).to(dtype=torch.bfloat16)
 
-            if self.psd_freqs_per_freq is not None and self.psd_freqs_per_freq > 1:
-                B, C, H, W = x_ref.shape
-                x_ref = x_ref.view(B, C, self.config.in_num_freqs, self.psd_freqs_per_freq, W)
-                x_ref = x_ref.permute(0, 3, 1, 2, 4).reshape(B, self.psd_freqs_per_freq * C, self.config.in_num_freqs, W)
-
             emb = self.emb_fourier(c_noise)
 
+        if self.psd_freqs_per_freq is not None and self.psd_freqs_per_freq > 1:
+            B, C, H, W = x_ref.shape
+            x_ref = x_ref.view(B, C, self.config.in_num_freqs, self.psd_freqs_per_freq, W)
+            x_ref = x_ref.permute(0, 3, 1, 2, 4).reshape(B, self.psd_freqs_per_freq * C, self.config.in_num_freqs, W)
+            
         x = mp_cat(x, x_ref.to(dtype=torch.bfloat16), t=self.x_ref_balance.sigmoid())
         
         # embedding

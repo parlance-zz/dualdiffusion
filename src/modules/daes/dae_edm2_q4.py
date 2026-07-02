@@ -46,14 +46,14 @@ class DAE_Config(DualDiffusionDAEConfig):
     in_channels: int     = 8
     in_channels_emb: int = 0
     out_channels: int    = 8
-    latent_channels: int = 8
+    latent_channels: int = 16
 
     in_num_freqs: int = 256
     in_psd_freqs: int = 512
 
     model_channels: int         = 64         # Base multiplier for the number of channels.
-    channel_mult_enc: int       = (1,2,4,8)
-    channel_mult_dec: list[int] = (1,2,4,8)
+    channel_mult_enc: int       = (1,2,3,5,8)
+    channel_mult_dec: list[int] = (1,2,3,5,8)
     channel_mult_emb: int     = 4            # Multiplier for final embedding dimensionality.
     channels_per_head: int    = 64           # Number of channels per attention head.
     num_enc_layers_per_block: int = 3        # Number of resnet blocks per resolution.
@@ -205,7 +205,7 @@ class DAE(DualDiffusionDAE):
             cout = enc_channels[level]
 
             if level == 0:
-                self.enc[f"conv_in"] = MPConv(self.config.in_channels * self.psd_freqs_per_freq, cin, kernel=(3,3), bias=True)
+                self.enc[f"conv_in"] = MPConv(self.config.in_channels * self.psd_freqs_per_freq, cout, kernel=(3,3), bias=True)
             else:
                 self.enc[f"block{level}_down"] = Block(level, cin, cout, cemb,
                     use_attention=level in config.attn_levels, flavor="enc", resample_mode="down", **block_kwargs)

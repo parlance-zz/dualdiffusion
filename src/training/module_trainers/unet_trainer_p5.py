@@ -212,7 +212,12 @@ class UNetTrainer(ModuleTrainer):
         else:
             perturbed_input = None
 
-        denoised, error_logvar = self.trainer.get_ddp_module(self.unet)(samples + noise, batch_sigma, self.format, embeddings,
+        try:
+            unet_module: UNet = self.trainer.get_ddp_module(self.unet)
+        except:
+            unet_module: UNet = self.unet
+
+        denoised, error_logvar = unet_module(samples + noise, batch_sigma, self.format, embeddings,
             x_ref=ref_samples, perturbed_input=perturbed_input, conditioning_mask=conditioning_mask)
         
         sigma_data = self.sigma_sampler.config.sigma_data
