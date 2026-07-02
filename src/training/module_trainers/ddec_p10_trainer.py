@@ -189,7 +189,6 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
         })
 
         if self.train_dae == True:
-            
             latents, ddec_cond = self.trainer.get_ddp_module(self.dae)(
                 ms_psd, audio_embeddings, latents_sigma=self.config.add_latents_noise)
             
@@ -225,7 +224,8 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
         if ddec_cond is not None:
             ddec_x_ref: torch.Tensor = ddec_cond
         else:
-            ddec_x_ref: torch.Tensor = ms_psd + torch.randn_like(ms_psd) * self.config.add_x_ref_noise
+            ddec_x_ref: torch.Tensor = ms_psd.detach() + torch.randn_like(ms_psd) * self.config.add_x_ref_noise
+            logs["io_stats/add_x_ref_noise"] = self.config.add_x_ref_noise
 
         if self.train_ddecp == True:
             loss_weight = self.format.mdct_mel_density / self.format.mdct_mel_density.mean()
