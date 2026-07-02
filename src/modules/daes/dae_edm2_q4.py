@@ -34,10 +34,10 @@ from dataclasses import dataclass
 from typing import Union, Literal, Optional
 
 import torch
+from numpy import ndarray
 
 from modules.daes.dae import DualDiffusionDAE, DualDiffusionDAEConfig
 from modules.mp_tools import LatentStatsTracker, MPConv, mp_silu, mp_sum, normalize, resample_2d, patchify_2d, unpatchify_2d
-
 
  
 @dataclass
@@ -46,15 +46,15 @@ class DAE_Config(DualDiffusionDAEConfig):
     in_channels: int     = 8
     in_channels_emb: int = 0
     out_channels: int    = 8
-    latent_channels: int = 16
+    latent_channels: int = 8
     use_1d_latents: bool = False
 
     in_num_freqs: int = 256
     in_psd_freqs: int = 512
 
     model_channels: int         = 64         # Base multiplier for the number of channels.
-    channel_mult_enc: int       = (1,2,3,5,8)
-    channel_mult_dec: list[int] = (1,2,3,5,8)
+    channel_mult_enc: int       = (1,2,4,8)
+    channel_mult_dec: list[int] = (1,2,4,8)
     channel_mult_emb: int     = 4            # Multiplier for final embedding dimensionality.
     channels_per_head: int    = 64           # Number of channels per attention head.
     num_enc_layers_per_block: int = 3        # Number of resnet blocks per resolution.
@@ -265,17 +265,20 @@ class DAE(DualDiffusionDAE):
     
     def get_latent_shape(self, mel_spec_shape: Union[torch.Size, tuple[int, int, int, int]]) -> torch.Size:
         if len(mel_spec_shape) == 4:
-            return (mel_spec_shape[0], self.config.latent_channels,
-                    mel_spec_shape[2] // 2 ** (self.num_levels-1),
-                    mel_spec_shape[3] // 2 ** (self.num_levels-1))
+            if self.config.use_1d_latents == True:
+                return (mel_spec_shape[0], self.config.latent_channels, 1,
+                        mel_spec_shape[3] // 2 ** (self.num_levels-1))
+            else:
+                return (mel_spec_shape[0], self.config.latent_channels,
+                        mel_spec_shape[2] // self.psd_freqs_per_freq // 2 ** (self.num_levels-1),
+                        mel_spec_shape[3] // 2 ** (self.num_levels-1))
         else:
             raise ValueError(f"Invalid sample shape: {mel_spec_shape}")
         
     def get_mel_spec_shape(self, latent_shape: Union[torch.Size, tuple[int, int, int, int]]) -> torch.Size:
         if len(latent_shape) == 4:
-            return (latent_shape[0], self.config.in_channels,
-                    latent_shape[2] * 2 ** (self.num_levels-1),
-                    latent_shape[3] * 2 ** (self.num_levels-1))
+            return (latent_shape[0], self.config.out_channels,
+                self.config.in_psd_freqs, latent_shape[3] * 2 ** (self.num_levels-1))
         else:
             raise ValueError(f"Invalid latent shape: {latent_shape}")
         
@@ -346,6 +349,17 @@ class DAE(DualDiffusionDAE):
 
         ddec_cond = self.decode(decode_latents, dae_embeddings, training=True)
         return latents, ddec_cond
+
+    def latents_to_img(self, latents: torch.Tensor, **kwargs) -> ndarray:
+        
+        if self.config.use_1d_latents == True:
+
+            latents = latents.reshape(latents.shape[0], latents.shape[1] // 4, 4, latents.shape[3])
+            latents = latents.permute(0, 2, 1, 3).contiguous()
+            
+            return super().latents_to_img(latents, img_split_stereo=False, **kwargs)
+        else:
+            return super().latents_to_img(latents, img_split_stereo=False, **kwargs)
 
     def tiled_encode(self, x: torch.Tensor, embeddings: torch.Tensor, max_chunk: int = 6144, overlap: int = 256) -> torch.Tensor:
 
