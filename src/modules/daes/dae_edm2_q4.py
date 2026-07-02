@@ -47,6 +47,7 @@ class DAE_Config(DualDiffusionDAEConfig):
     in_channels_emb: int = 0
     out_channels: int    = 8
     latent_channels: int = 16
+    use_1d_latents: bool = False
 
     in_num_freqs: int = 256
     in_psd_freqs: int = 512
@@ -68,7 +69,7 @@ class DAE_Config(DualDiffusionDAEConfig):
 
     static_latents_scale: Optional[float] = None
     static_latents_noise: Optional[float] = None
-    
+
 class Block(torch.nn.Module):
 
     def __init__(self,
@@ -177,6 +178,8 @@ class DAE(DualDiffusionDAE):
 
         self.num_levels = len(config.channel_mult_dec)
         self.downsample_ratio = 2 ** (self.num_levels - 1)
+        assert config.in_num_freqs % self.downsample_ratio == 0
+        self.num_latent_freqs = config.in_num_freqs // self.downsample_ratio
 
         assert config.in_psd_freqs % config.in_num_freqs == 0
         self.psd_freqs_per_freq = config.in_psd_freqs // config.in_num_freqs
@@ -215,9 +218,17 @@ class DAE(DualDiffusionDAE):
                 self.enc[f"block{level}_layer{idx}"] = Block(level, cout, cout, cemb,
                     use_attention=level in config.attn_levels, flavor="enc", **block_kwargs)
 
-        self.conv_latents_out = MPConv(enc_channels[-1], config.latent_channels, kernel=(3,3))
         self.latents_out_gain = torch.nn.Parameter(torch.ones([]))
-        self.conv_latents_in = MPConv(config.latent_channels, dec_channels[-1], kernel=(3,3), bias=True)
+
+        if config.use_1d_latents == True:
+            self.conv_latents_out = MPConv(enc_channels[-1] * self.num_latent_freqs, config.latent_channels, kernel=(1,1))
+            self.conv_latents_in = MPConv(config.latent_channels, dec_channels[-1] * self.num_latent_freqs, kernel=(1,1), bias=True)
+            with torch.no_grad():
+                self.conv_latents_in.weight.copy_(torch.linalg.pinv(self.conv_latents_out.weight.data[:, :, 0, 0])[:, :, None, None])
+                self.conv_latents_in.bias.zero_()
+        else:
+            self.conv_latents_out = MPConv(enc_channels[-1], config.latent_channels, kernel=(3,3))
+            self.conv_latents_in = MPConv(config.latent_channels, dec_channels[-1], kernel=(3,3), bias=True)
 
         # decoder
         self.dec = torch.nn.ModuleDict()
@@ -280,6 +291,10 @@ class DAE(DualDiffusionDAE):
         for name, block in self.enc.items():
             x = block(x) if "conv" in name else block(x, embeddings)
         
+        if self.config.use_1d_latents == True:
+            assert x.shape[2] == self.num_latent_freqs
+            x = patchify_2d(x, self.num_latent_freqs, 1)
+
         latents: torch.Tensor = self.conv_latents_out(x, gain=self.latents_out_gain)
         #latents = normalize(latents.float())
         
@@ -302,6 +317,10 @@ class DAE(DualDiffusionDAE):
             #    x = x + torch.randn_like(x) * self.config.static_latents_noise
 
         x = self.conv_latents_in(x.to(dtype=torch.bfloat16))
+
+        if self.config.use_1d_latents == True:
+            assert x.shape[2] == 1
+            x = unpatchify_2d(x, self.num_latent_freqs, 1)
 
         if embeddings is not None:
             embeddings = embeddings[:, :, None, None]
