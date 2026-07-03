@@ -49,7 +49,7 @@ class UNetConfig(DualDiffusionUNetConfig):
     in_channels_x_ref: int = 8
 
     in_num_freqs: int = 256
-    in_psd_freqs: int = 256
+    in_psd_freqs: int = 512
 
     model_channels: int  = 64                # Base multiplier for the number of channels.
     logvar_channels: int = 192               # Number of channels for training uncertainty estimation.
@@ -199,10 +199,8 @@ class UNet(DualDiffusionUNet):
             assert config.in_psd_freqs % config.in_num_freqs == 0
             assert config.in_channels_x_ref > 0
             self.psd_freqs_per_freq = config.in_psd_freqs // config.in_num_freqs
-            c_x_ref = self.psd_freqs_per_freq * config.in_channels_x_ref
         else:
             self.psd_freqs_per_freq = None
-            c_x_ref = config.in_channels_x_ref
         
         # Embedding.
         self.emb_fourier = MPFourier(cnoise)
@@ -216,8 +214,9 @@ class UNet(DualDiffusionUNet):
 
         # Encoder.
         self.x_ref_balance = torch.nn.Parameter(torch.zeros([]))
+        self.conv_x_ref_in = MPConv(config.in_channels_x_ref, cblock[0], kernel=(3,3), bias=True)
         self.enc = torch.nn.ModuleDict()
-        cin = config.in_channels + c_x_ref
+        cin = config.in_channels
 
         for level, channels in enumerate(cblock):
             
@@ -302,12 +301,8 @@ class UNet(DualDiffusionUNet):
 
             emb = self.emb_fourier(c_noise)
 
-        if self.psd_freqs_per_freq is not None and self.psd_freqs_per_freq > 1:
-            B, C, H, W = x_ref.shape
-            x_ref = x_ref.view(B, C, self.config.in_num_freqs, self.psd_freqs_per_freq, W)
-            x_ref = x_ref.permute(0, 3, 1, 2, 4).reshape(B, self.psd_freqs_per_freq * C, self.config.in_num_freqs, W)
-            
-        x = mp_cat(x, x_ref.to(dtype=torch.bfloat16), t=self.x_ref_balance.sigmoid())
+        x_ref = self.conv_x_ref_in(x_ref.to(dtype=torch.bfloat16))
+        x_ref = resample_2d(x_ref, "down_keep")
         
         # embedding
         emb = self.emb_noise(emb)
@@ -318,7 +313,11 @@ class UNet(DualDiffusionUNet):
         # encoder
         skips = []
         for name, block in self.enc.items():
-            x = block(x) if "conv" in name else block(x, emb)
+            if "conv" in name:
+                x = block(x)
+                x = mp_sum(x, x_ref, t=self.x_ref_balance.sigmoid())
+            else:
+                x = block(x, emb)
             skips.append(x)
 
         # decoder

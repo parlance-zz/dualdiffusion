@@ -222,7 +222,7 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
                     logs[f"ch_stats/msq_{i}"]  = self.dae.latents_stats_tracker.msq[i].detach()
 
         if ddec_cond is not None:
-            ddec_x_ref: torch.Tensor = ddec_cond
+            ddec_x_ref: torch.Tensor = ddec_cond + torch.randn_like(ddec_cond) * self.config.add_x_ref_noise
         else:
             ddec_x_ref: torch.Tensor = ms_psd.detach() + torch.randn_like(ms_psd) * self.config.add_x_ref_noise
             logs["io_stats/add_x_ref_noise"] = self.config.add_x_ref_noise
