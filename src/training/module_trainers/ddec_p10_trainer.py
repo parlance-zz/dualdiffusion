@@ -70,6 +70,7 @@ class DiffusionDecoder_Trainer_Config(ModuleTrainerConfig):
 
     random_stereo_augmentation: bool = True
     random_phase_augmentation: bool  = True
+    mel_density_loss_weight_pow: float = 1
 
 class DiffusionDecoder_Trainer(ModuleTrainer):
     
@@ -228,7 +229,8 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
             logs["io_stats/add_x_ref_noise"] = self.config.add_x_ref_noise
 
         if self.train_ddecp == True:
-            loss_weight = self.format.mdct_mel_density / self.format.mdct_mel_density.mean()
+            loss_weight = self.format.mdct_mel_density.pow(self.config.mel_density_loss_weight_pow)
+            loss_weight /= self.format.mdct_mel_density.mean()
             logs.update(self.ddecp_trainer.train_batch(
                 mdct_phase_psd, audio_embeddings, ref_samples=ddec_x_ref, loss_weight=loss_weight))
             logs["loss"] = logs["loss"] + logs["loss/ddecp"]
