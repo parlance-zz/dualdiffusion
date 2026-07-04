@@ -161,9 +161,13 @@ class MS_MDCT_DualFormat(DualDiffusionFormat):
             ms_psds.append((
                  self.config.ms_psd_p_real[i][0] * stft_h0 + self.config.ms_psd_p_real[i][1] * stft_h1 +
                 (self.config.ms_psd_p_imag[i][0] * stft_h0 + self.config.ms_psd_p_imag[i][1] * stft_h1) * 1j
-            ).abs().clip(min=min_psd_eps).pow(self.config.mdct_psd_exponent))
+            ))
 
-        ms_psd = torch.cat(ms_psds, dim=1)
+        ms_psd = torch.cat(ms_psds, dim=1).abs()
+        if min_psd_eps is not None:
+            ms_psd = ms_psd.clip(min=min_psd_eps)
+        ms_psd = ms_psd.pow(self.config.mdct_psd_exponent)
+
         if self.config.ms_psd_downsample > 1:
             ms_psd = torch.nn.functional.avg_pool2d(ms_psd, (self.config.ms_psd_downsample, 1))
         ms_psd = (ms_psd + self.ms_psd_offset) / self.ms_psd_scale
