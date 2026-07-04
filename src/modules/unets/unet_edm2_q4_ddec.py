@@ -302,7 +302,8 @@ class UNet(DualDiffusionUNet):
             emb = self.emb_fourier(c_noise)
 
         x_ref = self.conv_x_ref_in(x_ref.to(dtype=torch.bfloat16))
-        x_ref = resample_2d(x_ref, "down_keep")
+        if self.psd_freqs_per_freq > 1:
+            x_ref = resample_2d(x_ref, "down_keep")
         
         # embedding
         emb = self.emb_noise(emb)

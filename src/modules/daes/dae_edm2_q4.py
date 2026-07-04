@@ -196,11 +196,12 @@ class DAE(DualDiffusionDAE):
         enc_channels = [config.model_channels * m for m in config.channel_mult_enc]
         dec_channels = [config.model_channels * m for m in config.channel_mult_dec]
 
+        self.recon_logvar = torch.nn.Parameter(torch.zeros([]))
         self.latents_stats_tracker = LatentStatsTracker(config.latent_channels, static_scale=config.static_latents_scale)
 
         # encoder
         self.enc = torch.nn.ModuleDict()
-        cin = config.in_channels #* self.psd_freqs_per_freq
+        cin = config.in_channels
         
         for level in range(self.num_levels):
             
@@ -252,7 +253,7 @@ class DAE(DualDiffusionDAE):
                     use_attention=level in config.attn_levels, flavor="dec", **block_kwargs)
 
         self.conv_out = MPConv(cout, self.config.out_channels, kernel=(3,3))
-        self.out_gain = torch.nn.Parameter(torch.zeros([]))
+        self.out_gain = torch.nn.Parameter(torch.ones([]))
             
     def get_embeddings(self, emb_in: torch.Tensor) -> torch.Tensor:
         if self.emb_label is not None:
@@ -261,7 +262,7 @@ class DAE(DualDiffusionDAE):
             return None
     
     def get_recon_loss_logvar(self) -> torch.Tensor:
-        return None
+        return self.recon_logvar
     
     def get_latent_shape(self, mel_spec_shape: Union[torch.Size, tuple[int, int, int, int]]) -> torch.Size:
         if len(mel_spec_shape) == 4:
@@ -288,12 +289,12 @@ class DAE(DualDiffusionDAE):
             embeddings = embeddings[:, :, None, None]
 
         x = x.to(dtype=torch.bfloat16)
-        #if self.psd_freqs_per_freq > 1:
-        #    x = patchify_2d(x, self.psd_freqs_per_freq, 1)
 
         for name, block in self.enc.items():
             if "conv" in name:
-                x = resample_2d(block(x), "down_keep")
+                x = block(x)
+                if self.psd_freqs_per_freq > 1:
+                    x = resample_2d(x, "down_keep")
             else:
                 x = block(x, embeddings)
         
@@ -334,7 +335,8 @@ class DAE(DualDiffusionDAE):
         for block in self.dec.values():
             x = block(x, embeddings)
 
-        x = resample_2d(x, "up_keep")
+        if self.psd_freqs_per_freq > 1:
+            x = resample_2d(x, "up_keep")
         x: torch.Tensor = self.conv_out(x, gain=self.out_gain)
         #if self.psd_freqs_per_freq > 1:
         #    x = unpatchify_2d(x, self.psd_freqs_per_freq, 1)

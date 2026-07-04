@@ -26,6 +26,8 @@ from typing import Literal, Optional
 import torch
 import numpy as np
 
+from modules.formats.frequency_scale import get_mel_density
+
 
 def _is_prime(n: int) -> bool:
     if n <= 1:
@@ -54,6 +56,9 @@ class MSSLoss2DConfig:
     midside_probability: float = 0.5
     psd_eps: float = 1e-4
     loss_scale: float = 3
+
+    sample_rate: float = 32000
+    mel_density_pow: float = 0
 
 class MSSLoss2D:
 
@@ -189,6 +194,11 @@ class MSSLoss2D:
                 target_fft_abs = target_fft.abs().requires_grad_(False).detach()
                 loss_weight = target_fft_abs.pow(2).mean(dim=r_dims, keepdim=True).clip(min=self.config.psd_eps).pow(0.5).requires_grad_(False).detach()
 
+                if self.config.mel_density_pow > 0:
+                    hz = torch.arange(target_fft_abs.shape[2], device=self.device) / target_fft_abs.shape[2] * self.config.sample_rate / 2
+                    mel_density = get_mel_density(hz).pow(self.config.mel_density_pow)
+                    mel_density /= mel_density.mean()
+                    loss_weight = loss_weight / mel_density.view(1, 1,-1, 1, 1, 1)
                 """
                 if order == (-2, -1):
                     blockfreq_y = torch.fft.fftfreq(block_height, 1/block_height, device=self.device)
