@@ -141,7 +141,6 @@ class MS_MDCT_DualFormat(DualDiffusionFormat):
         raw_length = raw_length or self.config.default_raw_length
         return raw_length // self.config.width_alignment * self.config.width_alignment - self.config.num_frequencies
 
-    @torch.no_grad()
     def raw_to_ms_psd(self, raw_samples: torch.Tensor) -> torch.Tensor:
 
         raw_samples = torch.cat((raw_samples, raw_samples[..., -1:]), dim=-1) # fix stft shape with odd window length
