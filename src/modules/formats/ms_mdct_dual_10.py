@@ -141,7 +141,7 @@ class MS_MDCT_DualFormat(DualDiffusionFormat):
         raw_length = raw_length or self.config.default_raw_length
         return raw_length // self.config.width_alignment * self.config.width_alignment - self.config.num_frequencies
 
-    def raw_to_ms_psd(self, raw_samples: torch.Tensor) -> torch.Tensor:
+    def raw_to_ms_psd(self, raw_samples: torch.Tensor, min_psd_eps: Optional[float] = None) -> torch.Tensor:
 
         raw_samples = torch.cat((raw_samples, raw_samples[..., -1:]), dim=-1) # fix stft shape with odd window length
         packed_raw = raw_samples.float().view(raw_samples.shape[0] * raw_samples.shape[1], raw_samples.shape[2])
@@ -161,7 +161,7 @@ class MS_MDCT_DualFormat(DualDiffusionFormat):
             ms_psds.append((
                  self.config.ms_psd_p_real[i][0] * stft_h0 + self.config.ms_psd_p_real[i][1] * stft_h1 +
                 (self.config.ms_psd_p_imag[i][0] * stft_h0 + self.config.ms_psd_p_imag[i][1] * stft_h1) * 1j
-            ).abs().pow(self.config.mdct_psd_exponent))
+            ).abs().clip(min=min_psd_eps).pow(self.config.mdct_psd_exponent))
 
         ms_psd = torch.cat(ms_psds, dim=1)
         if self.config.ms_psd_downsample > 1:
