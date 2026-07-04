@@ -31,6 +31,7 @@ from training.module_trainers.unet_trainer_p5 import UNetTrainerConfig, UNetTrai
 from training.module_trainers.unet_trainer_p5 import UNetTrainerConfig as UNetTrainerConfig_LDM, UNetTrainer as UNetTrainer_LDM
 from training.loss.sigreg import sigreg_strong_loss
 from training.loss.mss_1d import MSSLoss1D, MSSLoss1DConfig
+from training.loss.mss_2d import MSSLoss2D, MSSLoss2DConfig
 from modules.daes.dae_edm2_q4 import DAE
 from modules.unets.unet_edm2_q4_ddec import UNet
 from modules.unets.unet_edm2_p6 import UNet as UNet_LDM
@@ -103,6 +104,7 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
                 self.ddecp = trainer.pipeline.ddecp.to(device=trainer.accelerator.device, dtype=torch.bfloat16).requires_grad_(False)
                 assert self.ddecp.config.last_global_step > 0
                 self.train_ddecp = True
+            #self.mss_2d = MSSLoss2D(MSSLoss2DConfig(), device=trainer.accelerator.device)
 
         self.format: MS_MDCT_DualFormat = trainer.pipeline.format.to(self.trainer.accelerator.device)
 
@@ -230,7 +232,7 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
 
         if self.train_ddecp == True:
             loss_weight = self.format.mdct_mel_density.pow(self.config.mel_density_loss_weight_pow)
-            loss_weight /= self.format.mdct_mel_density.mean()
+            loss_weight /= loss_weight.mean()
             logs.update(self.ddecp_trainer.train_batch(
                 mdct_phase_psd, audio_embeddings, ref_samples=ddec_x_ref, loss_weight=loss_weight))
             logs["loss"] = logs["loss"] + logs["loss/ddecp"]
@@ -260,6 +262,17 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
                 logs["loss/latents_sigreg"] = latents_sigreg_loss.detach()
                 logs["loss"] = logs["loss"] + latents_sigreg_loss * latents_sigreg_loss_weight
 
+            """
+            leak = 1 - min(self.trainer.global_step / 200, 1)
+            if leak <= 0: leak = None
+
+            logs["loss/mss_2d"] = self.mss_2d.mss_loss(ddec_cond, ms_psd, 4, leak_max=leak)
+            logs["loss/mss_2d_nll"] = logs["loss/mss_2d"] / self.dae.get_recon_loss_logvar().exp() + self.dae.get_recon_loss_logvar()
+            logs["loss"] = logs["loss"] + logs["loss/dae_qh_nll"]
+
+            logs["loss/dae_mse"] = torch.nn.functional.mse_loss(ddec_cond, ms_psd, reduction="none").mean(dim=(1,2,3)).detach()
+            """
+            
             """
             logs["loss/ms_psd_mse"] = torch.zeros_like(logs["loss"])
             for i, (cond, ms_psd) in enumerate(zip(ddec_cond, ms_psds)):
