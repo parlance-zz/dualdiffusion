@@ -228,7 +228,7 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
             ddec_x_ref: torch.Tensor = ddec_cond + torch.randn_like(ddec_cond) * self.config.add_x_ref_noise
         else:
             ddec_x_ref: torch.Tensor = ms_psd.detach() + torch.randn_like(ms_psd) * self.config.add_x_ref_noise
-            logs["io_stats/add_x_ref_noise"] = self.config.add_x_ref_noise
+        logs["io_stats/add_x_ref_noise"] = self.config.add_x_ref_noise
 
         if self.train_ddecp == True:
             loss_weight = self.format.mdct_mel_density.pow(self.config.mel_density_loss_weight_pow)
@@ -272,7 +272,7 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
 
             logs["loss/dae_mse"] = torch.nn.functional.mse_loss(ddec_cond, ms_psd, reduction="none").mean(dim=(1,2,3)).detach()
             """
-            
+
             """
             logs["loss/ms_psd_mse"] = torch.zeros_like(logs["loss"])
             for i, (cond, ms_psd) in enumerate(zip(ddec_cond, ms_psds)):
