@@ -46,11 +46,11 @@ def _is_prime(n: int) -> bool:
 @dataclass
 class MSSLoss2DConfig:
 
-    block_low:  int = 11 #5
+    block_low:  int = 7 #5
     block_high: int = 254
 
     block_sampling_replace: bool = True
-    block_sampling_scale: Literal["linear", "ln_linear", "natural"] = "natural"
+    block_sampling_scale: Literal["linear", "ln_linear", "natural"] = "ln_linear"
 
     num_iterations: int = 1
     midside_probability: float = 0.5
@@ -59,6 +59,7 @@ class MSSLoss2DConfig:
 
     sample_rate: float = 32000
     mel_density_pow: float = 0
+    loss_weight_pow : float = 0.5
 
 class MSSLoss2D:
 
@@ -196,8 +197,8 @@ class MSSLoss2D:
             with torch.no_grad():
                 target_fft = self.stft2d(target, block_width, block_height, order,
                     step_w, step_h, window, offset_h, offset_w, end_offset_h, end_offset_w, midside)
-                target_fft_abs = target_fft.abs().requires_grad_(False).detach()
-                loss_weight = target_fft_abs.pow(2).mean(dim=r_dims, keepdim=True).clip(min=self.config.psd_eps).pow(0.5).requires_grad_(False).detach()
+                target_fft_abs = target_fft.abs()
+                loss_weight = target_fft_abs.pow(2).mean(dim=r_dims, keepdim=True).clip(min=self.config.psd_eps).pow(self.config.loss_weight_pow)
 
                 if self.config.mel_density_pow > 0:
                     hz = torch.arange(target_fft_abs.shape[2], device=self.device) / target_fft_abs.shape[2] * self.config.sample_rate / 2
