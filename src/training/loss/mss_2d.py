@@ -46,11 +46,11 @@ def _is_prime(n: int) -> bool:
 @dataclass
 class MSSLoss2DConfig:
 
-    block_low:  int = 5
+    block_low:  int = 11 #5
     block_high: int = 254
 
     block_sampling_replace: bool = True
-    block_sampling_scale: Literal["linear", "ln_linear"] = "ln_linear"
+    block_sampling_scale: Literal["linear", "ln_linear", "natural"] = "natural"
 
     num_iterations: int = 1
     midside_probability: float = 0.5
@@ -77,21 +77,26 @@ class MSSLoss2D:
         elif self.config.block_sampling_scale == "linear":
             targets = np.linspace(self.config.block_low, self.config.block_high, n)
         else:
-            raise ValueError(f"Invalid block_sampling_scale: {self.config.block_sampling_scale}")
+            if self.config.block_sampling_scale != "natural":
+                raise ValueError(f"Invalid block_sampling_scale: {self.config.block_sampling_scale}")
 
-        spaced_primes = []
-        for t in targets:
-            closest = min(primes, key=lambda p: abs(p - t))
-            spaced_primes.append(closest)
+        if self.config.block_sampling_scale == "natural":
+            block_sizes = primes
+            block_weights = [1.] * len(primes)
+        else:
+            spaced_primes = []
+            for t in targets:
+                closest = min(primes, key=lambda p: abs(p - t))
+                spaced_primes.append(closest)
 
-        block_sizes = []
-        block_weights = []
+            block_sizes = []
+            block_weights = []
 
-        for b in sorted(set(spaced_primes)):
-            count = spaced_primes.count(b)
+            for b in sorted(set(spaced_primes)):
+                count = spaced_primes.count(b)
 
-            block_sizes.append(b)
-            block_weights.append(float(count))
+                block_sizes.append(b)
+                block_weights.append(float(count))
 
         self.block_sizes = np.array(block_sizes)
         self.block_weights = np.array(block_weights)
