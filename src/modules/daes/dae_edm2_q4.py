@@ -303,7 +303,7 @@ class DAE(DualDiffusionDAE):
             x = patchify_2d(x, self.num_latent_freqs, 1)
 
         latents: torch.Tensor = self.conv_latents_out(x, gain=self.latents_out_gain)
-        #latents = normalize(latents.float())
+        latents = normalize(latents.float())
         
         if training == False:
             assert self.training == False
@@ -319,7 +319,7 @@ class DAE(DualDiffusionDAE):
             x = x.float()
             #x = self.latents_stats_tracker.rescale(x, mode="static")
             #x = self.latents_stats_tracker.add_mean(x, mode="per_channel")
-            #x = normalize(x)
+            x = normalize(x)
             #if self.config.static_latents_noise is not None:
             #    x = x + torch.randn_like(x) * self.config.static_latents_noise
 
@@ -338,8 +338,6 @@ class DAE(DualDiffusionDAE):
         if self.psd_freqs_per_freq > 1:
             x = resample_2d(x, "up_keep")
         x: torch.Tensor = self.conv_out(x, gain=self.out_gain)
-        #if self.psd_freqs_per_freq > 1:
-        #    x = unpatchify_2d(x, self.psd_freqs_per_freq, 1)
 
         return x
     
