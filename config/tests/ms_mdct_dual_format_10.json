@@ -1,17 +1,11 @@
 {
     "device": "cuda",
-    "add_random_test_samples": 500000,
-    "save_output": false,
+    "add_random_test_samples": 0,
+    "save_output": true,
     
     "test_sample_verbose": false,
     "test_samples": [
-        "switch/Arcaea/_t_songs_ignotus.ogg.flac",
-        "dsf/Metropolis Street Racer Prototype/file_15.adx.flac",
-        "psf3/Iron Man/_t_! movies_HUB_05_000001C2.adx.flac",
-        "psf/Gradius Gaiden/SLPM-86042_BGM1_0000096c.XA.flac",
-        "psf/Pukunpa - Joshikousei no Houkago/SARU1.DA.ape.flac",
-        "psf3/Tekken Hybrid/_t_Tekken Tag Tournament 2 Prologue_charasele.lwav.flac",
-        "switch/Muse Dash/_t_stage_jump_hard_candy_music.fsb.flac"
+        "switch/Arcaea/_t_songs_ignotus.ogg.flac"
     ],
 
     "format_config": {
@@ -23,10 +17,10 @@
         //"default_raw_length": 3833600,
         //"default_raw_length": 2817536,
         //"default_raw_length": 2097152,
-        //"default_raw_length": 1408768,
-        "default_raw_length": 128000,
+        "default_raw_length": 1408768,
+        //"default_raw_length": 131072,
         //"default_raw_length": 96000,
-        "width_alignment": 4096,
+        "width_alignment": 8192,
 
         "mdct_psd_exponent": 0.25,
         "window_len": 512,
@@ -36,10 +30,28 @@
         //"ms_psd_t_scale": 2.37,
         //"ms_psd_window_len": 1023,
 
+        // standard, from paper
+        "ms_psd_p_real": [ [2,0], [1,1], [-1,1], [0,1] ],
+        "ms_psd_p_imag": [ [0,0], [0,0], [ 0,0], [1,0] ],
         "ms_psd_t_scale": 2.37,
+
+        // high symmetry, only shifts visually on freq axis
+        //"ms_psd_p_real": [ [ 3,-1], [-1, 3], [-1,-1], [-1,-1] ],
+        //"ms_psd_p_imag": [ [-1,-1], [-1,-1], [ 3,-1], [-1, 3] ],
+        //"ms_psd_t_scale": 2.37,
+        
+        // good coverage?
+        //"ms_psd_p_real": [ [ 2, 0], [-1, 0], [ 0, 1], [ 0, 1] ],
+        //"ms_psd_p_imag": [ [ 0, 0], [ 1, 0], [-1, 0], [ 1, 0] ],
+        //"ms_psd_t_scale": 2.37,
+        
+        // "equirectangular"
+        //"ms_psd_p_real": [ [ 1, 1], [ 1, 0], [ 1,-1], [ 1, 0] ],
+        //"ms_psd_p_imag": [ [ 0, 0], [ 0, 1], [ 0, 0], [ 0,-1] ],
+        //"ms_psd_t_scale": 2.37,
+
         "ms_psd_window_len": 1023,
         "ms_psd_downsample": 2,
-
 
         "mel_spec_config": {
             "sample_rate": 32000,

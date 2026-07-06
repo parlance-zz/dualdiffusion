@@ -78,10 +78,13 @@ def ms_mdct_dual_format_test() -> None:
 
     coverage = torch.zeros(format.config.ms_psd_window_len, device=format.device)
     for i in range(4):
-        coverage += (
-            (format.config.ms_psd_p_real[i][0] * format.ms_psd_win_h0 + format.config.ms_psd_p_real[i][1] * format.ms_psd_win_h1).pow(2) +
-            (format.config.ms_psd_p_imag[i][0] * format.ms_psd_win_h0 + format.config.ms_psd_p_imag[i][1] * format.ms_psd_win_h1).pow(2)
+        wnd = (
+            (format.config.ms_psd_p_real[i][0] * format.ms_psd_win_h0 + format.config.ms_psd_p_real[i][1] * format.ms_psd_win_h1) +
+            (format.config.ms_psd_p_imag[i][0] * format.ms_psd_win_h0 + format.config.ms_psd_p_imag[i][1] * format.ms_psd_win_h1) * 1j
         )
+
+        torch.view_as_real(wnd).cpu().numpy().tofile(os.path.join(output_path, f"ms_psd_wnd_{i}.raw"))
+        coverage += wnd.abs().pow(2)
 
     coverage_test = torch.zeros((format.config.ms_psd_window_len + 1) * 10, device=format.device)
     for i in range(10 * 2 - 1):
