@@ -32,7 +32,7 @@ from dataclasses import dataclass
 import torch
 
 from modules.formats.format import DualDiffusionFormat, DualDiffusionFormatConfig
-from modules.formats.frequency_scale import get_mel_density
+from modules.formats.frequency_scale import FrequencyScale, get_mel_density
 from modules.formats.mel_spec import MelSpecConfig, MelSpec
 from utils.dual_diffusion_utils import tensor_to_img
 from utils.mdct import MDCT, IMDCT, sin_window, kaiser_bessel_derived, vorbis
@@ -63,8 +63,8 @@ class MS_MDCT_DualFormatConfig(DualDiffusionFormatConfig):
     # raw audio format params
     sample_rate: int = 32000
     num_raw_channels: int = 2
-    default_raw_length: int = 96000
-    width_alignment: int    = 4096
+    default_raw_length: int = 131072
+    width_alignment: int    = 8192
 
     # mdct params
     mdct_psd_exponent: float = 0.25
@@ -80,17 +80,19 @@ class MS_MDCT_DualFormatConfig(DualDiffusionFormatConfig):
         return self.window_len // 2
         
     # ms psd params
-    ms_psd_t_scale: float = 2.37
+    ms_psd_t_scale: float = 2.28
     ms_psd_window_len: int = 1023
     ms_psd_downsample: int = 1
+    ms_psd_num_filters: int = 64
+    ms_psd_filter_shape: Literal["triangular", "cos", "triangular+", "triangular++"] = "triangular+"
     ms_psd_p_real: list[tuple[float, float]] = ( (2,0), (1,1), (-1,1), (0,1) )
     ms_psd_p_imag: list[tuple[float, float]] = ( (0,0), (0,0), ( 0,0), (1,0) )
 
     @property
     def ms_psd_num_frequencies(self) -> int:
         return (self.ms_psd_window_len // 2 + 1) // self.ms_psd_downsample
-
-    # mel-spec params
+    
+    # mel-spec params    
     mel_spec_config: Optional[MelSpecConfig] = None
 
 class MS_MDCT_DualFormat(DualDiffusionFormat):
@@ -119,6 +121,26 @@ class MS_MDCT_DualFormat(DualDiffusionFormat):
         self.register_buffer(f"ms_psd_offset", torch.zeros(config.ms_psd_num_frequencies).view(1, 1,-1, 1), persistent=True)
         self.register_buffer(f"ms_psd_scale",  torch.ones(config.ms_psd_num_frequencies).view(1, 1,-1, 1),  persistent=True)
         
+        assert config.ms_psd_num_frequencies % config.num_frequencies == 0
+        #assert config.num_frequencies % config.ms_psd_num_filters == 0
+        self.ms_psd_freq_scale = FrequencyScale(
+            freq_scale="mel",
+            freq_min=0,
+            freq_max=config.sample_rate / 2,
+            sample_rate=config.sample_rate,
+            num_stft_bins=config.ms_psd_num_frequencies,
+            num_filters=config.ms_psd_num_filters,
+            filter_norm="l2",
+            filter_shape=config.ms_psd_filter_shape
+        )
+
+        self.ms_psd_mel_scale: torch.Tensor; self.ms_psd_mel_offset: torch.Tensor
+        self.register_buffer("ms_psd_mel_scale", torch.ones(config.ms_psd_num_filters).view(1, 1,-1, 1), persistent=True)
+        self.register_buffer("ms_psd_mel_offset", torch.zeros(config.ms_psd_num_filters).view(1, 1,-1, 1), persistent=True)
+        self.ms_psd_mel_unscaled_scale: torch.Tensor; self.ms_psd_mel_unscaled_offset: torch.Tensor
+        self.register_buffer("ms_psd_mel_unscaled_scale", torch.ones(config.ms_psd_num_frequencies).view(1, 1,-1, 1), persistent=True)
+        self.register_buffer("ms_psd_mel_unscaled_offset", torch.zeros(config.ms_psd_num_frequencies).view(1, 1,-1, 1), persistent=True)
+
         # ***** mdct setup *****
 
         mdct_window_func = _get_mdct_window_func(config.window_func)
@@ -141,6 +163,7 @@ class MS_MDCT_DualFormat(DualDiffusionFormat):
         raw_length = raw_length or self.config.default_raw_length
         return raw_length // self.config.width_alignment * self.config.width_alignment - self.config.num_frequencies
 
+    @torch.no_grad()
     def raw_to_ms_psd(self, raw_samples: torch.Tensor, min_psd_eps: Optional[float] = None) -> torch.Tensor:
 
         raw_samples = torch.cat((raw_samples, raw_samples[..., -1:]), dim=-1) # fix stft shape with odd window length
@@ -174,6 +197,17 @@ class MS_MDCT_DualFormat(DualDiffusionFormat):
 
         return ms_psd
     
+    @torch.no_grad()
+    def scale_ms_psd(self, ms_psd: torch.Tensor) -> torch.Tensor:
+        ms_psd = ms_psd.float() * self.ms_psd_scale - self.ms_psd_offset
+        ms_psd_mel: torch.Tensor = self.ms_psd_freq_scale.scale(ms_psd)
+        return (ms_psd_mel + self.ms_psd_mel_offset) / self.ms_psd_mel_scale
+
+    def unscale_ms_psd(self, ms_psd_mel: torch.Tensor) -> torch.Tensor:
+        ms_psd_mel = ms_psd_mel.float() * self.ms_psd_mel_scale - self.ms_psd_mel_offset
+        ms_psd = self.ms_psd_freq_scale.unscale(ms_psd_mel, rectify=False)
+        return (ms_psd + self.ms_psd_mel_unscaled_offset) / self.ms_psd_mel_unscaled_scale
+
     @torch.no_grad()
     def ms_psd_to_img(self, ms_psd: torch.Tensor, use_colormap: bool = False):
         

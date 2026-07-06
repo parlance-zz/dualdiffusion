@@ -43,8 +43,8 @@ from modules.formats.format import DualDiffusionFormat
 @dataclass
 class UNetConfig(DualDiffusionUNetConfig):
 
-    in_channels:  int = 8
-    out_channels: int = 8
+    in_channels:  int = 4
+    out_channels: int = 4
     in_channels_emb: int = 0
     in_channels_x_ref: int = 8
 
@@ -54,17 +54,17 @@ class UNetConfig(DualDiffusionUNetConfig):
     model_channels: int  = 64                # Base multiplier for the number of channels.
     logvar_channels: int = 192               # Number of channels for training uncertainty estimation.
     channel_mult: list[int]    = (1,2,3,4,5) # Per-resolution multipliers for the number of channels.
-    double_midblock: bool      = True
-    midblock_attn: bool        = True
-    channel_mult_noise: Optional[int] = 8    # Multiplier for noise embedding dimensionality.
-    channel_mult_emb: Optional[int]   = 8    # Multiplier for final embedding dimensionality.
+    double_midblock: bool      = False
+    midblock_attn: bool        = False
+    channel_mult_noise: Optional[int] = 4    # Multiplier for noise embedding dimensionality.
+    channel_mult_emb: Optional[int]   = 4    # Multiplier for final embedding dimensionality.
     channels_per_head: int    = 64           # Number of channels per attention head.
     num_layers_per_block: int = 3            # Number of resnet blocks per resolution.
     label_balance: float      = 0.5          # Balance between noise embedding (0) and class embedding (1).
     concat_balance: float     = 0.5          # Balance between skip connections (0) and main path (1).
     res_balance: float        = 0.3          # Balance between main branch (0) and residual branch (1).
     attn_balance: float       = 0.3          # Balance between main branch (0) and self-attention (1).
-    attn_levels: list[int]    = (4,)         # List of resolution levels to use self-attention.
+    attn_levels: list[int]    = ()           # List of resolution levels to use self-attention.
     mlp_multiplier: int    = 2               # Multiplier for the number of channels in the MLP.
     mlp_groups: int        = 1               # Number of groups for the MLPs.
     emb_linear_groups: int = 1

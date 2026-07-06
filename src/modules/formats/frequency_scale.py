@@ -79,6 +79,35 @@ def _create_triangular_filterbank_plus(all_freqs: torch.Tensor, f_pts: torch.Ten
 
     return fb
 
+@torch.no_grad()
+def _create_triangular_filterbank_plus_plus(all_freqs: torch.Tensor, f_pts: torch.Tensor) -> torch.Tensor:
+
+    f_diff = f_pts[1:] - f_pts[:-1]
+
+    slopes = f_pts.unsqueeze(0) - all_freqs.unsqueeze(1)
+
+    zero = torch.zeros(1, device=all_freqs.device, dtype=all_freqs.dtype)
+    down_slopes = (-slopes[:, :-2]) / f_diff[:-1]
+    up_slopes = slopes[:, 2:] / f_diff[1:]
+
+    fb = torch.maximum(zero, torch.minimum(down_slopes, up_slopes))
+
+    # First filter: peak at bin 0.
+    fb[:, 0] = torch.clamp(
+        1.0 - all_freqs / (f_pts[2] - f_pts[1]),
+        min=0.0,
+        max=1.0,
+    )
+
+    # Last filter: peak at last frequency bin.
+    fb[:, -1] = torch.clamp(
+        1.0 - (all_freqs[-1] - all_freqs) / (f_pts[-2] - f_pts[-3]),
+        min=0.0,
+        max=1.0,
+    )
+
+    return fb
+
 class FrequencyScale(torch.nn.Module):
 
     def __init__(
@@ -92,7 +121,7 @@ class FrequencyScale(torch.nn.Module):
         filter_norm: Optional[Literal["slaney", "l2"]] = None,
         unscale_mode: Literal["lstsq", "grid_sample"] = "lstsq",
         unscale_lstsq_driver: Literal["gels", "gelsy", "gelsd", "gelss"] = "gels",
-        filter_shape: Literal["triangular", "cos", "triangular+"] = "triangular",
+        filter_shape: Literal["triangular", "cos", "triangular+", "triangular++"] = "triangular",
     ) -> None:
         
         super().__init__()
@@ -110,7 +139,7 @@ class FrequencyScale(torch.nn.Module):
 
         assert unscale_mode in ["lstsq", "grid_sample"], f"Invalid unscale_mode: {unscale_mode}"
         assert unscale_lstsq_driver in ["gels", "gelsy", "gelsd", "gelss"], f"Invalid unscale_lstsq_driver: {unscale_lstsq_driver}"
-        assert filter_shape in ["triangular", "cos", "triangular+"]
+        assert filter_shape in ["triangular", "cos", "triangular+", "triangular++"]
         
         if freq_scale == "mel":
             self.scale_fn = _hz_to_mel
@@ -193,6 +222,8 @@ class FrequencyScale(torch.nn.Module):
             filters = _create_cos_filterbank(stft_freqs, unscaled_freqs)
         elif self.filter_shape == "triangular+":
             filters = _create_triangular_filterbank_plus(stft_freqs, unscaled_freqs)
+        elif self.filter_shape == "triangular++":
+            filters = _create_triangular_filterbank_plus_plus(stft_freqs, unscaled_freqs)
         else:
             raise ValueError(f"Invalid filter shape: {self.filter_shape}")
         
