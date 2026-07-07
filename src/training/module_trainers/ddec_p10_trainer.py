@@ -150,8 +150,8 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
             self.logger.info(f"UNet-LDM trainer (loss weight: {self.config.unet_loss_weight}) (warmup steps:{self.config.unet_loss_warmup_steps}):")
             self.unet_trainer = UNetTrainer_LDM(UNetTrainerConfig_LDM(**config.unet), trainer, self.unet, "unet")
 
-        ms_psd_hz = torch.linspace(0, 1, self.format.config.num_frequencies, device=self.trainer.accelerator.device) * self.format.config.sample_rate/2
-        loss_weight = get_mel_density(ms_psd_hz).pow(self.config.mel_density_loss_weight_pow)
+        hz = torch.linspace(0, 1, self.format.config.num_frequencies, device=self.trainer.accelerator.device) * self.format.config.sample_rate/2
+        loss_weight = get_mel_density(hz).pow(self.config.mel_density_loss_weight_pow)
         self.loss_weight = (loss_weight / loss_weight.mean()).view(1, 1,-1, 1)
 
     @torch.no_grad()

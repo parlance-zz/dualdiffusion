@@ -46,15 +46,15 @@ class DAE_Config(DualDiffusionDAEConfig):
     in_channels: int     = 8
     in_channels_emb: int = 0
     out_channels: int    = 8
-    latent_channels: int = 8
+    latent_channels: int = 24
     use_1d_latents: bool = False
 
-    in_num_freqs: int = 256
-    in_psd_freqs: int = 512
+    in_num_freqs: int = 96
+    in_psd_freqs: int = 96
 
-    model_channels: int         = 64         # Base multiplier for the number of channels.
-    channel_mult_enc: int       = (1,2,4,8)
-    channel_mult_dec: list[int] = (1,2,4,8)
+    model_channels: int         = 128         # Base multiplier for the number of channels.
+    channel_mult_enc: int       = (1,2,3,4)
+    channel_mult_dec: list[int] = (1,2,3,4)
     channel_mult_emb: int     = 4            # Multiplier for final embedding dimensionality.
     channels_per_head: int    = 64           # Number of channels per attention head.
     num_enc_layers_per_block: int = 3        # Number of resnet blocks per resolution.
