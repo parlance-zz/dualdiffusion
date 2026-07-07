@@ -152,7 +152,11 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
 
         hz = torch.linspace(0, 1, self.format.config.num_frequencies, device=self.trainer.accelerator.device) * self.format.config.sample_rate/2
         loss_weight = get_mel_density(hz).pow(self.config.mel_density_loss_weight_pow)
-        self.loss_weight = (loss_weight / loss_weight.mean()).view(1, 1,-1, 1)
+        self.ddecp_loss_weight = (loss_weight / loss_weight.mean()).view(1, 1,-1, 1)
+
+        hz = torch.linspace(0, 1, self.format.config.ms_psd_num_filters, device=self.trainer.accelerator.device) * self.format.config.sample_rate/2
+        loss_weight = get_mel_density(hz).pow(self.config.mel_density_loss_weight_pow)
+        self.dae_loss_weight = (loss_weight / loss_weight.mean()).view(1, 1,-1, 1)
 
     @torch.no_grad()
     def init_batch(self, validation: bool = False) -> Optional[dict[str, Union[torch.Tensor, float]]]:
@@ -184,6 +188,7 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
         mdct_phase_psd = self.format.raw_to_mdct_phase_psd(raw_samples, random_phase_augmentation=self.config.random_phase_augmentation)
         #mdct_phase_psd = self.format.flatten_mdct_phase_psd(mdct_phase_psd)
         ms_psd = self.format.raw_to_ms_psd(raw_samples).detach()
+        ms_psd_scaled = self.format.scale_ms_psd(ms_psd).detach()
 
         logs.update({
             "io_stats/mdct_phase_psd_msq": mdct_phase_psd.pow(2).mean(dim=(1,2,3)),
@@ -194,13 +199,13 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
 
         if self.train_dae == True:
             latents, ddec_cond = self.trainer.get_ddp_module(self.dae)(
-                ms_psd, audio_embeddings, latents_sigma=self.config.add_latents_noise)
+                ms_psd_scaled, audio_embeddings, latents_sigma=self.config.add_latents_noise)
             
             self.dae.latents_stats_tracker(latents)
 
         elif self.dae is not None:
             with torch.no_grad():
-                latents, ddec_cond = self.dae(ms_psd, audio_embeddings, latents_sigma=self.config.add_latents_noise)
+                latents, ddec_cond = self.dae(ms_psd_scaled, audio_embeddings, latents_sigma=self.config.add_latents_noise)
         else:
             latents = ddec_cond = None
         
@@ -225,18 +230,20 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
                     logs[f"ch_stats/mean_{i}"] = self.dae.latents_stats_tracker.mean[i].detach()
                     logs[f"ch_stats/msq_{i}"]  = self.dae.latents_stats_tracker.msq[i].detach()
 
-        if ddec_cond is not None:
-            ddec_x_ref: torch.Tensor = self.format.unscale_ms_psd(ddec_cond) + torch.randn_like(ddec_cond) * self.config.add_x_ref_noise
-        else:
-            ddec_x_ref: torch.Tensor = self.format.scale_ms_psd(ms_psd)
-            ddec_x_ref = self.format.unscale_ms_psd(ddec_x_ref) + torch.randn_like(ms_psd) * self.config.add_x_ref_noise
-            ddec_x_ref = ddec_x_ref.detach()
+        if self.train_ddecp == True:
+            if ddec_cond is not None:
+                ddec_x_ref = self.format.unscale_ms_psd(ddec_cond) + torch.randn_like(ddec_cond) * self.config.add_x_ref_noise
+            else:
+                ddec_x_ref = self.format.unscale_ms_psd(ms_psd_scaled) + torch.randn_like(ms_psd) * self.config.add_x_ref_noise
+                ddec_x_ref = ddec_x_ref.detach()
 
-        logs["io_stats/add_x_ref_noise"] = self.config.add_x_ref_noise
+            logs["io_stats/add_x_ref_noise"] = self.config.add_x_ref_noise
+        else:
+            ddec_x_ref = None
 
         if self.train_ddecp == True:
             logs.update(self.ddecp_trainer.train_batch(
-                mdct_phase_psd, audio_embeddings, ref_samples=ddec_x_ref, loss_weight=self.loss_weight))
+                mdct_phase_psd, audio_embeddings, ref_samples=ddec_x_ref, loss_weight=self.ddecp_loss_weight))
             logs["loss"] = logs["loss"] + logs["loss/ddecp"]
 
             """
@@ -274,8 +281,8 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
 
             logs["io_stats_dae/mss_2d_leak_max"] = leak_max if leak_max is not None else 0
             
-            logs["loss/dae_mse"] = (torch.nn.functional.mse_loss(ddec_cond, ms_psd, reduction="none") * self.loss_weight).mean(dim=(1,2,3)).detach()
-            logs["loss/mss_2d"] = self.mss_2d.mss_loss(ddec_cond, ms_psd, self.config.mss_2d_leak_pow, leak_max=leak_max)
+            logs["loss/dae_mse"] = (torch.nn.functional.mse_loss(ddec_cond, ms_psd_scaled, reduction="none") * self.dae_loss_weight).mean(dim=(1,2,3)).detach()
+            logs["loss/mss_2d"] = self.mss_2d.mss_loss(ddec_cond, ms_psd_scaled, self.config.mss_2d_leak_pow, leak_max=leak_max)
             logs["loss/mss_2d_nll"] = logs["loss/mss_2d"] / self.dae.get_recon_loss_logvar().exp() + self.dae.get_recon_loss_logvar()
             logs["loss"] = logs["loss"] + logs["loss/mss_2d_nll"]
 
@@ -314,10 +321,10 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
 
             if latents is not None:
                 print("latents.shape:", latents.shape)
-                for i, cond in enumerate(ddec_cond):
-                    print(f"ddec_cond_{i}.shape:", cond.shape)
-                for i, x in enumerate(ddec_x_ref):
-                    print(f"ddec_x_ref_{i}.shape:", x.shape)
+                print(f"ddec_cond.shape:", ddec_cond.shape)
+            
+            if ddec_x_ref is not None:
+                print(f"ddec_x_ref.shape:", ddec_x_ref.shape)
 
         return logs
       
