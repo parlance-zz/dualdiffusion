@@ -232,7 +232,7 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
 
         if self.train_ddecp == True:
             if ddec_cond is not None:
-                ddec_x_ref = self.format.unscale_ms_psd(ddec_cond) + torch.randn_like(ddec_cond) * self.config.add_x_ref_noise
+                ddec_x_ref = self.format.unscale_ms_psd(ddec_cond) + torch.randn_like(ms_psd) * self.config.add_x_ref_noise
             else:
                 ddec_x_ref = self.format.unscale_ms_psd(ms_psd_scaled) + torch.randn_like(ms_psd) * self.config.add_x_ref_noise
                 ddec_x_ref = ddec_x_ref.detach()
