@@ -42,7 +42,7 @@ if input("Save module? (y/n) ").lower() == 'y':
 
 
 from modules.unets.unet_edm2_p6 import UNet, UNetConfig
-unet = UNet(UNetConfig(num_layers_per_block=10, block_kernel_size=3))
+unet = UNet(UNetConfig())
 print_module_info(unet, "unet")
 
 if input("Save module? (y/n) ").lower() == 'y':
