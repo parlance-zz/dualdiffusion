@@ -125,9 +125,12 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
             self.logger.info(f"SIGReg loss weight: {self.config.latents_sigreg_loss_weight} (warmup steps: {self.config.sigreg_loss_warmup_steps})")
             self.logger.info(f"SIGReg config: {dict_str(self.config.sigreg)}")
 
-            self.mss_2d = MSSLoss2D(MSSLoss2DConfig(**self.config.mss_2d), device=trainer.accelerator.device)
-            self.logger.info(f"MSS-2D config: {dict_str(self.mss_2d.config.__dict__)}")
-            self.logger.info(f"MSS-2D leak pow: {self.config.mss_2d_leak_pow} (leak steps: {self.config.mss_2d_leak_steps})")
+            if self.train_ddecp == False:
+                self.mss_2d = MSSLoss2D(MSSLoss2DConfig(**self.config.mss_2d), device=trainer.accelerator.device)
+                self.logger.info(f"MSS-2D config: {dict_str(self.mss_2d.config.__dict__)}")
+                self.logger.info(f"MSS-2D leak pow: {self.config.mss_2d_leak_pow} (leak steps: {self.config.mss_2d_leak_steps})")
+            else:
+                self.mss_2d = None
 
         if self.train_ddecp == True:
             self.logger.info(f"Add x_ref noise: {self.config.add_x_ref_noise}")
@@ -273,38 +276,19 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
                 logs["loss/latents_sigreg"] = latents_sigreg_loss.detach()
                 logs["loss"] = logs["loss"] + latents_sigreg_loss * latents_sigreg_loss_weight
             
-            if self.config.mss_2d_leak_steps > 0:
-                leak_max = 1 - min(self.trainer.global_step / self.config.mss_2d_leak_steps, 1)
-                if leak_max <= 0: leak_max = None
-            else:
-                leak_max = None
+            if self.train_ddecp == False:
+                if self.config.mss_2d_leak_steps > 0:
+                    leak_max = 1 - min(self.trainer.global_step / self.config.mss_2d_leak_steps, 1)
+                    if leak_max <= 0: leak_max = None
+                else:
+                    leak_max = None
 
-            logs["io_stats_dae/mss_2d_leak_max"] = leak_max if leak_max is not None else 0
-            
-            logs["loss/dae_mse"] = (torch.nn.functional.mse_loss(ddec_cond, ms_psd_scaled, reduction="none") * self.dae_loss_weight).mean(dim=(1,2,3)).detach()
-            logs["loss/mss_2d"] = self.mss_2d.mss_loss(ddec_cond, ms_psd_scaled, self.config.mss_2d_leak_pow, leak_max=leak_max)
-            logs["loss/mss_2d_nll"] = logs["loss/mss_2d"] / self.dae.get_recon_loss_logvar().exp() + self.dae.get_recon_loss_logvar()
-            logs["loss"] = logs["loss"] + logs["loss/mss_2d_nll"]
-
-            #logs["loss/dae_qh"] = logs["loss/mss_2d"].detach()
-
-            """
-            logs["loss/ms_psd_mse"] = torch.zeros_like(logs["loss"])
-            for i, (cond, ms_psd) in enumerate(zip(ddec_cond, ms_psds)):
-                logs[f"loss/ms_psd_mse_{i}"] = torch.nn.functional.mse_loss(cond, ms_psd, reduction="none").mean(dim=(1,2,3))
-                logs["loss/ms_psd_mse"] = logs["loss/ms_psd_mse"] + logs[f"loss/ms_psd_mse_{i}"] / len(ms_psds)
-
-            ms_psd_mse_loss_weight = 0
-            logs["loss_weight/ms_psd_mse"] = ms_psd_mse_loss_weight
-            logs["loss"] = logs["loss"] + logs["loss/ms_psd_mse"] * ms_psd_mse_loss_weight
-            """
-            """
-            for i in range(self.dae.num_psd_levels - 1):
-                logs[f"io_stats_dae/in_balance_{i+1}"] = self.dae.in_balance[i].sigmoid().detach()
-
-            for i in range(self.dae.num_psd_levels):
-                logs[f"io_stats_dae/out_gain_{i}"] = self.dae.out_gain[i].detach()
-            """
+                logs["io_stats_dae/mss_2d_leak_max"] = leak_max if leak_max is not None else 0
+                
+                logs["loss/dae_mse"] = (torch.nn.functional.mse_loss(ddec_cond, ms_psd_scaled, reduction="none") * self.dae_loss_weight).mean(dim=(1,2,3)).detach()
+                logs["loss/mss_2d"] = self.mss_2d.mss_loss(ddec_cond, ms_psd_scaled, self.config.mss_2d_leak_pow, leak_max=leak_max)
+                logs["loss/mss_2d_nll"] = logs["loss/mss_2d"] / self.dae.get_recon_loss_logvar().exp() + self.dae.get_recon_loss_logvar()
+                logs["loss"] = logs["loss"] + logs["loss/mss_2d_nll"]
 
         if self.train_unet == True:
             
