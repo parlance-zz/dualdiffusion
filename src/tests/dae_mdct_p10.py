@@ -83,7 +83,7 @@ def dae_test() -> None:
 
     if test_params.get("dae_bypass", False) == False:
         last_global_step = dae.config.last_global_step
-        output_path = os.path.join(model_path, "output", "dae", f"step_{last_global_step}")
+        output_path = os.path.join(model_path, "output", "dae", f"step_{last_global_step}_ddec_{ddecp.config.last_global_step if ddecp is not None else 0}")
     else:
         if ddecm is not None: last_global_step = ddecm.config.last_global_step
         else: last_global_step = 0
@@ -168,6 +168,7 @@ def dae_test() -> None:
         #input_mdct_phase_psd = format.flatten_mdct_phase_psd(input_mdct_phase_psd)
         input_mdct_psd = format.raw_to_mdct_psd(input_raw_sample)#, level=0)
         input_ms_psd = format.raw_to_ms_psd(input_raw_sample)#, level=-1)
+        input_ms_psd_scaled = format.scale_ms_psd(input_ms_psd)
         #input_mel_spec = input_ms_psds[-1]
 
         safetensors_file_name = os.path.join(f"{os.path.splitext(filename)[0]}.safetensors")
@@ -186,7 +187,7 @@ def dae_test() -> None:
 
         # ***************** dae stage *****************
         if test_params.get("dae_bypass", False) == False:
-            dae_input = input_ms_psd
+            dae_input = input_ms_psd_scaled
             dae_embedding = dae.get_embeddings(audio_embedding.to(dtype=dae.dtype))
 
             if test_params["latents_tiled_encode"] == True:
@@ -208,50 +209,52 @@ def dae_test() -> None:
             else:
                 decode_latents = latents
 
-            ddec_cond = dae.decode(decode_latents.to(dtype=dae.dtype), dae_embedding)
+            ddec_cond = dae.decode(decode_latents.to(dtype=dae.dtype), dae_embedding).float()
 
-            #latents = latents - latents.mean(dim=(1,3), keepdim=True)
-            #latents = latents / latents.pow(2).mean(dim=(1,3), keepdim=True).pow(0.5)
+            latents = latents - latents.mean(dim=(0,3), keepdim=True)
+            latents = latents / latents.pow(2).mean(dim=(0,3), keepdim=True).pow(0.5)
             #latents = dae.latents_stats_tracker.remove_mean(latents)
             #latents = dae.latents_stats_tracker.unscale(latents)
         else:
             latents = None
-            ddec_cond = input_ms_psd
+            ddec_cond = input_ms_psd_scaled
 
         # ***************** ddec stage *****************
-        """
+        #"""
+        #if ddecm is None: ddecm = ddecp
+
         if ddecm is not None:
 
             ddecm_x_ref = ddec_cond
 
             ddecm_params = SampleParams(
                 seed=5000,
-                num_steps=50, length=audio_len, cfg_scale=0, input_perturbation=0.5, input_perturbation_offset=-3,
-                use_heun=False, schedule="ln_linear", rho=1, sigma_max=300, sigma_min=0.01, stereo_fix=0
+                num_steps=50, length=audio_len, cfg_scale=0, input_perturbation=0.5, input_perturbation_offset=-2.5,
+                use_heun=False, schedule="cos", rho=1, sigma_max=1000, sigma_min=1e-3, stereo_fix=0
             )
 
             output_ddecm = pipeline.diffusion_decode(
                 ddecm_params, audio_embedding=audio_embedding,
-                sample_shape=input_mdct_phase_psd.shape,
+                sample_shape=input_ms_psd.shape,
                 x_ref=ddecm_x_ref, module=ddecm).float()
 
-            ddec_cond = format.flatten_mdct_phase_psd(output_ddecm)
+            ddec_cond = output_ddecm
             
         else:
             output_ddecm = None
-        """
+        #"""
 
+        #ddecp = None
         if ddecp is not None:
             
-            #ddecp_x_ref = [(x + torch.randn_like(x) * 0.08) for x in ddec_cond]
-            #ddecp_x_ref = ddec_cond + torch.randn_like(ddec_cond) * 0.08
-            ddecp_x_ref = ddec_cond
-            #ddecp_x_ref = format.ms_psd_to_psd_linear(ddec_cond)
+            ddecp_x_ref = format.unscale_ms_psd(ddec_cond)
+            if test_params.get("add_x_ref_noise", None) is not None:
+                ddecp_x_ref = ddecp_x_ref + torch.randn_like(ddecp_x_ref) * test_params["add_x_ref_noise"]
 
             ddecp_params = SampleParams(
                 seed=5000,
                 num_steps=50, length=audio_len, cfg_scale=0, input_perturbation=0.5, input_perturbation_offset=0,
-                use_heun=False, schedule="cos", rho=1, sigma_max=1000, sigma_min=1e-3, stereo_fix=0
+                use_heun=False, schedule="cos", rho=1, sigma_max=1000, sigma_min=0.001, stereo_fix=0
             )
 
             output_ddecp = pipeline.diffusion_decode(
@@ -293,16 +296,18 @@ def dae_test() -> None:
                     collage_img = np.concatenate([collage_img, latents_img], axis=0)
         
         #save_img(format.mel_spec.mel_spec_to_img(input_mel_spec), os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_mel_spec_input.png')}"))
-        save_img(format.ms_psd_to_img(input_mel_spec), os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_mel_spec_input.png')}"))
+        save_img(format.mel_spec.mel_spec_to_img(input_mel_spec), os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_mel_spec_input.png')}"))
         if output_mel_spec is not None:
             output_mel_spec.clip_(input_mel_spec.amin(), input_mel_spec.amax())
             output_mel_spec[0, 0, 0, 0] = input_mel_spec.amin(); output_mel_spec[0, 0, 0, 1] = input_mel_spec.amax()
             #save_img(format.mel_spec.mel_spec_to_img(output_mel_spec), os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_mel_spec_output.png')}"))
-            save_img(format.ms_psd_to_img(output_mel_spec), os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_mel_spec_output.png')}"))
+            save_img(format.mel_spec.mel_spec_to_img(output_mel_spec), os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_mel_spec_output.png')}"))
 
         if ddec_cond is not None and test_params.get("dae_bypass", False) == False:
-            save_img(format.ms_psd_to_img(ddec_cond), os.path.join(output_path, "2", f"step_{last_global_step}_{filename.replace(file_ext, f'_ms_psd_output.png')}"))
-            save_img(format.ms_psd_to_img(input_ms_psd), os.path.join(output_path, "2", f"step_{last_global_step}_{filename.replace(file_ext, f'_ms_psd_input.png')}"))
+            ddec_cond.clip_(input_ms_psd_scaled.amin(), input_ms_psd_scaled.amax())
+            ddec_cond[0, 0, 0, 0] = input_ms_psd_scaled.amin(); ddec_cond[0, 0, 0, 1] = input_ms_psd_scaled.amax()
+            save_img(format.ms_psd_to_img(ddec_cond), os.path.join(output_path, "2", f"step_{last_global_step}_{filename.replace(file_ext, f'_ms_psd_scaled_output.png')}"))
+            save_img(format.ms_psd_to_img(input_ms_psd_scaled), os.path.join(output_path, "2", f"step_{last_global_step}_{filename.replace(file_ext, f'_ms_psd_scaled_input.png')}"))
 
         if output_mdct_psd is not None:
             save_img(tensor_to_img(input_mdct_psd, flip_y=True),  os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_mdct_psd_input.png')}"))
