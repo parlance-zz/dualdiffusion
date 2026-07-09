@@ -15,7 +15,7 @@ embedding.save_pretrained(model_path, subfolder="embedding")
 """
 
 from modules.daes.dae_edm2_q4 import DAE, DAE_Config
-dae = DAE(DAE_Config())
+dae = DAE(DAE_Config(add_recon_logvar=True))
 print_module_info(dae, "dae")
 
 if input("Save module? (y/n) ").lower() == 'y':
@@ -40,9 +40,8 @@ if input("Save module? (y/n) ").lower() == 'y':
     ddecp.save_pretrained(model_path, subfolder="ddecp")
     print(f"Saved model to {model_path}/ddecp")
 
-
 from modules.unets.unet_edm2_p6 import UNet, UNetConfig
-unet = UNet(UNetConfig())
+unet = UNet(UNetConfig(num_layers_per_block=12, in_channels=384, out_channels=384))
 print_module_info(unet, "unet")
 
 if input("Save module? (y/n) ").lower() == 'y':

@@ -198,7 +198,10 @@ class MSSLoss2D:
                 target_fft = self.stft2d(target, block_width, block_height, order,
                     step_w, step_h, window, offset_h, offset_w, end_offset_h, end_offset_w, midside)
                 target_fft_abs = target_fft.abs()
-                loss_weight = target_fft_abs.pow(2).mean(dim=r_dims, keepdim=True).clip(min=self.config.psd_eps).pow(self.config.loss_weight_pow)
+                if self.config.loss_weight_pow > 0:
+                    loss_weight = target_fft_abs.pow(2).mean(dim=r_dims, keepdim=True).clip(min=self.config.psd_eps).pow(self.config.loss_weight_pow)
+                else:
+                    loss_weight = 1
 
                 if self.config.mel_density_pow > 0:
                     hz = torch.arange(target_fft_abs.shape[2], device=self.device) / target_fft_abs.shape[2] * self.config.sample_rate / 2

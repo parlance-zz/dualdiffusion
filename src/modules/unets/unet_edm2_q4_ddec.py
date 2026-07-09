@@ -53,7 +53,7 @@ class UNetConfig(DualDiffusionUNetConfig):
 
     model_channels: int  = 64                # Base multiplier for the number of channels.
     logvar_channels: int = 192               # Number of channels for training uncertainty estimation.
-    channel_mult: list[int]    = (1,2,3,4,5) # Per-resolution multipliers for the number of channels.
+    channel_mult: list[int]    = (1,2,3,5)   # Per-resolution multipliers for the number of channels.
     double_midblock: bool      = False
     midblock_attn: bool        = False
     channel_mult_noise: Optional[int] = 4    # Multiplier for noise embedding dimensionality.

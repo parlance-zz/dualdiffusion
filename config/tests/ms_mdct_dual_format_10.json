@@ -1,7 +1,7 @@
 {
     "device": "cuda",
-    "add_random_test_samples": 200000,
-    "save_output": false,
+    "add_random_test_samples": 0,
+    "save_output": true,
     
     "test_sample_verbose": false,
     "test_samples": [
@@ -17,8 +17,8 @@
         //"default_raw_length": 3833600,
         //"default_raw_length": 2817536,
         //"default_raw_length": 2097152,
-        //"default_raw_length": 1408768,
-        "default_raw_length": 131072,
+        "default_raw_length": 1408768,
+        //"default_raw_length": 131072,
         //"default_raw_length": 96000,
         "width_alignment": 8192,
 
@@ -33,9 +33,9 @@
         // standard, from paper
         "ms_psd_p_real": [ [2,0], [1,1], [-1,1], [0,1] ],
         "ms_psd_p_imag": [ [0,0], [0,0], [ 0,0], [1,0] ],
-        "ms_psd_t_scale": 2.3,
+        "ms_psd_t_scale": 2.26,
 
-        // high symmetry, only shifts visually on freq axis
+        // strong symmetry, only shifts visually on freq axis
         //"ms_psd_p_real": [ [ 3,-1], [-1, 3], [-1,-1], [-1,-1] ],
         //"ms_psd_p_imag": [ [-1,-1], [-1,-1], [ 3,-1], [-1, 3] ],
         //"ms_psd_t_scale": 2.37,
@@ -51,7 +51,7 @@
         //"ms_psd_t_scale": 2.37,
 
         "ms_psd_window_len": 1023,
-        "ms_psd_num_filters": 128,
+        "ms_psd_num_filters": 96,
 
         "mel_spec_config": {
             "sample_rate": 32000,
