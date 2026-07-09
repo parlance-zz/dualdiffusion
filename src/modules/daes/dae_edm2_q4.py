@@ -367,6 +367,15 @@ class DAE(DualDiffusionDAE):
             
             return super().latents_to_img(latents, img_split_stereo=False, **kwargs)
         else:
+
+            if self.config.latent_channels > 8:
+                #latents = latents.reshape(latents.shape[0], latents.shape[1] * latents.shape[2] // 4, 4, latents.shape[3])
+                #latents = latents.permute(0, 2, 1, 3).contiguous()
+
+                latents = unpatchify_2d(latents, latents.shape[1]//4, 1)
+
+                #latents = torch.cat(torch.chunk(latents, latents.shape[1]//4, dim=1), dim=2)
+
             return super().latents_to_img(latents, img_split_stereo=False, **kwargs)
 
     def tiled_encode(self, x: torch.Tensor, embeddings: torch.Tensor, max_chunk: int = 6144, overlap: int = 256) -> torch.Tensor:
