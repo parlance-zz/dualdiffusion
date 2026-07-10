@@ -77,6 +77,9 @@ def ms_mdct_dual_format_test() -> None:
     format.ms_psd_win_h0.cpu().numpy().tofile(os.path.join(output_path, "ms_psd_wnd_h0.raw"))
     format.ms_psd_win_h1.cpu().numpy().tofile(os.path.join(output_path, "ms_psd_wnd_h1.raw"))
 
+    mdct_window_padded = torch.nn.functional.pad(format.mdct.window, ((format.config.ms_psd_window_len - format.config.window_len) // 2,) * 2)
+    mdct_window_padded.cpu().numpy().tofile(os.path.join(output_path, "mdct_wnd_padded.raw"))
+
     coverage = torch.zeros(format.config.ms_psd_window_len, device=format.device)
     for i in range(4):
         wnd = (

@@ -51,7 +51,7 @@ class UNetConfig(DualDiffusionUNetConfig):
     in_num_freqs: int = 256
     in_psd_freqs: int = 512
 
-    model_channels: int  = 64                # Base multiplier for the number of channels.
+    model_channels: int  = 96                # Base multiplier for the number of channels.
     logvar_channels: int = 192               # Number of channels for training uncertainty estimation.
     channel_mult: list[int]    = (1,2,3,5)   # Per-resolution multipliers for the number of channels.
     double_midblock: bool      = False

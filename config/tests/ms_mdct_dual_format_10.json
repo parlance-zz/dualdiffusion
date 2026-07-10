@@ -33,7 +33,11 @@
         // standard, from paper
         "ms_psd_p_real": [ [2,0], [1,1], [-1,1], [0,1] ],
         "ms_psd_p_imag": [ [0,0], [0,0], [ 0,0], [1,0] ],
-        "ms_psd_t_scale": 2.26,
+        // to get the minimum required coverage for phase retrieval it would seem that the max value
+        // for t_scale is e if ms_psd window is 2x larger than mdct window, e/2 if they are the same size, etc
+        // (for this p config from the paper, at least)
+        "ms_psd_t_scale": 2.26,   // widest possible before aliasing
+        //"ms_psd_t_scale": 2.71828
 
         // strong symmetry, only shifts visually on freq axis
         //"ms_psd_p_real": [ [ 3,-1], [-1, 3], [-1,-1], [-1,-1] ],
@@ -49,6 +53,11 @@
         //"ms_psd_p_real": [ [ 1, 1], [ 1, 0], [ 1,-1], [ 1, 0] ],
         //"ms_psd_p_imag": [ [ 0, 0], [ 0, 1], [ 0, 0], [ 0,-1] ],
         //"ms_psd_t_scale": 2.37,
+
+        // SIC-POVM
+        //"ms_psd_p_real": [ [ 0.888074, 0.325058], [ 0.459701, 0.627963], [ 0.459701, -0.627963], [ 0.888074, -0.325058] ],
+        //"ms_psd_p_imag": [ [ 0,        0.325058], [ 0,       -0.627963], [ 0,         0.627963], [ 0,        -0.325058] ],
+        //"ms_psd_t_scale": 2.71828,
 
         "ms_psd_window_len": 1023,
         "ms_psd_num_filters": 96,
