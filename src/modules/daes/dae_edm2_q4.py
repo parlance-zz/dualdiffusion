@@ -46,22 +46,22 @@ class DAE_Config(DualDiffusionDAEConfig):
     in_channels: int     = 8
     in_channels_emb: int = 0
     out_channels: int    = 8
-    latent_channels: int = 32
+    latent_channels: int = 16
     use_1d_latents: bool = False
 
-    in_num_freqs: int = 96
-    in_psd_freqs: int = 96
+    in_num_freqs: int = 128
+    in_psd_freqs: int = 128
 
-    model_channels: int         = 128         # Base multiplier for the number of channels.
-    channel_mult_enc: int       = (1,2,3,5)
-    channel_mult_dec: list[int] = (1,2,3,5)
+    model_channels: int         = 128        # Base multiplier for the number of channels.
+    channel_mult_enc: int       = (1,2,3,4)
+    channel_mult_dec: list[int] = (1,2,3,4)
     channel_mult_emb: int     = 4            # Multiplier for final embedding dimensionality.
     channels_per_head: int    = 64           # Number of channels per attention head.
     num_enc_layers_per_block: int = 3        # Number of resnet blocks per resolution.
     num_dec_layers_per_block: int = 3        # Number of resnet blocks per resolution.
     res_balance: float        = 0.3          # Balance between main branch (0) and residual branch (1).
     attn_balance: float       = 0.3          # Balance between main branch (0) and self-attention (1).
-    attn_levels: list[int]    = ()           # List of resolution levels to use self-attention.
+    attn_levels: list[int]    = (3,)         # List of resolution levels to use self-attention.
     mlp_multiplier: int    = 2               # Multiplier for the number of channels in the MLP.
     mlp_groups: int        = 1               # Number of groups for the MLPs.
     emb_linear_groups: int = 1
@@ -107,13 +107,13 @@ class Block(torch.nn.Module):
         self.clip_act = clip_act
         self.mlp_groups = mlp_groups
 
-        self.conv_res0 = MPConv(out_channels if flavor == "enc" else in_channels,
+        self.conv_res0 = MPConv(out_channels,
                         out_channels * mlp_multiplier, kernel=(3,3), groups=mlp_groups)
         self.conv_res1 = MPConv(out_channels * mlp_multiplier,
                     out_channels, kernel=(3,3), groups=mlp_groups)
 
         if in_channels != out_channels or mlp_groups > 1:
-            self.conv_skip = MPConv(in_channels, out_channels, kernel=(1,1), groups=1)
+            self.conv_skip = MPConv(in_channels, out_channels, kernel=(3,3), groups=1)
         else:
             self.conv_skip = None
 
@@ -125,14 +125,28 @@ class Block(torch.nn.Module):
             self.emb_gain = self.emb_linear = None
         
         if self.use_attention == True:
-            raise NotImplementedError()
+            self.attn_q = MPConv(out_channels, out_channels, kernel=(1,1))
+            self.attn_k = MPConv(out_channels, out_channels, kernel=(1,1))
+            self.attn_v = MPConv(out_channels, out_channels, kernel=(1,1))
+            self.attn_proj = MPConv(out_channels, out_channels, kernel=(1,1))
+
+            if emb_channels > 0:
+                self.emb_gain_qkv = torch.nn.Parameter(torch.zeros([]))
+                self.emb_linear_qkv = MPConv(emb_channels, out_channels, kernel=(1,1))
+            else:
+                self.emb_gain_qkv = self.emb_linear_qkv = None
 
     def forward(self, x: torch.Tensor, emb: torch.Tensor) -> torch.Tensor:
         
-        if self.flavor == "enc" and self.conv_skip is not None:
-            x = self.conv_skip(x)
+        if self.flavor == "enc":
+            if self.conv_skip is not None:
+                x = self.conv_skip(x)
+            x = resample_2d(x, self.resample_mode)
 
-        x = resample_2d(x, self.resample_mode)
+        if self.flavor == "dec":
+            x = resample_2d(x, self.resample_mode)
+            if self.conv_skip is not None:
+                x = self.conv_skip(x)
 
         if self.use_pixel_norm == True and self.flavor == "enc":
             x = normalize(x, dim=1)
@@ -150,12 +164,29 @@ class Block(torch.nn.Module):
 
         y = self.conv_res1(y)
 
-        if self.flavor == "dec" and self.conv_skip is not None:
-            x = self.conv_skip(x)
         x = mp_sum(x, y, t=self.res_balance)
         
         if self.use_attention == True:
-            raise NotImplementedError()
+            if self.emb_linear_qkv is not None:
+                c = self.emb_linear_qkv(emb, gain=self.emb_gain_qkv) + 1.
+                y = x * c
+            else:
+                y = x
+
+            q: torch.Tensor = self.attn_q(y)
+            k: torch.Tensor = self.attn_k(y)
+            v: torch.Tensor = self.attn_v(y)
+            q = q.reshape(q.shape[0], self.num_heads, -1, y.shape[2] * y.shape[3])
+            k = k.reshape(k.shape[0], self.num_heads, -1, y.shape[2] * y.shape[3])
+            v = v.reshape(v.shape[0], self.num_heads, -1, y.shape[2] * y.shape[3])
+            q = normalize(q, dim=2).transpose(-1, -2)
+            k = normalize(k, dim=2).transpose(-1, -2)
+            v = normalize(v, dim=2).transpose(-1, -2)
+
+            y = torch.nn.functional.scaled_dot_product_attention(q, k, v).transpose(-1, -2)
+
+            y = self.attn_proj(y.reshape(*x.shape))
+            x = mp_sum(x, y, t=self.attn_balance)
 
         if self.clip_act is not None:
             x = x.clip_(-self.clip_act, self.clip_act)
@@ -215,13 +246,13 @@ class DAE(DualDiffusionDAE):
                 self.enc[f"conv_in"] = MPConv(self.config.in_channels, cout, kernel=(3,3), bias=True)
             else:
                 self.enc[f"block{level}_down"] = Block(level, cin, cout, cemb,
-                    use_attention=level in config.attn_levels, flavor="enc", resample_mode="down", **block_kwargs)
-                
+                    use_attention=False, flavor="enc", resample_mode="down", **block_kwargs)
+            
             for idx in range(config.num_enc_layers_per_block):
                 cin = cout
                 cout = enc_channels[level]
                 self.enc[f"block{level}_layer{idx}"] = Block(level, cout, cout, cemb,
-                    use_attention=level in config.attn_levels, flavor="enc", **block_kwargs)
+                    use_attention=False, flavor="enc", **block_kwargs)
 
         self.latents_out_gain = torch.nn.Parameter(torch.ones([]))
 

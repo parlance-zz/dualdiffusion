@@ -45,7 +45,7 @@ class UNetConfig(DualDiffusionUNetConfig):
 
     in_channels:  int = 8
     out_channels: int = 8
-    in_channels_emb: int = 1024
+    in_channels_emb: int = 0
     in_channels_x_ref: int = 8
 
     in_num_freqs: int = 128
