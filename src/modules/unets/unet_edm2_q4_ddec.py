@@ -43,19 +43,19 @@ from modules.formats.format import DualDiffusionFormat
 @dataclass
 class UNetConfig(DualDiffusionUNetConfig):
 
-    in_channels:  int = 4
-    out_channels: int = 4
-    in_channels_emb: int = 0
+    in_channels:  int = 8
+    out_channels: int = 8
+    in_channels_emb: int = 1024
     in_channels_x_ref: int = 8
 
-    in_num_freqs: int = 256
-    in_psd_freqs: int = 512
+    in_num_freqs: int = 128
+    in_psd_freqs: int = 128
 
-    model_channels: int  = 96                # Base multiplier for the number of channels.
+    model_channels: int  = 128               # Base multiplier for the number of channels.
     logvar_channels: int = 192               # Number of channels for training uncertainty estimation.
-    channel_mult: list[int]    = (1,2,3,5)   # Per-resolution multipliers for the number of channels.
+    channel_mult: list[int]    = (1,2,3,4)   # Per-resolution multipliers for the number of channels.
     double_midblock: bool      = False
-    midblock_attn: bool        = False
+    midblock_attn: bool        = True
     channel_mult_noise: Optional[int] = 4    # Multiplier for noise embedding dimensionality.
     channel_mult_emb: Optional[int]   = 4    # Multiplier for final embedding dimensionality.
     channels_per_head: int    = 64           # Number of channels per attention head.
@@ -64,7 +64,7 @@ class UNetConfig(DualDiffusionUNetConfig):
     concat_balance: float     = 0.5          # Balance between skip connections (0) and main path (1).
     res_balance: float        = 0.3          # Balance between main branch (0) and residual branch (1).
     attn_balance: float       = 0.3          # Balance between main branch (0) and self-attention (1).
-    attn_levels: list[int]    = ()           # List of resolution levels to use self-attention.
+    attn_levels: list[int]    = (3,)         # List of resolution levels to use self-attention.
     mlp_multiplier: int    = 2               # Multiplier for the number of channels in the MLP.
     mlp_groups: int        = 1               # Number of groups for the MLPs.
     emb_linear_groups: int = 1
@@ -306,6 +306,12 @@ class UNet(DualDiffusionUNet):
             x_ref = resample_2d(x_ref, "down_keep")
         
         # embedding
+        if conditioning_mask is not None: # nuisance due to ddp wrapper limitations
+            assert self.training == True
+            embeddings = self.get_embeddings(embeddings, conditioning_mask)
+        else:
+            assert self.training == False
+
         emb = self.emb_noise(emb)
         if self.config.in_channels_emb > 0:
             emb = mp_silu(mp_sum(emb, embeddings, t=self.config.label_balance))
