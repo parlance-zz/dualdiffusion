@@ -23,6 +23,7 @@
 from utils import config
 
 from dataclasses import dataclass
+from typing import Optional
 import os
 import random
 
@@ -45,6 +46,7 @@ class MS_MDCT_DualFormat_TestConfig:
 
     add_random_test_samples: int
     test_samples: list[str]
+    test_samples_seed: Optional[int]
 
     format_config: MS_MDCT_DualFormatConfig
 
@@ -52,11 +54,13 @@ class MS_MDCT_DualFormat_TestConfig:
 def ms_mdct_dual_format_test() -> None:
 
     torch.manual_seed(0)
-    random.seed()
 
     cfg: MS_MDCT_DualFormat_TestConfig = config.load_config(MS_MDCT_DualFormat_TestConfig,
         os.path.join(config.CONFIG_PATH, "tests", "ms_mdct_dual_format_10.json"))
     
+    if cfg.test_samples_seed is not None:
+        random.seed(cfg.test_samples_seed)
+
     output_path = os.path.join(config.DEBUG_PATH, "ms_mdct_dual_format_10_test")
     os.makedirs(output_path, exist_ok=True)
 

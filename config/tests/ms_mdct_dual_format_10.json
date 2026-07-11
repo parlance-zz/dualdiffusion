@@ -1,9 +1,10 @@
 {
     "device": "cuda",
-    "add_random_test_samples": 0,
-    "save_output": true,
+    "add_random_test_samples": 100000,
+    "save_output": false,
     
     "test_sample_verbose": false,
+    "test_samples_seed": 0,
     "test_samples": [
         "switch/Arcaea/_t_songs_ignotus.ogg.flac"
     ],
@@ -17,50 +18,26 @@
         //"default_raw_length": 3833600,
         //"default_raw_length": 2817536,
         //"default_raw_length": 2097152,
-        "default_raw_length": 1408768,
-        //"default_raw_length": 131072,
+        //"default_raw_length": 1408768,
+        "default_raw_length": 131072,
         //"default_raw_length": 96000,
         "width_alignment": 8192,
 
         "mdct_psd_exponent": 0.25,
         "window_len": 512,
         "window_func": "vorbis",
-        
-        // attempt #1
-        //"ms_psd_t_scale": 2.37,
-        //"ms_psd_window_len": 1023,
 
-        // standard, from paper
+        // standard p config, from paper
         "ms_psd_p_real": [ [2,0], [1,1], [-1,1], [0,1] ],
         "ms_psd_p_imag": [ [0,0], [0,0], [ 0,0], [1,0] ],
         // to get the minimum required coverage for phase retrieval it would seem that the max value
         // for t_scale is e if ms_psd window is 2x larger than mdct window, e/2 if they are the same size, etc
-        // (for this p config from the paper, at least)
-        "ms_psd_t_scale": 2.26,   // widest possible before aliasing
-        //"ms_psd_t_scale": 2.71828
-
-        // strong symmetry, only shifts visually on freq axis
-        //"ms_psd_p_real": [ [ 3,-1], [-1, 3], [-1,-1], [-1,-1] ],
-        //"ms_psd_p_imag": [ [-1,-1], [-1,-1], [ 3,-1], [-1, 3] ],
-        //"ms_psd_t_scale": 2.37,
-        
-        // good coverage?
-        //"ms_psd_p_real": [ [ 2, 0], [-1, 0], [ 0, 1], [ 0, 1] ],
-        //"ms_psd_p_imag": [ [ 0, 0], [ 1, 0], [-1, 0], [ 1, 0] ],
-        //"ms_psd_t_scale": 2.37,
-        
-        // "equirectangular"
-        //"ms_psd_p_real": [ [ 1, 1], [ 1, 0], [ 1,-1], [ 1, 0] ],
-        //"ms_psd_p_imag": [ [ 0, 0], [ 0, 1], [ 0, 0], [ 0,-1] ],
-        //"ms_psd_t_scale": 2.37,
-
-        // SIC-POVM
-        //"ms_psd_p_real": [ [ 0.888074, 0.325058], [ 0.459701, 0.627963], [ 0.459701, -0.627963], [ 0.888074, -0.325058] ],
-        //"ms_psd_p_imag": [ [ 0,        0.325058], [ 0,       -0.627963], [ 0,         0.627963], [ 0,        -0.325058] ],
-        //"ms_psd_t_scale": 2.71828,
+        // however, if the noise floor is satisfied the longer the window the better
+        "ms_psd_t_scale": 2.26,      // -120db noise floor at ms_psd window edge
+        //"ms_psd_t_scale": 2.71828, 
 
         "ms_psd_window_len": 1023,
-        "ms_psd_num_filters": 96,
+        "ms_psd_num_filters": 128,
 
         "mel_spec_config": {
             "sample_rate": 32000,
