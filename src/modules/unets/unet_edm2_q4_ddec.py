@@ -66,7 +66,7 @@ class UNetConfig(DualDiffusionUNetConfig):
     attn_balance: float       = 0.3          # Balance between main branch (0) and self-attention (1).
     attn_levels: list[int]    = (3,)         # List of resolution levels to use self-attention.
     mlp_multiplier: int    = 2               # Multiplier for the number of channels in the MLP.
-    mlp_groups: int        = 1               # Number of groups for the MLPs.
+    mlp_groups: int        = 2               # Number of groups for the MLPs.
     emb_linear_groups: int = 1
 
 class Block(torch.nn.Module):
@@ -108,7 +108,7 @@ class Block(torch.nn.Module):
         self.conv_res1 = MPConv(out_channels * mlp_multiplier, out_channels, kernel=(3,3), groups=mlp_groups)
 
         if in_channels != out_channels:
-            self.conv_skip = MPConv(in_channels, out_channels, kernel=(1,1), groups=1)
+            self.conv_skip = MPConv(in_channels, out_channels, kernel=(3,3), groups=1)
         else:
             self.conv_skip = None
 
