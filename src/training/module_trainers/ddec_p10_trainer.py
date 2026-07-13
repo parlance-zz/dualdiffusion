@@ -64,7 +64,9 @@ class DiffusionDecoder_Trainer_Config(ModuleTrainerConfig):
     #mss_2d_leak_pow: float = 4
     #mss_2d_leak_steps: int = 0
 
+    add_ddecm_x_ref_noise: float = 0
     add_ddecp_x_ref_noise: float = 0
+    
     add_latents_noise: Optional[float] = None
     unet_loss_weight: float     = 0
     unet_loss_warmup_steps: int = 1000
@@ -108,8 +110,8 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
                 self.train_ddecp = True
         """
 
-        if self.train_dae == True or self.train_ddecm == True:
-            assert self.train_dae == True and self.train_ddecm == True
+        #if self.train_dae == True or self.train_ddecm == True:
+        #    assert self.train_dae == True and self.train_ddecm == True
 
         self.format: MS_MDCT_DualFormat = trainer.pipeline.format.to(self.trainer.accelerator.device)
 
@@ -158,6 +160,7 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
         else: self.logger.info("Random stereo augmentation is disabled")
 
         if self.train_ddecm == True:
+            self.logger.info(f"Add DDEC-M x_ref noise: {self.config.add_ddecm_x_ref_noise}")
             self.logger.info(f"DDEC-M mel-density loss weight pow: {self.config.mel_density_loss_weight_pow_ddecm}")
             self.logger.info(f"DDEC-M trainer:")
             self.ddecm_trainer = UNetTrainer(UNetTrainerConfig(**config.ddecm), trainer, self.ddecm, "ddecm")
@@ -246,7 +249,8 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
 
         if self.train_ddecp == True:
 
-            ddecp_x_ref = self.format.unscale_ms_psd(ms_psd_scaled) + torch.randn_like(ms_psd) * self.config.add_ddecp_x_ref_noise
+            #ddecp_x_ref = self.format.unscale_ms_psd(ms_psd_scaled) + torch.randn_like(ms_psd) * self.config.add_ddecp_x_ref_noise
+            ddecp_x_ref = self.format.unscale_ms_psd(ms_psd_scaled + torch.randn_like(ms_psd_scaled) * self.config.add_ddecp_x_ref_noise)
             ddecp_x_ref = ddecp_x_ref.detach()
             logs["io_stats_ddecp/add_ddecp_x_ref_noise"] = self.config.add_ddecp_x_ref_noise
 
@@ -265,8 +269,14 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
             ddecp_x_ref = None
 
         if self.train_ddecm == True:
+
+            ddecm_x_ref = (ms_psd_scaled + torch.randn_like(ms_psd_scaled) * self.config.add_ddecm_x_ref_noise) / (1 + self.config.add_ddecm_x_ref_noise**2)**0.5
+            #ddecm_x_ref = torch.nn.functional.avg_pool2d(ms_psd_scaled, kernel_size=4, stride=4)
+            #ddecm_x_ref = torch.nn.functional.interpolate(ddecm_x_ref, scale_factor=4, mode="bicubic").detach() / 0.5**0.5
+            logs["io_stats_ddecm/ddecm_x_ref_msq"] = ddecm_x_ref.pow(2).mean(dim=(1,2,3)).detach()
+
             logs.update(self.ddecm_trainer.train_batch(
-                ms_psd_scaled, audio_embeddings, ref_samples=ddec_cond, loss_weight=self.ddecm_loss_weight))
+                ms_psd_scaled, audio_embeddings, ref_samples=ddecm_x_ref, loss_weight=self.ddecm_loss_weight))
             logs["loss"] = logs["loss"] + logs["loss/ddecm"]
         
         if self.train_dae == True:

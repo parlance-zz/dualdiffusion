@@ -201,6 +201,7 @@ class UNet(DualDiffusionUNet):
             self.psd_freqs_per_freq = config.in_psd_freqs // config.in_num_freqs
         else:
             self.psd_freqs_per_freq = None
+            assert config.in_channels_x_ref == 0
         
         # Embedding.
         self.emb_fourier = MPFourier(cnoise)
@@ -213,8 +214,12 @@ class UNet(DualDiffusionUNet):
         self.logvar_linear.weight.data.fill_(0)
 
         # Encoder.
-        self.x_ref_balance = torch.nn.Parameter(torch.zeros([]))
-        self.conv_x_ref_in = MPConv(config.in_channels_x_ref, cblock[0], kernel=(3,3), bias=True)
+        if config.in_channels_x_ref > 0:
+            self.x_ref_balance = torch.nn.Parameter(torch.zeros([]))
+            self.conv_x_ref_in = MPConv(config.in_channels_x_ref, cblock[0], kernel=(3,3), bias=True)
+        else:
+            self.x_ref_balance = self.conv_x_ref_in = None
+        
         self.enc = torch.nn.ModuleDict()
         cin = config.in_channels
 
@@ -301,9 +306,12 @@ class UNet(DualDiffusionUNet):
 
             emb = self.emb_fourier(c_noise)
 
-        x_ref = self.conv_x_ref_in(x_ref.to(dtype=torch.bfloat16))
-        if self.psd_freqs_per_freq > 1:
-            x_ref = resample_2d(x_ref, "down_keep")
+        if self.config.in_channels_x_ref > 0:
+            x_ref = self.conv_x_ref_in(x_ref.to(dtype=torch.bfloat16))
+            if self.psd_freqs_per_freq > 1:
+                x_ref = resample_2d(x_ref, "down_keep")
+        else:
+            assert x_ref is None
         
         # embedding
         if conditioning_mask is not None: # nuisance due to ddp wrapper limitations
@@ -322,7 +330,9 @@ class UNet(DualDiffusionUNet):
         for name, block in self.enc.items():
             if "conv" in name:
                 x = block(x)
-                x = mp_sum(x, x_ref, t=self.x_ref_balance.sigmoid())
+                
+                if self.config.in_channels_x_ref > 0:
+                    x = mp_sum(x, x_ref, t=self.x_ref_balance.sigmoid())
             else:
                 x = block(x, emb)
             skips.append(x)
