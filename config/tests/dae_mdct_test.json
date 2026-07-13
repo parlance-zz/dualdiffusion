@@ -14,13 +14,14 @@
     "models_path_override": null,
     "length": 1408768,
     "add_latents_noise": 0,
-    "add_x_ref_noise": 0.01,
+    "add_ddecm_x_ref_noise": 0.5,
+    "add_ddecp_x_ref_noise": 0,
     "ms_img_show_center_channel": true,
     "latents_tiled_encode": false,
     "latents_tiled_max_chunk_size": 6144,
     "latents_tiled_overlap": 256,
     "latents_img_split_stereo": false,
-    "latents_img_use_pca": false,
+    "latents_img_use_pca": true,
     "latents_img_channel_order": null,
     "latents_img_save_collage": true,
     "output_lufs": -20,
@@ -32,7 +33,6 @@
     "test_samples": [
         "psf3/Tekken Hybrid/_t_Tekken Tag Tournament 2 Prologue_charasele.lwav.flac",
         "wii/Just Dance 2014/otherside.wav.ckd.flac",
-        "switch/Astral Chain/_t_wem_810084485.wem.flac",
         "SuspectT",
         "3sf/Dopamix/STRM_BGM_ENDING.bcstm.flac",
         "dsf/Metropolis Street Racer Prototype/file_15.adx.flac",
@@ -41,7 +41,6 @@
         "dae_tests",
         "switch/Muse Dash/_t_stage_jump_hard_candy_music.fsb.flac",
         "wii/Kamen Rider - Chou Climax Heroes/Stage03.brstm.flac",
-        "vita/Tayutama 2 - You're the only one/015.at9.flac",
         "switch/Arcaea/_t_songs_ignotus.ogg.flac"
     ]
 }

@@ -64,7 +64,8 @@ class SampleParams:
     input_perturbation: float             = 1.
     input_perturbation_offset: float      = 0.
     stereo_fix: float                     = 0
-    img2img_strength: float               = 0.5
+    use_x_ref_as_init: bool               = False
+    #img2img_strength: float               = 0.5
     input_audio: Optional[Union[str, torch.Tensor]] = None
     input_audio_pre_encoded: bool                   = False
     inpainting_mask: Optional[torch.Tensor]         = None
@@ -626,7 +627,7 @@ class DualDiffusionPipeline(torch.nn.Module):
             input_ref_sample = None
         else:
             sample_shape = sample_shape or x_ref.shape
-            if unet_class_embeddings is not None:
+            if unet_class_embeddings is not None and params.use_x_ref_as_init == False:
                 input_ref_sample = x_ref.repeat(2, 1, 1, 1)
             else:
                 input_ref_sample = x_ref
@@ -643,21 +644,41 @@ class DualDiffusionPipeline(torch.nn.Module):
             noise[:, ::2] = noise[:, 1::2]
             noise = mp_sum(torch.randn_like(noise), noise, params.stereo_fix)
 
-        sample = noise * (sigma_schedule[0]**2 + params.sigma_data**2)**0.5
+        if params.use_x_ref_as_init == False or input_ref_sample is None:
+            sample = noise * (sigma_schedule[0]**2 + params.sigma_data**2)**0.5
+        else:
+            sample = input_ref_sample + noise * sigma_schedule[0]
+            input_ref_sample = None
 
-        error_logvar = unet.get_sigma_loss_logvar(sigma_schedule)
-        i = error_logvar.argmin()
-        print("Sigma with lowest loss:", sigma_schedule_list[i], "logvar:", error_logvar[i].exp().item())
+        #error_logvar = unet.get_sigma_loss_logvar(sigma_schedule)
+        #i = error_logvar.argmin()
+        #print("Sigma with lowest loss:", sigma_schedule_list[i], "logvar:", error_logvar[i].exp().item())
 
         progress_bar = tqdm(total=params.num_steps, disable=quiet)
-        for i, (sigma_curr, sigma_next) in enumerate(zip(sigma_schedule_list[:-1], sigma_schedule_list[1:])):
+        for i, sigma_curr in enumerate(sigma_schedule_list):
+
+            if i < len(sigma_schedule_list) - 1:
+                sigma_next = sigma_schedule_list[i+1]
+            else:
+                sigma_next = 0
+            
+            """ # measure peak vram usage for diffusion module only
+            if i == 1:
+                torch.cuda.reset_peak_memory_stats()
+                torch.cuda.empty_cache()
+            elif i == 2:
+                peak_mb = torch.cuda.max_memory_allocated() / 1024**2
+                print(f"Peak VRAM: {peak_mb:.1f} MB")
+                exit()
+            """
             
             if params.seamless_loop == True:
                 loop_shift = int(np_generator.integers(0, sample.shape[-1]))
                 sample = torch.roll(sample, shifts=loop_shift, dims=-1)
                 sample = torch.cat((sample[..., -32:], sample, sample[..., :32]), dim=-1)
-                input_ref_sample = torch.roll(input_ref_sample, shifts=loop_shift, dims=-1)
-                input_ref_sample = torch.cat((input_ref_sample[..., -32:], input_ref_sample, input_ref_sample[..., :32]), dim=-1)
+                if input_ref_sample is not None:
+                    input_ref_sample = torch.roll(input_ref_sample, shifts=loop_shift, dims=-1)
+                    input_ref_sample = torch.cat((input_ref_sample[..., -32:], input_ref_sample, input_ref_sample[..., :32]), dim=-1)
             else:
                 loop_shift = None
 
@@ -696,7 +717,7 @@ class DualDiffusionPipeline(torch.nn.Module):
             #print(f"{i+1}/{params.num_steps} input perturbation: {effective_input_perturbation:.3f}  sigma: {sigma_curr:.3f}")
 
             sigma_next *= (1 - (max(min(effective_input_perturbation, 1), 0)))
-            effective_input_perturbation = 1 - sigma_next / old_sigma_next
+            effective_input_perturbation = 1 - sigma_next / (old_sigma_next + 1e-20)
             effective_input_perturbation = old_sigma_next - sigma_next
             debug_info["effective_input_perturbation"].append(effective_input_perturbation)
 
@@ -736,7 +757,8 @@ class DualDiffusionPipeline(torch.nn.Module):
 
             if loop_shift is not None:
                 sample = torch.roll(sample[..., 32:-32], shifts=-loop_shift, dims=-1)
-                input_ref_sample = torch.roll(input_ref_sample[..., 32:-32], shifts=-loop_shift, dims=-1)
+                if input_ref_sample is not None:
+                    input_ref_sample = torch.roll(input_ref_sample[..., 32:-32], shifts=-loop_shift, dims=-1)
                 cfg_model_output = torch.roll(cfg_model_output[..., 32:-32], shifts=-loop_shift, dims=-1)
 
             if i+1 < params.num_steps:
