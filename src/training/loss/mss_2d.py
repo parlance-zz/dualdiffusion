@@ -211,7 +211,7 @@ class MSSLoss2D:
                     loss_weight = 1
 
                 if self.config.mel_density_pow > 0:
-                    hz = torch.arange(target_fft_abs.shape[2], device=self.device) / target_fft_abs.shape[2] * self.config.sample_rate / 2
+                    hz = torch.linspace(0, 1, target_fft_abs.shape[2], device=self.device) * self.config.sample_rate/2
                     mel_density = get_mel_density(hz).pow(self.config.mel_density_pow)
                     mel_density /= mel_density.mean()
                     loss_weight = loss_weight / mel_density.view(1, 1,-1, 1, 1, 1)
