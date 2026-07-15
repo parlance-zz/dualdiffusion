@@ -86,10 +86,12 @@ class MS_MDCT_DualFormatConfig(DualDiffusionFormatConfig):
     ms_psd_num_filters: int = 128
     ms_psd_p_real: list[tuple[float, float]] = ( (2,0), (1,1), (-1,1), (0,1) )
     ms_psd_p_imag: list[tuple[float, float]] = ( (0,0), (0,0), ( 0,0), (1,0) )
+    ms_psd_center_p_real: tuple[float, float] = (2,0)
+    ms_psd_center_p_imag: tuple[float, float] = (0,0)
 
     @property
     def ms_psd_num_frequencies(self) -> int:
-        return self.ms_psd_window_len // 2 + 1
+        return self.ms_psd_window_len // 2 + 1 if self.ms_psd_window_len % 2 == 1 else self.ms_psd_window_len // 2
     
     # mel-spec params    
     mel_spec_config: Optional[MelSpecConfig] = None
@@ -161,7 +163,9 @@ class MS_MDCT_DualFormat(DualDiffusionFormat):
     @torch.no_grad()
     def raw_to_ms_psd(self, raw_samples: torch.Tensor, min_psd_eps: Optional[float] = None) -> torch.Tensor:
 
-        raw_samples = torch.cat((raw_samples, raw_samples[..., -1:]), dim=-1) # fix stft shape with odd window length
+        if self.config.ms_psd_window_len % 2 == 1:
+            raw_samples = torch.cat((raw_samples, raw_samples[..., -1:]), dim=-1) # fix stft shape with odd window length
+
         packed_raw = raw_samples.float().view(raw_samples.shape[0] * raw_samples.shape[1], raw_samples.shape[2])
 
         stft_h0 = torch.stft(packed_raw, n_fft=self.config.ms_psd_window_len, hop_length=self.config.hop_length,
@@ -174,7 +178,18 @@ class MS_MDCT_DualFormat(DualDiffusionFormat):
         stft_h0 = stft_h0.view(raw_samples.shape[0], raw_samples.shape[1], stft_h0.shape[1], stft_h0.shape[2])
         stft_h1 = stft_h1.view(raw_samples.shape[0], raw_samples.shape[1], stft_h1.shape[1], stft_h1.shape[2])
         
-        ms_psds: list[torch.Tensor] = []
+        if stft_h0.shape[2] % 2 != 0:
+            stft_h0 = stft_h0[:, :, :-1]
+            stft_h1 = stft_h1[:, :, :-1]
+
+        center_h0 = torch.lerp(stft_h0[:, :1], stft_h0[:, 1:], 0.5)
+        center_h1 = torch.lerp(stft_h1[:, :1], stft_h1[:, 1:], 0.5)
+        ms_psd_center = (
+             self.config.ms_psd_center_p_real[0] * center_h0 + self.config.ms_psd_center_p_real[1] * center_h1 +
+            (self.config.ms_psd_center_p_imag[0] * center_h0 + self.config.ms_psd_center_p_imag[1] * center_h1) * 1j
+        )
+
+        ms_psds: list[torch.Tensor] = [ms_psd_center]
         for i in range(4):
             ms_psds.append((
                  self.config.ms_psd_p_real[i][0] * stft_h0 + self.config.ms_psd_p_real[i][1] * stft_h1 +
@@ -202,8 +217,8 @@ class MS_MDCT_DualFormat(DualDiffusionFormat):
     @torch.no_grad()
     def ms_psd_to_img(self, ms_psd: torch.Tensor, use_colormap: bool = False):
         
-        if ms_psd.shape[1] == 4 * self.config.num_raw_channels:
-            ms_psd = torch.cat(ms_psd.chunk(4, dim=1), dim=2)
+        if ms_psd.shape[1] == 4 * self.config.num_raw_channels + 1:
+            ms_psd = torch.cat(ms_psd[:, 1:].chunk(4, dim=1) + (ms_psd[:, :1].repeat(1,2,1,1),), dim=2)
 
         if use_colormap == True:
             return tensor_to_img(ms_psd.mean(dim=(0,1)), flip_y=True, colormap=True)

@@ -1,7 +1,7 @@
 {
     "device": "cuda",
-    "add_random_test_samples": 100000,
-    "save_output": false,
+    "add_random_test_samples": 0,
+    "save_output": true,
     
     "test_sample_verbose": false,
     "test_samples_seed": 0,
@@ -18,8 +18,8 @@
         //"default_raw_length": 3833600,
         //"default_raw_length": 2817536,
         //"default_raw_length": 2097152,
-        //"default_raw_length": 1408768,
-        "default_raw_length": 131072,
+        "default_raw_length": 1408768,
+        //"default_raw_length": 131072,
         //"default_raw_length": 96000,
         "width_alignment": 8192,
 
@@ -28,13 +28,18 @@
         "window_func": "vorbis",
 
         // standard p config, from paper
-        "ms_psd_p_real": [ [2,0], [1,1], [-1,1], [0,1] ],
-        "ms_psd_p_imag": [ [0,0], [0,0], [ 0,0], [1,0] ],
+        "ms_psd_p_real": [ [ 2,0], [1,1], [-1,1], [0,1] ],
+        "ms_psd_p_imag": [ [ 0,0], [0,0], [ 0,0], [1,0] ],
+        "ms_psd_center_p_real": [ 2, 0],
+        "ms_psd_center_p_imag": [ 0, 0],
+
         // to get the minimum required coverage for phase retrieval it would seem that the max value
         // for t_scale is e if ms_psd window is 2x larger than mdct window, e/2 if they are the same size, etc
         // however, if the noise floor is satisfied the longer the window the better
         "ms_psd_t_scale": 2.26,      // -120db noise floor at ms_psd window edge
         //"ms_psd_t_scale": 2.71828, 
+        //"ms_psd_t_scale": 5.436563657,
+        //"ms_psd_t_scale": 3.5,
 
         "ms_psd_window_len": 1023,
         "ms_psd_num_filters": 128,

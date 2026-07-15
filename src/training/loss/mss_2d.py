@@ -60,6 +60,7 @@ class MSSLoss2DConfig:
     sample_rate: float = 32000
     mel_density_pow: float = 0
     loss_weight_pow : float = 0.5
+    split_center_on_midside: bool = False
 
 class MSSLoss2D:
 
@@ -147,8 +148,14 @@ class MSSLoss2D:
         x = x.unfold(2, block_height, step_h).unfold(3, block_width, step_w)
 
         x = torch.fft.rfft2(x * window, norm="ortho", dim=order)
+
         if midside == True:
-            x = torch.fft.fft(x, dim=1, norm="ortho")
+            if self.config.split_center_on_midside == True:
+                y = x[:, :1]
+                x = torch.fft.fft(x[:, 1:], dim=1, norm="ortho")
+                x = torch.cat((y, x), dim=1)
+            else:
+                x = torch.fft.fft(x, dim=1, norm="ortho")
 
         return x
     

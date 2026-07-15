@@ -221,28 +221,37 @@ def ms_mdct_dual_format_test() -> None:
         save_img(format.ms_psd_to_img(ms_psd), ms_psd_output_path)
         print(f"Saved ms_psd img to {ms_psd_output_path}")
 
-        for i, psd in enumerate(ms_psd.chunk(4, dim=1)):
-            ms_psd_output_path = os.path.join(output_path, f"{filename}_ms_psd_{i}.png")
+        ms_psd_output_path = os.path.join(output_path, f"{filename}_ms_psd_0.png")
+        save_img(tensor_to_img(ms_psd[:, :1].repeat(1,2,1,1), flip_y=True), ms_psd_output_path)
+        print(f"Saved ms_psd_0 img to {ms_psd_output_path}")
+        for i, psd in enumerate(ms_psd[:, 1:].chunk(4, dim=1)):
+            ms_psd_output_path = os.path.join(output_path, f"{filename}_ms_psd_{i+1}.png")
             save_img(tensor_to_img(psd, flip_y=True), ms_psd_output_path)
-            print(f"Saved ms_psd_{i} img to {ms_psd_output_path}")
+            print(f"Saved ms_psd_{i+1} img to {ms_psd_output_path}")
 
         ms_psd_mel_output_path = os.path.join(output_path, f"{filename}_ms_psd_mel.png")
         save_img(format.ms_psd_to_img(ms_psd_mel), ms_psd_mel_output_path)
         print(f"Saved ms_psd_mel img to {ms_psd_mel_output_path}")
 
-        for i, psd in enumerate(ms_psd_mel.chunk(4, dim=1)):
-            ms_psd_mel_output_path = os.path.join(output_path, f"{filename}_ms_psd_mel_{i}.png")
+        ms_psd_mel_output_path = os.path.join(output_path, f"{filename}_ms_psd_mel_0.png")
+        save_img(tensor_to_img(ms_psd_mel[:, :1].repeat(1,2,1,1), flip_y=True), ms_psd_mel_output_path)
+        print(f"Saved ms_psd_mel_0 img to {ms_psd_mel_output_path}")
+        for i, psd in enumerate(ms_psd_mel[:, 1:].chunk(4, dim=1)):
+            ms_psd_mel_output_path = os.path.join(output_path, f"{filename}_ms_psd_mel_{i+1}.png")
             save_img(tensor_to_img(psd, flip_y=True), ms_psd_mel_output_path)
-            print(f"Saved ms_psd_mel_{i} img to {ms_psd_mel_output_path}")
+            print(f"Saved ms_psd_mel_{i+1} img to {ms_psd_mel_output_path}")
 
         ms_psd_mel_unscaled_output_path = os.path.join(output_path, f"{filename}_ms_psd_mel_unscaled.png")
         save_img(format.ms_psd_to_img(ms_psd_mel_unscaled), ms_psd_mel_unscaled_output_path)
         print(f"Saved ms_psd_mel_unscaled img to {ms_psd_mel_unscaled_output_path}")
 
-        for i, psd in enumerate(ms_psd_mel_unscaled.chunk(4, dim=1)):
-            ms_psd_mel_unscaled_output_path = os.path.join(output_path, f"{filename}_ms_psd_mel_unscaled_{i}.png")
+        ms_psd_mel_unscaled_output_path = os.path.join(output_path, f"{filename}_ms_psd_mel_unscaled_0.png")
+        save_img(tensor_to_img(ms_psd_mel_unscaled[:, :1].repeat(1,2,1,1), flip_y=True), ms_psd_mel_unscaled_output_path)
+        print(f"Saved ms_psd_mel_unscaled_0 img to {ms_psd_mel_unscaled_output_path}")
+        for i, psd in enumerate(ms_psd_mel_unscaled[:, 1:].chunk(4, dim=1)):
+            ms_psd_mel_unscaled_output_path = os.path.join(output_path, f"{filename}_ms_psd_mel_unscaled_{i+1}.png")
             save_img(tensor_to_img(psd, flip_y=True), ms_psd_mel_unscaled_output_path)
-            print(f"Saved ms_psd_mel_unscaled_{i} img to {ms_psd_mel_unscaled_output_path}")
+            print(f"Saved ms_psd_mel_unscaled_{i+1} img to {ms_psd_mel_unscaled_output_path}")
 
         recon_mel_spec = format.mel_spec.raw_to_mel_spec(raw_sample_recon)
         recon_mel_spec_img = format.mel_spec.mel_spec_to_img(recon_mel_spec)
