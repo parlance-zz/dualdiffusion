@@ -23,7 +23,7 @@ if input("Save module? (y/n) ").lower() == 'y':
     print(f"Saved model to {model_path}/dae")
 
 from modules.unets.unet_edm2_q4_ddec import UNet, UNetConfig
-ddecm = UNet(UNetConfig(in_channels_x_ref=0, in_psd_freqs=0))
+ddecm = UNet(UNetConfig(in_channels_x_ref=0, in_psd_freqs=0, in_num_freqs=128, in_channels=9, out_channels=9))
 print_module_info(ddecm, "ddecm")
 
 if input("Save module? (y/n) ").lower() == 'y':
