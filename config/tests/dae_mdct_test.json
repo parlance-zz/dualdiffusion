@@ -14,7 +14,6 @@
     "models_path_override": null,
     "length": 1408768,
     "add_latents_noise": 0,
-    "add_ddecm_x_ref_noise": 0.5,
     "add_ddecp_x_ref_noise": 0,
     "ms_img_show_center_channel": true,
     "latents_tiled_encode": false,
