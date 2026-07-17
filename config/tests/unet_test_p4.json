@@ -7,6 +7,7 @@
         "load_emas": {
             //"unet": "ema_beta0.995.safetensors",
             //"unet": "ema_std0.1.safetensors"
+            //"unet": "phema_std0.01.safetensors",
             "unet": "ema_std0.05.safetensors"
             //"ddecm": "ema_std0.1.safetensors",
             //"ddecp": "ema_std0.1.safetensors"
@@ -25,21 +26,22 @@
     "test_samples": [
         
         /*
-        "switch/Muse Dash/_t_stage_jump_hard_candy_music.fsb.flac",
-        "switch/Muse Dash/_t_stage_jump_hard_candy_music.fsb.flac",
-        "switch/Crazy BMX World/04_sasori.fsb.flac",
-        "switch/Crazy BMX World/04_sasori.fsb.flac",
-        "moonsurgent.flac",
-        "moonsurgent.flac"
-        */
-        
+        "wii/Kamen Rider - Chou Climax Heroes/Stage03.brstm.flac",
+        "wii/Kamen Rider - Chou Climax Heroes/Stage03.brstm.flac",
+        "wii/Kamen Rider - Chou Climax Heroes/Stage03.brstm.flac",
+        "wii/Kamen Rider - Chou Climax Heroes/Stage03.brstm.flac",
+        //*/
 
         /*
+        "switch/Muse Dash/_t_stage_jump_hard_candy_music.fsb.flac",
+        "switch/Muse Dash/_t_stage_jump_hard_candy_music.fsb.flac",
+        "switch/Crazy BMX World/04_sasori.fsb.flac",
+        "switch/Crazy BMX World/04_sasori.fsb.flac",
         "moonsurgent.flac",
         "moonsurgent.flac",
-        "moonsurgent.flac",
-        "moonsurgent.flac",
-        "moonsurgent.flac",
+        //*/
+
+        //*
         "moonsurgent.flac",
         "moonsurgent.flac",
         "moonsurgent.flac"
@@ -60,12 +62,9 @@
         "disco_light.flac",
         "disco_light.flac",
         "disco_light.flac",
-        "disco_light.flac",
-        "disco_light.flac",
-        "disco_light.flac",
-        "disco_light.flac",
-        "disco_light.flac"
-        /*/
+        //*/
+
+        //"switch/Eschatos",
 
         /*
         "myon_myon.flac",
@@ -78,7 +77,7 @@
         "myon_myon.flac"
         */
         
-        //"xbox/Jet Set Radio Future",
+        //"xbox/Jet Set Radio Future"
         //"dsf/Jet Grind Radio"
         //"psf3/Elder Scrolls IV, The - Oblivion",
         //"xbox/Elder Scrolls III, The - Morrowind"
@@ -95,8 +94,12 @@
         "switch/LoveR Kiss/BGM_23.adx.flac", // cool electronic
         "switch/Eschatos/_t_stream_common_boss1.dspadpcm.bfstm.flac", // cool electronic
         "switch/Arcaea/_t_songs_dl_badtek.ogg.flac", // cool electronic
-
         "psp/megpoid the Music#/S001.AT3.flac", // funky with female asian singing, medium audio quality
+        "vita/Labyrinth of Galleria - Coven of Dusk/15_white_cho.at9.flac",  // choir and orchestral
+        "vita/Super Heroine Chronicle - Chou Heroine Senki/bgm_btl_tangel.at9.flac", // progressive
+
+        "switch/Bayonetta 3/_t_sound_stream_238503895.wem.flac",
+        "psf3/Shining Resonance/M_STR_406_00000000.hca.flac",
 
         "switch/Super Smash Bros. Ultimate/_t_!Movie_c2_opening_jp.ogg.flac", // smash bros opening with female asian vocals
         "switch/Super Smash Bros. Ultimate/j40_hr_menutitle.lopus.flac", // harmonized electric guitars
@@ -105,6 +108,7 @@
         "switch/Atelier Firis - The Alchemist and the Mysterious Journey DX/_t_pack00_a10_003.kno.flac", // progressive metal
         "vita/Tayutama 2 - You're the only one/015.at9.flac", // sick progressive metal
         "wii/Kamen Rider - Chou Climax Heroes/Stage03.brstm.flac", // progressive metal
+        "vita/Jikkyou Powerful Pro Yakyuu 2018/Music_Menu-0834-event.txtp.flac", // progressive
         "3sf/Future Card Buddyfight Mezase! Buddy Champion!/BGM16.dspadpcm.bcstm.flac", // metal
         "switch/Legend of Heroes - Trails of Cold Steel III, The/ed8466.lopus.flac", // metal
 
@@ -129,7 +133,7 @@
         "3sf/Inazuma Eleven Everyday/STRM_BGM43_SAD_PAST_PIANO_VERSION.bcstm.flac" // nice solo piano
         //*/
 
-        //"switch/Super Smash Bros. Ultimate"
+        //"switch/Super Smash Bros. Ultimate",
         //"wii/Kamen Rider - Chou Climax Heroes"
 
         //"switch/Blazing Chrome"
@@ -175,9 +179,9 @@
         "spc/Umihara Kawase"
         /*/
         
-        //"psf/Mega Man X4"
+        //"psf/Mega Man X4",
         //"psf/Mega Man X5",
-        //"psf/Mega Man X6"
+        //"psf/Mega Man X6",
         //"psf/Mega Man 8"
         //"switch/Mega Man X Legacy Collection",
         //"switch/Mega Man X Legacy Collection 2"
@@ -208,7 +212,6 @@
         //"psf/Street Fighter Alpha 3",
         //"psf/Gradius Gaiden"
         //"psf/Descent Maximum"
-        //"ssf/Command & Conquer - Red Alert" // cool shit
 
         /* // high-def jazzy electronic (bomberman 64-esque)
         "psp/Conception - Ore no Kodomo o Unde Kure!!/bgm042.at3.flac",
@@ -292,7 +295,7 @@
         //*/
         //"psf2/Fisherman's Challenge"
 
-        //* // metal
+        /* // metal
         //"psf3/One Piece - Pirate Warriors 3/BGMLink_00000007.at3.flac",
         //"switch/eBaseball Powerful Pro Yakyuu 2020/_t_wem_1004274880.wem.flac",
         //"vita/Tayutama 2 - You're the only one/015.at9.flac", // sick progressive metal
@@ -301,23 +304,28 @@
         //"psf3/One Piece - Pirate Warriors 3/BGMLink_00000007.at3.flac",
         //"switch/eBaseball Powerful Pro Yakyuu 2020/_t_wem_1004274880.wem.flac",
         "vita/Tayutama 2 - You're the only one/015.at9.flac", // sick progressive metal ***
+        "vita/Tayutama 2 - You're the only one/015.at9.flac", // sick progressive metal ***
         //"vita/Tayutama 2 - You're the only one/015.at9.flac", // sick progressive metal ***
         
+        "switch/Legend of Heroes - Trails of Cold Steel III, The/ed8466.lopus.flac",
         "switch/Legend of Heroes - Trails of Cold Steel III, The/ed8466.lopus.flac",
         //"switch/Legend of Heroes - Trails of Cold Steel III, The/ed8466.lopus.flac",
 
         "wii/Kamen Rider - Chou Climax Heroes/Stage03.brstm.flac", // progressive metal
         "wii/Kamen Rider - Chou Climax Heroes/Stage03.brstm.flac", // progressive metal
-        "wii/Kamen Rider - Chou Climax Heroes/Stage03.brstm.flac", // progressive metal
-        "wii/Kamen Rider - Chou Climax Heroes/Stage03.brstm.flac", // progressive metal
+        "vita/Jikkyou Powerful Pro Yakyuu 2018/Music_Menu-0834-event.txtp.flac", // progressive
+        "vita/Jikkyou Powerful Pro Yakyuu 2018/Music_Menu-0834-event.txtp.flac", // progressive
+        "vita/Super Heroine Chronicle - Chou Heroine Senki/bgm_btl_tangel.at9.flac", // progressive
+        "vita/Super Heroine Chronicle - Chou Heroine Senki/bgm_btl_tangel.at9.flac", // progressive
 
+        "vita/Gundam Breaker 2/bgm.awb.00011.at9.flac",
         "vita/Gundam Breaker 2/bgm.awb.00011.at9.flac"
         //"vita/Gundam Breaker 2/bgm.awb.00011.at9.flac"
 
         //"switch/Super Smash Bros. Ultimate/j40_hr_menutitle.lopus.flac" // harmonized electric guitars
         //*/
 
-        /* // jazz
+        /* // progressive jazz fusion
         "dsf/Metropolis Street Racer Prototype/file_15.adx.flac",
         "dsf/Metropolis Street Racer Prototype/file_15.adx.flac",
         "dsf/Metropolis Street Racer Prototype/file_15.adx.flac",
@@ -361,8 +369,8 @@
 
         /*
         "psf/Mega Man X6/11. BLAZE HEATNIX STAGE.xa.flac",
-        "psf/Final Fantasy VII/416 One-Winged Angel.minipsf.flac",
-        "psf/Final Fantasy VII/111 Fanfare.minipsf.flac",
+        //"psf/Final Fantasy VII/416 One-Winged Angel.minipsf.flac",
+        //"psf/Final Fantasy VII/111 Fanfare.minipsf.flac",
         "psf/Soul Blade/SLUS-00240_SOULXA_01016401_0000.xa.flac",
         "psf/Tony Hawk's Pro Skater 2/_t_MOVIE_INTRO.XA.flac",
         "dsf/Metropolis Street Racer Prototype/file_15.adx.flac",
@@ -370,7 +378,7 @@
         //*/
     ],
     "unet_params": {
-        "seed": 100,
+        "seed": null,
         "seamless_loop": false,
 
         //"length": null,
@@ -378,24 +386,24 @@
         //"length": 2097152,
         //"length": 308768,
         
-        "num_steps": 200,//300,//500
-        "cfg_scale": 4,//5,//4,//3.5,//4//3//1.5,
-        "use_heun": false,
+        "num_steps": 1000,//400,//200,//300,//500
+        "cfg_scale": 4,//6/4.4//5,//4,//3.5,//4//3//1.5,
+        "use_heun": false, //false,
 
         //"schedule": "ln_linear",
         //"rho": 1,
 
-        "schedule": "edm2",
-        "rho": 7,
+        //"schedule": "edm2",
+        //"rho": 7,
 
-        //"schedule": "cos",
-        //"rho": 1.35,
+        "schedule": "cos",
+        "rho": 1.35,
 
-        "sigma_max": 200,
+        "sigma_max": 1000,//200,
         "sigma_min": 0.08,
         
-        "input_perturbation": 1,//0.2,//0.016,//0.005568,//0.016,//0.12,//0.1//0.01
-        "input_perturbation_offset": -2.5//-1//-0.85//-0.35//-0.85//100
+        "input_perturbation": 0.4,//0.5,//0.08,//0.2
+        "input_perturbation_offset": -4//-1//-2.5//-1//-0.85
     },
     "ddecm_params": {
 
@@ -419,7 +427,7 @@
         "schedule": "cos",
         "rho": 1,
 
-        "sigma_max": 200,
+        "sigma_max": 200,//200,
         "sigma_min": 1e-3,
 
         "input_perturbation": 0.5,

@@ -217,30 +217,24 @@ def dae_test() -> None:
             #latents = dae.latents_stats_tracker.remove_mean(latents)
             #latents = dae.latents_stats_tracker.unscale(latents)
         else:
-            latents = None
-            ddec_cond = input_ms_psd_scaled
+            latents = ddec_cond = None
 
         # ***************** ddec stage *****************
         #ddecm = None; output_ddecm = ddec_cond
         #ddecp = None
 
-        if ddecm is not None:
-
-            if test_params.get("dae_bypass", False) == False:
-                ddecm_x_ref = ddec_cond
-            else:
-                ddecm_x_ref = input_ms_psd_scaled
+        if ddecm is not None and ddec_cond is not None:
 
             ddecm_params = SampleParams(
                 seed=5000,
                 num_steps=25, length=audio_len, cfg_scale=0, input_perturbation=0, input_perturbation_offset=0,
-                use_heun=True, schedule="edm2", rho=7, sigma_max=1, sigma_min=0.01, stereo_fix=0, use_x_ref_as_init=True
+                use_heun=True, schedule="ln_linear", rho=1, sigma_max=200, sigma_min=0.08, stereo_fix=0
             )
 
             output_ddecm = pipeline.diffusion_decode(
                 ddecm_params, audio_embedding=audio_embedding,
                 sample_shape=input_ms_psd_scaled.shape,
-                x_ref=ddecm_x_ref, module=ddecm).float()
+                x_ref=ddec_cond, module=ddecm).float()
             
         else:
             output_ddecm = None
@@ -256,7 +250,7 @@ def dae_test() -> None:
                 
             ddecp_params = SampleParams(
                 seed=5000,
-                num_steps=50, length=audio_len, cfg_scale=0, input_perturbation=0, input_perturbation_offset=0,
+                num_steps=50, length=audio_len, cfg_scale=0, input_perturbation=0.5, input_perturbation_offset=0,
                 use_heun=False, schedule="cos", rho=1, sigma_max=1000, sigma_min=1e-3, stereo_fix=0
             )
 
