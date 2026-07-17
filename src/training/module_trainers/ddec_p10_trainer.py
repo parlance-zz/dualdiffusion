@@ -333,9 +333,6 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
             if ddecp_x_ref is not None:
                 print(f"ddecp_x_ref.shape:", ddecp_x_ref.shape)
 
-            if ddecm_x_ref is not None:
-                print(f"ddecm_x_ref.shape:", ddecm_x_ref.shape)
-
         return logs
       
     @torch.no_grad()
