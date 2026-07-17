@@ -60,7 +60,7 @@ class UNetConfig(DualDiffusionUNetConfig):
     adg_max_balance: Optional[float]  = 0.9
     adg_weight_decay: Optional[float] = None
 
-    model_channels: int  = 6144                # Base multiplier for the number of channels.
+    model_channels: int  = 4096                # Base multiplier for the number of channels.
     logvar_channels: int = 192                 # Number of channels for training uncertainty estimation.
     channel_mult: list[int] = (1,)             # Per-resolution multipliers for the number of channels.
     channel_mult_noise: Optional[float] = 0.25 # Multiplier for noise embedding dimensionality.
@@ -76,8 +76,8 @@ class UNetConfig(DualDiffusionUNetConfig):
     conv0_kernel_size: int = 3
     conv1_kernel_size: int = 1
     mlp_multiplier: int    = 3               # Multiplier for the number of channels in the MLP.
-    mlp_groups: int        = 48              # Number of groups for the MLPs.
-    emb_linear_groups: int = 48
+    mlp_groups: int        = 32              # Number of groups for the MLPs.
+    emb_linear_groups: int = 32
 
 class Block(torch.nn.Module):
 
