@@ -28,7 +28,7 @@
     "ddec_output": false,
     "add_random_test_samples": 20,
     "random_test_samples_seed": 29999999999999999999999999,
-    "copy_sample_source_files": true,
+    "copy_sample_source_files": false,
     "test_samples": [
         "psf3/Tekken Hybrid/_t_Tekken Tag Tournament 2 Prologue_charasele.lwav.flac",
         "wii/Just Dance 2014/otherside.wav.ckd.flac",

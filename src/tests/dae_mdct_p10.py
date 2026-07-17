@@ -291,9 +291,10 @@ def dae_test() -> None:
             save_img(format.mel_spec.mel_spec_to_img(output_mel_spec), os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_mel_spec_output.png')}"))
 
         if ddec_cond is not None and test_params.get("dae_bypass", False) == False:
-            ddec_cond.clip_(input_ms_psd_scaled.amin(), input_ms_psd_scaled.amax())
-            ddec_cond[0, 0, 0, 0] = input_ms_psd_scaled.amin(); ddec_cond[0, 0, 0, 1] = input_ms_psd_scaled.amax()
-            save_img(format.ms_psd_to_img(ddec_cond), os.path.join(output_path, "2", f"step_{last_global_step}_{filename.replace(file_ext, f'_ms_psd_scaled_cond.png')}"))
+            #ddec_cond.clip_(input_ms_psd_scaled.amin(), input_ms_psd_scaled.amax())
+            #ddec_cond[0, 0, 0, 0] = input_ms_psd_scaled.amin(); ddec_cond[0, 0, 0, 1] = input_ms_psd_scaled.amax()
+            #save_img(format.ms_psd_to_img(ddec_cond), os.path.join(output_path, "2", f"step_{last_global_step}_{filename.replace(file_ext, f'_ms_psd_scaled_cond.png')}"))
+            save_img(super(DAE, dae).latents_to_img(ddec_cond, align_ref=align_ref), os.path.join(output_path, "3", f"step_{last_global_step}_{filename.replace(file_ext, f'_ms_psd_scaled_cond.png')}"))
 
         if (ddec_cond is not None and test_params.get("dae_bypass", False) == False) or (output_ddecm is not None):
             save_img(format.ms_psd_to_img(input_ms_psd_scaled), os.path.join(output_path, "2", f"step_{last_global_step}_{filename.replace(file_ext, f'_ms_psd_scaled_input.png')}"))
