@@ -242,6 +242,8 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
                 "io_stats_dae/latents_per_ch_mean": self.dae.latents_stats_tracker.mean.abs().mean(),
                 "io_stats_dae/latents_per_ch_msq": self.dae.latents_stats_tracker.msq.mean(),
                 "io_stats_dae/latents_sigma": self.config.add_latents_noise if self.config.add_latents_noise is not None else 0,
+                "io_stats_dae/ddec_cond_msq": ddec_cond.pow(2).mean(dim=(1,2,3)).detach(),
+                "io_stats_dae/ddec_cond_mean": ddec_cond.mean(dim=(1,2,3)).detach()
             })
             
             if self.dae.config.latent_channels <= 8:
