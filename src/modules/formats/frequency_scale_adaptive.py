@@ -104,6 +104,7 @@ def _create_uniform_coverage_triangles(all_freqs: torch.Tensor, f_pts: torch.Ten
 class FrequencyScale(torch.nn.Module):
     def __init__(
         self,
+        alpha: Optional[float] = None,
         freq_min: float = 0.0,
         freq_max: Optional[float] = None,
         sample_rate: int = 32000,
@@ -129,7 +130,7 @@ class FrequencyScale(torch.nn.Module):
 
         self._adaptive_mel_min = float(_hz_to_mel(self.freq_min))
         self._adaptive_mel_max = float(_hz_to_mel(self.freq_max))
-        self._adaptive_alpha = self._solve_minimum_alpha()
+        self._adaptive_alpha = alpha if alpha is not None else self._solve_minimum_alpha()
 
         self.filters: torch.Tensor
         self.register_buffer("filters", self.get_filters(), persistent=False)

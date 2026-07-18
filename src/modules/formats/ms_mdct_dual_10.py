@@ -84,6 +84,7 @@ class MS_MDCT_DualFormatConfig(DualDiffusionFormatConfig):
     ms_psd_t_scale: float = 2.3
     ms_psd_window_len: int = 1023
     ms_psd_num_filters: int = 128
+    ms_psd_filter_alpha: Optional[float] = None
     ms_psd_p_real: list[tuple[float, float]] = ( (2,0), (1,1), (-1,1), (0,1) )
     ms_psd_p_imag: list[tuple[float, float]] = ( (0,0), (0,0), ( 0,0), (1,0) )
     ms_psd_center_p_real: tuple[float, float] = (2,0)
@@ -105,7 +106,7 @@ class MS_MDCT_DualFormat(DualDiffusionFormat):
         super().__init__()
         self.config = config
 
-        assert int(1/self.config.mdct_psd_exponent) == 1/self.config.mdct_psd_exponent, "mdct_psd_exponent must be the reciprocal of an integer"
+        #assert int(1/self.config.mdct_psd_exponent) == 1/self.config.mdct_psd_exponent, "mdct_psd_exponent must be the reciprocal of an integer"
 
         # ***** mel_spec setup *****
 
@@ -124,6 +125,7 @@ class MS_MDCT_DualFormat(DualDiffusionFormat):
         
         assert config.ms_psd_num_frequencies % config.num_frequencies == 0
         self.ms_psd_freq_scale = FrequencyScale(
+            alpha=config.ms_psd_filter_alpha,
             freq_min=0,
             freq_max=config.sample_rate / 2,
             sample_rate=config.sample_rate,
@@ -263,9 +265,9 @@ class MS_MDCT_DualFormat(DualDiffusionFormat):
         mdct_phase = mdct_phase * self.mdct_phase_scale
         mdct_psd = mdct_psd * self.mdct_psd_scale - self.mdct_psd_offset
 
-        #mdct_psd = mdct_psd.clip(min=0).pow(1 / self.config.mdct_psd_exponent - 1)
-        recon_exp = int((1 / self.config.mdct_psd_exponent - 1) / 2) * 2 + 1
-        mdct_psd = mdct_psd.pow(recon_exp)
+        mdct_psd = mdct_psd.clip(min=0).pow(1 / self.config.mdct_psd_exponent - 1)
+        #recon_exp = int((1 / self.config.mdct_psd_exponent - 1) / 2) * 2 + 1
+        #mdct_psd = mdct_psd.pow(recon_exp)
         raw_samples = self.imdct(mdct_phase * mdct_psd).real.contiguous()
         return raw_samples
         
