@@ -60,7 +60,8 @@ class MSSLoss2DConfig:
     sample_rate: float = 32000
     mel_density_pow: float = 0
     loss_weight_pow : float = 0.5
-    split_center_on_midside: bool = False
+    use_complex_loss: bool = False
+    gaussian_window_t_scale: float = 2.26
 
 class MSSLoss2D:
 
@@ -129,8 +130,12 @@ class MSSLoss2D:
         block_width  = width  * supersample_x
         block_height = height * supersample_y
 
-        hx = self._flat_top_window((torch.arange(block_height, device=self.device) + 0.5) / block_height * 2 * torch.pi)
-        wx = self._flat_top_window((torch.arange(block_width,  device=self.device) + 0.5) / block_width  * 2 * torch.pi)
+        if self.config.use_complex_loss == False:
+            hx = self._flat_top_window((torch.arange(block_height, device=self.device) + 0.5) / block_height * 2 * torch.pi)
+            wx = self._flat_top_window((torch.arange(block_width,  device=self.device) + 0.5) / block_width  * 2 * torch.pi)
+        else:
+            hx = self.get_gaussian_window(block_height)
+            wx = self.get_gaussian_window(block_width)
 
         window = hx.view(1, 1,-1, 1) * wx.view(1, 1, 1,-1)
         if supersample_x > 1 or supersample_y > 1:
@@ -141,6 +146,12 @@ class MSSLoss2D:
         self.windows[width, height] = window
         return window
     
+    @torch.no_grad()
+    def get_gaussian_window(self, window_len: int) -> torch.Tensor:
+        t = torch.linspace(-self.config.gaussian_window_t_scale,
+            self.config.gaussian_window_t_scale, window_len, device=self.device)
+        return (-torch.pi * t.pow(2)).exp()
+
     def stft2d(self, x: torch.Tensor, block_width: int, block_height: int, order: tuple[int],
                step_w: int, step_h: int, window: torch.Tensor, offset_h: int, offset_w: int, end_offset_h: int, end_offset_w: int, midside: bool) -> torch.Tensor:
         
@@ -150,21 +161,17 @@ class MSSLoss2D:
         x = torch.fft.rfft2(x * window, norm="ortho", dim=order)
 
         if midside == True:
-            if self.config.split_center_on_midside == True:
-                y = x[:, :1]
-                x = torch.fft.fft(x[:, 1:], dim=1, norm="ortho")
-                x = torch.cat((y, x), dim=1)
-            else:
-                x = torch.fft.fft(x, dim=1, norm="ortho")
+            x = torch.fft.fft(x, dim=1, norm="ortho")
 
         return x
     
     def mss_loss(self, sample: torch.Tensor, target: torch.Tensor,
             leak_pow: Optional[float] = None, leak_max: Optional[float] = None) -> torch.Tensor:
 
-        if leak_pow is not None and leak_max is not None:  # useful at start of training for preventing polarity mismatch
-            rnd_t = np.random.rand()**leak_pow * leak_max  # disable afterwards for better performance
-            sample = torch.lerp(sample, target.detach(), rnd_t)
+        if self.config.use_complex_loss == False:
+            if leak_pow is not None and leak_max is not None:  # useful at start of training for preventing polarity mismatch without complex loss
+                rnd_t = np.random.rand()**leak_pow * leak_max  # disable after ~200 steps for improved performance
+                sample = torch.lerp(sample, target.detach(), rnd_t)
         
         loss = torch.zeros(target.shape[0], device=self.device)
 
@@ -215,27 +222,18 @@ class MSSLoss2D:
                     mel_density = get_mel_density(hz).pow(self.config.mel_density_pow)
                     mel_density /= mel_density.mean()
                     loss_weight = loss_weight / mel_density.view(1, 1,-1, 1, 1, 1)
-                """
-                if order == (-2, -1):
-                    blockfreq_y = torch.fft.fftfreq(block_height, 1/block_height, device=self.device)
-                    blockfreq_x = torch.arange(block_width//2 + 1, device=self.device)
-                else:
-                    blockfreq_y = torch.arange(block_height//2 + 1, device=self.device)
-                    blockfreq_x = torch.fft.fftfreq(block_width, 1/block_width, device=self.device)
-                loss_weight = 1 / ((blockfreq_y.square().view(-1, 1) + blockfreq_x.square().view(1, -1)).sqrt() + 1)
-                loss_weight = loss_weight[None, None, None, None, :, :] / 0.100311111
-                if midside == True:
-                    #loss_weight = loss_weight / (torch.arange(target_fft_abs.shape[1], device=self.device) + 1)[None, :, None, None, None, None]
-                    loss_weight = loss_weight * target_fft_abs.pow(2).mean(dim=(0,2,3,4,5), keepdim=True).clip(min=self.config.psd_eps).pow(0.5) 
-                """
 
             sample_fft = self.stft2d(sample, block_width, block_height, order,
                 step_w, step_h, window, offset_h, offset_w, end_offset_h, end_offset_w, midside)
 
-            sample_fft_abs = sample_fft.abs()
-            
-            mse_loss = torch.nn.functional.mse_loss(sample_fft_abs.float(), target_fft_abs.float(), reduction="none")
-            loss = loss + (mse_loss / loss_weight).mean(dim=(1,2,3,4,5)) #** 2
+            if self.config.use_complex_loss == False:
+                sample_fft_abs = sample_fft.abs()
+                mse_loss = torch.nn.functional.mse_loss(sample_fft_abs.float(), target_fft_abs.float(), reduction="none")
+            else:
+                mse_loss = torch.nn.functional.mse_loss(sample_fft.real, target_fft.real, reduction="none") + \
+                           torch.nn.functional.mse_loss(sample_fft.imag, target_fft.imag, reduction="none")
+
+            loss = loss + (mse_loss / loss_weight).mean(dim=(1,2,3,4,5))
 
         return loss * self.loss_scale
 
