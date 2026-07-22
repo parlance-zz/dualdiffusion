@@ -87,7 +87,8 @@ class Block(torch.nn.Module):
         mlp_groups: int        = 1,        # Number of groups for the MLP.
         emb_linear_groups: int = 1,
         channels_per_head: int = 64,       # Number of channels per attention head.
-        use_attention: bool    = False     # Use self-attention in this block.
+        use_attention: bool    = False,    # Use self-attention in this block.
+        skip_channels: int = 0,
     ) -> None:
         super().__init__()
 
@@ -112,6 +113,16 @@ class Block(torch.nn.Module):
         else:
             self.conv_skip = None
 
+        if skip_channels > 0:
+            assert self.flavor == "dec"
+            self.conv_skip2 = MPConv(skip_channels, out_channels, kernel=(1,1), groups=1)
+
+            self.emb_gain_skip2 = torch.nn.Parameter(torch.zeros([]))
+            self.emb_linear_skip2 = MPConv(emb_channels, skip_channels,
+                kernel=(1,1), groups=emb_linear_groups) if emb_channels != 0 else None
+        else:
+            self.conv_skip2 = self.emb_gain_skip2 = self.emb_linear_skip2 = None
+
         self.emb_gain = torch.nn.Parameter(torch.zeros([]))
         self.emb_linear = MPConv(emb_channels, out_channels * mlp_multiplier,
             kernel=(1,1), groups=emb_linear_groups) if emb_channels != 0 else None
@@ -125,7 +136,7 @@ class Block(torch.nn.Module):
             self.emb_gain_qkv = torch.nn.Parameter(torch.zeros([]))
             self.emb_linear_qkv = MPConv(emb_channels, out_channels, kernel=(1,1))
 
-    def forward(self, x: torch.Tensor, emb: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, emb: torch.Tensor, skip: Optional[torch.Tensor] = None) -> torch.Tensor:
         
         if self.flavor == "enc":
             if self.conv_skip is not None:
@@ -148,6 +159,11 @@ class Block(torch.nn.Module):
 
         if self.flavor == "dec" and self.conv_skip is not None:
             x = self.conv_skip(x)
+
+        if self.conv_skip2 is not None:
+            c = self.emb_linear_skip2(emb, gain=self.emb_gain_skip2) + 1.
+            x = mp_sum(x, self.conv_skip2(skip * c), t=0.5)
+
         x = mp_sum(x, y, t=self.res_balance)
         
         if self.use_attention:
@@ -260,11 +276,11 @@ class UNet(DualDiffusionUNet):
                     use_attention=level in config.attn_levels, flavor="dec", resample_mode="up", **block_kwargs)
 
             for idx in range(config.num_layers_per_block + 1):
-                cin = cout + skips.pop()
+                cin = cout #+ skips.pop()
                 cout = channels
                 self.dec[f"block{level}_layer{idx}"] = Block(level, cin, cout, cemb, num_freqs,
-                    use_attention=level in config.attn_levels, flavor="dec", **block_kwargs)
-                
+                    use_attention=level in config.attn_levels, flavor="dec", skip_channels=skips.pop()*2, **block_kwargs)
+
         self.out_gain = torch.nn.Parameter(torch.zeros([]))
         self.conv_out = MPConv(cout, config.out_channels, kernel=(3,3))
 
@@ -333,8 +349,10 @@ class UNet(DualDiffusionUNet):
         # decoder
         for name, block in self.dec.items():
             if "layer" in name:
-                x = mp_cat(x, skips.pop() + x_ref.pop(), t=self.config.concat_balance)
-            x = block(x, emb)
+                skip = mp_cat(skips.pop(), x_ref.pop(), t=self.config.concat_balance)
+                x = block(x, emb, skip)
+            else:
+                x = block(x, emb)
 
         x: torch.Tensor = self.conv_out(x, gain=self.out_gain)
         D_x: torch.Tensor = c_skip * x_in.float() + c_out * x.float()

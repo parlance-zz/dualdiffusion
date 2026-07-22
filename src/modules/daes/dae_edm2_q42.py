@@ -271,7 +271,6 @@ class DAE(DualDiffusionDAE):
         # decoder
         self.dec = torch.nn.ModuleDict()
         cin = dec_channels[-1]
-        num_cond_blocks = 0
 
         for level in reversed(range(0, self.num_levels)):
             
@@ -289,12 +288,6 @@ class DAE(DualDiffusionDAE):
                 cout = dec_channels[level]
                 self.dec[f"block{level}_layer{idx}"] = Block(level, cout, cout, cemb,
                     use_attention=level in config.attn_levels, flavor="dec", **block_kwargs)
-                
-                if level < config.num_cond_levels:
-                    num_cond_blocks += 1
-
-        self.num_cond_blocks = num_cond_blocks
-        self.cond_out_gain = torch.nn.Parameter(torch.zeros(num_cond_blocks))
             
     def get_embeddings(self, emb_in: torch.Tensor) -> torch.Tensor:
         if self.emb_label is not None:
@@ -375,8 +368,8 @@ class DAE(DualDiffusionDAE):
         for name, block in self.dec.items():
             x = block(x, embeddings)
             if block.level < self.config.num_cond_levels and "layer" in name:
-                cond_gain = 2 ** (-2 * (self.config.num_cond_levels - block.level - 1))
-                outputs.append(x * self.cond_out_gain[len(outputs)] * cond_gain)
+                #cond_gain = 2 ** (-2 * (self.config.num_cond_levels - block.level - 1))
+                outputs.append(x)
 
         return outputs
     
