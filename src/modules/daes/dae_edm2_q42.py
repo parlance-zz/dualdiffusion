@@ -283,9 +283,6 @@ class DAE(DualDiffusionDAE):
             else:
                 self.dec[f"block{level}_up"] = Block(level, cin, cout, cemb,
                     use_attention=level in config.attn_levels, flavor="dec", resample_mode="up", **block_kwargs)
-            
-            if level < config.num_cond_levels:
-                num_cond_blocks += 1
 
             for idx in range(config.num_dec_layers_per_block + 1):
                 cin = cout
@@ -375,9 +372,9 @@ class DAE(DualDiffusionDAE):
             embeddings = embeddings[:, :, None, None]
 
         outputs: list[torch.Tensor] = []
-        for block in self.dec.values():
+        for name, block in self.dec.items():
             x = block(x, embeddings)
-            if block.level < self.config.num_cond_levels:
+            if block.level < self.config.num_cond_levels and "layer" in name:
                 cond_gain = 2 ** (-2 * (self.config.num_cond_levels - block.level - 1))
                 outputs.append(x * self.cond_out_gain[len(outputs)] * cond_gain)
 
