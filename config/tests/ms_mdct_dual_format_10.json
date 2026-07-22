@@ -1,7 +1,7 @@
 {
     "device": "cuda",
-    "add_random_test_samples": 100000,
-    "save_output": false,
+    "add_random_test_samples": 0,
+    "save_output": true,
     
     "test_sample_verbose": false,
     "test_samples_seed": 0,
@@ -19,8 +19,9 @@
         //"default_raw_length": 3833600,
         //"default_raw_length": 2817536,
         //"default_raw_length": 2097152,
-        //"default_raw_length": 1408768,
-        "default_raw_length": 131072,
+        "default_raw_length": 1408768,
+        //"default_raw_length": 808768,
+        //"default_raw_length": 131072,
         //"default_raw_length": 96000,
         "width_alignment": 8192,
 
@@ -40,11 +41,11 @@
         "ms_psd_t_scale": 2.26,      // -120db noise floor at ms_psd window edge
         //"ms_psd_t_scale": 2.71828, 
         //"ms_psd_t_scale": 5.436563657,
-        //"ms_psd_t_scale": 3.5,
+        //"ms_psd_t_scale": 3.14,
 
         "ms_psd_window_len": 1023,
         "ms_psd_num_filters": 128,
-        "ms_psd_filter_alpha": 1,
+        "ms_psd_filter_alpha": null,
 
         "mel_spec_config": {
             "sample_rate": 32000,

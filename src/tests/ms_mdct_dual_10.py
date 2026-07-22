@@ -78,6 +78,10 @@ def ms_mdct_dual_format_test() -> None:
     print(dict_str(format.config.__dict__))
     
     print(f"MS-PSD Adaptive FrequencyScale Alpha: {format.ms_psd_freq_scale._adaptive_alpha}")
+    unscaled_freqs = format.ms_psd_freq_scale.get_unscaled(format.config.ms_psd_num_filters + 2)[1:-1]
+    for i in range(format.config.ms_psd_num_filters):
+        print(f"filter {i:03d}: {unscaled_freqs[i]:.2f} hz")
+        
     format.ms_psd_win_h0.cpu().numpy().tofile(os.path.join(output_path, "ms_psd_wnd_h0.raw"))
     format.ms_psd_win_h1.cpu().numpy().tofile(os.path.join(output_path, "ms_psd_wnd_h1.raw"))
 
