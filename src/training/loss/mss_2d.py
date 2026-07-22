@@ -119,6 +119,12 @@ class MSSLoss2D:
                 - 0.083578947 * torch.cos(3*x) + 0.006947368 * torch.cos(4*x))
 
     @torch.no_grad()
+    def _gaussian_window(self, window_len: int) -> torch.Tensor:
+        t = torch.linspace(-self.config.gaussian_window_t_scale,
+            self.config.gaussian_window_t_scale, window_len, device=self.device)
+        return (-torch.pi * t.pow(2)).exp()
+    
+    @torch.no_grad()
     def get_flat_top_window_2d(self, width: int, height: int, supersample: int = 9, supersample_threshold: int = 256) -> torch.Tensor:
 
         if (width, height) in self.windows:
@@ -134,8 +140,8 @@ class MSSLoss2D:
             hx = self._flat_top_window((torch.arange(block_height, device=self.device) + 0.5) / block_height * 2 * torch.pi)
             wx = self._flat_top_window((torch.arange(block_width,  device=self.device) + 0.5) / block_width  * 2 * torch.pi)
         else:
-            hx = self.get_gaussian_window(block_height)
-            wx = self.get_gaussian_window(block_width)
+            hx = self._gaussian_window(block_height)
+            wx = self._gaussian_window(block_width)
 
         window = hx.view(1, 1,-1, 1) * wx.view(1, 1, 1,-1)
         if supersample_x > 1 or supersample_y > 1:
@@ -145,12 +151,6 @@ class MSSLoss2D:
 
         self.windows[width, height] = window
         return window
-    
-    @torch.no_grad()
-    def get_gaussian_window(self, window_len: int) -> torch.Tensor:
-        t = torch.linspace(-self.config.gaussian_window_t_scale,
-            self.config.gaussian_window_t_scale, window_len, device=self.device)
-        return (-torch.pi * t.pow(2)).exp()
 
     def stft2d(self, x: torch.Tensor, block_width: int, block_height: int, order: tuple[int],
                step_w: int, step_h: int, window: torch.Tensor, offset_h: int, offset_w: int, end_offset_h: int, end_offset_w: int, midside: bool) -> torch.Tensor:
