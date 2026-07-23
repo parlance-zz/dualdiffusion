@@ -61,8 +61,8 @@ class DiffusionDecoder_Trainer_Config(ModuleTrainerConfig):
     #latents_sigreg_loss_weight: float = 0
     #sigreg_loss_warmup_steps: int = 0
     
-    #mss_2d_leak_pow: float = 4
-    #mss_2d_leak_steps: int = 200
+    mss_2d_leak_pow: float = 4
+    mss_2d_leak_steps: int = 200
     #dae_mae_loss_weight: float = 0.5
     #dae_mse_loss_weight: float = 8
     #mel_density_loss_weight_pow_dae: float = 0
@@ -316,7 +316,14 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
             logs["loss"] = logs["loss"] + logs["loss/dae_recon_nll"]
             """
 
-            logs["loss/mss_2d"] = self.mss_2d.mss_loss(ddec_cond[-1], ms_psd_scaled)
+            if self.config.mss_2d_leak_steps > 0:
+                leak_max = 1 - min(self.trainer.global_step / self.config.mss_2d_leak_steps, 1)
+                if leak_max <= 0: leak_max = None
+            else:
+                leak_max = None
+            logs["io_stats_dae/mss_2d_leak_max"] = leak_max if leak_max is not None else 0
+
+            logs["loss/mss_2d"] = self.mss_2d.mss_loss(ddec_cond[-1], ms_psd_scaled, leak_pow=self.config.mss_2d_leak_pow, leak_max=leak_max)
 
             logs["loss/dae_mae"] = torch.nn.functional.l1_loss( ddec_cond[-1], ms_psd_scaled, reduction="none").mean(dim=(1,2,3)).detach()
             logs["loss/dae_mse"] = torch.nn.functional.mse_loss(ddec_cond[-1], ms_psd_scaled, reduction="none").mean(dim=(1,2,3)).detach()
