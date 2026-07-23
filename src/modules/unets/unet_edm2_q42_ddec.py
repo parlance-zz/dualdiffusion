@@ -54,7 +54,7 @@ class UNetConfig(DualDiffusionUNetConfig):
     model_channels: int  = 128               # Base multiplier for the number of channels.
     logvar_channels: int = 192               # Number of channels for training uncertainty estimation.
     channel_mult: list[int]    = (1,2,3,4)   # Per-resolution multipliers for the number of channels.
-    double_midblock: bool      = True
+    double_midblock: bool      = False
     midblock_attn: bool        = True
     channel_mult_noise: Optional[int] = 4    # Multiplier for noise embedding dimensionality.
     channel_mult_emb: Optional[int]   = 4    # Multiplier for final embedding dimensionality.
@@ -65,7 +65,7 @@ class UNetConfig(DualDiffusionUNetConfig):
     res_balance: float        = 0.3          # Balance between main branch (0) and residual branch (1).
     attn_balance: float       = 0.3          # Balance between main branch (0) and self-attention (1).
     attn_levels: list[int]    = (3,)         # List of resolution levels to use self-attention.
-    mlp_multiplier: int    = 1               # Multiplier for the number of channels in the MLP.
+    mlp_multiplier: int    = 2               # Multiplier for the number of channels in the MLP.
     mlp_groups: int        = 1               # Number of groups for the MLPs.
     emb_linear_groups: int = 1
 
@@ -117,11 +117,8 @@ class Block(torch.nn.Module):
             assert self.flavor == "enc"
 
             self.cond_gain = torch.nn.Parameter(torch.zeros([]))
-            if mlp_multiplier > 1:
-                self.conv_cond = MPConv(cond_channels, out_channels * mlp_multiplier,
-                    kernel=(1,1), groups=1)
-            else:
-                self.conv_cond = torch.nn.Identity()
+            self.conv_cond = MPConv(cond_channels, out_channels * mlp_multiplier,
+                kernel=(1,1), groups=1)
         else:
             self.cond_gain = self.conv_cond = None
 
@@ -335,10 +332,12 @@ class UNet(DualDiffusionUNet):
         skips = []
         for name, block in self.enc.items():
             if "conv" in name:
-                x = block(x) + self.conv_x_ref_in(x_ref.pop(), gain=self.x_ref_gain)
+                cond_gain = 2 ** (-2 * (self.num_levels - 1))
+                x = block(x) + self.conv_x_ref_in(x_ref.pop(), gain=self.x_ref_gain) * cond_gain
             else:
                 if "layer" in name:
-                    x = block(x, emb, cond=x_ref.pop())
+                    cond_gain = 2 ** (-2 * (self.num_levels - block.level - 1))
+                    x = block(x, emb, cond=x_ref.pop() * cond_gain)
                 else:
                     x = block(x, emb)
             skips.append(x)
