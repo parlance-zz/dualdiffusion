@@ -116,11 +116,11 @@ class Block(torch.nn.Module):
         if cond_channels > 0:
             assert self.flavor == "enc"
 
-            self.cond_gain = torch.nn.Parameter(torch.zeros([]))
+            self.cond_balance = torch.nn.Parameter(torch.zeros([]))
             self.conv_cond = MPConv(cond_channels, out_channels * mlp_multiplier,
                 kernel=(1,1), groups=1)
         else:
-            self.cond_gain = self.conv_cond = None
+            self.cond_balance = self.conv_cond = None
 
         self.emb_gain = torch.nn.Parameter(torch.zeros([]))
         self.emb_linear = MPConv(emb_channels, out_channels * mlp_multiplier,
@@ -149,7 +149,9 @@ class Block(torch.nn.Module):
         y = self.conv_res0(mp_silu(x))
 
         if self.conv_cond is not None:
-            y = y + self.conv_cond(cond, gain=self.cond_gain)
+            y = mp_sum(y, self.conv_cond(cond), t=self.cond_balance.sigmoid())
+        else:
+            assert cond is None
 
         c = self.emb_linear(emb, gain=self.emb_gain) + 1.
         y = mp_silu(y * c)
@@ -226,7 +228,7 @@ class UNet(DualDiffusionUNet):
 
         # Encoder.
         self.conv_x_ref_in = MPConv(config.in_channels_x_ref, cblock[0], kernel=(3,3), bias=True)
-        self.x_ref_gain = torch.nn.Parameter(torch.zeros([]))
+        self.x_ref_balance = torch.nn.Parameter(torch.zeros([]))
         
         self.enc = torch.nn.ModuleDict()
         cin = config.in_channels
@@ -245,8 +247,9 @@ class UNet(DualDiffusionUNet):
             for idx in range(config.num_layers_per_block):
                 cin = cout
                 cout = channels
+                cond_channels = channels if idx == 0 else 0
                 self.enc[f"block{level}_layer{idx}"] = Block(level, cin, cout, cemb, num_freqs,
-                    use_attention=level in config.attn_levels, flavor="enc", **block_kwargs)
+                    use_attention=level in config.attn_levels, flavor="enc", cond_channels=cond_channels, **block_kwargs)
 
         # Decoder.
         self.dec = torch.nn.ModuleDict()
@@ -332,12 +335,10 @@ class UNet(DualDiffusionUNet):
         skips = []
         for name, block in self.enc.items():
             if "conv" in name:
-                cond_gain = 2 ** (-2 * (self.num_levels - 1))
-                x = block(x) + self.conv_x_ref_in(x_ref.pop(), gain=self.x_ref_gain) * cond_gain
+                x = mp_sum(block(x), self.conv_x_ref_in(x_ref.pop()), t=self.x_ref_balance.sigmoid())
             else:
-                if "layer" in name:
-                    cond_gain = 2 ** (-2 * (self.num_levels - block.level - 1))
-                    x = block(x, emb, cond=x_ref.pop() * cond_gain)
+                if "layer0" in name:
+                    x = block(x, emb, cond=x_ref.pop())
                 else:
                     x = block(x, emb)
             skips.append(x)

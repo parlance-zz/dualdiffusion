@@ -370,7 +370,7 @@ class DAE(DualDiffusionDAE):
         outputs: list[torch.Tensor] = []
         for name, block in self.dec.items():
             x = block(x, embeddings)
-            if block.level < self.config.num_cond_levels and "layer" in name:
+            if block.level < self.config.num_cond_levels and f"layer{self.config.num_dec_layers_per_block - 1}" in name:
                 outputs.append(x)
 
         x: torch.Tensor = self.conv_out(x, gain=self.out_gain)
