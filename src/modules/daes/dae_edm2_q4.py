@@ -53,16 +53,16 @@ class DAE_Config(DualDiffusionDAEConfig):
     in_psd_freqs: int = 128
 
     model_channels: int         = 128        # Base multiplier for the number of channels.
-    channel_mult_enc: int       = (1,2,3,4,5)
-    channel_mult_dec: list[int] = (1,2,3,4,5)
+    channel_mult_enc: int       = (1,2,3,4)
+    channel_mult_dec: list[int] = (1,2,3,4)
     channel_mult_emb: int     = 0            # Multiplier for final embedding dimensionality.
     channels_per_head: int    = 64           # Number of channels per attention head.
     num_enc_layers_per_block: int = 3        # Number of resnet blocks per resolution.
     num_dec_layers_per_block: int = 3        # Number of resnet blocks per resolution.
     res_balance: float        = 0.3          # Balance between main branch (0) and residual branch (1).
     attn_balance: float       = 0.3          # Balance between main branch (0) and self-attention (1).
-    attn_levels: list[int]    = (3,4)        # List of resolution levels to use self-attention.
-    mlp_multiplier: int    = 1               # Multiplier for the number of channels in the MLP.
+    attn_levels: list[int]    = (3,)         # List of resolution levels to use self-attention.
+    mlp_multiplier: int    = 2               # Multiplier for the number of channels in the MLP.
     mlp_groups: int        = 1               # Number of groups for the MLPs.
     emb_linear_groups: int = 1
     add_pixel_norm: bool   = False

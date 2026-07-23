@@ -28,6 +28,51 @@ import numpy as np
 
 from modules.formats.frequency_scale import get_mel_density
 
+import torch
+
+
+def sketch2_2d(
+    x1: torch.Tensor,
+    x2: torch.Tensor,
+    *,
+    normalize: bool = False,
+    generator: torch.Generator | None = None,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """
+    Apply the same random Gaussian CxC channel-mixing matrix to two image-like tensors.
+
+    Args:
+        x1: Tensor of shape (B, C, H, W)
+        x2: Tensor of shape (B, C, H, W)
+        normalize: If True, scales the random matrix by 1/sqrt(C)
+        generator: Optional torch.Generator for reproducibility
+
+    Returns:
+        (y1, y2): transformed tensors, each of shape (B, C, H, W)
+    """
+    if x1.ndim != 4 or x2.ndim != 4:
+        raise ValueError("x1 and x2 must both have shape (B, C, H, W)")
+    if x1.shape != x2.shape:
+        raise ValueError("x1 and x2 must have the same shape")
+
+    B, C, H, W = x1.shape
+    device = x1.device
+    dtype = x1.dtype
+
+    if x2.device != device:
+        raise ValueError("x1 and x2 must be on the same device")
+    if x2.dtype != dtype:
+        raise ValueError("x1 and x2 must have the same dtype")
+
+    G = torch.randn(C, C, device=device, dtype=dtype, generator=generator)
+    if normalize:
+        G = G / (C ** 0.5)
+
+    # mix channels: for each pixel, new_channel_values = G @ old_channel_values
+    y1 = torch.einsum("ij,bjhw->bihw", G, x1)
+    y2 = torch.einsum("ij,bjhw->bihw", G, x2)
+
+    return y1, y2
 
 def _is_prime(n: int) -> bool:
     if n <= 1:
@@ -52,15 +97,16 @@ class MSSLoss2DConfig:
     block_sampling_replace: bool = True
     block_sampling_scale: Literal["linear", "ln_linear", "natural"] = "ln_linear"
 
-    num_iterations: int = 1
-    midside_probability: float = 0.5
+    num_iterations: int = 1          # 10 if use_complex_loss
+    midside_probability: float = 0.5 # 0 if use_complex_loss
     psd_eps: float = 1e-4
-    loss_scale: float = 3
+    loss_scale: float = 3            # 1 if use_complex_loss
 
     sample_rate: float = 32000
     mel_density_pow: float = 0
     loss_weight_pow : float = 0.5
     use_complex_loss: bool = False
+    use_sketching: bool = False     # True if use_complex_loss
     gaussian_window_t_scale: float = 2.26
 
 class MSSLoss2D:
@@ -179,12 +225,18 @@ class MSSLoss2D:
         sample = torch.nn.functional.pad(sample, (static_pad, static_pad, static_pad, static_pad), mode="reflect")
         target = torch.nn.functional.pad(target, (static_pad, static_pad, static_pad, static_pad), mode="reflect")
 
+        _sample = sample
+        _target = target
+
         block_widths  = np.random.choice(self.block_sizes, size=self.config.num_iterations,
             replace=self.config.block_sampling_replace, p=self.block_weights)
         block_heights = np.random.choice(self.block_sizes, size=self.config.num_iterations,
             replace=self.config.block_sampling_replace, p=self.block_weights)
 
         for i in range(self.config.num_iterations):
+            
+            if self.config.use_sketching == True:
+                sample, target = sketch2_2d(_sample, _target)
 
             block_width = int(block_widths[i])
             block_height = int(block_heights[i])

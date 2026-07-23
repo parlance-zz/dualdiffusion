@@ -14,15 +14,15 @@ embedding = CLAP_Embedding(CLAP_Config())
 embedding.save_pretrained(model_path, subfolder="embedding")
 """
 
-from modules.daes.dae_edm2_q42 import DAE, DAE_Config
-dae = DAE(DAE_Config(in_psd_freqs=128, in_num_freqs=128))
+from modules.daes.dae_edm2_q4 import DAE, DAE_Config
+dae = DAE(DAE_Config(in_psd_freqs=256, in_num_freqs=256))
 print_module_info(dae, "dae")
 
 if input("Save module? (y/n) ").lower() == 'y':
     dae.save_pretrained(model_path, subfolder="dae")
     print(f"Saved model to {model_path}/dae")
 
-from modules.unets.unet_edm2_q42_ddec import UNet, UNetConfig
+from modules.unets.unet_edm2_q4_ddec import UNet, UNetConfig
 ddecm = UNet(UNetConfig(in_psd_freqs=128, in_num_freqs=128, in_channels=9, out_channels=9, model_channels=128, in_channels_x_ref=9))
 print_module_info(ddecm, "ddecm")
 
@@ -39,7 +39,7 @@ if input("Save module? (y/n) ").lower() == 'y':
     print(f"Saved model to {model_path}/ddecp")
 
 from modules.unets.unet_edm2_p6 import UNet, UNetConfig
-unet = UNet(UNetConfig(num_layers_per_block=16, in_channels=320, out_channels=320))
+unet = UNet(UNetConfig(num_layers_per_block=16, in_channels=512, out_channels=512))
 print_module_info(unet, "unet")
 
 if input("Save module? (y/n) ").lower() == 'y':
