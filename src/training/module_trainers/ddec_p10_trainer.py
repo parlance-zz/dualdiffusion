@@ -256,6 +256,10 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
                     logs[f"ch_stats/mean_{i}"] = self.dae.latents_stats_tracker.mean[i].detach()
                     logs[f"ch_stats/msq_{i}"]  = self.dae.latents_stats_tracker.msq[i].detach()
 
+            if self.config.add_latents_noise:
+                logs["io_stats_dae/latents_bpd"] = (1 + self.dae.latents_stats_tracker.msq**2 / self.config.add_latents_noise**2).log2().mean() / 2
+                logs["io_stats_dae/latents_ms_psd_bpp"] = logs["io_stats_dae/latents_bpd"] / self.dae.downsample_ratio**2 * self.dae.config.latent_channels
+
         if self.train_ddecp == True:
 
             ddecp_x_ref = self.format.unscale_ms_psd(ms_psd_scaled + torch.randn_like(ms_psd_scaled) * self.config.add_ddecp_x_ref_noise).detach()
