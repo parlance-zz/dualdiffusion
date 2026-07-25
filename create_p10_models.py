@@ -31,7 +31,7 @@ if input("Save module? (y/n) ").lower() == 'y':
     print(f"Saved model to {model_path}/ddecm")
 
 from modules.unets.unet_edm2_q4_ddec import UNet, UNetConfig
-ddecp = UNet(UNetConfig(in_num_freqs=256, in_psd_freqs=1024, in_channels=4, out_channels=4, model_channels=64, in_channels_x_ref=9))
+ddecp = UNet(UNetConfig(in_num_freqs=256, in_psd_freqs=512, in_channels=4, out_channels=4, model_channels=64, in_channels_x_ref=9, channel_mult=(1,2,3,4,5), attn_levels=(3,4)))
 print_module_info(ddecp, "ddecp")
 
 if input("Save module? (y/n) ").lower() == 'y':
@@ -39,7 +39,8 @@ if input("Save module? (y/n) ").lower() == 'y':
     print(f"Saved model to {model_path}/ddecp")
 
 from modules.unets.unet_edm2_p6 import UNet, UNetConfig
-unet = UNet(UNetConfig(num_layers_per_block=16, in_channels=512, out_channels=512))
+#unet = UNet(UNetConfig(num_layers_per_block=16, in_channels=512, out_channels=512))
+unet = UNet(UNetConfig(model_channels=8192, mlp_groups=64, emb_linear_groups=64, num_layers_per_block=24, channel_mult_noise=0.125, in_channels=512, out_channels=512))
 print_module_info(unet, "unet")
 
 if input("Save module? (y/n) ").lower() == 'y':

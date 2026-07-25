@@ -71,6 +71,8 @@ class DiffusionDecoder_Trainer_Config(ModuleTrainerConfig):
     add_ddecp_x_ref_noise: float = 0
     
     add_latents_noise: Optional[float] = 0.08
+    unet_loss_start_weight: float = 0
+    unet_loss_start_steps: int    = 0
     unet_loss_weight: float     = 0.075
     unet_loss_warmup_steps: int = 1500
 
@@ -113,7 +115,7 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
         #        self.train_ddecp = True
         #"""
 
-        if self.train_dae == False and self.train_ddecm == True:
+        if self.train_dae == False and self.train_ddecp == True:
             assert self.trainer.pipeline.dae.config.last_global_step > 0
             self.dae = trainer.pipeline.dae.to(device=trainer.accelerator.device, dtype=torch.bfloat16).requires_grad_(False)
         
@@ -182,7 +184,8 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
             self.ddecm_loss_weight = (loss_weight / loss_weight.mean()).view(1, 1,-1, 1)
         
         if self.train_unet == True:
-            self.logger.info(f"UNet-LDM trainer (loss weight: {self.config.unet_loss_weight}) (warmup steps:{self.config.unet_loss_warmup_steps}):")
+            self.logger.info(f"UNet-LDM trainer (start loss weight: {self.config.unet_loss_start_weight}) (warmup steps:{self.config.unet_loss_start_steps})"
+                             f" (loss weight: {self.config.unet_loss_weight}) (warmup steps: {self.config.unet_loss_warmup_steps}):")
             self.unet_trainer = UNetTrainer_LDM(UNetTrainerConfig_LDM(**config.unet), trainer, self.unet, "unet")
 
     @torch.no_grad()
@@ -262,8 +265,9 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
 
         if self.train_ddecp == True:
 
-            ddecp_x_ref = self.format.unscale_ms_psd(ms_psd_scaled + torch.randn_like(ms_psd_scaled) * self.config.add_ddecp_x_ref_noise).detach()
-            logs["io_stats_ddecp/add_ddecp_x_ref_noise"] = self.config.add_ddecp_x_ref_noise
+            #ddecp_x_ref = self.format.unscale_ms_psd(ms_psd_scaled + torch.randn_like(ms_psd_scaled) * self.config.add_ddecp_x_ref_noise).detach()
+            #logs["io_stats_ddecp/add_ddecp_x_ref_noise"] = self.config.add_ddecp_x_ref_noise
+            ddecp_x_ref = self.format.unscale_ms_psd(ddec_cond).detach()
 
             logs.update(self.ddecp_trainer.train_batch(
                 mdct_phase_psd, audio_embeddings, ref_samples=ddecp_x_ref, loss_weight=self.ddecp_loss_weight))
@@ -340,9 +344,11 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
 
         if self.train_unet == True:
             
-            unet_loss_weight = self.config.unet_loss_weight
-            if self.trainer.global_step < self.config.unet_loss_warmup_steps:
-                unet_loss_weight *= self.trainer.global_step / self.config.unet_loss_warmup_steps
+            if self.trainer.global_step < self.config.unet_loss_start_steps:
+                unet_loss_weight = self.config.unet_loss_start_weight
+            else:
+                t = min((self.trainer.global_step - self.config.unet_loss_start_steps) / self.config.unet_loss_warmup_steps, 1)
+                unet_loss_weight = self.config.unet_loss_start_weight * (1 - t) + self.config.unet_loss_weight * t
 
             logs.update(self.unet_trainer.train_batch(latents, audio_embeddings))
             logs["loss"] = logs["loss"] + logs["loss/unet"] * unet_loss_weight
