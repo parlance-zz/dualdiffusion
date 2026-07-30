@@ -29,7 +29,7 @@ from training.trainer import DualDiffusionTrainer
 from training.module_trainers.module_trainer import ModuleTrainer, ModuleTrainerConfig
 from training.module_trainers.unet_trainer_p6 import UNetTrainerConfig, UNetTrainer
 from training.module_trainers.unet_trainer_p6 import UNetTrainerConfig as UNetTrainerConfig_LDM, UNetTrainer as UNetTrainer_LDM
-#from training.loss.sigreg import sigreg_strong_loss
+from training.loss.sigreg import sigreg_strong_loss
 from training.loss.mss_2d import MSSLoss2D, MSSLoss2DConfig
 from modules.daes.dae_edm2_q4 import DAE
 from modules.unets.unet_edm2_q4_ddec import UNet
@@ -55,11 +55,11 @@ class DiffusionDecoder_Trainer_Config(ModuleTrainerConfig):
     ddecp: dict[str, Any]
     ddecm: dict[str, Any]
     unet: dict[str, Any]
-    #sigreg: dict[str, Any]
+    sigreg: dict[str, Any]
     mss_2d: dict[str, Any]
 
-    #latents_sigreg_loss_weight: float = 0
-    #sigreg_loss_warmup_steps: int = 0
+    latents_sigreg_loss_weight: float = 0
+    sigreg_loss_warmup_steps: int = 0
     
     mss_2d_leak_pow: float = 4
     mss_2d_leak_steps: int = 350
@@ -308,8 +308,6 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
         
         if self.train_dae == True:
             
-            pass
-            """
             latents_sigreg_loss_weight = self.config.latents_sigreg_loss_weight
             if self.trainer.global_step < self.config.sigreg_loss_warmup_steps:
                 latents_sigreg_loss_weight *= (self.trainer.global_step + 1) / self.config.sigreg_loss_warmup_steps
@@ -321,7 +319,6 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
                     latents_sigreg_loss = latents_sigreg_loss.detach()
                 logs["loss/latents_sigreg"] = latents_sigreg_loss.detach()
                 logs["loss"] = logs["loss"] + latents_sigreg_loss * latents_sigreg_loss_weight
-            """
 
             """
             if self.config.mss_2d_leak_steps > 0:
