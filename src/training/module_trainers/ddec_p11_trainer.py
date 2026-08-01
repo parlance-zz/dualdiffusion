@@ -138,8 +138,8 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
 
         if self.train_dae == True:
             self.logger.info(f"Add latents noise: {self.config.add_latents_noise}")
-            #self.logger.info(f"SIGReg loss weight: {self.config.latents_sigreg_loss_weight} (warmup steps: {self.config.sigreg_loss_warmup_steps})")
-            #self.logger.info(f"SIGReg config: {dict_str(self.config.sigreg)}")
+            self.logger.info(f"SIGReg loss weight: {self.config.latents_sigreg_loss_weight} (warmup steps: {self.config.sigreg_loss_warmup_steps})")
+            self.logger.info(f"SIGReg config: {dict_str(self.config.sigreg)}")
 
             """
             if self.train_ddecp == False:
