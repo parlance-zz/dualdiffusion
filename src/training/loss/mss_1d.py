@@ -47,7 +47,8 @@ def _is_prime(n: int) -> bool:
 class MSSLoss1DConfig:
 
     block_low:  int = 31
-    block_high: int = 8200
+    #block_high: int = 8200
+    block_high: int = 1280
 
     block_sampling_replace: bool = True
     block_sampling_scale: Literal["linear", "ln_linear", "natural"] = "natural"
@@ -62,11 +63,10 @@ class MSSLoss1DConfig:
     
     cepstrum_pow: float = 0.25
 
-    loss_scale: float = 6.42
-    loss_scale_cepstrum: float = 90
+    loss_scale: float = 12
+    loss_scale_cepstrum: float = 170
 
-    mel_density_pow: float = 0.5
-
+    mel_density_pow: float = 0
 
 class MSSLoss1D:
 
@@ -159,24 +159,17 @@ class MSSLoss1D:
 
         return x
     
-    #def mss_loss(self, sample1: torch.Tensor, sample2: torch.Tensor, target: torch.Tensor,
     def mss_loss(self, sample: torch.Tensor, target: torch.Tensor,
             leak_pow: Optional[float] = None, leak_max: Optional[float] = None, t: Optional[torch.Tensor] = None) -> dict[str, torch.Tensor]:
-
-        #sample = torch.cat((sample1, sample2), dim=0)
 
         if t is None:
             leak_pow = self.config.leak_pow or leak_pow
             leak_max = self.config.leak_max or leak_max
 
             if leak_pow is not None and leak_max is not None:  # useful at start of training for preventing polarity mismatch
-                #rnd_t = (torch.rand(sample1.shape[0], device=sample1.device).pow(leak_pow) * leak_max).repeat(2).view(-1, 1, 1)
-                #sample = torch.lerp(sample, target.repeat(2, 1, 1).detach(), rnd_t)
                 rnd_t = (torch.rand(sample.shape[0], device=sample.device).pow(leak_pow) * leak_max).view(-1, 1, 1)
-                sample = torch.lerp(sample, target.detach(), rnd_t)
-                
+                sample = torch.lerp(sample, target.detach(), rnd_t)   
         else:
-            #sample = torch.lerp(sample, target.repeat(2, 1, 1).detach(), 1 - t.view(-1, 1, 1))
             sample = torch.lerp(sample, target.detach(), 1 - t.view(-1, 1, 1))
 
         loss = torch.zeros(sample.shape[0], device=self.device)
@@ -207,6 +200,8 @@ class MSSLoss1D:
                 target_fft = self.stft1d(target, block_width, step_w, window, offset_w, end_offset_w, midside)
                 target_fft_abs = target_fft.abs().requires_grad_(False).detach()
 
+                mel_density_half = 1
+
                 if self.loss_scale > 0:
                     loss_weight = target_fft_abs.pow(2).mean(dim=r_dims, keepdim=True)
                     #print(block_width, loss_weight.amin(), loss_weight.mean())
@@ -218,42 +213,26 @@ class MSSLoss1D:
 
                         mel_density_half = mel_density.pow(0.5)
                         mel_density_half /= mel_density_half.mean()
-                        #mel_density_half = 1
 
                 if self.cepstrum_loss_scale > 0:
-                    #target_cepstrum: torch.Tensor = torch.fft.rfft(target_fft_abs / loss_weight.pow(0.5), norm="ortho").abs()
-                    #target_cepstrum: torch.Tensor = torch.fft.rfft((target_fft_abs + self.config.psd_eps).pow(self.config.cepstrum_pow), norm="ortho").abs()
                     target_cepstrum: torch.Tensor = torch.fft.rfft((target_fft_abs + self.config.psd_eps).pow(self.config.cepstrum_pow) * mel_density_half, norm="ortho").abs()
-                    #target_cepstrum = torch.fft.rfft(target_fft_abs.clip(min=self.config.psd_eps**0.5).pow(0.25), norm="ortho").abs()
-                    #target_cepstrum = target_cepstrum.repeat(2, 1, 1, 1)
-
-                #target_fft_abs = target_fft_abs.repeat(2, 1, 1, 1)
 
             sample_fft = self.stft1d(sample, block_width, step_w, window, offset_w, end_offset_w, midside)
             sample_fft_abs = sample_fft.abs()
 
             if self.loss_scale > 0:
                 mse_loss = torch.nn.functional.mse_loss(sample_fft_abs.float(), target_fft_abs.float(), reduction="none")
-                loss = loss + (mse_loss / loss_weight).mean(dim=(1,2,3)) #** 2
+                loss = loss + (mse_loss / loss_weight).mean(dim=(1,2,3))
 
             if self.cepstrum_loss_scale > 0:
-                #sample_cepstrum: torch.Tensor = torch.fft.rfft(sample_fft_abs / loss_weight.pow(0.5), norm="ortho").abs()
-                sample_cepstrum: torch.Tensor = torch.fft.rfft((sample_fft_abs + self.config.psd_eps).pow(self.config.cepstrum_pow) * mel_density_half, norm="ortho").abs()
-                #sample_cepstrum: torch.Tensor = torch.fft.rfft((sample_fft_abs + self.config.psd_eps).pow(self.config.cepstrum_pow), norm="ortho").abs()
-                #sample_cepstrum = torch.fft.rfft(sample_fft_abs.clip(min=self.config.psd_eps**0.5).pow(0.25), norm="ortho").abs()
 
+                sample_cepstrum: torch.Tensor = torch.fft.rfft((sample_fft_abs + self.config.psd_eps).pow(self.config.cepstrum_pow) * mel_density_half, norm="ortho").abs()
                 mse_loss = torch.nn.functional.mse_loss(sample_cepstrum.float(), target_cepstrum.float(), reduction="none")
                 loss_cepstrum = loss_cepstrum + mse_loss.mean(dim=(1,2,3))
 
-        #loss1, loss2 = loss.chunk(2, dim=0)
-        #loss_cepstrum1, loss_cepstrum2 = loss_cepstrum.chunk(2, dim=0)
-
-        #loss = (loss1 + loss2) / 2
-        #loss_cepstrum = (loss_cepstrum1 + loss_cepstrum2) / 2
-
         return {
-            "loss/mss1d": loss * self.loss_scale,
-            "loss/mss1d_cepstrum": loss_cepstrum * self.cepstrum_loss_scale,
+            "loss/mss_1d": loss * self.loss_scale,
+            "loss/mss_1d_cepstrum": loss_cepstrum * self.cepstrum_loss_scale,
         }
 
 
@@ -270,7 +249,7 @@ if __name__ == "__main__":
     
     batch_size = 4
     channels = 2
-    width = 128000
+    width = 1024 * 192
 
     sample = torch.randn(batch_size, channels, width, device=device)
     target = torch.randn(batch_size, channels, width, device=device)
