@@ -4,8 +4,10 @@
     "save_output": true,
     
     "test_sample_verbose": false,
+    "test_samples_seed": 0,
     "test_samples": [
-        "switch/Arcaea/_t_songs_ignotus.ogg.flac"
+        "switch/Arcaea/_t_songs_ignotus.ogg.flac",
+        "SuspectT/Knife Party - Destroy Them With Lazers.flac"
         //"dsf/Metropolis Street Racer Prototype/file_15.adx.flac",
         //"psf3/Iron Man/_t_! movies_HUB_05_000001C2.adx.flac",
         //"psf/Gradius Gaiden/SLPM-86042_BGM1_0000096c.XA.flac",
@@ -24,12 +26,13 @@
         //"default_raw_length": 2817536,
         //"default_raw_length": 2097152,
         "default_raw_length": 1408768,
+        //"default_raw_length": 196608,
         //"default_raw_length": 128000,
         //"default_raw_length": 96000,
-        "width_alignment": 4096,
+        "width_alignment": 8192,
 
         "use_per_freq_preconditioning": true,
-        "ms_psd_add_center_channel": false,
+        "ms_psd_add_center_channel": true,
         "ms_psd_img_show_center_channel": true,
         "mdct_psd_exponent": 0.25,
 
@@ -44,19 +47,19 @@
                 "window_len": 256,
                 "window_func": "vorbis",
                 "crop_lo": 0,
-                "crop_hi": 0.5
+                "crop_hi": 1
             },
             {
                 "window_len": 512,
                 "window_func": "vorbis",
                 "crop_lo": 0,
-                "crop_hi": 0.25
+                "crop_hi": 1
             },
             {
                 "window_len": 1024,
                 "window_func": "vorbis",
                 "crop_lo": 0,
-                "crop_hi": 0.125
+                "crop_hi": 1
             }
         ],
 

@@ -23,6 +23,7 @@
 from utils import config
 
 from dataclasses import dataclass
+from typing import Optional
 import os
 import random
 
@@ -45,6 +46,7 @@ class MS_MDCT_DualFormat_TestConfig:
 
     add_random_test_samples: int
     test_samples: list[str]
+    test_samples_seed: Optional[int]
 
     format_config: MS_MDCT_DualFormatConfig
 
@@ -52,11 +54,13 @@ class MS_MDCT_DualFormat_TestConfig:
 def ms_mdct_dual_format_test() -> None:
 
     torch.manual_seed(0)
-    random.seed()
 
     cfg: MS_MDCT_DualFormat_TestConfig = config.load_config(MS_MDCT_DualFormat_TestConfig,
         os.path.join(config.CONFIG_PATH, "tests", "ms_mdct_dual_format_9.json"))
     
+    if cfg.test_samples_seed is not None:
+        random.seed(cfg.test_samples_seed)
+
     output_path = os.path.join(config.DEBUG_PATH, "ms_mdct_dual_format_9_test")
     os.makedirs(output_path, exist_ok=True)
 
@@ -111,9 +115,13 @@ def ms_mdct_dual_format_test() -> None:
         raw_sample = load_audio(file_path, start=start, count=crop_width).unsqueeze(0).to(cfg.device)
 
         mdct_phase_psds = format.raw_to_mdct_phase_psd(raw_sample, level=-1)
+        ms_psds = format.raw_to_ms_psd(raw_sample, level=-1)
+
         for i in range(format.config.num_mdcts):
 
-            _mdct_phase, _mdct_psd = mdct_phase_psds[i].to(dtype=torch.float64).chunk(2, dim=1)
+            _mdct_phase = mdct_phase_psds[i].to(dtype=torch.float64)
+            _mdct_psd = ms_psds[i].to(dtype=torch.float64)
+            
             _mdct_phase_msq = _mdct_phase.pow(2).mean(dim=r_dims, keepdim=True)
             _mdct_psd_msq = _mdct_psd.pow(2).mean(dim=r_dims, keepdim=True)
             _mdct_psd_mean = _mdct_psd.mean(dim=r_dims, keepdim=True)
@@ -125,8 +133,6 @@ def ms_mdct_dual_format_test() -> None:
             stat_logger.add_logs({f"mdct_phase_psd_{i}_mean": _mdct_psd_mean.mean()})
             stat_logger.add_logs({f"mdct_phase_{i}_msq": _mdct_phase_msq.mean()})
 
-        ms_psds = format.raw_to_ms_psd(raw_sample, level=-1)
-        
         raw_sample_recon = format.mdct_phase_psd_to_raw(mdct_phase_psds, level=-1)
         
         stat_logger.add_logs({
@@ -208,14 +214,11 @@ def ms_mdct_dual_format_test() -> None:
         start = -1 if cfg.save_output == False else 0
         raw_sample = load_audio(file_path, start=start, count=crop_width).unsqueeze(0).to(cfg.device)
         
-        mdct_phase_psds = format.raw_to_mdct_phase_psd(raw_sample, level=-1)
+        ms_psds = format.raw_to_ms_psd(raw_sample, level=-1)
         for i in range(format.config.num_mdcts):
-            _, _mdct_psd = mdct_phase_psds[i].to(dtype=torch.float64).chunk(2, dim=1)
+            _mdct_psd = ms_psds[i].to(dtype=torch.float64)
             _mdct_psd_msq = _mdct_psd.pow(2).mean(dim=r_dims, keepdim=True)
             mdct_psd_avg_bin_msqs[i]  += _mdct_psd_msq / len(test_samples)
-
-        ms_psds = format.raw_to_ms_psd(raw_sample, level=-1)
-
 
     for i in range(format.config.num_mdcts):
         getattr(format, f"mdct_psd_scale_{i}").copy_(mdct_psd_avg_bin_msqs[i].pow(0.5).float())

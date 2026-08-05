@@ -105,8 +105,8 @@ class MS_MDCT_DualFormatConfig(DualDiffusionFormatConfig):
     # raw audio format params
     sample_rate: int = 32000
     num_raw_channels: int = 2
-    default_raw_length: int = 96000
-    width_alignment: int    = 4096
+    default_raw_length: int = 196608
+    width_alignment: int    = 8192
 
     use_per_freq_preconditioning: bool = True
 
@@ -150,6 +150,8 @@ class MS_MDCT_DualFormat(DualDiffusionFormat):
         self.mdcts = torch.nn.ModuleList(); self.imdcts = torch.nn.ModuleList()
         for i in range(self.config.num_mdcts):
             
+            assert config.mdcts[i].crop_lo == 0 and config.mdcts[i].crop_hi == 1
+
             if config.mdcts[i].window_len == config.mdcts[0].window_len:
                 last_frame = -1
             elif config.mdcts[i].window_len > config.mdcts[0].window_len:
@@ -159,7 +161,8 @@ class MS_MDCT_DualFormat(DualDiffusionFormat):
 
             mdct_window_func = _get_mdct_window_func(config.mdcts[i].window_func)
 
-            mdct = MDCT(win_length=config.mdcts[i].window_len, window_fn=mdct_window_func, return_complex=True, last_frame=last_frame)
+            mdct = MDCT(win_length=config.mdcts[i].window_len,
+                window_fn=mdct_window_func, return_complex=True, last_frame=last_frame)
             self.mdcts.append(mdct)
             imdct = IMDCT(win_length=config.mdcts[i].window_len, window_fn=mdct_window_func)
             self.imdcts.append(imdct)
@@ -213,11 +216,14 @@ class MS_MDCT_DualFormat(DualDiffusionFormat):
             return tensor_to_img(ms_psd.mean(dim=(0,1)), flip_y=True, colormap=True)
         else:
             if ms_psd.shape[1] == 3:
+                assert self.config.ms_psd_add_center_channel == True
                 l, r, c = torch.chunk(ms_psd, 3, dim=1)
                 if self.config.ms_psd_img_show_center_channel == True:
                     ms_psd = torch.cat((l, c, r), dim=1)
                 else:
                     ms_psd = torch.cat((l, r), dim=1)
+            else:
+                assert self.config.ms_psd_add_center_channel == False
 
             return tensor_to_img(ms_psd, flip_y=True)
 
@@ -227,7 +233,7 @@ class MS_MDCT_DualFormat(DualDiffusionFormat):
         raw_crop_width = self.get_raw_crop_width(raw_length=raw_length)
         num_mdct_bins = self.config.mdcts[0].num_frequencies
         num_mdct_frames = raw_crop_width // num_mdct_bins + 1
-        return (bsz, self.config.num_raw_channels * 2, 1, num_mdct_bins * num_mdct_frames * self.config.num_mdcts)
+        return (bsz, self.config.num_raw_channels, 1, num_mdct_bins * num_mdct_frames * self.config.num_mdcts)
 
     def get_mdct_shape(self, bsz: int = 1, raw_length: Optional[int] = None):
         return self.get_mdct_phase_psd_shape(bsz=bsz, raw_length=raw_length)
@@ -243,26 +249,19 @@ class MS_MDCT_DualFormat(DualDiffusionFormat):
                     phase_rotation = torch.exp(2j * torch.pi * torch.rand(_mclt.shape[0], device=_mclt.device)) 
                     _mclt *= phase_rotation.view(-1, 1, 1, 1)
             else:
+                assert torch.is_tensor(random_phase_augmentation)
                 _mclt *= random_phase_augmentation.view(-1, 1, 1, 1)
 
-            mdct_psd = _mclt.abs()
-            mdct_phase = (_mclt.real / mdct_psd.clip(min=1e-20)).clip(min=-1, max=1)
-
-            mdct_psd = mdct_psd.pow(self.config.mdct_psd_exponent)
-            mdct_phase = mdct_phase * mdct_psd
+            mdct_phase = _mclt.real.contiguous()
 
             if self.config.use_per_freq_preconditioning == False:
-                mdct_psd /= getattr(self, f"mdct_mel_density_{level}").pow(self.config.mdct_psd_exponent)
                 mdct_phase /= getattr(self, f"mdct_mel_density_{level}").pow(self.config.mdct_psd_exponent)
 
             mdct_phase = mdct_phase / getattr(self, f"mdct_phase_scale_{level}")
-            mdct_psd = (mdct_psd + getattr(self, f"mdct_psd_offset_{level}")) / getattr(self, f"mdct_psd_scale_{level}")
-
-            mdct_phase_psd = torch.cat((mdct_phase, mdct_psd), dim=1)
-            return mdct_phase_psd
+            return mdct_phase
         else:
             if random_phase_augmentation == True:
-                random_phase_augmentation = torch.exp(2j * torch.pi * torch.rand(raw_samples.shape[0], device=raw_samples.device))
+                random_phase_augmentation = torch.exp(2j*torch.pi * torch.rand(raw_samples.shape[0], device=raw_samples.device))
 
             mdct_phase_psds = []
             for i in range(self.config.num_mdcts):
@@ -274,25 +273,21 @@ class MS_MDCT_DualFormat(DualDiffusionFormat):
     def mdct_phase_psd_to_raw(self, mdct_phase_psd: Union[torch.Tensor, list[torch.Tensor]], level: int = 0) -> torch.Tensor:
 
         if level >= 0:
-            mdct_phase, mdct_psd = torch.chunk(mdct_phase_psd.float(), 2, dim=1)
-            mdct_phase = mdct_phase * getattr(self, f"mdct_phase_scale_{level}")
-            mdct_psd: torch.Tensor = mdct_psd * getattr(self, f"mdct_psd_scale_{level}") - getattr(self, f"mdct_psd_offset_{level}")
+            mdct_phase = mdct_phase_psd.float() * getattr(self, f"mdct_phase_scale_{level}")
 
             if self.config.use_per_freq_preconditioning == False:
-                mdct_phase *= getattr(self, f"mdct_mel_density_{level}").pow(self.config.mdct_psd_exponent)
-                mdct_psd *= getattr(self, f"mdct_mel_density_{level}").pow(self.config.mdct_psd_exponent)
+                mdct_phase = mdct_phase * getattr(self, f"mdct_mel_density_{level}").pow(self.config.mdct_psd_exponent)
 
-            #mdct_psd = mdct_psd.clip(min=0).pow(1 / self.config.mdct_psd_exponent - 1)
-            recon_exp = int((1 / self.config.mdct_psd_exponent - 1) / 2) * 2 + 1
-            mdct_psd = mdct_psd.pow(recon_exp)
-            mdct: torch.Tensor = mdct_phase * mdct_psd
-
-            mdct[:, :, :self.config.mdcts[level].bin_lo] = 0
-            mdct[:, :, self.config.mdcts[level].bin_hi:] = 0
+            mdct = mdct_phase
+            
+            #mdct[:, :, :self.config.mdcts[level].bin_lo] = 0
+            #mdct[:, :, self.config.mdcts[level].bin_hi:] = 0
 
             raw_samples = self.imdcts[level](mdct).real.contiguous()
             return raw_samples
         else:
+            assert isinstance(mdct_phase_psd, list)
+
             output_mdct_raws: list[torch.Tensor] = []
             for i in range(len(mdct_phase_psd)):
                 output_mdct_raws.append(self.mdct_phase_psd_to_raw(mdct_phase_psd[i], level=i))
@@ -313,10 +308,10 @@ class MS_MDCT_DualFormat(DualDiffusionFormat):
         assert mdct_phase_psd.shape[3] % self.config.num_mdcts == 0
         mdct_phase_psds: list[torch.Tensor] = []
         for i, chunk in enumerate(torch.chunk(mdct_phase_psd, chunks=self.config.num_mdcts, dim=3)):
-            num_mdct_phase_psd_channels = self.config.num_raw_channels * 2
-            mdct_phase_psds.append(chunk.reshape(chunk.shape[0], num_mdct_phase_psd_channels, self.config.mdcts[i].num_frequencies, -1))
+            mdct_phase_psds.append(chunk.reshape(chunk.shape[0], self.config.num_raw_channels, self.config.mdcts[i].num_frequencies, -1))
         return mdct_phase_psds
 
+    """
     def crop_unflattened(self, mdct_phase_psds: list[torch.Tensor]) -> list[torch.Tensor]:
         cropped_mdct_phase_psds: list[torch.Tensor] = []
         for i in range(self.config.num_mdcts):
@@ -333,12 +328,17 @@ class MS_MDCT_DualFormat(DualDiffusionFormat):
             bin_lo = self.config.mdcts[i].bin_lo
             uncropped_mdct_phase_psds.append(torch.nn.functional.pad(cropped_mdct_phase_psds[i], (0, 0, bin_lo, num_mdct_bins - bin_hi)))
         return uncropped_mdct_phase_psds
+    """
 
-    def get_mdct_phase_psd_loss(self, pred_mdct_phase_psd: list[torch.Tensor], target_mdct_phase_psd: list[torch.Tensor]) -> torch.Tensor:
+    def get_mdct_phase_psd_loss(self, pred_mdct_phase_psd: torch.Tensor, target_mdct_phase_psd: torch.Tensor) -> torch.Tensor:
         
-        pred_mdct_phase_psd = self.crop_unflattened(self.unflatten_mdct_phase_psd(pred_mdct_phase_psd))
-        target_mdct_phase_psd = self.crop_unflattened(self.unflatten_mdct_phase_psd(target_mdct_phase_psd))
-        mel_densities = self.crop_unflattened(self.get_mdct_mel_density(level=-1))
+        #pred_mdct_phase_psd = self.crop_unflattened(self.unflatten_mdct_phase_psd(pred_mdct_phase_psd))
+        #target_mdct_phase_psd = self.crop_unflattened(self.unflatten_mdct_phase_psd(target_mdct_phase_psd))
+        #mel_densities = self.crop_unflattened(self.get_mdct_mel_density(level=-1))
+
+        pred_mdct_phase_psd = self.unflatten_mdct_phase_psd(pred_mdct_phase_psd)
+        target_mdct_phase_psd = self.unflatten_mdct_phase_psd(target_mdct_phase_psd)
+        mel_densities = self.get_mdct_mel_density(level=-1)
 
         level_losses: list[torch.Tensor] = []
         for pred, target, weight in zip(pred_mdct_phase_psd, target_mdct_phase_psd, mel_densities):
@@ -347,7 +347,7 @@ class MS_MDCT_DualFormat(DualDiffusionFormat):
             level_loss = (torch.nn.functional.mse_loss(pred, target.detach(), reduction="none") * weight).mean(dim=(1,2,3))
             level_losses.append(level_loss)
 
-        return torch.stack(level_losses, dim=1)
+        return torch.stack(level_losses, dim=1).mean(dim=1)
 
     def get_mdct_mel_density(self, level: int = 0) -> Union[torch.Tensor:, list[torch.Tensor]]:
         if level >= 0:
@@ -359,7 +359,4 @@ class MS_MDCT_DualFormat(DualDiffusionFormat):
             return mdct_mel_densities
         
     def raw_to_mdct_psd(self, raw_samples: torch.Tensor, level: int = 0) -> torch.Tensor:
-
-        mdct_phase_psd = self.raw_to_mdct_phase_psd(raw_samples.float(), level=level)
-        _, mdct_psd = torch.chunk(mdct_phase_psd, 2, dim=1)
-        return mdct_psd
+        return self.raw_to_ms_psd(raw_samples, level=level)
