@@ -36,37 +36,37 @@ from typing import Union, Optional, Literal
 import torch
 
 from modules.unets.unet import DualDiffusionUNet, DualDiffusionUNetConfig
+from modules.formats.ms_mdct_dual_9 import MS_MDCT_DualFormat, patch_ms_psd, unpatch_ms_psd
 from modules.mp_tools import MPFourier, MPConv, mp_cat, mp_silu, mp_sum, normalize, resample_2d
-from modules.formats.format import DualDiffusionFormat
 
 
 @dataclass
 class UNetConfig(DualDiffusionUNetConfig):
 
-    in_channels:  int = 8
-    out_channels: int = 8
+    in_channels:  int = 2
+    out_channels: int = 2
     in_channels_emb: int = 0
-    in_channels_x_ref: int = 8
+    in_channels_x_ref: int = 3
 
-    in_num_freqs: int = 128
-    in_psd_freqs: int = 128
+    in_num_freqs: int = 64
+    in_psd_num_freqs: list[int] = (64, 128, 256, 512)
 
-    model_channels: int  = 128               # Base multiplier for the number of channels.
+    model_channels: int  = 512               # Base multiplier for the number of channels.
     logvar_channels: int = 192               # Number of channels for training uncertainty estimation.
-    channel_mult: list[int]    = (1,2,3,4)   # Per-resolution multipliers for the number of channels.
+    channel_mult: list[int]    = (1,2,4)     # Per-resolution multipliers for the number of channels.
     double_midblock: bool      = False
-    midblock_attn: bool        = True
-    channel_mult_noise: Optional[int] = 4    # Multiplier for noise embedding dimensionality.
-    channel_mult_emb: Optional[int]   = 4    # Multiplier for final embedding dimensionality.
-    channels_per_head: int    = 64           # Number of channels per attention head.
-    num_layers_per_block: int = 3            # Number of resnet blocks per resolution.
+    midblock_attn: bool        = False
+    channel_mult_noise: Optional[int] = 1    # Multiplier for noise embedding dimensionality.
+    channel_mult_emb: Optional[int]   = 1    # Multiplier for final embedding dimensionality.
+    channels_per_head: int    = 128          # Number of channels per attention head.
+    num_layers_per_block: int = 2            # Number of resnet blocks per resolution.
     label_balance: float      = 0.5          # Balance between noise embedding (0) and class embedding (1).
     concat_balance: float     = 0.5          # Balance between skip connections (0) and main path (1).
     res_balance: float        = 0.3          # Balance between main branch (0) and residual branch (1).
     attn_balance: float       = 0.3          # Balance between main branch (0) and self-attention (1).
-    attn_levels: list[int]    = (3,)         # List of resolution levels to use self-attention.
-    mlp_multiplier: int    = 2               # Multiplier for the number of channels in the MLP.
-    mlp_groups: int        = 1               # Number of groups for the MLPs.
+    attn_levels: list[int]    = ()           # List of resolution levels to use self-attention.
+    mlp_multiplier: int    = 1               # Multiplier for the number of channels in the MLP.
+    mlp_groups: int        = 4               # Number of groups for the MLPs.
     emb_linear_groups: int = 1
 
 class Block(torch.nn.Module):
@@ -194,14 +194,13 @@ class UNet(DualDiffusionUNet):
         cemb = config.model_channels * config.channel_mult_emb if config.channel_mult_emb is not None else max(cblock)
 
         self.num_levels = len(config.channel_mult)
+        self.num_psd_levels = len(config.in_psd_num_freqs)
+        self.downsample_ratio = 2 ** (self.num_levels - 1)
+        assert config.in_num_freqs % self.downsample_ratio == 0
 
-        if self.config.in_psd_freqs > 0:
-            assert config.in_psd_freqs % config.in_num_freqs == 0
-            assert config.in_channels_x_ref > 0
-            self.psd_freqs_per_freq = config.in_psd_freqs // config.in_num_freqs
-        else:
-            self.psd_freqs_per_freq = None
-            assert config.in_channels_x_ref == 0
+        self.psd_freqs_per_freq = 2 ** (self.num_psd_levels - 1)
+        for i in range(self.num_psd_levels):
+            assert config.in_psd_num_freqs[i] % self.psd_freqs_per_freq == 0
         
         # Embedding.
         self.emb_fourier = MPFourier(cnoise)
@@ -214,14 +213,12 @@ class UNet(DualDiffusionUNet):
         self.logvar_linear.weight.data.fill_(0)
 
         # Encoder.
-        if config.in_channels_x_ref > 0:
-            self.x_ref_balance = torch.nn.Parameter(torch.zeros([]))
-            self.conv_x_ref_in = MPConv(config.in_channels_x_ref, cblock[0], kernel=(3,3), bias=True)
-        else:
-            self.x_ref_balance = self.conv_x_ref_in = None
+        assert config.in_channels_x_ref > 0
+        self.x_ref_balance = torch.nn.Parameter(torch.zeros([]))
+        self.conv_x_ref_in = MPConv(config.in_channels_x_ref * self.psd_freqs_per_freq * self.num_psd_levels, cblock[0], kernel=(3,3), bias=True)
         
         self.enc = torch.nn.ModuleDict()
-        cin = config.in_channels
+        cin = config.in_channels * self.psd_freqs_per_freq * self.num_psd_levels
 
         for level, channels in enumerate(cblock):
             
@@ -265,7 +262,7 @@ class UNet(DualDiffusionUNet):
                     use_attention=level in config.attn_levels, flavor="dec", **block_kwargs)
                 
         self.out_gain = torch.nn.Parameter(torch.zeros([]))
-        self.conv_out = MPConv(cout, config.out_channels, kernel=(3,3))
+        self.conv_out = MPConv(cout, config.out_channels * self.psd_freqs_per_freq * self.num_psd_levels, kernel=(1,1))
 
     def get_embeddings(self, emb_in: torch.Tensor, conditioning_mask: torch.Tensor) -> torch.Tensor:
         if self.config.in_channels_emb > 0:
@@ -284,7 +281,7 @@ class UNet(DualDiffusionUNet):
 
     def forward(self, x_in: torch.Tensor,
                 sigma: torch.Tensor,
-                format: DualDiffusionFormat,
+                format: MS_MDCT_DualFormat,
                 embeddings: torch.Tensor,
                 x_ref: Optional[torch.Tensor] = None,
                 perturbed_input: Optional[torch.Tensor] = None,
@@ -306,13 +303,9 @@ class UNet(DualDiffusionUNet):
 
             emb = self.emb_fourier(c_noise)
 
-        if self.config.in_channels_x_ref > 0:
-            x_ref = self.conv_x_ref_in(x_ref.to(dtype=torch.bfloat16))
-            if self.psd_freqs_per_freq > 1:
-                x_ref = resample_2d(x_ref, "down_keep")
-        else:
-            assert x_ref is None
-        
+        x = patch_ms_psd(format.unflatten_mdct_phase_psd(x), self.num_psd_levels)
+        x_ref = patch_ms_psd(x_ref, self.num_psd_levels).to(dtype=torch.bfloat16)
+
         # embedding
         if conditioning_mask is not None: # nuisance due to ddp wrapper limitations
             assert self.training == True
@@ -332,7 +325,7 @@ class UNet(DualDiffusionUNet):
                 x = block(x)
                 
                 if self.config.in_channels_x_ref > 0:
-                    x = mp_sum(x, x_ref, t=self.x_ref_balance.sigmoid())
+                    x = mp_sum(x, self.conv_x_ref_in(x_ref), t=self.x_ref_balance.sigmoid())
             else:
                 x = block(x, emb)
             skips.append(x)
@@ -344,7 +337,7 @@ class UNet(DualDiffusionUNet):
             x = block(x, emb)
 
         x: torch.Tensor = self.conv_out(x, gain=self.out_gain)
-        D_x: torch.Tensor = c_skip * x_in.float() + c_out * x.float()
+        x = format.flatten_mdct_phase_psd(unpatch_ms_psd(x, self.num_psd_levels))
 
+        D_x: torch.Tensor = c_skip * x_in.float() + c_out * x.float()
         return D_x, self.get_sigma_loss_logvar(sigma)
-    
