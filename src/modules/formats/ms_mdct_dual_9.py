@@ -28,6 +28,7 @@ import torch
 from modules.formats.format import DualDiffusionFormat, DualDiffusionFormatConfig
 from modules.formats.frequency_scale import get_mel_density
 from modules.formats.mel_spec import MelSpecConfig, MelSpec
+from modules.mp_tools import patchify_2d, unpatchify_2d
 from utils.dual_diffusion_utils import tensor_to_img
 from utils.mdct import MDCT, IMDCT, sin_window, kaiser_bessel_derived, vorbis
 
@@ -71,6 +72,30 @@ def _get_mdct_window_func(mdct_window_func: str) -> callable:
     else:
         raise ValueError(f"Unsupported mdct window function: {mdct_window_func}. Supported functions are 'sin', 'kaiser_bessel_derived', and 'vorbis'.")
     return mdct_window_fn
+
+def patch_ms_psd(ms_psd: list[torch.Tensor], num_psd_levels: int) -> torch.Tensor:
+
+    assert isinstance(ms_psd, list) and len(ms_psd) == num_psd_levels
+
+    patched: list[torch.Tensor] = []
+    patch_w = 2 ** (num_psd_levels - 1); patch_h = 1
+    
+    for i in range(num_psd_levels):
+        patched.append(patchify_2d(ms_psd[i], patch_h, patch_w))
+        patch_w //= 2; patch_h *= 2
+    
+    return torch.cat(patched, dim=1)
+
+def unpatch_ms_psd(ms_psd_patched: torch.Tensor, num_psd_levels: int) -> torch.Tensor:
+
+    ms_psds: list[torch.Tensor] = []
+    patch_w = 2 ** (num_psd_levels - 1); patch_h = 1
+
+    for psd in torch.chunk(ms_psd_patched, num_psd_levels, dim=1):
+        ms_psds.append(unpatchify_2d(psd, patch_h, patch_w))
+        patch_w //= 2; patch_h *= 2
+
+    return ms_psds
 
 @dataclass()
 class MDCT_Config:
@@ -310,7 +335,7 @@ class MS_MDCT_DualFormat(DualDiffusionFormat):
         for i, chunk in enumerate(torch.chunk(mdct_phase_psd, chunks=self.config.num_mdcts, dim=3)):
             mdct_phase_psds.append(chunk.reshape(chunk.shape[0], self.config.num_raw_channels, self.config.mdcts[i].num_frequencies, -1))
         return mdct_phase_psds
-
+       
     """
     def crop_unflattened(self, mdct_phase_psds: list[torch.Tensor]) -> list[torch.Tensor]:
         cropped_mdct_phase_psds: list[torch.Tensor] = []

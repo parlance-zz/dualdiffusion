@@ -37,6 +37,7 @@ import torch
 from numpy import ndarray
 
 from modules.daes.dae import DualDiffusionDAE, DualDiffusionDAEConfig
+from modules.formats.ms_mdct_dual_9 import patch_ms_psd, unpatch_ms_psd
 from modules.mp_tools import LatentStatsTracker, MPConv, mp_silu, mp_sum, normalize, resample_2d, patchify_2d, unpatchify_2d
 
 
@@ -66,6 +67,7 @@ class DAE_Config(DualDiffusionDAEConfig):
     out_channels: int    = 3
     latent_channels: int = 64
     use_1d_latents: bool = False
+    use_latents_pixel_norm: bool = False
 
     in_num_freqs: int = 64
     in_psd_num_freqs: list[int] = (64, 128, 256, 512)
@@ -352,15 +354,8 @@ class DAE(DualDiffusionDAE):
 
         if embeddings is not None:
             embeddings = embeddings[:, :, None, None]
-
-        assert len(x) == self.num_psd_levels
-        in_x: list[torch.Tensor] = []
-        patch_w = 2 ** (self.num_psd_levels - 1); patch_h = 1
-        for i in range(self.num_psd_levels):
-            in_x.append(patchify_2d(x[i].to(dtype=torch.bfloat16), patch_h, patch_w))
-            patch_w //= 2; patch_h *= 2
         
-        x = self.conv_psd_in(torch.cat(in_x, dim=1))
+        x: torch.Tensor = self.conv_psd_in(patch_ms_psd(x, self.num_psd_levels).to(dtype=torch.bfloat16))
 
         for name, block in self.enc.items():
             x = block(x, embeddings)
@@ -370,7 +365,7 @@ class DAE(DualDiffusionDAE):
             x = patchify_2d(x, self.num_latent_freqs, 1)
 
         latents: torch.Tensor = self.conv_latents_out(x, gain=self.latents_out_gain)
-        latents = normalize(latents.float(), dim=1 if self.config.use_1d_latents == True else None)
+        latents = normalize(latents.float(), dim=1 if self.config.use_latents_pixel_norm == True else None)
         
         if training == False:
             assert self.training == False
@@ -382,7 +377,7 @@ class DAE(DualDiffusionDAE):
         if training == False:
             assert self.training == False
             x = x.float()
-            x = normalize(x, dim=1 if self.config.use_1d_latents == True else None)
+            x = normalize(x, dim=1 if self.config.use_latents_pixel_norm == True else None)
 
         x = self.conv_latents_in(x.to(dtype=torch.bfloat16))
 
@@ -396,14 +391,8 @@ class DAE(DualDiffusionDAE):
         for name, block in self.dec.items():
             x = block(x, embeddings)
 
-        psd_output: torch.Tensor = self.conv_psd_out(x, gain=self.psd_out_gain)
-
-        outputs: list[torch.Tensor] = []; patch_w = 2 ** (self.num_psd_levels - 1); patch_h = 1
-        for psd in torch.chunk(psd_output, self.num_psd_levels, dim=1):
-            outputs.append(unpatchify_2d(psd, patch_h, patch_w))
-            patch_w //= 2; patch_h *= 2
-
-        return outputs
+        psd_output: torch.Tensor = self.conv_psd_out(x, gain=self.psd_out_gain).float()
+        return unpatch_ms_psd(psd_output, self.num_psd_levels)
     
     def forward(self, samples: torch.Tensor, audio_embeddings: torch.Tensor, latents_sigma: Optional[float] = None) -> tuple[torch.Tensor, torch.Tensor]:
         
