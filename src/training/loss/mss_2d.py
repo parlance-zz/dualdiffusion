@@ -221,39 +221,45 @@ class MSSLoss2D:
         
         loss = torch.zeros(target.shape[0], device=self.device)
 
-        static_pad = int(self.block_sizes[-1])
-        sample = torch.nn.functional.pad(sample, (static_pad, static_pad, static_pad, static_pad), mode="reflect")
-        target = torch.nn.functional.pad(target, (static_pad, static_pad, static_pad, static_pad), mode="reflect")
+        block_widths  = self.block_sizes[:np.flatnonzero(self.block_sizes <= sample.shape[3])[-1] + 1]
+        block_heights = self.block_sizes[:np.flatnonzero(self.block_sizes <= sample.shape[2])[-1] + 1]
+        block_width_weights  = self.block_weights[:len(block_widths)];  block_width_weights  = block_width_weights / block_width_weights.sum()
+        block_height_weights = self.block_weights[:len(block_heights)]; block_height_weights = block_height_weights / block_height_weights.sum()
+
+        static_pad_width  = int(block_widths[-1])
+        static_pad_height = int(block_heights[-1])
+        sample = torch.nn.functional.pad(sample, (static_pad_width, static_pad_width, static_pad_height, static_pad_height), mode="reflect")
+        target = torch.nn.functional.pad(target, (static_pad_width, static_pad_width, static_pad_height, static_pad_height), mode="reflect")
 
         _sample = sample
         _target = target
 
-        block_widths  = np.random.choice(self.block_sizes, size=self.config.num_iterations,
-            replace=self.config.block_sampling_replace, p=self.block_weights)
-        block_heights = np.random.choice(self.block_sizes, size=self.config.num_iterations,
-            replace=self.config.block_sampling_replace, p=self.block_weights)
+        block_widths  = np.random.choice(block_widths, size=self.config.num_iterations,
+            replace=self.config.block_sampling_replace, p=block_width_weights)
+        block_heights = np.random.choice(block_heights, size=self.config.num_iterations,
+            replace=self.config.block_sampling_replace, p=block_height_weights)
 
         for i in range(self.config.num_iterations):
             
             if self.config.use_sketching == True:
                 sample, target = sketch2_2d(_sample, _target)
 
-            block_width = int(block_widths[i])
+            block_width  = int(block_widths[i])
             block_height = int(block_heights[i])
 
             step_w = block_width
             step_h = block_height
             window = self.get_flat_top_window_2d(block_width, block_height)
 
-            offset_min_h = int(max(0, static_pad - block_height))
-            offset_max_h = int(max(offset_min_h, static_pad))
+            offset_min_h = int(max(0, static_pad_height - block_height))
+            offset_max_h = int(max(offset_min_h, static_pad_height))
             offset_h = int(np.random.randint(offset_min_h, offset_max_h + 1))
-            end_offset_h = -(static_pad - block_height) or None
+            end_offset_h = -(static_pad_height - block_height) or None
 
-            offset_min_w = int(max(0, static_pad - block_width))
-            offset_max_w = int(max(offset_min_w, static_pad))
+            offset_min_w = int(max(0, static_pad_width - block_width))
+            offset_max_w = int(max(offset_min_w, static_pad_width))
             offset_w = int(np.random.randint(offset_min_w, offset_max_w + 1))
-            end_offset_w = -(static_pad - block_width) or None
+            end_offset_w = -(static_pad_width - block_width) or None
             
             order = (-1, -2) if np.random.randint(0, 2) == 0 else (-2, -1)
             midside = np.random.rand() < self.config.midside_probability
@@ -299,7 +305,7 @@ if __name__ == "__main__":
 
     batch_size = 4
     channels = 2
-    height = 256
+    height = 64
     width = 384
 
     sample = torch.randn(batch_size, channels, height, width, device=device)
