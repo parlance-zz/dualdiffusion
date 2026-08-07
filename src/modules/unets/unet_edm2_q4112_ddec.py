@@ -51,6 +51,8 @@ class UNetConfig(DualDiffusionUNetConfig):
     in_num_freqs: int = 64
     in_psd_num_freqs: list[int] = (64, 128, 256, 512)
 
+    fourier_bandwidth: float = 2
+
     model_channels: int  = 512               # Base multiplier for the number of channels.
     logvar_channels: int = 192               # Number of channels for training uncertainty estimation.
     channel_mult: list[int]    = (1,2,4)     # Per-resolution multipliers for the number of channels.
@@ -66,7 +68,7 @@ class UNetConfig(DualDiffusionUNetConfig):
     attn_balance: float       = 0.3          # Balance between main branch (0) and self-attention (1).
     attn_levels: list[int]    = ()           # List of resolution levels to use self-attention.
     mlp_multiplier: int    = 1               # Multiplier for the number of channels in the MLP.
-    mlp_groups: int        = 4               # Number of groups for the MLPs.
+    mlp_groups: int        = 8               # Number of groups for the MLPs.
     emb_linear_groups: int = 1
 
 class Block(torch.nn.Module):
@@ -203,7 +205,7 @@ class UNet(DualDiffusionUNet):
             assert config.in_psd_num_freqs[i] % self.psd_freqs_per_freq == 0
         
         # Embedding.
-        self.emb_fourier = MPFourier(cnoise)
+        self.emb_fourier = MPFourier(cnoise, bandwidth=config.fourier_bandwidth)
         self.emb_noise = MPConv(cnoise, cemb, kernel=())
         self.emb_label = MPConv(config.in_channels_emb, cemb, kernel=()) if config.in_channels_emb > 0 else None
 

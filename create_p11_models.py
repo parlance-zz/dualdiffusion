@@ -14,7 +14,7 @@ embedding = CLAP_Embedding(CLAP_Config())
 embedding.save_pretrained(model_path, subfolder="embedding")
 """
 
-from modules.daes.dae_edm2_q411 import DAE, DAE_Config
+from modules.daes.dae_edm2_q4112 import DAE, DAE_Config
 dae = DAE(DAE_Config())
 print_module_info(dae, "dae")
 
@@ -22,7 +22,7 @@ if input("Save module? (y/n) ").lower() == 'y':
     dae.save_pretrained(model_path, subfolder="dae")
     print(f"Saved model to {model_path}/dae")
 
-from modules.unets.unet_edm2_q411_ddec import UNet, UNetConfig
+from modules.unets.unet_edm2_q4112_ddec import UNet, UNetConfig
 ddecp = UNet(UNetConfig())
 print_module_info(ddecp, "ddecp")
 

@@ -281,7 +281,7 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
             #    logs[f"loss/mss_1d_{i}"], logs[f"loss/mss_1d_cepstrum_{i}"] = self.mss_1d.mss_loss(_denoised_raw, _input_raw)
 
             logs.update(self.mss_1d.mss_loss(denoised_raw, input_raw.detach()))
-            logs["loss"] = logs["loss"] + logs["loss/mss_1d"] + logs["loss/mss_1d_cepstrum"]
+            logs["loss"] = logs["loss"] + logs["loss/mss_1d"].mean() + logs["loss/mss_1d_cepstrum"].mean()
         else:
             ddecp_x_ref = None
         

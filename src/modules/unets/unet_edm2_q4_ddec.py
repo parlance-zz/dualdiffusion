@@ -69,6 +69,8 @@ class UNetConfig(DualDiffusionUNetConfig):
     mlp_groups: int        = 1               # Number of groups for the MLPs.
     emb_linear_groups: int = 1
 
+    fourier_bandwidth: float = 1              # Bandwidth for the Fourier embedding of the noise level.
+
 class Block(torch.nn.Module):
 
     def __init__(self,
@@ -204,7 +206,7 @@ class UNet(DualDiffusionUNet):
             assert config.in_channels_x_ref == 0
         
         # Embedding.
-        self.emb_fourier = MPFourier(cnoise)
+        self.emb_fourier = MPFourier(cnoise, bandwidth=config.fourier_bandwidth)
         self.emb_noise = MPConv(cnoise, cemb, kernel=())
         self.emb_label = MPConv(config.in_channels_emb, cemb, kernel=()) if config.in_channels_emb > 0 else None
 
@@ -216,7 +218,7 @@ class UNet(DualDiffusionUNet):
         # Encoder.
         if config.in_channels_x_ref > 0:
             self.x_ref_balance = torch.nn.Parameter(torch.zeros([]))
-            self.conv_x_ref_in = MPConv(config.in_channels_x_ref, cblock[0], kernel=(3,3), bias=True)
+            self.conv_x_ref_in = MPConv(config.in_channels_x_ref, cblock[0], kernel=(1,1))
         else:
             self.x_ref_balance = self.conv_x_ref_in = None
         
@@ -330,11 +332,12 @@ class UNet(DualDiffusionUNet):
         for name, block in self.enc.items():
             if "conv" in name:
                 x = block(x)
-                
-                if self.config.in_channels_x_ref > 0:
-                    x = mp_sum(x, x_ref, t=self.x_ref_balance.sigmoid())
             else:
                 x = block(x, emb)
+
+                if "block0_layer0" in name:
+                    x = mp_sum(x, x_ref, t=self.x_ref_balance.sigmoid())
+
             skips.append(x)
 
         # decoder

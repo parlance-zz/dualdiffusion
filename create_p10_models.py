@@ -14,24 +14,17 @@ embedding = CLAP_Embedding(CLAP_Config())
 embedding.save_pretrained(model_path, subfolder="embedding")
 """
 
-from modules.daes.dae_edm2_q4 import DAE, DAE_Config
-dae = DAE(DAE_Config(in_psd_freqs=256, in_num_freqs=256))
+from modules.daes.dae_edm2_q43 import DAE, DAE_Config
+dae = DAE(DAE_Config(latent_channels=128, add_recon_logvar=True))
 print_module_info(dae, "dae")
 
 if input("Save module? (y/n) ").lower() == 'y':
     dae.save_pretrained(model_path, subfolder="dae")
     print(f"Saved model to {model_path}/dae")
 
-from modules.unets.unet_edm2_q4_ddec import UNet, UNetConfig
-ddecm = UNet(UNetConfig(in_psd_freqs=128, in_num_freqs=128, in_channels=9, out_channels=9, model_channels=128, in_channels_x_ref=9))
-print_module_info(ddecm, "ddecm")
-
-if input("Save module? (y/n) ").lower() == 'y':
-    ddecm.save_pretrained(model_path, subfolder="ddecm")
-    print(f"Saved model to {model_path}/ddecm")
 
 from modules.unets.unet_edm2_q4_ddec import UNet, UNetConfig
-ddecp = UNet(UNetConfig(in_num_freqs=256, in_psd_freqs=512, in_channels=4, out_channels=4, model_channels=64, in_channels_x_ref=9, channel_mult=(1,2,3,4,5), attn_levels=(3,4)))
+ddecp = UNet(UNetConfig(in_num_freqs=256, in_psd_freqs=512, in_channels=4, out_channels=4, model_channels=64, in_channels_x_ref=9, channel_mult=(1,2,3,4), attn_levels=(), mlp_multiplier=2, mlp_groups=1, fourier_bandwidth=4))
 print_module_info(ddecp, "ddecp")
 
 if input("Save module? (y/n) ").lower() == 'y':
@@ -39,8 +32,8 @@ if input("Save module? (y/n) ").lower() == 'y':
     print(f"Saved model to {model_path}/ddecp")
 
 from modules.unets.unet_edm2_p6 import UNet, UNetConfig
-#unet = UNet(UNetConfig(num_layers_per_block=16, in_channels=512, out_channels=512))
-unet = UNet(UNetConfig(model_channels=8192, mlp_groups=64, emb_linear_groups=64, num_layers_per_block=24, channel_mult_noise=0.125, in_channels=512, out_channels=512))
+unet = UNet(UNetConfig(num_layers_per_block=16, in_channels=1024, out_channels=1024))
+#unet = UNet(UNetConfig(model_channels=8192, mlp_groups=64, emb_linear_groups=64, num_layers_per_block=24, channel_mult_noise=0.125, in_channels=3072, out_channels=3072))
 print_module_info(unet, "unet")
 
 if input("Save module? (y/n) ").lower() == 'y':
