@@ -87,7 +87,7 @@ coeffs_list = [(a / 1.01, b / 1.01**3, c / 1.01**5) for (a, b, c) in coeffs_list
 def _polar_express(G: torch.Tensor, steps: int) -> torch.Tensor:
     assert G.ndim >= 2
 
-    X = G.bfloat16() # for speed
+    X = G.float()#bfloat16()
     if G.size(-2) > G.size(-1): X = X.mT # this reduces FLOPs
 
     X = X / (X.norm(dim=(-2,-1), keepdim=True) * 1.01 + 1e-7)
@@ -117,8 +117,7 @@ def _zeropower_via_newtonschulz5(G: torch.Tensor, steps: int = 5) -> torch.Tenso
     
     a, b, c = (3.4445, -4.7750, 2.0315)
 
-    # Convert to bfloat16 for efficiency
-    X = G.to(torch.bfloat16)
+    X = G.float()#to(torch.bfloat16)
     transposed = X.size(-2) > X.size(-1)
     if transposed:
         X = X.transpose(-2, -1)

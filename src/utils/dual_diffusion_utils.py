@@ -55,14 +55,15 @@ class AudioInfo:
 
 class TF32_Disabled(ContextDecorator): # disables reduced precision tensor cores inside the context
     def __enter__(self):
-        self.original_matmul_allow_tf32 = torch.backends.cuda.matmul.allow_tf32
-        self.original_cudnn_allow_tf32 = torch.backends.cudnn.allow_tf32
-        torch.backends.cuda.matmul.allow_tf32 = False
-        torch.backends.cudnn.allow_tf32 = False
+        #self.original_matmul_allow_tf32 = torch.backends.cuda.matmul.allow_tf32
+        #self.original_cudnn_allow_tf32 = torch.backends.cudnn.allow_tf32
+        #torch.backends.cuda.matmul.allow_tf32 = False
+        #torch.backends.cudnn.allow_tf32 = False
+        pass
 
     def __exit__(self, exc_type, exc_value, traceback):
-        torch.backends.cuda.matmul.allow_tf32 = self.original_matmul_allow_tf32
-        torch.backends.cudnn.allow_tf32 = self.original_cudnn_allow_tf32
+        #torch.backends.cuda.matmul.allow_tf32 = self.original_matmul_allow_tf32
+        #torch.backends.cudnn.allow_tf32 = self.original_cudnn_allow_tf32
         return False
 
 def init_cuda(default_device: Optional[torch.device] = None) -> None:
@@ -71,11 +72,22 @@ def init_cuda(default_device: Optional[torch.device] = None) -> None:
         raise ValueError("Error: PyTorch not compiled with CUDA support or CUDA unavailable")
     else:
          # leaving these enabled these seems to make no difference for performance or stability
+        #torch.backends.cuda.matmul.allow_fp16_reduced_precision_reduction = False
+        #torch.backends.cuda.matmul.allow_bf16_reduced_precision_reduction = False
+        #torch.backends.cuda.allow_fp16_bf16_reduction_math_sdp(True) # improves perf by ~2.5%, seems stable
+        #torch.backends.cuda.matmul.allow_tf32 = False
+        #torch.backends.cudnn.allow_tf32 = False
+        torch.backends.cuda.allow_fp16_bf16_reduction_math_sdp(False)
+
+        torch.backends.fp32_precision = "ieee"
+        torch.backends.cuda.matmul.fp32_precision = "ieee"
+        torch.backends.cudnn.fp32_precision = "ieee"
+        torch.backends.cudnn.conv.fp32_precision = "ieee"
+        torch.backends.cudnn.rnn.fp32_precision = "ieee"
+
         torch.backends.cuda.matmul.allow_fp16_reduced_precision_reduction = False
         torch.backends.cuda.matmul.allow_bf16_reduced_precision_reduction = False
-        #torch.backends.cuda.allow_fp16_bf16_reduction_math_sdp(True) # improves perf by ~2.5%, seems stable
-        torch.backends.cuda.matmul.allow_tf32 = True
-        torch.backends.cudnn.allow_tf32 = True
+
         torch.backends.cuda.cufft_plan_cache[0].max_size = 250 # avoid cufft memory leak
         torch.backends.cudnn.benchmark = True
         
