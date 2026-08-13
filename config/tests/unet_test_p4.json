@@ -21,10 +21,9 @@
     "output_lufs": -20,
     "copy_sample_source_files": true,
     "random_test_samples_seed": null,
-    "add_random_test_samples": 0,
+    "add_random_test_samples": 16,
     "shuffle_test_samples": true,
     "test_samples": [
-        
         /*
         "wii/Kamen Rider - Chou Climax Heroes/Stage03.brstm.flac",
         "wii/Kamen Rider - Chou Climax Heroes/Stage03.brstm.flac",
@@ -41,7 +40,7 @@
         "moonsurgent.flac",
         //*/
 
-        //*
+        /*
         "moonsurgent.flac",
         "moonsurgent.flac",
         "moonsurgent.flac"
@@ -65,6 +64,32 @@
         //*/
 
         //"switch/Eschatos",
+
+        //"wiiu/Just Dance 2016/lights.wav.ckd.flac",
+        //"psf3/One Piece - Pirate Warriors/bgm010.at3.flac",
+        //"wiiu/Just Dance 2016/lights.wav.ckd.flac",
+        //"psf3/One Piece - Pirate Warriors/bgm010.at3.flac",
+        //"wiiu/Just Dance 2016/lights.wav.ckd.flac",
+
+        /*
+        "wiiu/Just Dance 2016/lights.wav.ckd.flac",
+        "wiiu/Just Dance 2016/lights.wav.ckd.flac",
+        "wiiu/Just Dance 2016/lights.wav.ckd.flac",
+        "wiiu/Just Dance 2016/lights.wav.ckd.flac",
+        "wiiu/Just Dance 2016/lights.wav.ckd.flac",
+        "wiiu/Just Dance 2016/lights.wav.ckd.flac",
+        "wiiu/Just Dance 2016/lights.wav.ckd.flac",
+        "wiiu/Just Dance 2016/lights.wav.ckd.flac",
+        "wiiu/Just Dance 2016/lights.wav.ckd.flac"
+        */
+
+        "vita/Pro Yakyuu Spirits 2019/_t_wem_67090854.wem.flac",
+        "vita/Pro Yakyuu Spirits 2019/_t_wem_67090854.wem.flac",
+        "vita/Pro Yakyuu Spirits 2019/_t_wem_67090854.wem.flac",
+        "vita/Pro Yakyuu Spirits 2019/_t_wem_67090854.wem.flac",
+        "vita/Pro Yakyuu Spirits 2019/_t_wem_67090854.wem.flac",
+        "vita/Pro Yakyuu Spirits 2019/_t_wem_67090854.wem.flac",
+        "vita/Pro Yakyuu Spirits 2019/_t_wem_67090854.wem.flac"
 
         /*
         "myon_myon.flac",
@@ -100,6 +125,7 @@
 
         "switch/Bayonetta 3/_t_sound_stream_238503895.wem.flac",
         "psf3/Shining Resonance/M_STR_406_00000000.hca.flac",
+        "wiiu/Just Dance 2016/lights.wav.ckd.flac",
 
         "switch/Super Smash Bros. Ultimate/_t_!Movie_c2_opening_jp.ogg.flac", // smash bros opening with female asian vocals
         "switch/Super Smash Bros. Ultimate/j40_hr_menutitle.lopus.flac", // harmonized electric guitars
@@ -113,6 +139,8 @@
         "switch/Legend of Heroes - Trails of Cold Steel III, The/ed8466.lopus.flac", // metal
         "vita/Croixleur Sigma/BgmFileBossCate.adx.flac", // progressive
         "psp/Ys vs. Sora no Kiseki - Alternative Saga/BGM_FIELD_381.txtp.flac", // progressive
+        "psf3/One Piece - Pirate Warriors/bgm010.at3.flac",
+        "vita/Pro Yakyuu Spirits 2019/_t_wem_67090854.wem.flac",
 
         "psf3/One Piece - Pirate Warriors 3/BGMLink_00000007.at3.flac",
         "switch/eBaseball Powerful Pro Yakyuu 2020/_t_wem_1004274880.wem.flac",
@@ -323,6 +351,8 @@
         "vita/Croixleur Sigma/BgmFileBossCate.adx.flac", // progressive
         "psp/Ys vs. Sora no Kiseki - Alternative Saga/BGM_FIELD_381.txtp.flac", // progressive
         "psp/Ys vs. Sora no Kiseki - Alternative Saga/BGM_FIELD_381.txtp.flac", // progressive
+        "psf2/Sega SuperStars/stg_sst~sonic03_1.adx.flac", // progressive
+        "psf2/Sega SuperStars/stg_sst~sonic03_1.adx.flac", // progressive
 
         "vita/Gundam Breaker 2/bgm.awb.00011.at9.flac",
         "vita/Gundam Breaker 2/bgm.awb.00011.at9.flac"
@@ -334,8 +364,10 @@
         /* // progressive jazz fusion
         "dsf/Metropolis Street Racer Prototype/file_15.adx.flac",
         "dsf/Metropolis Street Racer Prototype/file_15.adx.flac",
-        "dsf/Metropolis Street Racer Prototype/file_15.adx.flac",
-        "dsf/Metropolis Street Racer Prototype/file_15.adx.flac"
+        "psf3/One Piece - Pirate Warriors/bgm010.at3.flac",
+        "psf3/One Piece - Pirate Warriors/bgm010.at3.flac",
+        "vita/Pro Yakyuu Spirits 2019/_t_wem_67090854.wem.flac",
+        "vita/Pro Yakyuu Spirits 2019/_t_wem_67090854.wem.flac",
         //*/
         
 
