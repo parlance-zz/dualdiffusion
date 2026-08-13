@@ -111,7 +111,7 @@ class MS_MDCT_DualFormat(DualDiffusionFormat):
         super().__init__()
         self.config = config
 
-        #assert int(1/self.config.mdct_psd_exponent) == 1/self.config.mdct_psd_exponent, "mdct_psd_exponent must be the reciprocal of an integer"
+        assert int(1/self.config.mdct_psd_exponent) == 1/self.config.mdct_psd_exponent, "mdct_psd_exponent must be the reciprocal of an integer"
         
         if config.ms_psd_use_center == True:
             assert config.num_raw_channels > 1
@@ -274,9 +274,9 @@ class MS_MDCT_DualFormat(DualDiffusionFormat):
         mdct_phase = mdct_phase * self.mdct_phase_scale
         mdct_psd = mdct_psd * self.mdct_psd_scale - self.mdct_psd_offset
 
-        mdct_psd = mdct_psd.clip(min=0).pow(1 / self.config.mdct_psd_exponent - 1)
-        #recon_exp = int((1 / self.config.mdct_psd_exponent - 1) / 2) * 2 + 1
-        #mdct_psd = mdct_psd.pow(recon_exp)
+        #mdct_psd = mdct_psd.clip(min=0).pow(1 / self.config.mdct_psd_exponent - 1)
+        recon_exp = int((1 / self.config.mdct_psd_exponent - 1) / 2) * 2 + 1
+        mdct_psd = mdct_psd.pow(recon_exp)
         raw_samples = self.imdct(mdct_phase * mdct_psd).real.contiguous()
         return raw_samples
         
