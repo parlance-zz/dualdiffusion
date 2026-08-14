@@ -71,6 +71,7 @@ class UNetLossBuckets(torch.nn.Module):
         self.sigma_min = sigma_min
         self.sigma_max = sigma_max
         self.log_prefix = log_prefix
+        self.linear_buckets = linear_buckets
         self.trainer = trainer
 
         self.loss_buckets: torch.Tensor; self.loss_bucket_counts: torch.Tensor
@@ -81,7 +82,10 @@ class UNetLossBuckets(torch.nn.Module):
             bucket_sigma = torch.linspace(np.log(self.sigma_min), np.log(self.sigma_max), self.num_buckets + 1).exp()
         else:
             bucket_sigma = torch.linspace(self.sigma_min, self.sigma_max, self.num_buckets + 1)
-        bucket_sigma[0] = 0; bucket_sigma[-1] = float("inf")
+
+        bucket_sigma[0] = 0
+        if linear_buckets == False:
+            bucket_sigma[-1] = float("inf")
 
         self.bucket_names = [f"{log_prefix}_loss_σ_buckets/{bucket_sigma[i]:.4f} - {bucket_sigma[i+1]:.4f}" for i in range(num_buckets)]
 
@@ -89,7 +93,10 @@ class UNetLossBuckets(torch.nn.Module):
         
         global_loss = self.trainer.accelerator.gather(loss.detach()).cpu()
         sigma = self.trainer.accelerator.gather(sigma.detach()).cpu()
-        sigma_quantiles = (sigma.detach().log().cpu() - np.log(self.sigma_min)) / (np.log(self.sigma_max) - np.log(self.sigma_min))
+        if self.linear_buckets == False:
+            sigma_quantiles = (sigma.detach().log().cpu() - np.log(self.sigma_min)) / (np.log(self.sigma_max) - np.log(self.sigma_min))
+        else:
+            sigma_quantiles = (sigma.detach().cpu() - self.sigma_min) / (self.sigma_max - self.sigma_min)
         
         target_buckets = (sigma_quantiles * self.loss_buckets.shape[0]).long().clip(min=0, max=self.loss_buckets.shape[0] - 1)
         self.loss_buckets.index_add_(0, target_buckets, global_loss)
