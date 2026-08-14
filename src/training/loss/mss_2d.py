@@ -212,10 +212,12 @@ class MSSLoss2D:
         return x
     
     def mss_loss(self, sample: torch.Tensor, target: torch.Tensor,
-            leak_pow: Optional[float] = None, leak_max: Optional[float] = None) -> torch.Tensor:
+            leak_pow: Optional[float] = None, leak_max: Optional[float] = None, leak_t: Optional[torch.Tensor] = None) -> torch.Tensor:
 
         if self.config.use_complex_loss == False:
-            if leak_pow is not None and leak_max is not None:  # useful at start of training for preventing polarity mismatch without complex loss
+            if leak_t is not None:
+                sample = torch.lerp(sample, target.detach(), leak_t.view(-1, 1, 1, 1))
+            elif leak_pow is not None and leak_max is not None:  # useful at start of training for preventing polarity mismatch without complex loss
                 rnd_t = np.random.rand()**leak_pow * leak_max  # disable after ~200 steps for improved performance
                 sample = torch.lerp(sample, target.detach(), rnd_t)
         
