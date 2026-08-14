@@ -50,7 +50,6 @@ def residual_space_to_channel_avg(x: torch.Tensor, out_channels: int, factor: in
     x = x.view(b, out_channels, group_size, h, w)
     return x.mean(dim=2)
 
-
 def residual_channel_to_space_dup(x: torch.Tensor, out_channels: int, factor: int = 2) -> torch.Tensor:
     in_channels = x.shape[1]
     assert out_channels * factor**2 % in_channels == 0
@@ -65,11 +64,12 @@ class DAE_Config(DualDiffusionDAEConfig):
     in_channels: int     = 9
     in_channels_emb: int = 0
     out_channels: int    = 9
-    latent_channels: int = 32
+    latent_channels: int = 96
     use_1d_latents: bool = False
+    use_latents_pixel_norm: bool = True
 
-    in_num_freqs: int = 128
-    in_psd_freqs: int = 128
+    in_num_freqs: int = 112
+    in_psd_freqs: int = 112
 
     model_channels: int         = 128        # Base multiplier for the number of channels.
     channel_mult_enc: int       = (1,2,4,8,8)
@@ -82,14 +82,11 @@ class DAE_Config(DualDiffusionDAEConfig):
     attn_balance: float       = 0.3          # Balance between main branch (0) and self-attention (1).
     attn_levels: list[int]    = ()        # List of resolution levels to use self-attention.
     mlp_multiplier: int    = 1               # Multiplier for the number of channels in the MLP.
-    mlp_groups: int        = 2               # Number of groups for the MLPs.
+    mlp_groups: int        = 1               # Number of groups for the MLPs.
     emb_linear_groups: int = 1
     add_pixel_norm: bool   = False
 
     add_recon_logvar: bool = True
-
-    static_latents_scale: Optional[float] = None
-    static_latents_noise: Optional[float] = None
 
 class Block(torch.nn.Module):
 
@@ -263,7 +260,7 @@ class DAE(DualDiffusionDAE):
         if config.add_recon_logvar == True:
             self.recon_logvar = torch.nn.Parameter(torch.zeros([]))
 
-        self.latents_stats_tracker = LatentStatsTracker(config.latent_channels, static_scale=config.static_latents_scale)
+        self.latents_stats_tracker = LatentStatsTracker(config.latent_channels)
 
         # encoder
         self.enc = torch.nn.ModuleDict()
@@ -369,12 +366,10 @@ class DAE(DualDiffusionDAE):
             x = patchify_2d(x, self.num_latent_freqs, 1)
 
         latents: torch.Tensor = self.conv_latents_out(x, gain=self.latents_out_gain)
-        latents = normalize(latents.float(), dim=1 if self.config.use_1d_latents == True else None)
+        latents = normalize(latents.float(), dim=1 if self.config.use_latents_pixel_norm == True else None)
         
         if training == False:
             assert self.training == False
-            #latents = self.latents_stats_tracker.remove_mean(latents, mode="per_channel")
-            #latents = self.latents_stats_tracker.unscale(latents, mode="static")
 
         return latents
 
@@ -382,12 +377,7 @@ class DAE(DualDiffusionDAE):
 
         if training == False:
             assert self.training == False
-            x = x.float()
-            #x = self.latents_stats_tracker.rescale(x, mode="static")
-            #x = self.latents_stats_tracker.add_mean(x, mode="per_channel")
-            x = normalize(x, dim=1 if self.config.use_1d_latents == True else None)
-            #if self.config.static_latents_noise is not None:
-            #    x = x + torch.randn_like(x) * self.config.static_latents_noise
+            x = normalize(x.float(), dim=1 if self.config.use_latents_pixel_norm == True else None)
 
         x = self.conv_latents_in(x.to(dtype=torch.bfloat16))
 
@@ -431,15 +421,7 @@ class DAE(DualDiffusionDAE):
         else:
 
             if self.config.latent_channels > 8:
-                #latents = latents.reshape(latents.shape[0], latents.shape[1] * latents.shape[2] // 4, 4, latents.shape[3])
-                #latents = latents.permute(0, 2, 1, 3).contiguous()
-
-                #latents = unpatchify_2d(latents, latents.shape[1]//4, 1)
-                #latents = unpatchify_2d(latents, 16, 1)
-                #latents = unpatchify_2d(latents, 12, 1)
                 latents = unpatchify_2d(latents, 8, 1)
-
-                #latents = torch.cat(torch.chunk(latents, latents.shape[1]//4, dim=1), dim=2)
 
             return super().latents_to_img(latents, img_split_stereo=False, **kwargs)
 

@@ -20,13 +20,16 @@
         //"default_raw_length": 2817536,
         //"default_raw_length": 2097152,
         "default_raw_length": 1408768,
+        //"default_raw_length": 196608,
         //"default_raw_length": 808768,
         //"default_raw_length": 131072,
+        //"default_raw_length": 122880,
         //"default_raw_length": 96000,
-        "width_alignment": 8192,
+        "width_alignment": 12288,
+        //"width_alignment": 8192,
 
         "mdct_psd_exponent": 0.25,
-        "window_len": 512,
+        "window_len": 384,
         "window_func": "vorbis",
 
         // standard p config, from paper
@@ -43,8 +46,8 @@
         //"ms_psd_t_scale": 5.436563657,
         //"ms_psd_t_scale": 3.14,
 
-        "ms_psd_window_len": 1023,
-        "ms_psd_num_filters": 128,
+        "ms_psd_window_len": 1535,
+        "ms_psd_num_filters": 112,
         "ms_psd_filter_alpha": null,
 
         "mel_spec_config": {

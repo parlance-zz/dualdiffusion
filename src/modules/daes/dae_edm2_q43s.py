@@ -64,7 +64,7 @@ class DAE_Config(DualDiffusionDAEConfig):
     in_channels: int     = 9
     in_channels_emb: int = 0
     out_channels: int    = 9
-    latent_channels: int = 64
+    latent_channels: int = 96
     use_1d_latents: bool = False
 
     in_num_freqs: int = 112
@@ -86,7 +86,7 @@ class DAE_Config(DualDiffusionDAEConfig):
     add_pixel_norm: bool   = False
 
     use_latents_pixel_norm: bool = True
-    add_recon_logvar: bool = True
+    add_recon_logvar: bool = False
 
 class Block(torch.nn.Module):
 
@@ -237,6 +237,7 @@ class DAE(DualDiffusionDAE):
         
         assert config.in_channels == config.out_channels == 9
         assert config.model_channels % config.mlp_groups == 0
+        assert config.latent_channels % 2 == 0
 
         cemb = config.model_channels * config.channel_mult_emb if config.in_channels_emb > 0 else 0
 
@@ -293,8 +294,8 @@ class DAE(DualDiffusionDAE):
                 self.conv_latents_in.weight.copy_(torch.linalg.pinv(self.conv_latents_out.weight.data[:, :, 0, 0])[:, :, None, None])
                 self.conv_latents_in.bias.zero_()
         else:
-            self.conv_latents_out = MPConv(enc_channels[-1], config.latent_channels, kernel=(3,3))
-            self.conv_latents_in  = MPConv(config.latent_channels, dec_channels[-1], kernel=(3,3))
+            self.conv_latents_out = MPConv(enc_channels[-1], config.latent_channels // 2, kernel=(3,3))
+            self.conv_latents_in  = MPConv(config.latent_channels // 2, dec_channels[-1], kernel=(3,3))
 
         # decoder
         self.dec = torch.nn.ModuleDict()
@@ -317,7 +318,7 @@ class DAE(DualDiffusionDAE):
                 self.dec[f"block{level}_layer{idx}"] = Block(level, cout, cout, cemb,
                     use_attention=level in config.attn_levels, flavor="dec", **block_kwargs)
 
-        self.conv_out_center = MPConv(cout, 1, kernel=(3,3))
+        self.conv_out_center = MPConv(cout * 2, 1, kernel=(3,3))
         self.conv_out_stereo = MPConv(cout, 4, kernel=(3,3))
         self.out_gain = torch.nn.Parameter(torch.ones([]))
         
@@ -371,6 +372,9 @@ class DAE(DualDiffusionDAE):
         latents: torch.Tensor = self.conv_latents_out(x)
         latents = normalize(latents.float(), dim=1 if self.config.use_latents_pixel_norm == True else None)
         
+        latents_left, latents_right = latents.chunk(2, dim=0)
+        latents = torch.cat((latents_left, latents_right), dim=1)
+
         if training == False:
             assert self.training == False
             #latents = self.latents_stats_tracker.remove_mean(latents, mode="per_channel")
@@ -379,6 +383,9 @@ class DAE(DualDiffusionDAE):
         return latents
 
     def decode(self, x: torch.Tensor, embeddings: torch.Tensor, training: bool = False) -> torch.Tensor:
+
+        x_left, x_right = x.chunk(2, dim=1)
+        x = torch.cat((x_left, x_right), dim=0)
 
         if training == False:
             assert self.training == False
@@ -399,7 +406,7 @@ class DAE(DualDiffusionDAE):
         for block in self.dec.values():
             x = block(x, embeddings)
 
-        x_center: torch.Tensor = self.conv_out_center(x)
+        x_center: torch.Tensor = self.conv_out_center(torch.cat(x.chunk(2, dim=0), dim=1))
         x_stereo: torch.Tensor = self.conv_out_stereo(x)
 
         x_left, x_right = x_stereo.chunk(2, dim=0)

@@ -15,7 +15,7 @@ embedding.save_pretrained(model_path, subfolder="embedding")
 """
 
 from modules.daes.dae_edm2_q43 import DAE, DAE_Config
-dae = DAE(DAE_Config())
+dae = DAE(DAE_Config(add_recon_logvar=True))
 print_module_info(dae, "dae")
 
 if input("Save module? (y/n) ").lower() == 'y':
