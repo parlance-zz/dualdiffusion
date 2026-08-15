@@ -96,8 +96,12 @@ class MS_MDCT_DualFormatConfig(DualDiffusionFormatConfig):
         return self.ms_psd_window_len // 2 + 1 if self.ms_psd_window_len % 2 == 1 else self.ms_psd_window_len // 2
     
     @property
+    def ms_psd_num_layers(self) -> int:
+        return len(self.ms_psd_p_real)
+    
+    @property
     def ms_psd_num_channels(self) -> int:
-        return 4 * self.num_raw_channels + (1 if self.ms_psd_use_center else 0)
+        return self.ms_psd_num_layers * self.num_raw_channels + (1 if self.ms_psd_use_center else 0)
     
     # mel-spec params    
     mel_spec_config: Optional[MelSpecConfig] = None
@@ -112,6 +116,7 @@ class MS_MDCT_DualFormat(DualDiffusionFormat):
         self.config = config
 
         assert int(1/self.config.mdct_psd_exponent) == 1/self.config.mdct_psd_exponent, "mdct_psd_exponent must be the reciprocal of an integer"
+        assert len(config.ms_psd_p_real) == len(config.ms_psd_p_imag), "ms_psd_p_real and ms_psd_p_imag must have the same length"
         
         if config.ms_psd_use_center == True:
             assert config.num_raw_channels > 1
@@ -201,7 +206,7 @@ class MS_MDCT_DualFormat(DualDiffusionFormat):
             )
 
         ms_psds: list[torch.Tensor] = [ms_psd_center] if self.config.ms_psd_use_center == True else []
-        for i in range(4):
+        for i in range(self.config.ms_psd_num_layers):
             ms_psds.append((
                  self.config.ms_psd_p_real[i][0] * stft_h0 + self.config.ms_psd_p_real[i][1] * stft_h1 +
                 (self.config.ms_psd_p_imag[i][0] * stft_h0 + self.config.ms_psd_p_imag[i][1] * stft_h1) * 1j
@@ -229,7 +234,7 @@ class MS_MDCT_DualFormat(DualDiffusionFormat):
     def ms_psd_to_img(self, ms_psd: torch.Tensor, use_colormap: bool = False):
         
         if self.config.ms_psd_use_center == True:
-            ms_psd = torch.cat(ms_psd[:, 1:].chunk(4, dim=1) + (ms_psd[:, :1].repeat(1,self.config.num_raw_channels,1,1),), dim=2)
+            ms_psd = torch.cat(ms_psd[:, 1:].chunk(self.config.ms_psd_num_layers, dim=1) + (ms_psd[:, :1].repeat(1,self.config.num_raw_channels,1,1),), dim=2)
 
         if use_colormap == True:
             return tensor_to_img(ms_psd.mean(dim=(0,1)), flip_y=True, colormap=True)

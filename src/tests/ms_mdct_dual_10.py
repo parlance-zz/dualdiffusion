@@ -89,7 +89,7 @@ def ms_mdct_dual_format_test() -> None:
     mdct_window_padded.cpu().numpy().tofile(os.path.join(output_path, "mdct_wnd_padded.raw"))
 
     coverage = torch.zeros(format.config.ms_psd_window_len, device=format.device)
-    for i in range(4):
+    for i in range(format.config.ms_psd_num_layers):
         wnd = (
             (format.config.ms_psd_p_real[i][0] * format.ms_psd_win_h0 + format.config.ms_psd_p_real[i][1] * format.ms_psd_win_h1) +
             (format.config.ms_psd_p_imag[i][0] * format.ms_psd_win_h0 + format.config.ms_psd_p_imag[i][1] * format.ms_psd_win_h1) * 1j
@@ -228,7 +228,7 @@ def ms_mdct_dual_format_test() -> None:
         ms_psd_output_path = os.path.join(output_path, f"{filename}_ms_psd_0.png")
         save_img(tensor_to_img(ms_psd[:, :1].repeat(1,2,1,1), flip_y=True), ms_psd_output_path)
         print(f"Saved ms_psd_0 img to {ms_psd_output_path}")
-        for i, psd in enumerate(ms_psd[:, 1:].chunk(4, dim=1)):
+        for i, psd in enumerate(ms_psd[:, 1:].chunk(format.config.ms_psd_num_layers, dim=1)):
             ms_psd_output_path = os.path.join(output_path, f"{filename}_ms_psd_{i+1}.png")
             save_img(tensor_to_img(psd, flip_y=True), ms_psd_output_path)
             print(f"Saved ms_psd_{i+1} img to {ms_psd_output_path}")
@@ -240,7 +240,7 @@ def ms_mdct_dual_format_test() -> None:
         ms_psd_mel_output_path = os.path.join(output_path, f"{filename}_ms_psd_mel_0.png")
         save_img(tensor_to_img(ms_psd_mel[:, :1].repeat(1,2,1,1), flip_y=True), ms_psd_mel_output_path)
         print(f"Saved ms_psd_mel_0 img to {ms_psd_mel_output_path}")
-        for i, psd in enumerate(ms_psd_mel[:, 1:].chunk(4, dim=1)):
+        for i, psd in enumerate(ms_psd_mel[:, 1:].chunk(format.config.ms_psd_num_layers, dim=1)):
             ms_psd_mel_output_path = os.path.join(output_path, f"{filename}_ms_psd_mel_{i+1}.png")
             save_img(tensor_to_img(psd, flip_y=True), ms_psd_mel_output_path)
             print(f"Saved ms_psd_mel_{i+1} img to {ms_psd_mel_output_path}")
@@ -252,7 +252,7 @@ def ms_mdct_dual_format_test() -> None:
         ms_psd_mel_unscaled_output_path = os.path.join(output_path, f"{filename}_ms_psd_mel_unscaled_0.png")
         save_img(tensor_to_img(ms_psd_mel_unscaled[:, :1].repeat(1,2,1,1), flip_y=True), ms_psd_mel_unscaled_output_path)
         print(f"Saved ms_psd_mel_unscaled_0 img to {ms_psd_mel_unscaled_output_path}")
-        for i, psd in enumerate(ms_psd_mel_unscaled[:, 1:].chunk(4, dim=1)):
+        for i, psd in enumerate(ms_psd_mel_unscaled[:, 1:].chunk(format.config.ms_psd_num_layers, dim=1)):
             ms_psd_mel_unscaled_output_path = os.path.join(output_path, f"{filename}_ms_psd_mel_unscaled_{i+1}.png")
             save_img(tensor_to_img(psd, flip_y=True), ms_psd_mel_unscaled_output_path)
             print(f"Saved ms_psd_mel_unscaled_{i+1} img to {ms_psd_mel_unscaled_output_path}")
