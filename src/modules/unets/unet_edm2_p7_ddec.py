@@ -43,37 +43,32 @@ from modules.formats.format import DualDiffusionFormat
 @dataclass
 class UNetConfig(DualDiffusionUNetConfig):
 
-    in_channels:  int = 256
-    out_channels: int = 256
+    in_channels:  int = 768
+    out_channels: int = 768
     in_channels_emb: int = 0
-    in_channels_x_ref: int = 384
-    in_num_freqs: int = 128
+    in_channels_x_ref: int = 768
+    in_num_freqs: int = 192
 
-    sigma_max: float  = 100
-    sigma_min: float  = 0.01
+    sigma_max: float  = 1000
+    sigma_min: float  = 1e-3
     sigma_data: float = 1
-
-    mp_fourier_ln_sigma_offset: float = 0
-    mp_fourier_bandwidth:       float = 1
 
     adg_min_balance: Optional[float]  = 0.1
     adg_max_balance: Optional[float]  = 0.9
-    adg_weight_decay: Optional[float] = None
 
-    model_channels: int  = 2048              # Base multiplier for the number of channels.
+    model_channels: int  = 4096              # Base multiplier for the number of channels.
     logvar_channels: int = 192               # Number of channels for training uncertainty estimation.
     channel_mult: list[int] = (1,)           # Per-resolution multipliers for the number of channels.
     channel_mult_noise: Optional[float] = 0.125     # Multiplier for noise embedding dimensionality.
     channel_mult_emb: Optional[float]   = 1         # Multiplier for final embedding dimensionality.
     use_skips: bool     = False
     channels_per_head: int    = 128          # Number of channels per attention head.
-    attn_logit_scale: float   = 1
-    num_layers_per_block: int = 8            # Number of resnet blocks per resolution.
+    num_layers_per_block: int = 12           # Number of resnet blocks per resolution.
     label_balance: float      = 0.5          # Balance between noise embedding (0) and class embedding (1).
     balance_logits_offset: float = -4
-    mlp_multiplier: int    = 2               # Multiplier for the number of channels in the MLP.
-    mlp_groups: int        = 16              # Number of groups for the MLPs.
-    emb_linear_groups: int = 16
+    mlp_multiplier: int    = 3               # Multiplier for the number of channels in the MLP.
+    mlp_groups: int        = 32              # Number of groups for the MLPs.
+    emb_linear_groups: int = 32
 
 class Block(torch.nn.Module):
 
@@ -83,17 +78,15 @@ class Block(torch.nn.Module):
         out_channels: int,                 # Number of output channels.
         skip_channels: int,
         emb_channels: int,                 # Number of embedding channels.
-        dropout: float         = 0.,       # Dropout probability.
-        balance_logits_offset: float = -2, # Offset for the balance logits before sigmoid.
+        dropout: float         = 0,       # Dropout probability.
+        balance_logits_offset: float = -4, # Offset for the balance logits before sigmoid.
         clip_act: float        = 256,      # Clip output activations. None = do not clip.
-        mlp_multiplier: int    = 4,        # Multiplier for the number of channels in the MLP.
-        mlp_groups: int        = 4,        # Number of groups for the MLP.
-        emb_linear_groups: int = 4,
-        channels_per_head: int = 64,       # Number of channels per attention head.
-        attn_logit_scale: float = 1.,
+        mlp_multiplier: int    = 2,        # Multiplier for the number of channels in the MLP.
+        mlp_groups: int        = 32,        # Number of groups for the MLP.
+        emb_linear_groups: int = 32,
+        channels_per_head: int = 128,       # Number of channels per attention head.
         adg_min_balance: Optional[float]  = 0.1,
         adg_max_balance: Optional[float]  = 0.9,
-        adg_weight_decay: Optional[float] = 0.03
     ) -> None:
         super().__init__()
 
@@ -107,7 +100,6 @@ class Block(torch.nn.Module):
         self.dropout = dropout
         self.balance_logits_offset = balance_logits_offset
         self.clip_act = clip_act
-        self.attn_logit_scale = attn_logit_scale
 
         inner_channels = out_channels * mlp_multiplier
 
@@ -121,7 +113,7 @@ class Block(torch.nn.Module):
         if skip_channels > 0:
             self.conv_skip = MPConv(skip_channels, out_channels, kernel=(1,1), groups=mlp_groups)
             self.skip_balance = AdaptiveGroupBalance(emb_channels, mlp_groups, balance_logits_offset,
-                min_balance=adg_min_balance, max_balance=adg_max_balance, weight_decay=adg_weight_decay)
+                min_balance=adg_min_balance, max_balance=adg_max_balance)
         else:
             self.conv_skip = None
             self.skip_balance = None
@@ -132,7 +124,7 @@ class Block(torch.nn.Module):
         self.emb_gain = torch.nn.Parameter(torch.zeros([]))
         self.emb_linear = MPConv(emb_channels, inner_channels, kernel=(1,1), groups=emb_linear_groups)
         self.emb_res_balance = AdaptiveGroupBalance(emb_channels, mlp_groups, balance_logits_offset,
-            min_balance=adg_min_balance, max_balance=adg_max_balance, weight_decay=adg_weight_decay)
+            min_balance=adg_min_balance, max_balance=adg_max_balance)
     
         self.attn_q = MPConv(out_channels, out_channels, kernel=(1,1), groups=mlp_groups)
         self.attn_k = MPConv(out_channels, out_channels, kernel=(1,1), groups=mlp_groups)
@@ -142,7 +134,7 @@ class Block(torch.nn.Module):
         self.emb_gain_qkv = torch.nn.Parameter(torch.zeros([]))
         self.emb_linear_qkv = MPConv(emb_channels, out_channels, kernel=(1,1), groups=emb_linear_groups)
         self.emb_attn_balance = AdaptiveGroupBalance(emb_channels, mlp_groups, balance_logits_offset,
-            min_balance=adg_min_balance, max_balance=adg_max_balance, weight_decay=adg_weight_decay)
+            min_balance=adg_min_balance, max_balance=adg_max_balance)
 
     def forward(self, x: torch.Tensor, emb: torch.Tensor, skip: torch.Tensor) -> torch.Tensor:
 
@@ -161,9 +153,7 @@ class Block(torch.nn.Module):
         k = normalize(k, dim=4)
         v = normalize(v, dim=4)
 
-        y = torch.nn.functional.scaled_dot_product_attention(q, k, v,
-            scale=self.attn_logit_scale / self.channels_per_head**0.5)
-        
+        y = torch.nn.functional.scaled_dot_product_attention(q, k, v)
         y = y.permute(0, 3, 4, 2, 1).reshape(B, C, H, W)
 
         y = self.attn_proj(y)
@@ -185,7 +175,7 @@ class Block(torch.nn.Module):
         x = self.emb_res_balance(x, y, emb)
 
         if self.clip_act is not None:
-            x = x.clip(-self.clip_act, self.clip_act)
+            x = x.clip_(-self.clip_act, self.clip_act)
 
         return x
 
@@ -201,10 +191,8 @@ class UNet(DualDiffusionUNet):
                         "emb_linear_groups": config.emb_linear_groups,
                         "balance_logits_offset": config.balance_logits_offset,
                         "channels_per_head": config.channels_per_head,
-                        "attn_logit_scale": config.attn_logit_scale,
                         "adg_min_balance": config.adg_min_balance,
-                        "adg_max_balance": config.adg_max_balance,
-                        "adg_weight_decay": config.adg_weight_decay}
+                        "adg_max_balance": config.adg_max_balance}
 
         cblock = [config.model_channels * x for x in config.channel_mult]
         cnoise = int(config.model_channels * config.channel_mult_noise) if config.channel_mult_noise is not None else max(cblock)
@@ -218,10 +206,10 @@ class UNet(DualDiffusionUNet):
         assert cemb % config.mlp_groups == 0
 
         # embedding
-        self.emb_fourier = MPFourier(cnoise, bandwidth=config.mp_fourier_bandwidth)
+        self.emb_fourier = MPFourier(cnoise)
         self.emb_noise = MPConv(cnoise, cemb, kernel=())
         self.emb_x_ref = MPConv(config.in_channels_x_ref, cemb, kernel=(1,1))
-        self.x_ref_gain = torch.nn.Parameter(torch.zeros([]))
+        self.x_ref_balance = torch.nn.Parameter(torch.zeros([]))
 
         if config.in_channels_emb > 0:
             self.emb_label = MPConv(config.in_channels_emb, cemb, kernel=())
@@ -267,8 +255,7 @@ class UNet(DualDiffusionUNet):
             return None
         
     def get_sigma_loss_logvar(self, sigma: Optional[torch.Tensor] = None) -> torch.Tensor:
-        ln_sigma = sigma.flatten().log() - self.config.mp_fourier_ln_sigma_offset
-        return self.logvar_linear(self.logvar_fourier(ln_sigma / 4)).view(-1, 1, 1, 1).float()
+        return self.logvar_linear(self.logvar_fourier(sigma.flatten().log() / 4)).view(-1, 1, 1, 1).float()
     
     def get_latent_shape(self, latent_shape: Union[torch.Size, tuple[int, int, int, int]]) -> torch.Size:
         return latent_shape
@@ -288,17 +275,17 @@ class UNet(DualDiffusionUNet):
             c_skip = self.config.sigma_data ** 2 / (sigma ** 2 + self.config.sigma_data ** 2)
             c_out = sigma * self.config.sigma_data / (sigma ** 2 + self.config.sigma_data ** 2).sqrt()
             c_in = 1 / (self.config.sigma_data ** 2 + sigma ** 2).sqrt()
-            ln_sigma = sigma.flatten().log() - self.config.mp_fourier_ln_sigma_offset
-            c_noise = ln_sigma / 4
+            c_noise = sigma.flatten().log() / 4
 
             if perturbed_input is not None:
                 x = (c_in * perturbed_input).to(dtype=torch.bfloat16)
             else:
                 x = (c_in * x_in).to(dtype=torch.bfloat16)
 
-        x_ref = x_ref.permute(0, 2, 1, 3).reshape(x_ref.shape[0], x_ref.shape[1]*x_ref.shape[2], 1, x_ref.shape[3]).to(dtype=torch.bfloat16)
-        x = x.permute(0, 2, 1, 3).reshape(x.shape[0], x.shape[1]*x.shape[2], 1, x.shape[3]).to(dtype=torch.bfloat16)
+            x = x.to(dtype=torch.bfloat16).permute(0, 2, 1, 3).reshape(x.shape[0], x.shape[1]*x.shape[2], 1, x.shape[3])
 
+        x_ref = x_ref.to(dtype=torch.bfloat16)
+        
         # nuisance due to ddp wrapper limitations
         if conditioning_mask is not None:
             assert self.training == True
@@ -310,13 +297,13 @@ class UNet(DualDiffusionUNet):
         emb: torch.Tensor = self.emb_noise(self.emb_fourier(c_noise)).to(dtype=torch.bfloat16)
         if self.config.in_channels_emb > 0:
             emb = mp_silu(mp_sum(emb, embeddings.to(dtype=emb.dtype), t=self.config.label_balance))
-        #emb = mp_silu(mp_sum(emb[..., None, None], x_ref, t=0.5))
-        emb = mp_silu(emb)[..., None, None]
+        emb = mp_silu(mp_sum(emb[..., None, None], x_ref, t=self.x_ref_balance.sigmoid()))
+        #emb = mp_silu(emb)[..., None, None]
 
         idx = 0; skips = []
         for name, block in self.dec.items():
             if "conv" in name:
-                x = block(x) + self.emb_x_ref(x_ref) * self.x_ref_gain
+                x = block(x) #+ self.emb_x_ref(x_ref) * self.x_ref_gain
             else:
                 skip = None
 
