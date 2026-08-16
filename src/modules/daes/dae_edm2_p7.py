@@ -285,7 +285,7 @@ class DAE(DualDiffusionDAE):
 
         x_phase = x_phase.to(dtype=torch.bfloat16).flatten(1, 2).unsqueeze(2)
         x_psd = x_psd.to(dtype=torch.bfloat16).flatten(1, 2).unsqueeze(2)
-        x = mp_sum(self.conv_in_phase(x_phase), self.conv_in_psd(x_psd), gain=self.psd_in_balance.sigmoid())
+        x = mp_sum(self.conv_in_phase(x_phase), self.conv_in_psd(x_psd), t=self.psd_in_balance.sigmoid())
 
         for name, block in self.enc.items():
             x = block(x) if "conv" in name else block(x, emb)

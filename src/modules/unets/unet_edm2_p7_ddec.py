@@ -297,7 +297,7 @@ class UNet(DualDiffusionUNet):
         emb: torch.Tensor = self.emb_noise(self.emb_fourier(c_noise)).to(dtype=torch.bfloat16)
         if self.config.in_channels_emb > 0:
             emb = mp_silu(mp_sum(emb, embeddings.to(dtype=emb.dtype), t=self.config.label_balance))
-        emb = mp_silu(mp_sum(emb[..., None, None], x_ref, t=self.x_ref_balance.sigmoid()))
+        emb = mp_silu(mp_sum(emb[..., None, None], self.emb_x_ref(x_ref), t=self.x_ref_balance.sigmoid()))
         #emb = mp_silu(emb)[..., None, None]
 
         idx = 0; skips = []
