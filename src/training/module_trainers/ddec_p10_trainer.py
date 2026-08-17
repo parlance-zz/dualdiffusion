@@ -132,7 +132,7 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
             self.logger.info(f"DDEC-P mel-density loss weight pow: {self.config.mel_density_loss_weight_pow_ddecp}")
             self.logger.info(f"DDEC-P add x_ref noise: {self.config.add_ddecp_x_ref_noise}")
             self.logger.info(f"DDEC-P trainer:")
-            self.ddecp_trainer = UNetTrainer(UNetTrainerConfig(**config.ddecp, return_denoised=True), trainer, self.ddecp, "ddecp")
+            self.ddecp_trainer = UNetTrainer(UNetTrainerConfig(**config.ddecp), trainer, self.ddecp, "ddecp")
 
             hz = torch.linspace(0, 1, self.format.config.num_frequencies, device=self.trainer.accelerator.device) * self.format.config.sample_rate/2
             loss_weight = get_mel_density(hz).pow(self.config.mel_density_loss_weight_pow_ddecp)
@@ -154,7 +154,7 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
         if self.train_unet == True or self.unet is not None:
             self.logger.info(f"UNet-LDM trainer (start loss weight: {self.config.unet_loss_start_weight}) (warmup steps:{self.config.unet_loss_start_steps})"
                              f" (loss weight: {self.config.unet_loss_weight}) (warmup steps: {self.config.unet_loss_warmup_steps}):")
-            self.unet_trainer = UNetTrainer_LDM(UNetTrainerConfig_LDM(**config.unet, return_denoised=True), trainer, self.unet, "unet")
+            self.unet_trainer = UNetTrainer_LDM(UNetTrainerConfig_LDM(**config.unet, skip_bucket_loss_logging=True), trainer, self.unet, "unet")
         else:
             self.unet_trainer = None
 
@@ -198,20 +198,22 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
 
         if self.train_dae == True:
             
-            latents, ddec_cond, unet_logs = self.trainer.get_ddp_module(self.dae)(
+            latents, ddec_cond, unet_logs, ext_logs = self.trainer.get_ddp_module(self.dae)(
                 ms_psd_scaled, audio_embeddings, unet_trainer=self.unet_trainer)
 
             logs.update(unet_logs)
+            self.unet_trainer.unet_loss_buckets.log_buckets(ext_logs["bucket_log_loss"], ext_logs["batch_sigma"])
 
         elif self.dae is not None:
 
             with torch.no_grad():
-                latents, ddec_cond, unet_logs = self.trainer.get_ddp_module(self.dae)(
+                latents, ddec_cond, unet_logs, ext_logs = self.trainer.get_ddp_module(self.dae)(
                     ms_psd_scaled, audio_embeddings, unet_trainer=self.unet_trainer)
 
                 logs.update(unet_logs)
+                self.unet_trainer.unet_loss_buckets.log_buckets(ext_logs["bucket_log_loss"], ext_logs["batch_sigma"])
         else:
-            latents = ddec_cond = latents_denoised = None
+            latents = ddec_cond = None
         
         if latents is not None:
             latents: torch.Tensor = latents.float()
@@ -294,14 +296,14 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
             ddecp_x_ref = (ddecp_x_ref + torch.randn_like(ddecp_x_ref) * self.config.add_ddecp_x_ref_noise).detach()
             logs["io_stats_ddecp/ddecp_x_ref_noise"] = self.config.add_ddecp_x_ref_noise
             
-            ddecp_logs, denoised = self.ddecp_trainer.train_batch(
+            ddecp_logs, ext_logs = self.ddecp_trainer.train_batch(
                 mdct_phase_psd, audio_embeddings, ref_samples=ddecp_x_ref, loss_weight=self.ddecp_loss_weight)
             
             logs.update(ddecp_logs)
             logs["loss"] = logs["loss"] + logs["loss/ddecp"]
 
             if self.config.use_mss_1d_loss == True:
-                logs["loss/mss_1d"] = ddecp_loss_fn(denoised, mdct_phase_psd)
+                logs["loss/mss_1d"] = ddecp_loss_fn(ext_logs["denoised"], mdct_phase_psd)
                 logs["loss"] = logs["loss"] + logs["loss/mss_1d"] * self.config.mss_1d_loss_weight
 
         if self.trainer.config.enable_debug_mode == True:

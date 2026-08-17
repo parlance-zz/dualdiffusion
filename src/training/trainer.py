@@ -543,9 +543,8 @@ class DualDiffusionTrainer:
                         adam_params.append(param)
                         adam_param_names.append(name)
 
-            if self.config.enable_debug_mode == True:
-                self.logger.info(f"Muon  parameters: {muon_param_names}")
-                self.logger.info(f"AdamW parameters: {adam_param_names}")
+            self.logger.info(f"Muon  parameters: {muon_param_names}")
+            self.logger.info(f"AdamW parameters: {adam_param_names}")
 
             param_groups = [
                 {
@@ -988,6 +987,8 @@ class DualDiffusionTrainer:
         self.train_sample_logger = TrainLogger(self.accelerator)
         self.validation_sample_logger = TrainLogger(self.accelerator)
 
+        self.accum_step_tensor = torch.zeros(1, dtype=torch.int32, device=self.accelerator.device)
+
         while True:        
             self.run_train_epoch()
 
@@ -1052,7 +1053,9 @@ class DualDiffusionTrainer:
                 train_logger.add_logs(batch_init_logs)
         
             for self.accum_step in range(self.config.gradient_accumulation_steps):
-                    
+                
+                self.accum_step_tensor[:] = self.accum_step
+
                 with self.accelerator.accumulate(*self.ddp_modules):
 
                     device_batch = { # get sub-batch of device batch size from local batch for each grad_accum_step

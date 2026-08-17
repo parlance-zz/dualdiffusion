@@ -60,7 +60,7 @@ class UNetTrainerConfig(ModuleTrainerConfig):
     conditioning_dropout: float = 0.1
 
     disable_loss_weight: bool = False
-    return_denoised: bool = False
+    skip_bucket_loss_logging: bool = False
 
 class UNetLossBuckets(torch.nn.Module):
 
@@ -200,7 +200,7 @@ class UNetTrainer(ModuleTrainer):
 
     def train_batch(self, samples: torch.Tensor, embeddings: Optional[Union[torch.Tensor, list[torch.Tensor]]] = None,
             ref_samples: Optional[torch.Tensor] = None, loss_weight: Optional[torch.Tensor] = None,
-            loss_fn: Callable[[torch.Tensor, torch.Tensor], torch.Tensor] = None) -> dict[str, Union[torch.Tensor, float]]:
+            loss_fn: Callable[[torch.Tensor, torch.Tensor], torch.Tensor] = None) -> tuple[dict[str, Union[torch.Tensor, float]], dict[str, Union[torch.Tensor, float]]]:
 
         device_bsz = self.trainer.config.device_batch_size
 
@@ -209,7 +209,7 @@ class UNetTrainer(ModuleTrainer):
         
         # get the noise level for this sub-batch from the pre-calculated whole-batch sigma (required for stratified sampling)
         local_sigma = self.global_sigma[self.trainer.accelerator.process_index::self.trainer.accelerator.num_processes]
-        batch_sigma = local_sigma[self.trainer.accum_step * device_bsz:(self.trainer.accum_step+1) * device_bsz]
+        batch_sigma = local_sigma[self.trainer.accum_step_tensor * device_bsz:(self.trainer.accum_step_tensor+1) * device_bsz]
 
         # prepare model inputs
         noise = torch.randn(samples.shape, device=samples.device)
@@ -252,7 +252,7 @@ class UNetTrainer(ModuleTrainer):
             batch_loss = batch_weighted_loss / error_logvar.exp() + error_logvar
             bucket_log_loss = batch_weighted_loss
         
-        if self.config.num_loss_buckets > 0:
+        if self.config.num_loss_buckets > 0 and self.config.skip_bucket_loss_logging == False:
             self.unet_loss_buckets.log_buckets(bucket_log_loss, batch_sigma)
 
         logs = {
@@ -261,10 +261,13 @@ class UNetTrainer(ModuleTrainer):
             f"io_stats_{self.flavor}/denoised_mean": denoised.mean(dim=(1,2,3))
         }
 
-        if self.config.return_denoised == True:
-            return logs, denoised
-        else:
-            return logs
+        ext_logs = {
+            "denoised": denoised,
+            "bucket_log_loss": bucket_log_loss,
+            "batch_sigma": batch_sigma
+        }
+
+        return logs, ext_logs
     
     @torch.no_grad()
     def finish_batch(self) -> Optional[dict[str, Union[torch.Tensor, float]]]:

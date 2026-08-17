@@ -397,19 +397,19 @@ class DAE(DualDiffusionDAE):
 
         return x
     
-    def forward(self, samples: torch.Tensor, audio_embeddings: torch.Tensor, unet_trainer: Optional[UNetTrainer] = None) -> tuple[torch.Tensor, torch.Tensor]:
+    def forward(self, samples: torch.Tensor, audio_embeddings: torch.Tensor, unet_trainer: Optional[UNetTrainer] = None) -> tuple[torch.Tensor, torch.Tensor, dict, dict]:
         
         dae_embeddings = self.get_embeddings(audio_embeddings)
         latents = self.encode(samples, dae_embeddings, training=True)
 
         if unet_trainer is not None:
-            unet_logs, latents_denoised = unet_trainer.train_batch(latents, audio_embeddings)
-            ddec_cond = self.decode(latents_denoised, dae_embeddings, training=True)
+            unet_logs, ext_logs = unet_trainer.train_batch(latents, audio_embeddings)
+            ddec_cond = self.decode(ext_logs["denoised"], dae_embeddings, training=True)
         else:
-            unet_logs = None
+            unet_logs = ext_logs = None
             ddec_cond = self.decode(latents, dae_embeddings, training=True)
 
-        return latents, ddec_cond, unet_logs
+        return latents, ddec_cond, unet_logs, ext_logs
 
     def latents_to_img(self, latents: torch.Tensor, **kwargs) -> ndarray:
         
