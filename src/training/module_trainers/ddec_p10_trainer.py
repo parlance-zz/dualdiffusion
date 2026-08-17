@@ -100,21 +100,13 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
         self.train_unet = self.unet is not None
 
         if self.train_ddecp == True:
-            if self.train_dae == False or self.train_unet == False:
-                assert self.train_dae == False and self.train_unet == False
-                #self.dae  = trainer.pipeline.dae.to( device=trainer.accelerator.device, dtype=torch.bfloat16).requires_grad_(False)
-                #self.unet = trainer.pipeline.unet.to(device=trainer.accelerator.device, dtype=torch.bfloat16).requires_grad_(False).train()
-                #assert self.dae.config.last_global_step > 0 and self.unet.config.last_global_step > 0
+            assert self.train_dae == self.train_unet == False                            
+            self.dae  = trainer.pipeline.dae.to( device=trainer.accelerator.device, dtype=torch.bfloat16).requires_grad_(False)
+            self.unet = trainer.pipeline.unet.to(device=trainer.accelerator.device, dtype=torch.bfloat16).requires_grad_(False).train()
+            assert self.dae.config.last_global_step > 0 and self.unet.config.last_global_step > 0
 
         if self.train_dae == True or self.train_unet == True:
-            
-            #assert self.train_dae == True and self.train_unet == True
-            assert self.train_ddecp == False
-
-            #if self.train_ddecp == False and config.use_mss_2d_loss == False:
-            #    self.ddecp = trainer.pipeline.ddecp.to(device=trainer.accelerator.device, dtype=torch.bfloat16).requires_grad_(False).train()
-            #    assert self.ddecp.config.last_global_step > 0
-            #    self.train_ddecp = True
+            assert self.train_dae == True and self.train_unet == True
 
         self.format: MS_MDCT_DualFormat = trainer.pipeline.format.to(self.trainer.accelerator.device)
 
@@ -163,6 +155,8 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
             self.logger.info(f"UNet-LDM trainer (start loss weight: {self.config.unet_loss_start_weight}) (warmup steps:{self.config.unet_loss_start_steps})"
                              f" (loss weight: {self.config.unet_loss_weight}) (warmup steps: {self.config.unet_loss_warmup_steps}):")
             self.unet_trainer = UNetTrainer_LDM(UNetTrainerConfig_LDM(**config.unet, return_denoised=True), trainer, self.unet, "unet")
+        else:
+            self.unet_trainer = None
 
     @torch.no_grad()
     def init_batch(self, validation: bool = False) -> Optional[dict[str, Union[torch.Tensor, float]]]:
@@ -204,26 +198,18 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
 
         if self.train_dae == True:
             
-            #latents = self.dae.encode(ms_psd_scaled, None, training=True).float()
-            latents, ddec_cond = self.trainer.get_ddp_module(self.dae)(ms_psd_scaled, None)
+            latents, ddec_cond, unet_logs = self.trainer.get_ddp_module(self.dae)(
+                ms_psd_scaled, audio_embeddings, unet_trainer=self.unet_trainer)
 
-            #unet_logs, latents_denoised = self.unet_trainer.train_batch(latents, audio_embeddings)
-            #logs.update(unet_logs)
-            #latents_denoised = latents
-
-            #ddec_cond = self.dae.decode(latents_denoised, None, training=True)
+            logs.update(unet_logs)
 
         elif self.dae is not None:
 
             with torch.no_grad():
-                #latents = self.dae.encode(ms_psd_scaled, None, training=True).float()
-                latents, ddec_cond = self.dae(ms_psd_scaled, None)
+                latents, ddec_cond, unet_logs = self.trainer.get_ddp_module(self.dae)(
+                    ms_psd_scaled, audio_embeddings, unet_trainer=self.unet_trainer)
 
-                #unet_logs, latents_denoised = self.unet_trainer.train_batch(latents, audio_embeddings)
-                #logs.update(unet_logs)
-                #latents_denoised = latents
-
-                #ddec_cond = self.dae.decode(latents_denoised, None, training=True)
+                logs.update(unet_logs)
         else:
             latents = ddec_cond = latents_denoised = None
         
@@ -248,7 +234,7 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
                     if leak_max <= 0: leak_max = None
                 else:
                     leak_max = None
-                leak_max = 1
+                
                 logs["io_stats_dae/mss_2d_leak_max"] = leak_max if leak_max is not None else 0
                 
                 logs["loss/mss_2d"] = self.mss_2d.mss_loss(ddec_cond, ms_psd_scaled, leak_pow=self.config.mss_2d_leak_pow, leak_max=leak_max)
@@ -258,7 +244,6 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
             
             logs["loss/dae_mse"] = torch.nn.functional.mse_loss(ddec_cond, ms_psd_scaled, reduction="none").mean(dim=(1,2,3)).detach()
             
-            """
             if self.trainer.global_step < self.config.unet_loss_start_steps:
                 unet_loss_weight = self.config.unet_loss_start_weight
             else:
@@ -266,7 +251,6 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
                 unet_loss_weight = self.config.unet_loss_start_weight * (1 - t) + self.config.unet_loss_weight * t
             logs["loss"] = logs["loss"] + logs["loss/unet"] * unet_loss_weight
             logs["loss_weight/unet"] = unet_loss_weight
-            """
 
             latents_sigreg_loss_weight = self.config.latents_sigreg_loss_weight
             if self.trainer.global_step < self.config.sigreg_loss_warmup_steps:
@@ -302,14 +286,14 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
                 loss = (mss_1d_loss1 + mss_1d_loss2 + mss_1d_loss3) / 2 + (mss_1d_cepstrum_loss1 + mss_1d_cepstrum_loss2 + mss_1d_cepstrum_loss3) / 2
 
                 return loss
-                
+            
             if ddec_cond is not None:
                 ddecp_x_ref = self.format.unscale_ms_psd(ddec_cond)
             else:
-                ddecp_x_ref = self.format.unscale_ms_psd(ms_psd_scaled).detach()
-            ddecp_x_ref = ddecp_x_ref + torch.randn_like(ddecp_x_ref) * self.config.add_ddecp_x_ref_noise
+                ddecp_x_ref = self.format.unscale_ms_psd(ms_psd_scaled)
+            ddecp_x_ref = (ddecp_x_ref + torch.randn_like(ddecp_x_ref) * self.config.add_ddecp_x_ref_noise).detach()
             logs["io_stats_ddecp/ddecp_x_ref_noise"] = self.config.add_ddecp_x_ref_noise
-
+            
             ddecp_logs, denoised = self.ddecp_trainer.train_batch(
                 mdct_phase_psd, audio_embeddings, ref_samples=ddecp_x_ref, loss_weight=self.ddecp_loss_weight)
             
