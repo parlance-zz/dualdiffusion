@@ -137,14 +137,17 @@ class MS_MDCT_DualFormat(DualDiffusionFormat):
         self.register_buffer(f"ms_psd_scale",  torch.ones(config.ms_psd_num_frequencies).view(1, 1,-1, 1),  persistent=True)
         
         assert config.ms_psd_num_frequencies % config.num_frequencies == 0
-        self.ms_psd_freq_scale = FrequencyScale(
-            alpha=config.ms_psd_filter_alpha,
-            freq_min=0,
-            freq_max=config.sample_rate / 2,
-            sample_rate=config.sample_rate,
-            num_stft_bins=config.ms_psd_num_frequencies,
-            num_filters=config.ms_psd_num_filters
-        )
+        if config.ms_psd_num_filters > 0:
+            self.ms_psd_freq_scale = FrequencyScale(
+                alpha=config.ms_psd_filter_alpha,
+                freq_min=0,
+                freq_max=config.sample_rate / 2,
+                sample_rate=config.sample_rate,
+                num_stft_bins=config.ms_psd_num_frequencies,
+                num_filters=config.ms_psd_num_filters
+            )
+        else:
+            self.ms_psd_freq_scale = None
 
         self.ms_psd_mel_scale: torch.Tensor; self.ms_psd_mel_offset: torch.Tensor
         self.register_buffer("ms_psd_mel_scale", torch.ones(config.ms_psd_num_filters).view(1, 1,-1, 1), persistent=True)
@@ -221,14 +224,20 @@ class MS_MDCT_DualFormat(DualDiffusionFormat):
     
     @torch.no_grad()
     def scale_ms_psd(self, ms_psd: torch.Tensor) -> torch.Tensor:
-        ms_psd = ms_psd.float() * self.ms_psd_scale - self.ms_psd_offset
-        ms_psd_mel: torch.Tensor = self.ms_psd_freq_scale.scale(ms_psd)
-        return (ms_psd_mel + self.ms_psd_mel_offset) / self.ms_psd_mel_scale
+        if self.config.ms_psd_num_filters > 0:
+            ms_psd = ms_psd.float() * self.ms_psd_scale - self.ms_psd_offset
+            ms_psd_mel: torch.Tensor = self.ms_psd_freq_scale.scale(ms_psd)
+            return (ms_psd_mel + self.ms_psd_mel_offset) / self.ms_psd_mel_scale
+        else:
+            return ms_psd
 
     def unscale_ms_psd(self, ms_psd_mel: torch.Tensor) -> torch.Tensor:
-        ms_psd_mel = ms_psd_mel.float() * self.ms_psd_mel_scale - self.ms_psd_mel_offset
-        ms_psd = self.ms_psd_freq_scale.unscale(ms_psd_mel, rectify=False)
-        return (ms_psd + self.ms_psd_mel_unscaled_offset) / self.ms_psd_mel_unscaled_scale
+        if self.config.ms_psd_num_filters > 0:
+            ms_psd_mel = ms_psd_mel.float() * self.ms_psd_mel_scale - self.ms_psd_mel_offset
+            ms_psd = self.ms_psd_freq_scale.unscale(ms_psd_mel, rectify=False)
+            return (ms_psd + self.ms_psd_mel_unscaled_offset) / self.ms_psd_mel_unscaled_scale
+        else:
+            return ms_psd_mel
 
     @torch.no_grad()
     def ms_psd_to_img(self, ms_psd: torch.Tensor, use_colormap: bool = False):

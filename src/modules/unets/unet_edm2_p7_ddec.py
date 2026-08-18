@@ -46,7 +46,7 @@ class UNetConfig(DualDiffusionUNetConfig):
     in_channels:  int = 768
     out_channels: int = 768
     in_channels_emb: int = 0
-    in_channels_x_ref: int = 768
+    in_channels_x_ref: int = 576
     in_num_freqs: int = 192
 
     sigma_max: float  = 1000
@@ -66,7 +66,7 @@ class UNetConfig(DualDiffusionUNetConfig):
     num_layers_per_block: int = 12           # Number of resnet blocks per resolution.
     label_balance: float      = 0.5          # Balance between noise embedding (0) and class embedding (1).
     balance_logits_offset: float = -4
-    mlp_multiplier: int    = 3               # Multiplier for the number of channels in the MLP.
+    mlp_multiplier: int    = 2               # Multiplier for the number of channels in the MLP.
     mlp_groups: int        = 32              # Number of groups for the MLPs.
     emb_linear_groups: int = 32
 
@@ -284,7 +284,7 @@ class UNet(DualDiffusionUNet):
 
             x = x.to(dtype=torch.bfloat16).permute(0, 2, 1, 3).reshape(x.shape[0], x.shape[1]*x.shape[2], 1, x.shape[3])
 
-        x_ref = x_ref.to(dtype=torch.bfloat16)
+        x_ref = x_ref.to(dtype=torch.bfloat16).flatten(1,2).unsqueeze(2)
         
         # nuisance due to ddp wrapper limitations
         if conditioning_mask is not None:

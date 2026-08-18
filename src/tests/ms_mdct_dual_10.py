@@ -77,10 +77,13 @@ def ms_mdct_dual_format_test() -> None:
     print("Format config:")
     print(dict_str(format.config.__dict__))
     
-    print(f"MS-PSD Adaptive FrequencyScale Alpha: {format.ms_psd_freq_scale._adaptive_alpha}")
-    unscaled_freqs = format.ms_psd_freq_scale.get_unscaled(format.config.ms_psd_num_filters + 2)[1:-1]
-    for i in range(format.config.ms_psd_num_filters):
-        print(f"filter {i:03d}: {unscaled_freqs[i]:.2f} hz")
+    if format.config.ms_psd_num_filters > 0:
+        print(f"MS-PSD Adaptive FrequencyScale Alpha: {format.ms_psd_freq_scale._adaptive_alpha}")
+        unscaled_freqs = format.ms_psd_freq_scale.get_unscaled(format.config.ms_psd_num_filters + 2)[1:-1]
+        for i in range(format.config.ms_psd_num_filters):
+            print(f"filter {i:03d}: {unscaled_freqs[i]:.2f} hz")
+
+        format.ms_psd_freq_scale.filters.transpose(0, 1).cpu().numpy().tofile(os.path.join(output_path, "ms_psd_mel_filters.raw"))
         
     format.ms_psd_win_h0.cpu().numpy().tofile(os.path.join(output_path, "ms_psd_wnd_h0.raw"))
     format.ms_psd_win_h1.cpu().numpy().tofile(os.path.join(output_path, "ms_psd_wnd_h1.raw"))
@@ -105,8 +108,6 @@ def ms_mdct_dual_format_test() -> None:
     coverage_test = coverage_test.pow(0.5)
     coverage_test /= coverage_test.amax()
     coverage_test.cpu().numpy().tofile(os.path.join(output_path, "ms_psd_wnd_coverage.raw"))
-
-    format.ms_psd_freq_scale.filters.transpose(0, 1).cpu().numpy().tofile(os.path.join(output_path, "ms_psd_mel_filters.raw"))
 
     dataset_path = config.DATASET_PATH
     test_samples = cfg.test_samples
@@ -164,8 +165,6 @@ def ms_mdct_dual_format_test() -> None:
         stat_logger.add_logs({f"mdct_phase_msq": _mdct_phase_msq.mean()})
 
         ms_psd = format.raw_to_ms_psd(raw_sample)
-        ms_psd_mel = format.scale_ms_psd(ms_psd)
-        ms_psd_mel_unscaled = format.unscale_ms_psd(ms_psd_mel)
 
         _ms_psd = ms_psd.to(dtype=torch.float64)
         _ms_psd_msq = _ms_psd.pow(2).mean(dim=r_dims, keepdim=True)
@@ -176,23 +175,27 @@ def ms_mdct_dual_format_test() -> None:
         stat_logger.add_logs({f"ms_psd_msq": _ms_psd_msq.mean()})
         stat_logger.add_logs({f"ms_psd_mean": _ms_psd_mean.mean()})        
 
-        _ms_psd_mel = ms_psd_mel.to(dtype=torch.float64)
-        _ms_psd_mel_msq = _ms_psd_mel.pow(2).mean(dim=r_dims, keepdim=True)
-        _ms_psd_mel_mean = _ms_psd_mel.mean(dim=r_dims, keepdim=True)
+        if format.config.ms_psd_num_filters > 0:
+            ms_psd_mel = format.scale_ms_psd(ms_psd)
+            ms_psd_mel_unscaled = format.unscale_ms_psd(ms_psd_mel)
 
-        ms_psd_mel_avg_bin_msq  += _ms_psd_mel_msq / len(test_samples)
-        ms_psd_mel_avg_bin_mean += _ms_psd_mel_mean / len(test_samples)
-        stat_logger.add_logs({f"ms_psd_mel_msq": _ms_psd_mel_msq.mean()})
-        stat_logger.add_logs({f"ms_psd_mel_mean": _ms_psd_mel_mean.mean()})
+            _ms_psd_mel = ms_psd_mel.to(dtype=torch.float64)
+            _ms_psd_mel_msq = _ms_psd_mel.pow(2).mean(dim=r_dims, keepdim=True)
+            _ms_psd_mel_mean = _ms_psd_mel.mean(dim=r_dims, keepdim=True)
 
-        _ms_psd_mel_unscaled = ms_psd_mel_unscaled.to(dtype=torch.float64)
-        _ms_psd_mel_unscaled_msq = _ms_psd_mel_unscaled.pow(2).mean(dim=r_dims, keepdim=True)
-        _ms_psd_mel_unscaled_mean = _ms_psd_mel_unscaled.mean(dim=r_dims, keepdim=True)
+            ms_psd_mel_avg_bin_msq  += _ms_psd_mel_msq / len(test_samples)
+            ms_psd_mel_avg_bin_mean += _ms_psd_mel_mean / len(test_samples)
+            stat_logger.add_logs({f"ms_psd_mel_msq": _ms_psd_mel_msq.mean()})
+            stat_logger.add_logs({f"ms_psd_mel_mean": _ms_psd_mel_mean.mean()})
 
-        ms_psd_mel_unscaled_avg_bin_msq  += _ms_psd_mel_unscaled_msq / len(test_samples)
-        ms_psd_mel_unscaled_avg_bin_mean += _ms_psd_mel_unscaled_mean / len(test_samples)
-        stat_logger.add_logs({f"ms_psd_mel_unscaled_msq": _ms_psd_mel_unscaled_msq.mean()})
-        stat_logger.add_logs({f"ms_psd_mel_unscaled_mean": _ms_psd_mel_unscaled_mean.mean()})
+            _ms_psd_mel_unscaled = ms_psd_mel_unscaled.to(dtype=torch.float64)
+            _ms_psd_mel_unscaled_msq = _ms_psd_mel_unscaled.pow(2).mean(dim=r_dims, keepdim=True)
+            _ms_psd_mel_unscaled_mean = _ms_psd_mel_unscaled.mean(dim=r_dims, keepdim=True)
+
+            ms_psd_mel_unscaled_avg_bin_msq  += _ms_psd_mel_unscaled_msq / len(test_samples)
+            ms_psd_mel_unscaled_avg_bin_mean += _ms_psd_mel_unscaled_mean / len(test_samples)
+            stat_logger.add_logs({f"ms_psd_mel_unscaled_msq": _ms_psd_mel_unscaled_msq.mean()})
+            stat_logger.add_logs({f"ms_psd_mel_unscaled_mean": _ms_psd_mel_unscaled_mean.mean()})
 
         raw_sample_recon = format.mdct_phase_psd_to_raw(mdct_phase_psd)
         
@@ -233,29 +236,30 @@ def ms_mdct_dual_format_test() -> None:
             save_img(tensor_to_img(psd, flip_y=True), ms_psd_output_path)
             print(f"Saved ms_psd_{i+1} img to {ms_psd_output_path}")
 
-        ms_psd_mel_output_path = os.path.join(output_path, f"{filename}_ms_psd_mel.png")
-        save_img(format.ms_psd_to_img(ms_psd_mel), ms_psd_mel_output_path)
-        print(f"Saved ms_psd_mel img to {ms_psd_mel_output_path}")
+        if format.config.ms_psd_num_filters > 0:
+            ms_psd_mel_output_path = os.path.join(output_path, f"{filename}_ms_psd_mel.png")
+            save_img(format.ms_psd_to_img(ms_psd_mel), ms_psd_mel_output_path)
+            print(f"Saved ms_psd_mel img to {ms_psd_mel_output_path}")
 
-        ms_psd_mel_output_path = os.path.join(output_path, f"{filename}_ms_psd_mel_0.png")
-        save_img(tensor_to_img(ms_psd_mel[:, :1].repeat(1,2,1,1), flip_y=True), ms_psd_mel_output_path)
-        print(f"Saved ms_psd_mel_0 img to {ms_psd_mel_output_path}")
-        for i, psd in enumerate(ms_psd_mel[:, 1:].chunk(format.config.ms_psd_num_layers, dim=1)):
-            ms_psd_mel_output_path = os.path.join(output_path, f"{filename}_ms_psd_mel_{i+1}.png")
-            save_img(tensor_to_img(psd, flip_y=True), ms_psd_mel_output_path)
-            print(f"Saved ms_psd_mel_{i+1} img to {ms_psd_mel_output_path}")
+            ms_psd_mel_output_path = os.path.join(output_path, f"{filename}_ms_psd_mel_0.png")
+            save_img(tensor_to_img(ms_psd_mel[:, :1].repeat(1,2,1,1), flip_y=True), ms_psd_mel_output_path)
+            print(f"Saved ms_psd_mel_0 img to {ms_psd_mel_output_path}")
+            for i, psd in enumerate(ms_psd_mel[:, 1:].chunk(format.config.ms_psd_num_layers, dim=1)):
+                ms_psd_mel_output_path = os.path.join(output_path, f"{filename}_ms_psd_mel_{i+1}.png")
+                save_img(tensor_to_img(psd, flip_y=True), ms_psd_mel_output_path)
+                print(f"Saved ms_psd_mel_{i+1} img to {ms_psd_mel_output_path}")
 
-        ms_psd_mel_unscaled_output_path = os.path.join(output_path, f"{filename}_ms_psd_mel_unscaled.png")
-        save_img(format.ms_psd_to_img(ms_psd_mel_unscaled), ms_psd_mel_unscaled_output_path)
-        print(f"Saved ms_psd_mel_unscaled img to {ms_psd_mel_unscaled_output_path}")
+            ms_psd_mel_unscaled_output_path = os.path.join(output_path, f"{filename}_ms_psd_mel_unscaled.png")
+            save_img(format.ms_psd_to_img(ms_psd_mel_unscaled), ms_psd_mel_unscaled_output_path)
+            print(f"Saved ms_psd_mel_unscaled img to {ms_psd_mel_unscaled_output_path}")
 
-        ms_psd_mel_unscaled_output_path = os.path.join(output_path, f"{filename}_ms_psd_mel_unscaled_0.png")
-        save_img(tensor_to_img(ms_psd_mel_unscaled[:, :1].repeat(1,2,1,1), flip_y=True), ms_psd_mel_unscaled_output_path)
-        print(f"Saved ms_psd_mel_unscaled_0 img to {ms_psd_mel_unscaled_output_path}")
-        for i, psd in enumerate(ms_psd_mel_unscaled[:, 1:].chunk(format.config.ms_psd_num_layers, dim=1)):
-            ms_psd_mel_unscaled_output_path = os.path.join(output_path, f"{filename}_ms_psd_mel_unscaled_{i+1}.png")
-            save_img(tensor_to_img(psd, flip_y=True), ms_psd_mel_unscaled_output_path)
-            print(f"Saved ms_psd_mel_unscaled_{i+1} img to {ms_psd_mel_unscaled_output_path}")
+            ms_psd_mel_unscaled_output_path = os.path.join(output_path, f"{filename}_ms_psd_mel_unscaled_0.png")
+            save_img(tensor_to_img(ms_psd_mel_unscaled[:, :1].repeat(1,2,1,1), flip_y=True), ms_psd_mel_unscaled_output_path)
+            print(f"Saved ms_psd_mel_unscaled_0 img to {ms_psd_mel_unscaled_output_path}")
+            for i, psd in enumerate(ms_psd_mel_unscaled[:, 1:].chunk(format.config.ms_psd_num_layers, dim=1)):
+                ms_psd_mel_unscaled_output_path = os.path.join(output_path, f"{filename}_ms_psd_mel_unscaled_{i+1}.png")
+                save_img(tensor_to_img(psd, flip_y=True), ms_psd_mel_unscaled_output_path)
+                print(f"Saved ms_psd_mel_unscaled_{i+1} img to {ms_psd_mel_unscaled_output_path}")
 
         recon_mel_spec = format.mel_spec.raw_to_mel_spec(raw_sample_recon)
         recon_mel_spec_img = format.mel_spec.mel_spec_to_img(recon_mel_spec)
@@ -314,22 +318,26 @@ def ms_mdct_dual_format_test() -> None:
         mdct_psd_avg_bin_msq  += _mdct_psd_msq / len(test_samples)
 
         ms_psd = format.raw_to_ms_psd(raw_sample)
-        ms_psd_mel = format.scale_ms_psd(ms_psd)
-        ms_psd_mel_unscaled = format.unscale_ms_psd(ms_psd_mel)
 
         _ms_psd_msq = ms_psd.to(dtype=torch.float64).pow(2).mean(dim=r_dims, keepdim=True)
         ms_psd_avg_bin_msq += _ms_psd_msq / len(test_samples)
- 
-        _ms_psd_mel_msq = ms_psd_mel.to(dtype=torch.float64).pow(2).mean(dim=r_dims, keepdim=True)
-        ms_psd_mel_avg_bin_msq += _ms_psd_mel_msq / len(test_samples)
 
-        _ms_psd_mel_unscaled_msq = ms_psd_mel_unscaled.to(dtype=torch.float64).pow(2).mean(dim=r_dims, keepdim=True)
-        ms_psd_mel_unscaled_avg_bin_msq += _ms_psd_mel_unscaled_msq / len(test_samples)
+        if format.config.ms_psd_num_filters > 0:
+            ms_psd_mel = format.scale_ms_psd(ms_psd)
+            ms_psd_mel_unscaled = format.unscale_ms_psd(ms_psd_mel)
+
+            _ms_psd_mel_msq = ms_psd_mel.to(dtype=torch.float64).pow(2).mean(dim=r_dims, keepdim=True)
+            ms_psd_mel_avg_bin_msq += _ms_psd_mel_msq / len(test_samples)
+
+            _ms_psd_mel_unscaled_msq = ms_psd_mel_unscaled.to(dtype=torch.float64).pow(2).mean(dim=r_dims, keepdim=True)
+            ms_psd_mel_unscaled_avg_bin_msq += _ms_psd_mel_unscaled_msq / len(test_samples)
 
     format.mdct_psd_scale.copy_(mdct_psd_avg_bin_msq.pow(0.5).float())
     format.ms_psd_scale.copy_(ms_psd_avg_bin_msq.pow(0.5).float())
-    format.ms_psd_mel_scale.copy_(ms_psd_mel_avg_bin_msq.pow(0.5).float())
-    format.ms_psd_mel_unscaled_scale.copy_(ms_psd_mel_unscaled_avg_bin_msq.pow(0.5).float())
+
+    if format.config.ms_psd_num_filters > 0:
+        format.ms_psd_mel_scale.copy_(ms_psd_mel_avg_bin_msq.pow(0.5).float())
+        format.ms_psd_mel_unscaled_scale.copy_(ms_psd_mel_unscaled_avg_bin_msq.pow(0.5).float())
     
     if format_loaded == False:
         if input("\nSave format? (y/n): ") == "y":
