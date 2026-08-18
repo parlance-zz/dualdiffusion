@@ -24,6 +24,7 @@ from dataclasses import dataclass
 from typing import Union, Optional, Any
 
 import torch
+from accelerate import DistributedType
 
 from training.trainer import DualDiffusionTrainer
 from training.module_trainers.module_trainer import ModuleTrainer, ModuleTrainerConfig
@@ -107,6 +108,7 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
 
         if self.train_dae == True or self.train_unet == True:
             assert self.train_dae == True and self.train_unet == True
+            assert trainer.accelerator.distributed_type != DistributedType.MULTI_GPU
 
         self.format: MS_MDCT_DualFormat = trainer.pipeline.format.to(self.trainer.accelerator.device)
 
@@ -154,7 +156,7 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
         if self.train_unet == True or self.unet is not None:
             self.logger.info(f"UNet-LDM trainer (start loss weight: {self.config.unet_loss_start_weight}) (warmup steps:{self.config.unet_loss_start_steps})"
                              f" (loss weight: {self.config.unet_loss_weight}) (warmup steps: {self.config.unet_loss_warmup_steps}):")
-            self.unet_trainer = UNetTrainer_LDM(UNetTrainerConfig_LDM(**config.unet, skip_bucket_loss_logging=True), trainer, self.unet, "unet")
+            self.unet_trainer = UNetTrainer_LDM(UNetTrainerConfig_LDM(**config.unet), trainer, self.unet, "unet")
         else:
             self.unet_trainer = None
 
@@ -197,21 +199,21 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
         })
 
         if self.train_dae == True:
-            
-            latents, ddec_cond, unet_logs, ext_logs = self.trainer.get_ddp_module(self.dae)(
-                ms_psd_scaled, audio_embeddings, unet_trainer=self.unet_trainer)
 
+            latents = self.dae.encode(ms_psd_scaled, audio_embeddings, training=True)
+            unet_logs, ext_logs = self.unet_trainer.train_batch(latents, audio_embeddings)
             logs.update(unet_logs)
-            self.unet_trainer.unet_loss_buckets.log_buckets(ext_logs["bucket_log_loss"], ext_logs["batch_sigma"])
+
+            ddec_cond = self.dae.decode(ext_logs["denoised"], audio_embeddings, training=True)
 
         elif self.dae is not None:
 
             with torch.no_grad():
-                latents, ddec_cond, unet_logs, ext_logs = self.trainer.get_ddp_module(self.dae)(
-                    ms_psd_scaled, audio_embeddings, unet_trainer=self.unet_trainer)
-
+                latents = self.dae.encode(ms_psd_scaled, audio_embeddings, training=True)
+                unet_logs, ext_logs = self.unet_trainer.train_batch(latents, audio_embeddings)
                 logs.update(unet_logs)
-                self.unet_trainer.unet_loss_buckets.log_buckets(ext_logs["bucket_log_loss"], ext_logs["batch_sigma"])
+
+                ddec_cond = self.dae.decode(ext_logs["denoised"], audio_embeddings, training=True)
         else:
             latents = ddec_cond = None
         

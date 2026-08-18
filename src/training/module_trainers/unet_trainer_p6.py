@@ -60,7 +60,6 @@ class UNetTrainerConfig(ModuleTrainerConfig):
     conditioning_dropout: float = 0.1
 
     disable_loss_weight: bool = False
-    skip_bucket_loss_logging: bool = False
 
 class UNetLossBuckets(torch.nn.Module):
 
@@ -252,7 +251,7 @@ class UNetTrainer(ModuleTrainer):
             batch_loss = batch_weighted_loss / error_logvar.exp() + error_logvar
             bucket_log_loss = batch_weighted_loss
         
-        if self.config.num_loss_buckets > 0 and self.config.skip_bucket_loss_logging == False:
+        if self.config.num_loss_buckets > 0:
             self.unet_loss_buckets.log_buckets(bucket_log_loss, batch_sigma)
 
         logs = {
