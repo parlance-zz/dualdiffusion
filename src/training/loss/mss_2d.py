@@ -109,6 +109,8 @@ class MSSLoss2DConfig:
     use_sketching: bool = False     # True if use_complex_loss
     gaussian_window_t_scale: float = 2.26
 
+    disable_window_caching: bool = True
+
 class MSSLoss2D:
 
     @torch.no_grad()
@@ -195,7 +197,9 @@ class MSSLoss2D:
             window = torch.nn.functional.avg_pool2d(window, kernel_size=supersample, stride=supersample)
         window /= window.square().mean().sqrt()
 
-        self.windows[width, height] = window
+        if self.config.disable_window_caching == False:
+            self.windows[width, height] = window
+        
         return window
 
     def stft2d(self, x: torch.Tensor, block_width: int, block_height: int, order: tuple[int],
