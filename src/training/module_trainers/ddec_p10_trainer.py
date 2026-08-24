@@ -95,21 +95,16 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
         
         self.dae: DAE = trainer.get_train_module("dae")
         self.ddecp: UNet = trainer.get_train_module("ddecp")
-        self.unet: UNet_LDM = trainer.get_train_module("unet")
 
         self.train_dae = self.dae is not None
         self.train_ddecp = self.ddecp is not None
-        self.train_unet = self.unet is not None
 
         if self.train_ddecp == True:
-            assert self.train_dae == self.train_unet == False                            
+            assert self.train_dae == False
             #self.dae  = trainer.pipeline.dae.to( device=trainer.accelerator.device, dtype=torch.bfloat16).requires_grad_(False)
-            #self.unet = trainer.pipeline.unet.to(device=trainer.accelerator.device, dtype=torch.bfloat16).requires_grad_(False).train()
             #assert self.dae.config.last_global_step > 0 and self.unet.config.last_global_step > 0
 
-        if self.train_dae == True or self.train_unet == True:
-            assert self.train_dae == True and self.train_unet == True
-            assert trainer.accelerator.distributed_type != DistributedType.MULTI_GPU
+        if self.train_dae == True:
 
             self.ddecp = trainer.pipeline.ddecp.to(device=trainer.accelerator.device, dtype=torch.bfloat16).requires_grad_(True).train()
             assert self.ddecp.config.last_global_step > 0
@@ -124,8 +119,6 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
                 self.dae.compile(**trainer.config.compile_params)
             if self.ddecp is not None:
                 self.ddecp.compile(**trainer.config.compile_params)
-            if self.unet is not None:
-                self.unet.compile(**trainer.config.compile_params)
 
         if self.train_dae == True:
             self.logger.info(f"SIGReg loss weight: {self.config.latents_sigreg_loss_weight} (warmup steps: {self.config.sigreg_loss_warmup_steps})")
@@ -135,6 +128,10 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
             if config.use_mss_2d_loss == True:
                 self.mss_2d = MSSLoss2D(MSSLoss2DConfig(**config.mss_2d), device=trainer.accelerator.device)
                 self.logger.info(f"MSS-2D config: {dict_str(self.mss_2d.config.__dict__)}")
+
+            self.logger.info(f"DAE UNet-LDM trainer (start loss weight: {self.config.unet_loss_start_weight}) (delayed start steps:{self.config.unet_loss_start_steps})"
+                             f" (loss weight: {self.config.unet_loss_weight}) (warmup steps: {self.config.unet_loss_warmup_steps}):")
+            self.unet_trainer = UNetTrainer_LDM(UNetTrainerConfig_LDM(**config.unet), trainer, self.dae.unet, "unet")
 
         if self.train_ddecp == True:
             self.logger.info(f"DDEC-P mel-density loss weight pow: {self.config.mel_density_loss_weight_pow_ddecp}")
@@ -158,20 +155,13 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
         if self.config.random_stereo_augmentation == True:
             self.logger.info("Using random stereo augmentation")
         else: self.logger.info("Random stereo augmentation is disabled")
-        
-        if self.train_unet == True or self.unet is not None:
-            self.logger.info(f"UNet-LDM trainer (start loss weight: {self.config.unet_loss_start_weight}) (warmup steps:{self.config.unet_loss_start_steps})"
-                             f" (loss weight: {self.config.unet_loss_weight}) (warmup steps: {self.config.unet_loss_warmup_steps}):")
-            self.unet_trainer = UNetTrainer_LDM(UNetTrainerConfig_LDM(**config.unet), trainer, self.unet, "unet")
-        else:
-            self.unet_trainer = None
 
     @torch.no_grad()
     def init_batch(self, validation: bool = False) -> Optional[dict[str, Union[torch.Tensor, float]]]:
         
         if self.train_ddecp == True:
             self.ddecp_trainer.init_batch(validation)
-        if self.train_unet == True or self.unet is not None:
+        if self.train_dae == True:
             self.unet_trainer.init_batch(validation)
 
         return None
@@ -205,23 +195,27 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
         })
 
         if self.train_dae == True:
+            
+            dae_unet_batch_sigma = self.unet_trainer.get_batch_sigma()
+            latents, ddec_cond, dae_unet_batch_loss, bucket_log_loss = self.dae(ms_psd_scaled, audio_embeddings, batch_sigma=dae_unet_batch_sigma)
 
-            latents = self.dae.encode(ms_psd_scaled, audio_embeddings, training=True)
-            #ddec_cond = self.dae.decode(latents, audio_embeddings, training=True)
+            if self.unet_trainer.config.num_loss_buckets > 0:
+                self.unet_trainer.unet_loss_buckets.log_buckets(bucket_log_loss, dae_unet_batch_sigma)
 
-            unet_logs, ext_logs = self.unet_trainer.train_batch(latents, audio_embeddings)
-            logs.update(unet_logs)
-            ddec_cond = self.dae.decode(ext_logs["denoised"], audio_embeddings, training=True)
+            logs["loss/dae_unet"] = dae_unet_batch_loss.detach()
+            logs["io_stats_dae/batch_sigma"] = dae_unet_batch_sigma
 
         elif self.dae is not None:
 
             with torch.no_grad():
-                latents = self.dae.encode(ms_psd_scaled, audio_embeddings, training=True)
-                #ddec_cond = self.dae.decode(latents, audio_embeddings, training=True)
+                dae_unet_batch_sigma = self.unet_trainer.get_batch_sigma()
+                latents, ddec_cond, dae_unet_batch_loss, bucket_log_loss = self.dae(ms_psd_scaled, audio_embeddings, batch_sigma=dae_unet_batch_sigma)
 
-                unet_logs, ext_logs = self.unet_trainer.train_batch(latents, audio_embeddings)
-                logs.update(unet_logs)
-                ddec_cond = self.dae.decode(ext_logs["denoised"], audio_embeddings, training=True)
+                if self.unet_trainer.config.num_loss_buckets > 0:
+                    self.unet_trainer.unet_loss_buckets.log_buckets(bucket_log_loss, dae_unet_batch_sigma)
+
+            logs["loss/dae_unet"] = dae_unet_batch_loss.detach()
+            logs["io_stats_dae/batch_sigma"] = dae_unet_batch_sigma
         else:
             latents = ddec_cond = None
         
@@ -276,8 +270,8 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
             else:
                 t = min((self.trainer.global_step - self.config.unet_loss_start_steps) / (self.config.unet_loss_warmup_steps + 1), 1)
                 unet_loss_weight = self.config.unet_loss_start_weight * (1 - t) + self.config.unet_loss_weight * t
-            logs["loss"] = logs["loss"] + logs["loss/unet"] * unet_loss_weight
-            logs["loss_weight/unet"] = unet_loss_weight
+            logs["loss"] = logs["loss"] + dae_unet_batch_loss * unet_loss_weight
+            logs["loss_weight/dae_unet"] = unet_loss_weight
 
             latents_sigreg_loss_weight = self.config.latents_sigreg_loss_weight
             if self.trainer.global_step < self.config.sigreg_loss_warmup_steps:

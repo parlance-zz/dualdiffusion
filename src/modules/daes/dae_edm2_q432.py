@@ -38,7 +38,8 @@ from numpy import ndarray
 
 from modules.daes.dae import DualDiffusionDAE, DualDiffusionDAEConfig
 from modules.mp_tools import LatentStatsTracker, MPConv, mp_silu, mp_sum, normalize, resample_2d, patchify_2d, unpatchify_2d
-from training.module_trainers.unet_trainer_p6 import UNetTrainer
+from modules.unets.unet_edm2_p6 import UNet, UNetConfig
+
 
 def residual_space_to_channel_avg(x: torch.Tensor, out_channels: int, factor: int = 2) -> torch.Tensor:
     in_channels = x.shape[1]
@@ -64,14 +65,14 @@ class DAE_Config(DualDiffusionDAEConfig):
     in_channels: int     = 9
     in_channels_emb: int = 0
     out_channels: int    = 9
-    latent_channels: int = 768
+    latent_channels: int = 512
     use_1d_latents: bool = True
     use_latents_pixel_norm: bool = True
 
     in_num_freqs: int = 256
     in_psd_freqs: int = 512
 
-    model_channels: int         = 128        # Base multiplier for the number of channels.
+    model_channels: int         = 96        # Base multiplier for the number of channels.
     channel_mult_enc: int       = (1,2,4,8)
     channel_mult_dec: list[int] = (1,2,4,8)
     channel_mult_emb: int     = 0            # Multiplier for final embedding dimensionality.
@@ -87,6 +88,8 @@ class DAE_Config(DualDiffusionDAEConfig):
     add_pixel_norm: bool   = False
 
     add_recon_logvar: bool = True
+
+    unet: Optional[UNetConfig] = None
 
 class Block(torch.nn.Module):
 
@@ -316,7 +319,12 @@ class DAE(DualDiffusionDAE):
 
         self.conv_out = MPConv(cout, self.config.out_channels, kernel=(5,5))
         self.out_gain = torch.nn.Parameter(torch.ones([]))
-            
+        
+        if config.unet is not None:
+            self.unet = UNet(config.unet)
+        else:
+            self.unet = None
+
     def get_embeddings(self, emb_in: torch.Tensor) -> torch.Tensor:
         if self.emb_label is not None:
             return mp_silu(self.emb_label(normalize(emb_in).to(device=self.device, dtype=self.dtype)))
@@ -397,18 +405,36 @@ class DAE(DualDiffusionDAE):
 
         return x
     
-    def forward(self, samples: torch.Tensor, audio_embeddings: torch.Tensor, latents_sigma: Optional[float] = None) -> tuple[torch.Tensor, torch.Tensor]:
+    def forward(self, samples: torch.Tensor, audio_embeddings: torch.Tensor, batch_sigma: Optional[torch.Tensor] = None) -> tuple[torch.Tensor, torch.Tensor]:
         
         dae_embeddings = self.get_embeddings(audio_embeddings)
-        latents = self.encode(samples, dae_embeddings, training=True)
+        latents = self.encode(samples, dae_embeddings, training=True).float()
 
-        if latents_sigma is not None:
-            decode_latents = latents + latents_sigma * torch.randn_like(latents)
+        if batch_sigma is not None:
+            
+            assert self.unet is not None
+
+            conditioning_mask = torch.ones(latents.shape[0], device=latents.device)
+
+            noise = torch.randn(latents.shape, device=latents.device, dtype=torch.float32)
+            noise = (noise * batch_sigma.view(-1, 1, 1, 1)).detach()
+
+            denoised, error_logvar = self.unet(latents + noise, batch_sigma, None, audio_embeddings, conditioning_mask=conditioning_mask)
+            
+            batch_loss_weight = (batch_sigma**2 + 1) / batch_sigma**2
+            batch_weighted_loss = torch.nn.functional.mse_loss(denoised, latents, reduction="none").mean(dim=(1,2,3)) * batch_loss_weight
+
+            batch_loss = batch_weighted_loss / error_logvar.exp() + error_logvar
+            bucket_log_loss = batch_weighted_loss
+            decode_latents = denoised
         else:
+            assert self.unet is None
+            batch_loss = bucket_log_loss = None
             decode_latents = latents
 
         ddec_cond = self.decode(decode_latents, dae_embeddings, training=True)
-        return latents, ddec_cond
+
+        return latents, ddec_cond, batch_loss, bucket_log_loss
 
     def latents_to_img(self, latents: torch.Tensor, **kwargs) -> ndarray:
         

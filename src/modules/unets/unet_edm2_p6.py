@@ -284,7 +284,7 @@ class UNet(DualDiffusionUNet):
 
     def get_embeddings(self, emb_in: torch.Tensor, conditioning_mask: torch.Tensor) -> torch.Tensor:
         if self.config.in_channels_emb > 0:
-            c_embedding = self.emb_label(normalize(emb_in).to(device=self.device, dtype=self.dtype))
+            c_embedding = self.emb_label(normalize(emb_in))
             u_embedding = torch.zeros_like(c_embedding)
             return mp_sum(u_embedding, c_embedding, t=conditioning_mask.unsqueeze(1).to(u_embedding.dtype))
         else:
