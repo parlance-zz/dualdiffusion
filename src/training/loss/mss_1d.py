@@ -67,6 +67,7 @@ class MSSLoss1DConfig:
     loss_scale_cepstrum: float = 170
 
     mel_density_pow: float = 0
+    increase_cuda_fft_plan_cache: bool = False
 
 class MSSLoss1D:
 
@@ -110,7 +111,9 @@ class MSSLoss1D:
         self.block_weights = np.array(block_weights)
         self.block_weights /= self.block_weights.sum()
 
-        torch.backends.cuda.cufft_plan_cache.max_size = len(block_sizes) + 250 # slight performance boost if fft plans are cached
+        if config.increase_cuda_fft_plan_cache == True:
+            torch.backends.cuda.cufft_plan_cache.max_size = len(block_sizes) + 250 # slight performance boost if fft plans are cached
+            
         self.windows: dict[int, torch.Tensor] = {}
         self.mel_densities: dict[int, torch.Tensor] = {}
 

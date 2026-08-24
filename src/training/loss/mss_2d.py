@@ -110,6 +110,7 @@ class MSSLoss2DConfig:
     gaussian_window_t_scale: float = 2.26
 
     disable_window_caching: bool = True
+    increase_cuda_fft_plan_cache: bool = False
 
 class MSSLoss2D:
 
@@ -157,7 +158,9 @@ class MSSLoss2D:
             print(f"Block size: {self.block_sizes[i]:3d} Weight: {(self.block_weights[i]*100):.3f}%")
         print(f"total unique block sizes: {len(block_sizes)}\n")
 
-        torch.backends.cuda.cufft_plan_cache.max_size = len(block_sizes)**2 * 2 + 250 # slight performance boost if fft plans are cached
+        if config.increase_cuda_fft_plan_cache == True:
+            torch.backends.cuda.cufft_plan_cache.max_size = len(block_sizes)**2 * 2 + 250 # slight performance boost if fft plans are cached
+            
         self.windows: dict[tuple[int, int], torch.Tensor] = {}
         self.loss_scale = config.loss_scale / self.config.num_iterations
 
