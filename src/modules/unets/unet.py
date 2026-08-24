@@ -62,5 +62,7 @@ class DualDiffusionUNet(DualDiffusionModule, ABC):
                 sigma: torch.Tensor,
                 format: DualDiffusionFormat,
                 embeddings: Optional[torch.Tensor] = None,
-                x_ref: Optional[torch.Tensor] = None) -> torch.Tensor:
+                x_ref: Optional[torch.Tensor] = None,
+                perturbed_input: Optional[torch.Tensor] = None,
+                conditioning_mask: Optional[torch.Tensor] = None) -> tuple[torch.Tensor, torch.Tensor]:
         pass
