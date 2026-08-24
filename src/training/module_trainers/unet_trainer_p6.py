@@ -197,6 +197,14 @@ class UNetTrainer(ModuleTrainer):
 
         return None
 
+    @torch.no_grad()
+    def get_batch_sigma(self) -> torch.Tensor: # get the noise level for this sub-batch from the pre-calculated whole-batch sigma (required for stratified sampling)
+
+        local_sigma = self.global_sigma[self.trainer.accelerator.process_index::self.trainer.accelerator.num_processes]
+        batch_sigma = local_sigma[self.trainer.accum_step * self.trainer.config.device_batch_size:(self.trainer.accum_step+1) * self.trainer.config.device_batch_size]
+
+        return batch_sigma
+    
     def train_batch(self, samples: torch.Tensor, embeddings: Optional[Union[torch.Tensor, list[torch.Tensor]]] = None,
             ref_samples: Optional[torch.Tensor] = None, loss_weight: Optional[torch.Tensor] = None,
             loss_fn: Callable[[torch.Tensor, torch.Tensor], torch.Tensor] = None) -> tuple[dict[str, Union[torch.Tensor, float]], dict[str, Union[torch.Tensor, float]]]:
@@ -206,9 +214,7 @@ class UNetTrainer(ModuleTrainer):
         # normal conditioning dropout
         conditioning_mask = (torch.rand(device_bsz, device=self.trainer.accelerator.device) > self.config.conditioning_dropout).requires_grad_(False).detach()
         
-        # get the noise level for this sub-batch from the pre-calculated whole-batch sigma (required for stratified sampling)
-        local_sigma = self.global_sigma[self.trainer.accelerator.process_index::self.trainer.accelerator.num_processes]
-        batch_sigma = local_sigma[self.trainer.accum_step_tensor * device_bsz:(self.trainer.accum_step_tensor+1) * device_bsz]
+        batch_sigma = self.get_batch_sigma()
 
         # prepare model inputs
         noise = torch.randn(samples.shape, device=samples.device)
