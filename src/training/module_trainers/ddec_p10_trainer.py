@@ -63,6 +63,7 @@ class DiffusionDecoder_Trainer_Config(ModuleTrainerConfig):
     latents_sigreg_loss_weight: float = 1e-5
     sigreg_loss_warmup_steps: int = 350
     dae_attack_mse_loss_weight: float = 1
+    dae_recon_loss_weight: float = 1.5
     
     use_mss_1d_loss: bool = False
     mss_1d_loss_weight: float          = 0.5
@@ -263,7 +264,8 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
                 dae_recon_loss = dae_recon_loss + logs["loss/dae_attack_mse"] * logs["loss_weight/dae_attack_mse"]
 
             logs["loss/dae_recon_nll"] = dae_recon_loss / self.dae.get_recon_loss_logvar().exp() + self.dae.get_recon_loss_logvar()
-            logs["loss"] = logs["loss"] + logs["loss/dae_recon_nll"]
+            logs["loss_weight/dae_recon"] = self.config.dae_recon_loss_weight
+            logs["loss"] = logs["loss"] + logs["loss/dae_recon_nll"] * logs["loss_weight/dae_recon"]
 
             if self.trainer.global_step < self.config.unet_loss_start_steps:
                 unet_loss_weight = self.config.unet_loss_start_weight
