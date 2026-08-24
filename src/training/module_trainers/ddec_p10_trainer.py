@@ -197,7 +197,7 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
         if self.train_dae == True:
             
             dae_unet_batch_sigma = self.unet_trainer.get_batch_sigma()
-            latents, ddec_cond, dae_unet_batch_loss, bucket_log_loss = self.dae(ms_psd_scaled, audio_embeddings, batch_sigma=dae_unet_batch_sigma)
+            latents, ddec_cond, dae_unet_batch_loss, bucket_log_loss = self.trainer.get_ddp_module(self.dae)(ms_psd_scaled, audio_embeddings, batch_sigma=dae_unet_batch_sigma)
 
             if self.unet_trainer.config.num_loss_buckets > 0:
                 self.unet_trainer.unet_loss_buckets.log_buckets(bucket_log_loss, dae_unet_batch_sigma)
