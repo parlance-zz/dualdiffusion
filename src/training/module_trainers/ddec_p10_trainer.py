@@ -343,7 +343,7 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
         logs = {}
         if self.train_ddecp == True:
             logs.update(self.ddecp_trainer.finish_batch())
-        if self.train_unet == True or self.unet is not None:
+        if self.train_dae == True:
             logs.update(self.unet_trainer.finish_batch())
 
         return logs
