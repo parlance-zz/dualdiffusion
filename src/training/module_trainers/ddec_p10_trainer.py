@@ -249,7 +249,7 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
                 logs["loss/mss_2d"] = self.mss_2d.mss_loss(ddec_cond, ms_psd_scaled, leak_pow=self.config.mss_2d_leak_pow, leak_max=leak_max)
                 dae_recon_loss = logs["loss/mss_2d"]
             else:
-                dae_recon_loss = torch.zeros_like(logs["loss"])
+                dae_recon_loss = torch.nn.functional.mse_loss(ddec_cond, ms_psd_scaled, reduction="none").mean(dim=(1,2,3))
 
             logs["loss/dae_mse"] = torch.nn.functional.mse_loss(ddec_cond, ms_psd_scaled, reduction="none").mean(dim=(1,2,3)).detach()
             
