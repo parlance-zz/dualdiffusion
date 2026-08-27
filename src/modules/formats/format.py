@@ -23,7 +23,10 @@
 from abc import ABC
 from dataclasses import dataclass
 
+import torch
+
 from modules.module import DualDiffusionModule, DualDiffusionModuleConfig
+from modules.formats.frequency_scale import get_mel_density
 
 
 @dataclass
@@ -40,3 +43,7 @@ class DualDiffusionFormat(DualDiffusionModule, ABC):
     supports_half_precision: bool = False
     supports_compile: bool = False # format compilation disabled for now
                                    # as torch.compile does not support complex operators
+
+    def get_mel_density(self, n_bins: int) -> torch.Tensor:
+        freqs = torch.linspace(0, self.config.sample_rate / 2, n_bins, device=self.device)
+        return get_mel_density(freqs)
