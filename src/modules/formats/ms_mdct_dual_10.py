@@ -229,7 +229,7 @@ class MS_MDCT_DualFormat(DualDiffusionFormat):
             ms_psd_mel: torch.Tensor = self.ms_psd_freq_scale.scale(ms_psd)
             return (ms_psd_mel + self.ms_psd_mel_offset) / self.ms_psd_mel_scale
         else:
-            return ms_psd
+            return ms_psd.clone()
 
     def unscale_ms_psd(self, ms_psd_mel: torch.Tensor) -> torch.Tensor:
         if self.config.ms_psd_num_filters > 0:
@@ -237,7 +237,7 @@ class MS_MDCT_DualFormat(DualDiffusionFormat):
             ms_psd = self.ms_psd_freq_scale.unscale(ms_psd_mel, rectify=False)
             return (ms_psd + self.ms_psd_mel_unscaled_offset) / self.ms_psd_mel_unscaled_scale
         else:
-            return ms_psd_mel
+            return ms_psd_mel.clone()
 
     @torch.no_grad()
     def ms_psd_to_img(self, ms_psd: torch.Tensor, use_colormap: bool = False):
