@@ -44,9 +44,9 @@ class DualDiffusionFormat(DualDiffusionModule, ABC):
     supports_compile: bool = False # format compilation disabled for now
                                    # as torch.compile does not support complex operators
 
-    def get_mel_density(self, n_bins: int, normalize: bool = False) -> torch.Tensor:
+    def get_mel_density(self, n_bins: int, pow: float = 1, normalize: bool = False) -> torch.Tensor:
         freqs = torch.linspace(0, self.config.sample_rate / 2, n_bins, device=self.device)
-        mel_density = get_mel_density(freqs)
+        mel_density = get_mel_density(freqs).pow(pow)
         if normalize:
             mel_density = mel_density / mel_density.mean()
         return mel_density.view(1, 1,-1, 1)
