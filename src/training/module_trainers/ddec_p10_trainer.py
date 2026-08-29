@@ -198,7 +198,7 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
         if self.train_dae == True:
             
             dae_unet_batch_sigma = self.unet_trainer.get_batch_sigma() if self.unet_trainer is not None else None
-            latents, ddec_cond, dae_unet_batch_loss, bucket_log_loss = self.trainer.get_ddp_module(self.dae)(ms_psd_scaled, audio_embeddings, batch_sigma=dae_unet_batch_sigma)
+            latents, ddec_cond, dae_recon_logvar, dae_unet_batch_loss, bucket_log_loss = self.trainer.get_ddp_module(self.dae)(ms_psd_scaled, audio_embeddings, batch_sigma=dae_unet_batch_sigma)
 
             if self.unet_trainer is not None:
                 if self.unet_trainer.config.num_loss_buckets > 0:
@@ -211,7 +211,7 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
 
             with torch.no_grad():
                 dae_unet_batch_sigma = self.unet_trainer.get_batch_sigma() if self.unet_trainer is not None else None
-                latents, ddec_cond, dae_unet_batch_loss, bucket_log_loss = self.dae(ms_psd_scaled, audio_embeddings, batch_sigma=dae_unet_batch_sigma)
+                latents, ddec_cond, dae_recon_logvar, dae_unet_batch_loss, bucket_log_loss = self.dae(ms_psd_scaled, audio_embeddings, batch_sigma=dae_unet_batch_sigma)
 
             if self.unet_trainer is not None:
                 if self.unet_trainer.config.num_loss_buckets > 0:
@@ -265,7 +265,7 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
                 logs["loss/dae_attack_mse"] = torch.nn.functional.mse_loss(ddec_cond_attack, ms_psd_scaled_attack, reduction="none").mean(dim=(1,2,3))
                 dae_recon_loss = dae_recon_loss + logs["loss/dae_attack_mse"] * logs["loss_weight/dae_attack_mse"]
 
-            logs["loss/dae_recon_nll"] = dae_recon_loss / self.dae.get_recon_loss_logvar().exp() + self.dae.get_recon_loss_logvar()
+            logs["loss/dae_recon_nll"] = dae_recon_loss / dae_recon_logvar.exp() + dae_recon_logvar
             logs["loss_weight/dae_recon"] = self.config.dae_recon_loss_weight
             logs["loss"] = logs["loss"] + logs["loss/dae_recon_nll"] * logs["loss_weight/dae_recon"]
 

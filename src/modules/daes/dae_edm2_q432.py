@@ -62,19 +62,19 @@ def residual_channel_to_space_dup(x: torch.Tensor, out_channels: int, factor: in
 @dataclass
 class DAE_Config(DualDiffusionDAEConfig):
 
-    in_channels: int     = 9
+    in_channels: int     = 3
     in_channels_emb: int = 0
-    out_channels: int    = 9
-    latent_channels: int = 512
-    use_1d_latents: bool = True
+    out_channels: int    = 3
+    latent_channels: int = 64
+    use_1d_latents: bool = False
     use_latents_pixel_norm: bool = True
 
-    in_num_freqs: int = 256
-    in_psd_freqs: int = 512
+    in_num_freqs: int = 192
+    in_psd_freqs: int = 192
 
-    model_channels: int         = 96        # Base multiplier for the number of channels.
-    channel_mult_enc: int       = (1,2,4,8)
-    channel_mult_dec: list[int] = (1,2,4,8)
+    model_channels: int         = 96         # Base multiplier for the number of channels.
+    channel_mult_enc: int       = (1,2,4,8,8)
+    channel_mult_dec: list[int] = (1,2,4,8,8)
     channel_mult_emb: int     = 0            # Multiplier for final embedding dimensionality.
     channels_per_head: int    = 64           # Number of channels per attention head.
     num_enc_layers_per_block: int = 3        # Number of resnet blocks per resolution.
@@ -247,8 +247,6 @@ class DAE(DualDiffusionDAE):
 
         assert config.in_psd_freqs % config.in_num_freqs == 0
         self.psd_freqs_per_freq = config.in_psd_freqs // config.in_num_freqs
-        if self.psd_freqs_per_freq > 1:
-            assert self.psd_freqs_per_freq == 2
 
         # embedding
         if config.in_channels_emb > 0:
@@ -276,7 +274,7 @@ class DAE(DualDiffusionDAE):
             cout = enc_channels[level]
 
             if level == 0:
-                self.enc[f"conv_in"] = MPConv(self.config.in_channels, cout, kernel=(5,5))
+                self.enc[f"conv_in"] = MPConv(self.config.in_channels * self.psd_freqs_per_freq, cout, kernel=(5,5))
             else:
                 self.enc[f"block{level}_down"] = Block(level, cin, cout, cemb,
                     use_attention=level in config.attn_levels, flavor="enc", resample_mode="down", **block_kwargs)
@@ -317,7 +315,7 @@ class DAE(DualDiffusionDAE):
                 self.dec[f"block{level}_layer{idx}"] = Block(level, cout, cout, cemb,
                     use_attention=level in config.attn_levels, flavor="dec", **block_kwargs)
 
-        self.conv_out = MPConv(cout, self.config.out_channels, kernel=(5,5))
+        self.conv_out = MPConv(cout, self.config.out_channels * self.psd_freqs_per_freq, kernel=(5,5))
         self.out_gain = torch.nn.Parameter(torch.ones([]))
         
         if config.unet is not None:
@@ -360,11 +358,12 @@ class DAE(DualDiffusionDAE):
 
         x = x.to(dtype=torch.bfloat16)
 
+        if self.psd_freqs_per_freq > 1:
+            x = patchify_2d(x, self.psd_freqs_per_freq, 1)
+            
         for name, block in self.enc.items():
             if "conv" in name:
                 x = block(x)
-                if self.psd_freqs_per_freq == 2:
-                    x = torch.nn.functional.avg_pool2d(x, kernel_size=(2,1), stride=(2,1))
             else:
                 x = block(x, embeddings)
         
@@ -398,14 +397,14 @@ class DAE(DualDiffusionDAE):
         for block in self.dec.values():
             x = block(x, embeddings)
 
-        if self.psd_freqs_per_freq == 2:
-            x = resample_2d(x, "up_keep")
-
         x: torch.Tensor = self.conv_out(x, gain=self.out_gain)
+
+        if self.psd_freqs_per_freq > 1:
+            x = unpatchify_2d(x, self.psd_freqs_per_freq, 1)
 
         return x
     
-    def forward(self, samples: torch.Tensor, audio_embeddings: torch.Tensor, batch_sigma: Optional[torch.Tensor] = None) -> tuple[torch.Tensor, torch.Tensor]:
+    def forward(self, samples: torch.Tensor, audio_embeddings: torch.Tensor, batch_sigma: Optional[torch.Tensor] = None) -> tuple[torch.Tensor, ...]:
         
         dae_embeddings = self.get_embeddings(audio_embeddings)
         latents = self.encode(samples, dae_embeddings, training=True).float()
@@ -434,7 +433,7 @@ class DAE(DualDiffusionDAE):
 
         ddec_cond = self.decode(decode_latents, dae_embeddings, training=True)
 
-        return latents, ddec_cond, batch_loss, bucket_log_loss
+        return latents, ddec_cond, self.get_recon_loss_logvar(), batch_loss, bucket_log_loss
 
     def latents_to_img(self, latents: torch.Tensor, **kwargs) -> ndarray:
         
