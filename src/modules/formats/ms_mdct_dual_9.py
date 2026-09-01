@@ -281,13 +281,17 @@ class MS_MDCT_DualFormat(DualDiffusionFormat):
                 assert torch.is_tensor(random_phase_augmentation)
                 _mclt *= random_phase_augmentation.view(-1, 1, 1, 1)
 
-            mdct_phase = _mclt.real.contiguous()
+            mdct_psd = _mclt.abs()
+            mdct_phase = (_mclt.real / mdct_psd.clip(min=1e-20)).clip(min=-1, max=1)
 
-            if self.config.use_per_freq_preconditioning == False:
-                mdct_phase /= getattr(self, f"mdct_mel_density_{level}").pow(self.config.mdct_psd_exponent)
+            mdct_psd = mdct_psd.pow(self.config.mdct_psd_exponent)
+            mdct_phase = mdct_phase * mdct_psd
 
             mdct_phase = mdct_phase / getattr(self, f"mdct_phase_scale_{level}")
-            return mdct_phase
+            mdct_psd = (mdct_psd + getattr(self, f"mdct_psd_offset_{level}")) / getattr(self, f"mdct_psd_scale_{level}")
+
+            mdct_phase_psd = torch.cat((mdct_phase, mdct_psd), dim=1)
+            return mdct_phase_psd
         else:
             if random_phase_augmentation == True:
                 random_phase_augmentation = torch.exp(2j*torch.pi * torch.rand(raw_samples.shape[0], device=raw_samples.device))
@@ -302,17 +306,18 @@ class MS_MDCT_DualFormat(DualDiffusionFormat):
     def mdct_phase_psd_to_raw(self, mdct_phase_psd: Union[torch.Tensor, list[torch.Tensor]], level: int = 0) -> torch.Tensor:
 
         if level >= 0:
-            mdct_phase = mdct_phase_psd.float() * getattr(self, f"mdct_phase_scale_{level}")
+            mdct_phase, mdct_psd = torch.chunk(mdct_phase_psd.float(), 2, dim=1)
 
             if self.config.use_per_freq_preconditioning == False:
                 mdct_phase = mdct_phase * getattr(self, f"mdct_mel_density_{level}").pow(self.config.mdct_psd_exponent)
 
-            mdct = mdct_phase
-            
-            #mdct[:, :, :self.config.mdcts[level].bin_lo] = 0
-            #mdct[:, :, self.config.mdcts[level].bin_hi:] = 0
+            mdct_phase = mdct_phase * getattr(self, f"mdct_phase_scale_{level}")
+            mdct_psd = mdct_psd * getattr(self, f"mdct_psd_scale_{level}") - getattr(self, f"mdct_psd_offset_{level}")
 
-            raw_samples = self.imdcts[level](mdct).real.contiguous()
+            #mdct_psd = mdct_psd.clip(min=0).pow(1 / self.config.mdct_psd_exponent - 1)
+            recon_exp = int((1 / self.config.mdct_psd_exponent - 1) / 2) * 2 + 1
+            mdct_psd = mdct_psd.pow(recon_exp)
+            raw_samples = self.imdcts[level](mdct_phase * mdct_psd).real.contiguous()
             return raw_samples
         else:
             assert isinstance(mdct_phase_psd, list)
@@ -337,7 +342,7 @@ class MS_MDCT_DualFormat(DualDiffusionFormat):
         assert mdct_phase_psd.shape[3] % self.config.num_mdcts == 0
         mdct_phase_psds: list[torch.Tensor] = []
         for i, chunk in enumerate(torch.chunk(mdct_phase_psd, chunks=self.config.num_mdcts, dim=3)):
-            mdct_phase_psds.append(chunk.reshape(chunk.shape[0], self.config.num_raw_channels, self.config.mdcts[i].num_frequencies, -1))
+            mdct_phase_psds.append(chunk.reshape(chunk.shape[0], mdct_phase_psd.shape[1], self.config.mdcts[i].num_frequencies, -1))
         return mdct_phase_psds
        
     """
