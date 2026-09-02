@@ -51,7 +51,7 @@ class UNetConfig(DualDiffusionUNetConfig):
     in_num_freqs: int = 64
     in_psd_num_freqs: list[int] = (64, 128, 256, 512)
 
-    model_channels: int  = 64                # Base multiplier for the number of channels.
+    model_channels: int  = 96                # Base multiplier for the number of channels.
     logvar_channels: int = 192               # Number of channels for training uncertainty estimation.
     channel_mult: list[int]    = (1,1,1,1)   # Per-resolution multipliers for the number of channels.
     double_midblock: bool      = False
@@ -59,7 +59,7 @@ class UNetConfig(DualDiffusionUNetConfig):
     channel_mult_noise: Optional[int] = 4    # Multiplier for noise embedding dimensionality.
     channel_mult_emb: Optional[int]   = 4    # Multiplier for final embedding dimensionality.
     channels_per_head: int    = 64           # Number of channels per attention head.
-    num_layers_per_block: int = 2            # Number of resnet blocks per resolution.
+    num_layers_per_block: int = 3            # Number of resnet blocks per resolution.
     label_balance: float      = 0.5          # Balance between noise embedding (0) and class embedding (1).
     concat_balance: float     = 0.5          # Balance between skip connections (0) and main path (1).
     res_balance: float        = 0.3          # Balance between main branch (0) and residual branch (1).
@@ -244,7 +244,7 @@ class UNet(DualDiffusionUNet):
 
         # Decoder.
         self.dec = torch.nn.ModuleDict()
-        skips = [block.out_channels for block in self.enc.values()]
+        skips = [cblock[0]] + [block.out_channels for block in self.enc.values()]
         
         for level, channels in reversed(list(enumerate(cblock))):
             
