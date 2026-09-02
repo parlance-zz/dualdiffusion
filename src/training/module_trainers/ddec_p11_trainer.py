@@ -279,6 +279,7 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
             ddecp_x_ref = ms_psd
             #ddecp_x_ref = ddec_cond
 
+            logs["io_stats_ddecp/add_x_ref_noise"] = self.config.add_ddecp_x_ref_noise
             if self.config.add_ddecp_x_ref_noise > 0:
                 ddecp_x_ref = [x + torch.randn_like(x) * self.config.add_ddecp_x_ref_noise for x in ddecp_x_ref]
             mdct_phase_flattened, _ = mdct_phase_psd_flattened.chunk(2, dim=1)
