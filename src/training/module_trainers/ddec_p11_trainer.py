@@ -278,6 +278,9 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
 
             ddecp_x_ref = ms_psd
             #ddecp_x_ref = ddec_cond
+
+            if self.config.add_ddecp_x_ref_noise > 0:
+                ddecp_x_ref = [x + torch.randn_like(x) * self.config.add_ddecp_x_ref_noise for x in ddecp_x_ref]
             mdct_phase_flattened, _ = mdct_phase_psd_flattened.chunk(2, dim=1)
 
             loss_fn = lambda x, y: self.format.get_mdct_phase_psd_loss(x, y, mel_density_pow=self.config.mel_density_loss_weight_pow_ddecp)

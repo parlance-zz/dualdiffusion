@@ -377,8 +377,12 @@ class MS_MDCT_DualFormat(DualDiffusionFormat):
         level_losses: list[torch.Tensor] = []
         for pred, target, weight in zip(pred_mdct_phase_psd, target_mdct_phase_psd, mel_densities):
             
-            weight = weight.pow(mel_density_pow)
-            weight = weight / weight.mean()
+            if mel_density_pow> 0:
+                weight = weight.pow(mel_density_pow)
+                weight = weight / weight.mean()
+            else:
+                weight = 1
+                
             level_loss = (torch.nn.functional.mse_loss(pred, target.detach(), reduction="none") * weight).mean(dim=(1,2,3))
             level_losses.append(level_loss)
 
