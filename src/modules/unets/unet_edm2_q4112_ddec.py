@@ -31,13 +31,13 @@
 # SOFTWARE.
 
 from dataclasses import dataclass
-from typing import Union, Optional, Literal
+from typing import Union, Optional
 
 import torch
 
 from modules.unets.unet import DualDiffusionUNet, DualDiffusionUNetConfig
 from modules.formats.ms_mdct_dual_9 import MS_MDCT_DualFormat, patch_ms_psd, unpatch_ms_psd
-from modules.mp_tools import MPFourier, MPConv, mp_cat, mp_silu, mp_sum, normalize, resample_2d
+from modules.mp_tools import MPFourier, MPConv, AdaptiveGroupBalance, mp_silu, mp_sum, normalize, normalize_groups
 
 
 @dataclass
@@ -51,126 +51,117 @@ class UNetConfig(DualDiffusionUNetConfig):
     in_num_freqs: int = 64
     in_psd_num_freqs: list[int] = (64, 128, 256, 512)
 
-    fourier_bandwidth: float = 2
+    sigma_max: float  = 50
+    sigma_min: float  = 1e-3
+    sigma_data: float = 1
 
-    model_channels: int  = 512               # Base multiplier for the number of channels.
-    logvar_channels: int = 192               # Number of channels for training uncertainty estimation.
-    channel_mult: list[int]    = (1,2,4)     # Per-resolution multipliers for the number of channels.
-    double_midblock: bool      = False
-    midblock_attn: bool        = False
-    channel_mult_noise: Optional[int] = 1    # Multiplier for noise embedding dimensionality.
-    channel_mult_emb: Optional[int]   = 1    # Multiplier for final embedding dimensionality.
-    channels_per_head: int    = 128          # Number of channels per attention head.
-    num_layers_per_block: int = 2            # Number of resnet blocks per resolution.
+    adg_min_balance: Optional[float]  = 0.1
+    adg_max_balance: Optional[float]  = 0.9
+    adg_weight_decay: Optional[float] = None
+
+    model_channels: int  = 1024                # Base multiplier for the number of channels.
+    logvar_channels: int = 192                 # Number of channels for training uncertainty estimation.
+    channel_mult: list[int] = (1,)             # Per-resolution multipliers for the number of channels.
+    channel_mult_noise: Optional[float] = 0.25 # Multiplier for noise embedding dimensionality.
+    channel_mult_emb: Optional[float]   = 1    # Multiplier for final embedding dimensionality.
+    channels_per_head: int      = 128          # Number of channels per attention head.
+    num_layers_per_block: int = 8           # Number of resnet blocks per resolution.
     label_balance: float      = 0.5          # Balance between noise embedding (0) and class embedding (1).
-    concat_balance: float     = 0.5          # Balance between skip connections (0) and main path (1).
-    res_balance: float        = 0.3          # Balance between main branch (0) and residual branch (1).
-    attn_balance: float       = 0.3          # Balance between main branch (0) and self-attention (1).
-    attn_levels: list[int]    = ()           # List of resolution levels to use self-attention.
+    balance_logits_offset: float = -4
     mlp_multiplier: int    = 1               # Multiplier for the number of channels in the MLP.
-    mlp_groups: int        = 8               # Number of groups for the MLPs.
-    emb_linear_groups: int = 1
+    mlp_groups: int        = 8              # Number of groups for the MLPs.
+    emb_linear_groups: int = 8
 
 class Block(torch.nn.Module):
 
     def __init__(self,
-        level: int,                             # Resolution level.
-        in_channels: int,                       # Number of input channels.
-        out_channels: int,                      # Number of output channels.
-        emb_channels: int,                      # Number of embedding channels.
-        num_freqs: int,         
-        flavor: Literal["enc", "dec"] = "enc",
-        resample_mode: Literal["keep", "up", "down"] = "keep",
+        in_channels: int,                  # Number of input channels.
+        out_channels: int,                 # Number of output channels.
+        emb_channels: int,                 # Number of embedding channels.
+        num_freqs: int,
         dropout: float         = 0.,       # Dropout probability.
-        res_balance: float     = 0.3,      # Balance between main branch (0) and residual branch (1).
-        attn_balance: float    = 0.3,      # Balance between main branch (0) and self-attention (1).
+        balance_logits_offset: float = -4, # Offset for the balance logits before sigmoid.
         clip_act: float        = 256,      # Clip output activations. None = do not clip.
-        mlp_multiplier: int    = 1,        # Multiplier for the number of channels in the MLP.
-        mlp_groups: int        = 1,        # Number of groups for the MLP.
-        emb_linear_groups: int = 1,
-        channels_per_head: int = 64,       # Number of channels per attention head.
-        use_attention: bool    = False     # Use self-attention in this block.
+        mlp_multiplier: int    = 2,        # Multiplier for the number of channels in the MLP.
+        mlp_groups: int        = 16,        # Number of groups for the MLP.
+        emb_linear_groups: int = 16,
+        channels_per_head: int = 128,       # Number of channels per attention head.
+        adg_min_balance: Optional[float]  = 0.1,
+        adg_max_balance: Optional[float]  = 0.9,
+        adg_weight_decay: Optional[float] = None,
     ) -> None:
         super().__init__()
+        assert out_channels % channels_per_head == 0
 
-        self.level = level
-        self.num_freqs = num_freqs
-        self.use_attention = use_attention
-        self.num_heads = out_channels // channels_per_head
+        self.num_heads = out_channels // mlp_groups // channels_per_head
+        self.channels_per_head = channels_per_head
+        self.mlp_groups = mlp_groups
         self.out_channels = out_channels
-        self.flavor = flavor
-        self.resample_mode = resample_mode
         self.dropout = dropout
-        self.res_balance = res_balance
-        self.attn_balance = attn_balance
+        self.balance_logits_offset = balance_logits_offset
         self.clip_act = clip_act
+        self.num_freqs = num_freqs
+
+        inner_channels = out_channels * mlp_multiplier
+
+        assert self.num_heads == 1
+        assert emb_channels % emb_linear_groups == 0
+        assert inner_channels % mlp_groups == 0
+        assert inner_channels % emb_linear_groups == 0
+        assert out_channels % mlp_groups == 0
+        assert in_channels % mlp_groups == 0
+
+        self.conv_res0 = MPConv(in_channels, inner_channels,  kernel=(3,3), groups=mlp_groups)
+        self.conv_res1 = MPConv(inner_channels, out_channels, kernel=(3,3), groups=mlp_groups)
         
-        self.conv_res0 = MPConv(out_channels if flavor == "enc" else in_channels,
-                                out_channels * mlp_multiplier, kernel=(3,3), groups=mlp_groups)
-        self.conv_res1 = MPConv(out_channels * mlp_multiplier, out_channels, kernel=(3,3), groups=mlp_groups)
-
-        if in_channels != out_channels:
-            self.conv_skip = MPConv(in_channels, out_channels, kernel=(1,1), groups=1)
-        else:
-            self.conv_skip = None
-
         self.emb_gain = torch.nn.Parameter(torch.zeros([]))
-        self.emb_linear = MPConv(emb_channels, out_channels * mlp_multiplier,
-            kernel=(1,1), groups=emb_linear_groups) if emb_channels != 0 else None
-        
-        if self.use_attention:
-            self.attn_q = MPConv(out_channels, out_channels, kernel=(1,1))
-            self.attn_k = MPConv(out_channels, out_channels, kernel=(1,1))
-            self.attn_v = MPConv(out_channels, out_channels, kernel=(1,1))
-            self.attn_proj = MPConv(out_channels, out_channels, kernel=(1,1))
+        self.emb_linear = MPConv(emb_channels, inner_channels, kernel=(1,1), groups=emb_linear_groups)
+        self.emb_res_balance = AdaptiveGroupBalance(emb_channels, mlp_groups, balance_logits_offset,
+            min_balance=adg_min_balance, max_balance=adg_max_balance, weight_decay=adg_weight_decay)
+    
+        self.attn_q = MPConv(out_channels, out_channels, kernel=(1,1), groups=mlp_groups)
+        self.attn_k = MPConv(out_channels, out_channels, kernel=(1,1), groups=mlp_groups)
+        self.attn_v = MPConv(out_channels, out_channels, kernel=(1,1), groups=mlp_groups)
+        self.attn_proj = MPConv(out_channels, out_channels, kernel=(1,1), groups=mlp_groups)
 
-            self.emb_gain_qkv = torch.nn.Parameter(torch.zeros([]))
-            self.emb_linear_qkv = MPConv(emb_channels, out_channels, kernel=(1,1))
+        self.emb_gain_qkv = torch.nn.Parameter(torch.zeros([]))
+        self.emb_linear_qkv = MPConv(emb_channels, out_channels, kernel=(1,1), groups=emb_linear_groups)
+        self.emb_attn_balance = AdaptiveGroupBalance(emb_channels, mlp_groups, balance_logits_offset,
+            min_balance=adg_min_balance, max_balance=adg_max_balance, weight_decay=adg_weight_decay)
 
     def forward(self, x: torch.Tensor, emb: torch.Tensor) -> torch.Tensor:
-        
-        if self.flavor == "enc":
-            if self.conv_skip is not None:
-                x = self.conv_skip(x)
 
-        x = resample_2d(x, mode=self.resample_mode)
-
-        if self.flavor == "enc":
-            x = normalize(x, dim=1) # pixel norm
-
-        y = self.conv_res0(mp_silu(x))
+        y = self.conv_res0(x)
 
         c = self.emb_linear(emb, gain=self.emb_gain) + 1.
-        y = mp_silu(y * c)
+        y = mp_silu(normalize_groups(y * c, groups=self.mlp_groups))
 
         if self.dropout != 0 and self.training == True: # magnitude preserving fix for dropout
             y = torch.nn.functional.dropout(y, p=self.dropout) * (1. - self.dropout)**0.5
 
-        y = self.conv_res1(y)
+        y: torch.Tensor = self.conv_res1(y)
+        x = self.emb_res_balance(x, y, emb)
 
-        if self.flavor == "dec" and self.conv_skip is not None:
-            x = self.conv_skip(x)
-        x = mp_sum(x, y, t=self.res_balance)
-        
-        if self.use_attention:
-            c = self.emb_linear_qkv(emb, gain=self.emb_gain_qkv) + 1.
-            y = x * c
+        c = self.emb_linear_qkv(emb, gain=self.emb_gain_qkv) + 1.
+        y = x * c
 
-            # bizarrely this is way faster than doing a single qkv projection, and uses less memory (with compile)
-            q: torch.Tensor = self.attn_q(y)
-            k: torch.Tensor = self.attn_k(y)
-            v: torch.Tensor = self.attn_v(y)
-            q = q.reshape(q.shape[0], self.num_heads, -1, y.shape[2] * y.shape[3])
-            k = k.reshape(k.shape[0], self.num_heads, -1, y.shape[2] * y.shape[3])
-            v = v.reshape(v.shape[0], self.num_heads, -1, y.shape[2] * y.shape[3])
-            q = normalize(q, dim=2).transpose(-1, -2)
-            k = normalize(k, dim=2).transpose(-1, -2)
-            v = normalize(v, dim=2).transpose(-1, -2)
+        B, C, H, W = y.shape
 
-            y = torch.nn.functional.scaled_dot_product_attention(q, k, v).transpose(-1, -2)
+        q: torch.Tensor = self.attn_q(y).permute(0, 3, 2, 1)
+        k: torch.Tensor = self.attn_k(y).permute(0, 3, 2, 1)
+        v: torch.Tensor = self.attn_v(y).permute(0, 3, 2, 1)
+        q = q.reshape(B, W, H, self.mlp_groups, self.channels_per_head)
+        k = k.reshape(B, W, H, self.mlp_groups, self.channels_per_head)
+        v = v.reshape(B, W, H, self.mlp_groups, self.channels_per_head)
+        q = normalize(q, dim=4)
+        k = normalize(k, dim=4)
+        v = normalize(v, dim=4)
 
-            y = self.attn_proj(y.reshape(*x.shape))
-            x = mp_sum(x, y, t=self.attn_balance)
+        y = torch.nn.functional.scaled_dot_product_attention(q, k, v)
+        y = y.permute(0, 3, 4, 2, 1).reshape(B, C, H, W)
+
+        y = self.attn_proj(y)
+        x = self.emb_attn_balance(x, y, emb)
 
         if self.clip_act is not None:
             x = x.clip_(-self.clip_act, self.clip_act)
@@ -187,25 +178,29 @@ class UNet(DualDiffusionUNet):
                         "mlp_multiplier": config.mlp_multiplier,
                         "mlp_groups": config.mlp_groups,
                         "emb_linear_groups": config.emb_linear_groups,
-                        "res_balance": config.res_balance,
-                        "attn_balance": config.attn_balance,
-                        "channels_per_head": config.channels_per_head}
+                        "balance_logits_offset": config.balance_logits_offset,
+                        "channels_per_head": config.channels_per_head,
+                        "adg_min_balance": config.adg_min_balance,
+                        "adg_max_balance": config.adg_max_balance,
+                        "adg_weight_decay": config.adg_weight_decay}
 
         cblock = [config.model_channels * x for x in config.channel_mult]
-        cnoise = config.model_channels * config.channel_mult_noise if config.channel_mult_noise is not None else max(cblock)
-        cemb = config.model_channels * config.channel_mult_emb if config.channel_mult_emb is not None else max(cblock)
+        cnoise = int(config.model_channels * config.channel_mult_noise) if config.channel_mult_noise is not None else max(cblock)
+        cemb = int(config.model_channels * config.channel_mult_emb) if config.channel_mult_emb is not None else max(cblock)
 
         self.num_levels = len(config.channel_mult)
         self.num_psd_levels = len(config.in_psd_num_freqs)
-        self.downsample_ratio = 2 ** (self.num_levels - 1)
-        assert config.in_num_freqs % self.downsample_ratio == 0
+        
+        assert self.num_levels == 1
+        assert cnoise % 2 == 0
+        assert cemb % config.emb_linear_groups == 0
 
         self.psd_freqs_per_freq = 2 ** (self.num_psd_levels - 1)
         for i in range(self.num_psd_levels):
             assert config.in_psd_num_freqs[i] % self.psd_freqs_per_freq == 0
         
         # Embedding.
-        self.emb_fourier = MPFourier(cnoise, bandwidth=config.fourier_bandwidth)
+        self.emb_fourier = MPFourier(cnoise)
         self.emb_noise = MPConv(cnoise, cemb, kernel=())
         self.emb_label = MPConv(config.in_channels_emb, cemb, kernel=()) if config.in_channels_emb > 0 else None
 
@@ -214,57 +209,17 @@ class UNet(DualDiffusionUNet):
         self.logvar_linear = MPConv(config.logvar_channels, 1, kernel=(), disable_weight_norm=True)
         self.logvar_linear.weight.data.fill_(0)
 
-        # Encoder.
         assert config.in_channels_x_ref > 0
-        self.x_ref_balance = torch.nn.Parameter(torch.zeros([]))
-        self.conv_x_ref_in = MPConv(config.in_channels_x_ref * self.psd_freqs_per_freq * self.num_psd_levels, cblock[0], kernel=(3,3), bias=True)
-        
-        self.enc = torch.nn.ModuleDict()
-        cin = config.in_channels * self.psd_freqs_per_freq * self.num_psd_levels
+        self.emb_x_ref = MPConv(config.in_channels_x_ref * self.psd_freqs_per_freq * self.num_psd_levels, cemb, kernel=(1,1), bias=True)
+        self.conv_in = MPConv(config.in_channels * self.psd_freqs_per_freq * self.num_psd_levels, cblock[0], kernel=(1,1), bias=True)
 
-        for level, channels in enumerate(cblock):
-            
-            num_freqs = config.in_num_freqs // 2**level
-            cout = channels
-
-            if level == 0:
-                self.enc[f"conv_in"] = MPConv(cin, cout, kernel=(3,3), bias=True)
-            else:
-                self.enc[f"block{level}_down"] = Block(level, cin, cout, cemb, num_freqs,
-                    use_attention=level in config.attn_levels, flavor="enc", resample_mode="down", **block_kwargs)
-            
-            for idx in range(config.num_layers_per_block):
-                cin = cout
-                cout = channels
-                self.enc[f"block{level}_layer{idx}"] = Block(level, cin, cout, cemb, num_freqs,
-                    use_attention=level in config.attn_levels, flavor="enc", **block_kwargs)
-
-        # Decoder.
         self.dec = torch.nn.ModuleDict()
-        skips = [block.out_channels for block in self.enc.values()]
+        for idx in range(config.num_layers_per_block):
+            self.dec[f"block0_layer{idx}"] = Block(
+                cblock[0], cblock[0], cemb, config.in_num_freqs, **block_kwargs)
         
-        for level, channels in reversed(list(enumerate(cblock))):
-            
-            num_freqs = config.in_num_freqs // 2**level
-
-            if level == len(cblock) - 1:
-                self.dec[f"block{level}_in0"] = Block(level, cout, cout, cemb, num_freqs,
-                    use_attention=config.midblock_attn, flavor="dec", **block_kwargs)
-                if config.double_midblock == True:
-                    self.dec[f"block{level}_in1"] = Block(level, cout, cout, cemb, num_freqs,
-                        use_attention=config.midblock_attn, flavor="dec", **block_kwargs)
-            else:
-                self.dec[f"block{level}_up"] = Block(level, cout, cout, cemb, num_freqs,
-                    use_attention=level in config.attn_levels, flavor="dec", resample_mode="up", **block_kwargs)
-
-            for idx in range(config.num_layers_per_block + 1):
-                cin = cout + skips.pop()
-                cout = channels
-                self.dec[f"block{level}_layer{idx}"] = Block(level, cin, cout, cemb, num_freqs,
-                    use_attention=level in config.attn_levels, flavor="dec", **block_kwargs)
-                
         self.out_gain = torch.nn.Parameter(torch.zeros([]))
-        self.conv_out = MPConv(cout, config.out_channels * self.psd_freqs_per_freq * self.num_psd_levels, kernel=(1,1))
+        self.conv_out = MPConv(cblock[0], config.out_channels * self.psd_freqs_per_freq * self.num_psd_levels, kernel=(1,1))
 
     def get_embeddings(self, emb_in: torch.Tensor, conditioning_mask: torch.Tensor) -> torch.Tensor:
         if self.config.in_channels_emb > 0:
@@ -278,8 +233,7 @@ class UNet(DualDiffusionUNet):
         return self.logvar_linear(self.logvar_fourier(sigma.flatten().log() / 4)).view(-1, 1, 1, 1).float()
     
     def get_latent_shape(self, latent_shape: Union[torch.Size, tuple[int, int, int, int]]) -> torch.Size:
-        return latent_shape[0:2] + ((latent_shape[2] // 2**(self.num_levels-1)) * 2**(self.num_levels-1),
-                                    (latent_shape[3] // 2**(self.num_levels-1)) * 2**(self.num_levels-1))
+        return latent_shape
 
     def forward(self, x_in: torch.Tensor,
                 sigma: torch.Tensor,
@@ -319,23 +273,11 @@ class UNet(DualDiffusionUNet):
         if self.config.in_channels_emb > 0:
             emb = mp_silu(mp_sum(emb, embeddings, t=self.config.label_balance))
         emb = emb[:, :, None, None].to(dtype=torch.bfloat16)
+        emb = mp_silu(mp_sum(emb, self.emb_x_ref(x_ref), t=0.5))
 
-        # encoder
-        skips = []
-        for name, block in self.enc.items():
-            if "conv" in name:
-                x = block(x)
-                
-                if self.config.in_channels_x_ref > 0:
-                    x = mp_sum(x, self.conv_x_ref_in(x_ref), t=self.x_ref_balance.sigmoid())
-            else:
-                x = block(x, emb)
-            skips.append(x)
+        x = self.conv_in(x)
 
-        # decoder
         for name, block in self.dec.items():
-            if "layer" in name:
-                x = mp_cat(x, skips.pop(), t=self.config.concat_balance)
             x = block(x, emb)
 
         x: torch.Tensor = self.conv_out(x, gain=self.out_gain)

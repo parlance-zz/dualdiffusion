@@ -119,7 +119,7 @@ def ms_mdct_dual_format_test() -> None:
 
         for i in range(format.config.num_mdcts):
 
-            _mdct_phase = mdct_phase_psds[i].to(dtype=torch.float64)
+            _mdct_phase, _ = mdct_phase_psds[i].to(dtype=torch.float64).chunk(2, dim=1)
             _mdct_psd = ms_psds[i].to(dtype=torch.float64)
             
             _mdct_phase_msq = _mdct_phase.pow(2).mean(dim=r_dims, keepdim=True)
@@ -138,6 +138,8 @@ def ms_mdct_dual_format_test() -> None:
         stat_logger.add_logs({
             "raw_sample_msq": raw_sample.pow(2).mean(),
             "raw_sample_recon_msq": raw_sample_recon.pow(2).mean(),
+            "mdct_phase_psd_msq": format.flatten_mdct_phase_psd(mdct_phase_psds).pow(2).mean(),
+            "mdct_phase_psd_mean": format.flatten_mdct_phase_psd(mdct_phase_psds).mean(),
             #"recon_error_rms": (raw_sample - raw_sample_recon).pow(2).mean().pow(0.5)
         })
 

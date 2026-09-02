@@ -246,7 +246,7 @@ class UNetTrainer(ModuleTrainer):
                 batch_weighted_loss = batch_weighted_loss * loss_weight
             batch_weighted_loss = batch_weighted_loss.mean(dim=(1,2,3)) * batch_loss_weight
         else:
-            batch_weighted_loss = loss_fn(denoised, samples)
+            batch_weighted_loss = loss_fn(denoised, samples) * batch_loss_weight
 
         if self.config.disable_loss_weight == True:
             error_logvar = self.unet.get_sigma_loss_logvar(torch.ones_like(batch_sigma))

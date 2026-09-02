@@ -7,9 +7,9 @@
     "test_samples_seed": 0,
     "test_samples": [
         "switch/Arcaea/_t_songs_ignotus.ogg.flac",
-        "SuspectT/Knife Party - Destroy Them With Lazers.flac"
-        //"dsf/Metropolis Street Racer Prototype/file_15.adx.flac",
-        //"psf3/Iron Man/_t_! movies_HUB_05_000001C2.adx.flac",
+        "SuspectT/Knife Party - Destroy Them With Lazers.flac",
+        "dsf/Metropolis Street Racer Prototype/file_15.adx.flac",
+        "psf3/Iron Man/_t_! movies_HUB_05_000001C2.adx.flac"
         //"psf/Gradius Gaiden/SLPM-86042_BGM1_0000096c.XA.flac",
         //"psf/Pukunpa - Joshikousei no Houkago/SARU1.DA.ape.flac",
         //"psf3/Tekken Hybrid/_t_Tekken Tag Tournament 2 Prologue_charasele.lwav.flac",
@@ -27,7 +27,7 @@
         //"default_raw_length": 2097152,
         "default_raw_length": 1408768,
         //"default_raw_length": 196608,
-        //"default_raw_length": 128000,
+        //"default_raw_length": 131072,
         //"default_raw_length": 96000,
         "width_alignment": 8192,
 
