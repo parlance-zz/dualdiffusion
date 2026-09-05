@@ -207,7 +207,8 @@ class UNetTrainer(ModuleTrainer):
     
     def train_batch(self, samples: torch.Tensor, embeddings: Optional[Union[torch.Tensor, list[torch.Tensor]]] = None,
             ref_samples: Optional[torch.Tensor] = None, loss_weight: Optional[torch.Tensor] = None,
-            loss_fn: Callable[[torch.Tensor, torch.Tensor], torch.Tensor] = None) -> tuple[dict[str, Union[torch.Tensor, float]], dict[str, Union[torch.Tensor, float]]]:
+            loss_fn: Callable[[torch.Tensor, torch.Tensor], torch.Tensor] = None,
+            target_x_ref: Optional[torch.Tensor] = None) -> tuple[dict[str, Union[torch.Tensor, float]], dict[str, Union[torch.Tensor, float]]]:
 
         device_bsz = self.trainer.config.device_batch_size
 
@@ -231,46 +232,81 @@ class UNetTrainer(ModuleTrainer):
         except:
             unet_module: UNet = self.unet
 
-        denoised, error_logvar = unet_module(samples + noise, batch_sigma, self.format, embeddings,
-            x_ref=ref_samples, perturbed_input=perturbed_input, conditioning_mask=conditioning_mask)
-        
-        sigma_data = self.sigma_sampler.config.sigma_data
-        if self.config.disable_loss_weight == True:
-            batch_loss_weight = 2 / batch_sigma**2
-        else:
-            batch_loss_weight = (batch_sigma ** 2 + sigma_data ** 2) / (batch_sigma * sigma_data) ** 2
-        
-        if loss_fn is None:
-            batch_weighted_loss = torch.nn.functional.mse_loss(denoised, samples, reduction="none")
-            if loss_weight is not None:
-                batch_weighted_loss = batch_weighted_loss * loss_weight
-            batch_weighted_loss = batch_weighted_loss.mean(dim=(1,2,3)) * batch_loss_weight
-        else:
-            batch_weighted_loss = loss_fn(denoised, samples) * batch_loss_weight
+        if target_x_ref is None:
+            denoised, error_logvar = unet_module(samples + noise, batch_sigma, self.format, embeddings,
+                x_ref=ref_samples, perturbed_input=perturbed_input, conditioning_mask=conditioning_mask)
+            
+            sigma_data = self.sigma_sampler.config.sigma_data
+            if self.config.disable_loss_weight == True:
+                batch_loss_weight = 2 / batch_sigma**2
+            else:
+                batch_loss_weight = (batch_sigma ** 2 + sigma_data ** 2) / (batch_sigma * sigma_data) ** 2
+            
+            if loss_fn is None:
+                batch_weighted_loss = torch.nn.functional.mse_loss(denoised, samples, reduction="none")
+                if loss_weight is not None:
+                    batch_weighted_loss = batch_weighted_loss * loss_weight
+                batch_weighted_loss = batch_weighted_loss.mean(dim=(1,2,3)) * batch_loss_weight
+            else:
+                batch_weighted_loss = loss_fn(denoised, samples) * batch_loss_weight
 
-        if self.config.disable_loss_weight == True:
-            error_logvar = self.unet.get_sigma_loss_logvar(torch.ones_like(batch_sigma))
-            batch_loss = batch_weighted_loss / error_logvar.exp() + error_logvar
-            #bucket_log_loss = batch_weighted_loss
-            bucket_log_loss = (0.5 * batch_weighted_loss * batch_sigma**2) * (batch_sigma ** 2 + sigma_data ** 2) / (batch_sigma * sigma_data) ** 2
+            if self.config.disable_loss_weight == True:
+                error_logvar = self.unet.get_sigma_loss_logvar(torch.ones_like(batch_sigma))
+                batch_loss = batch_weighted_loss / error_logvar.exp() + error_logvar
+                #bucket_log_loss = batch_weighted_loss
+                bucket_log_loss = (0.5 * batch_weighted_loss * batch_sigma**2) * (batch_sigma ** 2 + sigma_data ** 2) / (batch_sigma * sigma_data) ** 2
+            else:
+                batch_loss = batch_weighted_loss / error_logvar.exp() + error_logvar
+                bucket_log_loss = batch_weighted_loss
+                
+            logs = {
+                f"loss/{self.flavor}": batch_loss,
+                f"io_stats_{self.flavor}/denoised_var": denoised.var(dim=(1,2,3)),
+                f"io_stats_{self.flavor}/denoised_mean": denoised.mean(dim=(1,2,3))
+            }
+
+            ext_logs = {
+                "denoised": denoised,
+                "bucket_log_loss": bucket_log_loss,
+                "batch_sigma": batch_sigma
+            }
+            
         else:
-            batch_loss = batch_weighted_loss / error_logvar.exp() + error_logvar
-            bucket_log_loss = batch_weighted_loss
+            with torch.no_grad():
+                _, _, target_hidden_states = unet_module(samples + noise, batch_sigma, self.format, embeddings,
+                    x_ref=target_x_ref, perturbed_input=perturbed_input, conditioning_mask=conditioning_mask)
+                
+            _, _, output_hidden_states = unet_module(samples + noise, batch_sigma, self.format, embeddings,
+                x_ref=ref_samples, perturbed_input=perturbed_input, conditioning_mask=conditioning_mask)
+
+            logs = {}; ext_logs = {}
+        
+            loss = torch.zeros(samples.shape[0], device=samples.device)
+            state_loss_weight = torch.ones(samples.shape[0], device=samples.device)
+
+            for i, (x, y) in enumerate(zip(output_hidden_states, target_hidden_states)):
+                mel_density = self.format.get_mel_density(y.shape[-2], pow=1, normalize=True)
+                state_loss = torch.nn.functional.mse_loss(x, y, reduction="none")
+                state_loss = (state_loss * mel_density).mean(dim=(1,2,3)) / (y.pow(2) * mel_density).mean(dim=(1,2,3)).clip(min=1e-4)
+
+                logs[f"loss_weight/hidden_state_{i}"] = state_loss_weight.mean()
+                loss = loss + state_loss * state_loss_weight.detach()
+                logs[f"loss/hidden_state_{i}"] = state_loss.detach()
+
+                with torch.no_grad():
+                    state_loss_weight = state_loss_weight * (1 - state_loss.clip(min=0, max=1))**0.5
+                    state_loss_weight = state_loss_weight.clip(min=1e-2)
+
+            bucket_log_loss = loss.detach()
+            logs[f"loss/{self.flavor}"] = loss
+
+            ext_logs = {
+                "bucket_log_loss": bucket_log_loss,
+                "batch_sigma": batch_sigma
+            }
         
         if self.config.num_loss_buckets > 0:
             self.unet_loss_buckets.log_buckets(bucket_log_loss, batch_sigma)
-
-        logs = {
-            f"loss/{self.flavor}": batch_loss,
-            f"io_stats_{self.flavor}/denoised_var": denoised.var(dim=(1,2,3)),
-            f"io_stats_{self.flavor}/denoised_mean": denoised.mean(dim=(1,2,3))
-        }
-
-        ext_logs = {
-            "denoised": denoised,
-            "bucket_log_loss": bucket_log_loss,
-            "batch_sigma": batch_sigma
-        }
 
         return logs, ext_logs
     
