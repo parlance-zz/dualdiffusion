@@ -233,8 +233,10 @@ class UNetTrainer(ModuleTrainer):
             unet_module: UNet = self.unet
 
         if target_x_ref is None:
-            denoised, error_logvar = unet_module(samples + noise, batch_sigma, self.format, embeddings,
+            _ret = unet_module(samples + noise, batch_sigma, self.format, embeddings,
                 x_ref=ref_samples, perturbed_input=perturbed_input, conditioning_mask=conditioning_mask)
+            
+            denoised, error_logvar = _ret[0], _ret[1]
             
             sigma_data = self.sigma_sampler.config.sigma_data
             if self.config.disable_loss_weight == True:
@@ -258,7 +260,7 @@ class UNetTrainer(ModuleTrainer):
             else:
                 batch_loss = batch_weighted_loss / error_logvar.exp() + error_logvar
                 bucket_log_loss = batch_weighted_loss
-                
+            
             logs = {
                 f"loss/{self.flavor}": batch_loss,
                 f"io_stats_{self.flavor}/denoised_var": denoised.var(dim=(1,2,3)),
@@ -274,10 +276,10 @@ class UNetTrainer(ModuleTrainer):
         else:
             with torch.no_grad():
                 _, _, target_hidden_states = unet_module(samples + noise, batch_sigma, self.format, embeddings,
-                    x_ref=target_x_ref, perturbed_input=perturbed_input, conditioning_mask=conditioning_mask)
+                    x_ref=target_x_ref, perturbed_input=perturbed_input, conditioning_mask=conditioning_mask, return_hidden_states=True)
                 
             _, _, output_hidden_states = unet_module(samples + noise, batch_sigma, self.format, embeddings,
-                x_ref=ref_samples, perturbed_input=perturbed_input, conditioning_mask=conditioning_mask)
+                x_ref=ref_samples, perturbed_input=perturbed_input, conditioning_mask=conditioning_mask, return_hidden_states=True)
 
             logs = {}; ext_logs = {}
         

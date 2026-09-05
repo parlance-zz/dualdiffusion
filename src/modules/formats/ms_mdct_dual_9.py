@@ -368,10 +368,6 @@ class MS_MDCT_DualFormat(DualDiffusionFormat):
     """
 
     def get_mdct_phase_psd_loss(self, pred_mdct_phase_psd: torch.Tensor, target_mdct_phase_psd: torch.Tensor, mel_density_pow: float = 0) -> torch.Tensor:
-        
-        #pred_mdct_phase_psd = self.crop_unflattened(self.unflatten_mdct_phase_psd(pred_mdct_phase_psd))
-        #target_mdct_phase_psd = self.crop_unflattened(self.unflatten_mdct_phase_psd(target_mdct_phase_psd))
-        #mel_densities = self.crop_unflattened(self.get_mdct_mel_density(level=-1))
 
         pred_mdct_phase_psd = self.unflatten_mdct_phase_psd(pred_mdct_phase_psd)
         target_mdct_phase_psd = self.unflatten_mdct_phase_psd(target_mdct_phase_psd)
@@ -380,7 +376,7 @@ class MS_MDCT_DualFormat(DualDiffusionFormat):
         level_losses: list[torch.Tensor] = []
         for pred, target, weight in zip(pred_mdct_phase_psd, target_mdct_phase_psd, mel_densities):
             
-            if mel_density_pow> 0:
+            if mel_density_pow > 0:
                 weight = weight.pow(mel_density_pow)
                 weight = weight / weight.mean()
             else:

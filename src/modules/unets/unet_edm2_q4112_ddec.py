@@ -48,6 +48,9 @@ class UNetConfig(DualDiffusionUNetConfig):
     in_channels_emb: int = 0
     in_channels_x_ref: int = 3
 
+    x_ref_noise_max_sigma: float = 0.5
+    x_ref_noise_mel_density_pow: float = 1
+
     in_num_freqs: int = 64
     in_psd_num_freqs: list[int] = (64, 128, 256, 512)
 
@@ -62,14 +65,14 @@ class UNetConfig(DualDiffusionUNetConfig):
     model_channels: int  = 1024                # Base multiplier for the number of channels.
     logvar_channels: int = 192                 # Number of channels for training uncertainty estimation.
     channel_mult: list[int] = (1,)             # Per-resolution multipliers for the number of channels.
-    channel_mult_noise: Optional[float] = 0.25 # Multiplier for noise embedding dimensionality.
+    channel_mult_noise: Optional[float] = 0.5  # Multiplier for noise embedding dimensionality.
     channel_mult_emb: Optional[float]   = 1    # Multiplier for final embedding dimensionality.
     channels_per_head: int      = 128          # Number of channels per attention head.
     num_layers_per_block: int = 8           # Number of resnet blocks per resolution.
     label_balance: float      = 0.5          # Balance between noise embedding (0) and class embedding (1).
     balance_logits_offset: float = -4
     mlp_multiplier: int    = 1               # Multiplier for the number of channels in the MLP.
-    mlp_groups: int        = 8              # Number of groups for the MLPs.
+    mlp_groups: int        = 8               # Number of groups for the MLPs.
     emb_linear_groups: int = 8
 
 class Block(torch.nn.Module):
@@ -235,13 +238,41 @@ class UNet(DualDiffusionUNet):
     def get_latent_shape(self, latent_shape: Union[torch.Size, tuple[int, int, int, int]]) -> torch.Size:
         return latent_shape
 
+    @torch.no_grad()
+    def get_x_ref_noise(self, x_ref: list[torch.Tensor], format: MS_MDCT_DualFormat) -> list[torch.Tensor]:
+
+        assert len(x_ref) == self.num_psd_levels
+
+        x_ref_noise: list[torch.Tensor] = []
+        x_ref_sigma: list[torch.Tensor] = []
+
+        for i in range(self.num_psd_levels):
+            mel_density = 1 / format.get_mel_density(x_ref[i].shape[-2], pow=self.config.x_ref_noise_mel_density_pow)
+            x_ref_sigma.append(mel_density / mel_density.amax() * self.config.x_ref_noise_max_sigma)
+            x_ref_noise.append(torch.randn_like(x_ref[i]) * x_ref_sigma[i])
+
+        return x_ref_noise, x_ref_sigma
+
+    def add_x_ref_noise(self, x_ref: list[torch.Tensor], x_ref_noise: list[torch.Tensor], x_ref_sigma: list[torch.Tensor]) -> list[torch.Tensor]:
+
+        assert len(x_ref) == len(x_ref_noise) == len(x_ref_sigma) == self.num_psd_levels
+
+        noised_x_ref_noise: list[torch.Tensor] = []
+
+        for i in range(self.num_psd_levels):
+            _noised_x_ref = (x_ref[i] + x_ref_noise[i]) / (1 + x_ref_sigma[i]**2).pow(0.5)
+            noised_x_ref_noise.append(_noised_x_ref)
+
+        return noised_x_ref_noise
+    
     def forward(self, x_in: torch.Tensor,
                 sigma: torch.Tensor,
                 format: MS_MDCT_DualFormat,
                 embeddings: torch.Tensor,
                 x_ref: Optional[torch.Tensor] = None,
                 perturbed_input: Optional[torch.Tensor] = None,
-                conditioning_mask: Optional[torch.Tensor] = None) -> torch.Tensor:
+                conditioning_mask: Optional[torch.Tensor] = None,
+                return_hidden_states: bool = False) -> torch.Tensor:
 
         with torch.no_grad():
             sigma = sigma.view(-1, 1, 1, 1)
@@ -262,6 +293,8 @@ class UNet(DualDiffusionUNet):
         x = patch_ms_psd(format.unflatten_mdct_phase_psd(x), self.num_psd_levels)
         x_ref = patch_ms_psd(x_ref, self.num_psd_levels).to(dtype=torch.bfloat16)
 
+        hidden_states: list[torch.Tensor] = []
+
         # embedding
         if conditioning_mask is not None: # nuisance due to ddp wrapper limitations
             assert self.training == True
@@ -273,15 +306,33 @@ class UNet(DualDiffusionUNet):
         if self.config.in_channels_emb > 0:
             emb = mp_silu(mp_sum(emb, embeddings, t=self.config.label_balance))
         emb = emb[:, :, None, None].to(dtype=torch.bfloat16)
-        emb = mp_silu(mp_sum(emb, self.emb_x_ref(x_ref), t=0.5))
 
+        if return_hidden_states == True:
+            emb_x_ref = self.emb_x_ref(x_ref)
+            hidden_states.append(emb_x_ref)
+            emb = mp_silu(mp_sum(emb, emb_x_ref, t=0.5))
+        else:
+            emb = mp_silu(mp_sum(emb, self.emb_x_ref(x_ref), t=0.5))
+        
+        if return_hidden_states == True:
+            hidden_states.append(emb)
+        
         x = self.conv_in(x)
 
         for name, block in self.dec.items():
             x = block(x, emb)
 
-        x: torch.Tensor = self.conv_out(x, gain=self.out_gain)
-        x = format.flatten_mdct_phase_psd(unpatch_ms_psd(x, self.num_psd_levels))
+            if return_hidden_states == True:
+                hidden_states.append(x)
 
+        x: torch.Tensor = self.conv_out(x, gain=self.out_gain)
+        if return_hidden_states == True:
+            hidden_states.append(x)
+
+        x = format.flatten_mdct_phase_psd(unpatch_ms_psd(x, self.num_psd_levels))
         D_x: torch.Tensor = c_skip * x_in.float() + c_out * x.float()
-        return D_x, self.get_sigma_loss_logvar(sigma)
+
+        if return_hidden_states == True:
+            return D_x, self.get_sigma_loss_logvar(sigma), hidden_states
+        else:
+            return D_x, self.get_sigma_loss_logvar(sigma)

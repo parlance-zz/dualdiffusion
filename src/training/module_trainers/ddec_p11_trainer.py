@@ -75,7 +75,6 @@ class DiffusionDecoder_Trainer_Config(ModuleTrainerConfig):
     random_stereo_augmentation: bool = False
     random_phase_augmentation: bool  = False
     mel_density_loss_weight_pow_ddecp: float = 0
-    add_ddecp_x_ref_noise: float = 0
 
 class DiffusionDecoder_Trainer(ModuleTrainer):
     
@@ -132,11 +131,9 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
 
         if self.train_ddecp == True:
             self.logger.info(f"DDEC-P mel-density loss weight pow: {self.config.mel_density_loss_weight_pow_ddecp}")
-            self.logger.info(f"DDEC-P add x_ref noise: {self.config.add_ddecp_x_ref_noise}")
             self.logger.info(f"DDEC-P trainer:")
             self.ddecp_trainer = UNetTrainer(UNetTrainerConfig(**config.ddecp), trainer, self.ddecp, "ddecp")
 
-            
             if self.config.random_phase_augmentation == True:
                 self.logger.info("Using random phase augmentation")
             else: self.logger.info("Random phase augmentation is disabled")
@@ -178,6 +175,7 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
         mdct_phase_psd = self.format.raw_to_mdct_phase_psd(raw_samples,
             random_phase_augmentation=self.config.random_phase_augmentation, level=-1)
         mdct_phase_psd_flattened = self.format.flatten_mdct_phase_psd(mdct_phase_psd)
+        mdct_phase_flattened, mdct_phase_psd_flattened = mdct_phase_psd_flattened.chunk(2, dim=1)
         ms_psd = self.format.raw_to_ms_psd(raw_samples, level=-1)
 
         for i, (_mdct_phase_psd, _ms_psd) in enumerate(zip(mdct_phase_psd, ms_psd)):
@@ -275,40 +273,45 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
             self.dae.latents_stats_tracker(latents)
 
         if self.train_ddecp == True:
+            
+            x_ref_noise, x_ref_sigma = self.ddecp.get_x_ref_noise(ms_psd, self.format)
+            ddecp_x_ref = self.ddecp.add_x_ref_noise(ms_psd, x_ref_noise, x_ref_sigma)
 
-            ddecp_x_ref = ms_psd
-            #ddecp_x_ref = ddec_cond
-
-            logs["io_stats_ddecp/add_x_ref_noise"] = self.config.add_ddecp_x_ref_noise
-            if self.config.add_ddecp_x_ref_noise > 0:
-                ddecp_x_ref = [x + torch.randn_like(x) * self.config.add_ddecp_x_ref_noise for x in ddecp_x_ref]
-            mdct_phase_flattened, _ = mdct_phase_psd_flattened.chunk(2, dim=1)
-
-            loss_fn = lambda x, y: self.format.get_mdct_phase_psd_loss(x, y, mel_density_pow=self.config.mel_density_loss_weight_pow_ddecp)
+            if ddec_cond is not None:
+                target_x_ref = ddecp_x_ref
+                ddecp_x_ref = self.ddecp.add_x_ref_noise(ddec_cond, x_ref_noise, x_ref_sigma)
+                loss_fn = None
+                error_logvar = dae_recon_logvar
+            else:
+                target_x_ref = None
+                loss_fn = lambda x, y: self.format.get_mdct_phase_psd_loss(x, y, mel_density_pow=self.config.mel_density_loss_weight_pow_ddecp)
+                error_logvar = torch.zeros(1, device=mdct_phase_flattened.device)
+            
             ddecp_logs, ext_logs = self.ddecp_trainer.train_batch(
-                mdct_phase_flattened, audio_embeddings, ref_samples=ddecp_x_ref, loss_fn=loss_fn)
+                mdct_phase_flattened, audio_embeddings, ref_samples=ddecp_x_ref, loss_fn=loss_fn, target_x_ref=target_x_ref)
             
             logs.update(ddecp_logs)
-            logs["loss"] = logs["loss"] + logs["loss/ddecp"]
+            logs["loss"] = logs["loss"] + logs["loss/ddecp"] / error_logvar.exp() + error_logvar
 
-            """
-            denoised = self.format.unflatten_mdct_phase_psd(denoised)
+            if self.config.use_mss_1d_loss == True and ddec_cond is None:
+                denoised = self.format.unflatten_mdct_phase_psd(ext_logs["denoised"])
 
-            denoised_raw: list[torch.Tensor] = []; input_raw: list[torch.Tensor] = []
-            for i, (_denoised, _input) in enumerate(zip(denoised, mdct_phase_psd)):
-                denoised_raw.append(self.format.mdct_phase_psd_to_raw(_denoised, level=i))
-                input_raw.append(self.format.mdct_phase_psd_to_raw(_input, level=i))
+                denoised_raw: list[torch.Tensor] = []; input_raw: list[torch.Tensor] = []
+                for i, (_denoised, _mdct_phase_psd) in enumerate(zip(denoised, mdct_phase_psd)):
+                    _, _mdct_psd = _mdct_phase_psd.chunk(2, dim=1)
+                    _denoised = torch.cat([_denoised, _mdct_psd], dim=1)
+                    denoised_raw.append(self.format.mdct_phase_psd_to_raw(_denoised, level=i))
+                    input_raw.append(self.format.mdct_phase_psd_to_raw(_mdct_phase_psd, level=i))
 
-            crop_length = min(x.shape[-1] for x in denoised_raw)
-            denoised_raw = torch.cat([x[..., :crop_length] for x in denoised_raw], dim=0)
-            input_raw = torch.cat([x[..., :crop_length] for x in input_raw], dim=0)
+                crop_length = min(x.shape[-1] for x in denoised_raw)
+                denoised_raw = torch.stack([x[..., :crop_length] for x in denoised_raw], dim=0).mean(dim=0)
+                input_raw = torch.stack([x[..., :crop_length] for x in input_raw], dim=0).mean(dim=0)
 
-            #for i, (_denoised_raw, _input_raw) in enumerate(zip(denoised_raw, input_raw)):
-            #    logs[f"loss/mss_1d_{i}"], logs[f"loss/mss_1d_cepstrum_{i}"] = self.mss_1d.mss_loss(_denoised_raw, _input_raw)
+                logs.update(self.mss_1d.mss_loss(denoised_raw, input_raw.detach()))
+                logs["loss"] = logs["loss"] + logs["loss/mss_1d"].mean() * self.config.mss_1d_loss_weight + logs["loss/mss_1d_cepstrum"].mean() * self.config.mss_1d_cepstrum_loss_weight
+                logs["loss_weight/mss_1d"] = self.config.mss_1d_loss_weight
+                logs["loss_weight/mss_1d_cepstrum"] = self.config.mss_1d_cepstrum_loss_weight
 
-            logs.update(self.mss_1d.mss_loss(denoised_raw, input_raw.detach()))
-            logs["loss"] = logs["loss"] + logs["loss/mss_1d"].mean() + logs["loss/mss_1d_cepstrum"].mean()
-            """
         else:
             ddecp_x_ref = None
         
