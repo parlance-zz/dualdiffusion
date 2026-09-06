@@ -228,35 +228,40 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
 
         if self.train_dae == True:
             
+            """
             if self.config.mss_2d_leak_steps > 0:
                 leak_max = 1 - min(self.trainer.global_step / self.config.mss_2d_leak_steps, 1)
                 if leak_max <= 0: leak_max = None
             else:
                 leak_max = None
             logs["io_stats_dae/mss_2d_leak_max"] = leak_max if leak_max is not None else 0
+            """
 
             for i, (_ddec_cond, _ms_psd) in enumerate(zip(ddec_cond, ms_psd)):
-                logs[f"loss/mss_2d_{i}"] = self.mss_2d.mss_loss(_ddec_cond, _ms_psd, leak_pow=self.config.mss_2d_leak_pow, leak_max=leak_max)
+                #logs[f"loss/mss_2d_{i}"] = self.mss_2d.mss_loss(_ddec_cond, _ms_psd, leak_pow=self.config.mss_2d_leak_pow, leak_max=leak_max)
                 logs[f"loss/dae_mse_{i}"] = torch.nn.functional.mse_loss(_ddec_cond, _ms_psd, reduction="none").mean(dim=(1,2,3)).detach()
 
                 if i == 0:
-                    logs["loss/mss_2d"]  = logs[f"loss/mss_2d_{i}"] / len(ddec_cond)
+                    #logs["loss/mss_2d"]  = logs[f"loss/mss_2d_{i}"] / len(ddec_cond)
                     logs["loss/dae_mse"] = logs[f"loss/dae_mse_{i}"] / len(ddec_cond)
                 else:
-                    logs["loss/mss_2d"]  = logs["loss/mss_2d"] + logs[f"loss/mss_2d_{i}"] / len(ddec_cond)
+                    #logs["loss/mss_2d"]  = logs["loss/mss_2d"] + logs[f"loss/mss_2d_{i}"] / len(ddec_cond)
                     logs["loss/dae_mse"] = logs["loss/dae_mse"] + logs[f"loss/dae_mse_{i}"] / len(ddec_cond)
             
+            """
             dae_recon_loss = logs["loss/mss_2d"]
             logs["loss/dae_recon_nll"] = dae_recon_loss / self.dae.get_recon_loss_logvar().exp() + self.dae.get_recon_loss_logvar()
             logs["loss"] = logs["loss"] + logs["loss/dae_recon_nll"]
+            """
 
-            if self.trainer.global_step < self.config.unet_loss_start_steps:
-                unet_loss_weight = self.config.unet_loss_start_weight
-            else:
-                t = min((self.trainer.global_step - self.config.unet_loss_start_steps) / (self.config.unet_loss_warmup_steps + 1), 1)
-                unet_loss_weight = self.config.unet_loss_start_weight * (1 - t) + self.config.unet_loss_weight * t
-            logs["loss"] = logs["loss"] + logs["loss/unet"] * unet_loss_weight
-            logs["loss_weight/unet"] = unet_loss_weight
+            if self.unet_trainer is not None:
+                if self.trainer.global_step < self.config.unet_loss_start_steps:
+                    unet_loss_weight = self.config.unet_loss_start_weight
+                else:
+                    t = min((self.trainer.global_step - self.config.unet_loss_start_steps) / (self.config.unet_loss_warmup_steps + 1), 1)
+                    unet_loss_weight = self.config.unet_loss_start_weight * (1 - t) + self.config.unet_loss_weight * t
+                logs["loss"] = logs["loss"] + logs["loss/unet"] * unet_loss_weight
+                logs["loss_weight/unet"] = unet_loss_weight
 
             latents_sigreg_loss_weight = self.config.latents_sigreg_loss_weight
             if self.trainer.global_step < self.config.sigreg_loss_warmup_steps:

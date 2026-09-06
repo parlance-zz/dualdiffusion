@@ -327,6 +327,7 @@ class UNet(DualDiffusionUNet):
             assert x_ref is None
 
         # encoder
+        hidden_states: list[torch.Tensor] = []
         skips = []
         for name, block in self.enc.items():
             if "conv" in name:
@@ -338,14 +339,23 @@ class UNet(DualDiffusionUNet):
                 x = block(x, emb)
             skips.append(x)
 
+            if self.training == True:
+                hidden_states.append(x)
+
         # decoder
         for name, block in self.dec.items():
             if "layer" in name:
                 x = mp_cat(x, skips.pop(), t=self.config.concat_balance)
             x = block(x, emb)
 
+            if self.training == True:
+                hidden_states.append(x)
+
         x: torch.Tensor = self.conv_out(x, gain=self.out_gain)
         D_x: torch.Tensor = c_skip * x_in.float() + c_out * x.float()
 
-        return D_x, self.get_sigma_loss_logvar(sigma)
+        if self.training == False:
+            return D_x, self.get_sigma_loss_logvar(sigma)
+        else:
+            return D_x, self.get_sigma_loss_logvar(sigma), hidden_states + [x]
     
