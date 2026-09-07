@@ -66,9 +66,9 @@ class DAE_Config(DualDiffusionDAEConfig):
     in_channels: int     = 3
     in_channels_emb: int = 0
     out_channels: int    = 3
-    latent_channels: int = 64
-    use_1d_latents: bool = False
-    use_latents_pixel_norm: bool = False
+    latent_channels: int = 512
+    use_1d_latents: bool = True
+    use_latents_pixel_norm: bool = True
 
     in_num_freqs: int = 64
     in_psd_num_freqs: list[int] = (64, 128, 256, 512)

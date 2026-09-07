@@ -306,13 +306,7 @@ class UNet(DualDiffusionUNet):
         if self.config.in_channels_emb > 0:
             emb = mp_silu(mp_sum(emb, embeddings, t=self.config.label_balance))
         emb = emb[:, :, None, None].to(dtype=torch.bfloat16)
-
-        if return_hidden_states == True:
-            emb_x_ref = self.emb_x_ref(x_ref)
-            hidden_states.append(emb_x_ref)
-            emb = mp_silu(mp_sum(emb, emb_x_ref, t=0.5))
-        else:
-            emb = mp_silu(mp_sum(emb, self.emb_x_ref(x_ref), t=0.5))
+        emb = mp_silu(mp_sum(emb, self.emb_x_ref(x_ref), t=0.5))
         
         if return_hidden_states == True:
             hidden_states.append(emb)

@@ -289,7 +289,8 @@ class UNetTrainer(ModuleTrainer):
             for i, (x, y) in enumerate(zip(output_hidden_states, target_hidden_states)):
                 mel_density = self.format.get_mel_density(y.shape[-2], pow=1, normalize=True)
                 state_loss = torch.nn.functional.mse_loss(x, y, reduction="none")
-                state_loss = (state_loss * mel_density).mean(dim=(1,2,3)) / (y.pow(2) * mel_density).mean(dim=(1,2,3)).clip(min=1e-4)
+                state_loss = (state_loss * mel_density).mean(dim=(2,3)) / (y.pow(2) * mel_density).mean(dim=(2,3)).clip(min=1e-4)
+                state_loss = state_loss.mean(dim=1)
 
                 logs[f"loss_weight/hidden_state_{i}"] = state_loss_weight.mean()
                 loss = loss + state_loss * state_loss_weight.detach()

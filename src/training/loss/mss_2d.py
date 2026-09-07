@@ -31,13 +31,8 @@ from modules.formats.frequency_scale import get_mel_density
 import torch
 
 
-def sketch2_2d(
-    x1: torch.Tensor,
-    x2: torch.Tensor,
-    *,
-    normalize: bool = False,
-    generator: torch.Generator | None = None,
-) -> tuple[torch.Tensor, torch.Tensor]:
+def sketch2_2d(x1: torch.Tensor, x2: torch.Tensor, max_sketches: Optional[int] = None,
+        normalize: bool = True, generator: torch.Generator | None = None) -> tuple[torch.Tensor, torch.Tensor]:
     """
     Apply the same random Gaussian CxC channel-mixing matrix to two image-like tensors.
 
@@ -64,9 +59,10 @@ def sketch2_2d(
     if x2.dtype != dtype:
         raise ValueError("x1 and x2 must have the same dtype")
 
-    G = torch.randn(C, C, device=device, dtype=dtype, generator=generator)
+    n_sketches = min(C, max_sketches) if max_sketches is not None else C
+    G = torch.randn(n_sketches, C, device=device, dtype=dtype, generator=generator)
     if normalize:
-        G = G / (C ** 0.5)
+        G = G / (n_sketches ** 0.5)
 
     # mix channels: for each pixel, new_channel_values = G @ old_channel_values
     y1 = torch.einsum("ij,bjhw->bihw", G, x1)
@@ -107,6 +103,7 @@ class MSSLoss2DConfig:
     loss_weight_pow : float = 0.5
     use_complex_loss: bool = False
     use_sketching: bool = False     # True if use_complex_loss
+    max_sketches: Optional[int] = None
     gaussian_window_t_scale: float = 2.26
 
     disable_window_caching: bool = True
@@ -251,7 +248,7 @@ class MSSLoss2D:
         for i in range(self.config.num_iterations):
             
             if self.config.use_sketching == True:
-                sample, target = sketch2_2d(_sample, _target)
+                sample, target = sketch2_2d(_sample, _target, max_sketches=self.config.max_sketches)
 
             block_width  = int(block_widths[i])
             block_height = int(block_heights[i])
