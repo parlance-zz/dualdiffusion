@@ -293,7 +293,8 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
                 error_logvar = torch.zeros(1, device=mdct_phase_flattened.device)
             
             ddecp_logs, ext_logs = self.ddecp_trainer.train_batch(
-                mdct_phase_flattened, audio_embeddings, ref_samples=ddecp_x_ref, loss_fn=loss_fn, target_x_ref=target_x_ref)
+                mdct_phase_flattened, audio_embeddings, ref_samples=ddecp_x_ref, loss_fn=loss_fn,
+                mel_density_loss_weight_pow=self.config.mel_density_loss_weight_pow_ddecp, target_x_ref=target_x_ref)
             
             logs.update(ddecp_logs)
             logs["loss"] = logs["loss"] + logs["loss/ddecp"] / error_logvar.exp() + error_logvar

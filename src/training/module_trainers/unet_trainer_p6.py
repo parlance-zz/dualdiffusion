@@ -206,7 +206,7 @@ class UNetTrainer(ModuleTrainer):
         return batch_sigma
     
     def train_batch(self, samples: torch.Tensor, embeddings: Optional[Union[torch.Tensor, list[torch.Tensor]]] = None,
-            ref_samples: Optional[torch.Tensor] = None, loss_weight: Optional[torch.Tensor] = None,
+            ref_samples: Optional[torch.Tensor] = None, mel_density_loss_weight_pow: Optional[float] = None,
             loss_fn: Callable[[torch.Tensor, torch.Tensor], torch.Tensor] = None,
             target_x_ref: Optional[torch.Tensor] = None) -> tuple[dict[str, Union[torch.Tensor, float]], dict[str, Union[torch.Tensor, float]]]:
 
@@ -246,7 +246,8 @@ class UNetTrainer(ModuleTrainer):
             
             if loss_fn is None:
                 batch_weighted_loss = torch.nn.functional.mse_loss(denoised, samples, reduction="none")
-                if loss_weight is not None:
+                if mel_density_loss_weight_pow:
+                    loss_weight = self.format.get_mel_density(samples.shape[-2], pow=mel_density_loss_weight_pow, normalize=True)
                     batch_weighted_loss = batch_weighted_loss * loss_weight
                 batch_weighted_loss = batch_weighted_loss.mean(dim=(1,2,3)) * batch_loss_weight
             else:
@@ -278,7 +279,7 @@ class UNetTrainer(ModuleTrainer):
                 _, _, target_hidden_states = unet_module(samples + noise, batch_sigma, self.format, embeddings,
                     x_ref=target_x_ref, perturbed_input=perturbed_input, conditioning_mask=conditioning_mask, return_hidden_states=True)
                 
-            _, _, output_hidden_states = unet_module(samples + noise, batch_sigma, self.format, embeddings,
+            denoised, _, output_hidden_states = unet_module(samples + noise, batch_sigma, self.format, embeddings,
                 x_ref=ref_samples, perturbed_input=perturbed_input, conditioning_mask=conditioning_mask, return_hidden_states=True)
 
             logs = {}; ext_logs = {}
@@ -287,8 +288,14 @@ class UNetTrainer(ModuleTrainer):
             state_loss_weight = torch.ones(samples.shape[0], device=samples.device)
 
             for i, (x, y) in enumerate(zip(output_hidden_states, target_hidden_states)):
-                mel_density = self.format.get_mel_density(y.shape[-2], pow=1, normalize=True)
-                state_loss = torch.nn.functional.mse_loss(x, y, reduction="none")
+                x: torch.Tensor; y: torch.Tensor
+
+                if mel_density_loss_weight_pow:
+                    mel_density = self.format.get_mel_density(y.shape[-2], pow=mel_density_loss_weight_pow, normalize=True)
+                else:
+                    mel_density = 1
+
+                state_loss: torch.Tensor = torch.nn.functional.mse_loss(x, y, reduction="none")
                 state_loss = (state_loss * mel_density).mean(dim=(2,3)) / (y.pow(2) * mel_density).mean(dim=(2,3)).clip(min=1e-4)
                 state_loss = state_loss.mean(dim=1)
 
@@ -304,6 +311,7 @@ class UNetTrainer(ModuleTrainer):
             logs[f"loss/{self.flavor}"] = loss
 
             ext_logs = {
+                "denoised": denoised,
                 "bucket_log_loss": bucket_log_loss,
                 "batch_sigma": batch_sigma
             }

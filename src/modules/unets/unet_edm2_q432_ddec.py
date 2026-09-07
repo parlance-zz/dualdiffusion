@@ -48,6 +48,8 @@ class UNetConfig(DualDiffusionUNetConfig):
     in_channels_emb: int = 0
     in_channels_x_ref: int = 9
 
+    x_ref_max_sigma: float = 0.5
+    
     in_num_freqs: int = 256
     in_psd_freqs: int = 512
 
@@ -320,6 +322,10 @@ class UNet(DualDiffusionUNet):
         emb = emb[:, :, None, None].to(dtype=torch.bfloat16)
 
         if self.config.in_channels_x_ref > 0:
+            x_ref, x_ref_noise = x_ref.float().chunk(2, dim=1)
+            x_ref_sigma = c_skip * self.config.x_ref_max_sigma
+            x_ref = (x_ref + x_ref_noise * x_ref_sigma) / (x_ref_sigma**2 + 1).pow(0.5)
+            
             x_ref = self.conv_x_ref_in(x_ref.to(dtype=torch.bfloat16))
             if self.psd_freqs_per_freq == 2:
                 x_ref = torch.nn.functional.avg_pool2d(x_ref, kernel_size=(2,1), stride=(2,1))
@@ -352,10 +358,11 @@ class UNet(DualDiffusionUNet):
                 hidden_states.append(x)
 
         x: torch.Tensor = self.conv_out(x, gain=self.out_gain)
+        hidden_states.append(x)
+
         D_x: torch.Tensor = c_skip * x_in.float() + c_out * x.float()
 
         if self.training == False:
             return D_x, self.get_sigma_loss_logvar(sigma)
         else:
-            return D_x, self.get_sigma_loss_logvar(sigma), hidden_states + [x]
-    
+            return D_x, self.get_sigma_loss_logvar(sigma), hidden_states
