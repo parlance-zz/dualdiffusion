@@ -48,8 +48,8 @@ class UNetConfig(DualDiffusionUNetConfig):
     in_channels_emb: int = 0
     in_channels_x_ref: int = 9
 
-    x_ref_sigma_scale: float = 0.25
-    x_ref_noise_mel_density_pow: float = 0.5
+    x_ref_sigma_scale: float = 0.5
+    x_ref_noise_mel_density_pow: float = 0
     
     in_num_freqs: int = 256
     in_psd_freqs: int = 512
@@ -296,7 +296,7 @@ class UNet(DualDiffusionUNet):
                 return_hidden_states: bool = False) -> tuple[torch.Tensor, ...]:
 
         with torch.no_grad():
-            sigma = sigma.view(-1, 1, 1, 1)
+            sigma = sigma.view(-1, 1, 1, 1).float()
             
             # Preconditioning weights.
             c_skip = self.config.sigma_data ** 2 / (sigma ** 2 + self.config.sigma_data ** 2)
@@ -324,9 +324,13 @@ class UNet(DualDiffusionUNet):
         emb = emb[:, :, None, None].to(dtype=torch.bfloat16)
 
         if self.config.in_channels_x_ref > 0:
-            mel_density = format.get_mel_density(x_ref.shape[-2], pow=-self.config.x_ref_noise_mel_density_pow, normalize=True)
+            if self.config.x_ref_noise_mel_density_pow != 0:
+                mel_density = format.get_mel_density(x_ref.shape[-2], pow=-self.config.x_ref_noise_mel_density_pow, normalize=True).float()
+            else:
+                mel_density = 1
+
             x_ref, x_ref_noise = x_ref.float().chunk(2, dim=1)
-            x_ref_sigma = self.config.x_ref_sigma_scale / sigma * mel_density
+            x_ref_sigma = c_skip * self.config.x_ref_sigma_scale * mel_density
             x_ref = (x_ref + x_ref_noise * x_ref_sigma) / (x_ref_sigma**2 + 1).pow(0.5)
             
             x_ref = self.conv_x_ref_in(x_ref.to(dtype=torch.bfloat16))
