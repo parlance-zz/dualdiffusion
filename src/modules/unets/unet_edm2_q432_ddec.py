@@ -291,7 +291,8 @@ class UNet(DualDiffusionUNet):
                 embeddings: torch.Tensor,
                 x_ref: Optional[torch.Tensor] = None,
                 perturbed_input: Optional[torch.Tensor] = None,
-                conditioning_mask: Optional[torch.Tensor] = None) -> torch.Tensor:
+                conditioning_mask: Optional[torch.Tensor] = None,
+                return_hidden_states: bool = False) -> tuple[torch.Tensor, ...]:
 
         with torch.no_grad():
             sigma = sigma.view(-1, 1, 1, 1)
@@ -345,7 +346,7 @@ class UNet(DualDiffusionUNet):
                 x = block(x, emb)
             skips.append(x)
 
-            if self.training == True:
+            if return_hidden_states == True:
                 hidden_states.append(x)
 
         # decoder
@@ -354,7 +355,7 @@ class UNet(DualDiffusionUNet):
                 x = mp_cat(x, skips.pop(), t=self.config.concat_balance)
             x = block(x, emb)
 
-            if self.training == True:
+            if return_hidden_states == True:
                 hidden_states.append(x)
 
         x: torch.Tensor = self.conv_out(x, gain=self.out_gain)
@@ -362,7 +363,7 @@ class UNet(DualDiffusionUNet):
 
         D_x: torch.Tensor = c_skip * x_in.float() + c_out * x.float()
 
-        if self.training == False:
+        if return_hidden_states == False:
             return D_x, self.get_sigma_loss_logvar(sigma)
         else:
             return D_x, self.get_sigma_loss_logvar(sigma), hidden_states
