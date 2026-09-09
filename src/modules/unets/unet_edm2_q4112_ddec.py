@@ -48,8 +48,8 @@ class UNetConfig(DualDiffusionUNetConfig):
     in_channels_emb: int = 0
     in_channels_x_ref: int = 3
 
-    x_ref_noise_max_sigma: float = 0.5
-    x_ref_noise_mel_density_pow: float = 1
+    x_ref_noise_max_sigma: float = 0.4
+    x_ref_noise_mel_density_pow: float = 0
 
     in_num_freqs: int = 64
     in_psd_num_freqs: list[int] = (64, 128, 256, 512)
@@ -62,18 +62,18 @@ class UNetConfig(DualDiffusionUNetConfig):
     adg_max_balance: Optional[float]  = 0.9
     adg_weight_decay: Optional[float] = None
 
-    model_channels: int  = 1024                # Base multiplier for the number of channels.
+    model_channels: int  = 768                 # Base multiplier for the number of channels.
     logvar_channels: int = 192                 # Number of channels for training uncertainty estimation.
     channel_mult: list[int] = (1,)             # Per-resolution multipliers for the number of channels.
     channel_mult_noise: Optional[float] = 0.5  # Multiplier for noise embedding dimensionality.
     channel_mult_emb: Optional[float]   = 1    # Multiplier for final embedding dimensionality.
     channels_per_head: int      = 128          # Number of channels per attention head.
-    num_layers_per_block: int = 8           # Number of resnet blocks per resolution.
+    num_layers_per_block: int = 12           # Number of resnet blocks per resolution.
     label_balance: float      = 0.5          # Balance between noise embedding (0) and class embedding (1).
     balance_logits_offset: float = -4
     mlp_multiplier: int    = 1               # Multiplier for the number of channels in the MLP.
-    mlp_groups: int        = 8               # Number of groups for the MLPs.
-    emb_linear_groups: int = 8
+    mlp_groups: int        = 6               # Number of groups for the MLPs.
+    emb_linear_groups: int = 6
 
 class Block(torch.nn.Module):
 
@@ -85,13 +85,14 @@ class Block(torch.nn.Module):
         dropout: float         = 0.,       # Dropout probability.
         balance_logits_offset: float = -4, # Offset for the balance logits before sigmoid.
         clip_act: float        = 256,      # Clip output activations. None = do not clip.
-        mlp_multiplier: int    = 2,        # Multiplier for the number of channels in the MLP.
-        mlp_groups: int        = 16,        # Number of groups for the MLP.
-        emb_linear_groups: int = 16,
+        mlp_multiplier: int    = 1,        # Multiplier for the number of channels in the MLP.
+        mlp_groups: int        = 8,        # Number of groups for the MLP.
+        emb_linear_groups: int = 8,
         channels_per_head: int = 128,       # Number of channels per attention head.
         adg_min_balance: Optional[float]  = 0.1,
         adg_max_balance: Optional[float]  = 0.9,
         adg_weight_decay: Optional[float] = None,
+        use_attention: bool = True
     ) -> None:
         super().__init__()
         assert out_channels % channels_per_head == 0
@@ -104,6 +105,7 @@ class Block(torch.nn.Module):
         self.balance_logits_offset = balance_logits_offset
         self.clip_act = clip_act
         self.num_freqs = num_freqs
+        self.use_attention = use_attention
 
         inner_channels = out_channels * mlp_multiplier
 
@@ -121,16 +123,18 @@ class Block(torch.nn.Module):
         self.emb_linear = MPConv(emb_channels, inner_channels, kernel=(1,1), groups=emb_linear_groups)
         self.emb_res_balance = AdaptiveGroupBalance(emb_channels, mlp_groups, balance_logits_offset,
             min_balance=adg_min_balance, max_balance=adg_max_balance, weight_decay=adg_weight_decay)
-    
-        self.attn_q = MPConv(out_channels, out_channels, kernel=(1,1), groups=mlp_groups)
-        self.attn_k = MPConv(out_channels, out_channels, kernel=(1,1), groups=mlp_groups)
-        self.attn_v = MPConv(out_channels, out_channels, kernel=(1,1), groups=mlp_groups)
-        self.attn_proj = MPConv(out_channels, out_channels, kernel=(1,1), groups=mlp_groups)
 
-        self.emb_gain_qkv = torch.nn.Parameter(torch.zeros([]))
-        self.emb_linear_qkv = MPConv(emb_channels, out_channels, kernel=(1,1), groups=emb_linear_groups)
-        self.emb_attn_balance = AdaptiveGroupBalance(emb_channels, mlp_groups, balance_logits_offset,
-            min_balance=adg_min_balance, max_balance=adg_max_balance, weight_decay=adg_weight_decay)
+        if self.use_attention == True:
+            
+            self.attn_q = MPConv(out_channels, out_channels, kernel=(1,1), groups=mlp_groups)
+            self.attn_k = MPConv(out_channels, out_channels, kernel=(1,1), groups=mlp_groups)
+            self.attn_v = MPConv(out_channels, out_channels, kernel=(1,1), groups=mlp_groups)
+            self.attn_proj = MPConv(out_channels, out_channels, kernel=(1,1), groups=mlp_groups)
+
+            self.emb_gain_qkv = torch.nn.Parameter(torch.zeros([]))
+            self.emb_linear_qkv = MPConv(emb_channels, out_channels, kernel=(1,1), groups=emb_linear_groups)
+            self.emb_attn_balance = AdaptiveGroupBalance(emb_channels, mlp_groups, balance_logits_offset,
+                min_balance=adg_min_balance, max_balance=adg_max_balance, weight_decay=adg_weight_decay)
 
     def forward(self, x: torch.Tensor, emb: torch.Tensor) -> torch.Tensor:
 
@@ -145,26 +149,27 @@ class Block(torch.nn.Module):
         y: torch.Tensor = self.conv_res1(y)
         x = self.emb_res_balance(x, y, emb)
 
-        c = self.emb_linear_qkv(emb, gain=self.emb_gain_qkv) + 1.
-        y = x * c
+        if self.use_attention == True:
+            c = self.emb_linear_qkv(emb, gain=self.emb_gain_qkv) + 1.
+            y = x * c
 
-        B, C, H, W = y.shape
+            B, C, H, W = y.shape
 
-        q: torch.Tensor = self.attn_q(y).permute(0, 3, 2, 1)
-        k: torch.Tensor = self.attn_k(y).permute(0, 3, 2, 1)
-        v: torch.Tensor = self.attn_v(y).permute(0, 3, 2, 1)
-        q = q.reshape(B, W, H, self.mlp_groups, self.channels_per_head)
-        k = k.reshape(B, W, H, self.mlp_groups, self.channels_per_head)
-        v = v.reshape(B, W, H, self.mlp_groups, self.channels_per_head)
-        q = normalize(q, dim=4)
-        k = normalize(k, dim=4)
-        v = normalize(v, dim=4)
+            q: torch.Tensor = self.attn_q(y).permute(0, 3, 2, 1)
+            k: torch.Tensor = self.attn_k(y).permute(0, 3, 2, 1)
+            v: torch.Tensor = self.attn_v(y).permute(0, 3, 2, 1)
+            q = q.reshape(B, W, H, self.mlp_groups, self.channels_per_head)
+            k = k.reshape(B, W, H, self.mlp_groups, self.channels_per_head)
+            v = v.reshape(B, W, H, self.mlp_groups, self.channels_per_head)
+            q = normalize(q, dim=4)
+            k = normalize(k, dim=4)
+            v = normalize(v, dim=4)
 
-        y = torch.nn.functional.scaled_dot_product_attention(q, k, v)
-        y = y.permute(0, 3, 4, 2, 1).reshape(B, C, H, W)
+            y = torch.nn.functional.scaled_dot_product_attention(q, k, v)
+            y = y.permute(0, 3, 4, 2, 1).reshape(B, C, H, W)
 
-        y = self.attn_proj(y)
-        x = self.emb_attn_balance(x, y, emb)
+            y = self.attn_proj(y)
+            x = self.emb_attn_balance(x, y, emb)
 
         if self.clip_act is not None:
             x = x.clip_(-self.clip_act, self.clip_act)
@@ -218,8 +223,9 @@ class UNet(DualDiffusionUNet):
 
         self.dec = torch.nn.ModuleDict()
         for idx in range(config.num_layers_per_block):
+            use_attention = True if idx < config.num_layers_per_block - 1 else False
             self.dec[f"block0_layer{idx}"] = Block(
-                cblock[0], cblock[0], cemb, config.in_num_freqs, **block_kwargs)
+                cblock[0], cblock[0], cemb, config.in_num_freqs, use_attention=use_attention, **block_kwargs)
         
         self.out_gain = torch.nn.Parameter(torch.zeros([]))
         self.conv_out = MPConv(cblock[0], config.out_channels * self.psd_freqs_per_freq * self.num_psd_levels, kernel=(1,1))
@@ -316,7 +322,7 @@ class UNet(DualDiffusionUNet):
         for name, block in self.dec.items():
             x = block(x, emb)
 
-            if return_hidden_states == True:
+            if return_hidden_states == True and name != f"block0_layer{self.config.num_layers_per_block - 1}":
                 hidden_states.append(x)
 
         x: torch.Tensor = self.conv_out(x, gain=self.out_gain)
