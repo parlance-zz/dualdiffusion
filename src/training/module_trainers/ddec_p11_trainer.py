@@ -47,6 +47,54 @@ def random_stereo_augmentation(x: torch.Tensor) -> torch.Tensor:
     
     return output
 
+def analytic_signal(x: torch.Tensor) -> torch.Tensor:
+
+    if x.ndim != 3:
+        raise ValueError(f"Expected x with shape (b, c, t), got {tuple(x.shape)}")
+    if x.is_complex():
+        raise ValueError("analytic_signal expects a real-valued input tensor.")
+
+    t = x.shape[-1]
+    X = torch.fft.fft(x, dim=-1)
+
+    # frequency-domain analytic-signal mask:
+    #   DC: retained
+    #   positive frequencies: doubled
+    #   negative frequencies: removed
+    #   nyquist (when t is even): retained
+    
+    h = torch.zeros(t, device=x.device, dtype=x.dtype)
+    h[0] = 1
+
+    if t % 2 == 0:
+        # even length: bin t//2 is the Nyquist frequency.
+        h[1 : t // 2] = 2
+        h[t // 2] = 1
+    else:
+        # odd length: all bins 1 through floor(t/2) are positive frequencies.
+        h[1 : (t + 1) // 2] = 2
+
+    return torch.fft.ifft(X * h, dim=-1)
+
+def rotate_analytic_phase(x: torch.Tensor, phase: float | torch.Tensor) -> torch.Tensor:
+
+    z = analytic_signal(x)
+
+    phase = torch.as_tensor(phase, dtype=x.dtype, device=x.device)
+    rotation = torch.complex(torch.cos(phase), torch.sin(phase))
+
+    return z * rotation.view(-1, 1, 1)
+
+@torch.no_grad()
+def random_phase_augmentation(x: torch.Tensor, edge_crop: int) -> torch.Tensor:
+    
+    pad = x.shape[-1] // 2
+    x = torch.nn.functional.pad(x, (pad, pad), mode='reflect')
+
+    rnd_phase = torch.rand(x.shape[0], device=x.device) * 2*torch.pi
+    rotated = rotate_analytic_phase(x, rnd_phase).real
+    return rotated[..., pad + edge_crop:-pad - edge_crop]
+
 @dataclass
 class DiffusionDecoder_Trainer_Config(ModuleTrainerConfig):
 
@@ -173,8 +221,10 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
         else:
             raw_samples = batch["audio"]
 
-        mdct_phase_psd = self.format.raw_to_mdct_phase_psd(raw_samples,
-            random_phase_augmentation=self.config.random_phase_augmentation, level=-1)
+        if self.config.random_phase_augmentation == True:
+            raw_samples = random_phase_augmentation(raw_samples, self.format.config.width_alignment)
+
+        mdct_phase_psd = self.format.raw_to_mdct_phase_psd(raw_samples, level=-1)
         mdct_phase_psd_flattened = self.format.flatten_mdct_phase_psd(mdct_phase_psd)
         mdct_phase_flattened, mdct_phase_psd_flattened = mdct_phase_psd_flattened.chunk(2, dim=1)
         ms_psd = self.format.raw_to_ms_psd(raw_samples, level=-1)

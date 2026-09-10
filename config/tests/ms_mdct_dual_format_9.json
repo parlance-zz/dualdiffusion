@@ -38,25 +38,25 @@
 
         "mdcts": [
             {
-                "window_len": 128,
+                "window_len": 192,
                 "window_func": "vorbis",
                 "crop_lo": 0,
                 "crop_hi": 1
             },
             {
-                "window_len": 256,
+                "window_len": 384,
                 "window_func": "vorbis",
                 "crop_lo": 0,
                 "crop_hi": 1
             },
             {
-                "window_len": 512,
+                "window_len": 768,
                 "window_func": "vorbis",
                 "crop_lo": 0,
                 "crop_hi": 1
             },
             {
-                "window_len": 1024,
+                "window_len": 1536,
                 "window_func": "vorbis",
                 "crop_lo": 0,
                 "crop_hi": 1

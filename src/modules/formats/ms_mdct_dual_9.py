@@ -268,19 +268,10 @@ class MS_MDCT_DualFormat(DualDiffusionFormat):
     def get_mdct_shape(self, bsz: int = 1, raw_length: Optional[int] = None):
         return self.get_mdct_phase_psd_shape(bsz=bsz, raw_length=raw_length)
 
-    def raw_to_mdct_phase_psd(self, raw_samples: torch.Tensor,
-            random_phase_augmentation: Union[bool, torch.Tensor] = False, level: int = 0) -> Union[torch.Tensor, list[torch.Tensor]]:
+    def raw_to_mdct_phase_psd(self, raw_samples: torch.Tensor, level: int = 0) -> Union[torch.Tensor, list[torch.Tensor]]:
         
         if level >= 0:
             _mclt: torch.Tensor = self.mdcts[level](raw_samples.float())
-
-            if isinstance(random_phase_augmentation, bool):
-                if random_phase_augmentation == True:
-                    phase_rotation = torch.exp(2j * torch.pi * torch.rand(_mclt.shape[0], device=_mclt.device)) 
-                    _mclt *= phase_rotation.view(-1, 1, 1, 1)
-            else:
-                assert torch.is_tensor(random_phase_augmentation)
-                _mclt *= random_phase_augmentation.view(-1, 1, 1, 1)
 
             mdct_psd = _mclt.abs()
             mdct_phase = (_mclt.real / mdct_psd.clip(min=1e-20)).clip(min=-1, max=1)
@@ -294,12 +285,10 @@ class MS_MDCT_DualFormat(DualDiffusionFormat):
             mdct_phase_psd = torch.cat((mdct_phase, mdct_psd), dim=1)
             return mdct_phase_psd
         else:
-            if random_phase_augmentation == True:
-                random_phase_augmentation = torch.exp(2j*torch.pi * torch.rand(raw_samples.shape[0], device=raw_samples.device))
 
             mdct_phase_psds = []
             for i in range(self.config.num_mdcts):
-                mdct_phase_psd = self.raw_to_mdct_phase_psd(raw_samples, random_phase_augmentation=random_phase_augmentation, level=i)
+                mdct_phase_psd = self.raw_to_mdct_phase_psd(raw_samples, level=i)
                 mdct_phase_psds.append(mdct_phase_psd)
 
             return mdct_phase_psds
