@@ -158,7 +158,7 @@ class Block(torch.nn.Module):
 
         kernel = (3, 3)
 
-        self.conv_res0 = MPConv(in_channels, inner_channels, kernel=kernel, groups=mlp_groups)
+        self.conv_res0 = MPConv(out_channels, inner_channels, kernel=kernel, groups=mlp_groups)
         self.conv_res1 = MPConv(inner_channels, out_channels, kernel=kernel, groups=mlp_groups)
 
         if in_channels != out_channels:
