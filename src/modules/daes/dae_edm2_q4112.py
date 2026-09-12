@@ -66,8 +66,8 @@ class DAE_Config(DualDiffusionDAEConfig):
     in_channels: int     = 3
     in_channels_emb: int = 0
     out_channels: int    = 3
-    latent_channels: int = 16
-    use_1d_latents: bool = False
+    latent_channels: int = 256
+    use_1d_latents: bool = True
     use_latents_pixel_norm: bool = True
 
     in_num_freqs: int = 64
@@ -322,7 +322,7 @@ class DAE(DualDiffusionDAE):
                 self.dec[f"block{level}_layer{idx}"] = Block(level, cout, cout, cemb,
                     use_attention=level in config.attn_levels, flavor="dec", **block_kwargs)
                 
-        self.conv_psd_out = MPConv(cout, config.out_channels * self.psd_freqs_per_freq * self.num_psd_levels, kernel=(1,1))
+        self.conv_psd_out = MPConv(cout, config.out_channels * self.psd_freqs_per_freq * self.num_psd_levels, kernel=(3,3))
         self.psd_out_gain = torch.nn.Parameter(torch.ones([]))
 
         if config.unet is not None:
