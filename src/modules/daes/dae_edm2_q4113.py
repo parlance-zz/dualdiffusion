@@ -150,8 +150,6 @@ class Block(torch.nn.Module):
 
         inner_channels = out_channels * mlp_multiplier
 
-        print(in_channels, out_channels, inner_channels, emb_channels, mlp_groups, emb_linear_groups)
-
         assert emb_channels % emb_linear_groups == 0
         assert inner_channels % mlp_groups == 0
         assert inner_channels % emb_linear_groups == 0
