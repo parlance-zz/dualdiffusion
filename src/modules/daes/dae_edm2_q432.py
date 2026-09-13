@@ -65,12 +65,12 @@ class DAE_Config(DualDiffusionDAEConfig):
     in_channels: int     = 9
     in_channels_emb: int = 0
     out_channels: int    = 9
-    latent_channels: int = 512
+    latent_channels: int = 256
     use_1d_latents: bool = True
     use_latents_pixel_norm: bool = True
 
-    in_num_freqs: int = 256
-    in_psd_freqs: int = 512
+    in_num_freqs: int = 128
+    in_psd_freqs: int = 256
 
     model_channels: int         = 96        # Base multiplier for the number of channels.
     channel_mult_enc: int       = (1,2,4,8)

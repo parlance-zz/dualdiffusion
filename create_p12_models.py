@@ -18,7 +18,7 @@ from modules.daes.dae_edm2_q432 import DAE, DAE_Config
 from modules.unets.unet_edm2_p6 import UNetConfig
 #unet_cfg = UNetConfig(num_layers_per_block=12, in_channels=512, out_channels=512)
 unet_cfg=None
-dae = DAE(DAE_Config(model_channels=128, unet=unet_cfg))
+dae = DAE(DAE_Config(model_channels=128, in_num_freqs=128, in_psd_freqs=256, unet=unet_cfg))
 print_module_info(dae, "dae")
 
 if input("Save module? (y/n) ").lower() == 'y':
@@ -26,7 +26,7 @@ if input("Save module? (y/n) ").lower() == 'y':
     print(f"Saved model to {model_path}/dae")
 
 from modules.unets.unet_edm2_q432_ddec import UNet, UNetConfig
-ddecp = UNet(UNetConfig())
+ddecp = UNet(UNetConfig(in_num_freqs=128, in_psd_freqs=256))
 print_module_info(ddecp, "ddecp")
 
 if input("Save module? (y/n) ").lower() == 'y':

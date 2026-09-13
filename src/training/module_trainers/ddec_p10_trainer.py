@@ -77,7 +77,7 @@ class DiffusionDecoder_Trainer_Config(ModuleTrainerConfig):
 
     random_stereo_augmentation: bool = False
     random_phase_augmentation: bool  = False
-    mel_density_loss_weight_pow_ddecp: float = 0
+    mel_density_loss_weight_pow_ddecp: float = 1
 
 class DiffusionDecoder_Trainer(ModuleTrainer):
     
@@ -137,8 +137,6 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
             self.logger.info(f"DDEC-P trainer:")
             self.ddecp_trainer = UNetTrainer(UNetTrainerConfig(**config.ddecp), trainer, self.ddecp, "ddecp")
 
-            self.ddecp_loss_weight = self.format.get_mel_density(self.format.config.num_frequencies, pow=self.config.mel_density_loss_weight_pow_ddecp, normalize=True)
-            
             if self.config.random_phase_augmentation == True:
                 self.logger.info("Using random phase augmentation")
             else: self.logger.info("Random phase augmentation is disabled")
