@@ -62,7 +62,7 @@ def sketch2_2d(x1: torch.Tensor, x2: torch.Tensor, max_sketches: Optional[int] =
     n_sketches = min(C, max_sketches) if max_sketches is not None else C
     G = torch.randn(n_sketches, C, device=device, dtype=dtype, generator=generator)
     if normalize:
-        G = G / (n_sketches ** 0.5)
+        G = G / C ** 0.5
 
     # mix channels: for each pixel, new_channel_values = G @ old_channel_values
     y1 = torch.einsum("ij,bjhw->bihw", G, x1)
