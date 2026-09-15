@@ -57,6 +57,8 @@ class UNetTrainerConfig(ModuleTrainerConfig):
     linear_buckets: bool = False
     
     input_perturbation: float   = 0.1 # from https://arxiv.org/pdf/2301.11706
+    mel_density_input_perturb_pow: Optional[float] = None
+
     conditioning_dropout: float = 0.1
 
     disable_loss_weight: bool = False
@@ -150,6 +152,8 @@ class UNetTrainer(ModuleTrainer):
         # log unet trainer specific config / settings
         if self.config.input_perturbation > 0:
             self.logger.info(f"Using input perturbation: {self.config.input_perturbation}")
+            if self.config.mel_density_input_perturb_pow is not None:
+                self.logger.info(f"Scaling input perturbation with mel density pow: {self.config.mel_density_input_perturb_pow}")
         else:
             self.logger.info("Input perturbation is disabled")
         
@@ -223,6 +227,11 @@ class UNetTrainer(ModuleTrainer):
 
         if self.config.input_perturbation > 0:
             input_perturbation = torch.randn(samples.shape, device=samples.device)
+
+            if self.config.mel_density_input_perturb_pow is not None:
+                mel_density = self.format.get_mel_density(samples.shape[-2], pow=self.config.mel_density_input_perturb_pow, normalize=True)
+                input_perturbation = input_perturbation * mel_density.view(1, 1,-1, 1)
+
             perturbed_input = samples + noise + input_perturbation * batch_sigma.view(-1, 1, 1, 1) * self.config.input_perturbation
         else:
             perturbed_input = None
