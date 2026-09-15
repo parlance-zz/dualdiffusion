@@ -133,6 +133,7 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
                 self.unet_trainer = None
 
         if self.train_ddecp == True:
+            assert self.config.mel_density_loss_weight_pow_ddecp >= 0
             self.logger.info(f"DDEC-P mel-density loss weight pow: {self.config.mel_density_loss_weight_pow_ddecp}")
             self.logger.info(f"DDEC-P trainer:")
             self.ddecp_trainer = UNetTrainer(UNetTrainerConfig(**config.ddecp), trainer, self.ddecp, "ddecp")

@@ -229,6 +229,7 @@ class UNetTrainer(ModuleTrainer):
             input_perturbation = torch.randn(samples.shape, device=samples.device)
 
             if self.config.mel_density_input_perturb_pow is not None:
+                assert self.config.mel_density_input_perturb_pow <= 0
                 mel_density = self.format.get_mel_density(samples.shape[-2], pow=self.config.mel_density_input_perturb_pow, normalize=True)
                 input_perturbation = input_perturbation * mel_density.view(1, 1,-1, 1)
 
