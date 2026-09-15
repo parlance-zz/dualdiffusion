@@ -192,6 +192,7 @@ class UNet(DualDiffusionUNet):
                         "attn_balance": config.attn_balance,
                         "channels_per_head": config.channels_per_head}
 
+        assert config.x_ref_noise_mel_density_pow <= 0
         cblock = [config.model_channels * x for x in config.channel_mult]
         cnoise = config.model_channels * config.channel_mult_noise if config.channel_mult_noise is not None else max(cblock)
         cemb = config.model_channels * config.channel_mult_emb if config.channel_mult_emb is not None else max(cblock)
