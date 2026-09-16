@@ -2,7 +2,10 @@ from utils import config
 
 import os
 
+import torch
+
 from create_new_model import print_module_info
+from modules.formats.ms_mdct_dual_9 import MS_MDCT_DualFormat
 
 model_name = "edm2_dae_p11"
 model_path = os.path.join(config.MODELS_PATH, model_name)
@@ -23,8 +26,16 @@ if input("Save module? (y/n) ").lower() == 'y':
     print(f"Saved model to {model_path}/dae")
 
 from modules.unets.unet_edm2_q4112_ddec import UNet, UNetConfig
-ddecp = UNet(UNetConfig())
+ddecp = UNet(UNetConfig(x_ref_noise_max_sigma=0.5, x_ref_noise_mel_density_pow=0))
 print_module_info(ddecp, "ddecp")
+
+format = MS_MDCT_DualFormat.from_pretrained(model_path, subfolder="format")
+x_ref = []
+for n_psd_freqs in ddecp.config.in_psd_num_freqs:
+    x_ref.append(torch.randn(1, 3, n_psd_freqs, 64))
+_, x_ref_sigma = ddecp.get_x_ref_noise(x_ref, format)
+print("x_ref bin sigma:")
+print(x_ref_sigma[0].flatten())
 
 if input("Save module? (y/n) ").lower() == 'y':
     ddecp.save_pretrained(model_path, subfolder="ddecp")
