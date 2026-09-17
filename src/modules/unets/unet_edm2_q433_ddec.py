@@ -69,6 +69,7 @@ class UNetConfig(DualDiffusionUNetConfig):
     channel_mult_noise: Optional[float] = 1    # Multiplier for noise embedding dimensionality.
     channel_mult_emb: Optional[float]   = 1    # Multiplier for final embedding dimensionality.
     channels_per_head: int    = 128          # Number of channels per attention head.
+    qk_channels_per_head: Optional[int] = None
     num_layers_per_block: int = 12           # Number of resnet blocks per resolution.
     label_balance: float      = 0.5          # Balance between noise embedding (0) and class embedding (1).
     balance_logits_offset: float = -4
@@ -90,6 +91,7 @@ class Block(torch.nn.Module):
         mlp_groups: int        = 8,        # Number of groups for the MLP.
         emb_linear_groups: int = 8,
         channels_per_head: int = 128,       # Number of channels per attention head.
+        qk_channels_per_head: Optional[int] = 16,
         adg_min_balance: Optional[float]  = 0.1,
         adg_max_balance: Optional[float]  = 0.9,
         adg_weight_decay: Optional[float] = None,
@@ -107,6 +109,7 @@ class Block(torch.nn.Module):
         self.clip_act = clip_act
         self.num_freqs = num_freqs
         self.use_attention = use_attention
+        self.qk_channels_per_head = qk_channels_per_head if qk_channels_per_head is not None else channels_per_head
 
         inner_channels = out_channels * mlp_multiplier
 
@@ -126,9 +129,9 @@ class Block(torch.nn.Module):
             min_balance=adg_min_balance, max_balance=adg_max_balance, weight_decay=adg_weight_decay)
 
         if self.use_attention == True:
-            
-            self.attn_q = MPConv(out_channels, out_channels, kernel=(1,1), groups=mlp_groups)
-            self.attn_k = MPConv(out_channels, out_channels, kernel=(1,1), groups=mlp_groups)
+
+            self.attn_q = MPConv(out_channels, self.qk_channels_per_head * mlp_groups, kernel=(1,1), groups=mlp_groups)
+            self.attn_k = MPConv(out_channels, self.qk_channels_per_head * mlp_groups, kernel=(1,1), groups=mlp_groups)
             self.attn_v = MPConv(out_channels, out_channels, kernel=(1,1), groups=mlp_groups)
             self.attn_proj = MPConv(out_channels, out_channels, kernel=(1,1), groups=mlp_groups)
 
@@ -159,8 +162,8 @@ class Block(torch.nn.Module):
             q: torch.Tensor = self.attn_q(y).permute(0, 3, 2, 1)
             k: torch.Tensor = self.attn_k(y).permute(0, 3, 2, 1)
             v: torch.Tensor = self.attn_v(y).permute(0, 3, 2, 1)
-            q = q.reshape(B, W, H, self.mlp_groups, self.channels_per_head)
-            k = k.reshape(B, W, H, self.mlp_groups, self.channels_per_head)
+            q = q.reshape(B, W, H, self.mlp_groups, self.qk_channels_per_head)
+            k = k.reshape(B, W, H, self.mlp_groups, self.qk_channels_per_head)
             v = v.reshape(B, W, H, self.mlp_groups, self.channels_per_head)
             q = normalize(q, dim=4)
             k = normalize(k, dim=4)
@@ -189,6 +192,7 @@ class UNet(DualDiffusionUNet):
                         "emb_linear_groups": config.emb_linear_groups,
                         "balance_logits_offset": config.balance_logits_offset,
                         "channels_per_head": config.channels_per_head,
+                        "qk_channels_per_head": config.qk_channels_per_head,
                         "adg_min_balance": config.adg_min_balance,
                         "adg_max_balance": config.adg_max_balance,
                         "adg_weight_decay": config.adg_weight_decay}
