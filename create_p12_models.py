@@ -26,14 +26,14 @@ if input("Save module? (y/n) ").lower() == 'y':
     dae.save_pretrained(model_path, subfolder="dae")
     print(f"Saved model to {model_path}/dae")
 
-from modules.unets.unet_edm2_q432_ddec import UNet, UNetConfig
-ddecp = UNet(UNetConfig(x_ref_sigma_scale=0.5, x_ref_noise_mel_density_pow=-0.5))
+from modules.unets.unet_edm2_q433_ddec import UNet, UNetConfig
+ddecp = UNet(UNetConfig())
 print_module_info(ddecp, "ddecp")
 
-format = MS_MDCT_DualFormat.from_pretrained(model_path, subfolder="format")
-x_ref_sigma = ddecp.config.x_ref_sigma_scale * format.get_mel_density(ddecp.config.in_num_freqs, pow=ddecp.config.x_ref_noise_mel_density_pow, normalize=True).float()
-print("x_ref sigma:")
-print(x_ref_sigma.flatten())
+#format = MS_MDCT_DualFormat.from_pretrained(model_path, subfolder="format")
+#x_ref_sigma = ddecp.config.x_ref_sigma_scale * format.get_mel_density(ddecp.config.in_num_freqs, pow=ddecp.config.x_ref_noise_mel_density_pow, normalize=True).float()
+#print("x_ref sigma:")
+#print(x_ref_sigma.flatten())
 
 if input("Save module? (y/n) ").lower() == 'y':
     ddecp.save_pretrained(model_path, subfolder="ddecp")
