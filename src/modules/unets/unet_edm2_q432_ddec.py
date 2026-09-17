@@ -332,7 +332,7 @@ class UNet(DualDiffusionUNet):
 
             x_ref, x_ref_noise = x_ref.float().chunk(2, dim=1)
             x_ref_sigma = self.config.x_ref_sigma_scale * mel_density
-            x_ref = (x_ref + x_ref_noise * x_ref_sigma) / (x_ref_sigma**2 + 1).pow(0.5)
+            x_ref = (x_ref + x_ref_noise * x_ref_sigma) / (x_ref_sigma**2 + 1) ** 0.5
             
             x_ref = self.conv_x_ref_in(x_ref.to(dtype=torch.bfloat16))
             if self.psd_freqs_per_freq == 2:
