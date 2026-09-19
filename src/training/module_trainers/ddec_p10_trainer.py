@@ -60,6 +60,7 @@ class DiffusionDecoder_Trainer_Config(ModuleTrainerConfig):
     sigreg_loss_warmup_steps: int     = 350
 
     dae_attack_mse_loss_weight: float = 0
+    ddec_cond_kl_loss_weight: float = 0
     
     use_mss_1d_loss: bool = False
     mss_1d_loss_weight: float          = 0.5
@@ -131,6 +132,8 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
                 self.unet_trainer = UNetTrainer(UNetTrainerConfig(**config.unet), trainer, self.dae.unet, "unet")
             else:
                 self.unet_trainer = None
+
+            self.logger.info(f"ddec_cond KL loss weight: {self.config.ddec_cond_kl_loss_weight}")
 
         if self.train_ddecp == True:
             assert self.config.mel_density_loss_weight_pow_ddecp >= 0
@@ -266,6 +269,17 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
                     unet_loss_weight = self.config.unet_loss_start_weight * (1 - t) + self.config.unet_loss_weight * t
                 logs["loss"] = logs["loss"] + dae_unet_batch_loss * unet_loss_weight
                 logs["loss_weight/dae_unet"] = unet_loss_weight
+
+            if self.config.ddec_cond_kl_loss_weight > 0:
+                mel_density = self.format.get_mel_density(ddec_cond.shape[2], pow=self.config.mel_density_loss_weight_pow_ddecp, normalize=True).float().squeeze(-1)
+                ddec_cond_mean = ddec_cond.mean(dim=3)
+                ms_psd_mean = ms_psd_scaled.mean(dim=3)
+                ddec_cond_var = ddec_cond.var(dim=3) + 1e-4
+                ms_psd_var = ms_psd_scaled.var(dim=3) + 1e-4
+                logs["loss/ddec_cond_kl"] = 0.5 * (ddec_cond_var / ms_psd_var + ((ddec_cond_mean - ms_psd_mean)**2) / ms_psd_var - 1 + torch.log(ms_psd_var) - torch.log(ddec_cond_var))
+                logs["loss/ddec_cond_kl"] = (logs["loss/ddec_cond_kl"] * mel_density).mean(dim=(1,2))
+                logs["loss_weight/ddec_cond_kl"] = self.config.ddec_cond_kl_loss_weight
+                logs["loss"] = logs["loss"] + logs["loss/ddec_cond_kl"] * self.config.ddec_cond_kl_loss_weight
 
             latents_sigreg_loss_weight = self.config.latents_sigreg_loss_weight
             if self.trainer.global_step < self.config.sigreg_loss_warmup_steps:
