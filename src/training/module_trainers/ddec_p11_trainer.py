@@ -107,6 +107,8 @@ class DiffusionDecoder_Trainer_Config(ModuleTrainerConfig):
     latents_sigreg_loss_weight: float = 0
     sigreg_loss_warmup_steps: int = 350
 
+    ddec_cond_kl_loss_weight: float = 0
+
     use_mss_1d_loss: bool = False
     mss_1d_loss_weight: float          = 0.5
     mss_1d_cepstrum_loss_weight: float = 0.5
@@ -166,6 +168,8 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
         if self.train_dae == True:
             self.logger.info(f"SIGReg loss weight: {self.config.latents_sigreg_loss_weight} (warmup steps: {self.config.sigreg_loss_warmup_steps})")
             self.logger.info(f"SIGReg config: {dict_str(self.config.sigreg)}")
+
+            self.logger.info(f"ddec_cond KL loss weight: {self.config.ddec_cond_kl_loss_weight}")
 
             if config.use_mss_2d_loss == True:
                 self.mss_2d = MSSLoss2D(MSSLoss2DConfig(**config.mss_2d), device=trainer.accelerator.device)
@@ -312,6 +316,23 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
                     unet_loss_weight = self.config.unet_loss_start_weight * (1 - t) + self.config.unet_loss_weight * t
                 logs["loss"] = logs["loss"] + logs["loss/unet"] * unet_loss_weight
                 logs["loss_weight/unet"] = unet_loss_weight
+
+            if self.config.ddec_cond_kl_loss_weight > 0:
+                
+                ddec_cond_kl_loss = torch.zeros_like(logs["loss"])
+                for i, (_ddec_cond, _ms_psd) in enumerate(zip(ddec_cond, ms_psd)):
+                    mel_density = self.format.get_mel_density(_ddec_cond.shape[2], pow=self.config.mel_density_loss_weight_pow_ddecp, normalize=True).float().squeeze(-1)
+                    _ddec_cond_mean = _ddec_cond.mean(dim=3)
+                    _ms_psd_mean = _ms_psd.mean(dim=3)
+                    _ddec_cond_var = _ddec_cond.var(dim=3) + 1e-4
+                    _ms_psd_var = _ms_psd.var(dim=3) + 1e-4
+                    logs[f"loss/ddec_cond_kl_{i}"] = 0.5 * (_ddec_cond_var / _ms_psd_var + ((_ddec_cond_mean - _ms_psd_mean)**2) / _ms_psd_var - 1 + torch.log(_ms_psd_var) - torch.log(_ddec_cond_var))
+                    logs[f"loss/ddec_cond_kl_{i}"] = (logs[f"loss/ddec_cond_kl_{i}"] * mel_density).mean(dim=(1,2))
+                    ddec_cond_kl_loss = ddec_cond_kl_loss + logs[f"loss/ddec_cond_kl_{i}"] / len(ddec_cond)
+                    logs[f"loss/ddec_cond_kl_{i}"] = logs[f"loss/ddec_cond_kl_{i}"].detach()
+
+                logs["loss_weight/ddec_cond_kl"] = self.config.ddec_cond_kl_loss_weight
+                logs["loss"] = logs["loss"] + ddec_cond_kl_loss * self.config.ddec_cond_kl_loss_weight
 
             latents_sigreg_loss_weight = self.config.latents_sigreg_loss_weight
             if self.trainer.global_step < self.config.sigreg_loss_warmup_steps:
