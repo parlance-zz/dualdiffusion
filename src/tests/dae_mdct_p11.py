@@ -34,7 +34,7 @@ from modules.embeddings.clap import CLAP_Embedding
 from pipelines.dual_diffusion_pipeline import DualDiffusionPipeline, SampleParams
 from modules.unets.unet_edm2_q4112_ddec import UNet
 from modules.embeddings.clap import CLAP_Embedding
-from modules.daes.dae_edm2_q411 import DAE
+from modules.daes.dae_edm2_q4112 import DAE
 from modules.formats.ms_mdct_dual_9 import MS_MDCT_DualFormat
 from modules.mp_tools import mp_sum
 from utils.dual_diffusion_utils import (
@@ -83,7 +83,9 @@ def dae_test() -> None:
 
     last_global_step_ddecp = ddecp.config.last_global_step if ddecp is not None else 0
     
-    output_path = os.path.join(model_path, "output", "dae", f"step_{last_global_step}_ddecp_{last_global_step_ddecp}")
+    output_prefix = f"step_{last_global_step}_ddecp_{last_global_step_ddecp}"
+    output_path = os.path.join(model_path, "output", "dae", output_prefix)
+
     os.makedirs(output_path, exist_ok=True)
 
     model_metadata = {"model_metadata": dict_str(pipeline.model_metadata)}
@@ -185,7 +187,7 @@ def dae_test() -> None:
             else:
                 latents = dae.encode(dae_input, dae_embedding)
                 latents: torch.Tensor = latents.float()
-            
+
             if latents is not None:
                 latents_mean = latents.mean().item()
                 latents_var = latents.var().item()
@@ -217,18 +219,24 @@ def dae_test() -> None:
         if ddecp is not None:
 
             ddecp_x_ref = ddec_cond if ddec_cond is not None else input_ms_psd
+
+            x_ref_noise, x_ref_sigma = ddecp.get_x_ref_noise(ddecp_x_ref, format)
+            ddecp_x_ref = ddecp.add_x_ref_noise(ddecp_x_ref, x_ref_noise, x_ref_sigma)
             
             ddecp_params = SampleParams(
                 seed=5000,
-                num_steps=50, length=audio_len, cfg_scale=0, input_perturbation=1, input_perturbation_offset=0,
-                use_heun=False, schedule="cos", rho=1, sigma_max=1000, sigma_min=1e-3, stereo_fix=0, img_align_ref=None
+                num_steps=50, length=audio_len, cfg_scale=0, input_perturbation=1, input_perturbation_offset=100,
+                use_heun=False, schedule="cos", rho=1, sigma_max=50, sigma_min=1e-2, stereo_fix=0, img_align_ref=None
             )
 
+            input_mdct_phase_flattened, input_mdct_psd_flattened = input_mdct_phase_psd_flattened.chunk(2, dim=1)
             output_ddecp = pipeline.diffusion_decode(
                 ddecp_params, audio_embedding=audio_embedding,
-                sample_shape=input_mdct_phase_psd_flattened.shape,
+                #sample_shape=input_mdct_phase_psd_flattened.shape,
+                sample_shape=input_mdct_phase_flattened.shape,
                 x_ref=ddecp_x_ref, module=ddecp).float()
 
+            output_ddecp = torch.cat([output_ddecp, input_mdct_psd_flattened], dim=1)
             output_ddecp = format.unflatten_mdct_phase_psd(output_ddecp)
             decode_level = -1
             if decode_level >= 0:
@@ -252,7 +260,7 @@ def dae_test() -> None:
         if latents is not None:
             align_ref = (input_ms_psd[-1] - input_ms_psd[-1].amin())
             latents_img = dae.latents_to_img(latents, align_ref=align_ref)
-            save_img(latents_img, os.path.join(output_path, "1", f"step_{last_global_step}_{filename.replace(file_ext, '_latents.png')}"))
+            save_img(latents_img, os.path.join(output_path, "1", f"{output_prefix}_{filename.replace(file_ext, '_latents.png')}"))
 
             if test_params.get("latents_img_save_collage", False) == True:
                 if collage_img is None:
@@ -263,8 +271,8 @@ def dae_test() -> None:
         if output_mel_spec is not None:
             output_mel_spec.clip_(input_mel_spec.amin(), input_mel_spec.amax())
             output_mel_spec[0, 0, 0, 0] = input_mel_spec.amin(); output_mel_spec[0, 0, 0, 1] = input_mel_spec.amax()
-            save_img(format.mel_spec.mel_spec_to_img(input_mel_spec), os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_mel_spec_input.png')}"))
-            save_img(format.mel_spec.mel_spec_to_img(output_mel_spec), os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_mel_spec_output.png')}"))
+            save_img(format.mel_spec.mel_spec_to_img(input_mel_spec), os.path.join(output_path, f"{output_prefix}_{filename.replace(file_ext, '_mel_spec_input.png')}"))
+            save_img(format.mel_spec.mel_spec_to_img(output_mel_spec), os.path.join(output_path, f"{output_prefix}_{filename.replace(file_ext, '_mel_spec_output.png')}"))
 
         if ddec_cond is not None and test_params.get("dae_bypass", False) == False:
             
@@ -273,20 +281,20 @@ def dae_test() -> None:
             #    _ddec_cond[0, 0, 0, 0] = _input_ms_psd.amin(); _ddec_cond[0, 0, 0, 1] = _input_ms_psd.amax()
 
             for i, psd_img in enumerate(format.ms_psd_to_img(ddec_cond)):
-                save_img(psd_img, os.path.join(output_path, "2", f"step_{last_global_step}_{filename.replace(file_ext, f'_ms_psd_{i}_cond.png')}"))
+                save_img(psd_img, os.path.join(output_path, "2", f"{output_prefix}_{filename.replace(file_ext, f'_ms_psd_{i}_cond.png')}"))
 
         if ddec_cond is not None:
             #save_img(format.ms_psd_to_img(input_ms_psd), os.path.join(output_path, "2", f"step_{last_global_step}_{filename.replace(file_ext, f'_ms_psd_scaled_input.png')}"))
             for i, psd_img in enumerate(format.ms_psd_to_img(input_ms_psd)):
-                save_img(psd_img, os.path.join(output_path, "2", f"step_{last_global_step}_{filename.replace(file_ext, f'_ms_psd_{i}_input.png')}"))
+                save_img(psd_img, os.path.join(output_path, "2", f"{output_prefix}_{filename.replace(file_ext, f'_ms_psd_{i}_input.png')}"))
 
         if output_raw is not None:
-            output_flac_file_path = os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_decoded.flac')}")
+            output_flac_file_path = os.path.join(output_path, f"{output_prefix}_{filename.replace(file_ext, '_decoded.flac')}")
             save_audio(output_raw, sample_rate, output_flac_file_path, metadata=metadata, target_lufs=test_params["output_lufs"])
             print(f"Saved flac output to {output_flac_file_path}")
 
         if copy_sample_source_files == True:
-            output_flac_file_path = os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_source.flac')}")
+            output_flac_file_path = os.path.join(output_path, f"{output_prefix}_{filename.replace(file_ext, '_source.flac')}")
             save_audio(source_raw_sample, sample_rate, output_flac_file_path, metadata=metadata, target_lufs=test_params["output_lufs"])
             print(f"Saved flac output to {output_flac_file_path}")
 
@@ -296,8 +304,8 @@ def dae_test() -> None:
         print(f"Latents avg var: {avg_latents_var / len(test_samples)}")
 
     if collage_img is not None:
-        save_img(collage_img, os.path.join(output_path, "1", f"_step_{last_global_step}_collage.png"))
-        print(f"Saved latents collage to {os.path.join(output_path, '1', f'_step_{last_global_step}_collage.png')}")
+        save_img(collage_img, os.path.join(output_path, "1", f"{output_prefix}_collage.png"))
+        print(f"Saved latents collage to {os.path.join(output_path, '1', f'{output_prefix}_collage.png')}")
 
 if __name__ == "__main__":
 

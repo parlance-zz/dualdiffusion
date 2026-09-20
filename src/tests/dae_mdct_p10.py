@@ -89,7 +89,8 @@ def dae_test() -> None:
     last_global_step_ddecm = ddecm.config.last_global_step if ddecm is not None else 0
     last_global_step_ddecp = ddecp.config.last_global_step if ddecp is not None else 0
     
-    output_path = os.path.join(model_path, "output", "dae", f"step_{last_global_step}_ddecm_{last_global_step_ddecm}_ddecp_{last_global_step_ddecp}")
+    output_prefix = f"step_{last_global_step}_ddecm_{last_global_step_ddecm}_ddecp_{last_global_step_ddecp}"
+    output_path = os.path.join(model_path, "output", "dae", output_prefix)
 
     os.makedirs(output_path, exist_ok=True)
 
@@ -240,23 +241,32 @@ def dae_test() -> None:
         if ddecp is not None:
 
             if output_ddecm is None:
-                ddecp_x_ref = input_ms_psd_scaled + torch.randn_like(input_ms_psd_scaled) * test_params.get("add_ddecp_x_ref_noise", 0)
+                ddecp_x_ref = input_ms_psd_scaled
             else:
-                ddecp_x_ref = output_ddecm + torch.randn_like(output_ddecm) * 0.08
+                ddecp_x_ref = output_ddecm
 
-            ddecp_x_ref = format.unscale_ms_psd(ddecp_x_ref)
+            #ddecp_x_ref /= 0.98**0.5
+            ddecp_x_ref = torch.cat([ddecp_x_ref, torch.randn_like(ddecp_x_ref)], dim=1)
+
+            input_mdct_phase, input_mdct_psd = input_mdct_phase_psd.chunk(2, dim=1)
             
             ddecp_params = SampleParams(
                 seed=5000,
-                num_steps=30, length=audio_len, cfg_scale=0, input_perturbation=0, input_perturbation_offset=0,
-                use_heun=True, schedule="cos", rho=1, sigma_max=1000, sigma_min=1e-3, stereo_fix=0, img_align_ref=input_mdct_psd
+                #num_steps=50, length=audio_len, cfg_scale=0, input_perturbation=0, input_perturbation_offset=100,
+                #use_heun=False, schedule="ln_linear", rho=1, sigma_max=50, sigma_min=1e-3, stereo_fix=0, img_align_ref=input_mdct_psd
+
+                num_steps=50, length=audio_len, cfg_scale=0, input_perturbation=1, input_perturbation_offset=100,
+                use_heun=False, schedule="cos", rho=2, sigma_max=50, sigma_min=1e-2, stereo_fix=0, img_align_ref=input_mdct_psd
             )
 
             output_ddecp = pipeline.diffusion_decode(
                 ddecp_params, audio_embedding=audio_embedding,
-                sample_shape=input_mdct_phase_psd.shape,
+                #sample_shape=input_mdct_phase_psd.shape,
+                sample_shape=input_mdct_phase.shape,
                 x_ref=ddecp_x_ref, module=ddecp).float()
-
+            
+            #output_ddecp, _ = output_ddecp.chunk(2, dim=1)
+            output_ddecp = torch.cat([output_ddecp, input_mdct_psd], dim=1)
             output_raw = format.mdct_phase_psd_to_raw(output_ddecp)
             output_mel_spec = format.mel_spec.raw_to_mel_spec(output_raw)
             output_mdct_psd = format.raw_to_mdct_psd(output_raw)
@@ -274,7 +284,7 @@ def dae_test() -> None:
         if latents is not None:
             align_ref = (input_ms_psd_scaled - input_ms_psd_scaled.amin())
             latents_img = dae.latents_to_img(latents, align_ref=align_ref)
-            save_img(latents_img, os.path.join(output_path, "1", f"step_{last_global_step}_{filename.replace(file_ext, '_latents.png')}"))
+            save_img(latents_img, os.path.join(output_path, "1", f"{output_prefix}_{filename.replace(file_ext, '_latents.png')}"))
 
             if test_params.get("latents_img_save_collage", False) == True:
                 if collage_img is None:
@@ -285,41 +295,43 @@ def dae_test() -> None:
         if output_mel_spec is not None:
             output_mel_spec.clip_(input_mel_spec.amin(), input_mel_spec.amax())
             output_mel_spec[0, 0, 0, 0] = input_mel_spec.amin(); output_mel_spec[0, 0, 0, 1] = input_mel_spec.amax()
-            save_img(format.mel_spec.mel_spec_to_img(input_mel_spec), os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_mel_spec_input.png')}"))
-            save_img(format.mel_spec.mel_spec_to_img(output_mel_spec), os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_mel_spec_output.png')}"))
+            save_img(format.mel_spec.mel_spec_to_img(input_mel_spec), os.path.join(output_path, f"{output_prefix}_{filename.replace(file_ext, '_mel_spec_input.png')}"))
+            save_img(format.mel_spec.mel_spec_to_img(output_mel_spec), os.path.join(output_path, f"{output_prefix}_{filename.replace(file_ext, '_mel_spec_output.png')}"))
 
         if ddec_cond is not None and test_params.get("dae_bypass", False) == False:
             
             ddec_cond.clip_(input_ms_psd_scaled.amin(), input_ms_psd_scaled.amax())
             ddec_cond[0, 0, 0, 0] = input_ms_psd_scaled.amin(); ddec_cond[0, 0, 0, 1] = input_ms_psd_scaled.amax()
-            save_img(format.ms_psd_to_img(ddec_cond), os.path.join(output_path, "2", f"step_{last_global_step}_{filename.replace(file_ext, f'_ms_psd_scaled_cond.png')}"))
+            save_img(format.ms_psd_to_img(ddec_cond), os.path.join(output_path, "2", f"{output_prefix}_{filename.replace(file_ext, f'_ms_psd_scaled_cond.png')}"))
 
-            #save_img(dae.latents_to_img(ddec_cond, align_ref=align_ref), os.path.join(output_path, "3", f"step_{last_global_step}_{filename.replace(file_ext, f'_ms_psd_scaled_cond.png')}"))
+            #save_img(dae.latents_to_img(ddec_cond, align_ref=align_ref), os.path.join(output_path, "3", f"{output_prefix}_{filename.replace(file_ext, f'_ms_psd_scaled_cond.png')}"))
 
             #ddec_cond_error = ddec_cond - input_ms_psd_scaled
             #save_img(format.ms_psd_to_img(ddec_cond_error), os.path.join(output_path, "2", f"step_{last_global_step}_{filename.replace(file_ext, f'_ms_psd_scaled_cond_error.png')}"))
 
         #if (ddec_cond is not None and test_params.get("dae_bypass", False) == False) or (output_ddecm is not None):
         if ddec_cond is not None or output_ddecm is not None:
-            save_img(format.ms_psd_to_img(input_ms_psd_scaled), os.path.join(output_path, "2", f"step_{last_global_step}_{filename.replace(file_ext, f'_ms_psd_scaled_input.png')}"))
+            save_img(format.ms_psd_to_img(input_ms_psd_scaled), os.path.join(output_path, "2", f"{output_prefix}_{filename.replace(file_ext, f'_ms_psd_scaled_input.png')}"))
 
-        if output_ddecm is not None and output_raw is not None:
-            output_ddecm = format.scale_ms_psd(format.raw_to_ms_psd(output_raw))
-            output_ddecm.clip_(input_ms_psd_scaled.amin(), input_ms_psd_scaled.amax())
-            output_ddecm[0, 0, 0, 0] = input_ms_psd_scaled.amin(); output_ddecm[0, 0, 0, 1] = input_ms_psd_scaled.amax()
-            save_img(format.ms_psd_to_img(output_ddecm), os.path.join(output_path, "2", f"step_{last_global_step}_{filename.replace(file_ext, f'_ms_psd_scaled_output.png')}"))
+        #if output_ddecm is not None and output_raw is not None:
+        #    output_ddecm = format.scale_ms_psd(format.raw_to_ms_psd(output_raw))
+        #    output_ddecm.clip_(input_ms_psd_scaled.amin(), input_ms_psd_scaled.amax())
+        #    output_ddecm[0, 0, 0, 0] = input_ms_psd_scaled.amin(); output_ddecm[0, 0, 0, 1] = input_ms_psd_scaled.amax()
+        #    save_img(format.ms_psd_to_img(output_ddecm), os.path.join(output_path, "2", f"{output_prefix}_{filename.replace(file_ext, f'_ms_psd_scaled_output.png')}"))
 
-        if output_mdct_psd is not None:
-            save_img(tensor_to_img(input_mdct_psd, flip_y=True),  os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_mdct_psd_input.png')}"))
-            save_img(tensor_to_img(output_mdct_psd, flip_y=True), os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_mdct_psd_output.png')}"))
+        #if output_mdct_psd is not None:
+        #    output_mdct_psd.clip_(input_mdct_psd.amin(), input_mdct_psd.amax())
+        #    output_mdct_psd[0, 0, 0, 0] = input_mdct_psd.amin(); output_mdct_psd[0, 0, 0, 1] = input_mdct_psd.amax()
+        #    save_img(tensor_to_img(input_mdct_psd, flip_y=True),  os.path.join(output_path, f"{output_prefix}_{filename.replace(file_ext, '_mdct_psd_input.png')}"))
+        #    save_img(tensor_to_img(output_mdct_psd, flip_y=True), os.path.join(output_path, f"{output_prefix}_{filename.replace(file_ext, '_mdct_psd_output.png')}"))
 
         if output_raw is not None:
-            output_flac_file_path = os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_decoded.flac')}")
+            output_flac_file_path = os.path.join(output_path, f"{output_prefix}_{filename.replace(file_ext, '_decoded.flac')}")
             save_audio(output_raw, sample_rate, output_flac_file_path, metadata=metadata, target_lufs=test_params["output_lufs"])
             print(f"Saved flac output to {output_flac_file_path}")
 
         if copy_sample_source_files == True:
-            output_flac_file_path = os.path.join(output_path, f"step_{last_global_step}_{filename.replace(file_ext, '_source.flac')}")
+            output_flac_file_path = os.path.join(output_path, f"{output_prefix}_{filename.replace(file_ext, '_source.flac')}")
             save_audio(source_raw_sample, sample_rate, output_flac_file_path, metadata=metadata, target_lufs=test_params["output_lufs"])
             print(f"Saved flac output to {output_flac_file_path}")
 
@@ -329,8 +341,8 @@ def dae_test() -> None:
         print(f"Latents avg var: {avg_latents_var / len(test_samples)}")
 
     if collage_img is not None:
-        save_img(collage_img, os.path.join(output_path, "1", f"_step_{last_global_step}_collage.png"))
-        print(f"Saved latents collage to {os.path.join(output_path, '1', f'_step_{last_global_step}_collage.png')}")
+        save_img(collage_img, os.path.join(output_path, "1", f"{output_prefix}_collage.png"))
+        print(f"Saved latents collage to {os.path.join(output_path, '1', f'{output_prefix}_collage.png')}")
 
 if __name__ == "__main__":
 
