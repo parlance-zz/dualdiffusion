@@ -411,6 +411,51 @@ class MPConv(torch.nn.Module):
         return x
 
     @torch.no_grad()
+    def _init_weight_1d_spatial(
+        self,
+        in_channels_per_freq: int,
+        out_channels_per_freq: int,
+        in_num_freqs: int,
+        out_num_freqs: int,
+    ) -> None:
+        """Initialize a dense 1x1 projection in-place while preserving the
+        frequency-spatial alignment and randomizing the channel coefficients inside each
+        matched band.
+        """
+
+        weight = self.weight
+
+        if weight.ndim != 4:
+            raise ValueError(f"Expected 4D weight tensor, got shape {tuple(weight.shape)}")
+        if weight.shape[2:] != (1, 1):
+            raise ValueError(f"This initializer is only valid for 1x1 kernels, got {tuple(weight.shape)}")
+
+        out_channels = out_channels_per_freq * out_num_freqs
+        in_channels = in_channels_per_freq * in_num_freqs
+        if weight.shape[0] != out_channels or weight.shape[1] != in_channels:
+            raise ValueError(
+                f"Weight shape {tuple(weight.shape)} does not match "
+                f"expected ({out_channels}, {in_channels}, 1, 1)"
+            )
+
+        weight.zero_()
+        for out_f in range(out_num_freqs):
+            in_f_lo = int(math.floor(out_f * in_num_freqs / out_num_freqs))
+            in_f_hi = int(math.ceil((out_f + 1) * in_num_freqs / out_num_freqs))
+            in_f_lo = max(0, min(in_f_lo, in_num_freqs))
+            in_f_hi = max(in_f_lo, min(in_f_hi, in_num_freqs))
+
+            in_start = in_f_lo * in_channels_per_freq
+            in_end = in_f_hi * in_channels_per_freq
+
+            out_start = out_f * out_channels_per_freq
+            out_end = out_start + out_channels_per_freq
+            block = torch.randn(out_end - out_start, in_end - in_start, device=weight.device, dtype=weight.dtype)
+            weight[out_start:out_end, in_start:in_end, 0, 0] = block
+
+        self.normalize_weights()
+
+    @torch.no_grad()
     def normalize_weights(self) -> None:
         if self.disable_weight_norm == False:
             self.weight.copy_(normalize(self.weight))
