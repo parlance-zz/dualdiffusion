@@ -439,20 +439,39 @@ class MPConv(torch.nn.Module):
             )
 
         weight.zero_()
-        for out_f in range(out_num_freqs):
-            in_f_lo = int(math.floor(out_f * in_num_freqs / out_num_freqs))
-            in_f_hi = int(math.ceil((out_f + 1) * in_num_freqs / out_num_freqs))
-            in_f_lo = max(0, min(in_f_lo, in_num_freqs))
-            in_f_hi = max(in_f_lo, min(in_f_hi, in_num_freqs))
 
-            in_start = in_f_lo * in_channels_per_freq
-            in_end = in_f_hi * in_channels_per_freq
+        # patchify_2d / unpatchify_2d flatten as channel-major, frequency-minor.
+        # Each output row should therefore live in the matching channel block and cover
+        # the corresponding mapped frequency span within that block.
+        out_rows = torch.arange(out_channels, device=weight.device)
+        out_c = out_rows // out_num_freqs
+        out_f = out_rows % out_num_freqs
 
-            out_start = out_f * out_channels_per_freq
-            out_end = out_start + out_channels_per_freq
-            block = torch.randn(out_end - out_start, in_end - in_start, device=weight.device, dtype=weight.dtype)
-            weight[out_start:out_end, in_start:in_end, 0, 0] = block
+        in_c = torch.clamp((out_c.float() * in_channels_per_freq / out_channels_per_freq).round().long(), 0, in_channels_per_freq - 1)
+        in_f_lo = torch.floor(out_f.float() * in_num_freqs / out_num_freqs).long()
+        in_f_hi = torch.ceil((out_f.float() + 1) * in_num_freqs / out_num_freqs).long()
+        in_f_lo = torch.clamp(in_f_lo, 0, in_num_freqs)
+        in_f_hi = torch.clamp(in_f_hi, 0, in_num_freqs)
 
+        in_start = in_c * in_num_freqs + in_f_lo
+        in_end = in_c * in_num_freqs + in_f_hi
+        spans = in_end - in_start
+
+        max_span = int(spans.max().item())
+        if max_span == 0:
+            self.normalize_weights()
+            return
+
+        col_idx = torch.arange(max_span, device=weight.device).unsqueeze(0).expand(out_channels, -1)
+        valid = col_idx < spans.unsqueeze(1)
+        src = in_start.unsqueeze(1) + col_idx
+        src = torch.where(valid, src, 0)
+
+        rows = out_rows.unsqueeze(1).expand(-1, max_span)[valid]
+        cols = src[valid]
+        vals = torch.randn(rows.numel(), device=weight.device, dtype=weight.dtype)
+
+        weight[rows, cols, 0, 0] = vals
         self.normalize_weights()
 
     @torch.no_grad()
