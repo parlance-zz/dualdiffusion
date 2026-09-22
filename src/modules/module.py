@@ -39,6 +39,8 @@ from training.ema import reconstruct_phema
 class DualDiffusionModuleConfig(ABC):
     last_global_step: int = 0
 
+    serial_num: Optional[str] = None
+
 class DualDiffusionModule(torch.nn.Module, ABC):
     
     config_class: Optional[Type[DualDiffusionModuleConfig]] = None
