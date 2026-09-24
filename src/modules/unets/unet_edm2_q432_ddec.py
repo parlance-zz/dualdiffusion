@@ -324,6 +324,8 @@ class UNet(DualDiffusionUNet):
             emb = mp_silu(mp_sum(emb, embeddings, t=self.config.label_balance))
         emb = emb[:, :, None, None].to(dtype=torch.bfloat16)
 
+        hidden_states: list[torch.Tensor] = []
+
         if self.config.in_channels_x_ref > 0:
             if self.config.x_ref_noise_mel_density_pow != 0:
                 mel_density = format.get_mel_density(x_ref.shape[-2], pow=self.config.x_ref_noise_mel_density_pow, normalize=True).float()
@@ -331,6 +333,10 @@ class UNet(DualDiffusionUNet):
                 mel_density = 1
 
             x_ref, x_ref_noise = x_ref.float().chunk(2, dim=1)
+
+            if return_hidden_states == True:
+                hidden_states.append(x_ref)
+
             x_ref_sigma = self.config.x_ref_sigma_scale * mel_density
             x_ref = (x_ref + x_ref_noise * x_ref_sigma) / (x_ref_sigma**2 + 1) ** 0.5
             
@@ -341,7 +347,6 @@ class UNet(DualDiffusionUNet):
             assert x_ref is None
 
         # encoder
-        hidden_states: list[torch.Tensor] = []
         skips = []
         for name, block in self.enc.items():
             if "conv" in name:
@@ -369,6 +374,7 @@ class UNet(DualDiffusionUNet):
         hidden_states.append(x)
 
         D_x: torch.Tensor = c_skip * x_in.float() + c_out * x.float()
+        hidden_states.append(D_x)
 
         if return_hidden_states == False:
             return D_x, self.get_sigma_loss_logvar(sigma)
