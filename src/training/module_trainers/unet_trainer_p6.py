@@ -295,7 +295,6 @@ class UNetTrainer(ModuleTrainer):
             logs = {}; ext_logs = {}
         
             loss = torch.zeros(samples.shape[0], device=samples.device)
-            state_loss_weight = torch.ones(samples.shape[0], device=samples.device)
 
             for i, (x, y) in enumerate(zip(output_hidden_states, target_hidden_states)):
                 x: torch.Tensor; y: torch.Tensor
@@ -309,13 +308,8 @@ class UNetTrainer(ModuleTrainer):
                 state_loss = (state_loss * mel_density).mean(dim=(2,3)) / (y.pow(2) * mel_density).mean(dim=(2,3)).clip(min=1e-4)
                 state_loss = state_loss.mean(dim=1)
 
-                logs[f"loss_weight/hidden_state_{i}"] = state_loss_weight.mean()
-                loss = loss + state_loss * state_loss_weight.detach()
+                loss = loss + state_loss
                 logs[f"loss/hidden_state_{i}"] = state_loss.detach()
-
-                with torch.no_grad():
-                    state_loss_weight = state_loss_weight * (1 - state_loss.clip(min=0, max=1))**0.5
-                    state_loss_weight = state_loss_weight.clip(min=1e-2)
 
             bucket_log_loss = loss.detach()
             logs[f"loss/{self.flavor}"] = loss

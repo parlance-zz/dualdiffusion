@@ -38,6 +38,7 @@ print_module_info(ddecp, "ddecp")
 #x_ref_sigma = ddecp.config.x_ref_sigma_scale * format.get_mel_density(ddecp.config.in_num_freqs, pow=ddecp.config.x_ref_noise_mel_density_pow, normalize=True).float()
 #print("x_ref sigma:")
 #print(x_ref_sigma.flatten())
+#exit()
 
 if input("Save module? (y/n) ").lower() == 'y':
     ddecp.save_pretrained(model_path, subfolder="ddecp")
