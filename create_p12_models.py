@@ -14,7 +14,7 @@ print(f"Saving new modules to {model_path}...")
 #embedding = CLAP_Embedding(CLAP_Config())
 #embedding.save_pretrained(model_path, subfolder="embedding")
 
-from modules.daes.dae_edm2_q432 import DAE, DAE_Config
+from modules.daes.dae_edm2_q432b import DAE, DAE_Config
 from modules.unets.unet_edm2_p6 import UNetConfig
 #unet_cfg = UNetConfig(num_layers_per_block=12, in_channels=512, out_channels=512)
 unet_cfg=None
@@ -27,7 +27,7 @@ if input("Save module? (y/n) ").lower() == 'y':
     dae.save_pretrained(model_path, subfolder="dae")
     print(f"Saved model to {model_path}/dae")
 
-from modules.unets.unet_edm2_q433_ddec import UNet, UNetConfig
+from modules.unets.unet_edm2_q432_ddec import UNet, UNetConfig
 serial = seed_and_get_module_serial_num()
 ddecp = UNet(UNetConfig())
 ddecp.config.serial_num = serial

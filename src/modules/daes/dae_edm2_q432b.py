@@ -60,6 +60,50 @@ def residual_channel_to_space_dup(x: torch.Tensor, out_channels: int, factor: in
     x = x.repeat_interleave(repeats, dim=1)
     return torch.nn.functional.pixel_shuffle(x, factor)
 
+def make_patchified_conv1x1_weight(c_out: int, c_in: int,
+                                   patch_size_in: int, patch_size_out: int,
+                                   base_weight: Optional[torch.Tensor] = None) -> torch.Tensor:
+    """
+    Build a conv2d weight for a patchified tensor (patch_w == 1, so its height is 1)
+    that applies the SAME pointwise transform at every position, while also resampling
+    the folded (formerly height) axis from patch_size_in rows to patch_size_out rows.
+
+    Folded channel order ("channels are major"):
+        input  folded channel = c * patch_size_in  + i   (i = original input row)
+        output folded channel = a * patch_size_out + f   (f = output row)
+
+    Each output row f is connected to exactly ONE input row i = g(f), and the (c_out, c_in)
+    block of weights for that pair equals base_weight for every f - i.e. each output
+    pixel sees exactly one input pixel, with weights replicated across all positions.
+
+    Downsample (patch_size_in  = r * patch_size_out): g(f) = r * f    (strided)
+    Upsample   (patch_size_out = r * patch_size_in ): g(f) = f // r   (nearest/duplicate)
+
+    Returns:
+        Weight of shape (c_out * patch_size_out, c_in * patch_size_in, 1, 1) for F.conv2d.
+    """
+    if base_weight is None:
+        base_weight = torch.randn(c_out, c_in)
+    if base_weight.shape != (c_out, c_in):
+        raise ValueError(f"base_weight must have shape ({c_out}, {c_in})")
+
+    weight = base_weight.new_zeros(c_out * patch_size_out, c_in * patch_size_in)
+
+    if patch_size_in % patch_size_out == 0:                      # downsample
+        r = patch_size_in // patch_size_out
+        in_row_of_out_row = [r * f for f in range(patch_size_out)]
+    elif patch_size_out % patch_size_in == 0:                    # upsample
+        r = patch_size_out // patch_size_in
+        in_row_of_out_row = [f // r for f in range(patch_size_out)]
+    else:
+        raise ValueError("patch sizes must be integer multiples of each other")
+
+    for f, i in enumerate(in_row_of_out_row):
+        # rows {a*P_out + f} for all a, cols {b*P_in + i} for all b  ->  (c_out, c_in) block
+        weight[f::patch_size_out, i::patch_size_in] = base_weight
+
+    return weight.reshape(c_out * patch_size_out, c_in * patch_size_in, 1, 1).contiguous()
+
 @dataclass
 class DAE_Config(DualDiffusionDAEConfig):
 
@@ -278,13 +322,9 @@ class DAE(DualDiffusionDAE):
             if level == 0:
                 self.enc[f"conv_in"] = MPConv(cin * config.in_psd_freqs, cout * config.in_num_freqs, kernel=(1,1))
 
-                self.enc["conv_in"]._init_weight_1d_spatial(
-                    in_channels_per_freq=self.config.in_channels,
-                    out_channels_per_freq=enc_channels[0],
-                    in_num_freqs=self.config.in_psd_freqs,
-                    out_num_freqs=self.config.in_num_freqs,
-                )
-
+                with torch.no_grad():
+                    self.enc["conv_in"].weight.copy_(make_patchified_conv1x1_weight(
+                        cout, cin, config.in_psd_freqs, config.in_num_freqs))
             else:
                 self.enc[f"block{level}_down"] = Block(level, cin, cout, cemb,
                     use_attention=level in config.attn_levels, flavor="enc", resample_mode="down", **block_kwargs)
@@ -322,12 +362,9 @@ class DAE(DualDiffusionDAE):
         self.conv_out = MPConv(cout * config.in_num_freqs, self.config.out_channels * config.in_psd_freqs, kernel=(1,1))
         self.out_gain = torch.nn.Parameter(torch.ones([]))
 
-        self.conv_out._init_weight_1d_spatial(
-            in_channels_per_freq=dec_channels[0],
-            out_channels_per_freq=self.config.out_channels,
-            in_num_freqs=self.config.in_num_freqs,
-            out_num_freqs=self.config.in_psd_freqs,
-        )
+        with torch.no_grad():
+            self.conv_out.weight.copy_(make_patchified_conv1x1_weight(
+                self.config.out_channels, cout, config.in_num_freqs, config.in_psd_freqs))
 
         if config.unet is not None:
             self.unet = UNet(config.unet)
@@ -345,13 +382,9 @@ class DAE(DualDiffusionDAE):
     
     def get_latent_shape(self, mel_spec_shape: Union[torch.Size, tuple[int, int, int, int]]) -> torch.Size:
         if len(mel_spec_shape) == 4:
-            if self.config.use_1d_latents == True:
-                return (mel_spec_shape[0], self.config.latent_channels, 1,
-                        mel_spec_shape[3] // 2 ** (self.num_levels-1))
-            else:
-                return (mel_spec_shape[0], self.config.latent_channels,
-                        mel_spec_shape[2] // self.psd_freqs_per_freq // 2 ** (self.num_levels-1),
-                        mel_spec_shape[3] // 2 ** (self.num_levels-1))
+            return (mel_spec_shape[0], self.config.latent_channels,
+                    mel_spec_shape[2] // self.psd_freqs_per_freq // 2 ** (self.num_levels-1),
+                    mel_spec_shape[3] // 2 ** (self.num_levels-1))
         else:
             raise ValueError(f"Invalid sample shape: {mel_spec_shape}")
         
@@ -437,18 +470,10 @@ class DAE(DualDiffusionDAE):
 
     def latents_to_img(self, latents: torch.Tensor, **kwargs) -> ndarray:
         
-        if self.config.use_1d_latents == True:
+        if self.config.latent_channels > 8:
+            latents = unpatchify_2d(latents, latents.shape[1]//8, 1)
 
-            latents = latents.reshape(latents.shape[0], latents.shape[1] // 4, 4, latents.shape[3])
-            latents = latents.permute(0, 2, 1, 3).contiguous()
-            
-            return super().latents_to_img(latents, img_split_stereo=False, **kwargs)
-        else:
-
-            if self.config.latent_channels > 8:
-                latents = unpatchify_2d(latents, latents.shape[1]//8, 1)
-
-            return super().latents_to_img(latents, img_split_stereo=False, **kwargs)
+        return super().latents_to_img(latents, img_split_stereo=False, **kwargs)
 
     def tiled_encode(self, x: torch.Tensor, embeddings: torch.Tensor, max_chunk: int = 6144, overlap: int = 256) -> torch.Tensor:
 
