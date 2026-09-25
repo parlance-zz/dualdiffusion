@@ -371,10 +371,12 @@ class UNet(DualDiffusionUNet):
                 hidden_states.append(x)
 
         x: torch.Tensor = self.conv_out(x, gain=self.out_gain)
-        hidden_states.append(x)
+        if return_hidden_states == True:
+            hidden_states.append(x)
 
         D_x: torch.Tensor = c_skip * x_in.float() + c_out * x.float()
-        hidden_states.append(D_x)
+        #if return_hidden_states == True:
+        #    hidden_states.append(D_x)
 
         if return_hidden_states == False:
             return D_x, self.get_sigma_loss_logvar(sigma)
