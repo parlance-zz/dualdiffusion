@@ -312,7 +312,7 @@ class UNetTrainer(ModuleTrainer):
                 logs[f"loss/hidden_state_{i}"] = state_loss.detach()
 
             bucket_log_loss = loss.detach()
-            logs[f"loss/{self.flavor}"] = loss
+            logs[f"loss/{self.flavor}"] = loss / len(output_hidden_states)
 
             ext_logs = {
                 "denoised": denoised,
