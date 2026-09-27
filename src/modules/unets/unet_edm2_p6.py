@@ -337,7 +337,8 @@ class UNet(DualDiffusionUNet):
         
         # Embedding.
         emb: torch.Tensor = self.emb_noise(self.emb_fourier(c_noise))
-        emb = mp_sum(emb, embeddings.to(dtype=emb.dtype), t=self.config.label_balance)
+        if self.config.in_channels_emb > 0:
+            emb = mp_sum(emb, embeddings.to(dtype=emb.dtype), t=self.config.label_balance)
         emb = mp_silu(emb).unsqueeze(2).unsqueeze(3).to(dtype=torch.bfloat16)
 
         # build rope tables
