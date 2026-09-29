@@ -100,12 +100,12 @@ def compare_dirs(output_path: str, dir1: str, dir2: str,
 
 if __name__ == "__main__":
 
-    target_path = "/home/parlance/dualdiffusion/models/edm2_ddec_mclt4/ddec_checkpoint-19557/src"
+    target_path = "/home/parlance/dualdiffusion/models/edm2_dae_p4/old_checkpoints/_new_best_1.5d_long_ddecm_ddecp/ddecm_ddecp_checkpoint-52416_best/src"
     output_path = "/home/parlance/dualdiffusion/debug/compare_dirs"
     diff_output = compare_dirs(
         os.path.join(output_path, "diff_output.diff"),
-        "/home/parlance/dualdiffusion/src",
-        target_path, ignore_patterns=["*.pyc"])
+        target_path, "/home/parlance/dualdiffusion/src",
+        ignore_patterns=["*.pyc"])
     
     print(diff_output)
 

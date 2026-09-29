@@ -36,24 +36,25 @@ from typing import Union, Optional, Literal
 import torch
 
 from modules.unets.unet import DualDiffusionUNet, DualDiffusionUNetConfig
-from modules.mp_tools import MPFourier, MPConv, mp_cat, mp_silu, mp_sum, normalize, resample_2d
+from modules.mp_tools import MPFourier, MPConv, mp_cat, mp_silu, mp_sum, normalize, resample_2d, patchify_2d
 from modules.formats.format import DualDiffusionFormat
 
 
 @dataclass
-class UNet_Config(DualDiffusionUNetConfig):
+class UNetConfig(DualDiffusionUNetConfig):
 
-    in_channels:  int = 2
-    out_channels: int = 2
+    in_channels:  int = 4
+    out_channels: int = 4
     in_channels_emb: int = 0
+    in_channels_x_ref: int = 9
 
-    in_num_freqs: int = 256
-    in_psd_freqs: int = 2048
+    in_num_freqs: int = 192
+    in_psd_freqs: int = 768
 
-    model_channels: int  = 32                # Base multiplier for the number of channels.
+    model_channels: int  = 64                # Base multiplier for the number of channels.
     logvar_channels: int = 192               # Number of channels for training uncertainty estimation.
-    channel_mult: list[int]    = (1,2,3,4,5) # Per-resolution multipliers for the number of channels.
-    double_midblock: bool      = True
+    channel_mult: list[int]    = (1,2,3,4)   # Per-resolution multipliers for the number of channels.
+    double_midblock: bool      = False
     midblock_attn: bool        = False
     channel_mult_noise: Optional[int] = 4    # Multiplier for noise embedding dimensionality.
     channel_mult_emb: Optional[int]   = 4    # Multiplier for final embedding dimensionality.
@@ -116,15 +117,23 @@ class Block(torch.nn.Module):
             kernel=(1,1), groups=emb_linear_groups) if emb_channels != 0 else None
         
         if self.use_attention:
-            raise NotImplementedError()
+            self.attn_q = MPConv(out_channels, out_channels, kernel=(1,1))
+            self.attn_k = MPConv(out_channels, out_channels, kernel=(1,1))
+            self.attn_v = MPConv(out_channels, out_channels, kernel=(1,1))
+            self.attn_proj = MPConv(out_channels, out_channels, kernel=(1,1))
+
+            self.emb_gain_qkv = torch.nn.Parameter(torch.zeros([]))
+            self.emb_linear_qkv = MPConv(emb_channels, out_channels, kernel=(1,1))
 
     def forward(self, x: torch.Tensor, emb: torch.Tensor) -> torch.Tensor:
         
-        x = resample_2d(x, mode=self.resample_mode)
-
         if self.flavor == "enc":
             if self.conv_skip is not None:
                 x = self.conv_skip(x)
+
+        x = resample_2d(x, mode=self.resample_mode)
+
+        if self.flavor == "enc":
             x = normalize(x, dim=1) # pixel norm
 
         y = self.conv_res0(mp_silu(x))
@@ -142,7 +151,24 @@ class Block(torch.nn.Module):
         x = mp_sum(x, y, t=self.res_balance)
         
         if self.use_attention:
-            raise NotImplementedError()
+            c = self.emb_linear_qkv(emb, gain=self.emb_gain_qkv) + 1.
+            y = x * c
+
+            # bizarrely this is way faster than doing a single qkv projection, and uses less memory (with compile)
+            q: torch.Tensor = self.attn_q(y)
+            k: torch.Tensor = self.attn_k(y)
+            v: torch.Tensor = self.attn_v(y)
+            q = q.reshape(q.shape[0], self.num_heads, -1, y.shape[2] * y.shape[3])
+            k = k.reshape(k.shape[0], self.num_heads, -1, y.shape[2] * y.shape[3])
+            v = v.reshape(v.shape[0], self.num_heads, -1, y.shape[2] * y.shape[3])
+            q = normalize(q, dim=2).transpose(-1, -2)
+            k = normalize(k, dim=2).transpose(-1, -2)
+            v = normalize(v, dim=2).transpose(-1, -2)
+
+            y = torch.nn.functional.scaled_dot_product_attention(q, k, v).transpose(-1, -2)
+
+            y = self.attn_proj(y.reshape(*x.shape))
+            x = mp_sum(x, y, t=self.attn_balance)
 
         if self.clip_act is not None:
             x = x.clip_(-self.clip_act, self.clip_act)
@@ -151,7 +177,7 @@ class Block(torch.nn.Module):
 
 class UNet(DualDiffusionUNet):
 
-    def __init__(self, config: UNet_Config) -> None:
+    def __init__(self, config: UNetConfig) -> None:
         super().__init__()
         self.config = config
 
@@ -166,20 +192,21 @@ class UNet(DualDiffusionUNet):
         cblock = [config.model_channels * x for x in config.channel_mult]
         cnoise = config.model_channels * config.channel_mult_noise if config.channel_mult_noise is not None else max(cblock)
         cemb = config.model_channels * config.channel_mult_emb if config.channel_mult_emb is not None else max(cblock)
-        cemb *= self.config.mlp_multiplier
 
         self.num_levels = len(config.channel_mult)
 
-        assert config.in_psd_freqs % config.in_num_freqs == 0
-        self.psd_freqs_per_freq = config.in_psd_freqs // config.in_num_freqs
+        if self.config.in_psd_freqs > 0:
+            assert config.in_psd_freqs % config.in_num_freqs == 0
+            assert config.in_channels_x_ref > 0
+            self.psd_freqs_per_freq = config.in_psd_freqs // config.in_num_freqs
+        else:
+            self.psd_freqs_per_freq = None
+            assert config.in_channels_x_ref == 0
         
         # Embedding.
-        assert config.in_channels_emb == 0
-
         self.emb_fourier = MPFourier(cnoise)
         self.emb_noise = MPConv(cnoise, cemb, kernel=())
         self.emb_label = MPConv(config.in_channels_emb, cemb, kernel=()) if config.in_channels_emb > 0 else None
-        self.emb_label_unconditional = MPConv(1, cemb, kernel=()) if config.in_channels_emb > 0 else None
 
         # Training uncertainty estimation.
         self.logvar_fourier = MPFourier(config.logvar_channels)
@@ -187,19 +214,26 @@ class UNet(DualDiffusionUNet):
         self.logvar_linear.weight.data.fill_(0)
 
         # Encoder.
+        if config.in_channels_x_ref > 0:
+            self.emb_x_ref_linear = MPConv(cemb, config.in_channels_x_ref * self.psd_freqs_per_freq, kernel=(1,1))
+            self.emb_x_ref_gain = torch.nn.Parameter(torch.zeros([]))
+            self.conv_x_ref_in = MPConv(config.in_channels_x_ref * self.psd_freqs_per_freq, cblock[0], kernel=(3,3))
+            self.x_ref_balance = torch.nn.Parameter(torch.zeros([]))
+        else:
+            self.x_ref_balance = self.emb_x_ref_linear = self.conv_x_ref_in = None
+        
         self.enc = torch.nn.ModuleDict()
-        cout = config.in_channels + self.psd_freqs_per_freq * 2
+        cin = config.in_channels
 
         for level, channels in enumerate(cblock):
             
             num_freqs = config.in_num_freqs // 2**level
+            cout = channels
 
             if level == 0:
-                cin = cout
-                cout = channels
                 self.enc[f"conv_in"] = MPConv(cin, cout, kernel=(3,3), bias=True)
             else:
-                self.enc[f"block{level}_down"] = Block(level, cout, cout, cemb, num_freqs,
+                self.enc[f"block{level}_down"] = Block(level, cin, cout, cemb, num_freqs,
                     use_attention=level in config.attn_levels, flavor="enc", resample_mode="down", **block_kwargs)
             
             for idx in range(config.num_layers_per_block):
@@ -237,9 +271,9 @@ class UNet(DualDiffusionUNet):
 
     def get_embeddings(self, emb_in: torch.Tensor, conditioning_mask: torch.Tensor) -> torch.Tensor:
         if self.config.in_channels_emb > 0:
-            u_embedding = self.emb_label_unconditional(torch.ones(1, device=self.device, dtype=self.dtype))
             c_embedding = self.emb_label(normalize(emb_in).to(device=self.device, dtype=self.dtype))
-            return mp_sum(u_embedding, c_embedding, t=conditioning_mask.unsqueeze(1).to(self.device, self.dtype))
+            u_embedding = torch.zeros_like(c_embedding)
+            return mp_sum(u_embedding, c_embedding, t=conditioning_mask.unsqueeze(1).to(u_embedding.dtype))
         else:
             return None
         
@@ -255,7 +289,8 @@ class UNet(DualDiffusionUNet):
                 format: DualDiffusionFormat,
                 embeddings: torch.Tensor,
                 x_ref: Optional[torch.Tensor] = None,
-                perturbed_input: Optional[torch.Tensor] = None) -> torch.Tensor:
+                perturbed_input: Optional[torch.Tensor] = None,
+                conditioning_mask: Optional[torch.Tensor] = None) -> torch.Tensor:
 
         with torch.no_grad():
             sigma = sigma.view(-1, 1, 1, 1)
@@ -266,29 +301,44 @@ class UNet(DualDiffusionUNet):
             c_in = 1 / (self.config.sigma_data ** 2 + sigma ** 2).sqrt()
             c_noise = (sigma.flatten().log() / 4).to(self.dtype)
 
-            B,C,_,W = x_ref.shape
-            x_ref = x_ref.view(B, C, self.config.in_num_freqs, self.psd_freqs_per_freq, W)
-            x_ref = x_ref.permute(0, 3, 1, 2, 4).reshape(B, self.psd_freqs_per_freq * C, self.config.in_num_freqs, W).to(dtype=torch.bfloat16)
-
             if perturbed_input is not None:
                 x = (c_in * perturbed_input).to(dtype=torch.bfloat16)
             else:
                 x = (c_in * x_in).to(dtype=torch.bfloat16)
-                
-            x = mp_cat(x, x_ref, t=self.config.label_balance)
 
             emb = self.emb_fourier(c_noise)
-
+        
         # embedding
+        if conditioning_mask is not None: # nuisance due to ddp wrapper limitations
+            assert self.training == True
+            embeddings = self.get_embeddings(embeddings, conditioning_mask)
+        else:
+            assert self.training == False
+
         emb = self.emb_noise(emb)
         if self.config.in_channels_emb > 0:
             emb = mp_silu(mp_sum(emb, embeddings, t=self.config.label_balance))
         emb = emb[:, :, None, None].to(dtype=torch.bfloat16)
 
+        if self.config.in_channels_x_ref > 0:
+            if self.psd_freqs_per_freq > 1:
+                x_ref = patchify_2d(x_ref, self.psd_freqs_per_freq, 1)
+
+            c = self.emb_x_ref_linear(emb, gain=self.emb_x_ref_gain) + 1
+            x_ref = self.conv_x_ref_in(x_ref.to(dtype=torch.bfloat16) * c)
+        else:
+            assert x_ref is None
+
         # encoder
         skips = []
         for name, block in self.enc.items():
-            x = block(x) if "conv" in name else block(x, emb)
+            if "conv" in name:
+                x = block(x)
+                
+                if self.config.in_channels_x_ref > 0:
+                    x = mp_sum(x, x_ref, t=self.x_ref_balance.sigmoid())
+            else:
+                x = block(x, emb)
             skips.append(x)
 
         # decoder
@@ -300,5 +350,5 @@ class UNet(DualDiffusionUNet):
         x: torch.Tensor = self.conv_out(x, gain=self.out_gain)
         D_x: torch.Tensor = c_skip * x_in.float() + c_out * x.float()
 
-        return D_x
+        return D_x, self.get_sigma_loss_logvar(sigma)
     

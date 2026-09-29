@@ -39,6 +39,8 @@ from training.ema import reconstruct_phema
 class DualDiffusionModuleConfig(ABC):
     last_global_step: int = 0
 
+    serial_num: Optional[str] = None
+
 class DualDiffusionModule(torch.nn.Module, ABC):
     
     config_class: Optional[Type[DualDiffusionModuleConfig]] = None
@@ -145,8 +147,9 @@ class DualDiffusionModule(torch.nn.Module, ABC):
     def compile(self, **kwargs) -> None:
         if type(self).supports_compile == True:
             self.forward = torch.compile(self.forward, **kwargs)
-            if hasattr(self, "normalize_weights") and self.training == True:
-                self.normalize_weights = torch.compile(self.normalize_weights, **kwargs)
+            # this is disabled because it can cause weights to diverge by small amounts in distributed training
+            #if hasattr(self, "normalize_weights") and self.training == True:
+            #    self.normalize_weights = torch.compile(self.normalize_weights, **kwargs)
 
     @torch.no_grad()
     @TF32_Disabled()

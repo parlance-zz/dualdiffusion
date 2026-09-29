@@ -55,6 +55,15 @@ def top_pca_components(x: torch.Tensor, n_pca: int = 4) -> torch.Tensor:
     
     return result
 
+def pca_align_ref(pca: torch.Tensor, ref: torch.Tensor) -> torch.Tensor:
+    
+    ref = torch.nn.functional.interpolate(ref, pca.shape[2:], mode="area").mean(dim=1, keepdim=True)
+
+    alignment0 = ( pca * ref).mean(dim=(2,3), keepdim=True)
+    alignment1 = (-pca * ref).mean(dim=(2,3), keepdim=True)
+
+    return torch.where(alignment0 > alignment1, -pca, pca)
+
 @dataclass
 class DualDiffusionDAEConfig(DualDiffusionModuleConfig, ABC):
 
@@ -68,6 +77,10 @@ class DualDiffusionDAEConfig(DualDiffusionModuleConfig, ABC):
     latents_img_use_pca: bool      = True
     latents_img_channel_order: Optional[tuple[int]] = (1, 3, 2, 0)
     latents_img_flip_stereo: bool = False
+    latents_img_brightness: Optional[float] = 1
+    latents_img_contrast: Optional[float] = 0.94
+    latents_img_saturation: Optional[float] = 1.13
+    latents_img_gamma: Optional[float] = 1.46
 
 class DualDiffusionDAE(DualDiffusionModule, ABC):
 
@@ -114,7 +127,7 @@ class DualDiffusionDAE(DualDiffusionModule, ABC):
             self.decode = torch.compile(self.decode, **kwargs)
             self.forward = torch.compile(self.forward, **kwargs)
 
-    def latents_to_img(self, latents: torch.Tensor, img_split_stereo: Optional[bool] = None) -> ndarray:
+    def latents_to_img(self, latents: torch.Tensor, img_split_stereo: Optional[bool] = None, align_ref: Optional[torch.Tensor] = None) -> ndarray:
         
         if img_split_stereo is None:
             img_split_stereo = self.config.latents_img_split_stereo
@@ -126,8 +139,21 @@ class DualDiffusionDAE(DualDiffusionModule, ABC):
             latents = torch.cat((latents[:, 0::2], latents[:, 1::2]), dim=2)
         
         if self.config.latents_img_use_pca == True:
-            return tensor_to_img(top_pca_components(latents.float()),
-                flip_y=True, channel_order=self.config.latents_img_channel_order)
+            pca = top_pca_components(latents.float())
+            if align_ref is not None:
+                pca = pca_align_ref(pca, align_ref)
+            latents = pca
+        
+        return tensor_to_img(latents, flip_y=True, channel_order=self.config.latents_img_channel_order,
+            brightness=self.config.latents_img_brightness, contrast=self.config.latents_img_contrast,
+            saturation=self.config.latents_img_saturation, gamma=self.config.latents_img_gamma)
+        
+    def ddec_cond_to_img(self, ddec_cond: torch.Tensor, align_ref: Optional[torch.Tensor] = None) -> ndarray:
+        
+        if ddec_cond.shape[1] > 3:
+            pca = top_pca_components(ddec_cond.float())
+            if align_ref is not None:
+                pca = pca_align_ref(pca, align_ref)
+            return tensor_to_img(pca, flip_y=True, channel_order=self.config.latents_img_channel_order)
         else:
-            return tensor_to_img(latents, flip_y=True,
-                channel_order=self.config.latents_img_channel_order)
+            return tensor_to_img(ddec_cond, flip_y=True)

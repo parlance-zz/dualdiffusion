@@ -169,9 +169,12 @@ def reconstruct_phema(out_std: float, phema_path: str, quiet: bool = False) -> d
 
     # solve coefficients for desired std
     out_n_processed = max([ema["n_processed"] for ema in emas]) # just assume we want to use all available emas for now
-    ph_coefs = solve_posthoc_coefficients(
-        np.array([ema["n_processed"] for ema in emas]),
-        np.array([ema["std"] for ema in emas]), np.array([out_n_processed]), np.array([out_std]))
+    if out_std > 0:
+        ph_coefs = solve_posthoc_coefficients(
+            np.array([ema["n_processed"] for ema in emas]),
+            np.array([ema["std"] for ema in emas]), np.array([out_n_processed]), np.array([out_std]))
+    else: # if out_std <= 0, just use an equally-weighted average of all emas
+        ph_coefs = np.ones((len(emas), 1)) / len(emas)
 
     # combine weighted combination of emas with calculated coefficients
     progress_bar = tqdm(total=len(emas)) if quiet == False else None

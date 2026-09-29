@@ -1,0 +1,332 @@
+# MIT License
+#
+# Copyright (c) 2023 Christopher Friesen
+#
+# Permission is hereby granted, free of charge, to any person obtaining a copy
+# of this software and associated documentation files (the "Software"), to deal
+# in the Software without restriction, including without limitation the rights
+# to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+# copies of the Software, and to permit persons to whom the Software is
+# furnished to do so, subject to the following conditions:
+# 
+# The above copyright notice and this permission notice shall be included in all
+# copies or substantial portions of the Software.
+# 
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+# SOFTWARE.
+
+from dataclasses import dataclass
+from typing import Literal, Optional
+
+import torch
+import numpy as np
+
+from modules.formats.frequency_scale import get_mel_density
+
+import torch
+
+
+def sketch2_2d(x1: torch.Tensor, x2: torch.Tensor, max_sketches: Optional[int] = None,
+        normalize: bool = True, generator: torch.Generator | None = None) -> tuple[torch.Tensor, torch.Tensor]:
+    """
+    Apply the same random Gaussian CxC channel-mixing matrix to two image-like tensors.
+
+    Args:
+        x1: Tensor of shape (B, C, H, W)
+        x2: Tensor of shape (B, C, H, W)
+        normalize: If True, scales the random matrix by 1/sqrt(C)
+        generator: Optional torch.Generator for reproducibility
+
+    Returns:
+        (y1, y2): transformed tensors, each of shape (B, C, H, W)
+    """
+    if x1.ndim != 4 or x2.ndim != 4:
+        raise ValueError("x1 and x2 must both have shape (B, C, H, W)")
+    if x1.shape != x2.shape:
+        raise ValueError("x1 and x2 must have the same shape")
+
+    B, C, H, W = x1.shape
+    device = x1.device
+    dtype = x1.dtype
+
+    if x2.device != device:
+        raise ValueError("x1 and x2 must be on the same device")
+    if x2.dtype != dtype:
+        raise ValueError("x1 and x2 must have the same dtype")
+
+    n_sketches = min(C, max_sketches) if max_sketches is not None else C
+    G = torch.randn(n_sketches, C, device=device, dtype=dtype, generator=generator)
+    if normalize:
+        G = G / C ** 0.5
+
+    # mix channels: for each pixel, new_channel_values = G @ old_channel_values
+    y1 = torch.einsum("ij,bjhw->bihw", G, x1)
+    y2 = torch.einsum("ij,bjhw->bihw", G, x2)
+
+    return y1, y2
+
+def _is_prime(n: int) -> bool:
+    if n <= 1:
+        return False
+    if n <= 3:
+        return True
+    if n % 2 == 0 or n % 3 == 0:
+        return False
+    i = 5
+    while i * i <= n:
+        if n % i == 0 or n % (i + 2) == 0:
+            return False
+        i += 6
+    return True
+
+@dataclass
+class MSSLoss2DConfig:
+
+    block_low:  int = 7 #5
+    block_high: int = 254
+
+    block_sampling_replace: bool = True
+    block_sampling_scale: Literal["linear", "ln_linear", "natural"] = "ln_linear"
+
+    num_iterations: int = 1          # 10 if use_complex_loss
+    midside_probability: float = 0.5 # 0 if use_complex_loss
+    psd_eps: float = 1e-4
+    loss_scale: float = 3            # 1 if use_complex_loss
+
+    sample_rate: float = 32000
+    mel_density_pow: float = 0
+    loss_weight_pow : float = 0.5
+    use_complex_loss: bool = False
+    use_sketching: bool = False     # True if use_complex_loss
+    max_sketches: Optional[int] = None
+    gaussian_window_t_scale: float = 2.26
+
+    disable_window_caching: bool = True
+    increase_cuda_fft_plan_cache: bool = False
+
+class MSSLoss2D:
+
+    @torch.no_grad()
+    def __init__(self, config: MSSLoss2DConfig, device: torch.device) -> None:
+
+        self.config = config
+        self.device = device
+
+        primes = [i for i in range(self.config.block_low, self.config.block_high+1) if _is_prime(i)]
+
+        n = 25000
+
+        if self.config.block_sampling_scale == "ln_linear":
+            targets = np.exp(np.linspace(np.log(self.config.block_low), np.log(self.config.block_high), n))
+        elif self.config.block_sampling_scale == "linear":
+            targets = np.linspace(self.config.block_low, self.config.block_high, n)
+        else:
+            if self.config.block_sampling_scale != "natural":
+                raise ValueError(f"Invalid block_sampling_scale: {self.config.block_sampling_scale}")
+
+        if self.config.block_sampling_scale == "natural":
+            block_sizes = primes
+            block_weights = [1.] * len(primes)
+        else:
+            spaced_primes = []
+            for t in targets:
+                closest = min(primes, key=lambda p: abs(p - t))
+                spaced_primes.append(closest)
+
+            block_sizes = []
+            block_weights = []
+
+            for b in sorted(set(spaced_primes)):
+                count = spaced_primes.count(b)
+
+                block_sizes.append(b)
+                block_weights.append(float(count))
+
+        self.block_sizes = np.array(block_sizes)
+        self.block_weights = np.array(block_weights)
+        self.block_weights /= self.block_weights.sum()
+
+        for i in range(len(self.block_sizes)):
+            print(f"Block size: {self.block_sizes[i]:3d} Weight: {(self.block_weights[i]*100):.3f}%")
+        print(f"total unique block sizes: {len(block_sizes)}\n")
+
+        if config.increase_cuda_fft_plan_cache == True:
+            torch.backends.cuda.cufft_plan_cache.max_size = len(block_sizes)**2 * 2 + 250 # slight performance boost if fft plans are cached
+            
+        self.windows: dict[tuple[int, int], torch.Tensor] = {}
+        self.loss_scale = config.loss_scale / self.config.num_iterations
+
+    @torch.no_grad()
+    def _flat_top_window(self, x: torch.Tensor) -> torch.Tensor:
+        return (0.21557895 - 0.41663158 * torch.cos(x) + 0.277263158 * torch.cos(2*x)
+                - 0.083578947 * torch.cos(3*x) + 0.006947368 * torch.cos(4*x))
+
+    @torch.no_grad()
+    def _gaussian_window(self, window_len: int) -> torch.Tensor:
+        t = torch.linspace(-self.config.gaussian_window_t_scale,
+            self.config.gaussian_window_t_scale, window_len, device=self.device)
+        return (-torch.pi * t.pow(2)).exp()
+    
+    @torch.no_grad()
+    def get_flat_top_window_2d(self, width: int, height: int, supersample: int = 9, supersample_threshold: int = 256) -> torch.Tensor:
+
+        if (width, height) in self.windows:
+            return self.windows[width, height]
+
+        supersample_x = 1 if width  >= supersample_threshold else supersample
+        supersample_y = 1 if height >= supersample_threshold else supersample
+
+        block_width  = width  * supersample_x
+        block_height = height * supersample_y
+
+        if self.config.use_complex_loss == False:
+            hx = self._flat_top_window((torch.arange(block_height, device=self.device) + 0.5) / block_height * 2 * torch.pi)
+            wx = self._flat_top_window((torch.arange(block_width,  device=self.device) + 0.5) / block_width  * 2 * torch.pi)
+        else:
+            hx = self._gaussian_window(block_height)
+            wx = self._gaussian_window(block_width)
+
+        window = hx.view(1, 1,-1, 1) * wx.view(1, 1, 1,-1)
+        if supersample_x > 1 or supersample_y > 1:
+            supersample = (supersample_y, supersample_x)
+            window = torch.nn.functional.avg_pool2d(window, kernel_size=supersample, stride=supersample)
+        window /= window.square().mean().sqrt()
+
+        if self.config.disable_window_caching == False:
+            self.windows[width, height] = window
+        
+        return window
+
+    def stft2d(self, x: torch.Tensor, block_width: int, block_height: int, order: tuple[int],
+               step_w: int, step_h: int, window: torch.Tensor, offset_h: int, offset_w: int, end_offset_h: int, end_offset_w: int, midside: bool) -> torch.Tensor:
+        
+        x = x[:, :, offset_h:end_offset_h, offset_w:end_offset_w]
+        x = x.unfold(2, block_height, step_h).unfold(3, block_width, step_w)
+
+        x = torch.fft.rfft2(x * window, norm="ortho", dim=order)
+
+        if midside == True:
+            x = torch.fft.fft(x, dim=1, norm="ortho")
+
+        return x
+    
+    def mss_loss(self, sample: torch.Tensor, target: torch.Tensor,
+            leak_pow: Optional[float] = None, leak_max: Optional[float] = None, leak_t: Optional[torch.Tensor] = None) -> torch.Tensor:
+
+        if self.config.use_complex_loss == False:
+            if leak_t is not None:
+                sample = torch.lerp(sample, target.detach(), leak_t.view(-1, 1, 1, 1))
+            elif leak_pow is not None and leak_max is not None:  # useful at start of training for preventing polarity mismatch without complex loss
+                rnd_t = np.random.rand()**leak_pow * leak_max  # disable after ~200 steps for improved performance
+                sample = torch.lerp(sample, target.detach(), rnd_t)
+        
+        loss = torch.zeros(target.shape[0], device=self.device)
+
+        block_widths  = self.block_sizes[:np.flatnonzero(self.block_sizes <= sample.shape[3])[-1] + 1]
+        block_heights = self.block_sizes[:np.flatnonzero(self.block_sizes <= sample.shape[2])[-1] + 1]
+        block_width_weights  = self.block_weights[:len(block_widths)];  block_width_weights  = block_width_weights / block_width_weights.sum()
+        block_height_weights = self.block_weights[:len(block_heights)]; block_height_weights = block_height_weights / block_height_weights.sum()
+
+        static_pad_width  = int(block_widths[-1])
+        static_pad_height = int(block_heights[-1])
+        sample = torch.nn.functional.pad(sample, (static_pad_width, static_pad_width, static_pad_height, static_pad_height), mode="reflect")
+        target = torch.nn.functional.pad(target, (static_pad_width, static_pad_width, static_pad_height, static_pad_height), mode="reflect")
+
+        _sample = sample
+        _target = target
+
+        block_widths  = np.random.choice(block_widths, size=self.config.num_iterations,
+            replace=self.config.block_sampling_replace, p=block_width_weights)
+        block_heights = np.random.choice(block_heights, size=self.config.num_iterations,
+            replace=self.config.block_sampling_replace, p=block_height_weights)
+
+        for i in range(self.config.num_iterations):
+            
+            if self.config.use_sketching == True:
+                sample, target = sketch2_2d(_sample, _target, max_sketches=self.config.max_sketches)
+
+            block_width  = int(block_widths[i])
+            block_height = int(block_heights[i])
+
+            step_w = block_width
+            step_h = block_height
+            window = self.get_flat_top_window_2d(block_width, block_height)
+
+            offset_min_h = int(max(0, static_pad_height - block_height))
+            offset_max_h = int(max(offset_min_h, static_pad_height))
+            offset_h = int(np.random.randint(offset_min_h, offset_max_h + 1))
+            end_offset_h = -(static_pad_height - block_height) or None
+
+            offset_min_w = int(max(0, static_pad_width - block_width))
+            offset_max_w = int(max(offset_min_w, static_pad_width))
+            offset_w = int(np.random.randint(offset_min_w, offset_max_w + 1))
+            end_offset_w = -(static_pad_width - block_width) or None
+            
+            order = (-1, -2) if np.random.randint(0, 2) == 0 else (-2, -1)
+            midside = np.random.rand() < self.config.midside_probability
+            r_dims = (0, 2, 3) if midside == True else (0, 1, 2, 3)
+            #r_dims = (0, 3) if midside == True else (0, 1, 3)
+
+            with torch.no_grad():
+                target_fft = self.stft2d(target, block_width, block_height, order,
+                    step_w, step_h, window, offset_h, offset_w, end_offset_h, end_offset_w, midside)
+                target_fft_abs = target_fft.abs()
+                if self.config.loss_weight_pow > 0:
+                    loss_weight = target_fft_abs.pow(2).mean(dim=r_dims, keepdim=True).clip(min=self.config.psd_eps).pow(self.config.loss_weight_pow)
+                else:
+                    loss_weight = 1
+
+                if self.config.mel_density_pow > 0:
+                    hz = torch.linspace(0, 1, target_fft_abs.shape[2], device=self.device) * self.config.sample_rate/2
+                    mel_density = get_mel_density(hz).pow(self.config.mel_density_pow)
+                    mel_density /= mel_density.mean()
+                    loss_weight = loss_weight / mel_density.view(1, 1,-1, 1, 1, 1)
+
+            sample_fft = self.stft2d(sample, block_width, block_height, order,
+                step_w, step_h, window, offset_h, offset_w, end_offset_h, end_offset_w, midside)
+
+            if self.config.use_complex_loss == False:
+                sample_fft_abs = sample_fft.abs()
+                mse_loss = torch.nn.functional.mse_loss(sample_fft_abs.float(), target_fft_abs.float(), reduction="none")
+            else:
+                mse_loss = torch.nn.functional.mse_loss(sample_fft.real, target_fft.real, reduction="none") + \
+                           torch.nn.functional.mse_loss(sample_fft.imag, target_fft.imag, reduction="none")
+
+            loss = loss + (mse_loss / loss_weight).mean(dim=(1,2,3,4,5))
+
+        return loss * self.loss_scale
+
+
+if __name__ == "__main__":
+
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    config = MSSLoss2DConfig()
+    loss_fn = MSSLoss2D(config, device)
+
+    batch_size = 4
+    channels = 2
+    height = 64
+    width = 384
+
+    sample = torch.randn(batch_size, channels, height, width, device=device)
+    target = torch.randn(batch_size, channels, height, width, device=device)
+
+    loss = loss_fn.mss_loss(sample, target)
+    print("Loss:", loss)
+
+    from utils.dual_diffusion_utils import tensor_to_img, save_img
+    from utils import config
+    import os
+
+    output_path = os.path.join(config.DEBUG_PATH, "mss_2d_test")
+
+    for blk_sz in loss_fn.block_sizes:
+        window = loss_fn.get_flat_top_window_2d(blk_sz, blk_sz)
+        save_img(tensor_to_img(window), os.path.join(output_path, f"wndw_{blk_sz}.png"))
+        window.cpu().numpy().tofile(os.path.join(output_path, f"wndw_{blk_sz}.raw"))

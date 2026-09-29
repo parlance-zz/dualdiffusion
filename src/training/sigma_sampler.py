@@ -30,7 +30,7 @@ from scipy.special import erf
 from modules.unets.unet import DualDiffusionUNet
 
 
-SigmaSamplerDistribution: TypeAlias = Literal["ln_normal", "ln_sech", "ln_sech^2", "ln_linear", "ln_pdf", "scale_invariant", "linear"]
+SigmaSamplerDistribution: TypeAlias = Literal["ln_normal", "ln_sech", "ln_sech^2", "ln_linear", "ln_pdf", "linear"]
 
 @dataclass
 class SigmaSamplerConfig:
@@ -43,6 +43,7 @@ class SigmaSamplerConfig:
     dist_offset: float = 0.3
     dist_pdf: Optional[torch.Tensor] = None
     use_stratified_sigma_sampling: bool = True
+    use_stratified_sigma_shuffling: bool = False
     use_static_sigma_sampling: bool = False
     sigma_pdf_warmup_steps: int = 5000
     sigma_pdf_resolution: int = 127
@@ -77,8 +78,6 @@ class SigmaSampler():
             self.sample_fn = self.sample_ln_linear
         elif self.config.distribution == "linear":
             self.sample_fn = self.sample_linear
-        elif self.config.distribution == "scale_invariant":
-            self.sample_fn = self.sample_scale_invariant
         elif self.config.distribution == "ln_pdf":
             
             if self.config.dist_pdf is None:
@@ -103,6 +102,9 @@ class SigmaSampler():
             quantiles = self._sample_static_stratified(n_samples)
         elif self.config.use_stratified_sigma_sampling:
             quantiles = self._sample_uniform_stratified(n_samples)
+            if self.config.use_stratified_sigma_shuffling:
+                idx = torch.randperm(n_samples)
+                quantiles = quantiles[idx]
         else:
             quantiles = None
 
@@ -121,14 +123,6 @@ class SigmaSampler():
 
         ln_sigma = self.config.dist_offset + (self.config.dist_scale * 2**0.5) * (quantiles*2 - 1).erfinv().clip(min=-6, max=6)
         return ln_sigma.exp().clip(self.config.sigma_min, self.config.sigma_max)
-    
-    def sample_scale_invariant(self, n_samples: Optional[int] = None, quantiles: Optional[torch.Tensor] = None) -> torch.Tensor:
-        if quantiles is None:
-            quantiles = torch.rand(n_samples)
-
-        _min = 1/self.config.sigma_max**self.config.dist_scale
-        _max = 1/self.config.sigma_min**self.config.dist_scale
-        return 1 / (quantiles * (_max - _min) + _min) ** (1/self.config.dist_scale)
     
     def sample_ln_sech(self, n_samples: Optional[int] = None, quantiles: Optional[torch.Tensor] = None) -> torch.Tensor:
         if quantiles is None:
@@ -188,7 +182,7 @@ class SigmaSampler():
 
         ln_sigma = torch.linspace(self.config.ln_sigma_min, self.config.ln_sigma_max,
             self.config.sigma_pdf_resolution, device=unet.device)
-        ln_sigma_error = unet.get_sigma_loss_logvar(ln_sigma.exp()).float().flatten().detach()
+        ln_sigma_error = unet.get_sigma_loss_logvar(ln_sigma.exp()).float().mean(dim=1, keepdim=True).flatten().detach()
         
         sigma_distribution_pdf = (-warmup_scale * self.config.dist_scale * ln_sigma_error).exp()
         sigma_distribution_pdf = (sigma_distribution_pdf + self.config.sigma_pdf_offset).clip(min=self.config.sigma_pdf_min)

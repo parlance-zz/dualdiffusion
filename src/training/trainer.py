@@ -31,6 +31,7 @@ import atexit
 import importlib
 import platform
 import inspect
+import contextlib
 from datetime import datetime
 from typing import Optional, Literal, Type, Union, Any
 from dataclasses import dataclass
@@ -40,7 +41,7 @@ from re import search
 
 import torch
 from torch.optim.lr_scheduler import LambdaLR
-from accelerate import Accelerator
+from accelerate import Accelerator, DistributedType, DistributedDataParallelKwargs
 from accelerate.logging import get_logger
 from accelerate.utils import ProjectConfiguration, GradientAccumulationPlugin, set_seed
 from tqdm.auto import tqdm
@@ -74,7 +75,7 @@ class TrainLogger():
         
         if torch.is_tensor(value):
             if self.accelerator is not None:
-                value = self.accelerator.gather(value.detach()).mean().item()
+                value = self.accelerator.gather(value.detach().cuda()).mean().item()
             else:
                 value = value.detach().mean().item()
 
@@ -97,12 +98,12 @@ class TrainLogger():
 
 @dataclass
 class LRScheduleConfig:
-    lr_schedule: Literal["edm2", "constant"] = "edm2"
-    learning_rate: float     = 3e-3
-    lr_warmup_steps: int     = 5000
-    lr_reference_steps: int  = 70000
-    lr_decay_exponent: float = 0.5
-    min_learning_rate: float = 1e-4
+    lr_schedule: Literal["edm2", "constant", "edm2_smooth"] = "edm2_smooth"
+    learning_rate: float     = 2e-2
+    lr_warmup_steps: int     = 150
+    lr_reference_steps: int  = 150
+    lr_decay_exponent: float = 1
+    min_learning_rate: float = 1e-6
 
 @dataclass
 class OptimizerConfig:
@@ -112,17 +113,17 @@ class OptimizerConfig:
     adam_weight_decay: float  = 0.
 
     loss_scale: float         = 250.
-    max_grad_norm: float      = 1.
-    grad_norm_std_ema_beta: float  = 0.999
-    grad_norm_mean_ema_beta: float = 0.99
-    dynamic_max_grad_norm_z: Optional[float] = 3
+    max_grad_norm: float      = 100.
+    grad_norm_std_ema_beta: float  = 0.9975
+    grad_norm_mean_ema_beta: float = 0.9925
+    dynamic_max_grad_norm_z: Optional[float] = 6
 
-    muon_param_patterns: list[str] = ()
-    adam_param_patterns: list[str] = ()
-    muon_learning_rate_multiplier: float = 100
+    muon_param_patterns: list[str] = ("*",)
+    adam_param_patterns: list[str] = ("*gain*", "*balance*", "*logvar*", "*fourier*", "*emb_label_unconditional*", "*emb_noise*", "*bias*")
+    muon_learning_rate_multiplier: float = 50
     muon_momentum_beta: float = 0.95
     muon_weight_decay: float = 0.
-    muon_use_normuon: bool = False
+    muon_use_normuon: bool    = True
 
 @dataclass
 class DataLoaderConfig:
@@ -170,12 +171,14 @@ class DualDiffusionTrainerConfig:
     min_checkpoint_time: int            = 3600
     checkpoints_total_limit: int        = 1
     strict_checkpoint_time: bool        = False
+    start_global_step_override: Optional[int] = None
 
     activation_memory_budget: Optional[float] = None
     enable_bf16_reduction_in_sdp: bool  = False
     enable_anomaly_detection: bool      = False
     enable_model_compilation: bool      = True
     enable_debug_mode: bool             = False
+    enable_grad_sync_debug: bool        = False
     enable_cuda_gpu_stats_logging: bool = True
     compile_params: Optional[dict]      = None
 
@@ -257,14 +260,24 @@ class DualDiffusionTrainer:
                                                           logging_dir=self.config.logging.logging_dir)
         gradient_accumulation_plugin = GradientAccumulationPlugin(
             num_steps=self.config.gradient_accumulation_steps, sync_with_dataloader=False)
+        #ddp_kwargs = DistributedDataParallelKwargs(find_unused_parameters=True, gradient_as_bucket_view=True)#static_graph=True)
+        #ddp_kwargs = DistributedDataParallelKwargs(find_unused_parameters=True)#, static_graph=True)
+
         self.accelerator = Accelerator(
             log_with="tensorboard",
             project_config=accelerator_project_config,
             gradient_accumulation_plugin=gradient_accumulation_plugin,
+            #kwargs_handlers=[ddp_kwargs]
         )
 
         self.logger = get_logger("trainer", log_level="INFO")
-        log_path = os.path.join(self.config.logging.logging_dir, f"train_{self.config.module_name}.log")
+        if self.accelerator.distributed_type == DistributedType.MULTI_GPU:
+            log_filename_suffix = f"_ddp{self.accelerator.process_index}"
+        else:
+            log_filename_suffix = ""
+            self.config.enable_grad_sync_debug = False
+
+        log_path = os.path.join(self.config.logging.logging_dir, f"train_{self.config.module_name}{log_filename_suffix}.log")
         logging.basicConfig(
             handlers=[
                 logging.FileHandler(log_path),
@@ -290,6 +303,7 @@ class DualDiffusionTrainer:
             self.mixed_precision_dtype = torch.float32
 
         self.logger.info(self.accelerator.state, main_process_only=False, in_order=True)
+        self.logger.info(f"Distributed type: {self.accelerator.distributed_type}", main_process_only=False, in_order=True)
         self.accelerator.wait_for_everyone()
 
     def init_tensorboard(self) -> None:
@@ -337,10 +351,15 @@ class DualDiffusionTrainer:
             torch.backends.cuda.allow_fp16_bf16_reduction_math_sdp(True)
             self.logger.info("BF16 reduction in Pytorch SDP enabled")
 
+        if self.config.enable_debug_mode == True:
+            torch.backends.cudnn.benchmark = False
+            
         if self.config.activation_memory_budget is not None:
             self.logger.info(f"Using activation memory budget: {self.config.activation_memory_budget}")
-            import torch._functorch.config
-            torch._functorch.config.activation_memory_budget = self.config.activation_memory_budget
+            def enable_activation_memory_budget() -> None:
+                import torch._functorch.config
+                torch._functorch.config.activation_memory_budget = self.config.activation_memory_budget
+            enable_activation_memory_budget()
 
     def init_module_pipeline(self) -> None:
 
@@ -373,6 +392,16 @@ class DualDiffusionTrainer:
         self.logger.info(f"Model metadata: {dict_str(self.pipeline.model_metadata)}")
 
         self.modules = self.accelerator.prepare(*self.modules)
+        if not isinstance(self.modules, (tuple, list)):
+            self.modules = [self.modules]
+            
+        if self.accelerator.distributed_type == DistributedType.MULTI_GPU:
+            self.ddp_modules = self.modules
+            self.modules = list([self.accelerator.unwrap_model(m) for m in self.modules])
+
+        else:
+            self.ddp_modules = self.modules
+
         if not isinstance(self.modules, (tuple, list)): self.modules = [self.modules]
 
         for module in self.modules:
@@ -385,11 +414,24 @@ class DualDiffusionTrainer:
         
         return self.modules[self.config.train_modules.index(module_name)]
 
+    def get_ddp_module(self, module: DualDiffusionModule) -> DualDiffusionModule:
+        return self.ddp_modules[self.modules.index(module)]
+        #if module in self.modules and module in self.ddp_modules:
+        #    return self.ddp_modules[self.modules.index(module)]
+        #else:
+        #    return module
+    
     def init_ema_manager(self) -> None:
         
         self.config.emas = self.config.emas or {}
         self.ema_managers: list[EMA_Manager] = []
 
+        # only the main process saves checkpoints and processes EMA
+        if self.accelerator.distributed_type == DistributedType.MULTI_GPU:
+            if not self.accelerator.is_main_process:
+                self.logger.info(f"EMA_Manager disabled on non-main process")
+                return
+        
         if len(self.config.emas) > 0:
             for module_name, module in zip(self.config.train_modules, self.modules):
                 self.ema_managers.append(EMA_Manager(module_name, module, self.config.emas, self))
@@ -483,8 +525,10 @@ class DualDiffusionTrainer:
                 exit(1)
 
             muon_param_names = []; adam_param_names = []
-            for module in self.modules:
+            for module, module_name in zip(self.modules, self.config.train_modules):
+
                 for name, param in module.named_parameters():
+                    name = f"{module_name}.{name}"
                     muon_param = (any(fnmatch(name, pattern) for pattern in self.config.optimizer.muon_param_patterns) and
                                 (not any(fnmatch(name, pattern) for pattern in self.config.optimizer.adam_param_patterns)))
                     
@@ -499,9 +543,8 @@ class DualDiffusionTrainer:
                         adam_params.append(param)
                         adam_param_names.append(name)
 
-            if self.config.enable_debug_mode == True:
-                self.logger.info(f"Muon  parameters: {muon_param_names}")
-                self.logger.info(f"AdamW parameters: {adam_param_names}")
+            self.logger.info(f"Muon  parameters: {muon_param_names}")
+            self.logger.info(f"AdamW parameters: {adam_param_names}")
 
             param_groups = [
                 {
@@ -521,7 +564,7 @@ class DualDiffusionTrainer:
             self.optimizer = SingleDeviceNorMuonWithAuxAdam(param_groups)
             self.use_muon = True
 
-        self.logger.info(f"Using {opt_cls.__name__} optimiser with learning rate {self.config.lr_schedule.learning_rate}")
+        self.logger.info(f"Using {opt_cls.__name__} optimizer with learning rate {self.config.lr_schedule.learning_rate}")
         self.logger.info(f"  AdamW param count: {len(adam_params)} Muon param count: {len(muon_params)}")
         if self.use_muon == True:
             self.logger.info(f"  Muon learning rate multiplier: {self.config.optimizer.muon_learning_rate_multiplier}")
@@ -585,7 +628,6 @@ class DualDiffusionTrainer:
                         if self.accelerator.is_main_process:
                             if input("Continue? (y/n): ").lower() not in ["y", "yes"]:
                                 raise ValueError("Aborting training due to EMA load errors")
-                        self.accelerator.wait_for_everyone()
                     else:
                         self.logger.info(f"Successfully loaded EMA weights for {module_name}")
 
@@ -800,6 +842,7 @@ class DualDiffusionTrainer:
 
     def load_checkpoint(self) -> None:
 
+        self.last_loaded_checkpoint_global_step = 0
         self.accum_step = 0
         self.local_step = 0
         self.global_step = 0
@@ -813,7 +856,13 @@ class DualDiffusionTrainer:
         path = dirs[-1] if len(dirs) > 0 else None
 
         if path is None:
-            self.logger.warning(f"No existing checkpoints found, starting a new training run.")
+            if self.config.start_global_step_override is not None:
+                self.global_step = self.config.start_global_step_override
+                for _ in range(self.global_step):
+                    self.lr_scheduler.step() # kinda stupid that this needs to be done this way
+
+            self.logger.warning(f"No existing checkpoints found, starting a new training run from step {self.global_step}")
+            
             for module, module_name in zip(self.modules, self.config.train_modules):
                 if module.config.last_global_step > 0:
                     self.logger.warning(f"Last global step in {module_name} module config is {module.config.last_global_step}, but no checkpoint found")
@@ -906,6 +955,7 @@ class DualDiffusionTrainer:
                 shutil.copy(diff_output_path, logged_diff_output_path)
 
         if self.global_step > 0:
+            self.last_loaded_checkpoint_global_step = self.global_step
             self.epoch = self.global_step // self.num_update_steps_per_epoch
             self.resume_step = self.global_step % self.num_update_steps_per_epoch
             self.local_step = self.resume_step
@@ -936,6 +986,8 @@ class DualDiffusionTrainer:
         # tracks / logs individual sample losses for anomalous sample detection
         self.train_sample_logger = TrainLogger(self.accelerator)
         self.validation_sample_logger = TrainLogger(self.accelerator)
+
+        self.accum_step_tensor = torch.zeros(1, dtype=torch.int32, device=self.accelerator.device)
 
         while True:        
             self.run_train_epoch()
@@ -972,7 +1024,9 @@ class DualDiffusionTrainer:
             else: self.epoch += 1
 
         # hurray!
-        self.save_checkpoint()
+        if self.accelerator.is_main_process:
+            self.save_checkpoint()
+
         self.logger.info(f"Reached max train steps ({self.config.max_train_steps}) - Training complete")
         self.accelerator.end_training()
 
@@ -997,77 +1051,110 @@ class DualDiffusionTrainer:
             batch_init_logs = self.module_trainer.init_batch()
             if batch_init_logs is not None:
                 train_logger.add_logs(batch_init_logs)
-            
+        
             for self.accum_step in range(self.config.gradient_accumulation_steps):
+                
+                self.accum_step_tensor[:] = self.accum_step
 
-                device_batch = { # get sub-batch of device batch size from local batch for each grad_accum_step
-                    key: value[self.accum_step * self.config.device_batch_size: (self.accum_step+1) * self.config.device_batch_size]
-                    for key, value in local_batch.items()
-                }
+                with self.accelerator.accumulate(*self.ddp_modules):
 
-                with self.accelerator.accumulate(*self.modules):
+                    device_batch = { # get sub-batch of device batch size from local batch for each grad_accum_step
+                        key: value[self.accum_step * self.config.device_batch_size: (self.accum_step+1) * self.config.device_batch_size]
+                        for key, value in local_batch.items()
+                    }
 
                     module_logs = self.module_trainer.train_batch(device_batch)
                     train_logger.add_logs(module_logs)
                     for i, sample_path in enumerate(device_batch["sample_paths"]):
                         self.train_sample_logger.add_log(sample_path, module_logs["loss"][i])
 
-                    # loss is multiplied by grad accum steps for consistent grad norm
-                    self.accelerator.backward(module_logs["loss"].mean() * self.config.optimizer.loss_scale)
-                    # it'd be nice to use compilation for the backwards pass but currently errors out
-                    # with errors that are difficult to understand. tbd: debug this
-                    #with torch._dynamo.utils.maybe_enable_compiled_autograd(True, fullgraph=True, dynamic=False):
-                    #    self.accelerator.backward(module_logs["loss"].mean() * self.config.optimizer.loss_scale)
+                # loss is multiplied by grad accum steps for consistent grad norm
+                self.accelerator.backward(module_logs["loss"].mean() * self.config.optimizer.loss_scale)
+                del module_logs
+
+                # for whatever reason DDP gets very angry about unused parameters
+                if self.config.enable_grad_sync_debug == True:
+                    for module_name, module in zip(self.config.train_modules, self.modules):
+                        for name, p in module.named_parameters():
+                            if p.requires_grad and p.grad is None:
+                                self.logger.warning(f"module: {module_name} param: {name} has no grad but DDP is enabled")
+                        
+                if self.accelerator.sync_gradients:
+                    assert self.accum_step == (self.config.gradient_accumulation_steps - 1), \
+                        f"accum_step out of sync with sync_gradients: {self.accum_step} != {self.config.gradient_accumulation_steps - 1}"
                     
-                    if self.accelerator.sync_gradients:
-                        assert self.accum_step == (self.config.gradient_accumulation_steps - 1), \
-                            f"accum_step out of sync with sync_gradients: {self.accum_step} != {self.config.gradient_accumulation_steps - 1}"
-                        
-                        # clip grad norm and check for inf/nan grad
-                        max_grad_norm = self.get_max_grad_norm()
+                    # clip grad norm and check for inf/nan grad
+                    max_grad_norm = self.get_max_grad_norm()
 
-                        opt_params = [] # collect params for all train modules
-                        for module_name, module in zip(self.config.train_modules, self.modules):
-                            module_params = tuple(module.parameters())
-                            opt_params.extend(module_params)
+                    opt_params = [] # collect params for all train modules
+                    for module_name, module in zip(self.config.train_modules, self.modules):
+                        module_params = tuple(module.parameters())
+                        opt_params.extend(module_params)
 
-                            # if training multiple modules log individual module grad norms
-                            if len(self.config.train_modules) > 1:
-                                module_params = [p.grad for p in module_params if p.grad is not None]
-                                if len(module_params) > 0:
-                                    module_param_norms = torch._foreach_norm(module_params)
-                                    module_grad_norm = torch.linalg.vector_norm(torch.tensor(module_param_norms))
-                                    train_logger.add_log(f"grad_norm/{module_name}", module_grad_norm)
-                                else:
-                                    train_logger.add_log(f"grad_norm/{module_name}", 0)
-
-                        grad_norm = self.accelerator.clip_grad_norm_(opt_params, max_grad_norm).item()
-                        train_logger.add_log("grad_norm", grad_norm)
-                        train_logger.add_log("grad_norm/max", max_grad_norm)
-                        train_logger.add_log("grad_norm/clipped", min(max_grad_norm, grad_norm))
-                        train_logger.add_log("grad_norm/ema_mean", math.exp(self.persistent_state.grad_norm_logmean))
-                        train_logger.add_log("grad_norm/ema_std", math.exp(self.persistent_state.grad_norm_logvar/2))
-                        
-                        self.update_grad_norm_stats(grad_norm)
-                        
-                        if math.isinf(grad_norm) or math.isnan(grad_norm):
-                            self.logger.warning(f"Warning: grad norm is {grad_norm} step={self.global_step}")
-                        if math.isnan(grad_norm):
-                            self.logger.error(f"Error: grad norm is {grad_norm}, aborting...")
-                            if self.accelerator.is_main_process:
-                                import pdb; pdb.set_trace()
+                        # if training multiple modules log individual module grad norms
+                        if len(self.config.train_modules) > 1:
+                            module_params = [p.grad for p in module_params if p.grad is not None]
+                            if len(module_params) > 0:
+                                module_param_norms = torch._foreach_norm(module_params)
+                                module_grad_norm = torch.linalg.vector_norm(torch.tensor(module_param_norms))
+                                train_logger.add_log(f"grad_norm/{module_name}", module_grad_norm)
                             else:
-                                exit(1)
-                    else:
-                        assert self.accum_step != (self.config.gradient_accumulation_steps - 1), \
-                            f"accum_step out of sync, no sync_gradients but {self.accum_step} == {self.config.gradient_accumulation_steps - 1}"
-                        
-                    self.optimizer.step()
-                    self.lr_scheduler.step()
-                    self.optimizer.zero_grad()
+                                train_logger.add_log(f"grad_norm/{module_name}", 0)
+
+                    grad_norm = self.accelerator.clip_grad_norm_(opt_params, max_grad_norm).item()
+                    train_logger.add_log("grad_norm", grad_norm)
+                    train_logger.add_log("grad_norm/max", max_grad_norm)
+                    train_logger.add_log("grad_norm/clipped", min(max_grad_norm, grad_norm))
+                    train_logger.add_log("grad_norm/ema_mean", math.exp(self.persistent_state.grad_norm_logmean))
+                    train_logger.add_log("grad_norm/ema_std", math.exp(self.persistent_state.grad_norm_logvar/2))
+                    
+                    self.update_grad_norm_stats(grad_norm)
+                    
+                    if math.isinf(grad_norm) or math.isnan(grad_norm):
+                        self.logger.warning(f"Warning: grad norm is {grad_norm} step={self.global_step}")
+                    if math.isnan(grad_norm):
+                        self.logger.error(f"Error: grad norm is {grad_norm}, aborting...")
+                        if self.accelerator.is_main_process:
+                            import pdb; pdb.set_trace()
+                        else:
+                            exit(1)
+                else:
+                    #assert self.accum_step != (self.config.gradient_accumulation_steps - 1), \
+                    #    f"accum_step out of sync, no sync_gradients but {self.accum_step} == {self.config.gradient_accumulation_steps - 1}"
+                    if self.accum_step == (self.config.gradient_accumulation_steps - 1):
+                        self.logger.warning(f"Finished all grad accumulation steps but accelerator.sync_gradients is False. self.accum_step: {self.accum_step}")
+
+                self.optimizer.step()
+                self.lr_scheduler.step()
+                self.optimizer.zero_grad()
 
             # weights have now been updated in the last optimizer step
             if self.accelerator.sync_gradients:
+                
+                do_param_checksum = False
+                if self.accelerator.distributed_type == DistributedType.MULTI_GPU:
+                    if (self.global_step % self.num_update_steps_per_epoch == 0 and self.epoch > 0) or \
+                            (self.global_step == self.last_loaded_checkpoint_global_step + 10):
+                        do_param_checksum = True
+                
+                if self.config.enable_grad_sync_debug == True or do_param_checksum == True:
+                    def param_checksum(model):
+                        s = torch.zeros((), device=self.accelerator.device, dtype=torch.float64)
+                        n = 0
+                        with torch.no_grad():
+                            for p in model.parameters():
+                                s += p.detach().double().sum()
+                                n += p.numel()
+                        return s / n
+
+                    module_param_errors = {}
+                    for i, module_name in enumerate(self.config.train_modules):
+                        checksum = param_checksum(self.modules[i])
+                        all_cs = self.accelerator.gather(checksum).cpu()
+                        param_error = (all_cs[self.accelerator.process_index:self.accelerator.process_index+1] - all_cs[:]).abs().sum().item()
+                        module_param_errors[module_name] = param_error / (self.accelerator.num_processes - 1)
+                    
+                    self.logger.info(f"Rank: {self.accelerator.process_index} - Param Checksum Errors: {dict_str(module_param_errors)}", main_process_only=False)
                 
                 # log total train time, total samples processed, epoch #, and it/s stats
                 if last_sync_time is not None:
@@ -1151,8 +1238,9 @@ class DualDiffusionTrainer:
                         last_sync_time = datetime.now() # exclude checkpoint saving time from train total time
                         progress_bar.refresh()
             else:
-                assert False, "finished local_batch but accelerator.sync_gradients isn't True"
-            
+                #assert False, "finished local_batch but accelerator.sync_gradients isn't True"
+                self.logger.warning(f"Finished local batch but accelerator.sync_gradients isn't True. self.accum_steps: {self.accum_step}")
+
             if self.global_step >= self.config.max_train_steps: break
 
         progress_bar.close()

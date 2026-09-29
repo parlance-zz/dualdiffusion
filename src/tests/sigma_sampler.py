@@ -102,6 +102,9 @@ def sigma_sampler_test():
     test_params = config.load_json(os.path.join(config.CONFIG_PATH, "tests", "sigma_sampler.json"))
     output_path = os.path.join(config.DEBUG_PATH, "sigma_sampler")
 
+    if "models_path_override" in test_params and test_params["models_path_override"] is not None:
+        config.MODELS_PATH = test_params["models_path_override"]
+        
     reference_model_name = test_params["reference_model_name"]
     model_load_options = test_params["model_load_options"]
 

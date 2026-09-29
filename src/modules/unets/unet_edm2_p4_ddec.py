@@ -46,17 +46,16 @@ class UNetConfig(DualDiffusionUNetConfig):
     in_channels:  int = 512
     out_channels: int = 512
     in_channels_emb: int = 0
-    in_channels_x_ref: int = 512
     in_num_freqs: int = 256
 
-    sigma_max: float  = 200.
-    sigma_min: float  = 0.005
+    sigma_max: float  = 125.
+    sigma_min: float  = 0.008
     sigma_data: float = 1.
 
     mp_fourier_ln_sigma_offset: float = 0
     mp_fourier_bandwidth:       float = 1
 
-    model_channels: int  = 8192              # Base multiplier for the number of channels.
+    model_channels: int  = 4096              # Base multiplier for the number of channels.
     logvar_channels: int = 192               # Number of channels for training uncertainty estimation.
     channel_mult: list[int] = (1,)           # Per-resolution multipliers for the number of channels.
     channel_mult_noise: Optional[float] = 0.25      # Multiplier for noise embedding dimensionality.
@@ -66,10 +65,10 @@ class UNetConfig(DualDiffusionUNetConfig):
     attn_logit_scale: float   = 1
     num_layers_per_block: int = 8            # Number of resnet blocks per resolution.
     label_balance: float      = 0.5          # Balance between noise embedding (0) and class embedding (1).
-    balance_logits_offset: float = -1.75
+    balance_logits_offset: float = -2
     mlp_multiplier: int    = 2               # Multiplier for the number of channels in the MLP.
-    mlp_groups: int        = 64              # Number of groups for the MLPs.
-    emb_linear_groups: int = 64
+    mlp_groups: int        = 32              # Number of groups for the MLPs.
+    emb_linear_groups: int = 32
 
 class Block(torch.nn.Module):
 
@@ -113,7 +112,7 @@ class Block(torch.nn.Module):
 
         if skip_channels > 0:
             self.conv_skip = MPConv(skip_channels, out_channels, kernel=(1,1), groups=mlp_groups)
-            self.skip_balance = AdaptiveGroupBalance(emb_channels, mlp_groups, balance_logits_offset)
+            self.skip_balance = AdaptiveGroupBalance(emb_channels, mlp_groups, balance_logits_offset, min_balance=None, max_balance=None)
         else:
             self.conv_skip = None
             self.skip_balance = None
@@ -123,7 +122,7 @@ class Block(torch.nn.Module):
         
         self.emb_gain = torch.nn.Parameter(torch.zeros([]))
         self.emb_linear = MPConv(emb_channels, inner_channels, kernel=(1,1), groups=emb_linear_groups)
-        self.emb_res_balance = AdaptiveGroupBalance(emb_channels, mlp_groups, balance_logits_offset)
+        self.emb_res_balance = AdaptiveGroupBalance(emb_channels, mlp_groups, balance_logits_offset, min_balance=None, max_balance=None)
     
         self.attn_q = MPConv(out_channels, out_channels, kernel=(1,1), groups=mlp_groups)
         self.attn_k = MPConv(out_channels, out_channels, kernel=(1,1), groups=mlp_groups)
@@ -132,7 +131,7 @@ class Block(torch.nn.Module):
 
         self.emb_gain_qkv = torch.nn.Parameter(torch.zeros([]))
         self.emb_linear_qkv = MPConv(emb_channels, out_channels, kernel=(1,1), groups=emb_linear_groups)
-        self.emb_attn_balance = AdaptiveGroupBalance(emb_channels, mlp_groups, balance_logits_offset)
+        self.emb_attn_balance = AdaptiveGroupBalance(emb_channels, mlp_groups, balance_logits_offset, min_balance=None, max_balance=None)
 
     def forward(self, x: torch.Tensor, emb: torch.Tensor, skip: torch.Tensor) -> torch.Tensor:
 
@@ -207,14 +206,11 @@ class UNet(DualDiffusionUNet):
         # embedding
         self.emb_fourier = MPFourier(cnoise, bandwidth=config.mp_fourier_bandwidth)
         self.emb_noise = MPConv(cnoise, cemb, kernel=())
-        self.emb_x_ref = MPConv(config.in_channels_x_ref, cemb, kernel=(1,1))
 
         if config.in_channels_emb > 0:
             self.emb_label = MPConv(config.in_channels_emb, cemb, kernel=())
-            self.emb_label_unconditional = MPConv(1, cemb, kernel=())
         else:
             self.emb_label = None
-            self.emb_label_unconditional = None
 
         # training uncertainty estimation
         self.logvar_fourier = MPFourier(config.logvar_channels)
@@ -248,9 +244,9 @@ class UNet(DualDiffusionUNet):
 
     def get_embeddings(self, emb_in: torch.Tensor, conditioning_mask: torch.Tensor) -> torch.Tensor:
         if self.config.in_channels_emb > 0:
-            u_embedding = self.emb_label_unconditional(torch.ones(1, device=self.device, dtype=self.dtype))
             c_embedding = self.emb_label(normalize(emb_in).to(device=self.device, dtype=self.dtype))
-            return mp_sum(u_embedding, c_embedding, t=conditioning_mask.unsqueeze(1).to(self.device, self.dtype))
+            u_embedding = torch.zeros_like(c_embedding)
+            return mp_sum(u_embedding, c_embedding, t=conditioning_mask.unsqueeze(1).to(u_embedding.dtype))
         else:
             return None
         
@@ -266,7 +262,8 @@ class UNet(DualDiffusionUNet):
                 format: DualDiffusionFormat,
                 embeddings: torch.Tensor,
                 x_ref: Optional[torch.Tensor] = None,
-                perturbed_input: Optional[torch.Tensor] = None) -> torch.Tensor:
+                perturbed_input: Optional[torch.Tensor] = None,
+                conditioning_mask: Optional[torch.Tensor] = None) -> torch.Tensor:
 
         with torch.no_grad():
             sigma = sigma.view(-1, 1, 1, 1)
@@ -283,15 +280,20 @@ class UNet(DualDiffusionUNet):
             else:
                 x = (c_in * x_in).to(dtype=torch.bfloat16)
 
-        x_ref = x_ref.permute(0, 2, 1, 3).reshape(x_ref.shape[0], x_ref.shape[1]*x_ref.shape[2], 1, x_ref.shape[3]).to(dtype=torch.bfloat16)
         x = x.permute(0, 2, 1, 3).reshape(x.shape[0], x.shape[1]*x.shape[2], 1, x.shape[3]).to(dtype=torch.bfloat16)
+
+        # nuisance due to ddp wrapper limitations
+        if conditioning_mask is not None:
+            assert self.training == True
+            embeddings = self.get_embeddings(embeddings, conditioning_mask)
+        else:
+            assert self.training == False
 
         # embedding
         emb: torch.Tensor = self.emb_noise(self.emb_fourier(c_noise)).to(dtype=torch.bfloat16)
         if self.config.in_channels_emb > 0:
             emb = mp_silu(mp_sum(emb, embeddings.to(dtype=emb.dtype), t=self.config.label_balance))
-        x_ref = self.emb_x_ref(x_ref)
-        emb = mp_silu(mp_sum(emb[..., None, None], x_ref, t=0.5))
+        emb = mp_silu(mp_sum(emb[..., None, None], x_ref.to(dtype=emb.dtype), t=0.5))
 
         idx = 0; skips = []
         for name, block in self.dec.items():
@@ -311,9 +313,7 @@ class UNet(DualDiffusionUNet):
                 idx += 1
 
         x: torch.Tensor = self.conv_out(x, gain=self.out_gain)
-
-        c = self.config.out_channels // self.config.in_num_freqs
-        x = x.reshape(x.shape[0], x.shape[1]//c, c, x_in.shape[3]).permute(0, 2, 1, 3).contiguous()
+        x = x.reshape(x.shape[0], x.shape[1]//2, 2, x_in.shape[3]).permute(0, 2, 1, 3).contiguous()
         D_x = c_skip * x_in + c_out * x.float()
 
-        return D_x
+        return D_x, self.get_sigma_loss_logvar(sigma)

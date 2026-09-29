@@ -42,8 +42,6 @@ def mp_fourier_test():
     
     steps = test_params["steps"]
     emb_dim = test_params["emb_dim"]
-    emb_scale = test_params["emb_scale"]
-    softmax = test_params["softmax"]
     sigma_data = test_params["sigma_data"]
     sigma_max = test_params["sigma_max"]
     sigma_min = test_params["sigma_min"]
@@ -52,21 +50,25 @@ def mp_fourier_test():
 
     emb_fourier = MPFourier(emb_dim, bandwidth=bandwidth)
     
-    if sigma_scale == "log_linear":
+    if sigma_scale == "ln_linear":
         sigma = torch.linspace(np.log(sigma_min), np.log(sigma_max), steps).exp()
-    elif sigma_scale == "log_sech":
+    elif sigma_scale == "ln_sech":
         theta1 = np.arctan(sigma_data / sigma_max); theta0 = np.arctan(sigma_data / sigma_min)
         theta = torch.linspace(1, 0, steps) * (theta0 - theta1) + theta1
         sigma = theta.cos() / theta.sin() * sigma_data
-    
-    emb = emb_fourier(sigma.log() / 4) * emb_scale / emb_dim**0.5
-    inner_products = (emb.view(1, steps, emb_dim) * emb.view(steps, 1, emb_dim)).sum(dim=2)
-    
-    if softmax:
-        inner_products -= inner_products.amax()
-        inner_products = inner_products.exp()
     else:
-        inner_products /= inner_products.amax()
+        raise ValueError()
+    
+    if test_params["c_noise_scale"] == "acot":
+        c_noise = 2 * (1 / sigma).atan()
+    elif test_params["c_noise_scale"] == "ln":
+        c_noise = sigma.log() / 4
+    else:
+        raise ValueError()
+
+    emb = emb_fourier(c_noise)
+    inner_products = (emb.view(1, steps, emb_dim) * emb.view(steps, 1, emb_dim)).sum(dim=2)
+    inner_products /= inner_products.abs().amax()
 
     debug_path = config.DEBUG_PATH
     if debug_path is not None:    

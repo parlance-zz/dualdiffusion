@@ -108,7 +108,7 @@ def build_transition_matrix(source_freqs: torch.Tensor, target_freqs: torch.Tens
     return weights
 
 class ResampleStage(nn.Module):
-    def __init__(self, n_in: int, n_out: int, alpha_in: float, alpha_out: float, sample_rate: float) -> None:
+    def __init__(self, n_in: int, n_out: int, alpha_in: float, alpha_out: float, sample_rate: float, reg_lambda: float, weight_decay: float = 0.03) -> None:
         super().__init__()
         
         # 1. Get the Hz coordinates for Input and Output
@@ -118,14 +118,16 @@ class ResampleStage(nn.Module):
         # 2. Build Forward Matrix A: Maps freqs_in -> freqs_out
         # Shape: (n_in, n_out)
         A = build_transition_matrix(freqs_in, freqs_out)
-        self.forward_mat: torch.Tensor
-        self.register_buffer('forward_mat', A)
+        self.resample_forward: torch.Tensor = torch.nn.Parameter(A)
+        setattr(self.resample_forward, "weight_decay", weight_decay)
+        #self.register_buffer('resample_forward', A, persistent=False)
         
         # 3. Build Inverse Matrix W using Least Squares
         # Solve A * W = I (approximately)
         # Result W shape: (n_out, n_in)
         # Note: We want to recover Input from Output.
         # Inverse mapping: Output @ W -> Input
+        """
         target = torch.eye(n_in)
         
         # Use lstsq driver 'gelss' or 'gels' (usually safe defaults)
@@ -135,25 +137,37 @@ class ResampleStage(nn.Module):
         except:
             # Fallback for older torch versions or specific CUDA backends
             W = torch.pinverse(A) @ target
+        """
+        
+        U, S, Vh = torch.linalg.svd(A, full_matrices=False)
+        
+        # Regularized inversion of singular values: s / (s^2 + lambda)
+        # This dampens the explosion for very small singular values.
+        S_inv = S / (S**2 + reg_lambda)
+        
+        # Reconstruct Pseudo-Inverse: V @ S_inv @ U.T
+        W = Vh.mH @ torch.diag(S_inv) @ U.mH
 
-        self.inverse_mat: torch.Tensor
-        self.register_buffer('inverse_mat', W)
+        self.resample_inverse: torch.Tensor = torch.nn.Parameter(W)
+        setattr(self.resample_inverse, "weight_decay", weight_decay)
+        #self.register_buffer('resample_inverse', W, persistent=False)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         # x: (..., n_in)
-        return torch.matmul(x, self.forward_mat)
+        return torch.matmul(x, self.resample_forward)
 
     def inverse_transform(self, x: torch.Tensor) -> torch.Tensor:
         # x: (..., n_out)
         # Reconstructs: x @ W -> (..., n_in)
-        return torch.matmul(x, self.inverse_mat)
+        return torch.matmul(x, self.resample_inverse)
 
 class MelCascade(nn.Module):
-    def __init__(self, sample_rate: float = 32000, num_bins: int = 256, num_stages: int = 3) -> None:
+    def __init__(self, sample_rate: float = 32000, num_bins: int = 256, num_stages: int = 3, reg_lambda: tuple[float] = (1e-4, 1e-3, 1e-2)) -> None:
         super().__init__()
 
         self.sample_rate = sample_rate
         self.num_bins = num_bins
+        assert len(reg_lambda) == num_stages, "len(reg_lambda) != num_stages"
         
         stages = []
 
@@ -165,7 +179,7 @@ class MelCascade(nn.Module):
             n_bins_in  = num_bins // (2 ** i)
             n_bins_out = n_bins_in // 2
 
-            stages.append(ResampleStage(n_bins_in, n_bins_out, alpha_in, alpha_out, sample_rate))
+            stages.append(ResampleStage(n_bins_in, n_bins_out, alpha_in, alpha_out, sample_rate, reg_lambda[i]))
         
         self.stages = torch.nn.ModuleList(stages)
 
@@ -197,6 +211,11 @@ class MelCascade(nn.Module):
 
 # --- Validating the MSE ---
 if __name__ == "__main__":
+
+    from utils import config
+
+    import os
+
     torch.manual_seed(42)
     
     # Use a smooth signal instead of white noise. 
@@ -231,6 +250,14 @@ if __name__ == "__main__":
     mse_noise = nn.functional.mse_loss(noise_recon, noise)
     print(f"Reconstruction MSE on random noise:  {mse_noise.item():.5f}")
 
-    model.stages[0].forward_mat.cpu().transpose(-1,-2).numpy().tofile("stage1_filters.raw")
-    model.stages[1].forward_mat.cpu().transpose(-1,-2).numpy().tofile("stage2_filters.raw")
-    model.stages[2].forward_mat.cpu().transpose(-1,-2).numpy().tofile("stage3_filters.raw")
+    output_path = os.path.join(config.DEBUG_PATH, "mel_cascade")
+    if output_path is not None:
+        os.makedirs(output_path, exist_ok=True)
+
+        model.stages[0].resample_forward.cpu().transpose(-1,-2).detach().numpy().tofile(os.path.join(output_path, "stage1_filters.raw"))
+        model.stages[1].resample_forward.cpu().transpose(-1,-2).detach().numpy().tofile(os.path.join(output_path, "stage2_filters.raw"))
+        model.stages[2].resample_forward.cpu().transpose(-1,-2).detach().numpy().tofile(os.path.join(output_path, "stage3_filters.raw"))
+
+        model.stages[0].resample_inverse.cpu().transpose(-1,-2).detach().numpy().tofile(os.path.join(output_path, "stage1_inv_filters.raw"))
+        model.stages[1].resample_inverse.cpu().transpose(-1,-2).detach().numpy().tofile(os.path.join(output_path, "stage2_inv_filters.raw"))
+        model.stages[2].resample_inverse.cpu().transpose(-1,-2).detach().numpy().tofile(os.path.join(output_path, "stage3_inv_filters.raw"))

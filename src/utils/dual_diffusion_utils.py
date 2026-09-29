@@ -35,6 +35,7 @@ import subprocess
 import numpy as np
 import torch
 import torchaudio
+import torchvision.transforms.functional as TF
 import cv2
 import safetensors.torch as safetensors
 import mutagen
@@ -54,14 +55,15 @@ class AudioInfo:
 
 class TF32_Disabled(ContextDecorator): # disables reduced precision tensor cores inside the context
     def __enter__(self):
-        self.original_matmul_allow_tf32 = torch.backends.cuda.matmul.allow_tf32
-        self.original_cudnn_allow_tf32 = torch.backends.cudnn.allow_tf32
-        torch.backends.cuda.matmul.allow_tf32 = False
-        torch.backends.cudnn.allow_tf32 = False
+        #self.original_matmul_allow_tf32 = torch.backends.cuda.matmul.allow_tf32
+        #self.original_cudnn_allow_tf32 = torch.backends.cudnn.allow_tf32
+        #torch.backends.cuda.matmul.allow_tf32 = False
+        #torch.backends.cudnn.allow_tf32 = False
+        pass
 
     def __exit__(self, exc_type, exc_value, traceback):
-        torch.backends.cuda.matmul.allow_tf32 = self.original_matmul_allow_tf32
-        torch.backends.cudnn.allow_tf32 = self.original_cudnn_allow_tf32
+        #torch.backends.cuda.matmul.allow_tf32 = self.original_matmul_allow_tf32
+        #torch.backends.cudnn.allow_tf32 = self.original_cudnn_allow_tf32
         return False
 
 def init_cuda(default_device: Optional[torch.device] = None) -> None:
@@ -70,11 +72,22 @@ def init_cuda(default_device: Optional[torch.device] = None) -> None:
         raise ValueError("Error: PyTorch not compiled with CUDA support or CUDA unavailable")
     else:
          # leaving these enabled these seems to make no difference for performance or stability
+        #torch.backends.cuda.matmul.allow_fp16_reduced_precision_reduction = False
+        #torch.backends.cuda.matmul.allow_bf16_reduced_precision_reduction = False
+        #torch.backends.cuda.allow_fp16_bf16_reduction_math_sdp(True) # improves perf by ~2.5%, seems stable
+        #torch.backends.cuda.matmul.allow_tf32 = False
+        #torch.backends.cudnn.allow_tf32 = False
+        torch.backends.cuda.allow_fp16_bf16_reduction_math_sdp(False)
+
+        torch.backends.fp32_precision = "ieee"
+        torch.backends.cuda.matmul.fp32_precision = "ieee"
+        torch.backends.cudnn.fp32_precision = "ieee"
+        torch.backends.cudnn.conv.fp32_precision = "ieee"
+        torch.backends.cudnn.rnn.fp32_precision = "ieee"
+
         torch.backends.cuda.matmul.allow_fp16_reduced_precision_reduction = False
         torch.backends.cuda.matmul.allow_bf16_reduced_precision_reduction = False
-        #torch.backends.cuda.allow_fp16_bf16_reduction_math_sdp(True) # improves perf by ~2.5%, seems stable
-        torch.backends.cuda.matmul.allow_tf32 = True
-        torch.backends.cudnn.allow_tf32 = True
+
         torch.backends.cuda.cufft_plan_cache[0].max_size = 250 # avoid cufft memory leak
         torch.backends.cudnn.benchmark = True
         
@@ -281,8 +294,9 @@ def save_audio(raw_samples: torch.Tensor,
     if no_clobber == True:
         output_path = get_no_clobber_filepath(output_path)
     
-    audio_format = os.path.splitext(output_path)[1].lower()[1:]
-    bits_per_sample = 16 if audio_format in ["wav", "flac"] else None
+    # these were removed for torchcodec todo: this will cause problems with copy-on-write in dataset processing
+    audio_format = None #os.path.splitext(output_path)[1].lower()[1:]
+    bits_per_sample = None# 16 if audio_format in ["wav", "flac"] else None
     
     if copy_on_write == True:
         tmp_path = f"{output_path}.tmp"
@@ -607,7 +621,11 @@ def tensor_to_img(x: torch.Tensor,
                   flip_x: bool = False,
                   flip_y: bool = False,
                   colormap: bool = False,
-                  channel_order: Optional[tuple[int, int, int]] = None) -> np.ndarray:
+                  channel_order: Optional[tuple[int, int, int]] = None,
+                  gamma: Optional[float] = None,
+                  brightness: Optional[float] = None,
+                  contrast: Optional[float] = None,
+                  saturation: Optional[float] = None) -> np.ndarray:
     
     x = x.clone().detach().real.float().resolve_conj().cpu()
     while x.ndim < 4: x.unsqueeze_(0)
@@ -623,13 +641,11 @@ def tensor_to_img(x: torch.Tensor,
             x[..., i] = _x[..., channel_order[i]]
 
     if x.shape[-1] == 4: # show alpha channel as pre-multiplied brightness
-        #x = x[..., :3] * x[..., 3:4]
+        
         if recenter: x -= x.amin(dim=(-3,-2,-1), keepdim=True)
         if rescale:  x /= x.amax(dim=(-3,-2,-1), keepdim=True).clip(min=1e-16)
-        
+
         C, M, Y, K = x.unbind(-1)
-        
-        if K.mean().item() < 0.5: K = 1 - K
 
         R = (1 - torch.minimum(torch.tensor(1.0, device=x.device), C * (1 - K) + K))
         G = (1 - torch.minimum(torch.tensor(1.0, device=x.device), M * (1 - K) + K))
@@ -644,8 +660,19 @@ def tensor_to_img(x: torch.Tensor,
         x[..., 2], x[..., 1] = x[..., 1], 0
     elif x.shape[-1] > 4:
         raise ValueError(f"Unsupported number of channels in tensor_to_img: {x.shape[-1]}")
+
+    x = x.transpose(0, -1).clip(min=0, max=1)
+
+    if brightness is not None:
+        x = TF.adjust_brightness(x, brightness)
+    if contrast is not None:
+        x = TF.adjust_contrast(x, contrast)
+    if saturation is not None:
+        x = TF.adjust_saturation(x, saturation)
+    if gamma is not None:
+        x = TF.adjust_gamma(x, gamma)
     
-    img = (x * 255).clip(min=0, max=255).numpy().astype(np.uint8)
+    img = (x.transpose(0, -1) * 255).clip(min=0, max=255).numpy().astype(np.uint8)
 
     if flip_x: img = cv2.flip(img, 1)
     if flip_y: img = cv2.flip(img, 0)

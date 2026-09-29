@@ -22,6 +22,7 @@
 
 from utils import config
 
+from typing import Optional
 import os
 import shutil
 import importlib
@@ -32,6 +33,7 @@ import torch
 
 from modules.module import DualDiffusionModule
 from pipelines.dual_diffusion_pipeline import DualDiffusionPipeline
+
 
 def print_module_info(module: DualDiffusionModule, module_name: str) -> None:
 
@@ -59,6 +61,13 @@ def print_module_info(module: DualDiffusionModule, module_name: str) -> None:
     print(f"Total other params: {num_other_params/1000000:{4}f}m")
     print(f"Estimated size (MB): {num_total_params*4/1000000:{4}f}m")
     print("")
+
+def seed_and_get_module_serial_num(seed: Optional[int] = None) -> str:
+    if seed is None:
+        seed = torch.initial_seed()
+
+    torch.manual_seed(seed)
+    return f"{seed:016x}"
 
 
 if __name__ == "__main__":

@@ -67,16 +67,39 @@ def resample_1d(x: torch.Tensor, mode: Literal["keep", "down", "up"] = "keep") -
         return torch.lerp(x[..., ::2], x[..., 1::2], 0.5) # should be multiplied by 2**0.5 to be magnitude preserving,
     elif mode == 'up':
         return torch.repeat_interleave(x, 2, dim=-1)
-    
-def resample_2d(x: torch.Tensor, mode: Literal["keep", "down", "up"] = "keep",
-                ratio: int = 2, filtering: str = "nearest") -> torch.Tensor:
-    
+
+def resample_2d(
+    x: torch.Tensor,
+    mode: Literal[
+        "keep", "down", "up", "up_down", "down_up",
+        "keep_down", "keep_up", "down_keep", "up_keep"
+    ] = "keep",
+    ratio: int = 2,
+) -> torch.Tensor:
+
+    if not isinstance(ratio, int) or ratio < 1:
+        raise ValueError(f"ratio must be a positive int, got {ratio}")
+
     if mode == "keep":
         return x
-    elif mode == 'down':
-        return torch.nn.functional.avg_pool2d(x, ratio) # should be multiplied by 2 to be magnitude preserving,
-    elif mode == 'up':                              
-        return torch.nn.functional.interpolate(x, scale_factor=ratio, mode=filtering).to(x.dtype)
+    elif mode == "down":
+        return torch.nn.functional.avg_pool2d(x, kernel_size=ratio, stride=ratio)
+    elif mode == "up":
+        return torch.nn.functional.interpolate(x, scale_factor=ratio, mode="nearest").to(x.dtype)
+    elif mode == "up_down":
+        return torch.nn.functional.interpolate(x, scale_factor=(ratio, 1/ratio), mode="area").to(x.dtype)
+    elif mode == "down_up":
+        return torch.nn.functional.interpolate(x, scale_factor=(1/ratio, ratio), mode="area").to(x.dtype)
+    elif mode == "keep_down":
+        return torch.nn.functional.interpolate(x, scale_factor=(1, 1/ratio), mode="area").to(x.dtype)
+    elif mode == "keep_up":
+        return torch.nn.functional.interpolate(x, scale_factor=(1, ratio), mode="area").to(x.dtype)
+    elif mode == "down_keep":
+        return torch.nn.functional.interpolate(x, scale_factor=(1/ratio, 1), mode="area").to(x.dtype)
+    elif mode == "up_keep":
+        return torch.nn.functional.interpolate(x, scale_factor=(ratio, 1), mode="area").to(x.dtype)
+    else:
+        raise ValueError(f"Invalid mode: {mode}")
 
 def resample_3d(x: torch.Tensor, mode: Literal["keep", "down", "up"] = "keep") -> torch.Tensor:
 
@@ -310,6 +333,17 @@ def mp_cat_interleave(a: torch.Tensor, b: torch.Tensor,
     return torch.stack([wa * a , wb * b], dim=dim+1).reshape(
         *a.shape[:dim], a.shape[dim]*2, *a.shape[dim+1:])
 
+def cat_interleave(a: torch.Tensor, b: torch.Tensor, dim: int = 0) -> torch.Tensor:
+
+    if a.shape != b.shape:
+        raise ValueError(f"Shapes must match exactly, got {a.shape} and {b.shape}")
+
+    dim = dim % a.ndim
+    stacked = torch.stack((a, b), dim=dim + 1)
+    out_shape = list(a.shape)
+    out_shape[dim] *= 2
+    return stacked.reshape(out_shape)
+
 #----------------------------------------------------------------------------
 # Magnitude-preserving Fourier features (Equation 75).
 
@@ -333,7 +367,7 @@ class MPConv(torch.nn.Module):
 
     def __init__(self, in_channels: int, out_channels: int,
                  kernel: tuple[int, int], groups: int = 1, stride: int = 1,
-                 disable_weight_norm: bool = False, bias: bool = False) -> None:
+                 disable_weight_norm: bool = False, bias: bool = False, padding: Optional[tuple[int, int]] = None) -> None:
         
         super().__init__()
 
@@ -342,6 +376,10 @@ class MPConv(torch.nn.Module):
         self.groups = groups
         self.stride = stride
         self.disable_weight_norm = disable_weight_norm
+        if len(kernel) > 0:
+            self.padding = padding or (kernel[0] // 2, kernel[1] // 2)
+        else:
+            self.padding = (0, 0)
         
         self.weight = torch.nn.Parameter(torch.randn(out_channels, in_channels // groups, *kernel))
         self.weight.conv_groups = groups
@@ -366,7 +404,7 @@ class MPConv(torch.nn.Module):
         if w.ndim == 2:
             return x @ w.t()
         
-        x = torch.nn.functional.conv2d(x, w, padding=(w.shape[-2]//2, w.shape[-1]//2), groups=self.groups, stride=self.stride)
+        x = torch.nn.functional.conv2d(x, w, padding=self.padding, groups=self.groups, stride=self.stride)
         if self.bias is not None:
             x = x + self.bias.view(1,-1, 1, 1).to(dtype=x.dtype)
         
@@ -379,7 +417,8 @@ class MPConv(torch.nn.Module):
 
 class AdaptiveGroupBalance(torch.nn.Module):
 
-    def __init__(self, emb_channels: int, groups: int = 1, balance_logits_offset: float = 0, min_balance: float = 0.1, max_balance: float = 0.9, weight_decay: float = 0.03) -> None:
+    def __init__(self, emb_channels: int, groups: int = 1, balance_logits_offset: float = 0,
+            min_balance: Optional[float] = 0.1, max_balance: Optional[float] = 0.9, weight_decay: Optional[float] = None) -> None:
         
         super().__init__()
 
@@ -392,10 +431,12 @@ class AdaptiveGroupBalance(torch.nn.Module):
         if emb_channels > 0:
             self.emb_balance = MPConv(emb_channels, groups, kernel=(1,1), groups=1, disable_weight_norm=True)
             self.emb_balance.weight.data.fill_(0.)
-            setattr(self.emb_balance.weight, "weight_decay", weight_decay)
+            if weight_decay is not None:
+                setattr(self.emb_balance.weight, "weight_decay", weight_decay)
         else:
             self.emb_balance = torch.nn.Parameter(torch.zeros(groups))
-            setattr(self.emb_balance, "weight_decay", weight_decay)
+            if weight_decay is not None:
+                setattr(self.emb_balance, "weight_decay", weight_decay)
 
     def forward(self, x: torch.Tensor, y: torch.Tensor, emb: torch.Tensor) -> torch.Tensor:
         
@@ -406,7 +447,9 @@ class AdaptiveGroupBalance(torch.nn.Module):
             balance = self.emb_balance[None, :, None, None].to(dtype=x.dtype)
 
         balance = (balance + self.balance_logits_offset).sigmoid()
-        balance = balance.clip(min=self.min_balance, max=self.max_balance)
+        if self.min_balance is not None or self.max_balance is not None:
+            min_bal = self.min_balance or 0; max_bal = self.max_balance or 1
+            balance = balance * (max_bal - min_bal) + min_bal
 
         return mp_sum_groups(x, y, balance, self.groups)
 
@@ -493,3 +536,104 @@ class FilteredDownsample2D(torch.nn.Module):
             return torch.nn.functional.conv2d(self.pad(x), self.filter.squeeze(1), stride=self.stride, groups=x.shape[1])
         else:
             return torch.nn.functional.conv2d(self.pad(x), self.filter, stride=self.stride, groups=x.shape[1])
+
+class LatentStatsTracker(torch.nn.Module):
+
+    def __init__(self, num_channels: int, momentum: float = 0.99, eps: float = 1e-6,
+            static_mean: Optional[float] = None, static_scale: Optional[float] = None) -> None:
+        
+        super().__init__()
+
+        self.num_channels = num_channels
+        self.momentum = momentum
+        self.eps = eps
+
+        self.static_mean = static_mean
+        self.static_scale = static_scale
+        
+        self.mean: torch.Tensor
+        self.register_buffer("mean", torch.zeros(num_channels))
+        self.msq: torch.Tensor
+        self.register_buffer("msq", torch.ones(num_channels))
+
+        self.global_mean: torch.Tensor
+        self.register_buffer("global_mean", torch.zeros(1))
+        self.global_msq: torch.Tensor
+        self.register_buffer("global_msq", torch.ones(1))
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+
+        if self.training == True:
+            dx = x.detach().to(dtype=self.mean.dtype)
+
+            per_channel_mean = dx.mean(dim=(0,2,3))
+            self.mean.lerp_(per_channel_mean, 1. - self.momentum)
+            per_channel_msq = (dx - per_channel_mean[None, :, None, None]).pow(2).mean(dim=(0,2,3))
+            self.msq.lerp_(per_channel_msq, 1. - self.momentum)
+
+            global_mean = dx.mean()
+            self.global_mean.lerp_(global_mean, 1. - self.momentum)
+            global_msq = (dx - global_mean).pow(2).mean()
+            self.global_msq.lerp_(global_msq, 1. - self.momentum)
+
+        return x
+    
+    def remove_mean(self, x: torch.Tensor, mode: Literal["per_channel", "global", "static", "none"] = "per_channel") -> torch.Tensor:
+
+        assert mode in ["per_channel", "global", "static", "none"]
+        
+        if mode == "per_channel":
+            return (x - self.mean[None, :, None, None].detach()).to(dtype=x.dtype)
+        elif mode == "global":
+            return (x - self.global_mean.detach()).to(dtype=x.dtype)
+        elif mode == "static":
+            if self.static_mean is not None:
+                return (x - self.static_mean).to(dtype=x.dtype)
+
+        return x
+    
+    def add_mean(self, x: torch.Tensor, mode: Literal["per_channel", "global", "static", "none"] = "per_channel") -> torch.Tensor:
+
+        assert mode in ["per_channel", "global", "static", "none"]
+
+        if mode == "per_channel":
+            return (x + self.mean[None, :, None, None].detach()).to(dtype=x.dtype)
+        elif mode == "global":
+            return (x + self.global_mean.detach()).to(dtype=x.dtype)
+        elif mode == "static":
+            if self.static_mean is not None:
+                return (x + self.static_mean).to(dtype=x.dtype)
+            
+        return x
+    
+    def unscale(self, x: torch.Tensor, mode: Literal["per_channel", "global", "static", "none"] = "per_channel") -> torch.Tensor:
+
+        assert mode in ["per_channel", "global", "static", "none"]
+
+        if mode == "per_channel":
+            rms = (self.msq[None, :, None, None] + self.eps).pow(0.5)
+            return (x / rms.detach()).to(dtype=x.dtype)
+        elif mode == "global":
+            rms = (self.global_msq + self.eps).pow(0.5)
+            return (x / rms.detach()).to(dtype=x.dtype)
+        elif mode == "static":
+            if self.static_scale is not None:
+                return (x / self.static_scale).to(dtype=x.dtype)
+            
+        return x
+    
+    def rescale(self, x: torch.Tensor, mode: Literal["per_channel", "global", "static", "none"] = "per_channel") -> torch.Tensor:
+        
+        assert mode in ["per_channel", "global", "static", "none"]
+
+        if mode == "per_channel":
+            rms = (self.msq[None, :, None, None] + self.eps).pow(0.5)
+            return (x * rms.detach()).to(dtype=x.dtype)
+        elif mode == "global":
+            rms = (self.global_msq + self.eps).pow(0.5)
+            return (x * rms.detach()).to(dtype=x.dtype)
+        elif mode == "static":
+            if self.static_scale is not None:
+                return (x * self.static_scale).to(dtype=x.dtype)
+            
+        return x
