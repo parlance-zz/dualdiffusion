@@ -518,8 +518,10 @@ class DualDiffusionTrainer:
             self.use_muon = False
         else:
             try:
-                from training.nor_muon import SingleDeviceNorMuonWithAuxAdam  # type: ignore
-                opt_cls = SingleDeviceNorMuonWithAuxAdam
+                #from training.nor_muon import SingleDeviceNorMuonWithAuxAdam  # type: ignore
+                #opt_cls = SingleDeviceNorMuonWithAuxAdam
+                from training.amuse_nor_muon import SingleDeviceAMUSENorMuonWithAuxAdam
+                opt_cls = SingleDeviceAMUSENorMuonWithAuxAdam
             except ImportError:
                 self.logger.error("Import error: Unable to import muon and len(muon_param_patterns) > 0")
                 exit(1)
@@ -561,7 +563,7 @@ class DualDiffusionTrainer:
                     "betas": (self.config.optimizer.adam_beta1, self.config.optimizer.adam_beta2), "eps": self.config.optimizer.adam_epsilon
                 })
 
-            self.optimizer = SingleDeviceNorMuonWithAuxAdam(param_groups)
+            self.optimizer = SingleDeviceAMUSENorMuonWithAuxAdam(param_groups, warmup_steps=self.config.lr_schedule.lr_warmup_steps)
             self.use_muon = True
 
         self.logger.info(f"Using {opt_cls.__name__} optimizer with learning rate {self.config.lr_schedule.learning_rate}")
