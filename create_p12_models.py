@@ -15,9 +15,10 @@ print(f"Saving new modules to {model_path}...")
 #embedding.save_pretrained(model_path, subfolder="embedding")
 
 from modules.daes.dae_edm2_q432 import DAE, DAE_Config
-from modules.unets.unet_edm2_p6 import UNetConfig
-unet_cfg = UNetConfig(num_layers_per_block=12, in_channels=512, out_channels=512)
+from modules.unets.unet_edm2_b432 import UNetConfig
+#unet_cfg = UNetConfig(num_layers_per_block=12, in_channels=512, out_channels=512, in_channels_emb=0)
 #unet_cfg=None
+unet_cfg = UNetConfig()
 serial = seed_and_get_module_serial_num()
 dae = DAE(DAE_Config(unet=unet_cfg))
 dae.config.serial_num = serial
