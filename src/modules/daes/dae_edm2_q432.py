@@ -88,8 +88,8 @@ class DAE_Config(DualDiffusionDAEConfig):
     emb_linear_groups: int = 1
     add_pixel_norm: bool   = False
 
-    conv_in_kernel: tuple[int, int]  = (5,5)
-    conv_out_kernel: tuple[int, int] = (5,5)
+    conv_in_kernel: tuple[int, int]  = (3,3)
+    conv_out_kernel: tuple[int, int] = (3,3)
 
     add_recon_logvar: bool = True
 

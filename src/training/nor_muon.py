@@ -84,71 +84,61 @@ coeffs_list = [
 # safety factor for numerical stability (but exclude last polynomial)
 coeffs_list = [(a / 1.01, b / 1.01**3, c / 1.01**5) for (a, b, c) in coeffs_list [:-1]] + [coeffs_list[-1]]
 
+# "The Polar Express: Optimal Matrix Sign Methods and Their Application to the Muon Algorithm" by Noah Amsel, David Persson, Christopher Musco, Robert M. Gower
 def _polar_express(G: torch.Tensor, steps: int) -> torch.Tensor:
     assert G.ndim >= 2
 
-    X = G.float()#bfloat16()
-    if G.size(-2) > G.size(-1): X = X.mT # this reduces FLOPs
+    if torch.is_complex(G):
+        X = G.to(dtype=torch.complex64)
+    else:
+        X = G.float()#bfloat16()
+    if G.size(-2) > G.size(-1): X = X.mH # this reduces FLOPs
 
     X = X / (X.norm(dim=(-2,-1), keepdim=True) * 1.01 + 1e-7)
     hs = coeffs_list[:steps] + list(repeat(coeffs_list[-1], steps - len(coeffs_list)))
 
     for a, b, c in hs:
-        A = X @ X.mT
+        A = X @ X.mH
         B = b * A + c * A @ A
         X = a * X + B @ X # X <- aX + bX ˆ3 + cX ˆ5
     
-    if G.size(-2) > G.size(-1): X = X.mT
+    if G.size(-2) > G.size(-1): X = X.mH
     return X
 
-def _zeropower_via_newtonschulz5(G: torch.Tensor, steps: int = 5) -> torch.Tensor:
-    """
-    Batched Newton-Schulz iteration to compute an approximate 'zeroth power' or orthogonalization
-    of G. Each batch element of G (shape: [out_channels, in_channels]) is treated independently.
-
-    Args:
-        G: Tensor of shape (bsz, out_channels, in_channels)
-        steps: Number of Newton–Schulz iterations.
-
-    Returns:
-        Tensor of shape (bsz, out_channels, in_channels)
-    """
-    assert G.ndim == 3, "Expected G of shape (bsz, out_channels, in_channels)"
-    
-    a, b, c = (3.4445, -4.7750, 2.0315)
-
-    X = G.float()#to(torch.bfloat16)
-    transposed = X.size(-2) > X.size(-1)
-    if transposed:
-        X = X.transpose(-2, -1)
-
-    # Normalize each matrix so spectral norm ≤ 1 (approximate)
-    X = X / (X.norm(dim=(-2, -1), keepdim=True) + 1e-7)
-
-    # Perform batched Newton–Schulz iterations
-    for _ in range(steps):
-        A = X @ X.transpose(-2, -1)                  # (bsz, n, n)
-        B = b * A + c * (A @ A)                      # quintic term
-        X = a * X + B @ X                            # update step
-
-    if transposed:
-        X = X.transpose(-2, -1)
-
-    return X
-
+# "NorMuon: Making Muon more efficient and scalable" (https://arxiv.org/abs/2510.05491) by Zichong Li, Liming Liu, Chen Liang, Weizhu Chen, Tuo Zhao
 def normuon_update(grad: torch.Tensor, momentum: torch.Tensor, second_momentum: Optional[torch.Tensor],
         beta: float = 0.95, beta2: float =0.95, ns_steps: int = 5, nesterov: bool = True, groups: int = 1) -> torch.Tensor:
     
     momentum.lerp_(grad, 1 - beta)
     update = grad.lerp_(momentum, beta) if nesterov else momentum
-    if update.ndim >= 4: # reshape instead of view is needed for conv params when channels last is enabled
-        update = update.reshape(len(update), -1)
 
-    # convert grouped conv params into a batch of smaller matrices for newton schulz iterations
-    update = update.view(groups,-1, update.size(-1))
+    is_muon_c_update = False
+    if update.ndim >= 4:
+
+        # "Muon-C: Operator-Aligned Muon for Convolutional Kernels" (https://arxiv.org/abs/2609.09676) by Jiaxin Qing, Lexin Li
+        # additionally, groups for any size kernel (even 1x1) are packed into the batch dimension before orthogonalization, with the same reasoning
+
+        if update.shape[-1] > 1 or update.shape[-2] > 1: 
+            
+            update = update.unflatten(dim=0, sizes=(groups, update.shape[0] // groups))
+            H, W = update.shape[-2], update.shape[-1]
+            update: torch.Tensor = torch.fft.rfft2(update, norm="ortho") # g, o, i, hf, wf
+            Hf, Wf = update.shape[-2], update.shape[-1]
+            update = update.permute(0, 3, 4, 1, 2).flatten(start_dim=0, end_dim=2) # g*hf*wf, o, i
+            
+            is_muon_c_update = True
+        else:
+            update = update.reshape(len(update), -1)
+            # convert grouped conv params into a batch of smaller matrices for newton schulz iterations
+            update = update.view(groups,-1, update.size(-1))
     
-    #update = _zeropower_via_newtonschulz5(update, steps=ns_steps).to(dtype=grad.dtype)
-    update = _polar_express(update, steps=ns_steps).to(dtype=grad.dtype)
+    update = _polar_express(update, steps=ns_steps)#.to(dtype=grad.dtype)
+
+    if is_muon_c_update == True:
+        update = update.unflatten(dim=0, sizes=(groups, Hf, Wf))  # g, hf, wf, o, i
+        update = update.permute(0, 3, 4, 1, 2)  # g, o, i, hf, wf
+        update = torch.fft.irfft2(update, s=(H,W), norm="ortho")  # g, o, i, h, w
+        update = update.flatten(start_dim=2, end_dim=4)  # g, o, i*h*w
 
     if second_momentum is not None: #NorMuon added, from https://github.com/zichongli5/NorMuon
         vnorm = update.norm(dim=(-2,-1), keepdim=True)

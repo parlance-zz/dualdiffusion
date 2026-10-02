@@ -49,7 +49,7 @@ class UNetConfig(DualDiffusionUNetConfig):
     in_channels_x_ref: int = 9
 
     x_ref_sigma_scale: float = 0.5
-    x_ref_noise_mel_density_pow: float = -0.5
+    x_ref_noise_mel_density_pow: float = 0
     
     in_num_freqs: int = 128
     in_psd_freqs: int = 256
@@ -220,7 +220,7 @@ class UNet(DualDiffusionUNet):
 
         # Encoder.
         if config.in_channels_x_ref > 0:
-            self.conv_x_ref_in = MPConv(config.in_channels_x_ref, cblock[0], kernel=(5,5))
+            self.conv_x_ref_in = MPConv(config.in_channels_x_ref, cblock[0], kernel=(3,3))
             self.x_ref_balance = torch.nn.Parameter(torch.zeros([]))
         else:
             self.x_ref_balance = self.conv_x_ref_in = None
@@ -234,7 +234,7 @@ class UNet(DualDiffusionUNet):
             cout = channels
 
             if level == 0:
-                self.enc[f"conv_in"] = MPConv(cin, cout, kernel=(5,5))
+                self.enc[f"conv_in"] = MPConv(cin, cout, kernel=(3,3))
             else:
                 self.enc[f"block{level}_down"] = Block(level, cin, cout, cemb, num_freqs,
                     use_attention=level in config.attn_levels, flavor="enc", resample_mode="down", **block_kwargs)
@@ -270,7 +270,7 @@ class UNet(DualDiffusionUNet):
                     use_attention=level in config.attn_levels, flavor="dec", **block_kwargs)
                 
         self.out_gain = torch.nn.Parameter(torch.zeros([]))
-        self.conv_out = MPConv(cout, config.out_channels, kernel=(5,5))
+        self.conv_out = MPConv(cout, config.out_channels, kernel=(3,3))
 
     def get_embeddings(self, emb_in: torch.Tensor, conditioning_mask: torch.Tensor) -> torch.Tensor:
         if self.config.in_channels_emb > 0:
