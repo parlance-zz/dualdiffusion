@@ -1,14 +1,13 @@
 {
     "model_name": "edm2_dae_p6",
     "model_load_options": {
-        "torch_dtype": "bfloat16",
+        "torch_dtype": "float16",
         "device": "cuda",
         "load_checkpoints": true,
         "load_emas": {
-            //"unet": "ema_beta0.995.safetensors",
             //"unet": "ema_std0.1.safetensors"
-            //"unet": "phema_std0.01.safetensors",
             "unet": "ema_std0.05.safetensors"
+            //"unet": "phema_std0.01.safetensors",
             //"ddecm": "ema_std0.1.safetensors",
             //"ddecp": "ema_std0.1.safetensors"
         },
@@ -21,9 +20,27 @@
     "output_lufs": -20,
     "copy_sample_source_files": true,
     "random_test_samples_seed": null,
-    "add_random_test_samples": 16,
+    "add_random_test_samples": 2,
     "shuffle_test_samples": true,
     "test_samples": [
+
+        "switch/Gensou Shoujo Wars - Dream of the Stray Dreamer/bgm_pp_truth(15.272).ogg.flac",
+        "switch/Gensou Shoujo Wars - Dream of the Stray Dreamer/bgm_pp_truth(15.272).ogg.flac",
+        "vita/Steins;Gate/00075.at9.flac",
+        "vita/Steins;Gate/00075.at9.flac",
+        "vita/Steins;Gate/00075.at9.flac",
+        "vita/Steins;Gate/00075.at9.flac"
+        /*
+        "psf/Soukyuu Gurentai - Oubushutsugeki/STG02.psf.flac",
+        "switch/Saints Row The Third - The Full Package/sounds_0957.wem.flac",
+        "switch/Saints Row The Third - The Full Package/sounds_0957.wem.flac",
+
+        "wii/Kamen Rider - Chou Climax Heroes/Stage03.brstm.flac",
+        "wii/Mercury Meltdown Revolution/Virus-L.dsp.flac",
+        "gcn/Jikkyou Powerful Pro Yakyuu 10/strmbgm0006R.dsp.flac",
+        "switch/Mega Man X Legacy Collection 2/_t_X5_03_OPENINGSTAGEX.lopus.flac"
+        */
+
         /*
         "wii/Kamen Rider - Chou Climax Heroes/Stage03.brstm.flac",
         "wii/Kamen Rider - Chou Climax Heroes/Stage03.brstm.flac",
@@ -83,13 +100,14 @@
         "wiiu/Just Dance 2016/lights.wav.ckd.flac"
         */
 
-        "vita/Pro Yakyuu Spirits 2019/_t_wem_67090854.wem.flac",
-        "vita/Pro Yakyuu Spirits 2019/_t_wem_67090854.wem.flac",
-        "vita/Pro Yakyuu Spirits 2019/_t_wem_67090854.wem.flac",
-        "vita/Pro Yakyuu Spirits 2019/_t_wem_67090854.wem.flac",
-        "vita/Pro Yakyuu Spirits 2019/_t_wem_67090854.wem.flac",
-        "vita/Pro Yakyuu Spirits 2019/_t_wem_67090854.wem.flac",
-        "vita/Pro Yakyuu Spirits 2019/_t_wem_67090854.wem.flac"
+        //"wiiu/Just Dance 2016/lights.wav.ckd.flac",
+        //"wiiu/Just Dance 2016/lights.wav.ckd.flac",
+
+        //"vita/Pro Yakyuu Spirits 2019/_t_wem_67090854.wem.flac",
+        //"vita/Pro Yakyuu Spirits 2019/_t_wem_67090854.wem.flac",
+
+        //"psf2/ATV Offroad Fury 3/MUSIC3_A00001BD.ss2.flac",
+        //"psf2/ATV Offroad Fury 3/MUSIC3_A00001BD.ss2.flac"
 
         /*
         "myon_myon.flac",
@@ -265,8 +283,10 @@
         /* // high-def pop-punk
         "wii/Tony Hawk's Downhill Jam/_t_songs_15.logg.flac",
         "wii/Tony Hawk's Downhill Jam/_t_songs_15.logg.flac",
-        "wii/Tony Hawk's Downhill Jam/_t_songs_15.logg.flac",
-        "wii/Tony Hawk's Downhill Jam/_t_songs_15.logg.flac"
+        "psf2/ATV Offroad Fury 3/MUSIC3_A00001BD.ss2.flac",
+        "psf2/ATV Offroad Fury 3/MUSIC3_A00001BD.ss2.flac",
+        "psp/Madden NFL 07/Cartel - Say Anything (Else).txtp.flac",
+        "psp/Madden NFL 07/Cartel - Say Anything (Else).txtp.flac"
         //*/
 
         // extremely high-def orchestral *****
@@ -291,16 +311,12 @@
         //"psp/Conception - Ore no Kodomo o Unde Kure!!"
 
         /* // ** high-performing k-pop techno **
-        "psf/Mega Man 8/31. Staff Roll (Brandnew Way).flac.flac",
-        "psf/Mega Man 8/31. Staff Roll (Brandnew Way).flac.flac",
-        "psf/Mega Man 8/31. Staff Roll (Brandnew Way).flac.flac",
-        "psf/Mega Man 8/31. Staff Roll (Brandnew Way).flac.flac",
-        //*
-        "vita/Phantasy Star Online 2/11_bgm_musicdisc_590.hca.flac",
-        "vita/Phantasy Star Online 2/11_bgm_musicdisc_590.hca.flac",
-        "vita/Phantasy Star Online 2/11_bgm_musicdisc_590.hca.flac",
-        "vita/Phantasy Star Online 2/11_bgm_musicdisc_590.hca.flac"
-        //*/
+        //"psf/Mega Man 8/31. Staff Roll (Brandnew Way).flac.flac",
+        //"psf/Mega Man 8/31. Staff Roll (Brandnew Way).flac.flac",
+        //"vita/Phantasy Star Online 2/11_bgm_musicdisc_590.hca.flac",
+        //"vita/Phantasy Star Online 2/11_bgm_musicdisc_590.hca.flac",
+        //"psf3/Taiko no Tatsujin - Green Version/SONG_3RU3RU.nub.flac",
+        //"psf3/Taiko no Tatsujin - Green Version/SONG_3RU3RU.nub.flac",
 
         /* // no vocals, country / folk
         "wii/Cars - Race-O-Rama/RS_ExploreR.dsp.flac",
@@ -367,7 +383,7 @@
         "psf3/One Piece - Pirate Warriors/bgm010.at3.flac",
         "psf3/One Piece - Pirate Warriors/bgm010.at3.flac",
         "vita/Pro Yakyuu Spirits 2019/_t_wem_67090854.wem.flac",
-        "vita/Pro Yakyuu Spirits 2019/_t_wem_67090854.wem.flac",
+        "vita/Pro Yakyuu Spirits 2019/_t_wem_67090854.wem.flac"
         //*/
         
 
@@ -425,7 +441,7 @@
         //"length": 308768,
         
         "num_steps": 1000,//400,//200,//300,//500
-        "cfg_scale": 4,//6/4.4//5,//4,//3.5,//4//3//1.5,
+        "cfg_scale": 5,//4,//4//6/4.4//5,//4,//3.5,//4//3//1.5,
         "use_heun": false, //false,
 
         //"schedule": "ln_linear",
@@ -435,13 +451,13 @@
         //"rho": 7,
 
         "schedule": "cos",
-        "rho": 1.35,
+        "rho": 1.65,
 
         "sigma_max": 1000,//200,
-        "sigma_min": 0.08,
+        "sigma_min": 0.01,
         
-        "input_perturbation": 0.4,//0.5,//0.08,//0.2
-        "input_perturbation_offset": -4//-1//-2.5//-1//-0.85
+        "input_perturbation": 0.3,//0.5,//0//0.33,//0.5,//0.08,//0.2
+        "input_perturbation_offset": -4.5//-4//-1//-2.5//-1//-0.85
     },
     "ddecm_params": {
 

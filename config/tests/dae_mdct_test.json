@@ -1,10 +1,11 @@
 {
-    "model_name": "edm2_dae_p10",
+    "model_name": "edm2_dae_p12",
     "model_load_options": {
         "torch_dtype": "bfloat16",
         "device": "cuda",
         "load_checkpoints": true,
         "load_emas": {
+            "ddecp": "ema_std0.1.safetensors"
         },
         "compile_options": {
             "fullgraph": true,
@@ -13,8 +14,8 @@
     },
     "models_path_override": null,
     "length": 1408768,
-    "add_latents_noise": 0.08,
-    "add_ddecp_x_ref_noise": 0.03,
+    "add_latents_noise": 0,
+    "add_ddecp_x_ref_noise": 0,
     "ms_img_show_center_channel": true,
     "latents_tiled_encode": false,
     "latents_tiled_max_chunk_size": 6144,
@@ -24,22 +25,23 @@
     "latents_img_channel_order": null,
     "latents_img_save_collage": true,
     "output_lufs": -20,
-    "dae_bypass": false,
-    "ddec_output": false,
+    "dae_bypass": true,
+    "ddec_output": true,
     "add_random_test_samples": 20,
-    "random_test_samples_seed": 29999999999999999999999999,
-    "copy_sample_source_files": false,
+    "random_test_samples_seed": 29995513254353151354443126355136653756235100400460005560000800005316494467500003444553755555430004,
+    "copy_sample_source_files": true,
     "test_samples": [
-        "psf3/Tekken Hybrid/_t_Tekken Tag Tournament 2 Prologue_charasele.lwav.flac",
-        "wii/Just Dance 2014/otherside.wav.ckd.flac",
-        "SuspectT",
-        "3sf/Dopamix/STRM_BGM_ENDING.bcstm.flac",
         "dsf/Metropolis Street Racer Prototype/file_15.adx.flac",
+        "psf3/Tekken Hybrid/_t_Tekken Tag Tournament 2 Prologue_charasele.lwav.flac",
+        "Mighty_Switch_Force/Jake Kaufman - Mighty Switch Force OST - 07 BGM - Jive Bot.flac",
+        "vita/Luftrausers/luftrauser_bass1.logg.flac",
+        "SuspectT",
+
+        "3sf/Dopamix/STRM_BGM_ENDING.bcstm.flac",
         
         "psf3/Iron Man/_t_! movies_HUB_05_000001C2.adx.flac",
-        "dae_tests",
-        "switch/Muse Dash/_t_stage_jump_hard_candy_music.fsb.flac",
-        "wii/Kamen Rider - Chou Climax Heroes/Stage03.brstm.flac",
-        "switch/Arcaea/_t_songs_ignotus.ogg.flac"
+        "moonsurgent.flac",
+        "switch/Mega Man X Legacy Collection 2/_t_X6_08BLIZZARDWOLFANGSTAGE.lopus.flac",
+        "psf3/Taiko no Tatsujin - Green Version/SONG_3RU3RU.nub.flac"
     ]
 }

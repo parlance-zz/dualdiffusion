@@ -256,7 +256,7 @@ def dae_test() -> None:
                 #use_heun=False, schedule="ln_linear", rho=1, sigma_max=50, sigma_min=1e-3, stereo_fix=0, img_align_ref=input_mdct_psd
 
                 num_steps=50, length=audio_len, cfg_scale=0, input_perturbation=1, input_perturbation_offset=100,
-                use_heun=False, schedule="cos", rho=2, sigma_max=50, sigma_min=1e-2, stereo_fix=0, img_align_ref=input_mdct_psd
+                use_heun=False, schedule="cos", rho=2, sigma_max=50, sigma_min=1e-3, stereo_fix=0, img_align_ref=input_mdct_psd
             )
 
             output_ddecp = pipeline.diffusion_decode(
