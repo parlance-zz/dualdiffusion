@@ -15,10 +15,14 @@ print(f"Saving new modules to {model_path}...")
 #embedding.save_pretrained(model_path, subfolder="embedding")
 
 from modules.daes.dae_edm2_q432 import DAE, DAE_Config
-from modules.unets.unet_edm2_b432 import UNetConfig
-#unet_cfg = UNetConfig(num_layers_per_block=12, in_channels=512, out_channels=512, in_channels_emb=0)
-unet_cfg=None
+
+#from modules.unets.unet_edm2_p6 import UNetConfig
+#unet_cfg = UNetConfig(num_layers_per_block=12, in_channels=256, out_channels=256, in_channels_emb=0)
+
+#from modules.unets.unet_edm2_q432 import UNetConfig
 #unet_cfg = UNetConfig()
+
+unet_cfg=None
 serial = seed_and_get_module_serial_num()
 dae = DAE(DAE_Config(unet=unet_cfg))
 dae.config.serial_num = serial
@@ -46,11 +50,15 @@ if input("Save module? (y/n) ").lower() == 'y':
     print(f"Saved model to {model_path}/ddecp")
 
 #from modules.unets.unet_edm2_p6 import UNet, UNetConfig
-#serial = seed_and_get_module_serial_num()
+from modules.unets.unet_edm2_q432 import UNet, UNetConfig
+serial = seed_and_get_module_serial_num()
 #unet = UNet(UNetConfig(model_channels=8192, mlp_groups=64, emb_linear_groups=64, num_layers_per_block=24, channel_mult_noise=0.125, in_channels=3072, out_channels=3072))
-#unet.config.serial_num = serial
-#print_module_info(unet, "unet")
+#unet = UNet(UNetConfig(model_channels=4096, mlp_groups=32, emb_linear_groups=32, num_layers_per_block=32, channel_mult_noise=0.125, in_channels=256, out_channels=256,
+#                       conv0_kernel_size=3, conv1_kernel_size=3))
+unet = UNet(UNetConfig())
+unet.config.serial_num = serial
+print_module_info(unet, "unet")
 
-#if input("Save module? (y/n) ").lower() == 'y':
-#    unet.save_pretrained(model_path, subfolder="unet")
-#    print(f"Saved model to {model_path}/unet")
+if input("Save module? (y/n) ").lower() == 'y':
+    unet.save_pretrained(model_path, subfolder="unet")
+    print(f"Saved model to {model_path}/unet")

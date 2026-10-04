@@ -39,7 +39,7 @@ from numpy import ndarray
 from modules.daes.dae import DualDiffusionDAE, DualDiffusionDAEConfig
 from modules.mp_tools import LatentStatsTracker, MPConv, mp_silu, mp_sum, normalize, resample_2d, patchify_2d, unpatchify_2d
 #from modules.unets.unet_edm2_p6 import UNet, UNetConfig
-from modules.unets.unet_edm2_b432 import UNet, UNetConfig
+from modules.unets.unet_edm2_q432 import UNet, UNetConfig
 
 
 def residual_space_to_channel_avg(x: torch.Tensor, out_channels: int, factor: int = 2) -> torch.Tensor:
