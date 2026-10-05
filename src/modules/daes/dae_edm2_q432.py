@@ -91,7 +91,7 @@ class DAE_Config(DualDiffusionDAEConfig):
     conv_in_kernel: tuple[int, int]  = (3,3)
     conv_out_kernel: tuple[int, int] = (3,3)
 
-    add_recon_logvar: bool = True
+    num_recon_logvars: int = 37
 
     unet: Optional[UNetConfig] = None
 
@@ -266,9 +266,7 @@ class DAE(DualDiffusionDAE):
         enc_channels = [config.model_channels * m for m in config.channel_mult_enc]
         dec_channels = [config.model_channels * m for m in config.channel_mult_dec]
 
-        if config.add_recon_logvar == True:
-            self.recon_logvar = torch.nn.Parameter(torch.zeros([]))
-
+        self.recon_logvars = torch.nn.Parameter(torch.zeros(config.num_recon_logvars))
         self.latents_stats_tracker = LatentStatsTracker(config.latent_channels)
 
         # encoder
@@ -336,7 +334,7 @@ class DAE(DualDiffusionDAE):
             return None
     
     def get_recon_loss_logvar(self) -> torch.Tensor:
-        return getattr(self, "recon_logvar", None)
+        return getattr(self, "recon_logvars", None)
     
     def get_latent_shape(self, mel_spec_shape: Union[torch.Size, tuple[int, int, int, int]]) -> torch.Size:
         if len(mel_spec_shape) == 4:

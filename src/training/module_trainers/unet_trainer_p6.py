@@ -212,7 +212,8 @@ class UNetTrainer(ModuleTrainer):
     def train_batch(self, samples: torch.Tensor, embeddings: Optional[Union[torch.Tensor, list[torch.Tensor]]] = None,
             ref_samples: Optional[torch.Tensor] = None, mel_density_loss_weight_pow: Optional[float] = None,
             loss_fn: Callable[[torch.Tensor, torch.Tensor], torch.Tensor] = None,
-            target_x_ref: Optional[torch.Tensor] = None) -> tuple[dict[str, Union[torch.Tensor, float]], dict[str, Union[torch.Tensor, float]]]:
+            target_x_ref: Optional[torch.Tensor] = None,
+            target_x_ref_logvars: Optional[torch.Tensor] = None) -> tuple[dict[str, Union[torch.Tensor, float]], dict[str, Union[torch.Tensor, float]]]:
 
         device_bsz = self.trainer.config.device_batch_size
 
@@ -292,8 +293,11 @@ class UNetTrainer(ModuleTrainer):
             denoised, _, output_hidden_states = unet_module(samples + noise, batch_sigma, self.format, embeddings,
                 x_ref=ref_samples, perturbed_input=perturbed_input, conditioning_mask=conditioning_mask, return_hidden_states=True)
 
+            assert target_x_ref_logvars is not None
+            assert target_x_ref_logvars.shape[0] == len(output_hidden_states)
+            assert len(output_hidden_states) == len(target_hidden_states)
+
             logs = {}; ext_logs = {}
-        
             loss = torch.zeros(samples.shape[0], device=samples.device)
 
             for i, (x, y) in enumerate(zip(output_hidden_states, target_hidden_states)):
@@ -308,7 +312,7 @@ class UNetTrainer(ModuleTrainer):
                 state_loss = (state_loss * mel_density).mean(dim=(2,3)) / (y.pow(2) * mel_density).mean(dim=(2,3)).clip(min=1e-4)
                 state_loss = state_loss.mean(dim=1)
 
-                loss = loss + state_loss
+                loss = loss + state_loss / target_x_ref_logvars[i].exp() + target_x_ref_logvars[i]
                 logs[f"loss/hidden_state_{i}"] = state_loss.detach()
 
             bucket_log_loss = loss.detach()
