@@ -91,7 +91,7 @@ class DAE_Config(DualDiffusionDAEConfig):
     conv_in_kernel: tuple[int, int]  = (3,3)
     conv_out_kernel: tuple[int, int] = (3,3)
 
-    num_recon_logvars: int = 37
+    num_recon_logvars: int = 0
 
     unet: Optional[UNetConfig] = None
 
@@ -266,7 +266,11 @@ class DAE(DualDiffusionDAE):
         enc_channels = [config.model_channels * m for m in config.channel_mult_enc]
         dec_channels = [config.model_channels * m for m in config.channel_mult_dec]
 
-        self.recon_logvars = torch.nn.Parameter(torch.zeros(config.num_recon_logvars))
+        if config.num_recon_logvars > 0:
+            self.recon_logvars = torch.nn.Parameter(torch.zeros(config.num_recon_logvars))
+        else:
+            self.recon_logvars = None
+        
         self.latents_stats_tracker = LatentStatsTracker(config.latent_channels)
 
         # encoder
