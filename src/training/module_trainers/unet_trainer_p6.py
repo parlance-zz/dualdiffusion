@@ -309,8 +309,8 @@ class UNetTrainer(ModuleTrainer):
                     mel_density = 1
 
                 state_loss: torch.Tensor = torch.nn.functional.mse_loss(x, y, reduction="none")
-                state_loss = (state_loss * mel_density).mean(dim=(2,3)) / (y.pow(2) * mel_density).mean(dim=(2,3)).clip(min=1e-4)
-                state_loss = state_loss.mean(dim=1)
+                state_loss = state_loss.mean(dim=3, keepdim=True) / y.pow(2).mean(dim=3, keepdim=True).clip(min=1e-4)
+                state_loss = (state_loss * mel_density).mean(dim=(1,2,3))
 
                 loss = loss + state_loss / target_x_ref_logvars[i].exp() + target_x_ref_logvars[i]
                 logs[f"loss/hidden_state_{i}"] = state_loss.detach()

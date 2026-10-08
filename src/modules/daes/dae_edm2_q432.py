@@ -91,7 +91,7 @@ class DAE_Config(DualDiffusionDAEConfig):
     conv_in_kernel: tuple[int, int]  = (3,3)
     conv_out_kernel: tuple[int, int] = (3,3)
 
-    num_recon_logvars: int = 0
+    num_recon_logvars: int = 37
 
     unet: Optional[UNetConfig] = None
 
