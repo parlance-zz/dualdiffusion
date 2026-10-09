@@ -172,6 +172,7 @@ class DualDiffusionTrainerConfig:
     checkpoints_total_limit: int        = 1
     strict_checkpoint_time: bool        = False
     start_global_step_override: Optional[int] = None
+    force_checkpoint_at_steps: Optional[list[int]] = None
 
     activation_memory_budget: Optional[float] = None
     enable_bf16_reduction_in_sdp: bool  = False
@@ -1224,6 +1225,11 @@ class DualDiffusionTrainer:
                 if self.accelerator.is_main_process:
                     # if using strict checkpoint time, save it immediately instead of at the end of the epoch
                     _save_checkpoint = False
+                    
+                    if self.config.force_checkpoint_at_steps is not None:
+                        if self.global_step in self.config.force_checkpoint_at_steps:
+                            _save_checkpoint = True
+
                     if self.config.strict_checkpoint_time == True:
                         if (datetime.now() - self.last_checkpoint_time).total_seconds() >= self.config.min_checkpoint_time:
                             _save_checkpoint = True
@@ -1231,6 +1237,7 @@ class DualDiffusionTrainer:
                     # saves a checkpoint immediately if a file named "_save_checkpoint" is found in the model path
                     _save_checkpoint_path = os.path.join(self.config.model_path, "_save_checkpoint")
                     if os.path.isfile(_save_checkpoint_path): _save_checkpoint = True
+                    
                     if _save_checkpoint == True:
                         self.save_checkpoint()
                         if os.path.isfile(_save_checkpoint_path):
