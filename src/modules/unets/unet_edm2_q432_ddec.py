@@ -31,7 +31,7 @@
 # SOFTWARE.
 
 from dataclasses import dataclass
-from typing import Union, Optional, Literal
+from typing import Union, Optional, Literal, Callable
 
 import torch
 
@@ -54,13 +54,13 @@ class UNetConfig(DualDiffusionUNetConfig):
     in_num_freqs: int = 128
     in_psd_freqs: int = 256
 
-    model_channels: int  = 64                # Base multiplier for the number of channels.
+    model_channels: int  = 32                # Base multiplier for the number of channels.
     logvar_channels: int = 192               # Number of channels for training uncertainty estimation.
     channel_mult: list[int]    = (1,2,3,4)   # Per-resolution multipliers for the number of channels.
     double_midblock: bool      = False
     midblock_attn: bool        = False
-    channel_mult_noise: Optional[int] = 4    # Multiplier for noise embedding dimensionality.
-    channel_mult_emb: Optional[int]   = 4    # Multiplier for final embedding dimensionality.
+    channel_mult_noise: Optional[int] = 6    # Multiplier for noise embedding dimensionality.
+    channel_mult_emb: Optional[int]   = 6    # Multiplier for final embedding dimensionality.
     channels_per_head: int    = 64           # Number of channels per attention head.
     num_layers_per_block: int = 3            # Number of resnet blocks per resolution.
     label_balance: float      = 0.5          # Balance between noise embedding (0) and class embedding (1).
@@ -199,14 +199,8 @@ class UNet(DualDiffusionUNet):
 
         self.num_levels = len(config.channel_mult)
 
-        if self.config.in_psd_freqs > 0:
-            assert config.in_psd_freqs % config.in_num_freqs == 0
-            assert config.in_channels_x_ref > 0
-            self.psd_freqs_per_freq = config.in_psd_freqs // config.in_num_freqs
-            assert self.psd_freqs_per_freq in (1, 2)
-        else:
-            self.psd_freqs_per_freq = None
-            assert config.in_channels_x_ref == 0
+        assert config.in_psd_freqs % config.in_num_freqs == 0
+        assert config.in_psd_freqs // config.in_num_freqs == 2
         
         # Embedding.
         self.emb_fourier = MPFourier(cnoise)
@@ -219,12 +213,9 @@ class UNet(DualDiffusionUNet):
         self.logvar_linear.weight.data.fill_(0)
 
         # Encoder.
-        if config.in_channels_x_ref > 0:
-            self.conv_x_ref_in = MPConv(config.in_channels_x_ref, cblock[0], kernel=(3,3))
-            self.x_ref_balance = torch.nn.Parameter(torch.zeros([]))
-        else:
-            self.x_ref_balance = self.conv_x_ref_in = None
-        
+        self.conv_x_ref_in = MPConv(config.in_channels_x_ref, cblock[0], kernel=(6,3), stride=(2,1), padding=(2,1))
+        self.x_ref_balance = torch.nn.Parameter(torch.zeros([]))
+
         self.enc = torch.nn.ModuleDict()
         cin = config.in_channels
 
@@ -294,7 +285,8 @@ class UNet(DualDiffusionUNet):
                 x_ref: Optional[torch.Tensor] = None,
                 perturbed_input: Optional[torch.Tensor] = None,
                 conditioning_mask: Optional[torch.Tensor] = None,
-                return_hidden_states: bool = False) -> tuple[torch.Tensor, ...]:
+                align_loss_fn: Optional[Callable[[torch.Tensor], torch.Tensor]] = None
+                ) -> tuple[torch.Tensor, ...]:
 
         with torch.no_grad():
             sigma = sigma.view(-1, 1, 1, 1).float()
@@ -324,27 +316,21 @@ class UNet(DualDiffusionUNet):
             emb = mp_silu(mp_sum(emb, embeddings, t=self.config.label_balance))
         emb = emb[:, :, None, None].to(dtype=torch.bfloat16)
 
-        hidden_states: list[torch.Tensor] = []
+        align_loss: list[torch.Tensor] = [] if align_loss_fn is not None else None
 
-        if self.config.in_channels_x_ref > 0:
-            if self.config.x_ref_noise_mel_density_pow != 0:
-                mel_density = format.get_mel_density(x_ref.shape[-2], pow=self.config.x_ref_noise_mel_density_pow, normalize=True).float()
-            else:
-                mel_density = 1
-
-            x_ref, x_ref_noise = x_ref.float().chunk(2, dim=1)
-
-            #if return_hidden_states == True:
-            #    hidden_states.append(x_ref)
-
-            x_ref_sigma = self.config.x_ref_sigma_scale * mel_density
-            x_ref = (x_ref + x_ref_noise * x_ref_sigma) / (x_ref_sigma**2 + 1) ** 0.5
-            
-            x_ref = self.conv_x_ref_in(x_ref.to(dtype=torch.bfloat16))
-            if self.psd_freqs_per_freq == 2:
-                x_ref = torch.nn.functional.avg_pool2d(x_ref, kernel_size=(2,1), stride=(2,1))
+        if self.config.x_ref_noise_mel_density_pow != 0:
+            mel_density = format.get_mel_density(x_ref.shape[-2], pow=self.config.x_ref_noise_mel_density_pow, normalize=True).float()
         else:
-            assert x_ref is None
+            mel_density = 1
+
+        x_ref, x_ref_noise = x_ref.float().chunk(2, dim=1)
+
+        #if return_hidden_states == True:
+        #    hidden_states.append(x_ref)
+
+        x_ref_sigma = self.config.x_ref_sigma_scale * mel_density
+        x_ref = (x_ref + x_ref_noise * x_ref_sigma) / (x_ref_sigma**2 + 1) ** 0.5  
+        x_ref = self.conv_x_ref_in(x_ref.to(dtype=torch.bfloat16))
 
         # encoder
         skips = []
@@ -358,8 +344,8 @@ class UNet(DualDiffusionUNet):
                 x = block(x, emb)
             skips.append(x)
 
-            if return_hidden_states == True:
-                hidden_states.append(x)
+            if align_loss is not None:
+                align_loss.append(align_loss_fn(x))
 
         # decoder
         for name, block in self.dec.items():
@@ -367,18 +353,18 @@ class UNet(DualDiffusionUNet):
                 x = mp_cat(x, skips.pop(), t=self.config.concat_balance)
             x = block(x, emb)
 
-            if return_hidden_states == True:
-                hidden_states.append(x)
+            if align_loss is not None:
+                align_loss.append(align_loss_fn(x))
 
         x: torch.Tensor = self.conv_out(x, gain=self.out_gain)
-        if return_hidden_states == True:
-            hidden_states.append(x)
+        #if return_hidden_states == True:
+        #    hidden_states.append(x)
 
         D_x: torch.Tensor = c_skip * x_in.float() + c_out * x.float()
         #if return_hidden_states == True:
         #    hidden_states.append(D_x)
 
-        if return_hidden_states == False:
+        if align_loss is None:
             return D_x, self.get_sigma_loss_logvar(sigma)
         else:
-            return D_x, self.get_sigma_loss_logvar(sigma), hidden_states
+            return D_x, self.get_sigma_loss_logvar(sigma), align_loss

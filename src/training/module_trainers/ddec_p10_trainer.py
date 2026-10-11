@@ -98,14 +98,16 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
         self.train_ddecp = self.ddecp is not None
 
         if self.train_ddecp == True:
-            assert self.train_dae == False
+            #assert self.train_dae == False
+            assert self.train_dae == True
 
         if self.train_dae == True:
-            assert self.train_ddecp == False
+            #assert self.train_ddecp == False
+            assert self.train_ddecp == True
 
-            self.ddecp = trainer.pipeline.ddecp.to(device=trainer.accelerator.device, dtype=torch.bfloat16).requires_grad_(True).train()
-            assert self.ddecp.config.last_global_step > 0
-            self.train_ddecp = True
+            #self.ddecp = trainer.pipeline.ddecp.to(device=trainer.accelerator.device, dtype=torch.bfloat16).requires_grad_(True).train()
+            #assert self.ddecp.config.last_global_step > 0
+            #self.train_ddecp = True
 
         self.format: MS_MDCT_DualFormat = trainer.pipeline.format.to(self.trainer.accelerator.device)
 
@@ -326,6 +328,7 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
                 target_x_ref = torch.cat((target_x_ref, x_ref_noise), dim=1).detach()
                 error_logvars = dae_recon_logvars
             else:
+                assert False
                 ddecp_x_ref = self.format.unscale_ms_psd(ms_psd_scaled)
                 ddecp_x_ref = torch.cat((ddecp_x_ref, torch.randn_like(ddecp_x_ref)), dim=1).detach()
                 target_x_ref = None
@@ -338,6 +341,10 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
             
             logs.update(ddecp_logs)
             logs["loss"] = logs["loss"] + logs["loss/ddecp"]
+
+            if target_x_ref is not None:
+                logs["loss_weight/ddecp_align"] = 0.5
+                logs["loss"] = logs["loss"] + logs["loss/ddecp_align"] * logs["loss_weight/ddecp_align"]
 
             if self.config.use_mss_1d_loss == True:
                 assert ddec_cond is None
