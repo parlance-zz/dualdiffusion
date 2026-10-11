@@ -292,11 +292,12 @@ class UNetTrainer(ModuleTrainer):
             batch_weighted_loss = loss_fn(denoised, samples) * batch_loss_weight
 
         if self.config.disable_loss_weight == True:
-            error_logvar = self.unet.get_sigma_loss_logvar(torch.ones_like(batch_sigma))
+            error_logvar = self.unet.get_sigma_loss_logvar(torch.ones_like(batch_sigma)).flatten()
             batch_loss = batch_weighted_loss / error_logvar.exp() + error_logvar
             #bucket_log_loss = batch_weighted_loss
             bucket_log_loss = (0.5 * batch_weighted_loss * batch_sigma**2) * (batch_sigma ** 2 + sigma_data ** 2) / (batch_sigma * sigma_data) ** 2
         else:
+            error_logvar = error_logvar.flatten()
             batch_loss = batch_weighted_loss / error_logvar.exp() + error_logvar
             bucket_log_loss = batch_weighted_loss
         
@@ -313,7 +314,7 @@ class UNetTrainer(ModuleTrainer):
         if target_x_ref is not None:
             
             align_losses = _ret[2]
-            align_loss = torch.zeros_like(batch_loss)
+            align_loss = torch.zeros(device_bsz, device=self.trainer.accelerator.device)
             for i, state_loss in enumerate(align_losses):
                 logs[f"loss/{self.flavor}_align_{i}"] = state_loss
                 align_loss = align_loss + state_loss / target_x_ref_logvars[i].exp() + target_x_ref_logvars[i]
