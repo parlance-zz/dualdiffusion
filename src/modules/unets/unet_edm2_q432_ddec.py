@@ -357,12 +357,12 @@ class UNet(DualDiffusionUNet):
                 align_loss.append(align_loss_fn(x))
 
         x: torch.Tensor = self.conv_out(x, gain=self.out_gain)
-        #if return_hidden_states == True:
-        #    hidden_states.append(x)
+        if align_loss is not None:
+            align_loss.append(align_loss_fn(x))
 
         D_x: torch.Tensor = c_skip * x_in.float() + c_out * x.float()
-        #if return_hidden_states == True:
-        #    hidden_states.append(D_x)
+        #if align_loss is not None:
+        #    align_loss.append(align_loss_fn(D_x))
 
         if align_loss is None:
             return D_x, self.get_sigma_loss_logvar(sigma)
