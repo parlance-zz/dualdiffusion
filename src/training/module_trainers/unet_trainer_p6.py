@@ -259,7 +259,7 @@ class UNetTrainer(ModuleTrainer):
                 y = y.detach()
                 
                 if mel_density_loss_weight_pow:
-                    mel_density = self.format.get_mel_density(y.shape[-2], pow=mel_density_loss_weight_pow, normalize=True).squeeze(-1)
+                    mel_density = self.format.get_mel_density(y.shape[-2], pow=mel_density_loss_weight_pow, normalize=True)#.squeeze(-1)
                 else:
                     mel_density = 1
 
