@@ -326,7 +326,9 @@ class UNetTrainer(ModuleTrainer):
             #logs[f"loss/{self.flavor}_align"] = align_loss / len(align_losses)
             target_x_ref_logvars = target_x_ref_logvars.mean()
             logs[f"loss/{self.flavor}"] = (align_loss / len(align_losses)) / target_x_ref_logvars.exp() + target_x_ref_logvars
+
             bucket_log_loss = align_loss
+            batch_sigma = batch_sigma[:bucket_log_loss.shape[0]]
 
         ext_logs = {
             "denoised": denoised,
