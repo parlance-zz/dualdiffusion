@@ -134,11 +134,11 @@ def normuon_update(grad: torch.Tensor, momentum: torch.Tensor, second_momentum: 
 
     elif update.ndim == 5:
 
-        if update.shape[-1] > 1 or update.shape[-2] > 1: 
+        if update.shape[-1] > 1 or update.shape[-2] > 1 or update.shape[-3] > 1: 
             
             update = update.unflatten(dim=0, sizes=(groups, update.shape[0] // groups))
             Z, H, W = update.shape[-3], update.shape[-2], update.shape[-1]
-            update: torch.Tensor = torch.fft.rfftn(update, dim=(-3, -2, -1), norm="ortho") # g, o, i, hf, wf
+            update: torch.Tensor = torch.fft.rfftn(update, dim=(-3, -2, -1), norm="ortho") # g, o, i, zf, hf, wf
             Zf, Hf, Wf = update.shape[-3], update.shape[-2], update.shape[-1]
             update = update.permute(0, 3, 4, 5, 1, 2).flatten(start_dim=0, end_dim=3) # g*hf*wf, o, i
             
@@ -159,10 +159,10 @@ def normuon_update(grad: torch.Tensor, momentum: torch.Tensor, second_momentum: 
         update = torch.fft.irfft2(update, s=(H,W), norm="ortho")  # g, o, i, h, w
         update = update.flatten(start_dim=2, end_dim=4)  # g, o, i*h*w
     elif is_muon_c_update == "3d":
-        update = update.unflatten(dim=0, sizes=(groups, Zf, Hf, Wf))  # g, hf, wf, o, i
-        update = update.permute(0, 4, 5, 6, 1, 2, 3)  # g, o, i, hf, wf
-        update = torch.fft.irfftn(update, s=(Z, H, W), dim=(-3, -2, -1), norm="ortho")  # g, o, i, h, w
-        update = update.flatten(start_dim=2, end_dim=4)  # g, o, i*h*w
+        update = update.unflatten(dim=0, sizes=(groups, Zf, Hf, Wf))  # g, zf, hf, wf, o, i
+        update = update.permute(0, 4, 5, 1, 2, 3)  # g, o, i, zf, hf, wf
+        update = torch.fft.irfftn(update, s=(Z, H, W), dim=(-3, -2, -1), norm="ortho")  # g, o, i, z, h, w
+        update = update.flatten(start_dim=2, end_dim=5)  # g, o, i*z*h*w
 
     if second_momentum is not None: #NorMuon added, from https://github.com/zichongli5/NorMuon
         vnorm = update.norm(dim=(-2,-1), keepdim=True)

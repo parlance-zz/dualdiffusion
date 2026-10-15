@@ -221,7 +221,7 @@ class UNet(DualDiffusionUNet):
         self.logvar_linear.weight.data.fill_(0)
 
         # Encoder.
-        self.conv_x_ref_in = MPStereoConv(config.in_channels_x_ref, cblock[0], kernel=(6,3), stride=(2,1), padding=(2,1))
+        self.conv_x_ref_in = MPStereoConv(config.in_channels_x_ref + int(config.x_ref_has_center), cblock[0], kernel=(3,3))
         self.x_ref_balance = torch.nn.Parameter(torch.zeros([]))
 
         self.enc = torch.nn.ModuleDict()
@@ -332,8 +332,9 @@ class UNet(DualDiffusionUNet):
             mel_density = 1
 
         x_ref, x_ref_noise = x_ref.float().chunk(2, dim=1) # x_ref is (x_ref, noise), each stereo interleaved
-        x_ref = x_ref[:, 1:]
-        x_ref_noise = x_ref_noise[:, 1:]
+        if self.config.x_ref_has_center == True:
+            x_ref = torch.cat((x_ref[:, 0:1].repeat(1,2,1,1), x_ref[:, 1:]), dim=1)
+            x_ref_noise = torch.cat((x_ref_noise[:, 0:1].repeat(1,2,1,1), x_ref_noise[:, 1:]), dim=1)
 
         #if return_hidden_states == True:
         #    hidden_states.append(x_ref)
@@ -341,6 +342,7 @@ class UNet(DualDiffusionUNet):
         x_ref_sigma = self.config.x_ref_sigma_scale * mel_density
         x_ref = (x_ref + x_ref_noise * x_ref_sigma) / (x_ref_sigma**2 + 1) ** 0.5  
         x_ref = self.conv_x_ref_in(x_ref.to(dtype=torch.bfloat16))
+        x_ref = resample_2d(x_ref, mode="down_keep")
 
         # encoder
         skips = []
