@@ -113,7 +113,7 @@ def normuon_update(grad: torch.Tensor, momentum: torch.Tensor, second_momentum: 
     update = grad.lerp_(momentum, beta) if nesterov else momentum
 
     is_muon_c_update = False
-    if update.ndim >= 4:
+    if update.ndim == 4:
 
         # "Muon-C: Operator-Aligned Muon for Convolutional Kernels" (https://arxiv.org/abs/2609.09676) by Jiaxin Qing, Lexin Li
         # additionally, groups for any size kernel (even 1x1) are packed into the batch dimension before orthogonalization, with the same reasoning
@@ -131,6 +131,25 @@ def normuon_update(grad: torch.Tensor, momentum: torch.Tensor, second_momentum: 
             update = update.reshape(len(update), -1)
             # convert grouped conv params into a batch of smaller matrices for newton schulz iterations
             update = update.view(groups,-1, update.size(-1))
+
+    elif update.ndim == 5:
+
+        if update.shape[-1] > 1 or update.shape[-2] > 1: 
+            
+            update = update.unflatten(dim=0, sizes=(groups, update.shape[0] // groups))
+            Z, H, W = update.shape[-3], update.shape[-2], update.shape[-1]
+            update: torch.Tensor = torch.fft.rfftn(update, dim=(-3, -2, -1), norm="ortho") # g, o, i, hf, wf
+            Zf, Hf, Wf = update.shape[-3], update.shape[-2], update.shape[-1]
+            update = update.permute(0, 3, 4, 5, 1, 2).flatten(start_dim=0, end_dim=3) # g*hf*wf, o, i
+            
+            is_muon_c_update = "3d"
+        else:
+            update = update.reshape(len(update), -1)
+            # convert grouped conv params into a batch of smaller matrices for newton schulz iterations
+            update = update.view(groups,-1, update.size(-1))
+
+    else:
+        raise ValueError(f"Unsupported update ndim: {update.ndim}")
     
     update = _polar_express(update, steps=ns_steps)#.to(dtype=grad.dtype)
 
@@ -138,6 +157,11 @@ def normuon_update(grad: torch.Tensor, momentum: torch.Tensor, second_momentum: 
         update = update.unflatten(dim=0, sizes=(groups, Hf, Wf))  # g, hf, wf, o, i
         update = update.permute(0, 3, 4, 1, 2)  # g, o, i, hf, wf
         update = torch.fft.irfft2(update, s=(H,W), norm="ortho")  # g, o, i, h, w
+        update = update.flatten(start_dim=2, end_dim=4)  # g, o, i*h*w
+    elif is_muon_c_update == "3d":
+        update = update.unflatten(dim=0, sizes=(groups, Zf, Hf, Wf))  # g, hf, wf, o, i
+        update = update.permute(0, 4, 5, 6, 1, 2, 3)  # g, o, i, hf, wf
+        update = torch.fft.irfftn(update, s=(Z, H, W), dim=(-3, -2, -1), norm="ortho")  # g, o, i, h, w
         update = update.flatten(start_dim=2, end_dim=4)  # g, o, i*h*w
 
     if second_momentum is not None: #NorMuon added, from https://github.com/zichongli5/NorMuon
