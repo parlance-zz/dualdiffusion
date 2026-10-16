@@ -100,6 +100,9 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
         if self.train_ddecp == True:
             assert self.train_dae == False
 
+            if trainer.pipeline.dae.config.last_global_step > 0:
+                self.dae = trainer.pipeline.dae.to(device=trainer.accelerator.device, dtype=torch.bfloat16).requires_grad_(True).train()
+
         if self.train_dae == True:
             assert self.train_ddecp == False
 
@@ -134,7 +137,9 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
                 self.unet_trainer = None
 
             self.logger.info(f"ddec_cond KL loss weight: {self.config.ddec_cond_kl_loss_weight}")
-
+        else:
+            self.unet_trainer = None
+            
         if self.train_ddecp == True:
             assert self.config.mel_density_loss_weight_pow_ddecp >= 0
             self.logger.info(f"DDEC-P mel-density loss weight pow: {self.config.mel_density_loss_weight_pow_ddecp}")
@@ -325,6 +330,10 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
                 ddecp_x_ref = torch.cat((ddecp_x_ref, x_ref_noise), dim=1)
                 target_x_ref = torch.cat((target_x_ref, x_ref_noise), dim=1).detach()
                 error_logvars = dae_recon_logvars
+
+                if self.train_dae == False:
+                    target_x_ref = None
+                    error_logvars = None
             else:
                 ddecp_x_ref = self.format.unscale_ms_psd(ms_psd_scaled)
                 ddecp_x_ref = torch.cat((ddecp_x_ref, torch.randn_like(ddecp_x_ref)), dim=1).detach()
