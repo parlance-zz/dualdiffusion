@@ -63,17 +63,17 @@ def residual_channel_to_space_dup(x: torch.Tensor, out_channels: int, factor: in
 @dataclass
 class DAE_Config(DualDiffusionDAEConfig):
 
-    in_channels: int     = 9
+    in_channels: int     = 2
     in_channels_emb: int = 0
-    out_channels: int    = 9
+    out_channels: int    = 2
     latent_channels: int = 32
     use_1d_latents: bool = False
     use_latents_pixel_norm: bool = True
 
     in_num_freqs: int = 128
-    in_psd_freqs: int = 256
+    in_psd_freqs: int = 128
 
-    model_channels: int         = 96        # Base multiplier for the number of channels.
+    model_channels: int         = 64        # Base multiplier for the number of channels.
     channel_mult_enc: int       = (1,2,4,8,16)
     channel_mult_dec: list[int] = (1,2,4,8,16)
     channel_mult_emb: int     = 0            # Multiplier for final embedding dimensionality.
@@ -84,14 +84,14 @@ class DAE_Config(DualDiffusionDAEConfig):
     attn_balance: float       = 0.3          # Balance between main branch (0) and self-attention (1).
     attn_levels: list[int]    = ()        # List of resolution levels to use self-attention.
     mlp_multiplier: int    = 1               # Multiplier for the number of channels in the MLP.
-    mlp_groups: int        = 4               # Number of groups for the MLPs.
+    mlp_groups: int        = 2               # Number of groups for the MLPs.
     emb_linear_groups: int = 1
     add_pixel_norm: bool   = False
 
     conv_in_kernel: tuple[int, int]  = (3,3)
     conv_out_kernel: tuple[int, int] = (3,3)
 
-    num_recon_logvars: int = 37
+    num_recon_logvars: int = 0
 
     unet: Optional[UNetConfig] = None
 
@@ -282,7 +282,7 @@ class DAE(DualDiffusionDAE):
             cout = enc_channels[level]
 
             if level == 0:
-                self.enc[f"conv_in"] = MPConv(self.config.in_channels, cout, kernel=self.config.conv_in_kernel)
+                self.enc[f"conv_in"] = MPConv(self.config.in_channels, cout, kernel=self.config.conv_in_kernel, bias=True)
             else:
                 self.enc[f"block{level}_down"] = Block(level, cin, cout, cemb,
                     use_attention=level in config.attn_levels, flavor="enc", resample_mode="down", **block_kwargs)
@@ -364,7 +364,7 @@ class DAE(DualDiffusionDAE):
         if embeddings is not None:
             embeddings = embeddings[:, :, None, None]
 
-        x = x.to(dtype=torch.bfloat16)
+        x = x.to(dtype=torch.bfloat16).detach()
 
         for name, block in self.enc.items():
             if "conv" in name:

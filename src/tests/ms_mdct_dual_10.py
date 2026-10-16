@@ -117,8 +117,8 @@ def ms_mdct_dual_format_test() -> None:
         test_samples += [sample["file_name"] for sample in random.sample(train_samples, cfg.add_random_test_samples)]
 
     num_mdct_freqs = format.config.num_frequencies
-    mdct_psd_avg_bin_msq = torch.zeros(num_mdct_freqs,  dtype=torch.float64, device=cfg.device).view(1, 1,-1, 1)
-    mdct_psd_avg_bin_mean = torch.zeros(num_mdct_freqs,  dtype=torch.float64, device=cfg.device).view(1, 1,-1, 1)
+    #mdct_psd_avg_bin_msq = torch.zeros(num_mdct_freqs,  dtype=torch.float64, device=cfg.device).view(1, 1,-1, 1)
+    #mdct_psd_avg_bin_mean = torch.zeros(num_mdct_freqs,  dtype=torch.float64, device=cfg.device).view(1, 1,-1, 1)
     mdct_phase_avg_bin_msq = torch.zeros(num_mdct_freqs, dtype=torch.float64, device=cfg.device).view(1, 1,-1, 1)
 
     num_ms_psd_freqs = format.config.ms_psd_num_frequencies
@@ -152,16 +152,17 @@ def ms_mdct_dual_format_test() -> None:
 
         mdct_phase_psd = format.raw_to_mdct_phase_psd(raw_sample)
 
-        _mdct_phase, _mdct_psd = mdct_phase_psd.to(dtype=torch.float64).chunk(2, dim=1)
+        #_mdct_phase, _mdct_psd = mdct_phase_psd.to(dtype=torch.float64).chunk(2, dim=1)
+        _mdct_phase = mdct_phase_psd.to(dtype=torch.float64)
         _mdct_phase_msq = _mdct_phase.pow(2).mean(dim=r_dims, keepdim=True)
-        _mdct_psd_msq = _mdct_psd.pow(2).mean(dim=r_dims, keepdim=True)
-        _mdct_psd_mean = _mdct_psd.mean(dim=r_dims, keepdim=True)
+        #_mdct_psd_msq = _mdct_psd.pow(2).mean(dim=r_dims, keepdim=True)
+        #_mdct_psd_mean = _mdct_psd.mean(dim=r_dims, keepdim=True)
 
         mdct_phase_avg_bin_msq += _mdct_phase_msq / len(test_samples)
-        mdct_psd_avg_bin_msq  += _mdct_psd_msq / len(test_samples)
-        mdct_psd_avg_bin_mean += _mdct_psd_mean / len(test_samples)
-        stat_logger.add_logs({f"mdct_phase_psd_msq": _mdct_psd_msq.mean()})
-        stat_logger.add_logs({f"mdct_phase_psd_mean": _mdct_psd_mean.mean()})
+        #mdct_psd_avg_bin_msq  += _mdct_psd_msq / len(test_samples)
+        #mdct_psd_avg_bin_mean += _mdct_psd_mean / len(test_samples)
+        #stat_logger.add_logs({f"mdct_phase_psd_msq": _mdct_psd_msq.mean()})
+        #stat_logger.add_logs({f"mdct_phase_psd_mean": _mdct_psd_mean.mean()})
         stat_logger.add_logs({f"mdct_phase_msq": _mdct_phase_msq.mean()})
 
         ms_psd = format.raw_to_ms_psd(raw_sample)
@@ -272,8 +273,8 @@ def ms_mdct_dual_format_test() -> None:
         # copy our calculated means for mdct/ms psd to format buffers, zero the psd msqs for recalculation in 2nd pass
 
         format.mdct_phase_scale.copy_(mdct_phase_avg_bin_msq.pow(0.5).float())
-        format.mdct_psd_offset.copy_(-mdct_psd_avg_bin_mean.float())
-        mdct_psd_avg_bin_msq.zero_()
+        #format.mdct_psd_offset.copy_(-mdct_psd_avg_bin_mean.float())
+        #mdct_psd_avg_bin_msq.zero_()
     
         format.ms_psd_offset.copy_(-ms_psd_avg_bin_mean.float())
         ms_psd_avg_bin_msq.zero_()
@@ -313,9 +314,9 @@ def ms_mdct_dual_format_test() -> None:
         raw_sample = load_audio(file_path, start=start, count=crop_width).unsqueeze(0).to(cfg.device)
         
         mdct_phase_psd = format.raw_to_mdct_phase_psd(raw_sample)
-        _, _mdct_psd = mdct_phase_psd.to(dtype=torch.float64).chunk(2, dim=1)
-        _mdct_psd_msq = _mdct_psd.pow(2).mean(dim=r_dims, keepdim=True)
-        mdct_psd_avg_bin_msq  += _mdct_psd_msq / len(test_samples)
+        #_, _mdct_psd = mdct_phase_psd.to(dtype=torch.float64).chunk(2, dim=1)
+        #_mdct_psd_msq = _mdct_psd.pow(2).mean(dim=r_dims, keepdim=True)
+        #mdct_psd_avg_bin_msq  += _mdct_psd_msq / len(test_samples)
 
         ms_psd = format.raw_to_ms_psd(raw_sample)
 
@@ -332,7 +333,7 @@ def ms_mdct_dual_format_test() -> None:
             _ms_psd_mel_unscaled_msq = ms_psd_mel_unscaled.to(dtype=torch.float64).pow(2).mean(dim=r_dims, keepdim=True)
             ms_psd_mel_unscaled_avg_bin_msq += _ms_psd_mel_unscaled_msq / len(test_samples)
 
-    format.mdct_psd_scale.copy_(mdct_psd_avg_bin_msq.pow(0.5).float())
+    #format.mdct_psd_scale.copy_(mdct_psd_avg_bin_msq.pow(0.5).float())
     format.ms_psd_scale.copy_(ms_psd_avg_bin_msq.pow(0.5).float())
 
     if format.config.ms_psd_num_filters > 0:

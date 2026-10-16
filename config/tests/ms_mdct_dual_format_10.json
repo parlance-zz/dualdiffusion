@@ -1,7 +1,7 @@
 {
     "device": "cuda",
-    "add_random_test_samples": 50000,
-    "save_output": false,
+    "add_random_test_samples": 0,
+    "save_output": true,
     
     "test_sample_verbose": false,
     "test_samples_seed": 0,
@@ -20,7 +20,7 @@
         //"default_raw_length": 2817536,
         //"default_raw_length": 2097152,
         //"default_raw_length": 1408768,
-        "default_raw_length": 524288,
+        "default_raw_length": 130944,
         //"default_raw_length": 196608,
         //"default_raw_length": 808768,
         //"default_raw_length": 131072,
@@ -28,10 +28,10 @@
         //"default_raw_length": 96000,
         //"default_raw_length": 393216,
         //"width_alignment": 12288,
-        "width_alignment": 8192,
+        "width_alignment": 4096,
 
         "mdct_psd_exponent": 0.25,
-        "window_len": 512,
+        "window_len": 256,
         "window_func": "vorbis",
 
         // standard p config, from paper
@@ -52,7 +52,7 @@
         //"ms_psd_t_scale": 3.14,
         //"ms_psd_t_scale": 3.65, // equivalent to exp 15 in format 3
 
-        "ms_psd_window_len": 1023,
+        "ms_psd_window_len": 511,
         "ms_psd_num_filters": 0,
         "ms_psd_filter_alpha": null,
 
