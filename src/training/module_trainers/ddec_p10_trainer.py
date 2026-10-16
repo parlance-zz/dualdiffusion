@@ -111,8 +111,6 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
             assert self.ddecp.config.last_global_step > 0
             self.train_ddecp = True
         """
-        #if self.train_ddecp == True or self.train_dae == True:
-        #    assert self.train_ddecp == True and self.train_dae == True
 
         self.format: MS_MDCT_DualFormat = trainer.pipeline.format.to(self.trainer.accelerator.device)
 
@@ -205,7 +203,7 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
         if self.train_dae == True:
             
             dae_unet_batch_sigma = self.unet_trainer.get_batch_sigma() if self.unet_trainer is not None else None
-            latents, ddec_cond, dae_recon_logvars, dae_unet_batch_loss, bucket_log_loss = self.trainer.get_ddp_module(self.dae)(mdct_phase_psd, audio_embeddings, batch_sigma=dae_unet_batch_sigma)
+            latents, ddec_cond, dae_recon_logvars, dae_unet_batch_loss, bucket_log_loss = self.trainer.get_ddp_module(self.dae)(ms_psd_scaled, audio_embeddings, batch_sigma=dae_unet_batch_sigma)
 
             if self.unet_trainer is not None:
                 if self.unet_trainer.config.num_loss_buckets > 0:
@@ -218,7 +216,7 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
 
             with torch.no_grad():
                 dae_unet_batch_sigma = self.unet_trainer.get_batch_sigma() if self.unet_trainer is not None else None
-                latents, ddec_cond, dae_recon_logvars, dae_unet_batch_loss, bucket_log_loss = self.dae(mdct_phase_psd, audio_embeddings, batch_sigma=dae_unet_batch_sigma)
+                latents, ddec_cond, dae_recon_logvars, dae_unet_batch_loss, bucket_log_loss = self.dae(ms_psd_scaled, audio_embeddings, batch_sigma=dae_unet_batch_sigma)
 
             if self.unet_trainer is not None:
                 if self.unet_trainer.config.num_loss_buckets > 0:
@@ -244,9 +242,7 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
 
         if self.train_dae == True:
             
-            #logs["loss/dae_mse"] = torch.nn.functional.mse_loss(ddec_cond, ms_psd_scaled, reduction="none").mean(dim=(1,2,3)).detach()
-            #logs["loss/dae_mse"] = torch.nn.functional.mse_loss(ddec_cond, mdct_phase_psd, reduction="none").mean(dim=(1,2,3))
-            #logs["loss"] = logs["loss"] + logs["loss/dae_mse"]
+            logs["loss/dae_mse"] = torch.nn.functional.mse_loss(ddec_cond, ms_psd_scaled, reduction="none").mean(dim=(1,2,3)).detach()
             
             if self.config.use_mss_2d_loss == True:
                 if self.config.mss_2d_leak_steps > 0:
@@ -329,20 +325,17 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
 
             if ddec_cond is not None:
                 
-                ddecp_x_ref = ddec_cond
-                #target_x_ref = self.format.unscale_ms_psd(ms_psd_scaled)
+                ddecp_x_ref = self.format.unscale_ms_psd(ddec_cond)
+                target_x_ref = self.format.unscale_ms_psd(ms_psd_scaled)
 
-                x_ref_noise = torch.randn_like(ddecp_x_ref)
+                x_ref_noise = torch.randn_like(target_x_ref)
                 ddecp_x_ref = torch.cat((ddecp_x_ref, x_ref_noise), dim=1)
-                #target_x_ref = torch.cat((target_x_ref, x_ref_noise), dim=1).detach()
-                #error_logvars = dae_recon_logvars
+                target_x_ref = torch.cat((target_x_ref, x_ref_noise), dim=1).detach()
+                error_logvars = dae_recon_logvars
 
-                #if self.train_dae == False:
-                #    target_x_ref = None
-                #    error_logvars = None
-                target_x_ref = None
-                error_logvars = None
-
+                if self.train_dae == False:
+                    target_x_ref = None
+                    error_logvars = None
             else:
                 ddecp_x_ref = self.format.unscale_ms_psd(ms_psd_scaled)
                 ddecp_x_ref = torch.cat((ddecp_x_ref, torch.randn_like(ddecp_x_ref)), dim=1).detach()
