@@ -73,7 +73,7 @@ class DAE_Config(DualDiffusionDAEConfig):
     in_num_freqs: int = 128
     in_psd_freqs: int = 256
 
-    model_channels: int         = 96        # Base multiplier for the number of channels.
+    model_channels: int         = 64        # Base multiplier for the number of channels.
     channel_mult_enc: int       = (1,2,4,8,16)
     channel_mult_dec: list[int] = (1,2,4,8,16)
     channel_mult_emb: int     = 0            # Multiplier for final embedding dimensionality.
@@ -84,14 +84,14 @@ class DAE_Config(DualDiffusionDAEConfig):
     attn_balance: float       = 0.3          # Balance between main branch (0) and self-attention (1).
     attn_levels: list[int]    = ()        # List of resolution levels to use self-attention.
     mlp_multiplier: int    = 1               # Multiplier for the number of channels in the MLP.
-    mlp_groups: int        = 4               # Number of groups for the MLPs.
+    mlp_groups: int        = 2               # Number of groups for the MLPs.
     emb_linear_groups: int = 1
     add_pixel_norm: bool   = False
 
-    conv_in_kernel: tuple[int, int]  = (3,3)
-    conv_out_kernel: tuple[int, int] = (3,3)
+    conv_in_kernel: tuple[int, int]  = (7,3)
+    conv_out_kernel: tuple[int, int] = (7,3)
 
-    num_recon_logvars: int = 37
+    num_recon_logvars: int = 0
 
     unet: Optional[UNetConfig] = None
 

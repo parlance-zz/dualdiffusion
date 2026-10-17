@@ -333,9 +333,11 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
                 target_x_ref = torch.cat((target_x_ref, x_ref_noise), dim=1).detach()
                 error_logvars = dae_recon_logvars
 
-                if self.train_dae == False:
-                    target_x_ref = None
-                    error_logvars = None
+                #if self.train_dae == False:
+                #    target_x_ref = None
+                #    error_logvars = None
+                target_x_ref = None
+                error_logvars = None
             else:
                 ddecp_x_ref = self.format.unscale_ms_psd(ms_psd_scaled)
                 ddecp_x_ref = torch.cat((ddecp_x_ref, torch.randn_like(ddecp_x_ref)), dim=1).detach()

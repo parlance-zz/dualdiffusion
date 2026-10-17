@@ -48,19 +48,19 @@ class UNetConfig(DualDiffusionUNetConfig):
     in_channels_emb: int = 0
     in_channels_x_ref: int = 9
 
-    x_ref_sigma_scale: float = 0.5
+    x_ref_sigma_scale: float = 0
     x_ref_noise_mel_density_pow: float = 0
     
     in_num_freqs: int = 128
     in_psd_freqs: int = 256
 
-    model_channels: int  = 64                # Base multiplier for the number of channels.
+    model_channels: int  = 32                # Base multiplier for the number of channels.
     logvar_channels: int = 192               # Number of channels for training uncertainty estimation.
     channel_mult: list[int]    = (1,2,3,4)   # Per-resolution multipliers for the number of channels.
     double_midblock: bool      = False
     midblock_attn: bool        = False
-    channel_mult_noise: Optional[int] = 4    # Multiplier for noise embedding dimensionality.
-    channel_mult_emb: Optional[int]   = 4    # Multiplier for final embedding dimensionality.
+    channel_mult_noise: Optional[int] = 6    # Multiplier for noise embedding dimensionality.
+    channel_mult_emb: Optional[int]   = 6    # Multiplier for final embedding dimensionality.
     channels_per_head: int    = 64           # Number of channels per attention head.
     num_layers_per_block: int = 3            # Number of resnet blocks per resolution.
     label_balance: float      = 0.5          # Balance between noise embedding (0) and class embedding (1).
@@ -213,7 +213,7 @@ class UNet(DualDiffusionUNet):
         self.logvar_linear.weight.data.fill_(0)
 
         # Encoder.
-        self.conv_x_ref_in = MPConv(config.in_channels_x_ref, cblock[0], kernel=(6,3), stride=(2,1), padding=(2,1))
+        self.conv_x_ref_in = MPConv(config.in_channels_x_ref, cblock[0], kernel=(7,3))
         self.x_ref_balance = torch.nn.Parameter(torch.zeros([]))
 
         self.enc = torch.nn.ModuleDict()
@@ -331,6 +331,8 @@ class UNet(DualDiffusionUNet):
         x_ref_sigma = self.config.x_ref_sigma_scale * mel_density
         x_ref = (x_ref + x_ref_noise * x_ref_sigma) / (x_ref_sigma**2 + 1) ** 0.5  
         x_ref = self.conv_x_ref_in(x_ref.to(dtype=torch.bfloat16))
+
+        x_ref = resample_2d(x_ref, "down_keep")
 
         # encoder
         skips = []
