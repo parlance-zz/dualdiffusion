@@ -242,7 +242,7 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
 
         if self.train_dae == True:
             
-            logs["loss/dae_mse"] = torch.nn.functional.mse_loss(ddec_cond, ms_psd_scaled, reduction="none").mean(dim=(1,2,3)).detach()
+            #logs["loss/dae_mse"] = torch.nn.functional.mse_loss(ddec_cond, ms_psd_scaled, reduction="none").mean(dim=(1,2,3)).detach()
             
             if self.config.use_mss_2d_loss == True:
                 if self.config.mss_2d_leak_steps > 0:
@@ -326,12 +326,12 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
             if ddec_cond is not None:
                 
                 ddecp_x_ref = self.format.unscale_ms_psd(ddec_cond)
-                target_x_ref = self.format.unscale_ms_psd(ms_psd_scaled)
+                #target_x_ref = self.format.unscale_ms_psd(ms_psd_scaled)
 
-                x_ref_noise = torch.randn_like(target_x_ref)
-                ddecp_x_ref = torch.cat((ddecp_x_ref, x_ref_noise), dim=1)
-                target_x_ref = torch.cat((target_x_ref, x_ref_noise), dim=1).detach()
-                error_logvars = dae_recon_logvars
+                #x_ref_noise = torch.randn_like(target_x_ref)
+                #ddecp_x_ref = torch.cat((ddecp_x_ref, x_ref_noise), dim=1)
+                #target_x_ref = torch.cat((target_x_ref, x_ref_noise), dim=1).detach()
+                #error_logvars = dae_recon_logvars
 
                 #if self.train_dae == False:
                 #    target_x_ref = None
@@ -339,6 +339,7 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
                 target_x_ref = None
                 error_logvars = None
             else:
+                raise NotImplementedError()
                 ddecp_x_ref = self.format.unscale_ms_psd(ms_psd_scaled)
                 ddecp_x_ref = torch.cat((ddecp_x_ref, torch.randn_like(ddecp_x_ref)), dim=1).detach()
                 target_x_ref = None

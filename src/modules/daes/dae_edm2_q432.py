@@ -65,7 +65,7 @@ class DAE_Config(DualDiffusionDAEConfig):
 
     in_channels: int     = 9
     in_channels_emb: int = 0
-    out_channels: int    = 9
+    out_channels: int    = 16
     latent_channels: int = 32
     use_1d_latents: bool = False
     use_latents_pixel_norm: bool = True
@@ -89,7 +89,7 @@ class DAE_Config(DualDiffusionDAEConfig):
     add_pixel_norm: bool   = False
 
     conv_in_kernel: tuple[int, int]  = (7,3)
-    conv_out_kernel: tuple[int, int] = (7,3)
+    conv_out_kernel: tuple[int, int] = (3,3)
 
     num_recon_logvars: int = 0
 
@@ -282,7 +282,7 @@ class DAE(DualDiffusionDAE):
             cout = enc_channels[level]
 
             if level == 0:
-                self.enc[f"conv_in"] = MPConv(self.config.in_channels, cout, kernel=self.config.conv_in_kernel)
+                self.enc[f"conv_in"] = MPConv(self.config.in_channels, cout, kernel=self.config.conv_in_kernel, bias=True)
             else:
                 self.enc[f"block{level}_down"] = Block(level, cin, cout, cemb,
                     use_attention=level in config.attn_levels, flavor="enc", resample_mode="down", **block_kwargs)
@@ -324,7 +324,7 @@ class DAE(DualDiffusionDAE):
                     use_attention=level in config.attn_levels, flavor="dec", **block_kwargs)
 
         self.conv_out = MPConv(cout, self.config.out_channels, kernel=self.config.conv_out_kernel)
-        self.out_gain = torch.nn.Parameter(torch.ones([]))
+        #self.out_gain = torch.nn.Parameter(torch.ones([]))
         
         if config.unet is not None:
             self.unet = UNet(config.unet)
@@ -404,10 +404,7 @@ class DAE(DualDiffusionDAE):
         for block in self.dec.values():
             x = block(x, embeddings)
 
-        if self.psd_freqs_per_freq == 2:
-            x = resample_2d(x, "up_keep")
-
-        x: torch.Tensor = self.conv_out(x, gain=self.out_gain)
+        x: torch.Tensor = self.conv_out(x)#, gain=self.out_gain)
 
         return x
     

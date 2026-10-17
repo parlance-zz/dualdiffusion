@@ -43,16 +43,12 @@ from modules.formats.format import DualDiffusionFormat
 @dataclass
 class UNetConfig(DualDiffusionUNetConfig):
 
-    in_channels:  int = 2
-    out_channels: int = 2
+    in_channels:  int = 4
+    out_channels: int = 4
     in_channels_emb: int = 0
-    in_channels_x_ref: int = 9
-
-    x_ref_sigma_scale: float = 0
-    x_ref_noise_mel_density_pow: float = 0
+    in_channels_x_ref: int = 16
     
     in_num_freqs: int = 128
-    in_psd_freqs: int = 256
 
     model_channels: int  = 32                # Base multiplier for the number of channels.
     logvar_channels: int = 192               # Number of channels for training uncertainty estimation.
@@ -192,15 +188,11 @@ class UNet(DualDiffusionUNet):
                         "attn_balance": config.attn_balance,
                         "channels_per_head": config.channels_per_head}
 
-        assert config.x_ref_noise_mel_density_pow <= 0
         cblock = [config.model_channels * x for x in config.channel_mult]
         cnoise = config.model_channels * config.channel_mult_noise if config.channel_mult_noise is not None else max(cblock)
         cemb = config.model_channels * config.channel_mult_emb if config.channel_mult_emb is not None else max(cblock)
 
         self.num_levels = len(config.channel_mult)
-
-        assert config.in_psd_freqs % config.in_num_freqs == 0
-        assert config.in_psd_freqs // config.in_num_freqs == 2
         
         # Embedding.
         self.emb_fourier = MPFourier(cnoise)
@@ -213,7 +205,7 @@ class UNet(DualDiffusionUNet):
         self.logvar_linear.weight.data.fill_(0)
 
         # Encoder.
-        self.conv_x_ref_in = MPConv(config.in_channels_x_ref, cblock[0], kernel=(7,3))
+        self.conv_x_ref_in = MPConv(config.in_channels_x_ref, cblock[0], kernel=(3,3))
         self.x_ref_balance = torch.nn.Parameter(torch.zeros([]))
 
         self.enc = torch.nn.ModuleDict()
@@ -225,7 +217,7 @@ class UNet(DualDiffusionUNet):
             cout = channels
 
             if level == 0:
-                self.enc[f"conv_in"] = MPConv(cin, cout, kernel=(3,3))
+                self.enc[f"conv_in"] = MPConv(cin, cout, kernel=(3,3), bias=True)
             else:
                 self.enc[f"block{level}_down"] = Block(level, cin, cout, cemb, num_freqs,
                     use_attention=level in config.attn_levels, flavor="enc", resample_mode="down", **block_kwargs)
@@ -285,7 +277,6 @@ class UNet(DualDiffusionUNet):
                 x_ref: Optional[torch.Tensor] = None,
                 perturbed_input: Optional[torch.Tensor] = None,
                 conditioning_mask: Optional[torch.Tensor] = None,
-                align_loss_fn: Optional[Callable[[torch.Tensor], torch.Tensor]] = None
                 ) -> tuple[torch.Tensor, ...]:
 
         with torch.no_grad():
@@ -316,23 +307,7 @@ class UNet(DualDiffusionUNet):
             emb = mp_silu(mp_sum(emb, embeddings, t=self.config.label_balance))
         emb = emb[:, :, None, None].to(dtype=torch.bfloat16)
 
-        align_loss: list[torch.Tensor] = [] if align_loss_fn is not None else None
-
-        if self.config.x_ref_noise_mel_density_pow != 0:
-            mel_density = format.get_mel_density(x_ref.shape[-2], pow=self.config.x_ref_noise_mel_density_pow, normalize=True).float()
-        else:
-            mel_density = 1
-
-        x_ref, x_ref_noise = x_ref.float().chunk(2, dim=1)
-
-        #if return_hidden_states == True:
-        #    hidden_states.append(x_ref)
-
-        x_ref_sigma = self.config.x_ref_sigma_scale * mel_density
-        x_ref = (x_ref + x_ref_noise * x_ref_sigma) / (x_ref_sigma**2 + 1) ** 0.5  
         x_ref = self.conv_x_ref_in(x_ref.to(dtype=torch.bfloat16))
-
-        x_ref = resample_2d(x_ref, "down_keep")
 
         # encoder
         skips = []
@@ -346,27 +321,13 @@ class UNet(DualDiffusionUNet):
                 x = block(x, emb)
             skips.append(x)
 
-            if align_loss is not None:
-                align_loss.append(align_loss_fn(x))
-
         # decoder
         for name, block in self.dec.items():
             if "layer" in name:
                 x = mp_cat(x, skips.pop(), t=self.config.concat_balance)
             x = block(x, emb)
 
-            if align_loss is not None:
-                align_loss.append(align_loss_fn(x))
-
         x: torch.Tensor = self.conv_out(x, gain=self.out_gain)
-        if align_loss is not None:
-            align_loss.append(align_loss_fn(x))
-
         D_x: torch.Tensor = c_skip * x_in.float() + c_out * x.float()
-        #if align_loss is not None:
-        #    align_loss.append(align_loss_fn(D_x))
 
-        if align_loss is None:
-            return D_x, self.get_sigma_loss_logvar(sigma)
-        else:
-            return D_x, self.get_sigma_loss_logvar(sigma), align_loss
+        return D_x, self.get_sigma_loss_logvar(sigma)
