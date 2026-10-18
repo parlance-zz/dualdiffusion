@@ -323,6 +323,18 @@ def mp_cat(a: torch.Tensor, b: torch.Tensor,
     wb = C / Nb**0.5 * t
     return torch.cat([wa * a , wb * b], dim=dim)
 
+def mp_cat_groups(a: torch.Tensor, b: torch.Tensor,
+                  groups: int = 2, t: float = 0.5) -> torch.Tensor:
+    # concatenates per group along dim 1 so that group g of the output is [a_g, b_g]
+    Na = a.shape[1]
+    Nb = b.shape[1]
+    C = ((Na + Nb) / ((1 - t) ** 2 + t ** 2)) ** 0.5
+    wa = C / Na**0.5 * (1 - t)
+    wb = C / Nb**0.5 * t
+    a = (wa * a).reshape(a.shape[0], groups, Na // groups, *a.shape[2:])
+    b = (wb * b).reshape(b.shape[0], groups, Nb // groups, *b.shape[2:])
+    return torch.cat([a, b], dim=2).reshape(a.shape[0], Na + Nb, *a.shape[3:])
+
 def mp_cat_interleave(a: torch.Tensor, b: torch.Tensor,
                       dim: int = 1, t: float = 0.5) -> torch.Tensor:
     Na = a.shape[dim]
