@@ -211,7 +211,9 @@ class UNetTrainer(ModuleTrainer):
     
     def train_batch(self, samples: torch.Tensor, embeddings: Optional[Union[torch.Tensor, list[torch.Tensor]]] = None,
             ref_samples: Optional[torch.Tensor] = None, mel_density_loss_weight_pow: Optional[float] = None,
-            loss_fn: Callable[[torch.Tensor, torch.Tensor], torch.Tensor] = None) -> tuple[dict[str, Union[torch.Tensor, float]], dict[str, Union[torch.Tensor, float]]]:
+            loss_fn: Callable[[torch.Tensor, torch.Tensor], torch.Tensor] = None,
+            target_x_ref: Optional[torch.Tensor] = None,
+            target_x_ref_logvars: Optional[torch.Tensor] = None) -> tuple[dict[str, Union[torch.Tensor, float]], dict[str, Union[torch.Tensor, float]]]:
 
         device_bsz = self.trainer.config.device_batch_size
 
@@ -241,8 +243,39 @@ class UNetTrainer(ModuleTrainer):
         except:
             unet_module: UNet = self.unet
 
+        if target_x_ref is not None:
+            samples = samples.repeat(2, 1, 1, 1)
+            noise = noise.repeat(2, 1, 1, 1)
+            batch_sigma = batch_sigma.repeat(2)
+            ref_samples = torch.cat((ref_samples, target_x_ref), dim=0)
+            conditioning_mask = conditioning_mask.repeat(2)
+
+            if perturbed_input is not None:
+                perturbed_input = perturbed_input.repeat(2, 1, 1, 1)
+
+            def align_loss_fn(z: torch.Tensor) -> torch.Tensor:
+                
+                x, y = z.float().chunk(2, dim=0)
+                y = y.detach()
+                
+                if mel_density_loss_weight_pow:
+                    mel_density = self.format.get_mel_density(y.shape[-2], pow=mel_density_loss_weight_pow, normalize=True)#.squeeze(-1)
+                else:
+                    mel_density = 1
+
+                #state_loss: torch.Tensor = torch.nn.functional.mse_loss(x, y, reduction="none").mean(dim=3)
+                #state_loss = (state_loss * mel_density).mean(dim=2) / y.pow(2).mean(dim=(2,3)).clip(min=1e-4)
+                #state_loss = state_loss.mean(dim=1)
+                state_loss: torch.Tensor = torch.nn.functional.mse_loss(x, y, reduction="none")
+                state_loss = (state_loss * mel_density).mean(dim=(2,3)) / (y.pow(2) * mel_density).mean(dim=(2,3)).clip(min=1e-4)
+                state_loss = state_loss.mean(dim=1)
+
+                return state_loss
+        else:
+            align_loss_fn = None
+
         _ret = unet_module(samples + noise, batch_sigma, self.format, embeddings,
-            x_ref=ref_samples, perturbed_input=perturbed_input, conditioning_mask=conditioning_mask)
+            x_ref=ref_samples, perturbed_input=perturbed_input, conditioning_mask=conditioning_mask, align_loss_fn=align_loss_fn)
         
         denoised, error_logvar = _ret[0], _ret[1]
         
@@ -270,12 +303,31 @@ class UNetTrainer(ModuleTrainer):
             error_logvar = error_logvar.flatten()
             batch_loss = batch_weighted_loss / error_logvar.exp() + error_logvar
             bucket_log_loss = batch_weighted_loss
+        
+        if target_x_ref is not None:
+            batch_loss_ref, batch_loss_target = batch_loss.chunk(2, dim=0)
+            batch_loss = (batch_loss_ref + batch_loss_target) / 2
 
         logs = {
             f"loss/{self.flavor}": batch_loss,
             f"io_stats_{self.flavor}/denoised_var": denoised.var(dim=(1,2,3)),
             f"io_stats_{self.flavor}/denoised_mean": denoised.mean(dim=(1,2,3))
         }
+
+        if target_x_ref is not None:
+            
+            align_losses = _ret[2]
+            align_loss = torch.zeros(device_bsz, device=self.trainer.accelerator.device)
+            for i, state_loss in enumerate(align_losses):
+                logs[f"loss/hidden_state_{i}"] = state_loss.detach()
+                align_loss = align_loss + state_loss# / target_x_ref_logvars[i].exp() + target_x_ref_logvars[i]
+
+            #logs[f"loss/{self.flavor}_align"] = align_loss / len(align_losses)
+            target_x_ref_logvars = target_x_ref_logvars.mean()
+            logs[f"loss/{self.flavor}"] = (align_loss / len(align_losses)) / target_x_ref_logvars.exp() + target_x_ref_logvars
+
+            bucket_log_loss = align_loss
+            batch_sigma = batch_sigma[:bucket_log_loss.shape[0]]
 
         ext_logs = {
             "denoised": denoised,

@@ -65,7 +65,7 @@ class DAE_Config(DualDiffusionDAEConfig):
 
     in_channels: int     = 9
     in_channels_emb: int = 0
-    out_channels: int    = 16
+    out_channels: int    = 9
     latent_channels: int = 32
     use_1d_latents: bool = False
     use_latents_pixel_norm: bool = True
@@ -73,7 +73,7 @@ class DAE_Config(DualDiffusionDAEConfig):
     in_num_freqs: int = 128
     in_psd_freqs: int = 256
 
-    model_channels: int         = 64        # Base multiplier for the number of channels.
+    model_channels: int         = 96        # Base multiplier for the number of channels.
     channel_mult_enc: int       = (1,2,4,8,16)
     channel_mult_dec: list[int] = (1,2,4,8,16)
     channel_mult_emb: int     = 0            # Multiplier for final embedding dimensionality.
@@ -84,14 +84,11 @@ class DAE_Config(DualDiffusionDAEConfig):
     attn_balance: float       = 0.3          # Balance between main branch (0) and self-attention (1).
     attn_levels: list[int]    = ()        # List of resolution levels to use self-attention.
     mlp_multiplier: int    = 1               # Multiplier for the number of channels in the MLP.
-    mlp_groups: int        = 2               # Number of groups for the MLPs.
+    mlp_groups: int        = 4               # Number of groups for the MLPs.
     emb_linear_groups: int = 1
     add_pixel_norm: bool   = False
 
-    conv_in_kernel: tuple[int, int]  = (7,3)
-    conv_out_kernel: tuple[int, int] = (3,3)
-
-    num_recon_logvars: int = 0
+    num_recon_logvars: int = 1
 
     unet: Optional[UNetConfig] = None
 
@@ -251,8 +248,7 @@ class DAE(DualDiffusionDAE):
 
         assert config.in_psd_freqs % config.in_num_freqs == 0
         self.psd_freqs_per_freq = config.in_psd_freqs // config.in_num_freqs
-        if self.psd_freqs_per_freq > 1:
-            assert self.psd_freqs_per_freq == 2
+        assert self.psd_freqs_per_freq == 2
 
         # embedding
         if config.in_channels_emb > 0:
@@ -282,7 +278,7 @@ class DAE(DualDiffusionDAE):
             cout = enc_channels[level]
 
             if level == 0:
-                self.enc[f"conv_in"] = MPConv(self.config.in_channels, cout, kernel=self.config.conv_in_kernel, bias=True)
+                self.enc[f"conv_in"] = MPConv(config.in_channels, cout, kernel=(6,3), stride=(2,1), padding=(2,1), bias=True)
             else:
                 self.enc[f"block{level}_down"] = Block(level, cin, cout, cemb,
                     use_attention=level in config.attn_levels, flavor="enc", resample_mode="down", **block_kwargs)
@@ -300,7 +296,7 @@ class DAE(DualDiffusionDAE):
                 self.conv_latents_in.weight.copy_(torch.linalg.pinv(self.conv_latents_out.weight.data[:, :, 0, 0])[:, :, None, None])
         else:
             self.conv_latents_out = MPConv(enc_channels[-1], config.latent_channels, kernel=(3,3))
-            self.conv_latents_in = MPConv(config.latent_channels, dec_channels[-1], kernel=(3,3))
+            self.conv_latents_in = MPConv(config.latent_channels, dec_channels[-1], kernel=(3,3), bias=True)
 
         # decoder
         self.dec = torch.nn.ModuleDict()
@@ -323,8 +319,8 @@ class DAE(DualDiffusionDAE):
                 self.dec[f"block{level}_layer{idx}"] = Block(level, cout, cout, cemb,
                     use_attention=level in config.attn_levels, flavor="dec", **block_kwargs)
 
-        self.conv_out = MPConv(cout, self.config.out_channels, kernel=self.config.conv_out_kernel)
-        #self.out_gain = torch.nn.Parameter(torch.ones([]))
+        self.conv_out = MPConv(cout, self.config.out_channels, kernel=(7,3))
+        self.out_gain = torch.nn.Parameter(torch.ones([]))
         
         if config.unet is not None:
             self.unet = UNet(config.unet)
@@ -404,7 +400,10 @@ class DAE(DualDiffusionDAE):
         for block in self.dec.values():
             x = block(x, embeddings)
 
-        x: torch.Tensor = self.conv_out(x)#, gain=self.out_gain)
+        if self.psd_freqs_per_freq == 2:
+            x = resample_2d(x, "up_keep")
+
+        x: torch.Tensor = self.conv_out(x, gain=self.out_gain)
 
         return x
     
