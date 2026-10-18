@@ -43,8 +43,8 @@ from modules.formats.format import DualDiffusionFormat
 @dataclass
 class UNetConfig(DualDiffusionUNetConfig):
 
-    in_channels:  int = 2
-    out_channels: int = 2
+    in_channels:  int = 4
+    out_channels: int = 4
     in_channels_emb: int = 0
     in_channels_x_ref: int = 9
 

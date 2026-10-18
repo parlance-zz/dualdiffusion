@@ -185,7 +185,7 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
             raw_samples = batch["audio"]
 
         mdct_phase_psd = self.format.raw_to_mdct_phase_psd(raw_samples, random_phase_augmentation=self.config.random_phase_augmentation)
-        mdct_phase, mdct_psd = mdct_phase_psd.chunk(2, dim=1)
+        #mdct_phase, mdct_psd = mdct_phase_psd.chunk(2, dim=1)
         ms_psd = self.format.raw_to_ms_psd(raw_samples).detach()
         ms_psd_scaled = self.format.scale_ms_psd(ms_psd).detach()
 
@@ -341,7 +341,7 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
                 error_logvars = None
 
             ddecp_logs, ext_logs = self.ddecp_trainer.train_batch(
-                mdct_phase, audio_embeddings, ref_samples=ddecp_x_ref,
+                mdct_phase_psd, audio_embeddings, ref_samples=ddecp_x_ref,
                 mel_density_loss_weight_pow=self.config.mel_density_loss_weight_pow_ddecp,
                 target_x_ref=target_x_ref, target_x_ref_logvars=error_logvars)
             
@@ -350,7 +350,8 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
 
             if self.config.use_mss_1d_loss == True:
                 assert ddec_cond is None
-                denoised_mdct_phase_psd = torch.cat((ext_logs["denoised"], mdct_psd), dim=1)
+                #denoised_mdct_phase_psd = torch.cat((ext_logs["denoised"], mdct_psd), dim=1)
+                denoised_mdct_phase_psd = ext_logs["denoised"]
                 logs["loss/mss_1d"] = ddecp_loss_fn(denoised_mdct_phase_psd, mdct_phase_psd)
                 logs["loss"] = logs["loss"] + logs["loss/mss_1d"] * self.config.mss_1d_loss_weight
 
