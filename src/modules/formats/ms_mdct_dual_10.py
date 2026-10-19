@@ -263,7 +263,7 @@ class MS_MDCT_DualFormat(DualDiffusionFormat):
         raw_crop_width = self.get_raw_crop_width(raw_length=raw_length)
         num_mdct_bins = self.config.num_frequencies
         num_mdct_frames = raw_crop_width // num_mdct_bins + 1
-        return (bsz, self.config.num_raw_channels * 2, num_mdct_bins, num_mdct_frames,)
+        return (bsz, self.config.num_raw_channels, num_mdct_bins, num_mdct_frames,)
 
     def get_mdct_shape(self, bsz: int = 1, raw_length: Optional[int] = None):
         return self.get_mdct_phase_psd_shape(bsz=bsz, raw_length=raw_length)
@@ -277,31 +277,35 @@ class MS_MDCT_DualFormat(DualDiffusionFormat):
             phase_rotation = torch.exp(2j * torch.pi * torch.rand(_mclt.shape[0], device=_mclt.device)) 
             _mclt *= phase_rotation.view(-1, 1, 1, 1)
 
-        mdct_psd = _mclt.abs()
-        mdct_phase_real = (_mclt.real / mdct_psd.clip(min=1e-20)).clip(min=-1, max=1)
-        mdct_phase_imag = (_mclt.imag / mdct_psd.clip(min=1e-20)).clip(min=-1, max=1)
+        #mdct_psd = _mclt.abs()
+        #mdct_phase = (_mclt.real / mdct_psd.clip(min=1e-20)).clip(min=-1, max=1)
+        mdct_phase = _mclt.real / _mclt.real.abs().pow(1 - self.config.mdct_psd_exponent).clip(min=1e-20)
 
-        mdct_psd = mdct_psd.pow(self.config.mdct_psd_exponent)
-        mdct_phase = torch.cat((mdct_phase_real * mdct_psd, mdct_phase_imag * mdct_psd), dim=1)
+        #mdct_psd = mdct_psd.pow(self.config.mdct_psd_exponent)
+        #mdct_phase = mdct_phase * mdct_psd
 
         mdct_phase = mdct_phase / self.mdct_phase_scale
+        #mdct_psd = (mdct_psd + self.mdct_psd_offset) / self.mdct_psd_scale
+
+        #mdct_phase_psd = torch.cat((mdct_phase, mdct_psd), dim=1)
         mdct_phase_psd = mdct_phase
 
         return mdct_phase_psd
     
     def mdct_phase_psd_to_raw(self, mdct_phase_psd: torch.Tensor) -> torch.Tensor:
 
-
+        #mdct_phase, mdct_psd = torch.chunk(mdct_phase_psd.float(), 2, dim=1)
+        #mdct_phase = mdct_phase * self.mdct_phase_scale
+        #mdct_psd = mdct_psd * self.mdct_psd_scale - self.mdct_psd_offset
         mdct_phase = mdct_phase_psd * self.mdct_phase_scale
 
-        mdct_phase_real, mdct_phase_imag = torch.chunk(mdct_phase, 2, dim=1)
-        mdct_psd = (mdct_phase_real**2 + mdct_phase_imag**2).pow(0.5)
-
+        #mdct_psd = mdct_psd.clip(min=0).pow(1 / self.config.mdct_psd_exponent - 1)
         recon_exp = int((1 / self.config.mdct_psd_exponent - 1) / 2) * 2 + 1
-        mdct_phase_real *= mdct_psd.pow(recon_exp)
-        mdct_phase_imag *= mdct_psd.pow(recon_exp)
+        #mdct_psd = mdct_psd.pow(recon_exp)
+        #raw_samples = self.imdct(mdct_phase * mdct_psd).real.contiguous()
 
-        raw_samples = self.imdct(mdct_phase_real).real.contiguous()
+        mdct_phase = mdct_phase * mdct_phase.abs().pow(recon_exp)
+        raw_samples = self.imdct(mdct_phase).real.contiguous()
         return raw_samples
         
     def raw_to_mdct_psd(self, raw_samples: torch.Tensor) -> torch.Tensor:

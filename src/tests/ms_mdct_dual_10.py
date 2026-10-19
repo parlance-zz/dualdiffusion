@@ -33,7 +33,7 @@ from modules.formats.ms_mdct_dual_10 import MS_MDCT_DualFormat, MS_MDCT_DualForm
 from training.trainer import TrainLogger as StatLogger
 from utils.dual_diffusion_utils import (
     init_cuda, save_audio, load_audio, tensor_to_img,
-    save_img, get_audio_info, dict_str, tensor_info_str
+    save_img, get_audio_info, dict_str, tensor_info_str, quantize_tensor, dequantize_tensor
 )
 
 
@@ -49,6 +49,8 @@ class MS_MDCT_DualFormat_TestConfig:
     test_samples_seed: Optional[int]
 
     format_config: MS_MDCT_DualFormatConfig
+
+    audio_recon_quantize_levels: Optional[int] = None
 
 @torch.inference_mode()
 def ms_mdct_dual_format_test() -> None:
@@ -197,13 +199,17 @@ def ms_mdct_dual_format_test() -> None:
             ms_psd_mel_unscaled_avg_bin_mean += _ms_psd_mel_unscaled_mean / len(test_samples)
             stat_logger.add_logs({f"ms_psd_mel_unscaled_msq": _ms_psd_mel_unscaled_msq.mean()})
             stat_logger.add_logs({f"ms_psd_mel_unscaled_mean": _ms_psd_mel_unscaled_mean.mean()})
-
+        
+        if cfg.audio_recon_quantize_levels is not None:
+            mdct_phase_psd, offset_and_range = quantize_tensor(mdct_phase_psd, cfg.audio_recon_quantize_levels)
+            mdct_phase_psd = dequantize_tensor(mdct_phase_psd, offset_and_range)
         raw_sample_recon = format.mdct_phase_psd_to_raw(mdct_phase_psd)
         
         stat_logger.add_logs({
             "raw_sample_msq": raw_sample.pow(2).mean(),
             "raw_sample_recon_msq": raw_sample_recon.pow(2).mean(),
-            "recon_error_rms": (raw_sample - raw_sample_recon).pow(2).mean().pow(0.5)
+            "recon_error_rms": (raw_sample - raw_sample_recon).pow(2).mean().pow(0.5),
+            "mdct_phase_psd_min_max": torch.maximum(mdct_phase_psd.amin().abs(), mdct_phase_psd.amax().abs())
         })
 
         if cfg.test_sample_verbose == True:

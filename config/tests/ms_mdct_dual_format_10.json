@@ -1,7 +1,7 @@
 {
     "device": "cuda",
-    "add_random_test_samples": 100000,
-    "save_output": false,
+    "add_random_test_samples": 0,
+    "save_output": true,
     
     "test_sample_verbose": false,
     "test_samples_seed": 0,
