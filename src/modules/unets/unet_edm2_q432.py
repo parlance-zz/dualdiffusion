@@ -117,9 +117,10 @@ class Block(torch.nn.Module):
             kernel=(1,1), groups=emb_linear_groups) if emb_channels != 0 else None
         
         if self.use_attention:
-            self.attn_q = MPConv(out_channels, out_channels, kernel=(1,1))
-            self.attn_k = MPConv(out_channels, out_channels, kernel=(1,1))
-            self.attn_v = MPConv(out_channels, out_channels, kernel=(1,1))
+            assert mlp_groups <= self.num_heads and self.num_heads % mlp_groups == 0
+            self.attn_q = MPConv(out_channels, out_channels, kernel=(1,1)); self.attn_q.weight.conv_groups = self.num_heads
+            self.attn_k = MPConv(out_channels, out_channels, kernel=(1,1)); self.attn_k.weight.conv_groups = self.num_heads
+            self.attn_v = MPConv(out_channels, out_channels, kernel=(1,1)); self.attn_v.weight.conv_groups = self.num_heads
             self.attn_proj = MPConv(out_channels, out_channels, kernel=(1,1))
 
             self.emb_gain_qkv = torch.nn.Parameter(torch.zeros([]))
