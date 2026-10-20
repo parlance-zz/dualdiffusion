@@ -312,6 +312,7 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
 
                 return loss
 
+            """
             def ddecp_loss_fn(denoised: torch.Tensor, samples: torch.Tensor) -> torch.Tensor:
 
                 with torch.no_grad():
@@ -320,7 +321,8 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
                     rescale = phase_scale / mel_density
 
                 return torch.nn.functional.mse_loss(denoised * rescale, samples * rescale, reduction="none").mean(dim=(1,2,3))
-            
+            """
+
             if ddec_cond is not None:
                 
                 ddecp_x_ref = self.format.unscale_ms_psd(ddec_cond)
@@ -343,7 +345,7 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
             ddecp_logs, ext_logs = self.ddecp_trainer.train_batch(
                 mdct_phase_psd, audio_embeddings, ref_samples=ddecp_x_ref,
                 mel_density_loss_weight_pow=self.config.mel_density_loss_weight_pow_ddecp,
-                loss_fn=ddecp_loss_fn, target_x_ref=target_x_ref, target_x_ref_logvars=error_logvars)
+                target_x_ref=target_x_ref, target_x_ref_logvars=error_logvars)
             
             logs.update(ddecp_logs)
             logs["loss"] = logs["loss"] + logs["loss/ddecp"]
