@@ -319,7 +319,7 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
                     phase_scale = self.format.mdct_phase_scale / self.format.mdct_phase_scale.mean()
                     rescale = phase_scale / mel_density
 
-                return torch.nn.functional.mse_loss(denoised * rescale, samples * rescale).mean(dim=(1,2,3))
+                return torch.nn.functional.mse_loss(denoised * rescale, samples * rescale, reduction="none").mean(dim=(1,2,3))
             
             if ddec_cond is not None:
                 
