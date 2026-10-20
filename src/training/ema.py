@@ -208,6 +208,10 @@ class EMA_Config:
 
     modules: Optional[list[str]] = None  # list of module names to apply this EMA to; if None, applies to all modules
 
+    @property
+    def use_switch_or_feedback_ema(self) -> bool:
+        return self.num_switch_ema_epochs is not None or self.feedback_beta is not None
+
     def __post_init__(self):
         if self.beta is not None and self.std is not None:
             raise ValueError(f"Cannot specify both beta ({self.beta}) and std ({self.std}) in EMA_Config for ema_{self.name}")
@@ -327,11 +331,10 @@ class EMA_Manager:
     def switch_ema(self) -> Optional[str]:
 
         if self.switch_ema_name is not None:
-            if self.trainer.global_step >= self.ema_configs[self.switch_ema_name].num_warmup_steps:
-                if self.trainer.epoch % self.ema_configs[self.switch_ema_name].num_switch_ema_epochs == 0:
-                    self.module.load_state_dict(self.ema_modules[self.switch_ema_name].state_dict())
-                    self.module.normalize_weights()
-                    return self.switch_ema_name # return the name of the ema if we switched
+            if self.trainer.epoch % self.ema_configs[self.switch_ema_name].num_switch_ema_epochs == 0:
+                self.module.load_state_dict(self.ema_modules[self.switch_ema_name].state_dict())
+                self.module.normalize_weights()
+                return self.switch_ema_name # return the name of the ema if we switched
         
         return None # otherwise return None
 

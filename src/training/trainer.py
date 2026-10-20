@@ -427,11 +427,21 @@ class DualDiffusionTrainer:
         self.config.emas = self.config.emas or {}
         self.ema_managers: list[EMA_Manager] = []
 
-        # only the main process saves checkpoints and processes EMA
+        # only the main process saves checkpoints and processes EMA unless switch or feedback EMA is enabled
         if self.accelerator.distributed_type == DistributedType.MULTI_GPU:
             if not self.accelerator.is_main_process:
-                self.logger.info(f"EMA_Manager disabled on non-main process")
-                return
+                
+                use_switch_or_feedback_ema = False
+                for ema_config in self.config.emas.values():
+                    if ema_config.get("num_switch_ema_epochs", None) is not None or ema_config.get("feedback_beta", None) is not None:
+                        use_switch_or_feedback_ema = True
+                        break
+                
+                if use_switch_or_feedback_ema == False:
+                    self.logger.info(f"EMA_Manager disabled on non-main process", main_process_only=False)
+                    return
+                
+                self.logger.info(f"EMA_Manager enabled on non-main process for switch or feedback EMA", main_process_only=False)
         
         if len(self.config.emas) > 0:
             for module_name, module in zip(self.config.train_modules, self.modules):
@@ -1019,7 +1029,8 @@ class DualDiffusionTrainer:
                 for module_name, ema_manager in zip(self.config.train_modules, self.ema_managers):
                     switched_ema_name = ema_manager.switch_ema()
                     if switched_ema_name is not None:
-                        self.logger.info(f"Loaded train weights for {module_name} from switch EMA: {switched_ema_name}")
+                        self.logger.info(f"Loaded train weights for {module_name} from switch EMA: {switched_ema_name}", main_process_only=False)
+                        self.optimizer.optimizer.zero_momentum()
 
             if self.global_step >= self.config.max_train_steps: break
             else: self.epoch += 1

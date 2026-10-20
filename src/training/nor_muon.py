@@ -242,6 +242,8 @@ class SingleDeviceNorMuonWithAuxAdam(torch.optim.Optimizer):
                         state["exp_avg"].zero_()
                         state["exp_avg_sq"].zero_()
 
+                    state["step"] = 0
+
     @torch.no_grad()
     def step(self, closure: Optional[Callable[[], float]] = None):
 
