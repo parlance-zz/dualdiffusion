@@ -303,10 +303,6 @@ class UNetTrainer(ModuleTrainer):
             error_logvar = error_logvar.flatten()
             batch_loss = batch_weighted_loss / error_logvar.exp() + error_logvar
             bucket_log_loss = batch_weighted_loss
-        
-        if target_x_ref is not None:
-            batch_loss_ref, batch_loss_target = batch_loss.chunk(2, dim=0)
-            batch_loss = (batch_loss_ref + batch_loss_target) / 2
 
         logs = {
             f"loss/{self.flavor}": batch_loss,
