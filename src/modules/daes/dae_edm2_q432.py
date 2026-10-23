@@ -429,7 +429,7 @@ class DAE(DualDiffusionDAE):
 
             batch_loss = batch_weighted_loss / error_logvar.exp() + error_logvar
             bucket_log_loss = batch_weighted_loss
-            decode_latents = denoised
+            decode_latents = torch.lerp(denoised, latents, torch.rand(latents.shape[0], device=latents.device)[:, None, None, None])
         else:
             assert self.unet is None
             batch_loss = bucket_log_loss = None
