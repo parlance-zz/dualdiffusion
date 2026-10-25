@@ -73,7 +73,7 @@ class DAE_Config(DualDiffusionDAEConfig):
     in_num_freqs: int = 128
     in_psd_freqs: int = 256
 
-    model_channels: int         = 96        # Base multiplier for the number of channels.
+    model_channels: int         = 64        # Base multiplier for the number of channels.
     channel_mult_enc: int       = (1,2,4,8,16)
     channel_mult_dec: list[int] = (1,2,4,8,16)
     channel_mult_emb: int     = 0            # Multiplier for final embedding dimensionality.
@@ -84,7 +84,7 @@ class DAE_Config(DualDiffusionDAEConfig):
     attn_balance: float       = 0.3          # Balance between main branch (0) and self-attention (1).
     attn_levels: list[int]    = ()        # List of resolution levels to use self-attention.
     mlp_multiplier: int    = 1               # Multiplier for the number of channels in the MLP.
-    mlp_groups: int        = 4               # Number of groups for the MLPs.
+    mlp_groups: int        = 2               # Number of groups for the MLPs.
     emb_linear_groups: int = 1
     add_pixel_norm: bool   = False
 
@@ -366,8 +366,6 @@ class DAE(DualDiffusionDAE):
         for name, block in self.enc.items():
             if "conv" in name:
                 x = block(x)
-                if self.psd_freqs_per_freq == 2:
-                    x = torch.nn.functional.avg_pool2d(x, kernel_size=(2,1), stride=(2,1))
             else:
                 x = block(x, embeddings)
         
@@ -417,19 +415,24 @@ class DAE(DualDiffusionDAE):
             
             assert self.unet is not None
 
-            conditioning_mask = torch.ones(latents.shape[0], device=latents.device)
+            #unet_input_latents = self.latents_stats_tracker.remove_mean(latents, mode="per_channel")
+            #unet_input_latents = self.latents_stats_tracker.unscale(unet_input_latents, mode="per_channel")
+            unet_input_latents = latents
 
-            noise = torch.randn(latents.shape, device=latents.device, dtype=torch.float32)
+            conditioning_mask = torch.ones(unet_input_latents.shape[0], device=unet_input_latents.device)
+
+            noise = torch.randn(unet_input_latents.shape, device=unet_input_latents.device, dtype=torch.float32)
             noise = (noise * batch_sigma.view(-1, 1, 1, 1)).detach()
 
-            denoised, error_logvar = self.unet(latents + noise, batch_sigma, None, audio_embeddings, conditioning_mask=conditioning_mask)
+            denoised, error_logvar = self.unet(unet_input_latents + noise, batch_sigma, None, audio_embeddings, conditioning_mask=conditioning_mask)
             
             batch_loss_weight = (batch_sigma**2 + 1) / batch_sigma**2
             batch_weighted_loss = torch.nn.functional.mse_loss(denoised, latents, reduction="none").mean(dim=(1,2,3)) * batch_loss_weight
 
+            error_logvar = error_logvar.mean()
             batch_loss = batch_weighted_loss / error_logvar.exp() + error_logvar
             bucket_log_loss = batch_weighted_loss
-            decode_latents = torch.lerp(denoised, latents, torch.rand(latents.shape[0], device=latents.device)[:, None, None, None])
+            decode_latents = denoised #torch.lerp(denoised, latents, torch.rand(latents.shape[0], device=latents.device)[:, None, None, None])
         else:
             assert self.unet is None
             batch_loss = bucket_log_loss = None

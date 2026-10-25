@@ -580,12 +580,12 @@ class LatentStatsTracker(torch.nn.Module):
 
             per_channel_mean = dx.mean(dim=(0,2,3))
             self.mean.lerp_(per_channel_mean, 1. - self.momentum)
-            per_channel_msq = (dx - per_channel_mean[None, :, None, None]).pow(2).mean(dim=(0,2,3))
+            per_channel_msq = (dx - self.mean.view(1,-1, 1, 1)).pow(2).mean(dim=(0,2,3))
             self.msq.lerp_(per_channel_msq, 1. - self.momentum)
 
             global_mean = dx.mean()
             self.global_mean.lerp_(global_mean, 1. - self.momentum)
-            global_msq = (dx - global_mean).pow(2).mean()
+            global_msq = (dx - self.global_mean.view(1, 1, 1, 1)).pow(2).mean()
             self.global_msq.lerp_(global_msq, 1. - self.momentum)
 
         return x

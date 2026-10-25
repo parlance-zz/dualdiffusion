@@ -285,13 +285,13 @@ class UNet(DualDiffusionUNet):
             c_in = 1 / (self.config.sigma_data ** 2 + sigma ** 2).sqrt()
             c_noise = (sigma.flatten().log() / 4).to(self.dtype)
 
-            if perturbed_input is not None:
-                x = (c_in * perturbed_input).to(dtype=torch.bfloat16)
-            else:
-                x = (c_in * x_in).to(dtype=torch.bfloat16)
-
             emb = self.emb_fourier(c_noise)
-        
+
+        if perturbed_input is not None:
+            x = (c_in * perturbed_input).to(dtype=torch.bfloat16)
+        else:
+            x = (c_in * x_in).to(dtype=torch.bfloat16)
+            
         # embedding
         if conditioning_mask is not None: # nuisance due to ddp wrapper limitations
             assert self.training == True
