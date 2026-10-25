@@ -306,11 +306,12 @@ class UNet(DualDiffusionUNet):
             emb = self.emb_fourier(c_noise)
         
         # embedding
-        if conditioning_mask is not None: # nuisance due to ddp wrapper limitations
-            assert self.training == True
-            embeddings = self.get_embeddings(embeddings, conditioning_mask)
-        else:
-            assert self.training == False
+        if self.config.in_channels_emb > 0:
+            if conditioning_mask is not None: # nuisance due to ddp wrapper limitations
+                assert self.training == True
+                embeddings = self.get_embeddings(embeddings, conditioning_mask)
+            else:
+                assert self.training == False
 
         emb = self.emb_noise(emb)
         if self.config.in_channels_emb > 0:

@@ -101,12 +101,17 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
             assert self.train_dae == False
 
             if trainer.pipeline.dae.config.last_global_step > 0:
-                self.dae = trainer.pipeline.dae.to(device=trainer.accelerator.device, dtype=torch.bfloat16).requires_grad_(True).train()
+                self.dae = trainer.pipeline.dae.to(device=trainer.accelerator.device)
+                self.dae.normalize_weights()
+                self.dae = self.dae.to(dtype=torch.bfloat16)
 
         if self.train_dae == True:
             assert self.train_ddecp == False
 
-            self.ddecp = trainer.pipeline.ddecp.to(device=trainer.accelerator.device, dtype=torch.bfloat16).requires_grad_(True).train()
+            self.ddecp = trainer.pipeline.ddecp.to(device=trainer.accelerator.device)
+            self.ddecp.normalize_weights()
+            self.ddecp = self.ddecp.to(dtype=torch.bfloat16)
+
             assert self.ddecp.config.last_global_step > 0
             self.train_ddecp = True
 
