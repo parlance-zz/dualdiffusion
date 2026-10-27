@@ -20,11 +20,12 @@ from modules.daes.dae_edm2_q432 import DAE, DAE_Config
 #unet_cfg = UNetConfig(num_layers_per_block=12, in_channels=256, out_channels=256, in_channels_emb=0)
 
 from modules.unets.unet_edm2_q432 import UNetConfig
-#unet_cfg = UNetConfig()
+unet_cfg = UNetConfig()
 
-unet_cfg=None
-serial = seed_and_get_module_serial_num()
-dae = DAE(DAE_Config(unet=unet_cfg))
+#unet_cfg=None
+seed = None #int("020d2e5e481e492a", 16)
+serial = seed_and_get_module_serial_num(seed)
+dae = DAE(DAE_Config(unet=unet_cfg, latents_noise_floor=0.08))
 dae.config.serial_num = serial
 print_module_info(dae, "dae")
 
