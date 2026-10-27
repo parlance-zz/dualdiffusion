@@ -43,18 +43,18 @@ from modules.formats.format import DualDiffusionFormat
 @dataclass
 class UNetConfig(DualDiffusionUNetConfig):
 
-    in_channels:  int = 4
-    out_channels: int = 4
+    in_channels:  int = 2
+    out_channels: int = 2
     in_channels_emb: int = 0
     in_channels_x_ref: int = 9
 
-    x_ref_sigma_scale: float = 0.5
+    x_ref_sigma_scale: float = 0
     x_ref_noise_mel_density_pow: float = 0
     
     in_num_freqs: int = 128
     in_psd_freqs: int = 256
 
-    model_channels: int  = 32                # Base multiplier for the number of channels.
+    model_channels: int  = 64                # Base multiplier for the number of channels.
     logvar_channels: int = 192               # Number of channels for training uncertainty estimation.
     channel_mult: list[int]    = (1,2,3,4)   # Per-resolution multipliers for the number of channels.
     double_midblock: bool      = False

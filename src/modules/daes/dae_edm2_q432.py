@@ -69,6 +69,7 @@ class DAE_Config(DualDiffusionDAEConfig):
     latent_channels: int = 32
     use_1d_latents: bool = False
     use_latents_pixel_norm: bool = True
+    latents_noise_floor: Optional[float] = None
 
     in_num_freqs: int = 128
     in_psd_freqs: int = 256
@@ -387,6 +388,9 @@ class DAE(DualDiffusionDAE):
             assert self.training == False
             x = normalize(x.float(), dim=1 if self.config.use_latents_pixel_norm == True else None)
 
+        if self.config.latents_noise_floor is not None:
+            x = x + torch.randn_like(x) * self.config.latents_noise_floor
+
         x = self.conv_latents_in(x.to(dtype=torch.bfloat16))
 
         if self.config.use_1d_latents == True:
@@ -432,7 +436,7 @@ class DAE(DualDiffusionDAE):
             error_logvar = error_logvar.mean()
             batch_loss = batch_weighted_loss / error_logvar.exp() + error_logvar
             bucket_log_loss = batch_weighted_loss
-            decode_latents = denoised #torch.lerp(denoised, latents, torch.rand(latents.shape[0], device=latents.device)[:, None, None, None])
+            decode_latents = latents #denoised #torch.lerp(denoised, latents, torch.rand(latents.shape[0], device=latents.device)[:, None, None, None])
         else:
             assert self.unet is None
             batch_loss = bucket_log_loss = None
