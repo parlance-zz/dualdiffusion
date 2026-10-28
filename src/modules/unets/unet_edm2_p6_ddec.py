@@ -285,7 +285,8 @@ class UNet(DualDiffusionUNet):
             else:
                 x = (c_in * x_in).to(dtype=torch.bfloat16)
 
-            x = x.to(dtype=torch.bfloat16).permute(0, 2, 1, 3).reshape(x.shape[0], x.shape[1]*x.shape[2], 1, x.shape[3])
+            og_x_shape = x.shape
+            x = x.to(dtype=torch.bfloat16).flatten(1,2).unsqueeze(2)
 
         x_ref, x_ref_noise = x_ref.float().chunk(2, dim=1)
         x_ref = (x_ref + x_ref_noise * self.config.x_ref_sigma_scale) / (self.config.x_ref_sigma_scale**2 + 1) ** 0.5
@@ -324,8 +325,7 @@ class UNet(DualDiffusionUNet):
 
         x: torch.Tensor = self.conv_out(x, gain=self.out_gain)
 
-        c = self.config.out_channels // self.config.in_num_freqs
-        x = x.reshape(x.shape[0], x.shape[1]//c, c, x_in.shape[3]).permute(0, 2, 1, 3).contiguous()
+        x = x.reshape(*og_x_shape)
         D_x = c_skip * x_in + c_out * x.float()
 
         return D_x, self.get_sigma_loss_logvar(sigma)
