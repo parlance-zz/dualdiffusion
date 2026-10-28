@@ -430,12 +430,14 @@ class DAE(DualDiffusionDAE):
 
             denoised, error_logvar = self.unet(unet_input_latents + noise, batch_sigma, None, audio_embeddings, conditioning_mask=conditioning_mask)
             
-            batch_loss_weight = (batch_sigma**2 + 1) / batch_sigma**2
+            #batch_loss_weight = (batch_sigma**2 + 1) / batch_sigma**2
+            batch_loss_weight = 2 * 2**0.5 / batch_sigma**2
             batch_weighted_loss = torch.nn.functional.mse_loss(denoised, latents, reduction="none").mean(dim=(1,2,3)) * batch_loss_weight
 
             error_logvar = error_logvar.mean()
             batch_loss = batch_weighted_loss / error_logvar.exp() + error_logvar
-            bucket_log_loss = batch_weighted_loss
+            #bucket_log_loss = batch_weighted_loss
+            bucket_log_loss = (0.5 / 2**0.5 * batch_weighted_loss * batch_sigma**2) * (batch_sigma**2 + 1) / batch_sigma**2
             decode_latents = latents #denoised #torch.lerp(denoised, latents, torch.rand(latents.shape[0], device=latents.device)[:, None, None, None])
         else:
             assert self.unet is None

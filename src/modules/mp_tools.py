@@ -377,17 +377,22 @@ class MPFourier(torch.nn.Module):
 
 class MPConv(torch.nn.Module):
 
-    def __init__(self, in_channels: int, out_channels: int,
-                 kernel: tuple[int, int], groups: int = 1, stride: int = 1,
-                 disable_weight_norm: bool = False, bias: bool = False, padding: Optional[tuple[int, int]] = None) -> None:
+    def __init__(self, in_channels: int, out_channels: int, kernel: tuple[int, int],
+                 groups: int = 1, stride: int = 1, disable_weight_norm: bool = False,
+                 bias: bool = False, padding: Optional[tuple[int, int]] = None, transpose: bool = False) -> None:
         
         super().__init__()
+
+        if transpose == True:
+            in_channels, out_channels = out_channels, in_channels
+            assert len(kernel) == 2
 
         self.in_channels = in_channels
         self.out_channels = out_channels
         self.groups = groups
         self.stride = stride
         self.disable_weight_norm = disable_weight_norm
+        self.transpose = transpose
         if len(kernel) > 0:
             self.padding = padding or (kernel[0] // 2, kernel[1] // 2)
         else:
@@ -408,15 +413,22 @@ class MPConv(torch.nn.Module):
         
         w = self.weight.float()
         if self.training == True and self.disable_weight_norm == False:
-            w = normalize(w) # traditional weight normalization
+            if self.transpose == False:
+                w = normalize(w) # traditional weight normalization
+            else:
+                w = normalize(w.t()).t() # traditional weight normalization for transposed convolution
             
         w = w * (gain / w[0].numel()**0.5) # magnitude-preserving scaling
         w = w.to(x.dtype)
 
         if w.ndim == 2:
             return x @ w.t()
-        
-        x = torch.nn.functional.conv2d(x, w, padding=self.padding, groups=self.groups, stride=self.stride)
+
+        if self.transpose == False:
+            x = torch.nn.functional.conv2d(x, w, padding=self.padding, groups=self.groups, stride=self.stride)
+        else:
+            x = torch.nn.functional.conv_transpose2d(x, w, padding=self.padding, groups=self.groups, stride=self.stride)
+            
         if self.bias is not None:
             x = x + self.bias.view(1,-1, 1, 1).to(dtype=x.dtype)
         
@@ -425,7 +437,10 @@ class MPConv(torch.nn.Module):
     @torch.no_grad()
     def normalize_weights(self) -> None:
         if self.disable_weight_norm == False:
-            self.weight.copy_(normalize(self.weight))
+            if self.transpose == False:
+                self.weight.copy_(normalize(self.weight))
+            else:
+                self.weight.copy_(normalize(self.weight.t()).t())
 
 class AdaptiveGroupBalance(torch.nn.Module):
 
