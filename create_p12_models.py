@@ -17,15 +17,16 @@ print(f"Saving new modules to {model_path}...")
 from modules.daes.dae_edm2_q432 import DAE, DAE_Config
 
 #from modules.unets.unet_edm2_p6 import UNetConfig
-#unet_cfg = UNetConfig(num_layers_per_block=12, in_channels=256, out_channels=256, in_channels_emb=0)
+#unet_cfg = UNetConfig(num_layers_per_block=12, in_channels_emb=0)
 
 from modules.unets.unet_edm2_q432 import UNetConfig
-unet_cfg = UNetConfig()
+#unet_cfg = UNetConfig()
 
-#unet_cfg=None
-seed = None #int("020d2e5e481e492a", 16)
+unet_cfg=None
+
+seed = int("f0e772f6a051ff0a", 16)
 serial = seed_and_get_module_serial_num(seed)
-dae = DAE(DAE_Config(unet=unet_cfg, latents_noise_floor=0.08))
+dae = DAE(DAE_Config(unet=unet_cfg, latents_noise_floor=None, latent_channels=32))
 dae.config.serial_num = serial
 print_module_info(dae, "dae")
 
@@ -53,9 +54,7 @@ if input("Save module? (y/n) ").lower() == 'y':
 #from modules.unets.unet_edm2_p6 import UNet, UNetConfig
 from modules.unets.unet_edm2_q432 import UNet, UNetConfig
 serial = seed_and_get_module_serial_num()
-#unet = UNet(UNetConfig(model_channels=8192, mlp_groups=64, emb_linear_groups=64, num_layers_per_block=24, channel_mult_noise=0.125, in_channels=3072, out_channels=3072))
-#unet = UNet(UNetConfig(model_channels=4096, mlp_groups=32, emb_linear_groups=32, num_layers_per_block=32, channel_mult_noise=0.125, in_channels=256, out_channels=256,
-#                       conv0_kernel_size=3, conv1_kernel_size=3))
+
 unet = UNet(UNetConfig())
 unet.config.serial_num = serial
 print_module_info(unet, "unet")

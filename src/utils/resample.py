@@ -53,14 +53,6 @@ class FilteredResample1D(torch.nn.Module):
         else:
             self.pad_w = torch.nn.ReflectionPad2d((hk_size - even, hk_size, 0, 0))
 
-    def _apply(self, fn) -> "FilteredResample1D":
-        
-        kernel_f32 = self.kernel.clone()
-        super()._apply(fn)
-        self.kernel = kernel_f32.to(device=self.kernel.device)
-
-        return self
-    
     def forward(self, x: torch.Tensor) -> torch.Tensor:
 
         kw = self.kernel[None, None, None, :].expand(x.shape[1], 1, 1, self.k_size)
@@ -116,14 +108,6 @@ class FilteredResample2D(torch.nn.Module):
             self.pad_w = torch.nn.ReflectionPad2d((hk_size - even, hk_size, 0, 0))
             self.pad_h = torch.nn.ReflectionPad2d((0, 0, hk_size - even, hk_size))
 
-    def _apply(self, fn) -> "FilteredResample2D":
-        
-        kernel_f32 = self.kernel.clone()
-        super()._apply(fn)
-        self.kernel = kernel_f32.to(device=self.kernel.device)
-
-        return self
-    
     def forward(self, x: torch.Tensor) -> torch.Tensor:
 
         kernel: torch.Tensor = self.kernel
@@ -192,14 +176,6 @@ class FilteredResample3D(torch.nn.Module):
         self.pad_w = torch.nn.ReflectionPad3d((hk_size, hk_size - even, 0, 0, 0, 0))
         self.pad_h = torch.nn.ReflectionPad3d((0, 0, hk_size, hk_size - even, 0, 0))
 
-    def _apply(self, fn) -> "FilteredResample3D":
-        
-        kernel_f32 = self.kernel.clone()
-        super()._apply(fn)
-        self.kernel = kernel_f32.to(device=self.kernel.device)
-
-        return self
-    
     def forward(self, x: torch.Tensor) -> torch.Tensor:
 
         kw = self.kernel[None, None, None, None, :].expand(x.shape[1], 1, 1, 1, self.k_size)
@@ -268,23 +244,14 @@ class FilteredResample1D3(torch.nn.Module):
         else:
             self.pad_w = torch.nn.ReflectionPad3d((hk_size - even, hk_size, 0, 0, 0, 0))
 
-    def _apply(self, fn) -> "FilteredResample1D3":
-        
-        kernel_f32 = self.kernel.clone()
-        super()._apply(fn)
-        self.kernel = kernel_f32.to(device=self.kernel.device)
-
-        return self
-    
     def forward(self, x: torch.Tensor) -> torch.Tensor:
 
         kernel: torch.Tensor = self.kernel
-        original_dtype = x.dtype
 
         kw = kernel[None, None, None, None, :].expand(x.shape[1], 1, 1, 1, self.k_size)
         x = torch.nn.functional.conv3d(self.pad_w(x), kw, groups=x.shape[1], stride=(1,1,self.stride))
 
-        return x.to(dtype=original_dtype)
+        return x
 
     def get_filter(self) -> torch.Tensor:
         return self.kernel
