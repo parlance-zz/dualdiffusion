@@ -147,6 +147,12 @@ class FilteredUpsample2D(FilteredResample2D):
 
         return super().forward(y)
 
+class FilteredLowpass2D(FilteredResample2D):
+
+    def __init__(self, k_size: int = 31, beta: float = 6.95, cutoff: float = 0.5) -> None:
+        assert k_size % 2 == 1
+        super().__init__(k_size, 1, cutoff, beta, gain=1)
+
 class Filtered_MP_Silu_2D(torch.nn.Module):
 
     def __init__(self, k_size: int = 31, beta: float = 6.95) -> None:
@@ -326,6 +332,13 @@ if __name__ == "__main__":
 
     #test_image = img_to_tensor(load_img(os.path.join(output_path, "_test_latents.png")))
     test_image = img_to_tensor(load_img(os.path.join(output_path, "__test_img.png"))).cuda()
+
+    #test_image += torch.randn_like(test_image) * 0.08 * test_image.square().mean().pow(0.5)
+    lowpass = FilteredLowpass2D(k_size=31, beta=6.95, cutoff=1).cuda()
+
+    test_image = lowpass(test_image)
+    save_img(tensor_to_img(test_image, recenter=False, rescale=False), os.path.join(output_path, "__test_img_lowpassed.png"))
+    exit()
 
     """
     for i in range(3):
