@@ -33,6 +33,29 @@ def _kaiser_windowed_sinc_1d(size: int, cutoff: float, beta: float) -> torch.Ten
     kernel = sinc * torch.kaiser_window(size, beta=beta, periodic=False)
     return kernel / kernel.sum()
 
+def _kaiser_windowed_ramp_1d(size: int, beta: float) -> torch.Tensor:
+
+    assert size % 2 == 1
+    half_width = (size - 1) // 2
+
+    n = torch.arange(-half_width, half_width + 1)    # [2*half_width + 1]
+    h = torch.zeros(n.shape, dtype=torch.float32)    # [2*half_width + 1]
+
+    h[n == 0] = 0.5                                  # center tap
+
+    odd = (n.abs() % 2 == 1)                         # bool mask, same shape
+    h[odd] = -2 / (torch.pi**2 * n[odd].float()**2) # negative 1/n^2 tail
+
+    # even n != 0 stay exactly 0
+    kernel = h * torch.kaiser_window(size, beta=beta, periodic=False)
+
+    # Nyquist response of a symmetric kernel: sum(h[n] * (-1)^n)
+    nyquist_sign = 1 - 2 * (n.abs() % 2)                            # +1 even n, -1 odd n
+    nyquist_gain = (kernel * nyquist_sign).sum()                    # scalar
+    kernel = kernel / nyquist_gain                                  # gain at Nyquist == 1
+
+    return kernel
+
 class FilteredResample1D(torch.nn.Module):
 
     def __init__(self, k_size: int = 31, stride: int = 2,
@@ -152,6 +175,13 @@ class FilteredLowpass2D(FilteredResample2D):
     def __init__(self, k_size: int = 31, beta: float = 6.95, cutoff: float = 0.5) -> None:
         assert k_size % 2 == 1
         super().__init__(k_size, 1, cutoff, beta, gain=1)
+
+class FilteredHighpass2D(FilteredResample2D):
+
+    def __init__(self, k_size: int = 31, beta: float = 6.95) -> None:
+        assert k_size % 2 == 1
+        super().__init__(k_size, 1, 0.5, beta, gain=1)
+        self.kernel[:] = _kaiser_windowed_ramp_1d(k_size, beta)
 
 class Filtered_MP_Silu_2D(torch.nn.Module):
 
@@ -334,10 +364,17 @@ if __name__ == "__main__":
     test_image = img_to_tensor(load_img(os.path.join(output_path, "__test_img.png"))).cuda()
 
     #test_image += torch.randn_like(test_image) * 0.08 * test_image.square().mean().pow(0.5)
-    lowpass = FilteredLowpass2D(k_size=31, beta=6.95, cutoff=1).cuda()
-
-    test_image = lowpass(test_image)
-    save_img(tensor_to_img(test_image, recenter=False, rescale=False), os.path.join(output_path, "__test_img_lowpassed.png"))
+    #lowpass = FilteredLowpass2D(k_size=31, beta=6.95, cutoff=1).cuda()
+    #print(test_image.pow(2).mean().pow(0.5))
+    highpass = FilteredHighpass2D(k_size=15, beta=6.95).cuda()
+    #print(highpass(test_image).pow(2).mean().pow(0.5))
+    
+    hp_image = highpass(test_image)
+    lp_image = test_image - hp_image
+    save_img(tensor_to_img(lp_image, recenter=True, rescale=False), os.path.join(output_path, "__test_img_lp.png"))
+    #save_img(tensor_to_img(hp_image, recenter=False, rescale=True), os.path.join(output_path, "__test_img_hp.png"))
+    save_img(tensor_to_img(highpass.get_filter()), os.path.join(output_path, "__hp_filter_kernel.png"))
+    save_img(tensor_to_img(highpass.get_window()), os.path.join(output_path, "__hp_filter_window.png"))
     exit()
 
     """
