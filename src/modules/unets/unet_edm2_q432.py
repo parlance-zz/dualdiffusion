@@ -274,7 +274,8 @@ class UNet(DualDiffusionUNet):
                 embeddings: torch.Tensor,
                 x_ref: Optional[torch.Tensor] = None,
                 perturbed_input: Optional[torch.Tensor] = None,
-                conditioning_mask: Optional[torch.Tensor] = None) -> tuple[torch.Tensor, ...]:
+                conditioning_mask: Optional[torch.Tensor] = None,
+                **kwargs) -> tuple[torch.Tensor, ...]:
 
         with torch.no_grad():
             sigma = sigma.view(-1, 1, 1, 1).float()

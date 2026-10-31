@@ -38,8 +38,9 @@ from numpy import ndarray
 
 from modules.daes.dae import DualDiffusionDAE, DualDiffusionDAEConfig
 from modules.mp_tools import LatentStatsTracker, MPConv, mp_silu, mp_sum, normalize, resample_2d, patchify_2d, unpatchify_2d
-#from modules.unets.unet_edm2_p6 import UNet, UNetConfig
-from modules.unets.unet_edm2_q432 import UNet, UNetConfig
+from modules.unets.unet_edm2_p6 import UNet, UNetConfig
+#from modules.unets.unet_edm2_q432 import UNet, UNetConfig
+from utils.resample import FilteredHighpass2D
 
 
 def residual_space_to_channel_avg(x: torch.Tensor, out_channels: int, factor: int = 2) -> torch.Tensor:
@@ -270,6 +271,7 @@ class DAE(DualDiffusionDAE):
             self.recon_logvars = None
         
         self.latents_stats_tracker = LatentStatsTracker(config.latent_channels)
+        self.highpass = FilteredHighpass2D(k_size=15, beta=6.95)
 
         # encoder
         self.enc = torch.nn.ModuleDict()
@@ -376,9 +378,13 @@ class DAE(DualDiffusionDAE):
 
         latents: torch.Tensor = self.conv_latents_out(x)
         latents = normalize(latents.float(), dim=1 if self.config.use_latents_pixel_norm == True else None)
-        
+
+        latents = latents - self.highpass(latents.bfloat16()).float()
+
         if training == False:
             assert self.training == False
+            latents = self.latents_stats_tracker.remove_mean(latents, mode="per_channel")
+            latents = self.latents_stats_tracker.unscale(latents, mode="per_channel")
 
         return latents
 
@@ -386,10 +392,14 @@ class DAE(DualDiffusionDAE):
 
         if training == False:
             assert self.training == False
+            x = self.latents_stats_tracker.scale(x, mode="per_channel")
+            x = self.latents_stats_tracker.add_mean(x, mode="per_channel")
             x = normalize(x.float(), dim=1 if self.config.use_latents_pixel_norm == True else None)
 
         if self.config.latents_noise_floor is not None:
-            x = x + torch.randn_like(x) * self.config.latents_noise_floor
+            noise = torch.randn_like(x) * self.config.latents_noise_floor
+            noise = noise - self.highpass(noise.bfloat16()).float()
+            x = x + noise
 
         x = self.conv_latents_in(x.to(dtype=torch.bfloat16))
 
@@ -432,7 +442,11 @@ class DAE(DualDiffusionDAE):
             
             #batch_loss_weight = (batch_sigma**2 + 1) / batch_sigma**2
             batch_loss_weight = 2 * 2**0.5 / batch_sigma**2
-            batch_weighted_loss = torch.nn.functional.mse_loss(denoised, latents, reduction="none").mean(dim=(1,2,3)) * batch_loss_weight
+            #batch_weighted_loss = torch.nn.functional.mse_loss(denoised, latents, reduction="none").mean(dim=(1,2,3)) * batch_loss_weight
+            error = denoised - latents
+            error = error - error.mean(dim=3, keepdim=True).detach()
+            #error = error / (error.std(dim=3, keepdim=True) + 1e-3).detach()
+            batch_weighted_loss = error.pow(2).mean(dim=(1,2,3)) * batch_loss_weight
 
             error_logvar = error_logvar.mean()
             batch_loss = batch_weighted_loss / error_logvar.exp() + error_logvar
