@@ -72,7 +72,7 @@ def unet_test() -> None:
     torch.manual_seed(0)
 
     cfg: UNetTestConfig = config.load_config(UNetTestConfig,
-        os.path.join(config.CONFIG_PATH, "tests", "unet_test_p4.json"), quiet=True)
+        os.path.join(config.CONFIG_PATH, "tests", "unet_test_p12.json"), quiet=True)
 
     model_path = os.path.join(config.MODELS_PATH, cfg.model_name)
     print(f"Loading DualDiffusion model from '{model_path}'...")
