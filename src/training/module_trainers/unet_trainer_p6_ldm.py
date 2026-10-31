@@ -95,7 +95,7 @@ class UNetTrainer_LDM(ModuleTrainer):
             with torch.no_grad():
                 latents = self.dae.encode(ms_psd_scaled, audio_embeddings, training=False).float()
         
-        logs, _ = self.unet_trainer.train_batch(latents, embeddings=audio_embeddings, mel_density_loss_weight_pow=self.config.mel_density_loss_weight_pow)
+        logs, _ = self.unet_trainer.train_batch(latents, embeddings=audio_embeddings)
         logs["loss"] = logs["loss/unet"]
 
         logs.update({
