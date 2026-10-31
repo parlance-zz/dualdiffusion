@@ -36,7 +36,7 @@ from modules.mp_tools import normalize
 
 @dataclass
 class UNetTrainer_LDM_Config(UNetTrainerConfig):
-    pass
+    mel_density_loss_weight_pow: Optional[float] = None
 
 class UNetTrainer_LDM(ModuleTrainer):
     
@@ -72,6 +72,7 @@ class UNetTrainer_LDM(ModuleTrainer):
                 self.format.compile(**trainer.config.compile_params)
 
         self.logger.info(f"Training LDM: {trainer.config.train_modules}")
+        self.logger.info(f"Mel density loss weight pow: {config.mel_density_loss_weight_pow}")
         self.unet_trainer = UNetTrainer(UNetTrainerConfig(**config.__dict__), trainer, self.unet, "unet")
 
         #self.trainer.optimizer.optimizer.zero_momentum()
@@ -94,7 +95,7 @@ class UNetTrainer_LDM(ModuleTrainer):
             with torch.no_grad():
                 latents = self.dae.encode(ms_psd_scaled, audio_embeddings, training=False).float()
         
-        logs, _ = self.unet_trainer.train_batch(latents, embeddings=audio_embeddings)
+        logs, _ = self.unet_trainer.train_batch(latents, embeddings=audio_embeddings, mel_density_loss_weight_pow=self.config.mel_density_loss_weight_pow)
         logs["loss"] = logs["loss/unet"]
 
         logs.update({
