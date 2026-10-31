@@ -58,6 +58,7 @@ class UNetTrainerConfig(ModuleTrainerConfig):
     
     input_perturbation: float   = 0.1 # from https://arxiv.org/pdf/2301.11706
     mel_density_input_perturb_pow: Optional[float] = None
+    mel_density_loss_weight_pow: Optional[float] = None
 
     conditioning_dropout: float = 0.1
 
@@ -156,7 +157,8 @@ class UNetTrainer(ModuleTrainer):
                 self.logger.info(f"Scaling input perturbation with mel density pow: {self.config.mel_density_input_perturb_pow}")
         else:
             self.logger.info("Input perturbation is disabled")
-        
+
+        self.logger.info(f"Mel-density loss weight pow: {self.config.mel_density_loss_weight_pow}")
         self.logger.info(f"Conditioning dropout: {self.config.conditioning_dropout}")
 
         # sigma schedule / distribution for train batches
@@ -209,8 +211,9 @@ class UNetTrainer(ModuleTrainer):
 
         return batch_sigma
     
-    def train_batch(self, samples: torch.Tensor, embeddings: Optional[Union[torch.Tensor, list[torch.Tensor]]] = None,
-            ref_samples: Optional[torch.Tensor] = None, mel_density_loss_weight_pow: Optional[float] = None,
+    def train_batch(self, samples: torch.Tensor,
+            embeddings: Optional[Union[torch.Tensor, list[torch.Tensor]]] = None,
+            ref_samples: Optional[torch.Tensor] = None,
             loss_fn: Callable[[torch.Tensor, torch.Tensor], torch.Tensor] = None,
             target_x_ref: Optional[torch.Tensor] = None,
             target_x_ref_logvars: Optional[torch.Tensor] = None) -> tuple[dict[str, Union[torch.Tensor, float]], dict[str, Union[torch.Tensor, float]]]:
@@ -258,8 +261,8 @@ class UNetTrainer(ModuleTrainer):
                 x, y = z.float().chunk(2, dim=0)
                 y = y.detach()
                 
-                if mel_density_loss_weight_pow:
-                    mel_density = self.format.get_mel_density(y.shape[-2], pow=mel_density_loss_weight_pow, normalize=True)#.squeeze(-1)
+                if self.config.mel_density_loss_weight_pow:
+                    mel_density = self.format.get_mel_density(y.shape[-2], pow=self.config.mel_density_loss_weight_pow, normalize=True)#.squeeze(-1)
                 else:
                     mel_density = 1
 
@@ -287,8 +290,8 @@ class UNetTrainer(ModuleTrainer):
         
         if loss_fn is None:
             batch_weighted_loss = torch.nn.functional.mse_loss(denoised, samples, reduction="none")
-            if mel_density_loss_weight_pow:
-                loss_weight = self.format.get_mel_density(samples.shape[-2], pow=mel_density_loss_weight_pow, normalize=True)
+            if self.config.mel_density_loss_weight_pow:
+                loss_weight = self.format.get_mel_density(samples.shape[-2], pow=self.config.mel_density_loss_weight_pow, normalize=True)
                 batch_weighted_loss = batch_weighted_loss * loss_weight
             batch_weighted_loss = batch_weighted_loss.mean(dim=(1,2,3)) * batch_loss_weight
         else:

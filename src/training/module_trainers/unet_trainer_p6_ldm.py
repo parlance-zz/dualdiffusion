@@ -36,7 +36,7 @@ from modules.mp_tools import normalize
 
 @dataclass
 class UNetTrainer_LDM_Config(UNetTrainerConfig):
-    mel_density_loss_weight_pow: Optional[float] = None
+    pass
 
 class UNetTrainer_LDM(ModuleTrainer):
     

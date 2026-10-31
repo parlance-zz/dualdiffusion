@@ -78,7 +78,6 @@ class DiffusionDecoder_Trainer_Config(ModuleTrainerConfig):
 
     random_stereo_augmentation: bool = False
     random_phase_augmentation: bool  = False
-    mel_density_loss_weight_pow_ddecp: float = 1
 
 class DiffusionDecoder_Trainer(ModuleTrainer):
     
@@ -146,8 +145,6 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
             self.unet_trainer = None
             
         if self.train_ddecp == True:
-            assert self.config.mel_density_loss_weight_pow_ddecp >= 0
-            self.logger.info(f"DDEC-P mel-density loss weight pow: {self.config.mel_density_loss_weight_pow_ddecp}")
             self.logger.info(f"DDEC-P trainer:")
             self.ddecp_trainer = UNetTrainer(UNetTrainerConfig(**config.ddecp), trainer, self.ddecp, "ddecp")
 
@@ -281,7 +278,7 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
                 logs["loss_weight/dae_unet"] = unet_loss_weight
 
             if self.config.ddec_cond_kl_loss_weight > 0:
-                mel_density = self.format.get_mel_density(ddec_cond.shape[2], pow=self.config.mel_density_loss_weight_pow_ddecp, normalize=True).float().squeeze(-1)
+                mel_density = self.format.get_mel_density(ddec_cond.shape[2], pow=self.ddecp_trainer.config.mel_density_loss_weight_pow, normalize=True).float().squeeze(-1)
                 ddec_cond_mean = ddec_cond.mean(dim=3)
                 ms_psd_mean = ms_psd_scaled.mean(dim=3)
                 ddec_cond_var = ddec_cond.var(dim=3) + 1e-4
@@ -349,7 +346,6 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
 
             ddecp_logs, ext_logs = self.ddecp_trainer.train_batch(
                 mdct_phase_psd, audio_embeddings, ref_samples=ddecp_x_ref,
-                mel_density_loss_weight_pow=self.config.mel_density_loss_weight_pow_ddecp,
                 target_x_ref=target_x_ref, target_x_ref_logvars=error_logvars)
             
             logs.update(ddecp_logs)
