@@ -148,7 +148,7 @@ def normuon_update(grad: torch.Tensor, momentum: torch.Tensor, second_momentum: 
             # convert grouped conv params into a batch of smaller matrices for newton schulz iterations
             update = update.view(groups,-1, update.size(-1))
 
-    else:
+    elif update.ndim != 2:
         raise ValueError(f"Unsupported update ndim: {update.ndim}")
     
     update = _polar_express(update, steps=ns_steps)#.to(dtype=grad.dtype)
