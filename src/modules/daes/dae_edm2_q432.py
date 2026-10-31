@@ -392,7 +392,7 @@ class DAE(DualDiffusionDAE):
 
         if training == False:
             assert self.training == False
-            x = self.latents_stats_tracker.scale(x, mode="per_channel")
+            x = self.latents_stats_tracker.rescale(x, mode="per_channel")
             x = self.latents_stats_tracker.add_mean(x, mode="per_channel")
             x = normalize(x.float(), dim=1 if self.config.use_latents_pixel_norm == True else None)
 
