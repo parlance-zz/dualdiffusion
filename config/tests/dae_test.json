@@ -5,6 +5,7 @@
         "device": "cuda",
         "load_checkpoints": true,
         "load_emas": {
+            "ddecp": "ema_std0.1.safetensors"
         },
         "compile_options": {
             "fullgraph": true,
@@ -24,17 +25,22 @@
     "dae_bypass": false,
     "ddec_output": true,
     "xref_output": false,
-    "add_random_test_samples": 300,
-    "random_test_samples_seed": 485565621,
+    "add_random_test_samples": 20,
+    "random_test_samples_seed": 29995513254353151354443126355136653756235100400460005560000800005316494467500003444553755555430004,
     "copy_sample_source_files": true,
     "test_samples": [
-        "switch/Mega Man X Legacy Collection 2/_t_X6_08BLIZZARDWOLFANGSTAGE.lopus.flac",
-        "psf3/Iron Man/_t_! movies_HUB_05_000001C2.adx.flac",
+        "dsf/Metropolis Street Racer Prototype/file_15.adx.flac",
         "psf3/Tekken Hybrid/_t_Tekken Tag Tournament 2 Prologue_charasele.lwav.flac",
-        "dae_tests",
+        "Mighty_Switch_Force/Jake Kaufman - Mighty Switch Force OST - 07 BGM - Jive Bot.flac",
+        "vita/Luftrausers/luftrauser_bass1.logg.flac",
+        "SuspectT",
+
         "3sf/Dopamix/STRM_BGM_ENDING.bcstm.flac",
-        "switch/Muse Dash/_t_stage_jump_hard_candy_music.fsb.flac",
-        "switch/Arcaea/_t_songs_ignotus.ogg.flac",
-        "dsf/Metropolis Street Racer Prototype/file_15.adx.flac"
+        
+        "psf3/Iron Man/_t_! movies_HUB_05_000001C2.adx.flac",
+        "moonsurgent.flac",
+        "switch/Mega Man X Legacy Collection 2/_t_X6_08BLIZZARDWOLFANGSTAGE.lopus.flac",
+        "psf3/Taiko no Tatsujin - Green Version/SONG_3RU3RU.nub.flac",
+        "switch/Razion EX/12_highscore.ogg.flac"
     ]
 }

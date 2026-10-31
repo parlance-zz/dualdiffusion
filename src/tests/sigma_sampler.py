@@ -181,7 +181,7 @@ def sigma_sampler_test():
         multi_plot((batch_sampler.dist_pdf, "batch_distribution_pdf"),
                    (batch_sampler.dist_cdf, "batch_distribution_cdf"),
                    y_axis_range=(0, None),
-                   save_path=os.path.join(output_path, "batch_pdf_cdf.png"))
+                   save_path=os.path.join(output_path, f"batch_pdf_cdf_{module.config.last_global_step}.png"))
 
     avg_batch_mean = avg_batch_min = avg_batch_max = 0
     avg_reference_mean = avg_reference_min = avg_reference_max = 0
@@ -235,7 +235,7 @@ def sigma_sampler_test():
     multi_plot((batch_sigma_histo, "batch sigma"), (batch_example, "batch example"), (reference_example, "reference example"),
             added_plots={0: (reference_sigma_histo, "reference_sigma")},
             y_log_scale=use_y_log_scale, x_axis_range=(np.log(sigma_min), np.log(sigma_max)),
-            save_path=os.path.join(output_path, "batch_ref_sigma_histo.png"))
+            save_path=os.path.join(output_path, f"batch_ref_sigma_histo_{module.config.last_global_step}.png"))
     
 if __name__ == "__main__":
 
