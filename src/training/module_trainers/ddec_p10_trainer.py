@@ -76,6 +76,8 @@ class DiffusionDecoder_Trainer_Config(ModuleTrainerConfig):
     unet_loss_weight: float       = 0.1
     unet_loss_warmup_steps: int   = 1000
 
+    use_ddecp_loss: bool = True,
+
     random_stereo_augmentation: bool = False
     random_phase_augmentation: bool  = False
 
@@ -107,12 +109,13 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
         if self.train_dae == True:
             assert self.train_ddecp == False
 
-            self.ddecp = trainer.pipeline.ddecp.to(device=trainer.accelerator.device)
-            self.ddecp.normalize_weights()
-            self.ddecp = self.ddecp.to(dtype=torch.bfloat16)
+            if config.use_ddecp_loss == True:
+                self.ddecp = trainer.pipeline.ddecp.to(device=trainer.accelerator.device)
+                self.ddecp.normalize_weights()
+                self.ddecp = self.ddecp.to(dtype=torch.bfloat16)
 
-            assert self.ddecp.config.last_global_step > 0
-            self.train_ddecp = True
+                assert self.ddecp.config.last_global_step > 0
+                self.train_ddecp = True
 
         self.format: MS_MDCT_DualFormat = trainer.pipeline.format.to(self.trainer.accelerator.device)
 
