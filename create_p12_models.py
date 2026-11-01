@@ -16,17 +16,19 @@ print(f"Saving new modules to {model_path}...")
 
 from modules.daes.dae_edm2_q432 import DAE, DAE_Config
 
-#from modules.unets.unet_edm2_p6 import UNetConfig
+from modules.unets.unet_edm2_p6 import UNetConfig
 #unet_cfg = UNetConfig(num_layers_per_block=12, in_channels_emb=0)
 
-from modules.unets.unet_edm2_q432 import UNetConfig
+#from modules.unets.unet_edm2_q432 import UNetConfig
 #unet_cfg = UNetConfig()
 
 unet_cfg=None
 
 seed = int("f0e772f6a051ff0a", 16)
 serial = seed_and_get_module_serial_num(seed)
-dae = DAE(DAE_Config(unet=unet_cfg, latents_noise_floor=None, latent_channels=32))
+dae = DAE(DAE_Config(unet=unet_cfg, latents_noise_floor=0.1, latent_channels=32,
+    latents_img_brightness=1, latents_img_contrast=1, latents_img_saturation=0.85, latents_img_gamma=1.35))
+
 dae.config.serial_num = serial
 print_module_info(dae, "dae")
 
@@ -51,11 +53,13 @@ if input("Save module? (y/n) ").lower() == 'y':
     ddecp.save_pretrained(model_path, subfolder="ddecp")
     print(f"Saved model to {model_path}/ddecp")
 
-#from modules.unets.unet_edm2_p6 import UNet, UNetConfig
-from modules.unets.unet_edm2_q432 import UNet, UNetConfig
-serial = seed_and_get_module_serial_num()
+from modules.unets.unet_edm2_p6 import UNet, UNetConfig
+unet = UNet(UNetConfig(num_layers_per_block=18))
 
-unet = UNet(UNetConfig())
+#from modules.unets.unet_edm2_q432 import UNet, UNetConfig
+#unet = UNet(UNetConfig())
+
+serial = seed_and_get_module_serial_num()
 unet.config.serial_num = serial
 print_module_info(unet, "unet")
 
