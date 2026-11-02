@@ -129,9 +129,6 @@ class UNetTrainer(ModuleTrainer):
         self.flavor = flavor
         self.format: MS_MDCT_DualFormat = trainer.pipeline.format.to(trainer.accelerator.device)
 
-        if trainer.config.enable_model_compilation == True:
-            self.unet.compile(**trainer.config.compile_params)
-
         if config.disable_loss_weight == True:
             self.logger.info("Loss weighting is disabled")
 
@@ -165,7 +162,7 @@ class UNetTrainer(ModuleTrainer):
         sigma_sampler_config = SigmaSamplerConfig(
             sigma_max=self.config.sigma_override_max or self.unet.config.sigma_max,
             sigma_min=self.config.sigma_override_min or self.unet.config.sigma_min,
-            sigma_data=self.unet.config.sigma_data,
+            sigma_data=self.unet.config.sigma_data if self.unet is not None else 1,
             distribution=self.config.sigma_distribution,
             dist_scale=self.config.sigma_dist_scale,
             dist_offset=self.config.sigma_dist_offset,
