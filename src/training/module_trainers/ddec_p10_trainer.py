@@ -138,7 +138,7 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
             if self.ddecp is not None:
                 self.ddecp.compile(**trainer.config.compile_params)
 
-            if config.use_cycle_loss == True:
+            if config.use_cycle_loss == True and self.train_dae == True:
                 self.dae_copy.compile(**trainer.config.compile_params)
 
         if self.train_dae == True:
