@@ -189,7 +189,7 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
         #if self.train_dae == True and self.unet_trainer is not None:
         #    self.unet_trainer.init_batch(validation)
 
-        if self.config.use_cycle_loss == True:
+        if self.config.use_cycle_loss == True and self.train_dae == True:
             self.dae_copy.load_state_dict(self.dae.state_dict())
 
         return None
