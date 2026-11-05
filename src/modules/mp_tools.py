@@ -424,10 +424,16 @@ class MPConv(torch.nn.Module):
         if w.ndim == 2:
             return x @ w.t()
 
-        if self.transpose == False:
-            x = torch.nn.functional.conv2d(x, w, padding=self.padding, groups=self.groups, stride=self.stride)
+        if len(self.padding) == 4:
+            padding = 0
+            x = torch.nn.functional.pad(x, self.padding)
         else:
-            x = torch.nn.functional.conv_transpose2d(x, w, padding=self.padding, groups=self.groups, stride=self.stride)
+            padding = self.padding
+
+        if self.transpose == False:
+            x = torch.nn.functional.conv2d(x, w, padding=padding, groups=self.groups, stride=self.stride)
+        else:
+            x = torch.nn.functional.conv_transpose2d(x, w, padding=padding, groups=self.groups, stride=self.stride)
             
         if self.bias is not None:
             x = x + self.bias.view(1,-1, 1, 1).to(dtype=x.dtype)
