@@ -296,12 +296,14 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
 
                 cycle_latents = self.dae_copy.encode(ddec_cond, audio_embeddings, training=False)
                 dae_cycle_loss = torch.nn.functional.mse_loss(cycle_latents, latents.detach(), reduction="none").mean(dim=(1,2,3))
-                
+
                 if self.trainer.global_step < self.config.cycle_loss_start_steps:
                     cycle_loss_weight = self.config.cycle_loss_start_weight
                 else:
                     t = min((self.trainer.global_step - self.config.cycle_loss_start_steps) / (self.config.cycle_loss_warmup_steps + 1), 1)
                     cycle_loss_weight = self.config.cycle_loss_start_weight * (1 - t) + self.config.cycle_loss_weight * t
+
+                logs["loss/dae_cycle"] = dae_cycle_loss.detach()
                 logs["loss"] = logs["loss"] + dae_cycle_loss * cycle_loss_weight
                 logs["loss_weight/dae_cycle"] = cycle_loss_weight
 
