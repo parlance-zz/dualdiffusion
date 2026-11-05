@@ -279,7 +279,7 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
                 logs["io_stats_dae/mss_2d_leak_max"] = leak_max if leak_max is not None else 0
                 logs["loss/mss_2d"] = self.mss_2d.mss_loss(ddec_cond, ms_psd_scaled, leak_pow=self.config.mss_2d_leak_pow, leak_max=leak_max)
                 logs["loss_weight/mss_2d"] = self.config.mss_2d_loss_weight
-                logs["loss"] = logs["loss"] + logs["loss/mss_2d"] * self.config.mss_2d_loss_weight
+                logs["loss"] = logs["loss"] + (logs["loss/mss_2d"] / dae_recon_logvars.exp() + dae_recon_logvars) * self.config.mss_2d_loss_weight
 
             """
             if self.unet_trainer is not None:
