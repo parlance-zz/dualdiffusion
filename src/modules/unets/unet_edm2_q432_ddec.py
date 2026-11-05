@@ -36,7 +36,7 @@ from typing import Union, Optional, Literal, Callable
 import torch
 
 from modules.unets.unet import DualDiffusionUNet, DualDiffusionUNetConfig
-from modules.mp_tools import MPFourier, MPConv, mp_cat, mp_silu, mp_sum, normalize, resample_2d
+from modules.mp_tools import MPFourier, MPConv, mp_cat, mp_silu, mp_sum, normalize, resample_2d, patchify_2d
 from modules.formats.format import DualDiffusionFormat
 
 
@@ -46,13 +46,13 @@ class UNetConfig(DualDiffusionUNetConfig):
     in_channels:  int = 2
     out_channels: int = 2
     in_channels_emb: int = 0
-    in_channels_x_ref: int = 9
+    in_channels_x_ref: int = 3
 
     x_ref_sigma_scale: float = 0
     x_ref_noise_mel_density_pow: float = 0
     
-    in_num_freqs: int = 128
-    in_psd_freqs: int = 256
+    in_num_freqs: int = 256
+    in_psd_freqs: int = 2048
 
     model_channels: int  = 64                # Base multiplier for the number of channels.
     logvar_channels: int = 192               # Number of channels for training uncertainty estimation.
@@ -201,7 +201,8 @@ class UNet(DualDiffusionUNet):
         self.num_levels = len(config.channel_mult)
 
         assert config.in_psd_freqs % config.in_num_freqs == 0
-        assert config.in_psd_freqs // config.in_num_freqs == 2
+        self.psd_freqs_per_freq = config.in_psd_freqs // config.in_num_freqs
+        assert self.psd_freqs_per_freq >= 1
         
         # Embedding.
         self.emb_fourier = MPFourier(cnoise)
@@ -214,7 +215,13 @@ class UNet(DualDiffusionUNet):
         self.logvar_linear.weight.data.fill_(0)
 
         # Encoder.
-        self.conv_x_ref_in = MPConv(config.in_channels_x_ref, cblock[0], kernel=(6,3), stride=(2,1), padding=(2,1))
+        if self.psd_freqs_per_freq == 1:
+            self.conv_x_ref_in = MPConv(config.in_channels_x_ref, cblock[0], kernel=(3,3))
+        elif self.psd_freqs_per_freq == 2:
+            self.conv_x_ref_in = MPConv(config.in_channels_x_ref, cblock[0], kernel=(6,3), stride=(2,1), padding=(2,1))
+        else:
+            self.conv_x_ref_in = MPConv(config.in_channels_x_ref * self.psd_freqs_per_freq, cblock[0], kernel=(1,3))
+
         self.x_ref_balance = torch.nn.Parameter(torch.zeros([]))
 
         self.enc = torch.nn.ModuleDict()
@@ -328,7 +335,9 @@ class UNet(DualDiffusionUNet):
         x_ref, x_ref_noise = x_ref.float().chunk(2, dim=1)
 
         x_ref_sigma = self.config.x_ref_sigma_scale * mel_density
-        x_ref = (x_ref + x_ref_noise * x_ref_sigma) / (x_ref_sigma**2 + 1) ** 0.5  
+        x_ref = (x_ref + x_ref_noise * x_ref_sigma) / (x_ref_sigma**2 + 1) ** 0.5
+        if self.psd_freqs_per_freq > 2:
+            x_ref = patchify_2d(x_ref, self.psd_freqs_per_freq, 1)
         x_ref = self.conv_x_ref_in(x_ref.to(dtype=torch.bfloat16))
 
         # encoder
