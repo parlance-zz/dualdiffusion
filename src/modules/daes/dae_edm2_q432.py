@@ -40,6 +40,7 @@ from modules.daes.dae import DualDiffusionDAE, DualDiffusionDAEConfig
 from modules.mp_tools import LatentStatsTracker, MPConv, mp_silu, mp_sum, normalize, resample_2d, patchify_2d, unpatchify_2d
 from modules.unets.unet_edm2_p6 import UNet, UNetConfig
 #from modules.unets.unet_edm2_q432 import UNet, UNetConfig
+from utils.resample import FilteredDownsample2D
 
 
 def residual_space_to_channel_avg(x: torch.Tensor, out_channels: int, factor: int = 2) -> torch.Tensor:
@@ -63,35 +64,36 @@ def residual_channel_to_space_dup(x: torch.Tensor, out_channels: int, factor: in
 @dataclass
 class DAE_Config(DualDiffusionDAEConfig):
 
-    in_channels: int     = 9
+    in_channels: int     = 3
     in_channels_emb: int = 0
-    out_channels: int    = 9
-    latent_channels: int = 32
+    out_channels: int    = 3
+    latent_channels: int = 8
     use_1d_latents: bool = False
-    use_latents_pixel_norm: bool = True
+    use_latents_pixel_norm: bool = False
     latents_noise_floor: Optional[float] = None
+    use_filtered_downsample: bool = True
 
-    in_num_freqs: int = 128
+    in_num_freqs: int = 256
     in_psd_freqs: int = 256
 
     model_channels: int         = 64        # Base multiplier for the number of channels.
-    channel_mult_enc: int       = (1,2,4,8,16)
-    channel_mult_dec: list[int] = (1,2,4,8,16)
+    channel_mult_enc: int       = (1,)
+    channel_mult_dec: list[int] = (1,2,4,8)
     channel_mult_emb: int     = 0            # Multiplier for final embedding dimensionality.
     channels_per_head: int    = 64           # Number of channels per attention head.
-    num_enc_layers_per_block: int = 3        # Number of resnet blocks per resolution.
+    num_enc_layers_per_block: int = 4        # Number of resnet blocks per resolution.
     num_dec_layers_per_block: int = 3        # Number of resnet blocks per resolution.
     res_balance: float        = 0.3          # Balance between main branch (0) and residual branch (1).
     attn_balance: float       = 0.3          # Balance between main branch (0) and self-attention (1).
     attn_levels: list[int]    = ()        # List of resolution levels to use self-attention.
-    mlp_multiplier: int    = 1               # Multiplier for the number of channels in the MLP.
+    mlp_multiplier: int    = 2               # Multiplier for the number of channels in the MLP.
     mlp_groups: int        = 2               # Number of groups for the MLPs.
     emb_linear_groups: int = 1
     add_pixel_norm: bool   = False
 
-    num_recon_logvars: int = 1
+    num_recon_logvars: int = 0
 
-    unet: Optional[UNetConfig] = None
+    #unet: Optional[UNetConfig] = None
 
 class Block(torch.nn.Module):
 
@@ -112,6 +114,7 @@ class Block(torch.nn.Module):
         channels_per_head: int = 64,       # Number of channels per attention head.
         use_attention: bool    = False,    # Use self-attention in this block.
         use_pixel_norm: bool   = False,
+        use_filtered_downsample: bool = True,
     ) -> None:
         super().__init__()
 
@@ -128,12 +131,16 @@ class Block(torch.nn.Module):
         self.clip_act = clip_act
         self.mlp_groups = mlp_groups
 
-        self.conv_res0 = MPConv(out_channels,
-                        out_channels * mlp_multiplier, kernel=(3,3), groups=mlp_groups)
-        self.conv_res1 = MPConv(out_channels * mlp_multiplier,
-                    out_channels, kernel=(3,3), groups=mlp_groups)
+        if resample_mode != "keep" and flavor == "enc" and use_filtered_downsample == True:
+            assert resample_mode == "down"
+            self.downsample = FilteredDownsample2D(k_size=15, beta=6.95)
+        else:
+            self.downsample = None
 
-        if in_channels != out_channels:# or mlp_groups > 1:
+        self.conv_res0 = MPConv(out_channels, out_channels * mlp_multiplier, kernel=(3,3), groups=mlp_groups)
+        self.conv_res1 = MPConv(out_channels * mlp_multiplier, out_channels, kernel=(3,3), groups=mlp_groups)
+
+        if in_channels != out_channels:
             self.conv_skip = MPConv(in_channels, out_channels, kernel=(3,3), groups=1)
         else:
             self.conv_skip = None
@@ -166,7 +173,11 @@ class Block(torch.nn.Module):
 
             if self.conv_skip is not None:
                 x = self.conv_skip(x)
-            x = resample_2d(x, self.resample_mode)
+
+            if self.downsample is not None:
+                x = self.downsample(x)
+            else:
+                x = resample_2d(x, self.resample_mode)
 
             if self.resample_mode != "keep":
                 x = mp_sum(x, y, t=0.5)
@@ -239,7 +250,8 @@ class DAE(DualDiffusionDAE):
                         "res_balance": config.res_balance,
                         "attn_balance": config.attn_balance,
                         "channels_per_head": config.channels_per_head,
-                        "use_pixel_norm": config.add_pixel_norm}
+                        "use_pixel_norm": config.add_pixel_norm,
+                        "use_filtered_downsample": config.use_filtered_downsample}
         
         cemb = config.model_channels * config.channel_mult_emb if config.in_channels_emb > 0 else 0
 
@@ -250,7 +262,7 @@ class DAE(DualDiffusionDAE):
 
         assert config.in_psd_freqs % config.in_num_freqs == 0
         self.psd_freqs_per_freq = config.in_psd_freqs // config.in_num_freqs
-        assert self.psd_freqs_per_freq == 2
+        assert self.psd_freqs_per_freq in (1, 2)
 
         # embedding
         if config.in_channels_emb > 0:
@@ -271,16 +283,26 @@ class DAE(DualDiffusionDAE):
         
         self.latents_stats_tracker = LatentStatsTracker(config.latent_channels)
 
+        self.latents_downsample_levels = max(len(dec_channels) - len(enc_channels), 0)
+        if self.latents_downsample_levels > 0 and config.use_filtered_downsample == True:
+            assert config.use_1d_latents == False
+            self.latents_downsample = FilteredDownsample2D(k_size=31, beta=6.95)
+        else:
+            self.latents_downsample = None
+
         # encoder
         self.enc = torch.nn.ModuleDict()
         cin = config.in_channels
         
-        for level in range(self.num_levels):
+        for level in range(len(enc_channels)):
             
             cout = enc_channels[level]
 
             if level == 0:
-                self.enc[f"conv_in"] = MPConv(config.in_channels, cout, kernel=(6,3), stride=(2,1), padding=(2,1), bias=True)
+                if self.psd_freqs_per_freq == 2:
+                    self.enc[f"conv_in"] = MPConv(config.in_channels, cout, kernel=(6,3), stride=(2,1), padding=(2,1), bias=True)
+                else:
+                    self.enc[f"conv_in"] = MPConv(config.in_channels, cout, kernel=(3,3), bias=True)
             else:
                 self.enc[f"block{level}_down"] = Block(level, cin, cout, cemb,
                     use_attention=level in config.attn_levels, flavor="enc", resample_mode="down", **block_kwargs)
@@ -290,6 +312,8 @@ class DAE(DualDiffusionDAE):
                 cout = enc_channels[level]
                 self.enc[f"block{level}_layer{idx}"] = Block(level, cout, cout, cemb,
                     use_attention=level in config.attn_levels, flavor="enc", **block_kwargs)
+
+            cin = cout
 
         if config.use_1d_latents == True:
             self.conv_latents_out = MPConv(enc_channels[-1] * self.num_latent_freqs, config.latent_channels, kernel=(1,1))
@@ -321,13 +345,17 @@ class DAE(DualDiffusionDAE):
                 self.dec[f"block{level}_layer{idx}"] = Block(level, cout, cout, cemb,
                     use_attention=level in config.attn_levels, flavor="dec", **block_kwargs)
 
-        self.conv_out = MPConv(cout, self.config.out_channels, kernel=(7,3))
+        if self.psd_freqs_per_freq == 2:
+            self.conv_out = MPConv(cout, self.config.out_channels, kernel=(7,3))
+        else:
+            self.conv_out = MPConv(cout, self.config.out_channels, kernel=(3,3))
+
         self.out_gain = torch.nn.Parameter(torch.ones([]))
         
-        if config.unet is not None:
-            self.unet = UNet(config.unet)
-        else:
-            self.unet = None
+        #if config.unet is not None:
+        #    self.unet = UNet(config.unet)
+        #else:
+        #    self.unet = None
 
     def get_embeddings(self, emb_in: torch.Tensor) -> torch.Tensor:
         if self.emb_label is not None:
@@ -375,6 +403,14 @@ class DAE(DualDiffusionDAE):
             x = patchify_2d(x, self.num_latent_freqs, 1)
 
         latents: torch.Tensor = self.conv_latents_out(x)
+
+        if self.latents_downsample_levels > 0:
+            if self.config.use_filtered_downsample == True:
+                for _ in range(self.latents_downsample_levels):
+                    latents = self.latents_downsample(latents)
+            else:
+                latents = torch.nn.functional.avg_pool2d(latents, kernel_size=2**self.latents_downsample_levels)
+
         latents = normalize(latents.float(), dim=1 if self.config.use_latents_pixel_norm == True else None)
         
         if training == False:
@@ -414,11 +450,12 @@ class DAE(DualDiffusionDAE):
 
         return x
     
-    def forward(self, samples: torch.Tensor, audio_embeddings: torch.Tensor, batch_sigma: Optional[torch.Tensor] = None) -> tuple[torch.Tensor, torch.Tensor]:
+    def forward(self, samples: torch.Tensor, audio_embeddings: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         
         dae_embeddings = self.get_embeddings(audio_embeddings)
         latents = self.encode(samples, dae_embeddings, training=True).float()
 
+        """
         if batch_sigma is not None:
             
             assert self.unet is not None
@@ -446,15 +483,15 @@ class DAE(DualDiffusionDAE):
             batch_loss = batch_weighted_loss / error_logvar.exp() + error_logvar
             #bucket_log_loss = batch_weighted_loss
             bucket_log_loss = (0.5 / 2**0.5 * batch_weighted_loss * batch_sigma**2) * (batch_sigma**2 + 1) / batch_sigma**2
-            decode_latents = latents #denoised #torch.lerp(denoised, latents, torch.rand(latents.shape[0], device=latents.device)[:, None, None, None])
+            decode_latents = latents
         else:
             assert self.unet is None
             batch_loss = bucket_log_loss = None
-            decode_latents = latents
+        """
 
-        ddec_cond = self.decode(decode_latents, dae_embeddings, training=True)
+        ddec_cond = self.decode(latents, dae_embeddings, training=True)
 
-        return latents, ddec_cond, self.get_recon_loss_logvar(), batch_loss, bucket_log_loss
+        return latents, ddec_cond, self.get_recon_loss_logvar()
 
     def latents_to_img(self, latents: torch.Tensor, **kwargs) -> ndarray:
         
