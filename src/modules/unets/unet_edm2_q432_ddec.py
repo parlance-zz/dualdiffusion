@@ -48,7 +48,7 @@ class UNetConfig(DualDiffusionUNetConfig):
     in_channels_emb: int = 0
     in_channels_x_ref: int = 3
 
-    x_ref_sigma_scale: float = 0
+    x_ref_sigma_scale: float = 0.01
     x_ref_noise_mel_density_pow: float = 0
     
     in_num_freqs: int = 256
@@ -69,7 +69,7 @@ class UNetConfig(DualDiffusionUNetConfig):
     attn_balance: float       = 0.3          # Balance between main branch (0) and self-attention (1).
     attn_levels: list[int]    = ()           # List of resolution levels to use self-attention.
     mlp_multiplier: int    = 2               # Multiplier for the number of channels in the MLP.
-    mlp_groups: int        = 1               # Number of groups for the MLPs.
+    mlp_groups: int        = 2               # Number of groups for the MLPs.
     emb_linear_groups: int = 1
 
 class Block(torch.nn.Module):

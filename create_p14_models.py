@@ -22,11 +22,13 @@ from modules.daes.dae_edm2_q432 import DAE, DAE_Config
 #from modules.unets.unet_edm2_q432 import UNetConfig
 #unet_cfg = UNetConfig()
 
-unet_cfg=None
+#unet_cfg=None
 
 seed = int("f0e772f6a051ff0a", 16)
 serial = seed_and_get_module_serial_num(seed)
-dae = DAE(DAE_Config(unet=unet_cfg, latents_noise_floor=0.08))
+dae = DAE(DAE_Config())
+    #latents_img_brightness=1, latents_img_contrast=1, latents_img_saturation=0.85, latents_img_gamma=1.35))
+
 dae.config.serial_num = serial
 print_module_info(dae, "dae")
 
@@ -34,8 +36,7 @@ if input("Save module? (y/n) ").lower() == 'y':
     dae.save_pretrained(model_path, subfolder="dae")
     print(f"Saved model to {model_path}/dae")
 
-#from modules.unets.unet_edm2_q432_ddec import UNet, UNetConfig
-from modules.unets.unet_edm2_p6_ddec import UNet, UNetConfig
+from modules.unets.unet_edm2_q432_ddec import UNet, UNetConfig
 serial = seed_and_get_module_serial_num()
 ddecp = UNet(UNetConfig())
 ddecp.config.serial_num = serial
@@ -53,10 +54,12 @@ if input("Save module? (y/n) ").lower() == 'y':
     print(f"Saved model to {model_path}/ddecp")
 
 from modules.unets.unet_edm2_p6 import UNet, UNetConfig
-#from modules.unets.unet_edm2_q432 import UNet, UNetConfig
-serial = seed_and_get_module_serial_num()
+unet = UNet(UNetConfig(num_layers_per_block=18))
 
-unet = UNet(UNetConfig())
+#from modules.unets.unet_edm2_q432 import UNet, UNetConfig
+#unet = UNet(UNetConfig())
+
+serial = seed_and_get_module_serial_num()
 unet.config.serial_num = serial
 print_module_info(unet, "unet")
 
