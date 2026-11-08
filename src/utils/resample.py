@@ -176,7 +176,7 @@ class FilteredDownsampleWarped2D(FilteredResample2D):
         hx = ((8 * hx + 1)**0.5 - 2)[None, :, None, None]
         wx = torch.linspace(-1, 1, steps=x.shape[3], device=x.device, dtype=torch.float32)[None, None, :, None]
         hx, wx = torch.broadcast_tensors(hx, wx)
-        px = torch.cat((wx, hx), dim=3)
+        px = torch.cat((wx, hx), dim=3).expand(x.shape[0], -1, -1, -1)
 
         return torch.nn.functional.grid_sample(x_lp, px, mode="bicubic", padding_mode="border", align_corners=True).to(dtype=x_dtype)
     
