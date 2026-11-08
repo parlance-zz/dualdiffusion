@@ -158,6 +158,55 @@ class FilteredDownsample2D(FilteredResample2D):
     def __init__(self, k_size: int = 31, beta: float = 6.95, factor: int = 2) -> None:
         super().__init__(k_size, factor, 1/factor, beta, gain=1)
 
+class FilteredDownsampleWarped2D(FilteredResample2D):
+
+    def __init__(self, k_size: int = 31, beta: float = 6.95, factor: int = 2) -> None:
+        assert k_size % 2 == 1 and factor == 2
+        super().__init__(k_size, 1, 1/factor, beta, gain=1)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x_dtype = x.dtype
+
+        kernel: torch.Tensor = self.kernel
+
+        kh = kernel[None, None, :, None].expand(x.shape[1], 1, self.k_size, 1).float()
+        x_lp = torch.nn.functional.conv2d(self.pad_h(x).float(), kh, groups=x.shape[1], stride=(1,1))
+
+        hx = torch.linspace(0, 1, steps=x.shape[2] // 2, device=x.device, dtype=torch.float32)
+        hx = ((8 * hx + 1)**0.5 - 2)[None, :, None, None]
+        wx = torch.linspace(-1, 1, steps=x.shape[3], device=x.device, dtype=torch.float32)[None, None, :, None]
+        hx, wx = torch.broadcast_tensors(hx, wx)
+        px = torch.cat((wx, hx), dim=3)
+
+        return torch.nn.functional.grid_sample(x_lp, px, mode="bicubic", padding_mode="border", align_corners=True).to(dtype=x_dtype)
+    
+class FilteredUpsampleWarped2D(FilteredResample2D):
+
+    def __init__(self, k_size: int = 31, beta: float = 6.95, factor: int = 2) -> None:
+        assert k_size % 2 == 1 and factor == 2
+        super().__init__(k_size, 1, 1/factor, beta, gain=factor)
+        self.factor = factor
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+
+        b, c, h, w = x.shape
+        x_dtype = x.dtype
+
+        h *= self.factor
+        y = torch.zeros((b, c, h, w), device=x.device, dtype=torch.float32)
+        y[..., ::self.factor, :] = x.float()
+
+        kh = self.kernel[None, None, :, None].expand(x.shape[1], 1, self.k_size, 1).float()
+        y = torch.nn.functional.conv2d(self.pad_h(y), kh, groups=c, stride=(1,1))
+
+        hx = torch.linspace(0, 1, steps=h, device=x.device, dtype=torch.float32)
+        hx = (hx**2 + hx) * ((h - self.factor) / (h - 1)) - 1
+        wx = torch.linspace(-1, 1, steps=w, device=x.device, dtype=torch.float32)
+        grid = torch.stack((wx[None, :].expand(h, w), hx[:, None].expand(h, w)), dim=-1)
+        grid = grid.unsqueeze(0).expand(b, -1, -1, -1)
+
+        return torch.nn.functional.grid_sample(y, grid, mode="bicubic", padding_mode="border", align_corners=True).to(dtype=x_dtype)
+
 class FilteredUpsample2D(FilteredResample2D):
 
     def __init__(self, k_size: int = 31, beta: float = 6.95, factor: int = 2) -> None:
@@ -335,6 +384,22 @@ if __name__ == "__main__":
     
     init_cuda()
     output_path = os.path.join(config.DEBUG_PATH, "resample_test3")
+
+    test_image = img_to_tensor(load_img(os.path.join(output_path, "ms_psd.png"))).cuda().bfloat16()
+
+    ds = FilteredDownsampleWarped2D(k_size=31, beta=6.95, factor=2).cuda().bfloat16()
+    us = FilteredUpsampleWarped2D(k_size=31, beta=6.95, factor=2).cuda().bfloat16()
+
+    x = test_image.clone()
+    for i in range(1):
+        x = ds(x)
+        save_img(tensor_to_img(x, recenter=True, rescale=False), os.path.join(output_path, f"ms_psd_d{i}.png"))
+
+    for i in range(1):
+        x = us(x)
+        save_img(tensor_to_img(x, recenter=True, rescale=False), os.path.join(output_path, f"ms_psd_u{i}.png"))
+
+    exit()
 
     beta = 6.95
     k_size = 31
