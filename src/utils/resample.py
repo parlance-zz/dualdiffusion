@@ -131,12 +131,15 @@ class FilteredResample2D(torch.nn.Module):
             self.pad_w = torch.nn.ReflectionPad2d((hk_size - even, hk_size, 0, 0))
             self.pad_h = torch.nn.ReflectionPad2d((0, 0, hk_size - even, hk_size))
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, w_only: bool = False) -> torch.Tensor:
 
         kernel: torch.Tensor = self.kernel
 
         kw = kernel[None, None, None, :].expand(x.shape[1], 1, 1, self.k_size)
         x = torch.nn.functional.conv2d(self.pad_w(x), kw, groups=x.shape[1], stride=(1,self.stride))
+
+        if w_only == True:
+            return x
 
         kh = kernel[None, None, :, None].expand(x.shape[1], 1, self.k_size, 1)
         x = torch.nn.functional.conv2d(self.pad_h(x), kh, groups=x.shape[1], stride=(self.stride,1))
@@ -162,13 +165,17 @@ class FilteredUpsample2D(FilteredResample2D):
         
         self.factor = factor
     
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, w_only: bool = False) -> torch.Tensor:
 
         b,c,h,w = x.shape
-        y = torch.zeros((b, c, h*self.factor, w*self.factor), device=x.device, dtype=x.dtype)
-        y[..., ::self.factor, ::self.factor] = x
+        if w_only == False:
+            y = torch.zeros((b, c, h*self.factor, w*self.factor), device=x.device, dtype=x.dtype)
+            y[..., ::self.factor, ::self.factor] = x
+        else:
+            y = torch.zeros((b, c, h, w*self.factor), device=x.device, dtype=x.dtype)
+            y[..., ::self.factor] = x
 
-        return super().forward(y)
+        return super().forward(y, w_only=w_only)
 
 class FilteredLowpass2D(FilteredResample2D):
 
