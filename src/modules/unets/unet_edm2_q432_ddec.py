@@ -43,18 +43,18 @@ from modules.formats.format import DualDiffusionFormat
 @dataclass
 class UNetConfig(DualDiffusionUNetConfig):
 
-    in_channels:  int = 2
-    out_channels: int = 2
+    in_channels:  int = 9
+    out_channels: int = 9
     in_channels_emb: int = 0
-    in_channels_x_ref: int = 3
+    in_channels_x_ref: int = 9
 
-    x_ref_sigma_scale: float = 0.01
+    x_ref_sigma_scale: float = 0
     x_ref_noise_mel_density_pow: float = 0
     
     in_num_freqs: int = 256
-    in_psd_freqs: int = 2048
+    in_psd_freqs: int = 256
 
-    model_channels: int  = 64                # Base multiplier for the number of channels.
+    model_channels: int  = 32                # Base multiplier for the number of channels.
     logvar_channels: int = 192               # Number of channels for training uncertainty estimation.
     channel_mult: list[int]    = (1,2,3,4)   # Per-resolution multipliers for the number of channels.
     double_midblock: bool      = False
@@ -69,7 +69,7 @@ class UNetConfig(DualDiffusionUNetConfig):
     attn_balance: float       = 0.3          # Balance between main branch (0) and self-attention (1).
     attn_levels: list[int]    = ()           # List of resolution levels to use self-attention.
     mlp_multiplier: int    = 2               # Multiplier for the number of channels in the MLP.
-    mlp_groups: int        = 2               # Number of groups for the MLPs.
+    mlp_groups: int        = 1               # Number of groups for the MLPs.
     emb_linear_groups: int = 1
 
 class Block(torch.nn.Module):
@@ -327,15 +327,17 @@ class UNet(DualDiffusionUNet):
 
         align_loss: list[torch.Tensor] = [] if align_loss_fn is not None else None
 
-        if self.config.x_ref_noise_mel_density_pow != 0:
-            mel_density = format.get_mel_density(x_ref.shape[-2], pow=self.config.x_ref_noise_mel_density_pow, normalize=True).float()
-        else:
-            mel_density = 1
+        if self.config.x_ref_sigma_scale > 0:
+            if self.config.x_ref_noise_mel_density_pow != 0:
+                mel_density = format.get_mel_density(x_ref.shape[-2], pow=self.config.x_ref_noise_mel_density_pow, normalize=True).float()
+            else:
+                mel_density = 1
 
-        x_ref, x_ref_noise = x_ref.float().chunk(2, dim=1)
+            x_ref, x_ref_noise = x_ref.float().chunk(2, dim=1)
 
-        x_ref_sigma = self.config.x_ref_sigma_scale * mel_density
-        x_ref = (x_ref + x_ref_noise * x_ref_sigma) / (x_ref_sigma**2 + 1) ** 0.5
+            x_ref_sigma = self.config.x_ref_sigma_scale * mel_density
+            x_ref = (x_ref + x_ref_noise * x_ref_sigma) / (x_ref_sigma**2 + 1) ** 0.5
+        
         if self.psd_freqs_per_freq > 2:
             x_ref = patchify_2d(x_ref, self.psd_freqs_per_freq, 1)
         x_ref = self.conv_x_ref_in(x_ref.to(dtype=torch.bfloat16))
