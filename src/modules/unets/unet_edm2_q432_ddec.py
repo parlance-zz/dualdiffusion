@@ -327,7 +327,7 @@ class UNet(DualDiffusionUNet):
 
         align_loss: list[torch.Tensor] = [] if align_loss_fn is not None else None
 
-        if self.config.x_ref_sigma_scale > 0:
+        if x_ref.shape[1] == self.config.in_channels_x_ref * 2:
             if self.config.x_ref_noise_mel_density_pow != 0:
                 mel_density = format.get_mel_density(x_ref.shape[-2], pow=self.config.x_ref_noise_mel_density_pow, normalize=True).float()
             else:
