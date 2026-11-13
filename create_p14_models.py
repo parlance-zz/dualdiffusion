@@ -27,7 +27,6 @@ from modules.daes.dae_edm2_q432 import DAE, DAE_Config
 seed = int("f0e772f6a051ff0a", 16)
 serial = seed_and_get_module_serial_num(seed)
 dae = DAE(DAE_Config())
-    #latents_img_brightness=1, latents_img_contrast=1, latents_img_saturation=0.85, latents_img_gamma=1.35))
 
 dae.config.serial_num = serial
 print_module_info(dae, "dae")
@@ -36,22 +35,31 @@ if input("Save module? (y/n) ").lower() == 'y':
     dae.save_pretrained(model_path, subfolder="dae")
     print(f"Saved model to {model_path}/dae")
 
+
+
 from modules.unets.unet_edm2_q432_ddec import UNet, UNetConfig
 serial = seed_and_get_module_serial_num()
 ddecp = UNet(UNetConfig())
 ddecp.config.serial_num = serial
 print_module_info(ddecp, "ddecp")
 
-#from modules.formats.ms_mdct_dual_10 import MS_MDCT_DualFormat
-#format = MS_MDCT_DualFormat.from_pretrained(model_path, subfolder="format")
-#x_ref_sigma = ddecp.config.x_ref_sigma_scale * format.get_mel_density(ddecp.config.in_num_freqs, pow=ddecp.config.x_ref_noise_mel_density_pow, normalize=True).float()
-#print("x_ref sigma:")
-#print(x_ref_sigma.flatten())
-#exit()
-
 if input("Save module? (y/n) ").lower() == 'y':
     ddecp.save_pretrained(model_path, subfolder="ddecp")
     print(f"Saved model to {model_path}/ddecp")
+
+
+"""
+from modules.unets.unet_edm2_q432_ddec import UNet, UNetConfig
+serial = seed_and_get_module_serial_num()
+ddecm = UNet(UNetConfig())
+ddecm.config.serial_num = serial
+print_module_info(ddecm, "ddecm")
+
+if input("Save module? (y/n) ").lower() == 'y':
+    ddecm.save_pretrained(model_path, subfolder="ddecm")
+    print(f"Saved model to {model_path}/ddecm")
+"""
+
 
 from modules.unets.unet_edm2_p6 import UNet, UNetConfig
 unet = UNet(UNetConfig(num_layers_per_block=18))

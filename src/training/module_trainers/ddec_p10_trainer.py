@@ -58,8 +58,14 @@ class DiffusionDecoder_Trainer_Config(ModuleTrainerConfig):
     mss_2d: dict[str, Any]
 
     latents_sigreg_loss_weight: float = 0
-    sigreg_loss_warmup_steps: int     = 350
-    
+    sigreg_loss_warmup_steps: int     = 1000
+
+    latents_kl_loss_weight: float = 0
+    latents_kl_warmup_steps: int = 1000
+
+    latents_target_loss_weight: float = 0
+    latents_target_loss_warmup_steps: int = 1000
+
     use_mss_1d_loss: bool = False
     mss_1d_loss_weight: float          = 0.5
     mss_1d_cepstrum_loss_weight: float = 0
@@ -79,9 +85,6 @@ class DiffusionDecoder_Trainer_Config(ModuleTrainerConfig):
     cycle_loss_start_steps: int    = 0
     cycle_loss_weight: float       = 0.1
     cycle_loss_warmup_steps: int   = 1000
-
-    latents_kl_loss_weight: float = 0
-    latents_kl_warmup_steps: int = 1000
     
     use_ddecp_loss: bool = True,
 
@@ -233,7 +236,7 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
                     self.unet_trainer.unet_loss_buckets.log_buckets(bucket_log_loss, dae_unet_batch_sigma)
             """
 
-            latents, ddec_cond, dae_recon_logvars = self.trainer.get_ddp_module(self.dae)(ms_psd_scaled, audio_embeddings)
+            latents, ddec_cond, dae_recon_logvars, target_latents_loss = self.trainer.get_ddp_module(self.dae)(ms_psd_scaled, audio_embeddings)
 
         elif self.dae is not None:
 
@@ -248,9 +251,9 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
             """
 
             with torch.no_grad():
-                latents, ddec_cond, dae_recon_logvars = self.trainer.get_ddp_module(self.dae)(ms_psd_scaled, audio_embeddings)
+                latents, ddec_cond, dae_recon_logvars, target_latents_loss = self.trainer.get_ddp_module(self.dae)(ms_psd_scaled, audio_embeddings)
         else:
-            latents = ddec_cond = None
+            latents = ddec_cond = dae_recon_logvars = target_latents_loss = None
         
         if latents is not None:
             latents: torch.Tensor = latents.float()
@@ -266,7 +269,16 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
             })
 
         if self.train_dae == True:
-            
+
+            latents_target_loss_weight = self.config.latents_target_loss_weight
+            if self.trainer.global_step < self.config.latents_target_loss_warmup_steps:
+                latents_target_loss_weight *= (self.trainer.global_step + 1) / self.config.latents_target_loss_warmup_steps
+            logs["loss_weight/latents_target"] = latents_target_loss_weight
+
+            logs["loss/dae_target_x"] = target_latents_loss.detach()
+            logs["loss/latents_target"] = target_latents_loss.detach()
+            logs["loss"] = logs["loss"] + target_latents_loss * logs["loss_weight/latents_target"]
+
             logs["loss/dae_mse"] = torch.nn.functional.mse_loss(ddec_cond, ms_psd_scaled, reduction="none").mean(dim=(1,2,3)).detach()
             
             if self.config.use_mss_2d_loss == True:
@@ -323,9 +335,13 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
             logs["loss_weight/latents_kl"] = latents_kl_loss_weight
 
             if latents_kl_loss_weight > 0:
-                latents_kl_loss = latents.mean(dim=(0,2,3), keepdim=True).pow(2).mean(dim=(1,2,3))
-                latents_per_ch_var = latents.var(dim=(0,2,3), keepdim=True) + 1e-2
-                latents_kl_loss = latents_kl_loss + (latents_per_ch_var - 1 - latents_per_ch_var.log()).mean(dim=(1,2,3))
+
+                def get_latents_kl(latents: torch.Tensor, axis: int):
+                    latents_kl_loss = latents.mean(dim=(0, axis), keepdim=True).pow(2)
+                    latents_per_ch_var = latents.var(dim=(0, axis), keepdim=True) + 1e-2
+                    return (latents_kl_loss + latents_per_ch_var - 1 - latents_per_ch_var.log()).mean(dim=(1,2,3))
+                    
+                latents_kl_loss = get_latents_kl(latents, axis=2) + get_latents_kl(latents, axis=3)
                 logs["loss/latents_kl"] = latents_kl_loss.detach()
                 logs["loss"] = logs["loss"] + latents_kl_loss * latents_kl_loss_weight  
 

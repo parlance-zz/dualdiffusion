@@ -131,18 +131,17 @@ class FilteredResample2D(torch.nn.Module):
             self.pad_w = torch.nn.ReflectionPad2d((hk_size - even, hk_size, 0, 0))
             self.pad_h = torch.nn.ReflectionPad2d((0, 0, hk_size - even, hk_size))
 
-    def forward(self, x: torch.Tensor, w_only: bool = False) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, w: bool = True, h: bool = True) -> torch.Tensor:
 
         kernel: torch.Tensor = self.kernel
 
-        kw = kernel[None, None, None, :].expand(x.shape[1], 1, 1, self.k_size)
-        x = torch.nn.functional.conv2d(self.pad_w(x), kw, groups=x.shape[1], stride=(1,self.stride))
+        if w == True:
+            kw = kernel[None, None, None, :].expand(x.shape[1], 1, 1, self.k_size)
+            x = torch.nn.functional.conv2d(self.pad_w(x), kw, groups=x.shape[1], stride=(1,self.stride))
 
-        if w_only == True:
-            return x
-
-        kh = kernel[None, None, :, None].expand(x.shape[1], 1, self.k_size, 1)
-        x = torch.nn.functional.conv2d(self.pad_h(x), kh, groups=x.shape[1], stride=(self.stride,1))
+        if h == True:
+            kh = kernel[None, None, :, None].expand(x.shape[1], 1, self.k_size, 1)
+            x = torch.nn.functional.conv2d(self.pad_h(x), kh, groups=x.shape[1], stride=(self.stride,1))
 
         return x
 

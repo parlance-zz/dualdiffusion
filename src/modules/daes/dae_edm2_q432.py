@@ -38,50 +38,60 @@ from numpy import ndarray
 
 from modules.daes.dae import DualDiffusionDAE, DualDiffusionDAEConfig
 from modules.mp_tools import LatentStatsTracker, MPConv, mp_silu, mp_sum, normalize, resample_2d, patchify_2d, unpatchify_2d
-from modules.unets.unet_edm2_p6 import UNet, UNetConfig
+#from modules.unets.unet_edm2_p6 import UNet, UNetConfig
 #from modules.unets.unet_edm2_q432 import UNet, UNetConfig
 from utils.resample import FilteredDownsample2D
 
 
-def residual_space_to_channel_avg(x: torch.Tensor, out_channels: int, factor: int = 2) -> torch.Tensor:
+def residual_space_to_channel_avg(x: torch.Tensor, out_channels: int, factor: int = 2, p_axis: str = "h") -> torch.Tensor:
     in_channels = x.shape[1]
     assert in_channels * factor**2 % out_channels == 0
+    assert p_axis in ("h", "w")
     group_size = in_channels * factor**2 // out_channels
 
     x = torch.nn.functional.pixel_unshuffle(x, factor)
     b, _, h, w = x.shape
-    x = x.view(b, out_channels, group_size, h, w)
-    return x.mean(dim=2)
 
-def residual_channel_to_space_dup(x: torch.Tensor, out_channels: int, factor: int = 2) -> torch.Tensor:
+    if p_axis == "h":
+        return x.view(b, out_channels, group_size, h, w).mean(dim=2)
+    else:
+        return x.view(b, group_size, out_channels, h, w).mean(dim=1)
+
+def residual_channel_to_space_dup(x: torch.Tensor, out_channels: int, factor: int = 2, p_axis: str = "h") -> torch.Tensor:
     in_channels = x.shape[1]
     assert out_channels * factor**2 % in_channels == 0
+    assert p_axis in ("h", "w")
     repeats = out_channels * factor**2 // in_channels
 
-    x = x.repeat_interleave(repeats, dim=1)
+    if p_axis == "h":
+        x = x.repeat_interleave(repeats, dim=1)
+    else:
+        x = x.repeat(1, repeats, 1, 1)
+
     return torch.nn.functional.pixel_shuffle(x, factor)
 
 @dataclass
 class DAE_Config(DualDiffusionDAEConfig):
 
-    in_channels: int     = 3
+    in_channels: int     = 9
     in_channels_emb: int = 0
-    out_channels: int    = 3
+    out_channels: int    = 9
     latent_channels: int = 8
     use_1d_latents: bool = False
     use_latents_pixel_norm: bool = False
-    latents_noise_floor: Optional[float] = None
-    use_filtered_downsample: bool = True
+    use_normalize_latents: bool = False
+    latents_noise_floor: Optional[float] = 0.03
+    use_filtered_downsample: bool = False
 
-    in_num_freqs: int = 256
+    in_num_freqs: int = 128
     in_psd_freqs: int = 256
 
     model_channels: int         = 64        # Base multiplier for the number of channels.
-    channel_mult_enc: int       = (1,)
-    channel_mult_dec: list[int] = (1,2,4,8)
+    channel_mult_enc: int       = (1,2,3,4,5)
+    channel_mult_dec: list[int] = (1,2,3,4,5)
     channel_mult_emb: int     = 0            # Multiplier for final embedding dimensionality.
     channels_per_head: int    = 64           # Number of channels per attention head.
-    num_enc_layers_per_block: int = 4        # Number of resnet blocks per resolution.
+    num_enc_layers_per_block: int = 3        # Number of resnet blocks per resolution.
     num_dec_layers_per_block: int = 3        # Number of resnet blocks per resolution.
     res_balance: float        = 0.3          # Balance between main branch (0) and residual branch (1).
     attn_balance: float       = 0.3          # Balance between main branch (0) and self-attention (1).
@@ -91,7 +101,7 @@ class DAE_Config(DualDiffusionDAEConfig):
     emb_linear_groups: int = 1
     add_pixel_norm: bool   = False
 
-    num_recon_logvars: int = 0
+    num_recon_logvars: int = 1
 
     #unet: Optional[UNetConfig] = None
 
@@ -126,14 +136,14 @@ class Block(torch.nn.Module):
         self.flavor = flavor
         self.resample_mode = resample_mode
         self.dropout = dropout
-        self.res_balance = res_balance
+        self.res_balance = res_balance / (level + 1) if flavor == "enc" else res_balance
         self.attn_balance = attn_balance
         self.clip_act = clip_act
         self.mlp_groups = mlp_groups
 
         if resample_mode != "keep" and flavor == "enc" and use_filtered_downsample == True:
             assert resample_mode == "down"
-            self.downsample = FilteredDownsample2D(k_size=15, beta=6.95)
+            self.downsample = FilteredDownsample2D(k_size=16, beta=6.95)
         else:
             self.downsample = None
 
@@ -165,33 +175,50 @@ class Block(torch.nn.Module):
             else:
                 self.emb_gain_qkv = self.emb_linear_qkv = None
 
-    def forward(self, x: torch.Tensor, emb: torch.Tensor) -> torch.Tensor:
-        
+    def forward(self, x: torch.Tensor, emb: torch.Tensor, get_target_latents: bool = False) -> torch.Tensor:
+
         if self.flavor == "enc":
-            if self.resample_mode != "keep":
-                y = residual_space_to_channel_avg(x, self.out_channels, factor=2)
+            #if self.resample_mode != "keep":
+            #    y = residual_space_to_channel_avg(x, self.out_channels, factor=2)
 
             if self.conv_skip is not None:
                 x = self.conv_skip(x)
 
-            if self.downsample is not None:
-                x = self.downsample(x)
-            else:
-                x = resample_2d(x, self.resample_mode)
+            if self.resample_mode == "down":
 
-            if self.resample_mode != "keep":
-                x = mp_sum(x, y, t=0.5)
+                if self.downsample is not None:
+                    x = self.downsample(x, h=False, w=True)
+                else:
+                    x = resample_2d(x, "keep_down")
+                
+                cx = x.shape[2] // (self.level + 1)
+                if self.downsample is not None:
+                    dx = self.downsample(x[:, :, cx:, :], h=True, w=False)
+                else:
+                    dx = resample_2d(x[:, :, cx:, :], "down_keep")
+                x = torch.cat((x[:, :, :cx, :], dx), dim=2)
+
+            if get_target_latents == True:
+                return x
+            
+            #if self.resample_mode != "keep":
+            #    x = mp_sum(x, y, t=0.5)
 
         if self.flavor == "dec":
-            if self.resample_mode != "keep":
-                y = residual_channel_to_space_dup(x, self.out_channels, factor=2)
+            #if self.resample_mode != "keep":
+            #    y = residual_channel_to_space_dup(x, self.out_channels, factor=2)
 
-            x = resample_2d(x, self.resample_mode)
+            if self.resample_mode == "up":
+                x = resample_2d(x, "keep_up")
+                cx = 2 * x.shape[2] // (self.level + 3)
+                dx = resample_2d(x[:, :, cx:, :], "up_keep")
+                x = torch.cat((x[:, :, :cx, :], dx), dim=2)
+
             if self.conv_skip is not None:
                 x = self.conv_skip(x)
 
-            if self.resample_mode != "keep":
-                x = mp_sum(x, y, t=0.5)
+            #if self.resample_mode != "keep":
+            #    x = mp_sum(x, y, t=0.5)
 
         if self.use_pixel_norm == True and self.flavor == "enc":
             x = normalize(x, dim=1)
@@ -286,7 +313,7 @@ class DAE(DualDiffusionDAE):
         self.latents_downsample_levels = max(len(dec_channels) - len(enc_channels), 0)
         if self.latents_downsample_levels > 0 and config.use_filtered_downsample == True:
             assert config.use_1d_latents == False
-            self.latents_downsample = FilteredDownsample2D(k_size=31, beta=6.95)
+            self.latents_downsample = FilteredDownsample2D(k_size=30, beta=6.95)
         else:
             self.latents_downsample = None
 
@@ -405,13 +432,26 @@ class DAE(DualDiffusionDAE):
         latents: torch.Tensor = self.conv_latents_out(x)
 
         if self.latents_downsample_levels > 0:
-            if self.config.use_filtered_downsample == True:
-                for _ in range(self.latents_downsample_levels):
-                    latents = self.latents_downsample(latents)
-            else:
-                latents = torch.nn.functional.avg_pool2d(latents, kernel_size=2**self.latents_downsample_levels)
 
-        latents = normalize(latents.float(), dim=1 if self.config.use_latents_pixel_norm == True else None)
+            for i in range(self.latents_downsample_levels):
+                level = i + len(self.config.channel_mult_enc)
+
+                if self.latents_downsample is not None:
+                    latents = self.latents_downsample(latents, h=False, w=True)
+                else:
+                    latents = resample_2d(latents, "keep_down")
+                
+                cx = latents.shape[2] // (level + 1)
+                if self.latents_downsample is not None:
+                    dx = self.latents_downsample(latents[:, :, cx:, :], h=True, w=False)
+                else:
+                    dx = resample_2d(latents[:, :, cx:, :], "down_keep")
+                latents = torch.cat((latents[:, :, :cx, :], dx), dim=2)
+
+        latents = latents.float()
+
+        if self.config.use_normalize_latents == True:
+            latents = normalize(latents, dim=1 if self.config.use_latents_pixel_norm == True else None)
         
         if training == False:
             assert self.training == False
@@ -422,11 +462,15 @@ class DAE(DualDiffusionDAE):
 
     def decode(self, x: torch.Tensor, embeddings: torch.Tensor, training: bool = False) -> torch.Tensor:
 
+        x = x.float()
+        
         if training == False:
             assert self.training == False
             x = self.latents_stats_tracker.rescale(x, mode="per_channel")
             x = self.latents_stats_tracker.add_mean(x, mode="per_channel")
-            x = normalize(x.float(), dim=1 if self.config.use_latents_pixel_norm == True else None)
+            
+            if self.config.use_normalize_latents == True:
+                x = normalize(x.float(), dim=1 if self.config.use_latents_pixel_norm == True else None)
 
         if self.config.latents_noise_floor is not None:
             x = x + torch.randn_like(x) * self.config.latents_noise_floor
@@ -449,11 +493,52 @@ class DAE(DualDiffusionDAE):
         x: torch.Tensor = self.conv_out(x, gain=self.out_gain)
 
         return x
-    
-    def forward(self, samples: torch.Tensor, audio_embeddings: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+
+    def get_target_latents(self, x: torch.Tensor) -> torch.Tensor:
+
+        x = x.to(dtype=torch.bfloat16)
+
+        for name, block in self.enc.items():
+            if "conv" in name:
+                x = block(x)
+            else:
+                x = block(x, None, get_target_latents=True)
+        
+        if self.config.use_1d_latents == True:
+            assert False
+
+        latents: torch.Tensor = self.conv_latents_out(x)
+
+        if self.latents_downsample_levels > 0:
+
+            for i in range(self.latents_downsample_levels):
+                level = i + len(self.config.channel_mult_enc)
+
+                if self.latents_downsample is not None:
+                    latents = self.latents_downsample(latents, h=False, w=True)
+                else:
+                    latents = resample_2d(latents, "keep_down")
+                
+                cx = latents.shape[2] // (level + 1)
+                if self.latents_downsample is not None:
+                    dx = self.latents_downsample(latents[:, :, cx:, :], h=True, w=False)
+                else:
+                    dx = resample_2d(latents[:, :, cx:, :], "down_keep")
+                latents = torch.cat((latents[:, :, :cx, :], dx), dim=2)
+
+        latents = latents.float()
+
+        latents = latents - latents.mean(dim=(0,2,3), keepdim=True)
+        latents = latents / (latents.std(dim=(0,2,3), keepdim=True) + 1e-4)
+
+        return latents
+        
+    def forward(self, samples: torch.Tensor, audio_embeddings: torch.Tensor) -> tuple[torch.Tensor, ...]:
         
         dae_embeddings = self.get_embeddings(audio_embeddings)
-        latents = self.encode(samples, dae_embeddings, training=True).float()
+        latents = self.encode(samples, dae_embeddings, training=True)
+
+        target_latents_loss = torch.nn.functional.mse_loss(latents, self.get_target_latents(samples), reduction="none").mean(dim=(1,2,3))
 
         """
         if batch_sigma is not None:
@@ -491,7 +576,7 @@ class DAE(DualDiffusionDAE):
 
         ddec_cond = self.decode(latents, dae_embeddings, training=True)
 
-        return latents, ddec_cond, self.get_recon_loss_logvar()
+        return latents, ddec_cond, self.get_recon_loss_logvar(), target_latents_loss
 
     def latents_to_img(self, latents: torch.Tensor, **kwargs) -> ndarray:
         
@@ -505,6 +590,7 @@ class DAE(DualDiffusionDAE):
 
             if self.config.latent_channels > 8:
                 latents = unpatchify_2d(latents, latents.shape[1]//8, 1)
+                self.config.latents_img_use_pca = True
 
             return super().latents_to_img(latents, img_split_stereo=False, **kwargs)
 
