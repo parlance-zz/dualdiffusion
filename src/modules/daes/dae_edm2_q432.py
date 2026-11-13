@@ -589,8 +589,7 @@ class DAE(DualDiffusionDAE):
         else:
 
             if self.config.latent_channels > 8:
-                latents = unpatchify_2d(latents, latents.shape[1]//8, 1)
-                self.config.latents_img_use_pca = True
+                latents = unpatchify_2d(latents, latents.shape[1]//8, 1)            
 
             return super().latents_to_img(latents, img_split_stereo=False, **kwargs)
 
