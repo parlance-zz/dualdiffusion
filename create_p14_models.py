@@ -26,7 +26,7 @@ from modules.daes.dae_edm2_q432 import DAE, DAE_Config
 
 seed = int("f0e772f6a051ff0a", 16)
 serial = seed_and_get_module_serial_num(seed)
-dae = DAE(DAE_Config())
+dae = DAE(DAE_Config(latents_img_brightness=1, latents_img_contrast=1, latents_img_saturation=1.5, latents_img_gamma=1.7))
 
 dae.config.serial_num = serial
 print_module_info(dae, "dae")

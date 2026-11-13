@@ -80,7 +80,7 @@ class DAE_Config(DualDiffusionDAEConfig):
     use_1d_latents: bool = False
     use_latents_pixel_norm: bool = False
     use_normalize_latents: bool = False
-    latents_noise_floor: Optional[float] = 0.03
+    latents_noise_floor: Optional[float] = 0.08
     use_filtered_downsample: bool = False
 
     in_num_freqs: int = 128
@@ -351,6 +351,11 @@ class DAE(DualDiffusionDAE):
             self.conv_latents_out = MPConv(enc_channels[-1], config.latent_channels, kernel=(3,3))
             self.conv_latents_in = MPConv(config.latent_channels, dec_channels[-1], kernel=(3,3), bias=True)
 
+        if config.use_normalize_latents == False:
+            self.latents_out_gain = torch.nn.Parameter(torch.ones([]))
+        else:
+            self.latents_out_gain = None
+
         # decoder
         self.dec = torch.nn.ModuleDict()
         cin = dec_channels[-1]
@@ -452,7 +457,9 @@ class DAE(DualDiffusionDAE):
 
         if self.config.use_normalize_latents == True:
             latents = normalize(latents, dim=1 if self.config.use_latents_pixel_norm == True else None)
-        
+        else:
+            latents = latents * self.latents_out_gain
+            
         if training == False:
             assert self.training == False
             latents = self.latents_stats_tracker.remove_mean(latents, mode="per_channel")
