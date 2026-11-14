@@ -545,7 +545,9 @@ class DAE(DualDiffusionDAE):
         dae_embeddings = self.get_embeddings(audio_embeddings)
         latents = self.encode(samples, dae_embeddings, training=True)
 
-        target_latents_loss = torch.nn.functional.mse_loss(latents, self.get_target_latents(samples), reduction="none").mean(dim=(1,2,3))
+        target_latents = self.get_target_latents(samples)
+        target_latents = target_latents.lerp(target_latents.detach(), 0.5)
+        target_latents_loss = torch.nn.functional.mse_loss(latents, target_latents, reduction="none").mean(dim=(1,2,3))
 
         """
         if batch_sigma is not None:

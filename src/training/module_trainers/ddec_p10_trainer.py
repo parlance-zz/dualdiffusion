@@ -270,6 +270,8 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
 
         if self.train_dae == True:
 
+            dae_recon_vars_detached = dae_recon_logvars.mean().exp().detach()
+
             latents_target_loss_weight = self.config.latents_target_loss_weight
             if self.trainer.global_step < self.config.latents_target_loss_warmup_steps:
                 latents_target_loss_weight *= (self.trainer.global_step + 1) / self.config.latents_target_loss_warmup_steps
@@ -277,7 +279,7 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
 
             logs["loss/dae_target_x"] = target_latents_loss.detach()
             logs["loss/latents_target"] = target_latents_loss.detach()
-            logs["loss"] = logs["loss"] + target_latents_loss * logs["loss_weight/latents_target"]
+            logs["loss"] = logs["loss"] + target_latents_loss * logs["loss_weight/latents_target"] / dae_recon_vars_detached + dae_recon_vars_detached.log()
 
             logs["loss/dae_mse"] = torch.nn.functional.mse_loss(ddec_cond, ms_psd_scaled, reduction="none").mean(dim=(1,2,3)).detach()
             
@@ -291,7 +293,7 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
                 logs["io_stats_dae/mss_2d_leak_max"] = leak_max if leak_max is not None else 0
                 logs["loss/mss_2d"] = self.mss_2d.mss_loss(ddec_cond, ms_psd_scaled, leak_pow=self.config.mss_2d_leak_pow, leak_max=leak_max)
                 logs["loss_weight/mss_2d"] = self.config.mss_2d_loss_weight
-                logs["loss"] = logs["loss"] + (logs["loss/mss_2d"] / dae_recon_logvars.exp() + dae_recon_logvars) * self.config.mss_2d_loss_weight
+                logs["loss"] = logs["loss"] + (logs["loss/mss_2d"] / dae_recon_vars_detached + dae_recon_vars_detached.log()) * self.config.mss_2d_loss_weight
 
             """
             if self.unet_trainer is not None:
@@ -316,7 +318,7 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
                     cycle_loss_weight = self.config.cycle_loss_start_weight * (1 - t) + self.config.cycle_loss_weight * t
 
                 logs["loss/dae_cycle"] = dae_cycle_loss.detach()
-                logs["loss"] = logs["loss"] + dae_cycle_loss * cycle_loss_weight
+                logs["loss"] = logs["loss"] + dae_cycle_loss * cycle_loss_weight / dae_recon_vars_detached + dae_recon_vars_detached.log()
                 logs["loss_weight/dae_cycle"] = cycle_loss_weight
 
             latents_sigreg_loss_weight = self.config.latents_sigreg_loss_weight
@@ -327,7 +329,7 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
             if latents_sigreg_loss_weight > 0:
                 latents_sigreg_loss = sigreg_strong_loss(latents, **self.config.sigreg)
                 logs["loss/latents_sigreg"] = latents_sigreg_loss.detach()
-                logs["loss"] = logs["loss"] + latents_sigreg_loss * latents_sigreg_loss_weight    
+                logs["loss"] = logs["loss"] + latents_sigreg_loss * latents_sigreg_loss_weight / dae_recon_vars_detached + dae_recon_vars_detached.log()
 
             latents_kl_loss_weight = self.config.latents_kl_loss_weight
             if self.trainer.global_step < self.config.latents_kl_warmup_steps:
@@ -343,7 +345,7 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
                     
                 latents_kl_loss = get_latents_kl(latents, axis=2) + get_latents_kl(latents, axis=3)
                 logs["loss/latents_kl"] = latents_kl_loss.detach()
-                logs["loss"] = logs["loss"] + latents_kl_loss * latents_kl_loss_weight  
+                logs["loss"] = logs["loss"] + latents_kl_loss * latents_kl_loss_weight / dae_recon_vars_detached + dae_recon_vars_detached.log()
 
             self.dae.latents_stats_tracker(latents)
 
