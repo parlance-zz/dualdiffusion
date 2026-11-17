@@ -304,7 +304,7 @@ class DAE(DualDiffusionDAE):
         for name, block in self.enc.items():
             x = block(x) if "conv" in name else block(x, emb)
 
-        latents: torch.Tensor = self.conv_latents_out(x).float()
+        latents: torch.Tensor = self.conv_latents_out(x, gain=self.conv_latents_out_gain).float()
         latents = unpatchify_2d(latents, self.config.latents_freqs, 1)
 
         return latents
