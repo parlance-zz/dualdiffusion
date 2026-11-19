@@ -1,5 +1,5 @@
 {
-    "model_name": "edm2_dae_p12",
+    "model_name": "edm2_dae_p14",
     "model_load_options": {
         "torch_dtype": "bfloat16",
         "device": "cuda",
@@ -27,7 +27,7 @@
     "dae_bypass": false,
     "ddec_output": true,
     "add_random_test_samples": 20,
-    "random_test_samples_seed": 299955132543531513544431263551366537562351004004600055600008000053164944675000034445537555554300048,
+    "random_test_samples_seed": 29995513254353151354443126355136653756235100400460005560000800005316494467500003444553755555430004896,
     "copy_sample_source_files": true,
     "test_samples": [
         "dsf/Metropolis Street Racer Prototype/file_15.adx.flac",
@@ -44,6 +44,10 @@
         "switch/Mega Man X Legacy Collection 2/_t_X6_08BLIZZARDWOLFANGSTAGE.lopus.flac",
         "psf3/Taiko no Tatsujin - Green Version/SONG_3RU3RU.nub.flac",
         "switch/Razion EX/12_highscore.ogg.flac",
-        "psp/DJMax Portable 3/STREAMS_000000F9.at3.flac"
+        "psp/DJMax Portable 3/STREAMS_000000F9.at3.flac",
+
+        "psf2/Critical Velocity/BGM_013ee800.GENH.flac",
+        "hes/Power DoLLs FX/21.flac.flac",
+        "switch/Victory Heat Rally/mus_global_championship.ogg.flac"
     ]
 }
