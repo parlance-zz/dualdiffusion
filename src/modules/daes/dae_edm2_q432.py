@@ -540,14 +540,15 @@ class DAE(DualDiffusionDAE):
 
         return latents
         
-    def forward(self, samples: torch.Tensor, audio_embeddings: torch.Tensor) -> tuple[torch.Tensor, ...]:
+    def forward(self, samples: torch.Tensor, audio_embeddings: torch.Tensor, return_target_latents_loss: bool = False) -> tuple[torch.Tensor, ...]:
         
         dae_embeddings = self.get_embeddings(audio_embeddings)
         latents = self.encode(samples, dae_embeddings, training=True)
 
-        target_latents = self.get_target_latents(samples)
-        target_latents = target_latents.lerp(target_latents.detach(), 0.5)
-        target_latents_loss = torch.nn.functional.mse_loss(latents, target_latents, reduction="none").mean(dim=(1,2,3))
+        if return_target_latents_loss == True:
+            target_latents = self.get_target_latents(samples)
+            target_latents = target_latents.lerp(target_latents.detach(), 0.5)
+            target_latents_loss = torch.nn.functional.mse_loss(latents, target_latents, reduction="none").mean(dim=(1,2,3))
 
         """
         if batch_sigma is not None:
@@ -585,7 +586,10 @@ class DAE(DualDiffusionDAE):
 
         ddec_cond = self.decode(latents, dae_embeddings, training=True)
 
-        return latents, ddec_cond, self.get_recon_loss_logvar(), target_latents_loss
+        if return_target_latents_loss == True:
+            return latents, ddec_cond, self.get_recon_loss_logvar(), target_latents_loss
+        else:
+            return latents, ddec_cond, self.get_recon_loss_logvar()
 
     def latents_to_img(self, latents: torch.Tensor, **kwargs) -> ndarray:
         

@@ -236,7 +236,7 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
                     self.unet_trainer.unet_loss_buckets.log_buckets(bucket_log_loss, dae_unet_batch_sigma)
             """
 
-            latents, ddec_cond, dae_recon_logvars, target_latents_loss = self.trainer.get_ddp_module(self.dae)(ms_psd_scaled, audio_embeddings)
+            latents, ddec_cond, dae_recon_logvars, target_latents_loss = self.trainer.get_ddp_module(self.dae)(ms_psd_scaled, audio_embeddings, return_target_latents_loss=True)
 
         elif self.dae is not None:
 
@@ -251,7 +251,8 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
             """
 
             with torch.no_grad():
-                latents, ddec_cond, dae_recon_logvars, target_latents_loss = self.dae(ms_psd_scaled, audio_embeddings)
+                latents, ddec_cond, dae_recon_logvars = self.dae(ms_psd_scaled, audio_embeddings, return_target_latents_loss=False)
+                target_latents_loss = None
         else:
             latents = ddec_cond = dae_recon_logvars = target_latents_loss = None
         
