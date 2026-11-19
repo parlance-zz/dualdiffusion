@@ -251,7 +251,7 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
             """
 
             with torch.no_grad():
-                latents, ddec_cond, dae_recon_logvars, target_latents_loss = self.trainer.get_ddp_module(self.dae)(ms_psd_scaled, audio_embeddings)
+                latents, ddec_cond, dae_recon_logvars, target_latents_loss = self.dae(ms_psd_scaled, audio_embeddings)
         else:
             latents = ddec_cond = dae_recon_logvars = target_latents_loss = None
         
