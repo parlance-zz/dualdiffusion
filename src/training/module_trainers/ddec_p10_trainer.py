@@ -338,12 +338,12 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
 
             if latents_kl_loss_weight > 0:
 
-                def get_latents_kl(latents: torch.Tensor, axis: int):
-                    latents_kl_loss = latents.mean(dim=(0, axis), keepdim=True).pow(2)
-                    latents_per_ch_var = latents.var(dim=(0, axis), keepdim=True) + 1e-2
+                def get_latents_kl(latents: torch.Tensor):
+                    latents_kl_loss = latents.mean(dim=(0,3), keepdim=True).pow(2)
+                    latents_per_ch_var = latents.var(dim=(0,3), keepdim=True) + 1e-2
                     return (latents_kl_loss + latents_per_ch_var - 1 - latents_per_ch_var.log()).mean(dim=(1,2,3))
                     
-                latents_kl_loss = get_latents_kl(latents, axis=2) + get_latents_kl(latents, axis=3)
+                latents_kl_loss = get_latents_kl(latents)
                 logs["loss/latents_kl"] = latents_kl_loss.detach()
                 logs["loss"] = logs["loss"] + latents_kl_loss * latents_kl_loss_weight / dae_recon_vars_detached + dae_recon_vars_detached.log()
 
