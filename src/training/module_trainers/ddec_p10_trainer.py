@@ -63,6 +63,9 @@ class DiffusionDecoder_Trainer_Config(ModuleTrainerConfig):
     latents_kl_loss_weight: float = 0
     latents_kl_warmup_steps: int = 1000
 
+    ddec_cond_kl_loss_weight: float = 0
+    ddec_cond_kl_warmup_steps: int = 1000
+
     latents_target_loss_weight: float = 0
     latents_target_loss_warmup_steps: int = 1000
 
@@ -109,17 +112,15 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
         self.train_ddecp = self.ddecp is not None
 
         if self.train_ddecp == True:
-            assert self.train_dae == False
 
-            if trainer.pipeline.dae.config.last_global_step > 0:
+            if trainer.pipeline.dae.config.last_global_step > 0 and self.train_dae == False:
                 self.dae = trainer.pipeline.dae.to(device=trainer.accelerator.device)
                 self.dae.normalize_weights()
                 self.dae = self.dae.to(dtype=torch.bfloat16)
 
         if self.train_dae == True:
-            assert self.train_ddecp == False
 
-            if config.use_ddecp_loss == True:
+            if config.use_ddecp_loss == True and self.train_ddecp == False:
                 self.ddecp = trainer.pipeline.ddecp.to(device=trainer.accelerator.device)
                 self.ddecp.normalize_weights()
                 self.ddecp = self.ddecp.to(dtype=torch.bfloat16)
@@ -146,6 +147,7 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
 
         if self.train_dae == True:
             self.logger.info(f"Latents KL loss weight: {self.config.latents_kl_loss_weight} (warmup steps: {self.config.latents_kl_warmup_steps})")
+            self.logger.info(f"DDEC-Cond KL loss weight: {self.config.ddec_cond_kl_loss_weight} (warmup steps: {self.config.ddec_cond_kl_warmup_steps})")
 
             self.logger.info(f"SIGReg loss weight: {self.config.latents_sigreg_loss_weight} (warmup steps: {self.config.sigreg_loss_warmup_steps})")
             self.logger.info(f"SIGReg config: {dict_str(self.config.sigreg)}")
@@ -337,16 +339,26 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
                 latents_kl_loss_weight *= (self.trainer.global_step + 1) / self.config.latents_kl_warmup_steps
             logs["loss_weight/latents_kl"] = latents_kl_loss_weight
 
+            def get_latents_kl_loss(latents: torch.Tensor):
+                latents_kl_loss = latents.mean(dim=(0,3), keepdim=True).pow(2)
+                latents_per_ch_var = latents.var(dim=(0,3), keepdim=True) + 1e-2
+                return (latents_kl_loss + latents_per_ch_var - 1 - latents_per_ch_var.log()).mean(dim=(1,2,3))
+        
             if latents_kl_loss_weight > 0:
-
-                def get_latents_kl(latents: torch.Tensor):
-                    latents_kl_loss = latents.mean(dim=(0,3), keepdim=True).pow(2)
-                    latents_per_ch_var = latents.var(dim=(0,3), keepdim=True) + 1e-2
-                    return (latents_kl_loss + latents_per_ch_var - 1 - latents_per_ch_var.log()).mean(dim=(1,2,3))
-                    
-                latents_kl_loss = get_latents_kl(latents)
+                
+                latents_kl_loss = get_latents_kl_loss(latents)
                 logs["loss/latents_kl"] = latents_kl_loss.detach()
                 logs["loss"] = logs["loss"] + latents_kl_loss * latents_kl_loss_weight / dae_recon_vars_detached + dae_recon_vars_detached.log()
+
+            ddec_cond_loss_weight = self.config.ddec_cond_kl_loss_weight
+            if self.trainer.global_step < self.config.ddec_cond_kl_warmup_steps:
+                ddec_cond_loss_weight *= (self.trainer.global_step + 1) / self.config.ddec_cond_kl_warmup_steps
+            logs["loss_weight/ddec_cond_kl"] = ddec_cond_loss_weight
+
+            if ddec_cond_loss_weight > 0:
+                ddec_cond_kl_loss = get_latents_kl_loss(ddec_cond)
+                logs["loss/ddec_cond_kl"] = ddec_cond_kl_loss.detach()
+                logs["loss"] = logs["loss"] + ddec_cond_kl_loss * ddec_cond_loss_weight / dae_recon_vars_detached + dae_recon_vars_detached.log()
 
             self.dae.latents_stats_tracker(latents)
 
