@@ -341,7 +341,7 @@ class DiffusionDecoder_Trainer(ModuleTrainer):
 
             def get_latents_kl_loss(latents: torch.Tensor):
                 latents_kl_loss = latents.mean(dim=(0,3), keepdim=True).pow(2)
-                latents_per_ch_var = latents.var(dim=(0,3), keepdim=True) + 1e-2
+                latents_per_ch_var = latents.var(dim=(0,3), keepdim=True) + 1e-4
                 return (latents_kl_loss + latents_per_ch_var - 1 - latents_per_ch_var.log()).mean(dim=(1,2,3))
         
             if latents_kl_loss_weight > 0:

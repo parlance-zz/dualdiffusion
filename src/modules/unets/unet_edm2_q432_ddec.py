@@ -48,7 +48,7 @@ class UNetConfig(DualDiffusionUNetConfig):
     in_channels_emb: int = 0
     in_channels_x_ref: int = 9
 
-    x_ref_sigma_scale: float = 1e-2
+    x_ref_sigma_scale: float = 0
     x_ref_noise_mel_density_pow: float = 0
     
     in_num_freqs: int = 128
